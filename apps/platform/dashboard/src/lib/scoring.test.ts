@@ -23,6 +23,7 @@ import {
   compositeEquationText,
   continualSampleCount,
   continualWaves,
+  curveV3ScoreAdjustment,
   dethroneBandScale,
   dethroneFloor,
   displayComposite,
@@ -575,8 +576,10 @@ describe("composite equations (row 38: quality and token adjustments stay separa
       aggregate_method: "continual_mean",
       composite: 0.7,
       official_composite: 0.756,
+      effective_composite: 0.756,
       pre_efficiency_composite: 0.72,
       efficiency_bonus: 0.05,
+      efficiency_fold_applied: true,
       composite_breakdown: { ...breakdown, final_composite: 0.7 },
     });
     const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
@@ -588,6 +591,143 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     expect(compositeCalculationHeading({ pre_efficiency_composite: 0.72 })).toBe(
       "Score provenance and ranking fold",
     );
+  });
+
+  it.each([
+    [0.85, 0.68, "× 0.850 (−15.0% · frozen cohort P25 reference)"],
+    [1.1, 0.82, "× 1.100 (+10.0% · frozen cohort P25 reference)"],
+  ])("shows a bounded v9 factor of %s after authoritative quality", (factor, final, expected) => {
+    const rows = compositeCalculationRows({
+      tool_mean: 0.8,
+      memory_mean: 0.8,
+      bench_version: 9,
+      composite: 0.8,
+      official_composite: final,
+      effective_composite: final,
+      pre_efficiency_composite: 0.8,
+      efficiency_bonus: 0.05,
+      efficiency_factor: factor,
+      efficiency_fold_applied: true,
+      composite_breakdown: { ...breakdown, final_composite: 0.8 },
+    });
+    const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
+
+    expect(byKey["Bounded token-efficiency factor"]).toBe(expected);
+    expect(byKey["Folded ranking score"]).toBe(
+      final.toFixed(3) + " · used for rank, KOTH, and emissions",
+    );
+    expect(byKey["Relative token-efficiency bonus"]).toBeUndefined();
+  });
+
+  it("shows the Bench v9 remaining-headroom transform", () => {
+    const input = {
+      tool_mean: 0.95,
+      memory_mean: 0.95,
+      bench_version: 9,
+      composite: 0.95,
+      official_composite: 0.955,
+      effective_composite: 0.955,
+      pre_efficiency_composite: 0.95,
+      efficiency_factor: 1.1,
+      efficiency_fold_applied: true,
+      composite_breakdown: { ...breakdown, final_composite: 0.95 },
+    };
+
+    expect(curveV3ScoreAdjustment(input)).toEqual({
+      quality: 0.95,
+      factor: 1.1,
+      adjusted: 0.955,
+      mode: "headroom",
+    });
+    const byKey = Object.fromEntries(
+      (compositeCalculationRows(input) ?? []).map((row) => [row.k, row.v]),
+    );
+    expect(byKey["Bench v9 efficiency transform"]).toBe(
+      "0.950 + (1.100 − 1) × (1 − 0.950) = 0.955",
+    );
+    expect(byKey["Folded ranking score"]).toBe("0.955 · used for rank, KOTH, and emissions");
+  });
+
+  it("does not apply the Bench v9 transform to a historical v1/v2 bonus", () => {
+    const input = {
+      tool_mean: 0.95,
+      memory_mean: 0.95,
+      bench_version: 8,
+      composite: 0.95,
+      official_composite: 1.045,
+      effective_composite: 1.045,
+      pre_efficiency_composite: 0.95,
+      efficiency_bonus: 0.1,
+      efficiency_fold_applied: true,
+      composite_breakdown: { ...breakdown, final_composite: 0.95 },
+    };
+
+    const byKey = Object.fromEntries(
+      (compositeCalculationRows(input) ?? []).map((row) => [row.k, row.v]),
+    );
+    expect(curveV3ScoreAdjustment(input)).toBeNull();
+    expect(byKey["Bench v9 efficiency transform"]).toBeUndefined();
+    expect(byKey["Folded ranking score"]).toBe("1.045 · used for rank, KOTH, and emissions");
+  });
+
+  it("keeps a neutral factor audit-only until the explicit fold flag is true", () => {
+    const input = {
+      tool_mean: 0.8,
+      memory_mean: 0.8,
+      bench_version: 9,
+      composite: 0.8,
+      official_composite: 0.8,
+      effective_composite: 0.8,
+      pre_efficiency_composite: 0.8,
+      efficiency_factor: 1,
+      efficiency_fold_applied: false,
+      composite_breakdown: { ...breakdown, final_composite: 0.8 },
+    };
+
+    const rows = compositeCalculationRows(input);
+    const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
+    expect(byKey["Efficiency projection"]).toContain("audit only");
+    expect(byKey["Folded ranking score"]).toBeUndefined();
+    expect(compositeCalculationHeading(input)).toBe("Score provenance and efficiency projection");
+  });
+
+  it.each([
+    {
+      name: "bounded factor",
+      adjustment: { efficiency_factor: 0.85, efficiency_bonus: 0.05 },
+      row: "Bounded token-efficiency factor",
+      expected: "× 0.850 (−15.0% · frozen cohort P25 reference)",
+      effective: 0.68,
+    },
+    {
+      name: "legacy bonus",
+      adjustment: { efficiency_bonus: 0.05 },
+      row: "Relative token-efficiency bonus",
+      expected: "+5.0% · frozen cohort award",
+      effective: 0.84,
+    },
+  ])("labels an inactive $name as an audit-only projection", (example) => {
+    const input = {
+      tool_mean: 0.8,
+      memory_mean: 0.8,
+      bench_version: 9,
+      composite: 0.8,
+      official_composite: 0.8,
+      effective_composite: example.effective,
+      pre_efficiency_composite: 0.8,
+      composite_breakdown: { ...breakdown, final_composite: 0.8 },
+      ...example.adjustment,
+    };
+    const rows = compositeCalculationRows(input);
+    const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
+
+    expect(byKey[example.row]).toBe(example.expected);
+    expect(byKey["Efficiency projection"]).toBe(
+      example.effective.toFixed(3) + " · audit only; not used for rank, KOTH, or emissions",
+    );
+    expect(byKey["Current ranking score"]).toBe("0.800 · used for rank, KOTH, and emissions");
+    expect(byKey["Folded ranking score"]).toBeUndefined();
+    expect(compositeCalculationHeading(input)).toBe("Score provenance and efficiency projection");
   });
 
   it("says 'not applied or unavailable' when the token multiplier is absent", () => {
@@ -606,9 +746,13 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     expect(compositeCalculationRows({ tool_mean: 0.7, memory_mean: 0.5 })).toBeNull();
   });
 
-  it("carries the block heading and the bounded-penalty note verbatim", () => {
+  it("carries the block heading and bounded-adjustment note verbatim", () => {
     expect(COMPOSITE_CALC_HEADING).toBe("Composite calculation");
-    expect(COMPOSITE_CALC_NOTE).toContain("Bench v7+ relative-efficiency awards are upside");
+    expect(COMPOSITE_CALC_NOTE).toContain("Bench v7/v8 relative-efficiency awards are upside");
+    expect(COMPOSITE_CALC_NOTE).toContain("Bench v9 uses a bounded factor");
+    expect(COMPOSITE_CALC_NOTE).toContain("Downside multiplies quality");
+    expect(COMPOSITE_CALC_NOTE).toContain("imperfect quality cannot become 1.000");
+    expect(COMPOSITE_CALC_NOTE).toContain("audit-only projection is not used");
   });
 
   it("maxTokenPenaltyPct defaults to 10% only when the API omits the bound", () => {

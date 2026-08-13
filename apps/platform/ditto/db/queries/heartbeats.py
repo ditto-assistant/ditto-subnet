@@ -414,11 +414,9 @@ async def count_live_validators(
 ) -> int:
     """How many validators have heartbeated recently enough to be folding weights.
 
-    Deliberately capability-agnostic, unlike
-    :func:`live_validator_fleet_supports_protocol`: every registered validator
-    submits weights regardless of which benchmark versions it can score, so for
-    "is anyone out there applying this policy" the capable subset is the wrong
-    denominator.
+    Deliberately capability-agnostic: every registered validator submits weights
+    regardless of which benchmark versions it can score, so for "is anyone out
+    there applying this policy" the capable subset is the wrong denominator.
     """
     return (
         await session.scalar(
@@ -427,6 +425,34 @@ async def count_live_validators(
             .where(ValidatorHeartbeat.seen_at >= now - freshness)
         )
     ) or 0
+
+
+async def live_weight_setter_fleet_supports_protocol(
+    session: AsyncSession,
+    *,
+    minimum_protocol: int,
+    now: datetime,
+    freshness: timedelta = timedelta(minutes=15),
+) -> bool:
+    """Whether every recently-live weight setter supports a wire contract.
+
+    ``GET /scoring/scores`` is consumed by every validator that sets weights,
+    including validators whose scorer is absent, stale, or unable to execute the
+    benchmark represented by the ledger.  A protocol gate for a field that
+    changes the weight fold must therefore cover every fresh heartbeat, not only
+    the scorer-capable subset used by continual-retest activation.
+
+    An empty live fleet fails closed.  Heartbeat freshness is the only membership
+    filter; scorer capabilities deliberately do not participate in this query.
+    """
+    minimum_live_protocol = await session.scalar(
+        select(func.min(ValidatorHeartbeat.protocol_version)).where(
+            ValidatorHeartbeat.seen_at >= now - freshness
+        )
+    )
+    return (
+        minimum_live_protocol is not None and minimum_live_protocol >= minimum_protocol
+    )
 
 
 async def live_validator_fleet_supports_protocol(

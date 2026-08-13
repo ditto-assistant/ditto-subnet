@@ -1,4 +1,4 @@
-"""Platform-side relative token-efficiency bonus for bench_version >= 7.
+"""Platform-side relative token-efficiency adjustment for bench_version >= 7.
 
 Under the v7 quality-only contract the deterministic validator scores quality
 and *records* audited token usage without ever letting it move the composite
@@ -12,22 +12,21 @@ validator-side spec (ditto-subnet ``docs/relative-efficiency-bonus-spec.md``):
   sha256) collapse to their best entry before the reference is computed, so
   one lineage cannot define the frontier.
 * The **reference** is robust: the efficient quartile (nearest-rank P25) of
-  the cohort's audited chat token totals is the full-bonus frontier and the
-  cohort median is the zero-bonus point — never the mean, never the single
-  minimum.
-* The **bonus** is strictly additive and capped inside the 5-10% envelope:
-  tier 1 pays up to the base cap (default 5%) at the P25 frontier; tier 2
-  keeps climbing to the deep cap (default 10%) down to the deep frontier
-  (``deep_frontier_ratio x P25``) and then SATURATES flat — no reward for
-  racing toward zero tokens. ``effective_composite = composite * (1 +
-  bonus)``. The validator composite is never touched; the bonus is a
-  separate platform-side field.
+  the cohort's audited chat-token totals — never the mean, an operator value,
+  or the single minimum. It is frozen with the cohort for deterministic replay.
+* Historical curves v1/v2 are strictly-upside bonuses. New Bench-v9 snapshots
+  use curve v3: ``clamp((P25 / agent_cost) ** alpha, min, max)``. P25 is
+  neutral, cheaper qualified agents receive a bounded bonus, and more expensive
+  qualified agents receive a bounded penalty. The independently verified full
+  v9 quality score is adjusted only after all signed quality gates apply.
+  Downside multiplies quality; upside closes only a bounded fraction of its
+  remaining headroom, so imperfect quality never saturates at 1.0.
 * **Frozen cohorts**: the snapshot (membership, floors, reference values) is
   computed once per epoch and persisted; a submission's bonus is assigned
   once, against the frozen reference of the epoch it finalized in, and never
   recomputed. Published historical scores never move.
-* **Activation gate**: until a cohort has at least ``n_min`` deduped
-  qualified members, the snapshot is inactive and every bonus is zero.
+* **Activation gate**: until a cohort has at least ``n_min`` deduped qualified
+  members, the snapshot is inactive and no adjustment is assigned.
 
 The deterministic validator scorer is NEVER touched by any of this: same
 artifact, same validator score, forever. bench_version < 7 boards are
@@ -39,9 +38,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
-from math import ceil
+from math import ceil, fsum, isfinite
 from statistics import median
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -84,6 +83,30 @@ CURVE_VERSION_TWO_TIER = 2
 ``deep_bonus_cap`` between P25 and ``deep_frontier_ratio x P25``, then
 SATURATES flat below that deep frontier (racing toward zero tokens earns
 nothing extra)."""
+CURVE_VERSION_BOUNDED_FACTOR = 3
+"""Bounded power curve for Bench v9:
+``clamp((reference_cost / agent_cost) ** alpha, minimum, maximum)``."""
+BOUNDED_FACTOR_BENCH_VERSION = 9
+V9_TOKEN_COST_QUORUM = 3
+"""Every accepted k=3 score row must carry valid v9 cost evidence."""
+
+# Curve-v3's factor-specific model-use integrity floor.  The signed v9 base
+# contract intentionally needs only one attributed case (one basis point),
+# which is sufficient to keep a quality score non-zero but far too weak to
+# award a low-cost bonus: a deterministic harness could make one token probe
+# and bypass the model for the rest of the run.  These deliberately generous
+# floors reuse the already-calibrated Platform model-use policy, with the
+# additional benefit of v9's signature-bound distinct-case attribution.  They
+# are part of curve version 3 (not runtime knobs), so the authority is stable.
+V9_EFFICIENCY_MIN_MODEL_CASE_FRACTION_DENOMINATOR = 2
+"""At least half of eligible cases must have attributed inference.
+
+This is the smallest literal boundary at which the run was not *mostly*
+model-bypassed. Typed v9 evidence also guarantees that each such distinct case
+has at least one successful controlled request.
+"""
+V9_EFFICIENCY_MIN_PROMPT_TOKENS_PER_CASE = 200
+V9_EFFICIENCY_MIN_PROMPT_TOKENS_PER_REQUEST = 300
 
 
 @dataclass(frozen=True)
@@ -96,10 +119,21 @@ class EfficiencyCandidate:
     composite: float
     memory_mean: float
     token_total: float | None
-    """Median audited chat ``total_tokens`` across the agent's quorum score
-    rows whose relay accounting is complete; ``None`` when no quorum row
-    carries complete audited usage (such a run can never earn a bonus)."""
+    """Mean audited chat-token cost across comparable accepted seeds.
+
+    Legacy curves read complete relay ``token_usage`` accounting. Curve v3
+    requires all three accepted quorum roots plus every protocol-19 continual
+    retest that carries cost authority. Validator replicates are medianed per
+    seed, then all evaluated seeds are averaged with equal weight. ``None``
+    means the submission is unqualified for an adjustment.
+    """
     first_seen: datetime
+    owner_key: str | None = None
+    """Canonical payment/attestation owner root. One owner contributes at
+    most one candidate to the frozen reference, regardless of generations.
+    ``None`` is a source-compatible unique-per-agent fallback for pure tests."""
+    collapsed_agent_ids: tuple[UUID, ...] = ()
+    """Qualified same-owner generations removed before lineage dedupe."""
 
 
 @dataclass(frozen=True)
@@ -115,6 +149,13 @@ class CohortMember:
     collapsed_agent_ids: tuple[UUID, ...]
     """Other qualified agent ids that shared this lineage key and were
     collapsed into this (best-scoring) entry."""
+    first_seen: datetime | None = None
+    """Canonical score-order tiebreak captured with new snapshots.
+
+    ``None`` exists only so snapshots frozen before this audit field was added
+    remain readable. Newly built members always carry the winning candidate's
+    timestamp.
+    """
 
 
 @dataclass(frozen=True)
@@ -141,6 +182,12 @@ class CohortReference:
     """Tier-2 saturation cap (two-tier curve only); ``>= bonus_cap``, <= 0.10."""
     deep_frontier_ratio: float | None = None
     """Deep frontier as a fraction of P25 (two-tier curve only), in (0, 1)."""
+    factor_alpha: float | None = None
+    """Power exponent frozen for the bounded-factor curve (v3 only)."""
+    minimum_factor: float | None = None
+    """Lower clamp frozen for the bounded-factor curve (v3 only)."""
+    maximum_factor: float | None = None
+    """Upper clamp frozen for the bounded-factor curve (v3 only)."""
 
 
 def lineage_key(normalized_source_hash: str | None, sha256: str) -> str:
@@ -189,6 +236,125 @@ def audited_token_total(
     return float(median(totals))
 
 
+def audited_v9_run_token_total(
+    details: Mapping[str, Any] | None,
+    *,
+    base_evidence_sha256: str | None = None,
+) -> int | None:
+    """Return one v9 run's signature-bound, integrity-qualified token cost.
+
+    Curve v3 deliberately does not read the legacy ``token_usage`` or
+    ``platform_model_use_reconciliation`` annotations. Its integrity authority
+    is the typed v9 base root whose digest is bound into the validator receipt.
+    ``base_evidence_sha256`` is supplied directly while accepting a continual
+    retest; persisted quorum rows carry the same value beside ``v9_base`` in
+    ``details``. Only enforce-mode model-use passes that also clear curve-v3's
+    factor-specific breadth and prompt-size integrity floors contribute.
+    """
+    from pydantic import ValidationError
+
+    from ditto_screening_protocol.bench_v9 import (
+        V9_SCORE_CONTRACT_MANIFEST_SHA256,
+        V9_SCORE_CONTRACT_REVISION,
+        V9BaseEvidence,
+    )
+
+    if not isinstance(details, Mapping):
+        return None
+    raw = details.get("v9_base")
+    if not isinstance(raw, Mapping):
+        return None
+    try:
+        evidence = V9BaseEvidence.model_validate(raw)
+    except (ValidationError, TypeError, ValueError):
+        return None
+    # The score signature binds this sibling digest, not the opaque JSON
+    # object directly. Score intake enforces the same identity; repeat it here
+    # so malformed/imported history cannot turn an unsigned root into cost
+    # authority.
+    expected_digest = base_evidence_sha256 or details.get("base_evidence_sha256")
+    if expected_digest != evidence.digest_hex():
+        return None
+    gates = evidence.score_gates
+    model_use = gates.model_use
+    if (
+        evidence.score_contract.revision != V9_SCORE_CONTRACT_REVISION
+        or evidence.score_contract.manifest_sha256 != V9_SCORE_CONTRACT_MANIFEST_SHA256
+        or gates.threshold_profile.id != V9_SCORE_CONTRACT_REVISION
+        or gates.threshold_profile.manifest_sha256 != V9_SCORE_CONTRACT_MANIFEST_SHA256
+        or gates.rollout_mode != "enforce"
+        or model_use.result != "passed"
+        or model_use.factor_bps != 10_000
+        or evidence.semantic_gate_factor_bps != 10_000
+        or evidence.applied_gate_factor_bps != 10_000
+        or model_use.successful_requests <= 0
+    ):
+        return None
+    eligible_cases = model_use.eligible_cases
+    if (
+        eligible_cases <= 0
+        or not model_use.case_attribution_complete
+        or model_use.successful_inference_cases
+        * V9_EFFICIENCY_MIN_MODEL_CASE_FRACTION_DENOMINATOR
+        < eligible_cases
+        or model_use.prompt_tokens
+        < eligible_cases * V9_EFFICIENCY_MIN_PROMPT_TOKENS_PER_CASE
+        or model_use.prompt_tokens
+        < model_use.successful_requests * V9_EFFICIENCY_MIN_PROMPT_TOKENS_PER_REQUEST
+    ):
+        return None
+    total = model_use.prompt_tokens + model_use.completion_tokens
+    return total if total > 0 else None
+
+
+def audited_v9_token_total(
+    details_blobs: Sequence[Mapping[str, Any] | None],
+    *,
+    continual_seed_token_totals: Sequence[float] = (),
+    continual_cost_evidence_valid: bool = True,
+) -> float | None:
+    """Mean v9 cost over the pinned quorum seed and accepted retest seeds.
+
+    The three canonical roots are mandatory. Protocol-19 single-seed continual
+    retests contribute one further observation per seed, so an agent the fleet
+    keeps retesting is costed on its ongoing spend rather than on its first day
+    alone. Legacy retests without the new cost binding are ignored; an
+    explicitly invalid new retest fails the whole cost closed so model-bypassing
+    work cannot disappear from the aggregate.
+
+    A **seed** is the unit of observation, twice over. The k=3 quorum re-scores
+    one pinned dataset seed, so its three receipts are validator replicates of a
+    single observation, not three independent samples — they median into one
+    entry exactly as the confirmation ledger medians each retest seed. The
+    resulting per-seed observations are then averaged, giving every evaluated
+    seed equal weight regardless of how many validators happened to score it.
+    With no retests this reduces byte-for-byte to the frozen median-of-quorum
+    behaviour, leaving agents the fleet has never retested completely
+    unaffected by this path.
+    """
+    quorum = [audited_v9_run_token_total(details) for details in details_blobs]
+    # Fail closed: a factor that can penalize peers must not be inferred from a
+    # cherry-picked subset of the score quorum. All three accepted roots need
+    # valid, enforced model-use evidence.
+    if (
+        len(details_blobs) != V9_TOKEN_COST_QUORUM
+        or any(total is None for total in quorum)
+        or not continual_cost_evidence_valid
+    ):
+        return None
+    observations = [float(median([total for total in quorum if total is not None]))]
+    for total in continual_seed_token_totals:
+        if (
+            isinstance(total, bool)
+            or not isinstance(total, (int, float))
+            or not isfinite(total)
+            or total <= 0
+        ):
+            return None
+        observations.append(float(total))
+    return fsum(observations) / len(observations)
+
+
 def dedupe_lineages(
     candidates: Sequence[EfficiencyCandidate],
 ) -> list[CohortMember]:
@@ -215,11 +381,78 @@ def dedupe_lineages(
                 composite=best.composite,
                 memory_mean=best.memory_mean,
                 token_total=best.token_total,
-                collapsed_agent_ids=tuple(c.agent_id for c in ordered[1:]),
+                collapsed_agent_ids=tuple(
+                    dict.fromkeys(
+                        (
+                            *best.collapsed_agent_ids,
+                            *(c.agent_id for c in ordered[1:]),
+                            *(
+                                nested
+                                for candidate in ordered[1:]
+                                for nested in candidate.collapsed_agent_ids
+                            ),
+                        )
+                    )
+                ),
+                first_seen=best.first_seen,
             )
         )
-    members.sort(key=lambda m: (-m.composite, str(m.agent_id)))
-    return members
+
+    # Every member created above came from an EfficiencyCandidate and has a real
+    # first_seen. The optional type exists only for rehydrated legacy snapshots,
+    # which never enter this ranking path. Keep the ordering itself in the one
+    # canonical comparator shared by all ranking surfaces.
+    assert all(member.first_seen is not None for member in members)
+    return rank_submissions(members)  # type: ignore[type-var]
+
+
+def dedupe_owners(
+    candidates: Sequence[EfficiencyCandidate],
+) -> list[EfficiencyCandidate]:
+    """Choose one reference candidate per canonical emission owner.
+
+    Reference construction cannot depend on the factor whose P25 it is about to
+    derive. It therefore selects highest authoritative quality first. At equal
+    quality, lower audited cost wins before arrival time—the exact tie policy
+    curve v3 is meant to establish—and only then uses the canonical timestamp /
+    UUID tie-break. Every eligible generation still receives an assignment
+    after the reference freezes, so the official owner representative can later
+    be selected by the curve-v3 downside/headroom score transform.
+    """
+    by_owner: dict[str, list[EfficiencyCandidate]] = {}
+    for candidate in candidates:
+        owner_key = candidate.owner_key or f"agent:{candidate.agent_id}"
+        by_owner.setdefault(owner_key, []).append(candidate)
+    selected: list[EfficiencyCandidate] = []
+    for group in by_owner.values():
+        ordered = sorted(
+            group,
+            key=lambda candidate: (
+                -candidate.composite,
+                (
+                    candidate.token_total
+                    if candidate.token_total is not None
+                    else float("inf")
+                ),
+                candidate.first_seen,
+                str(candidate.agent_id),
+            ),
+        )
+        best = ordered[0]
+        selected.append(
+            replace(
+                best,
+                collapsed_agent_ids=tuple(
+                    dict.fromkeys(
+                        (
+                            *best.collapsed_agent_ids,
+                            *(candidate.agent_id for candidate in ordered[1:]),
+                        )
+                    )
+                ),
+            )
+        )
+    return selected
 
 
 def nearest_rank_percentile(values: Sequence[float], fraction: float) -> float:
@@ -266,6 +499,10 @@ def build_cohort_snapshot(
     memory_floor: float,
     deep_bonus_cap: float | None = None,
     deep_frontier_ratio: float | None = None,
+    curve_version: int | None = None,
+    factor_alpha: float | None = None,
+    minimum_factor: float | None = None,
+    maximum_factor: float | None = None,
 ) -> CohortReference:
     """Freeze one epoch's cohort: qualify, dedupe, cap at top-N, derive the
     robust reference. Pure and deterministic — the same candidates always
@@ -283,7 +520,7 @@ def build_cohort_snapshot(
             memory_floor=memory_floor,
         )
     ]
-    members = dedupe_lineages(qualified)[:cohort_limit]
+    members = dedupe_lineages(dedupe_owners(qualified))[:cohort_limit]
     active = len(members) >= n_min
     p25: float | None = None
     med: float | None = None
@@ -291,6 +528,13 @@ def build_cohort_snapshot(
         totals = [member.token_total for member in members]
         p25 = nearest_rank_percentile(totals, FRONTIER_QUANTILE)
         med = float(median(totals))
+    frozen_curve = curve_version
+    if frozen_curve is None:
+        frozen_curve = (
+            CURVE_VERSION_TWO_TIER
+            if deep_bonus_cap is not None and deep_frontier_ratio is not None
+            else CURVE_VERSION_SINGLE_TIER
+        )
     return CohortReference(
         bench_version=bench_version,
         run_size=run_size,
@@ -304,14 +548,99 @@ def build_cohort_snapshot(
         reference_p25_tokens=p25,
         reference_median_tokens=med,
         members=tuple(members),
-        curve_version=(
-            CURVE_VERSION_TWO_TIER
-            if deep_bonus_cap is not None and deep_frontier_ratio is not None
-            else CURVE_VERSION_SINGLE_TIER
+        curve_version=frozen_curve,
+        deep_bonus_cap=(
+            deep_bonus_cap if frozen_curve == CURVE_VERSION_TWO_TIER else None
         ),
-        deep_bonus_cap=deep_bonus_cap,
-        deep_frontier_ratio=deep_frontier_ratio,
+        deep_frontier_ratio=(
+            deep_frontier_ratio if frozen_curve == CURVE_VERSION_TWO_TIER else None
+        ),
+        factor_alpha=(
+            factor_alpha if frozen_curve == CURVE_VERSION_BOUNDED_FACTOR else None
+        ),
+        minimum_factor=(
+            minimum_factor if frozen_curve == CURVE_VERSION_BOUNDED_FACTOR else None
+        ),
+        maximum_factor=(
+            maximum_factor if frozen_curve == CURVE_VERSION_BOUNDED_FACTOR else None
+        ),
     )
+
+
+def bounded_efficiency_factor(
+    agent_cost: float,
+    *,
+    reference_cost: float,
+    alpha: float,
+    minimum_factor: float,
+    maximum_factor: float,
+) -> float:
+    """Apply the frozen v3 power curve and clamp its multiplier.
+
+    The reference is neutral by construction. Lower audited cost increases the
+    multiplier and higher audited cost decreases it, but neither direction can
+    escape the snapshot's frozen [minimum, maximum] envelope.
+    """
+    values = (agent_cost, reference_cost, alpha, minimum_factor, maximum_factor)
+    if any(not isfinite(value) for value in values):
+        return 1.0
+    if (
+        agent_cost <= 0.0
+        or reference_cost <= 0.0
+        or not 0.0 < alpha <= 1.0
+        or not 0.85 <= minimum_factor <= 1.0
+        or not 1.0 <= maximum_factor <= 1.10
+    ):
+        return 1.0
+    raw = (reference_cost / agent_cost) ** alpha
+    return min(max(raw, minimum_factor), maximum_factor)
+
+
+def factor_for_submission(
+    composite: float,
+    memory_mean: float,
+    token_total: float | None,
+    reference: CohortReference,
+) -> float | None:
+    """One curve-v3 assignment, or ``None`` when cost integrity is absent.
+
+    Quality and memory floors choose the robust reference cohort and gate v3
+    upside. They must not exempt an otherwise valid submission from downside:
+    otherwise an expensive agent could sandbag just below a floor to avoid a
+    penalty, and improving quality across that boundary could lower its final
+    score. A below-floor submission therefore receives ``min(raw, 1)``—never a
+    bonus, but the same bounded penalty as an above-floor peer.
+    """
+    if (
+        reference.curve_version != CURVE_VERSION_BOUNDED_FACTOR
+        or reference.bench_version != BOUNDED_FACTOR_BENCH_VERSION
+    ):
+        return None
+    if not reference.active or token_total is None:
+        return None
+    if (
+        reference.reference_p25_tokens is None
+        or reference.factor_alpha is None
+        or reference.minimum_factor is None
+        or reference.maximum_factor is None
+    ):
+        return None
+    factor = bounded_efficiency_factor(
+        token_total,
+        reference_cost=reference.reference_p25_tokens,
+        alpha=reference.factor_alpha,
+        minimum_factor=reference.minimum_factor,
+        maximum_factor=reference.maximum_factor,
+    )
+    if not qualifies(
+        composite,
+        memory_mean,
+        token_total,
+        quality_floor=reference.quality_floor,
+        memory_floor=reference.memory_floor,
+    ):
+        return min(factor, 1.0)
+    return factor
 
 
 def bonus_fraction(
@@ -391,7 +720,7 @@ def bonus_for_submission(
         memory_floor=reference.memory_floor,
     ):
         return 0.0
-    two_tier = reference.curve_version >= CURVE_VERSION_TWO_TIER
+    two_tier = reference.curve_version == CURVE_VERSION_TWO_TIER
     return bonus_fraction(
         token_total,
         reference_p25=reference.reference_p25_tokens,
@@ -403,12 +732,14 @@ def bonus_for_submission(
 
 
 def effective_composite(composite: float, bonus: float) -> float:
-    """The platform-side ranking score: ``composite * (1 + bonus)``.
+    """The legacy v1/v2 ranking score: ``composite * (1 + bonus)``.
 
     Multiplicative, matching the spec's ``bonus_multiplier`` form: the fold
     compares composites, so a scale factor preserves ordering semantics and a
     zero composite can never buy weight from cheapness alone. Bounded by
-    ``1 + cap`` (<= 1.10). The validator's composite is never modified."""
+    ``1 + cap`` (<= 1.10). Curve v3 does not use this helper: it multiplies
+    downside and applies upside only to remaining quality headroom. The
+    validator's composite is never modified."""
     return composite * (1.0 + bonus)
 
 
@@ -429,13 +760,25 @@ def floors_from_previous(
     *,
     quality_floor: float,
     memory_floor: float,
+    previous_curve_version: int | None = None,
+    current_curve_version: int | None = None,
 ) -> tuple[float, float]:
     """Derive this epoch's quality floors from the previous ACTIVE cohort.
 
     Spec policy: ``Q_min`` = previous cohort's median composite, ``M_min`` =
     ``MEMORY_FLOOR_FRACTION x`` previous median memory_mean — both never
     below the configured static floors, which alone govern the first epoch.
+
+    Curve v3 ranks independently confirmed full-v9 quality, whereas legacy
+    curves stored the earlier base composite. Those values are not comparable:
+    on the v2 -> v3 transition, configured floors govern until an active v3
+    cohort exists. Subsequent v3 epochs may inherit only from a v3 snapshot.
     """
+    if (
+        current_curve_version == CURVE_VERSION_BOUNDED_FACTOR
+        and previous_curve_version != CURVE_VERSION_BOUNDED_FACTOR
+    ):
+        return quality_floor, memory_floor
     if not previous_members:
         return quality_floor, memory_floor
     composites = [
@@ -482,24 +825,52 @@ class EfficiencyBoardView:
     is a real read of frozen rows."""
     preview_bonuses: dict[UUID, float] | None = None
     """Per-agent bonus fractions a preview computed, keyed by agent."""
+    preview_factors: dict[UUID, float] | None = None
+    """Per-agent bounded factors a curve-v3 preview computed, keyed by agent."""
 
 
 def _candidates_from_rows(
     rows: Sequence[LedgerRow],
     token_totals: Mapping[UUID, float | None],
+    *,
+    curve_version: int = CURVE_VERSION_TWO_TIER,
 ) -> list[EfficiencyCandidate]:
-    return [
-        EfficiencyCandidate(
-            agent_id=row.agent_id,
-            miner_hotkey=row.miner_hotkey,
-            lineage_key=lineage_key(row.normalized_source_hash, row.sha256),
-            composite=row.composite,
-            memory_mean=row.memory_mean,
-            token_total=token_totals.get(row.agent_id),
-            first_seen=row.first_seen,
+    def quality_composite(row: LedgerRow) -> float | None:
+        if curve_version != CURVE_VERSION_BOUNDED_FACTOR:
+            return row.composite
+        confirmation = row.v9_confirmation
+        if row.bench_version == BOUNDED_FACTOR_BENCH_VERSION and isinstance(
+            confirmation, Mapping
+        ):
+            micros = confirmation.get("full_effective_micros")
+            if (
+                isinstance(micros, int)
+                and not isinstance(micros, bool)
+                and 0 <= micros <= 1_000_000
+            ):
+                return micros / 1_000_000
+        return None
+
+    candidates: list[EfficiencyCandidate] = []
+    for row in rows:
+        quality = quality_composite(row)
+        candidates.append(
+            EfficiencyCandidate(
+                agent_id=row.agent_id,
+                miner_hotkey=row.miner_hotkey,
+                lineage_key=lineage_key(row.normalized_source_hash, row.sha256),
+                owner_key=(
+                    getattr(row, "emission_owner_root", None) or f"agent:{row.agent_id}"
+                ),
+                composite=quality if quality is not None else 0.0,
+                memory_mean=row.memory_mean,
+                token_total=(
+                    token_totals.get(row.agent_id) if quality is not None else None
+                ),
+                first_seen=row.first_seen,
+            )
         )
-        for row in rows
-    ]
+    return candidates
 
 
 async def _finalized_ranked_rows(session: AsyncSession) -> list[LedgerRow]:
@@ -510,8 +881,17 @@ async def _finalized_ranked_rows(session: AsyncSession) -> list[LedgerRow]:
         list_eligible_ledger,
     )
 
+    # Cohort lineage dedupe needs ``normalized_source_hash``. It catches the
+    # same source repacked into byte-different tarballs; falling back to artifact
+    # SHA alone lets those copies occupy several top-N slots and move P25. The
+    # ledger API currently groups this scalar with the larger anti-copy sketch,
+    # so load that projection here for reference integrity while still omitting
+    # the much larger score-details JSON.
     rows = await list_eligible_ledger(
-        session, include_fingerprints=False, include_details=False
+        session,
+        include_fingerprints=True,
+        include_details=False,
+        dedupe_owners=False,
     )
     ranked = [row for row in rows if row.eligible]
     counts = await get_score_counts(
@@ -575,6 +955,7 @@ async def _materialize_epoch(
         insert_bonus,
         insert_snapshot,
         latest_snapshot,
+        promote_v3_compatibility_placeholder,
     )
     from ditto.db.queries.scores import quorum_score_rows
 
@@ -588,21 +969,48 @@ async def _materialize_epoch(
 
     agent_ids = [row.agent_id for row in rows]
     versions = dict.fromkeys(agent_ids, bench_version)
-    score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
-    token_totals = {
-        agent_id: audited_token_total(
-            [score.details for score in score_rows.get(agent_id, [])]
-        )
-        for agent_id in agent_ids
-    }
-    candidates = _candidates_from_rows(rows, token_totals)
-
     snapshot = await get_snapshot(
         session,
         bench_version=bench_version,
         run_size=BONUS_RUN_SIZE,
         epoch_index=epoch,
     )
+    score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
+    curve_version = (
+        snapshot.curve_version
+        if snapshot is not None
+        else (
+            CURVE_VERSION_BOUNDED_FACTOR
+            if bench_version == BOUNDED_FACTOR_BENCH_VERSION
+            else CURVE_VERSION_TWO_TIER
+        )
+    )
+    if curve_version == CURVE_VERSION_BOUNDED_FACTOR:
+        from ditto.db.queries.confirmation_scores import (
+            ConfirmationEfficiencyCosts,
+            confirmation_efficiency_costs_by_agent,
+        )
+
+        continual_costs = await confirmation_efficiency_costs_by_agent(
+            session, agent_ids=agent_ids, bench_version=bench_version
+        )
+        token_totals = {}
+        for agent_id in agent_ids:
+            retests = continual_costs.get(agent_id, ConfirmationEfficiencyCosts())
+            token_totals[agent_id] = audited_v9_token_total(
+                [score.details for score in score_rows.get(agent_id, [])],
+                continual_seed_token_totals=retests.seed_token_totals,
+                continual_cost_evidence_valid=retests.evidence_valid,
+            )
+    else:
+        token_totals = {
+            agent_id: audited_token_total(
+                [score.details for score in score_rows.get(agent_id, [])]
+            )
+            for agent_id in agent_ids
+        }
+    candidates = _candidates_from_rows(rows, token_totals, curve_version=curve_version)
+
     if snapshot is None:
         previous = await latest_snapshot(
             session,
@@ -615,6 +1023,10 @@ async def _materialize_epoch(
             previous.members if previous is not None else None,
             quality_floor=config.quality_floor,
             memory_floor=config.memory_floor,
+            previous_curve_version=(
+                previous.curve_version if previous is not None else None
+            ),
+            current_curve_version=curve_version,
         )
         reference = build_cohort_snapshot(
             candidates,
@@ -626,8 +1038,30 @@ async def _materialize_epoch(
             bonus_cap=config.cap,
             quality_floor=quality_floor,
             memory_floor=memory_floor,
-            deep_bonus_cap=config.deep_cap,
-            deep_frontier_ratio=config.deep_frontier_ratio,
+            deep_bonus_cap=(
+                config.deep_cap if curve_version == CURVE_VERSION_TWO_TIER else None
+            ),
+            deep_frontier_ratio=(
+                config.deep_frontier_ratio
+                if curve_version == CURVE_VERSION_TWO_TIER
+                else None
+            ),
+            curve_version=curve_version,
+            factor_alpha=(
+                config.factor_alpha
+                if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+                else None
+            ),
+            minimum_factor=(
+                config.minimum_factor
+                if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+                else None
+            ),
+            maximum_factor=(
+                config.maximum_factor
+                if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+                else None
+            ),
         )
         snapshot = await insert_snapshot(session, reference)
         logger.info(
@@ -650,14 +1084,43 @@ async def _materialize_epoch(
         session, agent_ids, bench_versions=versions, epoch_index=epoch
     )
     for candidate in candidates:
-        if candidate.agent_id in existing:
-            continue
-        bonus = bonus_for_submission(
+        factor = factor_for_submission(
             candidate.composite,
             candidate.memory_mean,
             candidate.token_total,
             reference,
         )
+        existing_row = existing.get(candidate.agent_id)
+        if existing_row is not None:
+            if (
+                reference.curve_version == CURVE_VERSION_BOUNDED_FACTOR
+                and existing_row.factor is None
+                and factor is not None
+                and candidate.token_total is not None
+            ):
+                await promote_v3_compatibility_placeholder(
+                    session,
+                    existing_row,
+                    token_total=candidate.token_total,
+                    factor=factor,
+                )
+            continue
+        bonus = (
+            0.0
+            if reference.curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            else bonus_for_submission(
+                candidate.composite,
+                candidate.memory_mean,
+                candidate.token_total,
+                reference,
+            )
+        )
+        # A v3 assignment is authority only when all signed cost-integrity
+        # evidence is present. Do not freeze a null row: complete evidence
+        # arriving later in this same epoch must still be able to qualify
+        # against the already-frozen reference.
+        if reference.curve_version == CURVE_VERSION_BOUNDED_FACTOR and factor is None:
+            continue
         await insert_bonus(
             session,
             agent_id=candidate.agent_id,
@@ -666,6 +1129,7 @@ async def _materialize_epoch(
             snapshot_id=snapshot.snapshot_id,
             token_total=candidate.token_total,
             bonus=bonus,
+            factor=factor,
         )
 
 
@@ -676,6 +1140,16 @@ def reference_from_snapshot(snapshot: EfficiencyCohortSnapshot) -> CohortReferen
     for raw in snapshot.members or []:
         if not isinstance(raw, Mapping):
             continue
+        raw_first_seen = raw.get("first_seen")
+        member_first_seen = (
+            raw_first_seen
+            if isinstance(raw_first_seen, datetime)
+            else (
+                datetime.fromisoformat(str(raw_first_seen))
+                if raw_first_seen is not None
+                else None
+            )
+        )
         members.append(
             CohortMember(
                 agent_id=UUID(str(raw["agent_id"])),
@@ -687,6 +1161,7 @@ def reference_from_snapshot(snapshot: EfficiencyCohortSnapshot) -> CohortReferen
                 collapsed_agent_ids=tuple(
                     UUID(str(value)) for value in raw.get("collapsed_agent_ids", [])
                 ),
+                first_seen=member_first_seen,
             )
         )
     return CohortReference(
@@ -708,6 +1183,9 @@ def reference_from_snapshot(snapshot: EfficiencyCohortSnapshot) -> CohortReferen
         curve_version=snapshot.curve_version,
         deep_bonus_cap=snapshot.deep_bonus_cap,
         deep_frontier_ratio=snapshot.deep_frontier_ratio,
+        factor_alpha=snapshot.factor_alpha,
+        minimum_factor=snapshot.minimum_factor,
+        maximum_factor=snapshot.maximum_factor,
     )
 
 
@@ -719,27 +1197,40 @@ async def read_efficiency_board(
     agent_ids: Sequence[UUID],
     bench_versions: Mapping[UUID, int],
     now: datetime,
+    historical: bool = False,
 ) -> EfficiencyBoardView | None:
-    """Read-only view for a board render: the governing snapshot (the current
-    epoch's, else the latest frozen one) plus the displayed agents' frozen
-    bonus rows. ``None`` when the bonus does not apply to this board at all
-    (disabled, or bench_version < 7)."""
+    """Read the snapshot and assignments governing one board render.
+
+    Live/current boards always read assignments for the exact current epoch.
+    Missing current rows therefore fail closed instead of silently inheriting
+    an older adjustment. A settled historical board instead reproduces the
+    assignments belonging to the selected latest snapshot for that retired
+    benchmark. ``None`` means the policy cannot apply to this board at all.
+    """
     from ditto.db.queries.efficiency import get_bonus_rows, latest_snapshot
 
     if not config.enabled or bench_version < MIN_BONUS_BENCH_VERSION:
         return None
+    current_epoch = epoch_index_for(now, config.epoch_hours)
     snapshot = await latest_snapshot(
         session,
         bench_version=bench_version,
         run_size=BONUS_RUN_SIZE,
-        max_epoch_index=epoch_index_for(now, config.epoch_hours),
+        max_epoch_index=current_epoch,
         active_only=False,
     )
-    bonuses = await get_bonus_rows(
-        session,
-        agent_ids,
-        bench_versions=bench_versions,
-        epoch_index=epoch_index_for(now, config.epoch_hours),
+    assignment_epoch = (
+        snapshot.epoch_index if historical and snapshot is not None else current_epoch
+    )
+    bonuses = (
+        await get_bonus_rows(
+            session,
+            agent_ids,
+            bench_versions=bench_versions,
+            epoch_index=assignment_epoch,
+        )
+        if not historical or snapshot is not None
+        else {}
     )
     return EfficiencyBoardView(snapshot=snapshot, bonuses=bonuses)
 
@@ -796,14 +1287,39 @@ async def preview_efficiency_board(
     agent_ids = [row.agent_id for row in rows]
     versions = dict.fromkeys(agent_ids, bench_version)
     score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
-    candidates = _candidates_from_rows(
-        rows,
-        {
+    curve_version = (
+        CURVE_VERSION_BOUNDED_FACTOR
+        if bench_version == BOUNDED_FACTOR_BENCH_VERSION
+        else CURVE_VERSION_TWO_TIER
+    )
+    if curve_version == CURVE_VERSION_BOUNDED_FACTOR:
+        from ditto.db.queries.confirmation_scores import (
+            ConfirmationEfficiencyCosts,
+            confirmation_efficiency_costs_by_agent,
+        )
+
+        continual_costs = await confirmation_efficiency_costs_by_agent(
+            session, agent_ids=agent_ids, bench_version=bench_version
+        )
+        token_totals = {}
+        for agent_id in agent_ids:
+            retests = continual_costs.get(agent_id, ConfirmationEfficiencyCosts())
+            token_totals[agent_id] = audited_v9_token_total(
+                [score.details for score in score_rows.get(agent_id, [])],
+                continual_seed_token_totals=retests.seed_token_totals,
+                continual_cost_evidence_valid=retests.evidence_valid,
+            )
+    else:
+        token_totals = {
             agent_id: audited_token_total(
                 [score.details for score in score_rows.get(agent_id, [])]
             )
             for agent_id in agent_ids
-        },
+        }
+    candidates = _candidates_from_rows(
+        rows,
+        token_totals,
+        curve_version=curve_version,
     )
     epoch = epoch_index_for(now, config.epoch_hours)
     previous = await latest_snapshot(
@@ -817,6 +1333,10 @@ async def preview_efficiency_board(
         previous.members if previous is not None else None,
         quality_floor=config.quality_floor,
         memory_floor=config.memory_floor,
+        previous_curve_version=(
+            previous.curve_version if previous is not None else None
+        ),
+        current_curve_version=curve_version,
     )
     reference = build_cohort_snapshot(
         candidates,
@@ -828,21 +1348,64 @@ async def preview_efficiency_board(
         bonus_cap=config.cap,
         quality_floor=quality_floor,
         memory_floor=memory_floor,
-        deep_bonus_cap=config.deep_cap,
-        deep_frontier_ratio=config.deep_frontier_ratio,
+        deep_bonus_cap=(
+            config.deep_cap if curve_version == CURVE_VERSION_TWO_TIER else None
+        ),
+        deep_frontier_ratio=(
+            config.deep_frontier_ratio
+            if curve_version == CURVE_VERSION_TWO_TIER
+            else None
+        ),
+        curve_version=curve_version,
+        factor_alpha=(
+            config.factor_alpha
+            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            else None
+        ),
+        minimum_factor=(
+            config.minimum_factor
+            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            else None
+        ),
+        maximum_factor=(
+            config.maximum_factor
+            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            else None
+        ),
     )
     return EfficiencyBoardView(
         snapshot=None,
         bonuses={},
         preview=True,
         preview_reference=reference,
-        preview_bonuses={
-            candidate.agent_id: bonus_for_submission(
-                candidate.composite,
-                candidate.memory_mean,
-                candidate.token_total,
-                reference,
-            )
-            for candidate in candidates
-        },
+        preview_bonuses=(
+            None
+            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            else {
+                candidate.agent_id: bonus_for_submission(
+                    candidate.composite,
+                    candidate.memory_mean,
+                    candidate.token_total,
+                    reference,
+                )
+                for candidate in candidates
+            }
+        ),
+        preview_factors=(
+            {
+                candidate.agent_id: factor
+                for candidate in candidates
+                if (
+                    factor := factor_for_submission(
+                        candidate.composite,
+                        candidate.memory_mean,
+                        candidate.token_total,
+                        reference,
+                    )
+                )
+                is not None
+            }
+            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            else None
+        ),
     )

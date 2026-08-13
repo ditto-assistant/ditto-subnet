@@ -8,30 +8,49 @@ guarantee are all covered here without a database.
 
 from __future__ import annotations
 
+import copy
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from itertools import pairwise
+from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID
 
 import pytest
 
+from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.efficiency import (
     BONUS_RUN_SIZE,
+    CURVE_VERSION_BOUNDED_FACTOR,
     MIN_BONUS_BENCH_VERSION,
     CohortReference,
     EfficiencyCandidate,
     audited_token_total,
+    audited_v9_run_token_total,
+    audited_v9_token_total,
     bonus_for_submission,
     bonus_fraction,
+    bounded_efficiency_factor,
     build_cohort_snapshot,
     dedupe_lineages,
     effective_composite,
     epoch_index_for,
+    factor_for_submission,
     floors_from_previous,
     lineage_key,
     nearest_rank_percentile,
     qualifies,
+    read_efficiency_board,
 )
+from ditto_screening_protocol.bench_v9 import V9BaseEvidence, V9ScoreGateEvidence
 
 _T0 = datetime(2026, 7, 24, 12, 0, 0, tzinfo=UTC)
+_V9_VECTOR = (
+    Path(__file__).resolve().parents[5]
+    / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+)
 
 
 def _uuid(n: int) -> UUID:
@@ -45,6 +64,7 @@ def _candidate(
     memory_mean: float = 0.7,
     token_total: float | None = 100_000.0,
     lineage: str | None = None,
+    owner: str | None = None,
     first_seen: datetime | None = None,
 ) -> EfficiencyCandidate:
     return EfficiencyCandidate(
@@ -55,6 +75,7 @@ def _candidate(
         memory_mean=memory_mean,
         token_total=token_total,
         first_seen=first_seen or _T0,
+        owner_key=owner,
     )
 
 
@@ -65,6 +86,26 @@ def _usage(total: int, *, status: str = "complete", unavailable: int = 0) -> dic
             "total_tokens": total,
             "usage_unavailable": unavailable,
         }
+    }
+
+
+def _v9_usage(
+    total: int = 1_440,
+    *,
+    model_updates: dict[str, object] | None = None,
+) -> dict:
+    raw = copy.deepcopy(json.loads(_V9_VECTOR.read_text())["vectors"][0]["details"])
+    model_use = raw["score_gates"]["model_use"]
+    model_use["prompt_tokens"] = total - 240
+    model_use["completion_tokens"] = 240
+    if model_updates is not None:
+        model_use.update(model_updates)
+    gates = V9ScoreGateEvidence.model_validate(raw["score_gates"])
+    raw["score_gates_sha256"] = gates.digest_hex()
+    evidence = V9BaseEvidence.model_validate(raw)
+    return {
+        "v9_base": raw,
+        "base_evidence_sha256": evidence.digest_hex(),
     }
 
 
@@ -93,6 +134,257 @@ class TestAuditedTokenTotal:
     def test_none_when_no_complete_row(self) -> None:
         assert audited_token_total([_usage(5, status="unavailable"), None]) is None
         assert audited_token_total([]) is None
+
+
+class TestAuditedV9TokenTotal:
+    def test_median_of_complete_signature_bound_quorum(self) -> None:
+        # The quorum re-scores ONE pinned seed, so its three receipts are
+        # validator replicates that median to a single observation.
+        assert audited_v9_token_total(
+            [_v9_usage(1_440), _v9_usage(1_800), _v9_usage(2_400)]
+        ) == pytest.approx(1_800.0)
+
+    def test_mean_includes_protocol_19_continual_retest_seeds(self) -> None:
+        # Observations are [1800 (quorum seed), 800, 1600] -> mean 1400.
+        assert audited_v9_token_total(
+            [_v9_usage(1_440), _v9_usage(1_800), _v9_usage(2_400)],
+            continual_seed_token_totals=[800, 1_600],
+        ) == pytest.approx(1_400.0)
+
+    def test_retest_seeds_cannot_outvote_via_extra_validators(self) -> None:
+        """A seed is one observation however many validators scored it.
+
+        The caller medians validators per seed, so three cheap runs of the same
+        seed arrive as one entry and cannot drag the aggregate the way three
+        separate rows would.
+        """
+        assert audited_v9_token_total(
+            [_v9_usage(1_440), _v9_usage(1_800), _v9_usage(2_400)],
+            continual_seed_token_totals=[800],
+        ) == pytest.approx(1_300.0)
+
+    def test_quorum_only_matches_frozen_median_behaviour(self) -> None:
+        """No retests must leave the pre-retest cost byte-for-byte unchanged."""
+        blobs = [_v9_usage(1_440), _v9_usage(1_500), _v9_usage(9_000)]
+        assert audited_v9_token_total(blobs) == pytest.approx(1_500.0)
+        assert audited_v9_token_total(
+            blobs, continual_seed_token_totals=[]
+        ) == pytest.approx(1_500.0)
+
+    def test_explicit_invalid_continual_evidence_fails_closed(self) -> None:
+        assert (
+            audited_v9_token_total(
+                [_v9_usage(1_440), _v9_usage(1_800), _v9_usage(2_400)],
+                continual_seed_token_totals=[800],
+                continual_cost_evidence_valid=False,
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize("bad", [0, -1, float("nan"), float("inf"), True])
+    def test_malformed_retest_observation_fails_closed(self, bad: object) -> None:
+        assert (
+            audited_v9_token_total(
+                [_v9_usage(1_440), _v9_usage(1_800), _v9_usage(2_400)],
+                continual_seed_token_totals=[bad],  # type: ignore[list-item]
+            )
+            is None
+        )
+
+    def test_single_run_extractor_accepts_direct_digest(self) -> None:
+        usage = _v9_usage(1_440)
+        digest = usage.pop("base_evidence_sha256")
+
+        assert audited_v9_run_token_total(usage, base_evidence_sha256=digest) == 1_440
+
+    def test_factor_integrity_exact_boundaries_are_inclusive(self) -> None:
+        usage = _v9_usage(
+            model_updates={
+                "administered_cases": 4,
+                "eligible_cases": 4,
+                "successful_inference_cases": 2,
+                "missing_inference_cases": 2,
+                "observed_requests": 2,
+                "successful_requests": 2,
+                "prompt_tokens": 800,
+                "completion_tokens": 0,
+                "excluded": {
+                    "preflight": 0,
+                    "ablation": 0,
+                    "undelivered": 0,
+                    "validator_fault": 0,
+                },
+                "request_coverage_bps": 5_000,
+                "coverage_bps": 5_000,
+            }
+        )
+        assert audited_v9_token_total([usage, usage, usage]) == 800.0
+
+    def test_requires_every_quorum_root(self) -> None:
+        assert (
+            audited_v9_token_total([_v9_usage(1_440), _v9_usage(1_800), None]) is None
+        )
+        assert (
+            audited_v9_token_total(
+                [
+                    _v9_usage(1_440),
+                    _v9_usage(1_800),
+                    _v9_usage(2_100),
+                    _v9_usage(2_400),
+                ]
+            )
+            is None
+        )
+
+    @pytest.mark.parametrize(
+        "model_updates",
+        [
+            # One cheap probe still passes the frozen one-basis-point v9 base
+            # contract, but it is not authority for an efficiency reward.
+            {
+                "administered_cases": 3,
+                "eligible_cases": 3,
+                "successful_inference_cases": 1,
+                "missing_inference_cases": 2,
+                "observed_requests": 1,
+                "successful_requests": 1,
+                "prompt_tokens": 900,
+                "completion_tokens": 0,
+                "request_coverage_bps": 3_333,
+                "coverage_bps": 3_333,
+                "excluded": {
+                    "preflight": 0,
+                    "ablation": 0,
+                    "undelivered": 0,
+                    "validator_fault": 0,
+                },
+            },
+            # One large padded request clears token-volume floors but does not
+            # prove model involvement across a normal scored run.
+            {
+                "administered_cases": 8,
+                "eligible_cases": 8,
+                "successful_inference_cases": 1,
+                "missing_inference_cases": 7,
+                "observed_requests": 1,
+                "successful_requests": 1,
+                "prompt_tokens": 1_600,
+                "completion_tokens": 0,
+                "excluded": {
+                    "preflight": 0,
+                    "ablation": 0,
+                    "undelivered": 0,
+                    "validator_fault": 0,
+                },
+                "request_coverage_bps": 1_250,
+                "coverage_bps": 1_250,
+            },
+            # Attributed breadth and per-request prompt size pass, but total
+            # prompt volume is one token below the per-case floor.
+            {
+                "administered_cases": 8,
+                "eligible_cases": 8,
+                "successful_inference_cases": 4,
+                "missing_inference_cases": 4,
+                "observed_requests": 4,
+                "successful_requests": 4,
+                "prompt_tokens": 1_599,
+                "completion_tokens": 0,
+                "excluded": {
+                    "preflight": 0,
+                    "ablation": 0,
+                    "undelivered": 0,
+                    "validator_fault": 0,
+                },
+                "request_coverage_bps": 5_000,
+                "coverage_bps": 5_000,
+            },
+            # Breadth and per-case volume pass, but request padding makes the
+            # average prompt one token smaller than the calibrated floor.
+            {
+                "administered_cases": 4,
+                "eligible_cases": 4,
+                "successful_inference_cases": 2,
+                "missing_inference_cases": 2,
+                "observed_requests": 4,
+                "successful_requests": 4,
+                "prompt_tokens": 1_199,
+                "completion_tokens": 0,
+                "excluded": {
+                    "preflight": 0,
+                    "ablation": 0,
+                    "undelivered": 0,
+                    "validator_fault": 0,
+                },
+                "request_coverage_bps": 10_000,
+                "coverage_bps": 5_000,
+            },
+            # Per-case probe padding clears breadth but not meaningful prompt
+            # size per case or per request.
+            {
+                "successful_inference_cases": 3,
+                "missing_inference_cases": 0,
+                "observed_requests": 3,
+                "successful_requests": 3,
+                "prompt_tokens": 222,
+                "completion_tokens": 0,
+                "request_coverage_bps": 10_000,
+                "coverage_bps": 10_000,
+            },
+        ],
+    )
+    def test_rejects_model_bypass_shapes_that_pass_base_contract(
+        self, model_updates: dict[str, object]
+    ) -> None:
+        usage = _v9_usage(model_updates=model_updates)
+        assert usage["v9_base"]["score_gates"]["model_use"]["result"] == "passed"
+        assert audited_v9_token_total([usage, usage, usage]) is None
+
+    def test_one_integrity_failure_invalidates_the_whole_quorum(self) -> None:
+        probe = _v9_usage(
+            model_updates={
+                "successful_inference_cases": 3,
+                "missing_inference_cases": 0,
+                "observed_requests": 3,
+                "successful_requests": 3,
+                "prompt_tokens": 222,
+                "completion_tokens": 0,
+                "request_coverage_bps": 10_000,
+                "coverage_bps": 10_000,
+            }
+        )
+        assert audited_v9_token_total([_v9_usage(), _v9_usage(), probe]) is None
+
+    def test_requires_the_signature_bound_base_digest(self) -> None:
+        missing_digest = _v9_usage()
+        missing_digest.pop("base_evidence_sha256")
+        wrong_digest = _v9_usage()
+        wrong_digest["base_evidence_sha256"] = "00" * 32
+
+        assert audited_v9_token_total([missing_digest] * 3) is None
+        assert audited_v9_token_total([wrong_digest] * 3) is None
+
+    def test_rejects_shadow_or_wrong_contract(self) -> None:
+        shadow = _v9_usage()
+        shadow["v9_base"]["score_gates"]["rollout_mode"] = "shadow"
+        gates = V9ScoreGateEvidence.model_validate(shadow["v9_base"]["score_gates"])
+        shadow["v9_base"]["score_gates_sha256"] = gates.digest_hex()
+        # The base root's applied factor is derived from rollout mode.
+        shadow["v9_base"]["applied_gate_factor_bps"] = 10_000
+
+        wrong_contract = _v9_usage()
+        wrong_contract["v9_base"]["score_contract"]["revision"] = "v9-other"
+
+        assert audited_v9_token_total([shadow, shadow, shadow]) is None
+        assert (
+            audited_v9_token_total([wrong_contract, wrong_contract, wrong_contract])
+            is None
+        )
+
+    def test_ignores_legacy_or_reconciliation_annotations(self) -> None:
+        legacy = _usage(1)
+        legacy["platform_model_use_reconciliation"] = {"verdict": "pass"}
+        assert audited_v9_token_total([legacy, legacy, legacy]) is None
 
 
 class TestLineageKey:
@@ -131,6 +423,7 @@ class TestDedupeLineages:
         )
         members = dedupe_lineages([later, earlier])
         assert members[0].agent_id == earlier.agent_id
+        assert members[0].first_seen == _T0
 
 
 class TestNearestRankPercentile:
@@ -205,6 +498,98 @@ class TestBuildCohortSnapshot:
         assert len(snapshot.members) == 5
         assert min(member.composite for member in snapshot.members) >= 0.56
 
+    def test_equal_quality_owner_reference_uses_lower_cost_before_arrival(self) -> None:
+        earlier_expensive = _candidate(
+            1,
+            composite=0.8,
+            token_total=160.0,
+            owner="coldkey:a",
+            first_seen=_T0,
+        )
+        later_lean = _candidate(
+            2,
+            composite=0.8,
+            token_total=90.0,
+            owner="coldkey:a",
+            first_seen=_T0 + timedelta(hours=1),
+        )
+        snapshot = self._snapshot(
+            [
+                earlier_expensive,
+                later_lean,
+                _candidate(3, token_total=100.0, owner="coldkey:b"),
+                _candidate(4, token_total=110.0, owner="coldkey:c"),
+                _candidate(5, token_total=120.0, owner="coldkey:d"),
+            ],
+            n_min=4,
+        )
+
+        assert snapshot.active
+        assert {member.agent_id for member in snapshot.members} == {
+            _uuid(2),
+            _uuid(3),
+            _uuid(4),
+            _uuid(5),
+        }
+        lean = next(
+            member for member in snapshot.members if member.agent_id == _uuid(2)
+        )
+        assert lean.collapsed_agent_ids == (_uuid(1),)
+
+    def test_tied_boundary_uses_first_seen_before_uuid_and_freezes_p25(self) -> None:
+        """Lineage winner and top-N boundary share the canonical comparator.
+
+        UUID ordering would admit the one-token late submission and move P25
+        from 100 to 1. Earliest first_seen must win both decisions.
+        """
+        early_lineage_winner = _candidate(
+            50,
+            composite=0.8,
+            token_total=100.0,
+            lineage="sha:tied-lineage",
+            first_seen=_T0,
+        )
+        later_lineage_copy = _candidate(
+            40,
+            composite=0.8,
+            token_total=2.0,
+            lineage="sha:tied-lineage",
+            first_seen=_T0 + timedelta(minutes=3),
+        )
+        tied_middle = _candidate(
+            60,
+            composite=0.8,
+            token_total=200.0,
+            first_seen=_T0 + timedelta(minutes=1),
+        )
+        late_low_uuid = _candidate(
+            1,
+            composite=0.8,
+            token_total=1.0,
+            first_seen=_T0 + timedelta(minutes=2),
+        )
+        snapshot = self._snapshot(
+            [
+                late_low_uuid,
+                later_lineage_copy,
+                tied_middle,
+                _candidate(90, composite=0.95, token_total=400.0),
+                early_lineage_winner,
+                _candidate(80, composite=0.9, token_total=300.0),
+            ],
+            cohort_limit=4,
+            n_min=4,
+        )
+
+        assert [member.agent_id for member in snapshot.members] == [
+            _uuid(90),
+            _uuid(80),
+            _uuid(50),
+            _uuid(60),
+        ]
+        assert snapshot.members[2].collapsed_agent_ids == (_uuid(40),)
+        assert snapshot.reference_p25_tokens == 100.0
+
     def test_n_min_gate_inactive_snapshot(self) -> None:
         candidates = [_candidate(n, token_total=100.0) for n in range(1, 4)]
         snapshot = self._snapshot(candidates, n_min=4)
@@ -227,6 +612,30 @@ class TestBuildCohortSnapshot:
         candidates = [_candidate(n, token_total=100.0) for n in range(1, 5)]
         snapshot = self._snapshot(candidates)
         assert snapshot.curve_version == 1
+        assert snapshot.deep_bonus_cap is None
+        assert snapshot.deep_frontier_ratio is None
+
+    def test_v3_reference_is_dynamic_nearest_rank_p25(self) -> None:
+        # These are arbitrary example costs, not fixed standards. At N=8 the
+        # nearest-rank P25 is the second observed value (ceil(.25 * 8) = 2).
+        costs = [70.0, 90.0, 110.0, 160.0, 190.0, 230.0, 300.0, 500.0]
+        snapshot = self._snapshot(
+            [
+                _candidate(n, token_total=cost, composite=0.9 - n / 100)
+                for n, cost in enumerate(costs, start=1)
+            ],
+            bench_version=9,
+            n_min=8,
+            curve_version=CURVE_VERSION_BOUNDED_FACTOR,
+            factor_alpha=0.25,
+            minimum_factor=0.85,
+            maximum_factor=1.10,
+        )
+        assert snapshot.curve_version == CURVE_VERSION_BOUNDED_FACTOR
+        assert snapshot.reference_p25_tokens == 90.0
+        assert snapshot.factor_alpha == 0.25
+        assert snapshot.minimum_factor == 0.85
+        assert snapshot.maximum_factor == 1.10
         assert snapshot.deep_bonus_cap is None
         assert snapshot.deep_frontier_ratio is None
 
@@ -436,6 +845,88 @@ class TestBonusForSubmission:
         assert bonus_for_submission(0.9, 0.9, 100.0, legacy) == 0.05
 
 
+class TestBoundedEfficiencyFactor:
+    _KW = {
+        "reference_cost": 100.0,
+        "alpha": 0.25,
+        "minimum_factor": 0.85,
+        "maximum_factor": 1.10,
+    }
+
+    def test_reference_is_neutral(self) -> None:
+        assert bounded_efficiency_factor(100.0, **self._KW) == 1.0
+
+    def test_cheaper_is_bonus_and_expensive_is_penalty(self) -> None:
+        assert bounded_efficiency_factor(50.0, **self._KW) > 1.0
+        assert bounded_efficiency_factor(200.0, **self._KW) < 1.0
+
+    def test_clamps_both_directions(self) -> None:
+        assert bounded_efficiency_factor(1.0, **self._KW) == 1.10
+        assert bounded_efficiency_factor(1_000_000.0, **self._KW) == 0.85
+
+    def test_monotone_and_alpha_softens_the_ratio(self) -> None:
+        costs = [25.0, 50.0, 100.0, 200.0, 400.0]
+        factors = [bounded_efficiency_factor(cost, **self._KW) for cost in costs]
+        assert all(a >= b for a, b in pairwise(factors))
+        soft = bounded_efficiency_factor(125.0, **self._KW)
+        hard = bounded_efficiency_factor(125.0, **{**self._KW, "alpha": 0.5})
+        assert soft > hard
+
+    @pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf")])
+    def test_bad_agent_cost_is_neutral(self, bad: float) -> None:
+        assert bounded_efficiency_factor(bad, **self._KW) == 1.0
+
+    @pytest.mark.parametrize(
+        "override",
+        [
+            {"reference_cost": 0.0},
+            {"alpha": 0.0},
+            {"alpha": 1.01},
+            {"minimum_factor": 0.84},
+            {"maximum_factor": 1.11},
+        ],
+    )
+    def test_invalid_frozen_policy_is_neutral(self, override: dict[str, float]) -> None:
+        assert bounded_efficiency_factor(100.0, **{**self._KW, **override}) == 1.0
+
+    def test_factor_for_submission_uses_frozen_snapshot_not_examples(self) -> None:
+        reference = CohortReference(
+            bench_version=9,
+            run_size=BONUS_RUN_SIZE,
+            epoch_index=1000,
+            active=True,
+            cohort_limit=25,
+            n_min=8,
+            bonus_cap=0.05,
+            quality_floor=0.5,
+            memory_floor=0.4,
+            reference_p25_tokens=120_000.0,
+            reference_median_tokens=200_000.0,
+            members=(),
+            curve_version=CURVE_VERSION_BOUNDED_FACTOR,
+            factor_alpha=0.25,
+            minimum_factor=0.85,
+            maximum_factor=1.10,
+        )
+        assert factor_for_submission(0.8, 0.8, 120_000.0, reference) == 1.0
+        cheaper = factor_for_submission(0.8, 0.8, 80_000.0, reference)
+        dearer = factor_for_submission(0.8, 0.8, 180_000.0, reference)
+        assert cheaper is not None and cheaper > 1.0
+        assert dearer is not None and dearer < 1.0
+        # Floors define reference membership, not adjustment eligibility: a
+        # lower-quality expensive agent cannot sandbag below the floor to
+        # escape the downside.
+        below_floor = factor_for_submission(0.4, 0.3, 1_000_000.0, reference)
+        above_floor = factor_for_submission(0.5, 0.4, 1_000_000.0, reference)
+        assert below_floor == above_floor == 0.85
+        assert 0.4 * below_floor < 0.5 * above_floor
+        assert factor_for_submission(0.4, 0.3, 80_000.0, reference) == 1.0
+        assert factor_for_submission(0.8, 0.8, None, reference) is None
+
+        legacy_version = replace(reference, bench_version=8)
+        assert factor_for_submission(0.8, 0.8, 80_000.0, legacy_version) is None
+
+
 class TestEffectiveComposite:
     def test_multiplicative_and_bounded(self) -> None:
         assert effective_composite(0.8, 0.05) == 0.8 * 1.05
@@ -460,6 +951,64 @@ class TestEpochIndex:
             epoch_index_for(base + timedelta(hours=6), 6)
             == epoch_index_for(base, 6) + 1
         )
+
+
+class TestEfficiencyBoardReads:
+    @pytest.mark.parametrize("historical", [False, True])
+    async def test_assignment_epoch_is_current_or_selected_historical_snapshot(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        historical: bool,
+    ) -> None:
+        config = EfficiencyBonusConfig(enabled=True, epoch_hours=24)
+        current_epoch = epoch_index_for(_T0, config.epoch_hours)
+        snapshot = SimpleNamespace(epoch_index=current_epoch - 3)
+        latest = AsyncMock(return_value=snapshot)
+        assignments = AsyncMock(return_value={})
+        monkeypatch.setattr("ditto.db.queries.efficiency.latest_snapshot", latest)
+        monkeypatch.setattr("ditto.db.queries.efficiency.get_bonus_rows", assignments)
+        agent_id = _uuid(1)
+
+        view = await read_efficiency_board(
+            object(),  # type: ignore[arg-type]
+            config,
+            bench_version=7,
+            agent_ids=[agent_id],
+            bench_versions={agent_id: 7},
+            now=_T0,
+            historical=historical,
+        )
+
+        assert view is not None and view.snapshot is snapshot
+        assert assignments.await_args is not None
+        assert assignments.await_args.kwargs["epoch_index"] == (
+            snapshot.epoch_index if historical else current_epoch
+        )
+
+    async def test_historical_read_without_snapshot_cannot_borrow_current_rows(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config = EfficiencyBonusConfig(enabled=True)
+        latest = AsyncMock(return_value=None)
+        assignments = AsyncMock(return_value={})
+        monkeypatch.setattr("ditto.db.queries.efficiency.latest_snapshot", latest)
+        monkeypatch.setattr("ditto.db.queries.efficiency.get_bonus_rows", assignments)
+        agent_id = _uuid(1)
+
+        view = await read_efficiency_board(
+            object(),  # type: ignore[arg-type]
+            config,
+            bench_version=7,
+            agent_ids=[agent_id],
+            bench_versions={agent_id: 7},
+            now=_T0,
+            historical=True,
+        )
+
+        assert view is not None
+        assert view.snapshot is None
+        assert view.bonuses == {}
+        assignments.assert_not_awaited()
 
 
 class TestFloorsFromPrevious:
@@ -491,3 +1040,27 @@ class TestFloorsFromPrevious:
             members, quality_floor=0.5, memory_floor=0.4
         )
         assert (quality, memory) == (0.5, 0.4)
+
+    def test_v3_transition_ignores_incomparable_legacy_quality(self) -> None:
+        members = [{"composite": 0.95, "memory_mean": 0.95}]
+        assert floors_from_previous(
+            members,
+            quality_floor=0.3,
+            memory_floor=0.2,
+            previous_curve_version=2,
+            current_curve_version=CURVE_VERSION_BOUNDED_FACTOR,
+        ) == (0.3, 0.2)
+
+    def test_v3_inherits_only_from_previous_v3(self) -> None:
+        members = [
+            {"composite": 0.6, "memory_mean": 0.5},
+            {"composite": 0.8, "memory_mean": 0.7},
+            {"composite": 0.7, "memory_mean": 0.6},
+        ]
+        assert floors_from_previous(
+            members,
+            quality_floor=0.3,
+            memory_floor=0.2,
+            previous_curve_version=CURVE_VERSION_BOUNDED_FACTOR,
+            current_curve_version=CURVE_VERSION_BOUNDED_FACTOR,
+        ) == pytest.approx((0.7, 0.48))

@@ -25,6 +25,8 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -32,13 +34,21 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
+from ditto.api_server.config import EfficiencyBonusConfig
+from ditto.api_server.efficiency import epoch_index_for
 from ditto.db.models import Agent, ValidatorHeartbeat, ValidatorTicket
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
     append_confirmation_scores,
 )
-from ditto.db.queries.score_ranking import official_composites
+from ditto.db.queries.score_ranking import (
+    EfficiencyFactorRequesterNotReady,
+    dedupe_owner_rows,
+    official_composites,
+    resolve_efficiency_adjustments,
+    resolve_official_composites,
+)
 from ditto.db.queries.scores import list_eligible_ledger, upsert_score
 from ditto.db.queries.tickets import get_score_priority_floor_rows
 from ditto.score_order import rank_submissions, score_order_key
@@ -63,12 +73,31 @@ class _Row:
 
 
 @dataclass(frozen=True)
+class _CrownRow:
+    agent_id: UUID
+    miner_hotkey: str
+    first_seen: datetime
+    composite: float
+    bench_version: int
+    emission_owner_root: str
+    crown_first_seen: datetime | None = None
+    eligible: bool = True
+
+    @property
+    def fold_first_seen(self) -> datetime:
+        return self.crown_first_seen or self.first_seen
+
+
+@dataclass(frozen=True)
 class _FinalRow:
     agent_id: UUID
     miner_hotkey: str
     first_seen: datetime
     composite: float
     bench_version: int = 7
+    v9_confirmation: dict[str, int] | None = None
+    emission_owner_root: str | None = None
+    eligible: bool = True
 
 
 def _uuid(nibble: str) -> UUID:
@@ -80,6 +109,68 @@ class TestComparator:
         low = _Row(_uuid("1"), _BASE, 0.10)
         high = _Row(_uuid("2"), _BASE, 0.90)
         assert rank_submissions([low, high]) == [high, low]
+
+    def test_factor_adjusted_score_selects_the_leaner_owner_generation(self) -> None:
+        earlier_expensive = _FinalRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+            emission_owner_root="coldkey:owner-a",
+        )
+        later_lean = _FinalRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=1),
+            composite=0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+            emission_owner_root="coldkey:owner-a",
+        )
+
+        selected = dedupe_owner_rows(
+            [earlier_expensive, later_lean],
+            scores={
+                earlier_expensive.agent_id: 0.8 * 0.85,
+                later_lean.agent_id: 0.8 * 1.10,
+            },
+        )
+
+        assert selected == [later_lean]
+
+    def test_factor_recomputes_owner_crown_before_first_seen_tiebreak(self) -> None:
+        early_expensive = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.9,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        later_lean = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=2),
+            composite=0.9,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            # This is the pre-factor SQL anchor and must not survive.
+            crown_first_seen=_BASE,
+        )
+
+        [winner] = dedupe_owner_rows(
+            [early_expensive, later_lean],
+            scores={
+                early_expensive.agent_id: 0.9 * 0.85,
+                later_lean.agent_id: 0.9 * 1.10,
+            },
+        )
+
+        assert winner.agent_id == later_lean.agent_id
+        assert winner.fold_first_seen == later_lean.first_seen
 
     def test_a_score_tie_is_broken_by_the_earlier_first_seen(self) -> None:
         later = _Row(_uuid("2"), _BASE + timedelta(days=1), 0.50)
@@ -145,6 +236,326 @@ class TestComparator:
         )
 
         assert scores[row.agent_id] == pytest.approx(0.78 * 1.1)
+
+    def test_v9_factor_applies_after_full_quality_and_ignores_continual_data(
+        self,
+    ) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 750_000},
+        )
+
+        scores = official_composites(
+            [row],
+            quorum={row.agent_id: [1.0, 1.0, 1.0]},
+            completed_waves={row.agent_id: {10: 1.0}},
+            continual_mean_active=True,
+            efficiency_bonuses={row.agent_id: 0.1},
+            efficiency_factors={row.agent_id: 0.85},
+            efficiency_fold_active=True,
+        )
+
+        # Full v9 quality is authoritative; legacy bonus and continual samples
+        # are ignored, then curve v3 applies exactly once.
+        assert scores[row.agent_id] == pytest.approx(0.75 * 0.85)
+
+    def test_equal_v9_quality_lower_cost_factor_beats_submission_time(self) -> None:
+        earlier = _FinalRow(
+            _uuid("1"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        later = _FinalRow(
+            _uuid("2"),
+            "5" + "b" * 47,
+            _BASE + timedelta(hours=1),
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        scores = official_composites(
+            [earlier, later],
+            quorum={},
+            completed_waves={},
+            continual_mean_active=False,
+            efficiency_factors={earlier.agent_id: 0.85, later.agent_id: 1.10},
+            efficiency_fold_active=True,
+        )
+
+        assert rank_submissions([earlier, later], scores=scores) == [later, earlier]
+
+    def test_equal_headroom_adjusted_scores_use_submission_time_tie_break(self) -> None:
+        earlier = _FinalRow(
+            _uuid("1"),
+            "5" + "a" * 47,
+            _BASE,
+            0.95,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 950_000},
+        )
+        later = _FinalRow(
+            _uuid("2"),
+            "5" + "b" * 47,
+            _BASE + timedelta(hours=1),
+            0.95,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 950_000},
+        )
+        scores = official_composites(
+            [later, earlier],
+            quorum={},
+            completed_waves={},
+            continual_mean_active=False,
+            efficiency_factors={earlier.agent_id: 1.10, later.agent_id: 1.10},
+            efficiency_fold_active=True,
+        )
+
+        assert scores == {earlier.agent_id: 0.955, later.agent_id: 0.955}
+        assert rank_submissions([later, earlier], scores=scores) == [earlier, later]
+
+    def test_headroom_uplift_keeps_banblackycat_ahead_of_earlier_crown(self) -> None:
+        crown = _FinalRow(
+            _uuid("1"),
+            "5" + "a" * 47,
+            _BASE,
+            0.980723,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 980_723},
+        )
+        banblackycat = _FinalRow(
+            _uuid("2"),
+            "5" + "b" * 47,
+            _BASE + timedelta(minutes=15),
+            0.997012,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 997_012},
+        )
+        scores = official_composites(
+            [crown, banblackycat],
+            quorum={},
+            completed_waves={},
+            continual_mean_active=False,
+            efficiency_factors={
+                crown.agent_id: 1.09426,
+                banblackycat.agent_id: 1.034716,
+            },
+            efficiency_fold_active=True,
+        )
+
+        assert scores[crown.agent_id] == pytest.approx(0.98254005002)
+        assert scores[banblackycat.agent_id] == pytest.approx(0.997115731408)
+        assert rank_submissions([crown, banblackycat], scores=scores) == [
+            banblackycat,
+            crown,
+        ]
+
+
+@pytest.mark.asyncio
+class TestEfficiencyAdjustedFloors:
+    @pytest.mark.parametrize(
+        ("fleet_ready", "expected"),
+        [(True, 0.82), (False, 0.80)],
+    )
+    async def test_resolver_uses_threaded_policy_and_the_weight_setter_gate(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        fleet_ready: bool,
+        expected: float,
+    ) -> None:
+        """An env-seed config is authoritative even without a DB revision."""
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+
+        async def bonus_rows(*_args: object, **kwargs: object) -> dict[UUID, object]:
+            assert kwargs["epoch_index"] == epoch_index_for(_BASE, config.epoch_hours)
+            return {
+                row.agent_id: SimpleNamespace(factor=1.10, bonus=0.0),
+            }
+
+        async def fleet_supports(*_args: object, **kwargs: object) -> bool:
+            assert kwargs["minimum_protocol"] == 19
+            assert kwargs["now"] == _BASE
+            return fleet_ready
+
+        monkeypatch.setattr("ditto.db.queries.efficiency.get_bonus_rows", bonus_rows)
+        monkeypatch.setattr(
+            "ditto.db.queries.heartbeats.live_weight_setter_fleet_supports_protocol",
+            fleet_supports,
+        )
+        scores = await resolve_official_composites(
+            object(),  # type: ignore[arg-type]
+            rows=[row],
+            bench_version=9,
+            continual_mean_active=False,
+            efficiency_config=config,
+            now=_BASE,
+        )
+
+        assert scores[row.agent_id] == pytest.approx(expected)
+
+    @pytest.mark.parametrize(
+        "requester",
+        [
+            None,
+            SimpleNamespace(
+                protocol_version=18,
+                seen_at=_BASE - timedelta(hours=1),
+            ),
+        ],
+    )
+    async def test_absent_or_stale_ledger_requester_is_rejected_only_for_factor(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        requester: object | None,
+    ) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+        session = SimpleNamespace(get=AsyncMock(return_value=requester))
+
+        monkeypatch.setattr(
+            "ditto.db.queries.efficiency.get_bonus_rows",
+            AsyncMock(
+                return_value={row.agent_id: SimpleNamespace(factor=1.10, bonus=0.0)}
+            ),
+        )
+        fleet_gate = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ditto.db.queries.heartbeats.live_weight_setter_fleet_supports_protocol",
+            fleet_gate,
+        )
+
+        with pytest.raises(
+            EfficiencyFactorRequesterNotReady,
+            match="fresh validator heartbeat.*bounded efficiency factors",
+        ):
+            await resolve_efficiency_adjustments(
+                session,  # type: ignore[arg-type]
+                rows=[row],
+                efficiency_config=config,
+                now=_BASE,
+                requesting_validator_hotkey="5" + "z" * 47,
+            )
+
+        fleet_gate.assert_not_awaited()
+
+    async def test_fresh_pre_v19_requester_neutralizes_factor_via_global_gate(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+        session = SimpleNamespace(
+            get=AsyncMock(
+                return_value=SimpleNamespace(protocol_version=18, seen_at=_BASE)
+            )
+        )
+        monkeypatch.setattr(
+            "ditto.db.queries.efficiency.get_bonus_rows",
+            AsyncMock(
+                return_value={row.agent_id: SimpleNamespace(factor=1.10, bonus=0.0)}
+            ),
+        )
+        fleet_gate = AsyncMock(return_value=False)
+        monkeypatch.setattr(
+            "ditto.db.queries.heartbeats.live_weight_setter_fleet_supports_protocol",
+            fleet_gate,
+        )
+
+        bonuses, factors = await resolve_efficiency_adjustments(
+            session,  # type: ignore[arg-type]
+            rows=[row],
+            efficiency_config=config,
+            now=_BASE,
+            requesting_validator_hotkey="5" + "z" * 47,
+        )
+
+        assert bonuses == {}
+        assert factors == {}
+        fleet_gate.assert_awaited_once()
+
+    async def test_fifth_and_tenth_floors_use_factor_adjusted_order(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        rows = [
+            _FinalRow(
+                UUID(int=index + 1),
+                "5" + chr(ord("a") + index) * 47,
+                _BASE + timedelta(minutes=index),
+                0.8,
+                bench_version=9,
+                v9_confirmation={"full_effective_micros": 800_000},
+            )
+            for index in range(10)
+        ]
+        factors = {row.agent_id: 0.85 + index * 0.02 for index, row in enumerate(rows)}
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+
+        async def eligible_rows(*_args: object, **kwargs: object) -> list[_FinalRow]:
+            assert kwargs["include_fingerprints"] is False
+            assert kwargs["include_details"] is False
+            return rows
+
+        async def ranking_scores(*_args: object, **kwargs: object) -> dict[UUID, float]:
+            assert kwargs["efficiency_config"] is config
+            assert kwargs["now"] == _BASE
+            return official_composites(
+                rows,
+                quorum={},
+                completed_waves={},
+                continual_mean_active=False,
+                efficiency_factors=factors,
+                efficiency_fold_active=True,
+            )
+
+        monkeypatch.setattr(
+            "ditto.db.queries.tickets.list_eligible_ledger", eligible_rows
+        )
+        monkeypatch.setattr(
+            "ditto.db.queries.tickets.resolve_ranking_scores", ranking_scores
+        )
+
+        continuation, provisional = await get_score_priority_floor_rows(
+            object(),  # type: ignore[arg-type]
+            bench_version=9,
+            efficiency_config=config,
+            now=_BASE,
+        )
+
+        assert continuation is not None
+        assert provisional is not None
+        # Factor order is the reverse of submission-time order. Raw-score ties
+        # would put rows[4] fifth; the canonical adjusted floor is rows[5].
+        assert continuation.row.agent_id == rows[5].agent_id
+        assert continuation.score == pytest.approx(0.8 * factors[rows[5].agent_id])
+        assert provisional.row.agent_id == rows[0].agent_id
+        assert provisional.score == pytest.approx(0.8 * factors[rows[0].agent_id])
 
 
 async def _seed(

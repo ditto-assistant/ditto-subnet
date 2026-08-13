@@ -1,11 +1,11 @@
-# Relative efficiency bonus — platform-layer specification (v7+)
+# Relative efficiency adjustment — platform-layer specification (v7+)
 
 Status: IMPLEMENTED in `ditto-platform` behind operator-controlled shadow and
-enforcement settings. Nothing in this document runs in the validator. Under
-the v7+ quality-only contract the validator's composite is a
-pure function of (dataset, transcript) — deterministic and time-invariant —
-and audited token usage is recorded, never scored. Efficiency incentives live
-here, in the platform layer, computed over frozen cohorts.
+enforcement settings. Nothing here changes the deterministic benchmark scorer.
+Under the v7+ quality-only contract, quality evidence is deterministic and
+time-invariant; the platform separately computes relative efficiency over a
+frozen cohort. Historical curves v1/v2 are upside-only. A newly created Bench
+v9 snapshot selects curve v3, a bounded penalty-or-bonus factor.
 
 ## Why platform-layer, not validator-layer
 
@@ -14,6 +14,107 @@ regardless of WHEN it runs. Any relative-efficiency term inside the validator
 would break that (the comparison set changes over time). Absolute starter-kit
 budgets and their 60-run calibration workflow are retired. The platform already
 owns time-indexed state (the KOTH ledger) and can freeze cohorts by epoch.
+
+## Bench v9 policy (curve v3)
+
+For a new active `(bench_version=9, run_size=full, epoch)` snapshot:
+
+```text
+Efficiency Factor = clamp((Reference Cost / Agent Cost)^alpha,
+                           minimum_factor,
+                           maximum_factor)
+if Efficiency Factor <= 1:
+    Final Score = Authoritative Quality Score × Efficiency Factor
+else:
+    Final Score = Authoritative Quality Score
+                  + (Efficiency Factor - 1) × (1 - Authoritative Quality Score)
+```
+
+The defaults are `alpha=0.25`, `minimum_factor=0.85`, and
+`maximum_factor=1.10`. The lower exponent deliberately softens cost ratios;
+the clamps bound both the penalty and reward. Positive efficiency scales only
+remaining quality headroom: quality `0.95` with factor `1.10` produces `0.955`,
+not `1.0`. At equal authoritative quality, a lower-cost qualified agent ranks
+higher before the existing `first_seen` tie break; genuinely equal results use
+the existing deterministic tie break. Historical curve-v1/v2 bonus replay is
+unchanged.
+
+### Cost and integrity authority
+
+`Agent Cost` is a durable token proxy, not a displayed dollar price. It is the
+arithmetic mean over **seeds**, taken across everything comparable and accepted
+at the epoch freeze: the pinned quorum seed plus every protocol-19 single-seed
+continual retest.
+
+A seed is the unit of observation at both levels:
+
+```text
+observation(seed) = median(audited cost across the validators that scored it)
+Agent Cost        = mean(observation(pinned seed), observation(retest seeds…))
+```
+
+The three v9 quorum receipts all re-score the agent's single pinned dataset
+seed, so they are validator replicates of one observation rather than three
+independent samples — the same rule the confirmation ledger already applies to
+per-seed quality. Averaging raw rows instead would weight a seed by how many
+validators happened to draw it and would let a lone validator set that seed's
+cost. The per-seed observations are then averaged, so every evaluated seed has
+equal weight. With no retests this reduces exactly to the frozen
+median-of-quorum value, so agents the fleet has never retested are unaffected.
+
+Each observation is the typed
+`v9_base.score_gates.model_use.prompt_tokens + completion_tokens`. Every root
+used by the aggregate must:
+
+* parse under the exact frozen v9 score-contract revision and manifest;
+* carry the same exact threshold-profile identity;
+* be in `enforce` mode;
+* report passed model use with factor `10000` and clear curve-v3's frozen,
+  factor-specific integrity floor: attributed inference on at least half of
+  eligible cases, at least 200 prompt tokens per eligible case, and at least
+  300 prompt tokens per successful request;
+* carry a positive prompt-plus-completion total; and
+* report semantic and applied gate factors of `10000`.
+
+Fail closed if any canonical root or new cost-authoritative retest is absent,
+malformed, shadow-mode, failed, probe-only, or zero-use: that submission
+receives no v3 factor. Historical continual rows whose signatures predate the
+protocol-19 base-evidence binding are ignored, never counted as zero. The
+v9 base gate's one-basis-point threshold alone is intentionally not enough to
+earn an efficiency adjustment. Do not read the
+legacy `platform_model_use_reconciliation` annotation. Do not use
+`average_run_cost_microusd`: that short-retention grant-ledger metric includes
+provider pricing, embeddings, and possibly non-quorum work, so it is useful
+telemetry but not durable replay authority. Dollar values such as `$0.09` and
+`$0.16` are examples of agents' observed spend, never configured reference
+costs.
+
+### Dynamic reference and quality
+
+Use the independently verified full-confirmed v9
+`full_effective_micros / 1_000_000` as `Authoritative Quality Score`. Apply the
+configured/ratcheted quality and memory floors, collapse duplicate lineages,
+and retain the top `cohort_size` qualified entries. If fewer than `N_min`
+remain, freeze an inactive observation and assign no factor.
+
+For an active cohort, sort the per-agent token costs ascending and select the
+nearest-rank 25th percentile:
+
+```text
+Reference Cost = sorted_costs[ceil(0.25 × N) - 1]
+```
+
+This P25 is dynamic data from the qualified cohort—not the cheapest entry, a
+mean, a median, a dollar target, or an operator-entered constant. It is neutral
+(`factor=1.0`); lower cost moves toward the `1.10` cap and higher cost moves
+toward the `0.85` floor. Consequently, roughly the efficient quartile is
+neutral-or-better while the remainder of a non-degenerate cohort is on the
+bounded penalty side.
+
+Freeze membership, P25, alpha, and both clamps in the immutable epoch snapshot,
+then store each assignment separately. New arrivals cannot move an existing
+epoch. Historical curve-v1/v2 snapshots, including an already-frozen v9
+snapshot, replay their stored policy exactly; v7/v8 behavior is unchanged.
 
 ## Inputs the validator exposes (all already produced today)
 
@@ -37,7 +138,10 @@ Per scored run, signed/content-addressed as usual:
 The QUALITY GATE RESULT for the bonus is computable from (3) alone; the
 platform must not re-derive quality from usage.
 
-## Bonus definition
+## Historical v1/v2 bonus definition
+
+The remainder of this section is the replay contract for legacy snapshots. It
+does not define new Bench-v9 cost authority or curve-v3 arithmetic.
 
 For each cohort `(bench_version, run_size, epoch)`:
 
@@ -96,10 +200,29 @@ For each cohort `(bench_version, run_size, epoch)`:
   an unauthorized cheaper model or route.
 - The cap (5–10%) keeps the bonus a tiebreaker among comparable-quality
   agents; quality dominates by construction.
+- For v3, complete typed k=3 roots plus protocol-19 cost-bound continual roots
+  make model bypass, zero-model output, or a cherry-picked cheap receipt
+  unqualified. P25 limits one cheap outlier's
+  effect, and `[0.85, 1.10]` bounds the fold even when cohort costs are widely
+  dispersed. Quality/memory floors select the reference cohort and gate v3
+  upside; valid-cost rows below a floor still receive bounded downside, so
+  sandbagging below the threshold cannot avoid an expensive-run penalty.
 
 ## Rollout sequence
 
-1. Validators report quality-only scores plus complete trusted usage.
-2. The platform observes the model-use verdict and relative bonus in shadow.
-3. Backroom enables enforcement and bonus assignment only after the live cohort
-   is healthy. No scorer deploy or calibration campaign is part of this step.
+1. Validators report quality-only scores plus complete trusted usage and the
+   signature-bound v9 roots used by curve v3.
+2. Deploy factor-aware Platform and heartbeat-protocol-19 validator releases,
+   leaving the efficiency fold off. Let Platform freeze snapshots and audit
+   cohort health/P25.
+3. Backroom enables assignment only after the live cohort is healthy. New v9
+   snapshots use v3; legacy snapshots continue replaying v1/v2.
+4. Enable validator-ledger fold exposure only after all participating
+   validators report protocol 19+, prefer `efficiency_factor`, apply it after
+   authoritative full-v9 quality with the same downside/headroom transform, and
+   treat absent/malformed factors neutrally.
+   Platform independently fails closed: a mixed or empty recently-live
+   weight-setting fleet receives no v3 factors even when the fold flag is set,
+   regardless of scorer capability, so old validators cannot split KOTH/weight
+   projections. This new readiness gate does not alter historical curve-v1/v2
+   bonus exposure.

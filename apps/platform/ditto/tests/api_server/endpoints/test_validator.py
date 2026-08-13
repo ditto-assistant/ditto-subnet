@@ -4489,6 +4489,7 @@ class TestRequestJob:
             # the helper's default (the rail off) is what reaches the allocator.
             similarity_policy=None,
             similarity_concurrent_submission_limit=1,
+            efficiency_config=None,
         )
 
     async def test_activated_v7_retires_v6_permanently(

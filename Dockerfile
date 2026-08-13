@@ -3,7 +3,7 @@ FROM python:3.12-slim@sha256:646fb0bca3dd3ea1bcc6feb72c17ed16eed6e10cffc732fcc14
 ARG DITTO_VERSION=0.0.0
 ARG DITTO_REVISION=local
 ARG VALIDATOR_COMPATIBILITY_EPOCH=2
-ARG VALIDATOR_HEARTBEAT_PROTOCOL=18
+ARG VALIDATOR_HEARTBEAT_PROTOCOL=19
 
 LABEL org.opencontainers.image.source="https://github.com/ditto-assistant/ditto-subnet" \
       org.opencontainers.image.version="$DITTO_VERSION" \

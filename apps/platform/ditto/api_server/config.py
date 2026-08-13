@@ -170,6 +170,19 @@ class EfficiencyBonusConfig:
     ``ratio x P25`` the bonus saturates flat at ``deep_cap`` — deliberately
     no extra reward for racing toward zero tokens."""
 
+    factor_alpha: float = 0.25
+    """Exponent for the bounded v3 efficiency factor
+    (``DITTO_EFFICIENCY_BONUS_FACTOR_ALPHA``), in ``(0, 1]``. Values below
+    one soften cost differences before the minimum/maximum clamps apply."""
+
+    minimum_factor: float = 0.85
+    """Lower clamp for the bounded v3 efficiency factor
+    (``DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR``), in ``[0.85, 1]``."""
+
+    maximum_factor: float = 1.10
+    """Upper clamp for the bounded v3 efficiency factor
+    (``DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR``), in ``[1, 1.10]``."""
+
     cohort_size: int = 25
     """Top-N quality-qualified agents forming a cohort
     (``DITTO_EFFICIENCY_BONUS_COHORT_SIZE``)."""
@@ -612,6 +625,15 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             deep_frontier_ratio=float(
                 os.environ.get("DITTO_EFFICIENCY_BONUS_DEEP_FRONTIER_RATIO", "0.5")
             ),
+            factor_alpha=float(
+                os.environ.get("DITTO_EFFICIENCY_BONUS_FACTOR_ALPHA", "0.25")
+            ),
+            minimum_factor=float(
+                os.environ.get("DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR", "0.85")
+            ),
+            maximum_factor=float(
+                os.environ.get("DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR", "1.10")
+            ),
             cohort_size=int(os.environ.get("DITTO_EFFICIENCY_BONUS_COHORT_SIZE", "25")),
             min_cohort=int(os.environ.get("DITTO_EFFICIENCY_BONUS_MIN_COHORT", "8")),
             epoch_hours=int(os.environ.get("DITTO_EFFICIENCY_BONUS_EPOCH_HOURS", "24")),
@@ -966,6 +988,23 @@ def check_config(config: ApiServerConfig) -> None:
     if not 0.0 < efficiency.deep_frontier_ratio < 1.0:
         raise ApiServerConfigError(
             "DITTO_EFFICIENCY_BONUS_DEEP_FRONTIER_RATIO must be in (0, 1)"
+        )
+    if not 0.0 < efficiency.factor_alpha <= 1.0:
+        raise ApiServerConfigError(
+            "DITTO_EFFICIENCY_BONUS_FACTOR_ALPHA must be in (0, 1]"
+        )
+    if not 0.85 <= efficiency.minimum_factor <= 1.0:
+        raise ApiServerConfigError(
+            "DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR must be in [0.85, 1]"
+        )
+    if not 1.0 <= efficiency.maximum_factor <= 1.10:
+        raise ApiServerConfigError(
+            "DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR must be in [1, 1.10]"
+        )
+    if efficiency.minimum_factor > efficiency.maximum_factor:
+        raise ApiServerConfigError(
+            "DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR must not exceed "
+            "DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR"
         )
     if efficiency.min_cohort < 2:
         raise ApiServerConfigError(

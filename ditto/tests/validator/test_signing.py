@@ -114,6 +114,29 @@ def test_top5_confirmation_score_binds_all_seed_composite_pairs() -> None:
     )
 
 
+def test_protocol_19_confirmation_score_binds_v9_cost_evidence() -> None:
+    digest = "ab" * 32
+    message = top5_confirmation_score_signing_message(
+        validator_hotkey=_HOTKEY,
+        agent_id=_AGENT,
+        ticket_deadline=_DEADLINE,
+        run_id="confirmation-run",
+        bench_version=9,
+        confirmation_seeds=[11],
+        confirmation_composites=[0.997],
+        base_evidence_sha256=digest,
+    )
+
+    assert (
+        message
+        == (
+            "validator-top5-confirmation-score:v2:"
+            f"{_HOTKEY}:{_AGENT}:2026-07-09T12:30:00.000000+00:00:"
+            f"confirmation-run:9:[[11,0.997]]:{digest}"
+        ).encode()
+    )
+
+
 def test_transcript_digest_extends_canonical_format() -> None:
     # Offline reproducibility (v3 finding 3): a declared transcript digest is
     # appended to the canonical payload; absence keeps the legacy format so old

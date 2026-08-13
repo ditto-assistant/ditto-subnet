@@ -59,6 +59,7 @@ class KothEntry:
     confirmation_composites: tuple[float, ...] | None = None
     confirmation_seeds: tuple[int, ...] | None = None
     efficiency_bonus: float | None = None
+    efficiency_factor: float | None = None
 
 
 @dataclass(frozen=True)
@@ -143,8 +144,12 @@ def indistinguishable_from(
     gap = effective_composite(cutoff) - effective_composite(candidate)
     if gap <= 0.0:
         return True
-    candidate_stderr = _stderr(candidate) or 0.0
-    cutoff_stderr = _stderr(cutoff) or 0.0
+    # Stderr lives on the pre-efficiency quality scale. Propagate it through
+    # the frozen score transform before deciding whether the cutoff is
+    # unsettled, matching both Platform's dethrone decision and the validator
+    # fold.
+    candidate_stderr = (_stderr(candidate) or 0.0) * _efficiency_stderr_scale(candidate)
+    cutoff_stderr = (_stderr(cutoff) or 0.0) * _efficiency_stderr_scale(cutoff)
     tolerance = tolerance_z * math.sqrt(candidate_stderr**2 + cutoff_stderr**2)
     return gap <= tolerance
 
@@ -351,8 +356,34 @@ def _validated_composites(
     return values
 
 
+def _bounded_efficiency_factor(entry: KothEntry) -> float | None:
+    """Return a surfaced curve-v3 factor, neutralizing malformed values."""
+    factor = entry.efficiency_factor
+    if factor is None:
+        return None
+    if entry.bench_version != 9:
+        return 1.0
+    if (
+        isinstance(factor, bool)
+        or not isinstance(factor, (int, float))
+        or not math.isfinite(factor)
+        or not 0.85 <= factor <= 1.1
+    ):
+        return 1.0
+    return float(factor)
+
+
 def _efficiency_multiplier(entry: KothEntry) -> float:
-    """Return the bounded multiplier for an awarded relative-efficiency bonus."""
+    """Return the frozen relative-efficiency multiplier.
+
+    Curve v3 carries the multiplier itself because it may be either a bounded
+    penalty or a bounded bonus. It supersedes the legacy upside-only fraction
+    when present; missing data is neutral under both contracts.
+    """
+    factor = _bounded_efficiency_factor(entry)
+    if factor is not None:
+        return factor
+
     bonus = entry.efficiency_bonus
     if (
         isinstance(bonus, bool)
@@ -362,6 +393,49 @@ def _efficiency_multiplier(entry: KothEntry) -> float:
     ):
         return 1.0
     return 1.0 + float(bonus)
+
+
+def bounded_efficiency_adjusted_quality(quality: float, factor: float) -> float:
+    """Apply curve-v3 downside or remaining-headroom upside to quality.
+
+    The caller supplies already-validated Bench-v9 quality and factor values.
+    Keeping this pure transform public inside the Platform package lets public
+    audit projections use the exact same arithmetic as ranking and KOTH.
+    """
+    if factor <= 1.0:
+        return quality * factor
+    return quality + (factor - 1.0) * (1.0 - quality)
+
+
+def _efficiency_stderr_scale(entry: KothEntry) -> float:
+    """Return the score transform's slope on the entry's quality scale.
+
+    Standard error is measured before relative efficiency is applied, so its
+    first-order propagation uses the derivative of the frozen transform. Curve
+    v3 downside is ``quality * factor`` and therefore has slope ``factor``;
+    upside is the remaining-headroom transform and has slope ``2 - factor``.
+    Legacy v1/v2 rows remain multiplicative and retain their ``1 + bonus``
+    scaling exactly.
+    """
+    factor = _bounded_efficiency_factor(entry)
+    if factor is not None:
+        return factor if factor <= 1.0 else 2.0 - factor
+    return _efficiency_multiplier(entry)
+
+
+def _efficiency_adjusted_composite(entry: KothEntry, quality: float) -> float:
+    """Apply curve v3 within the Bench-v9 score domain.
+
+    A factor below one remains a multiplicative cost penalty.  Positive
+    efficiency scales only the quality score's remaining headroom, preventing
+    a broad plateau where distinct high-quality agents all saturate at 1.0.
+    Historical v1/v2 bonus rows keep their original arithmetic so frozen
+    snapshots still replay.
+    """
+    factor = _bounded_efficiency_factor(entry)
+    if factor is not None:
+        return bounded_efficiency_adjusted_quality(quality, factor)
+    return quality * _efficiency_multiplier(entry)
 
 
 def continual_composite(entry: KothEntry) -> float:
@@ -397,13 +471,17 @@ def continual_composite(entry: KothEntry) -> float:
 def effective_composite(entry: KothEntry) -> float:
     """Return the final score that drives ranking, KOTH, and emissions.
 
-    Continual evidence is aggregated first. A frozen Bench v7+ relative token
-    efficiency bonus, when awarded and activated for the fold, then multiplies
-    that aggregate. Missing bonus data remains byte-identical to the continual-
-    only fold, and older benchmark token penalties remain inside their signed
-    composites rather than entering this mechanism.
+    Continual evidence is aggregated first. A frozen relative-efficiency
+    multiplier, when awarded and activated for the fold, then multiplies that
+    aggregate. Curve v3 may move it down or up; positive efficiency closes a
+    bounded fraction of the remaining distance to 1.0, preserving score
+    resolution near the top. Legacy curves remain strictly upside under their
+    frozen arithmetic.
+    Missing adjustment data remains byte-identical to the continual-only fold,
+    and older benchmark token penalties remain inside their signed composites
+    rather than entering this mechanism.
     """
-    return continual_composite(entry) * _efficiency_multiplier(entry)
+    return _efficiency_adjusted_composite(entry, continual_composite(entry))
 
 
 def _effective_composite(entry: KothEntry) -> float:
@@ -441,15 +519,14 @@ def _paired_statistic(
     shared = sorted(challenger_by_seed.keys() & champion_by_seed.keys())
     if len(shared) < 2:
         return None
-    challenger_multiplier = _efficiency_multiplier(challenger)
-    champion_multiplier = _efficiency_multiplier(champion)
     differences = [
-        challenger_by_seed[seed] * challenger_multiplier
-        - champion_by_seed[seed] * champion_multiplier
+        _efficiency_adjusted_composite(challenger, challenger_by_seed[seed])
+        - _efficiency_adjusted_composite(champion, champion_by_seed[seed])
         for seed in shared
     ]
     champion_reference = sum(
-        champion_by_seed[seed] * champion_multiplier for seed in shared
+        _efficiency_adjusted_composite(champion, champion_by_seed[seed])
+        for seed in shared
     ) / len(shared)
     mean_difference = sum(differences) / len(differences)
     variance = sum(
@@ -485,8 +562,8 @@ def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDe
     statistical_lead: float | None = None
     method: Literal["flat", "unpaired", "paired"] = "flat"
     if challenger_stderr is not None and champion_stderr is not None:
-        challenger_stderr *= _efficiency_multiplier(challenger)
-        champion_stderr *= _efficiency_multiplier(champion)
+        challenger_stderr *= _efficiency_stderr_scale(challenger)
+        champion_stderr *= _efficiency_stderr_scale(champion)
         statistical_lead = KOTH_DETHRONE_Z * math.sqrt(
             challenger_stderr**2 + champion_stderr**2
         )

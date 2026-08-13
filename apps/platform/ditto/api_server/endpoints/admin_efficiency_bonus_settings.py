@@ -61,6 +61,7 @@ def _revision(row: RevisionRow) -> EfficiencyBonusSettingsRevision:
         parent_revision=row.parent_revision,
         scope=row.scope,
         settings=EfficiencyBonusSettings.model_validate(row.settings),
+        checksum_settings=dict(row.settings),
         reason=row.reason,
         actor=row.actor,
         created_at=row.created_at,
@@ -129,6 +130,25 @@ async def create_settings_revision(
             detail=(
                 "efficiency bonus settings changed; refresh before applying "
                 f"(expected {payload.expected_revision}, current {actual_revision})"
+            ),
+        )
+    if latest is not None:
+        previous = EfficiencyBonusSettings.model_validate(latest.settings)
+        if payload.settings.epoch_hours != previous.epoch_hours:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "epoch_hours is immutable after the first efficiency policy "
+                    "revision; changing the epoch namespace would invalidate "
+                    "frozen snapshot replay"
+                ),
+            )
+    elif payload.settings.epoch_hours != _resolver(request).seed.epoch_hours:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "epoch_hours must match the deployment seed on the first "
+                "efficiency policy revision"
             ),
         )
     try:

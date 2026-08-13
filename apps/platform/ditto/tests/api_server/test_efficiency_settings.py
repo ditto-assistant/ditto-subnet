@@ -8,6 +8,9 @@ next compute read with no restart.
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -59,6 +62,9 @@ class TestEffectiveConfig:
             cap=0.04,
             deep_cap=0.09,
             deep_frontier_ratio=0.4,
+            factor_alpha=0.5,
+            minimum_factor=0.9,
+            maximum_factor=1.08,
             cohort_size=30,
             min_cohort=5,
             epoch_hours=12,
@@ -72,6 +78,9 @@ class TestEffectiveConfig:
             cap=0.04,
             deep_cap=0.09,
             deep_frontier_ratio=0.4,
+            factor_alpha=0.5,
+            minimum_factor=0.9,
+            maximum_factor=1.08,
             cohort_size=30,
             min_cohort=5,
             epoch_hours=12,
@@ -118,6 +127,22 @@ class TestSettingsFromRow:
         )
         parsed = settings_from_row(row)
         assert parsed is not None and parsed.enabled is True
+
+    def test_legacy_row_gets_bounded_factor_defaults(self) -> None:
+        row = EfficiencyBonusSettingsRevision(
+            revision=1,
+            parent_revision=0,
+            scope="*",
+            settings={"enabled": True, "cap": 0.05},
+            checksum="a" * 64,
+            reason="r",
+            actor="a",
+        )
+        parsed = settings_from_row(row)
+        assert parsed is not None
+        assert parsed.factor_alpha == 0.25
+        assert parsed.minimum_factor == 0.85
+        assert parsed.maximum_factor == 1.10
 
     def test_corrupt_row_falls_back_to_none(self) -> None:
         # cap out of bounds: a hand-edited / schema-drifted row must not crash
@@ -221,3 +246,35 @@ class TestEffectiveView:
         # fold requested but enabled off → not in force.
         assert view.settings.fold_enabled is True
         assert view.fold_effective is False
+
+    def test_legacy_checksum_payload_stays_byte_authoritative(self) -> None:
+        raw_settings = {"enabled": True, "cap": 0.05}
+        checksum = hashlib.sha256(
+            json.dumps(raw_settings, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        row = EfficiencyBonusSettingsRevision(
+            revision=1,
+            parent_revision=0,
+            scope="*",
+            settings=raw_settings,
+            checksum=checksum,
+            reason="r",
+            actor="a",
+        )
+
+        view = effective_view(EfficiencyBonusConfig(), row, ttl_seconds=0.0)
+
+        assert view.settings.factor_alpha == 0.25
+        assert view.settings.minimum_factor == 0.85
+        assert view.settings.maximum_factor == 1.10
+        assert view.checksum_settings == raw_settings
+        assert (
+            hashlib.sha256(
+                json.dumps(
+                    view.checksum_settings,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ).encode()
+            ).hexdigest()
+            == view.checksum
+        )

@@ -47,6 +47,24 @@ class ConfirmationSeedScore:
     composite: float
     run_id: str
     signature: str | None
+    v9_efficiency_token_total: int | None = None
+    """Signed single-seed v9 token cost, available from protocol 19 onward."""
+    v9_efficiency_cost_eligible: bool | None = None
+    """``True`` for valid cost evidence, ``False`` for an explicit integrity
+    failure, and ``None`` for historical/non-v9 rows without cost authority."""
+
+
+@dataclass(frozen=True)
+class ConfirmationEfficiencyCosts:
+    """Retest observations available to one agent's daily cost average."""
+
+    seed_token_totals: tuple[float, ...] = ()
+    """One entry per retested seed, ascending by seed: the median audited cost
+    across the validators that scored it. Seeds, not rows, are the unit of
+    observation — the same rule :func:`confirmation_composites_by_seed` applies
+    to quality, so a seed several validators happened to draw does not outweigh
+    one a single validator drew, and no lone validator sets a seed's cost."""
+    evidence_valid: bool = True
 
 
 @dataclass(frozen=True)
@@ -361,6 +379,8 @@ async def append_confirmation_scores(
             "composite": row.composite,
             "run_id": row.run_id,
             "signature": row.signature,
+            "v9_efficiency_token_total": row.v9_efficiency_token_total,
+            "v9_efficiency_cost_eligible": row.v9_efficiency_cost_eligible,
             "created_at": created_at,
         }
         for row in rows
@@ -375,6 +395,67 @@ async def append_confirmation_scores(
     )
     result = await session.execute(statement)
     return int(getattr(result, "rowcount", 0) or 0)
+
+
+async def confirmation_efficiency_costs_by_agent(
+    session: AsyncSession,
+    *,
+    agent_ids: Iterable[UUID],
+    bench_version: int,
+) -> dict[UUID, ConfirmationEfficiencyCosts]:
+    """Return protocol-19 continual-retest costs for the efficiency snapshot.
+
+    Historical rows carry a null eligibility marker and are ignored because
+    their token telemetry was not bound into the confirmation signature. Every
+    new single-seed v9 retest carries either a positive authoritative total or
+    an explicit invalid marker. One invalid marker fails that agent's daily
+    average closed instead of silently dropping an inconvenient run.
+
+    Rows collapse to one observation per seed by median across validators,
+    matching :func:`confirmation_composites_by_seed`. Averaging raw rows would
+    weight a seed by how many validators happened to draw it and would let a
+    lone validator set that seed's cost, neither of which is true of the
+    quality this cost is ranked beside.
+    """
+    ids = list(dict.fromkeys(agent_ids))
+    if not ids:
+        return {}
+    rows = await session.execute(
+        select(
+            ConfirmationScore.agent_id,
+            ConfirmationScore.seed,
+            ConfirmationScore.v9_efficiency_token_total,
+            ConfirmationScore.v9_efficiency_cost_eligible,
+        )
+        .where(
+            ConfirmationScore.agent_id.in_(ids),
+            ConfirmationScore.bench_version == bench_version,
+        )
+        .order_by(
+            ConfirmationScore.agent_id,
+            ConfirmationScore.seed,
+            ConfirmationScore.validator_hotkey,
+        )
+    )
+    by_seed: dict[UUID, dict[int, list[int]]] = {}
+    validity = dict.fromkeys(ids, True)
+    for agent_id, seed, token_total, eligible in rows:
+        if eligible is None:
+            continue
+        if eligible is not True or token_total is None or token_total <= 0:
+            validity[agent_id] = False
+            continue
+        by_seed.setdefault(agent_id, {}).setdefault(seed, []).append(int(token_total))
+    return {
+        agent_id: ConfirmationEfficiencyCosts(
+            seed_token_totals=tuple(
+                float(statistics.median(totals))
+                for _seed, totals in sorted(by_seed.get(agent_id, {}).items())
+            ),
+            evidence_valid=validity[agent_id],
+        )
+        for agent_id in ids
+    }
 
 
 async def confirmation_composites_by_seed(

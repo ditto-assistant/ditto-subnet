@@ -139,12 +139,17 @@ from ditto.api_server.dependencies import (
     get_session,
     get_storage_client,
 )
+from ditto.api_server.efficiency import (
+    audited_v9_run_token_total,
+    ensure_efficiency_state,
+)
 from ditto.api_server.endpoints.retrieval import AgentNotFoundError
 from ditto.api_server.fingerprint import reference_corpus_provenance
 from ditto.api_server.inference_concurrency_settings import resolved_proxy_config
 from ditto.api_server.inference_routing import record_ticket_route_quality
 from ditto.api_server.koth import (
     KothEntry,
+    effective_composite,
     emission_set,
     project_koth,
     retest_cohort,
@@ -249,6 +254,10 @@ from ditto.db.queries.retry_budget import (
     grant_no_fault_retry,
     infra_retry_backoff,
 )
+from ditto.db.queries.score_ranking import (
+    dedupe_owner_rows,
+    resolve_efficiency_adjustments,
+)
 from ditto.db.queries.score_retests import (
     V9_CONTRACT_RETEST_BASIS,
     activate_next_score_retest,
@@ -289,7 +298,7 @@ from ditto.metrics import (
 from ditto.score_order import rank_submissions
 
 if TYPE_CHECKING:
-    from ditto.api_server.config import InferenceProxyConfig
+    from ditto.api_server.config import EfficiencyBonusConfig, InferenceProxyConfig
     from ditto.chain import ChainClient
 
 logger = logging.getLogger(__name__)
@@ -1150,6 +1159,7 @@ async def _issue_source_backfill_ticket(
     artifact_mode: Literal["legacy", "prefer_screened", "screened_only"],
     validator_running_benchmark: bool,
     slot_id: str,
+    efficiency_config: EfficiencyBonusConfig | None = None,
     # Defaults to the conservative policy so an omitted cap narrows the
     # backfill budget rather than widening it.
     slot_settings: ValidatorSlotSettings = SLOT_SETTINGS_DEFAULT,
@@ -1249,6 +1259,7 @@ async def _issue_source_backfill_ticket(
             artifact_mode=artifact_mode,
             validator_running_benchmark=validator_running_benchmark,
             slot_id=slot_id,
+            efficiency_config=efficiency_config,
             owner_concurrent_submission_limit=owner_concurrent_submission_limit,
             similarity_policy=similarity_policy,
             similarity_concurrent_submission_limit=(
@@ -1352,6 +1363,7 @@ async def _issue_source_backfill_ticket(
         artifact_mode=artifact_mode,
         validator_running_benchmark=validator_running_benchmark,
         slot_id=slot_id,
+        efficiency_config=efficiency_config,
         owner_concurrent_submission_limit=owner_concurrent_submission_limit,
         similarity_policy=similarity_policy,
         similarity_concurrent_submission_limit=(similarity_concurrent_submission_limit),
@@ -1369,6 +1381,7 @@ async def _issue_prev_gen_carryover_ticket(
     target_inference_ready: bool,
     validator_running_benchmark: bool,
     slot_id: str,
+    efficiency_config: EfficiencyBonusConfig | None = None,
     owner_concurrent_submission_limit: int = OWNER_CONCURRENT_SUBMISSION_LIMIT_DEFAULT,
     similarity_policy: SimilarityBudgetPolicy | None = None,
     similarity_concurrent_submission_limit: int = (
@@ -1429,6 +1442,7 @@ async def _issue_prev_gen_carryover_ticket(
         validator_running_benchmark=validator_running_benchmark,
         slot_id=slot_id,
         only_agent_ids=adopted,
+        efficiency_config=efficiency_config,
         owner_concurrent_submission_limit=owner_concurrent_submission_limit,
         similarity_policy=similarity_policy,
         similarity_concurrent_submission_limit=(similarity_concurrent_submission_limit),
@@ -1843,8 +1857,15 @@ def _top5_confirmation_score_signing_message(
     agent_id: UUID,
     ticket_deadline: datetime,
     report: ScoreReport,
+    *,
+    bind_base_evidence: bool = True,
 ) -> bytes:
-    """Bind every append-only seed/composite pair into a confirmation receipt."""
+    """Bind every append-only seed/composite pair into a confirmation receipt.
+
+    Protocol 19 uses v2 and binds the v9 base-evidence digest that authorizes
+    continual token cost. ``bind_base_evidence=False`` reproduces v1 exactly so
+    in-flight protocol-18 leases remain acceptable during rollout.
+    """
     lease = _lease_token(ticket_deadline)
     pairs = list(
         zip(
@@ -1854,11 +1875,16 @@ def _top5_confirmation_score_signing_message(
         )
     )
     encoded_pairs = json.dumps(pairs, separators=(",", ":"))
-    return (
-        "validator-top5-confirmation-score:v1:"
+    digest = report.base_evidence_sha256 if bind_base_evidence else None
+    version = "v2" if digest else "v1"
+    message = (
+        f"validator-top5-confirmation-score:{version}:"
         f"{validator_hotkey}:{agent_id}:{lease}:{report.run_id}:"
         f"{report.bench_version}:{encoded_pairs}"
-    ).encode()
+    )
+    if digest:
+        message += f":{digest}"
+    return message.encode()
 
 
 def _artifact_signing_message(
@@ -2555,6 +2581,16 @@ async def request_job(
     # session to refill a cold cache, and doing that inside this transaction
     # would nest sessions on the hot path.
     queue_policy = await _resolve_queue_policy(request)
+    efficiency_config = await request.app.state.efficiency_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    # Queue fifth/tenth-place admission floors consume the current epoch's
+    # efficiency-adjusted canonical order. Materialize that frozen epoch here,
+    # before the job transaction and before any floor read, so a new UTC epoch
+    # cannot issue work against a temporary raw-score order while waiting for a
+    # leaderboard or scoring-ledger request to create its assignments.
+    if efficiency_config.enabled:
+        await ensure_efficiency_state(session, efficiency_config, now=now)
     # Resolve the operator slot cap on the resolver's own session, before the
     # request transaction opens: reading it on `session` here would autobegin and
     # break the `session.begin()` below.
@@ -2803,6 +2839,7 @@ async def request_job(
                     target_inference_ready=target_benchmark_ready,
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
+                    efficiency_config=efficiency_config,
                     owner_concurrent_submission_limit=(
                         queue_policy.owner_concurrent_submission_limit
                     ),
@@ -2830,6 +2867,7 @@ async def request_job(
                         fifo_start_at=rollout.created_at,
                         completion_first=True,
                         slot_id=slot_id,
+                        efficiency_config=efficiency_config,
                         owner_concurrent_submission_limit=(
                             queue_policy.owner_concurrent_submission_limit
                         ),
@@ -2856,6 +2894,7 @@ async def request_job(
                     fifo_start_at=rollout.created_at,
                     completion_first=True,
                     slot_id=slot_id,
+                    efficiency_config=efficiency_config,
                     owner_concurrent_submission_limit=(
                         queue_policy.owner_concurrent_submission_limit
                     ),
@@ -2877,6 +2916,7 @@ async def request_job(
                     target_inference_ready=target_benchmark_ready,
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
+                    efficiency_config=efficiency_config,
                     owner_concurrent_submission_limit=(
                         queue_policy.owner_concurrent_submission_limit
                     ),
@@ -2939,6 +2979,7 @@ async def request_job(
                     artifact_mode=artifact_mode,
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
+                    efficiency_config=efficiency_config,
                     slot_settings=slot_settings,
                     resume_only=True,
                     similarity_policy=policy_from_settings(
@@ -3007,6 +3048,7 @@ async def request_job(
                         artifact_mode=artifact_mode,
                         validator_running_benchmark=slot_running_benchmark,
                         slot_id=slot_id,
+                        efficiency_config=efficiency_config,
                         owner_concurrent_submission_limit=(
                             queue_policy.owner_concurrent_submission_limit
                         ),
@@ -3056,6 +3098,7 @@ async def request_job(
                     artifact_mode=artifact_mode,
                     validator_running_benchmark=slot_running_benchmark,
                     slot_id=slot_id,
+                    efficiency_config=efficiency_config,
                     slot_settings=slot_settings,
                     carryover_settings=queue_policy.prev_gen_carryover,
                     owner_concurrent_submission_limit=(
@@ -3239,6 +3282,8 @@ async def _current_koth_entries(
     canonical_version: int,
     completed_waves_only: bool = True,
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> list[KothEntry]:
     """Build the active-version KOTH fold from canonical or completed evidence.
 
@@ -3259,6 +3304,7 @@ async def _current_koth_entries(
             include_fingerprints=False,
             details_keys=_KOTH_DETAIL_KEYS,
             bench_version=canonical_version,
+            dedupe_owners=False,
         )
         if row.eligible and row.composite > 0.0
     ]
@@ -3273,20 +3319,45 @@ async def _current_koth_entries(
         agent_ids=[row.agent_id for row in rows],
         bench_version=canonical_version,
     )
+    efficiency_bonuses, efficiency_factors = await resolve_efficiency_adjustments(
+        session,
+        rows=rows,
+        efficiency_config=efficiency_config,
+        now=now,
+    )
+    raw_scores = {
+        row.agent_id: (
+            row.v9_confirmation["full_effective_micros"] / 1_000_000
+            if row.bench_version == 9 and row.v9_confirmation is not None
+            else row.composite
+        )
+        for row in rows
+    }
+    raw_rows = dedupe_owner_rows(rows, scores=raw_scores)
     raw_entries = [
         KothEntry(
             miner_hotkey=row.miner_hotkey,
             agent_id=row.agent_id,
-            composite=row.composite,
+            composite=(
+                row.v9_confirmation["full_effective_micros"] / 1_000_000
+                if row.bench_version == 9 and row.v9_confirmation is not None
+                else row.composite
+            ),
             first_seen=row.fold_first_seen,
             raw_rank=rank,
             bench_version=row.bench_version,
-            composite_stderr=_ledger_stderr(
-                row.details if isinstance(row.details, dict) else {},
-                quorum.get(row.agent_id, []),
+            composite_stderr=(
+                row.v9_confirmation["full_stderr_micros"] / 1_000_000
+                if row.bench_version == 9 and row.v9_confirmation is not None
+                else _ledger_stderr(
+                    row.details if isinstance(row.details, dict) else {},
+                    quorum.get(row.agent_id, []),
+                )
             ),
+            efficiency_bonus=efficiency_bonuses.get(row.agent_id),
+            efficiency_factor=efficiency_factors.get(row.agent_id),
         )
-        for rank, row in enumerate(rows, start=1)
+        for rank, row in enumerate(raw_rows, start=1)
     ]
     raw_members = emission_set(project_koth(raw_entries))
     eligible_seeds = fold_eligible_seeds_by_agent(
@@ -3310,13 +3381,15 @@ async def _current_koth_entries(
     entries: list[KothEntry] = []
     for rank, row in enumerate(rows, start=1):
         details = row.details if isinstance(row.details, dict) else {}
+        v9_confirmed = row.bench_version == 9 and row.v9_confirmation is not None
+        v9_receipt = row.v9_confirmation if v9_confirmed else None
         merged: dict[int, float] = {}
-        legacy_seeds = _confirmation_seeds(details)
-        legacy_composites = _confirmation_composites(details)
+        legacy_seeds = None if v9_confirmed else _confirmation_seeds(details)
+        legacy_composites = None if v9_confirmed else _confirmation_composites(details)
         if legacy_seeds is not None and legacy_composites is not None:
             merged.update(zip(legacy_seeds, legacy_composites, strict=False))
         agent_eligible = eligible_seeds.get(row.agent_id, frozenset())
-        if completed_waves_only:
+        if completed_waves_only and not v9_confirmed:
             merged.update(
                 {
                     seed: value
@@ -3324,7 +3397,7 @@ async def _current_koth_entries(
                     if seed in agent_eligible
                 }
             )
-        else:
+        elif not v9_confirmed:
             # Compatibility view for leases issued before cohort-wave gating.
             # New KOTH/ledger projections must never use this mode.
             merged.update(history.get(row.agent_id, {}))
@@ -3333,15 +3406,29 @@ async def _current_koth_entries(
             KothEntry(
                 miner_hotkey=row.miner_hotkey,
                 agent_id=row.agent_id,
-                composite=row.composite,
+                composite=(
+                    v9_receipt["full_effective_micros"] / 1_000_000
+                    if v9_receipt is not None
+                    else row.composite
+                ),
                 first_seen=row.fold_first_seen,
                 raw_rank=rank,
                 bench_version=row.bench_version,
-                composite_stderr=_ledger_stderr(details, quorum.get(row.agent_id, [])),
-                quorum_composites=tuple(quorum.get(row.agent_id, [])) or None,
+                composite_stderr=(
+                    v9_receipt["full_stderr_micros"] / 1_000_000
+                    if v9_receipt is not None
+                    else _ledger_stderr(details, quorum.get(row.agent_id, []))
+                ),
+                quorum_composites=(
+                    None
+                    if v9_confirmed
+                    else tuple(quorum.get(row.agent_id, [])) or None
+                ),
                 completed_wave_composites=tuple(
                     value
-                    for seed, value in sorted(history.get(row.agent_id, {}).items())
+                    for seed, value in sorted(
+                        ({} if v9_confirmed else history.get(row.agent_id, {})).items()
+                    )
                     if seed in agent_eligible
                 )
                 or None,
@@ -3355,9 +3442,18 @@ async def _current_koth_entries(
                     if confirmations is not None
                     else None
                 ),
+                efficiency_bonus=efficiency_bonuses.get(row.agent_id),
+                efficiency_factor=efficiency_factors.get(row.agent_id),
             )
         )
-    return entries
+    entry_scores = {entry.agent_id: effective_composite(entry) for entry in entries}
+    selected_rows = dedupe_owner_rows(rows, scores=entry_scores)
+    selected_by_id = {row.agent_id: row for row in selected_rows}
+    return [
+        replace(entry, first_seen=selected_by_id[entry.agent_id].fold_first_seen)
+        for entry in entries
+        if entry.agent_id in selected_by_id
+    ]
 
 
 async def _current_emission_set(
@@ -3366,12 +3462,16 @@ async def _current_emission_set(
     canonical_version: int,
     completed_waves_only: bool = True,
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> tuple[KothEntry, ...]:
     entries = await _current_koth_entries(
         session,
         canonical_version=canonical_version,
         completed_waves_only=completed_waves_only,
         wave_membership=wave_membership,
+        efficiency_config=efficiency_config,
+        now=now,
     )
     return emission_set(project_koth(entries))
 
@@ -3381,6 +3481,8 @@ async def _current_retest_cohort(
     *,
     canonical_version: int,
     settings: ContinualRetestSettings,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> tuple[tuple[KothEntry, ...], tuple[KothEntry, ...], tuple[KothEntry, ...]]:
     """Return ``(emission_set, wave_members, retest_cohort)`` from one read.
 
@@ -3415,6 +3517,8 @@ async def _current_retest_cohort(
         session,
         canonical_version=canonical_version,
         wave_membership=settings.wave_membership,
+        efficiency_config=efficiency_config,
+        now=now,
     )
     projection = project_koth(entries)
     raw_entries = [
@@ -3941,6 +4045,11 @@ async def request_top5_confirmation_job(
     continual_settings = await continual_resolver.resolve(
         getattr(request.app.state, "session_maker", None)
     )
+    efficiency_config = await request.app.state.efficiency_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    if efficiency_config.enabled:
+        await ensure_efficiency_state(session, efficiency_config, now=now)
     # Resolved before the transaction opens: the resolver reads on its own
     # session, and this one supplies the request budget stamped onto new grants.
     inference_config = await resolved_proxy_config(
@@ -4043,6 +4152,8 @@ async def request_top5_confirmation_job(
             session,
             canonical_version=canonical_version,
             settings=continual_settings,
+            efficiency_config=efficiency_config,
+            now=now,
         )
         # These sets answer different questions and must not be conflated:
         #
@@ -4359,8 +4470,23 @@ async def submit_top5_confirmation_score(
         payload.ticket_deadline,
         report,
     )
-    if not _verify_signature(payload.validator_hotkey, signed, payload.signature):
-        raise ValidatorAuthError("top-5 confirmation score signature did not verify")
+    cost_evidence_bound = _verify_signature(
+        payload.validator_hotkey, signed, payload.signature
+    )
+    if not cost_evidence_bound:
+        legacy_signed = _top5_confirmation_score_signing_message(
+            payload.validator_hotkey,
+            agent_id,
+            payload.ticket_deadline,
+            report,
+            bind_base_evidence=False,
+        )
+        if not _verify_signature(
+            payload.validator_hotkey, legacy_signed, payload.signature
+        ):
+            raise ValidatorAuthError(
+                "top-5 confirmation score signature did not verify"
+            )
     await _assert_validator_permitted(
         chain,
         request.app.state.config.chain.netuid,
@@ -4376,6 +4502,12 @@ async def submit_top5_confirmation_score(
             raise HTTPException(
                 status_code=409,
                 detail="top-5 confirmation target is not finalized and eligible",
+            )
+        v9_base = _reported_v9_base_evidence(report)
+        if v9_base is not None and v9_base.artifact_sha256 != agent.sha256:
+            raise HTTPException(
+                status_code=409,
+                detail="v9 confirmation evidence artifact digest does not match agent",
             )
         canonical_version = await active_bench_version(session)
         if report.bench_version != canonical_version:
@@ -4414,10 +4546,23 @@ async def submit_top5_confirmation_score(
             ticket.purpose_revision = 1
             ticket.legacy_completion_allowed = False
         if ticket.seed is not None:
-            if seeds != [ticket.seed]:
+            if seeds != [ticket.seed] or report.seed != ticket.seed:
                 raise HTTPException(
                     status_code=409,
                     detail="confirmation report does not match the leased wave seed",
+                )
+            if (
+                canonical_version == 9
+                and cost_evidence_bound
+                and ticket.dataset_sha256 is not None
+                and _reported_dataset_sha256(report) != ticket.dataset_sha256
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "confirmation report dataset digest does not match the "
+                        "leased wave"
+                    ),
                 )
         else:
             # Bounded compatibility for already-issued bundle leases. New
@@ -4453,6 +4598,19 @@ async def submit_top5_confirmation_score(
                     status_code=409,
                     detail="confirmation report contains a non-canonical seed",
                 )
+        v9_efficiency_token_total: int | None = None
+        v9_efficiency_cost_eligible: bool | None = None
+        if (
+            canonical_version == 9
+            and cost_evidence_bound
+            and ticket.seed is not None
+            and seeds == [ticket.seed]
+        ):
+            v9_efficiency_token_total = audited_v9_run_token_total(
+                report.details,
+                base_evidence_sha256=report.base_evidence_sha256,
+            )
+            v9_efficiency_cost_eligible = v9_efficiency_token_total is not None
         await append_confirmation_scores(
             session,
             rows=[
@@ -4463,6 +4621,8 @@ async def submit_top5_confirmation_score(
                     composite=composite,
                     run_id=report.run_id,
                     signature=payload.signature,
+                    v9_efficiency_token_total=v9_efficiency_token_total,
+                    v9_efficiency_cost_eligible=v9_efficiency_cost_eligible,
                 )
                 for seed, composite in zip(seeds, composites, strict=True)
             ],
@@ -5881,9 +6041,19 @@ async def submit_score(
     # recording hiccup must never surface as a score failure, and the write-once
     # timestamp is never moved by a later re-coronation.
     try:
+        crown_efficiency_config = await request.app.state.efficiency_settings.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
+        if crown_efficiency_config.enabled:
+            await ensure_efficiency_state(
+                session, crown_efficiency_config, now=audit_now
+            )
         async with session.begin():
             champion_members = await _current_emission_set(
-                session, canonical_version=await active_bench_version(session)
+                session,
+                canonical_version=await active_bench_version(session),
+                efficiency_config=crown_efficiency_config,
+                now=audit_now,
             )
             if champion_members:
                 await record_first_crowned(

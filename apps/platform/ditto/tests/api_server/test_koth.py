@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -14,8 +15,12 @@ from ditto.api_models.continual_retest_settings import (
 from ditto.api_server.koth import (
     BLOCKS_PER_TEMPO,
     KothEntry,
+    _dethrone_decision,
+    _efficiency_stderr_scale,
+    _paired_statistic,
     effective_composite,
     emission_set,
+    indistinguishable_from,
     project_koth,
     retest_cohort,
     tempo_index,
@@ -37,6 +42,7 @@ def _entry(
     quorum: tuple[float, ...] | None = None,
     waves: tuple[float, ...] | None = None,
     efficiency_bonus: float | None = None,
+    efficiency_factor: float | None = None,
 ) -> KothEntry:
     return KothEntry(
         miner_hotkey="5" + str(marker) * 47,
@@ -51,6 +57,7 @@ def _entry(
         confirmation_composites=confirmations,
         confirmation_seeds=seeds,
         efficiency_bonus=efficiency_bonus,
+        efficiency_factor=efficiency_factor,
     )
 
 
@@ -83,6 +90,143 @@ def test_efficiency_bonus_multiplies_the_continual_score() -> None:
     )
 
     assert effective_composite(entry) == pytest.approx(0.78 * 1.1)
+
+
+def test_legacy_efficiency_bonus_replay_remains_uncapped() -> None:
+    entry = _entry(
+        1,
+        0.95,
+        minutes=0,
+        bench_version=8,
+        efficiency_bonus=0.1,
+    )
+
+    assert effective_composite(entry) == pytest.approx(1.045)
+
+
+@pytest.mark.parametrize(
+    ("factor", "expected"),
+    [(0.85, 0.8 * 0.85), (1.0, 0.8), (1.1, 0.8 + 0.1 * 0.2)],
+)
+def test_bounded_efficiency_factor_uses_headroom_uplift(
+    factor: float, expected: float
+) -> None:
+    entry = _entry(1, 0.8, minutes=0, bench_version=9, efficiency_factor=factor)
+
+    assert effective_composite(entry) == pytest.approx(expected)
+
+
+def test_bounded_efficiency_factor_does_not_saturate_imperfect_quality() -> None:
+    entry = _entry(1, 0.95, minutes=0, bench_version=9, efficiency_factor=1.1)
+
+    assert effective_composite(entry) == pytest.approx(0.955)
+
+
+def test_bounded_efficiency_factor_reaches_ceiling_only_for_perfect_quality() -> None:
+    entry = _entry(
+        1,
+        1.0,
+        minutes=0,
+        bench_version=9,
+        efficiency_factor=1.1,
+    )
+
+    assert effective_composite(entry) == 1.0
+
+
+def test_live_v9_regression_makes_ban_raw_leader_but_white_bolt_holds_koth() -> None:
+    """Raw score order and the incumbent-protecting KOTH band stay distinct."""
+    white_bolt = _entry(
+        4,
+        0.996348,
+        minutes=0,
+        stderr=0.001,
+        bench_version=9,
+        efficiency_factor=1.045905257,
+    )
+    omar = _entry(
+        1,
+        0.997012,
+        minutes=5,
+        stderr=0.001718,
+        bench_version=9,
+        efficiency_factor=0.85,
+    )
+    crown_v9 = _entry(
+        2,
+        0.980723,
+        minutes=14,
+        stderr=0.006474,
+        bench_version=9,
+        efficiency_factor=1.09426,
+    )
+    banblackycat_v7 = _entry(
+        3,
+        0.997012,
+        minutes=29,
+        stderr=0.001718,
+        bench_version=9,
+        efficiency_factor=1.034716,
+    )
+
+    projection = project_koth([banblackycat_v7, crown_v9, white_bolt, omar])
+
+    assert effective_composite(omar) == pytest.approx(0.8474602)
+    assert effective_composite(crown_v9) == pytest.approx(0.98254005002)
+    assert effective_composite(banblackycat_v7) == pytest.approx(0.997115731408)
+    assert effective_composite(banblackycat_v7) < 1.0
+    assert projection is not None
+    assert projection.raw_leader == banblackycat_v7
+    assert projection.champion == white_bolt
+
+
+def test_bounded_factor_supersedes_legacy_bonus() -> None:
+    entry = _entry(
+        1,
+        0.8,
+        minutes=0,
+        bench_version=9,
+        efficiency_bonus=0.1,
+        efficiency_factor=0.85,
+    )
+
+    assert effective_composite(entry) == pytest.approx(0.8 * 0.85)
+
+
+def test_bounded_factor_is_v9_only() -> None:
+    entry = _entry(1, 0.8, minutes=0, bench_version=8, efficiency_factor=0.85)
+
+    assert effective_composite(entry) == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize(("factor", "expected"), [(0.85, 0.85), (1.0, 1.0), (1.1, 0.9)])
+def test_curve_v3_stderr_scale_is_quality_transform_slope(
+    factor: float, expected: float
+) -> None:
+    entry = _entry(1, 0.8, minutes=0, bench_version=9, efficiency_factor=factor)
+
+    assert _efficiency_stderr_scale(entry) == pytest.approx(expected)
+
+
+def test_legacy_bonus_keeps_multiplicative_stderr_scale() -> None:
+    entry = _entry(1, 0.8, minutes=0, efficiency_bonus=0.1)
+
+    assert _efficiency_stderr_scale(entry) == pytest.approx(1.1)
+
+
+def test_indistinguishable_uses_headroom_slope_for_upside_stderr() -> None:
+    cutoff = _entry(
+        1, 0.5, minutes=0, stderr=0.04, bench_version=9, efficiency_factor=1.1
+    )
+    candidate = _entry(
+        2, 0.4, minutes=1, stderr=0.04, bench_version=9, efficiency_factor=1.1
+    )
+    gap = effective_composite(cutoff) - effective_composite(candidate)
+    transformed_tolerance = 1.64 * math.sqrt(2 * (0.04 * 0.9) ** 2)
+    factor_scaled_tolerance = 1.64 * math.sqrt(2 * (0.04 * 1.1) ** 2)
+
+    assert transformed_tolerance < gap < factor_scaled_tolerance
+    assert not indistinguishable_from(candidate, cutoff, tolerance_z=1.64)
 
 
 @pytest.mark.parametrize("bench_version", [6, 7, 8])
@@ -201,6 +345,25 @@ def test_statistical_band_matches_validator_unpaired_rule() -> None:
     assert decision.method == "unpaired"
 
 
+def test_unpaired_dethrone_uses_headroom_slope_for_upside_stderr() -> None:
+    incumbent = _entry(
+        2, 0.4, minutes=0, stderr=0.04, bench_version=9, efficiency_factor=1.1
+    )
+    challenger = _entry(
+        1, 0.5, minutes=1, stderr=0.04, bench_version=9, efficiency_factor=1.1
+    )
+
+    decision = _dethrone_decision(challenger, incumbent)
+    expected_statistical_lead = 1.64 * math.sqrt(2 * (0.04 * 0.9) ** 2)
+    incorrectly_factor_scaled_lead = 1.64 * math.sqrt(2 * (0.04 * 1.1) ** 2)
+
+    assert decision.method == "unpaired"
+    assert decision.statistical_lead == pytest.approx(expected_statistical_lead)
+    assert expected_statistical_lead < decision.challenger_lead
+    assert decision.challenger_lead < incorrectly_factor_scaled_lead
+    assert decision.dethrones
+
+
 def test_clear_challenger_dethrones_and_tail_uses_raw_composite_order() -> None:
     incumbent = _entry(3, 0.80, minutes=0, stderr=0.01)
     challenger = _entry(1, 0.90, minutes=2, stderr=0.01)
@@ -277,6 +440,34 @@ def test_efficiency_bonus_applies_inside_paired_seed_comparison() -> None:
 
     assert projection is not None
     assert projection.champion == challenger
+
+
+def test_bounded_factor_scales_each_paired_seeds_headroom_before_comparison() -> None:
+    incumbent = _entry(
+        2,
+        0.99,
+        minutes=0,
+        confirmations=(0.99, 0.95, 0.90),
+        seeds=(10, 20, 30),
+        bench_version=9,
+        efficiency_factor=1.1,
+    )
+    challenger = _entry(
+        1,
+        0.99,
+        minutes=1,
+        confirmations=(1.0, 1.0, 1.0),
+        seeds=(10, 20, 30),
+        bench_version=9,
+        efficiency_factor=1.0,
+    )
+
+    statistic = _paired_statistic(challenger, incumbent)
+
+    assert statistic is not None
+    mean_difference, champion_reference, _standard_error = statistic
+    assert champion_reference == pytest.approx((0.991 + 0.955 + 0.91) / 3)
+    assert mean_difference == pytest.approx(1.0 - champion_reference)
 
 
 def test_empty_or_non_positive_pool_has_no_projection() -> None:

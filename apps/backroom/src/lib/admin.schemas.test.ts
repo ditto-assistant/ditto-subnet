@@ -1378,6 +1378,9 @@ describe('efficiency bonus settings schemas', () => {
     cap: 0.05,
     deep_cap: 0.1,
     deep_frontier_ratio: 0.5,
+    factor_alpha: 0.25,
+    minimum_factor: 0.85,
+    maximum_factor: 1.1,
     cohort_size: 25,
     min_cohort: 8,
     epoch_hours: 24,
@@ -1407,6 +1410,7 @@ describe('efficiency bonus settings schemas', () => {
         revision: 0,
         scope: '*',
         settings: { ...settings, enabled: false },
+        checksum_settings: { ...settings, enabled: false },
         checksum: '',
         source: 'seed',
         fold_effective: false,
@@ -1424,6 +1428,7 @@ describe('efficiency bonus settings schemas', () => {
       parent_revision: 2,
       scope: '*',
       settings: { ...settings, fold_enabled: true },
+      checksum_settings: { ...settings, fold_enabled: true },
       reason: 'fold the bonus into validator weights',
       actor: 'peyton@omniaura.ai',
       created_at: '2026-07-23T12:00:00Z',
@@ -1437,6 +1442,7 @@ describe('efficiency bonus settings schemas', () => {
         revision: 3,
         scope: '*',
         settings: { ...settings, fold_enabled: true },
+        checksum_settings: { ...settings, fold_enabled: true },
         checksum: 'ab'.repeat(32),
         source: 'revision',
         fold_effective: true,
@@ -1444,6 +1450,10 @@ describe('efficiency bonus settings schemas', () => {
       },
     })
     expect(parsed.current[0]?.actor).toBe('peyton@omniaura.ai')
+    expect(parsed.current[0]?.checksum_settings).toEqual({
+      ...settings,
+      fold_enabled: true,
+    })
     expect(parsed.effective.fold_effective).toBe(true)
   })
 
@@ -1479,6 +1489,55 @@ describe('efficiency bonus settings schemas', () => {
     ).toThrow()
     expect(() =>
       efficiencyBonusSettingsSchema.parse({ ...settings, deep_frontier_ratio: 0 }),
+    ).toThrow()
+  })
+
+  it('defaults bounded-factor knobs when reading a legacy revision', () => {
+    const {
+      factor_alpha: _factorAlpha,
+      minimum_factor: _minimumFactor,
+      maximum_factor: _maximumFactor,
+      ...legacy
+    } = settings
+    const parsed = efficiencyBonusSettingsSchema.parse(legacy)
+    expect(parsed.factor_alpha).toBe(0.25)
+    expect(parsed.minimum_factor).toBe(0.85)
+    expect(parsed.maximum_factor).toBe(1.1)
+  })
+
+  it('does not default bounded-factor knobs on a whole-policy write', () => {
+    const {
+      factor_alpha: _factorAlpha,
+      minimum_factor: _minimumFactor,
+      maximum_factor: _maximumFactor,
+      ...legacy
+    } = settings
+    expect(() =>
+      setEfficiencyBonusSettingsInputSchema.parse({
+        ...input(),
+        settings: legacy,
+      }),
+    ).toThrow()
+  })
+
+  it('rejects bounded-factor knobs outside the platform envelope', () => {
+    expect(() =>
+      efficiencyBonusSettingsSchema.parse({ ...settings, factor_alpha: 0 }),
+    ).toThrow()
+    expect(() =>
+      efficiencyBonusSettingsSchema.parse({ ...settings, factor_alpha: 1.01 }),
+    ).toThrow()
+    expect(() =>
+      efficiencyBonusSettingsSchema.parse({ ...settings, minimum_factor: 0.84 }),
+    ).toThrow()
+    expect(() =>
+      efficiencyBonusSettingsSchema.parse({ ...settings, minimum_factor: 1.01 }),
+    ).toThrow()
+    expect(() =>
+      efficiencyBonusSettingsSchema.parse({ ...settings, maximum_factor: 0.99 }),
+    ).toThrow()
+    expect(() =>
+      efficiencyBonusSettingsSchema.parse({ ...settings, maximum_factor: 1.11 }),
     ).toThrow()
   })
 

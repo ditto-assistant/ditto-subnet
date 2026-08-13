@@ -66,6 +66,60 @@ export function displayComposite(e: CompositeCarrier, settledView = false): numb
   return e.official_composite != null ? e.official_composite : e.composite;
 }
 
+/** Whether the exposed efficiency arithmetic is the score authority. Platform
+ * exposes `effective_composite` for audit before activation, including neutral
+ * factors whose arithmetic equals the official score, so numeric equality is
+ * deliberately not used as an activation signal. */
+export function efficiencyFoldIsApplied(e: { efficiency_fold_applied?: boolean }): boolean {
+  return e.efficiency_fold_applied === true;
+}
+
+export interface CurveV3ScoreAdjustment {
+  quality: number;
+  factor: number;
+  adjusted: number;
+  mode: "downside" | "neutral" | "headroom";
+}
+
+/** Reproduce Bench-v9 curve-v3's score transform from public provenance.
+ *
+ * This is display-only arithmetic: the API's `effective_composite` remains the
+ * ranking authority. Legacy v1/v2 bonuses deliberately do not enter this
+ * helper because their historical replay remains unchanged.
+ */
+export function curveV3ScoreAdjustment(e: {
+  bench_version?: number | null;
+  pre_efficiency_composite?: number | null;
+  efficiency_factor?: number | null;
+}): CurveV3ScoreAdjustment | null {
+  if (
+    Number(e.bench_version) !== 9 ||
+    e.pre_efficiency_composite == null ||
+    e.efficiency_factor == null
+  ) {
+    return null;
+  }
+  const quality = Number(e.pre_efficiency_composite);
+  const factor = Number(e.efficiency_factor);
+  if (
+    !Number.isFinite(quality) ||
+    !Number.isFinite(factor) ||
+    quality < 0 ||
+    quality > 1 ||
+    factor < 0.85 ||
+    factor > 1.1
+  ) {
+    return null;
+  }
+  const adjusted = factor <= 1 ? quality * factor : quality + (factor - 1) * (1 - quality);
+  return {
+    quality,
+    factor,
+    adjusted,
+    mode: factor < 1 ? "downside" : factor > 1 ? "headroom" : "neutral",
+  };
+}
+
 // ── Dethrone band + floor (monolith 3486–3540) ───────────────
 
 /** Band-decay fold parameters (arrive on the emissions fold; kept structural
@@ -667,15 +721,26 @@ export const COMPOSITE_CALC_HEADING = "Composite calculation";
 export const COMPOSITE_CALC_NOTE =
   "The benchmark-quality multiplier combines scorer-owned behavioural and integrity gates " +
   "before token efficiency. It is shown as one audited factor so the platform cannot drift " +
-  "from the benchmark scorer. Older benches retain their bounded token penalty; Bench v7+ " +
-  "relative-efficiency awards are upside and apply only after continual aggregation.";
+  "from the benchmark scorer. Older benches retain their bounded token penalty; Bench v7/v8 " +
+  "relative-efficiency awards are upside, while Bench v9 uses a bounded factor around a " +
+  "frozen cohort P25 reference. Downside multiplies quality; upside scales only remaining " +
+  "quality headroom, so imperfect quality cannot become 1.000. Both are computed after " +
+  "authoritative quality aggregation; " +
+  "an audit-only projection is not used for ranking or emissions.";
 
 export function compositeCalculationHeading(e: {
   pre_efficiency_composite?: number | null;
+  efficiency_bonus?: number | null;
+  efficiency_factor?: number | null;
+  efficiency_fold_applied?: boolean;
+  effective_composite?: number | null;
+  official_composite?: number | null;
 }): string {
-  return e.pre_efficiency_composite != null
-    ? "Score provenance and ranking fold"
-    : COMPOSITE_CALC_HEADING;
+  if (e.pre_efficiency_composite == null) return COMPOSITE_CALC_HEADING;
+  const hasAdjustment = e.efficiency_factor != null || e.efficiency_bonus != null;
+  return hasAdjustment && !efficiencyFoldIsApplied(e)
+    ? "Score provenance and efficiency projection"
+    : "Score provenance and ranking fold";
 }
 
 /**
@@ -696,6 +761,9 @@ export function compositeCalculationRows(e: {
   aggregate_method?: string | null;
   pre_efficiency_composite?: number | null;
   efficiency_bonus?: number | null;
+  efficiency_factor?: number | null;
+  efficiency_fold_applied?: boolean;
+  effective_composite?: number | null;
   official_composite?: number | null;
   composite?: number;
   composite_breakdown?: CompositeBreakdown | null;
@@ -723,7 +791,7 @@ export function compositeCalculationRows(e: {
   const hasRankingFold = e.pre_efficiency_composite != null;
   if (hasRankingFold && Number(e.bench_version) >= 7) {
     // Bench v7+ does not reuse the legacy signed token penalty. Its separate
-    // relative-efficiency award is shown below, after continual aggregation.
+    // epoch-frozen adjustment is shown below, after authoritative quality.
   } else if (b.token_efficiency_multiplier == null) {
     rows.push({ k: "Token efficiency", v: "not applied or unavailable" });
   } else {
@@ -754,17 +822,67 @@ export function compositeCalculationRows(e: {
         e.aggregate_method === "continual_mean" ? "Continual aggregate" : "Score before efficiency",
       v: fx(e.pre_efficiency_composite),
     });
-    if (e.efficiency_bonus != null) {
+    const hasFactor = e.efficiency_factor != null;
+    const hasBonus = !hasFactor && e.efficiency_bonus != null;
+    const scoreAdjustment = curveV3ScoreAdjustment(e);
+    if (hasFactor) {
+      const factor = Number(e.efficiency_factor);
+      const delta = (factor - 1) * 100;
+      rows.push({
+        k: "Bounded token-efficiency factor",
+        v:
+          "× " +
+          fx(factor) +
+          " (" +
+          (delta >= 0 ? "+" : "−") +
+          Math.abs(delta).toFixed(1) +
+          "% · frozen cohort P25 reference)",
+      });
+      if (scoreAdjustment != null) {
+        rows.push({
+          k: "Bench v9 efficiency transform",
+          v:
+            scoreAdjustment.mode === "headroom"
+              ? fx(scoreAdjustment.quality) +
+                " + (" +
+                fx(scoreAdjustment.factor) +
+                " − 1) × (1 − " +
+                fx(scoreAdjustment.quality) +
+                ") = " +
+                fx(scoreAdjustment.adjusted)
+              : fx(scoreAdjustment.quality) +
+                " × " +
+                fx(scoreAdjustment.factor) +
+                " = " +
+                fx(scoreAdjustment.adjusted),
+        });
+      }
+    } else if (hasBonus) {
       rows.push({
         k: "Relative token-efficiency bonus",
         v: "+" + (Number(e.efficiency_bonus) * 100).toFixed(1) + "% · frozen cohort award",
       });
-      rows.push({
-        k: "Folded ranking score",
-        v:
-          fx(e.official_composite ?? e.composite ?? e.pre_efficiency_composite) +
-          " · used for rank, KOTH, and emissions",
-      });
+    }
+    if (hasFactor || hasBonus) {
+      if (efficiencyFoldIsApplied(e)) {
+        rows.push({
+          k: "Folded ranking score",
+          v: fx(Number(e.effective_composite)) + " · used for rank, KOTH, and emissions",
+        });
+      } else {
+        rows.push({
+          k: "Efficiency projection",
+          v:
+            (e.effective_composite == null ? "unavailable" : fx(e.effective_composite)) +
+            " · audit only; not used for rank, KOTH, or emissions",
+        });
+        rows.push({
+          k: "Current ranking score",
+          v:
+            fx(e.official_composite ?? e.composite ?? e.pre_efficiency_composite) +
+            " · used for rank, KOTH, and emissions",
+        });
+      }
     } else {
       rows.push({
         k: "Current ranking score",

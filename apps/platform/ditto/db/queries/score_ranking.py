@@ -17,20 +17,25 @@ first_seen, lowest agent_id``. The trailing terms are not decoration: they are
 what makes a tie deterministic across the API, the queue, and the fold, so two
 readers of the same ledger never see two different fifth places.
 
-**The score it orders by** (:func:`official_composites`) -- the KOTH continual
-mean. An agent starts on the canonical k=3 quorum median and switches, once it
-has retained samples, to the mean of its three signed quorum scores plus one
-score per accepted seed. Scheduling membership never removes accepted evidence.
-That is the estimator validators fold into
-weights, so it is the estimator every ranking surface must cut on, including the
-queue floors. See :func:`ditto.api_server.koth.effective_composite` for the
-formula itself; this module is only about *who reads it*.
+**The score it orders by** (:func:`official_composites`) -- the authoritative
+quality scalar followed by any activated Platform adjustment. Legacy eras start
+on the canonical k=3 quorum median and may switch to the continual mean. A
+full-confirmed Bench-v9 row instead uses its independently verified full quality;
+curve-v3 efficiency, when activated, multiplies downside and applies upside to
+the remaining quality headroom. This is the estimator validators
+fold into weights, so every ranking surface must cut on it, including queue
+floors. See
+:func:`ditto.api_server.koth.effective_composite` for the legacy continual
+formula; this module is only about *who reads it*.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import is_dataclass, replace
 from datetime import UTC, datetime, timedelta
+from math import exp
+from typing import TYPE_CHECKING, cast
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,16 +55,22 @@ from ditto.score_order import (
     score_order_terms,
 )
 
+if TYPE_CHECKING:
+    from ditto.api_server.config import EfficiencyBonusConfig
+
 __all__ = [
     "CONTINUAL_MEAN_PROTOCOL",
+    "EfficiencyFactorRequesterNotReady",
     "VALIDATOR_STALE_WINDOW",
     "FinalizedRow",
     "RankableRow",
     "ScoreOrderKey",
     "completed_wave_data",
     "continual_mean_is_active",
+    "dedupe_owner_rows",
     "official_composites",
     "rank_submissions",
+    "resolve_efficiency_adjustments",
     "resolve_official_composites",
     "resolve_ranking_scores",
     "score_order_key",
@@ -70,13 +81,84 @@ __all__ = [
 # official score once every benchmark-capable validator that has been live
 # recently speaks the contract that produces it.
 CONTINUAL_MEAN_PROTOCOL = 14
+BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 19
 VALIDATOR_STALE_WINDOW = timedelta(minutes=15)
+
+
+class EfficiencyFactorRequesterNotReady(RuntimeError):
+    """The ledger requester lacks fresh heartbeat membership for curve v3.
+
+    This is raised only after a bounded-factor assignment is found. Legacy
+    ledgers and v9 epochs without factor candidates do not require requester
+    heartbeat evidence merely to read their existing scoring authority.
+    """
 
 
 def _row_details(row: object) -> dict | None:
     """The row's telemetry blob when it carries one, else ``None``."""
     details = getattr(row, "details", None)
     return details if isinstance(details, dict) else None
+
+
+def dedupe_owner_rows(rows: Sequence[F], *, scores: Mapping[UUID, float]) -> list[F]:
+    """Select one official representative per payment/attestation owner.
+
+    Callers pass the exact score their surface ranks—full-v9 quality followed
+    by the activated factor—so a leaner equal-quality generation wins before
+    first-seen. Rows without an internal owner root fall back to a unique agent
+    key, preserving fixtures and historical value objects.
+    """
+    by_owner: dict[str, list[F]] = {}
+    for row in rows:
+        owner = getattr(row, "emission_owner_root", None) or f"agent:{row.agent_id}"
+        by_owner.setdefault(str(owner), []).append(row)
+    winners = [
+        _with_resolved_crown(
+            rank_submissions(group, scores=scores)[0], group=group, scores=scores
+        )
+        for group in by_owner.values()
+    ]
+    return rank_submissions(winners, scores=scores)
+
+
+def _with_resolved_crown(
+    winner: F, *, group: Sequence[F], scores: Mapping[UUID, float]
+) -> F:
+    """Re-anchor owner seniority on the same final score that chose its row.
+
+    PostgreSQL computes ``crown_first_seen`` before Platform efficiency is
+    available. Once a factor changes which generation represents an owner, the
+    earlier raw-quality anchor is no longer authoritative: an expensive early
+    sibling must not lend seniority to a later efficient winner unless their
+    *final* scores are still inside the flat dethrone band. Ledger rows are
+    frozen dataclasses, so replace only that derived field; lightweight test or
+    moderation rows without it retain their ordinary upload timestamp.
+    """
+    if not is_dataclass(winner) or not hasattr(winner, "crown_first_seen"):
+        return winner
+
+    from ditto.api_server.koth import (
+        KOTH_BAND_DECAY_MIN_BENCH_VERSION,
+        KOTH_BAND_DECAY_RATE,
+        KOTH_BAND_DECAY_START_COMPOSITE,
+        KOTH_MARGIN,
+    )
+
+    winner_score = scores.get(winner.agent_id, winner.composite)
+    scale = 1.0
+    if winner.bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION:
+        bounded = min(max(winner_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
+        scale = exp(-KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE))
+    threshold = winner_score - KOTH_MARGIN * scale
+    ancestors = [
+        row.first_seen
+        for row in group
+        if bool(getattr(row, "eligible", True))
+        and row.bench_version == winner.bench_version
+        and scores.get(row.agent_id, row.composite) >= threshold
+    ]
+    anchor = min(ancestors, default=winner.first_seen)
+    return cast(F, replace(winner, crown_first_seen=anchor))
 
 
 def completed_wave_data(
@@ -119,37 +201,71 @@ def official_composites(
     completed_waves: Mapping[UUID, Mapping[int, float]],
     continual_mean_active: bool,
     efficiency_bonuses: Mapping[UUID, float] | None = None,
+    efficiency_factors: Mapping[UUID, float] | None = None,
     efficiency_fold_active: bool = False,
 ) -> dict[UUID, float]:
     """The score every ranking surface cuts on, per agent.
 
-    With the continual mean inactive this is the stored quorum median, so the
-    whole ranking degrades to the pre-continual behaviour rather than to a
-    second, differently-shaped estimator.
+    With the continual mean inactive this is the stored quorum median except
+    for full-confirmed Bench-v9 rows, whose verified full composite remains
+    authoritative. Curve-v3 factors are accepted only for those v9 rows and
+    only while the coordinated efficiency fold is active.
     """
     from ditto.api_server.koth import KothEntry, effective_composite
 
     bonuses = efficiency_bonuses or {}
+    factors = efficiency_factors or {}
+
+    def authoritative_quality(row: FinalizedRow) -> float:
+        """The quality scalar efficiency multiplies for this benchmark era."""
+        confirmation = getattr(row, "v9_confirmation", None)
+        if row.bench_version == 9 and isinstance(confirmation, Mapping):
+            micros = confirmation.get("full_effective_micros")
+            if (
+                isinstance(micros, int)
+                and not isinstance(micros, bool)
+                and 0 <= micros <= 1_000_000
+            ):
+                return micros / 1_000_000
+        return row.composite
+
     if not continual_mean_active and not efficiency_fold_active:
-        return {row.agent_id: row.composite for row in rows}
+        return {row.agent_id: authoritative_quality(row) for row in rows}
     return {
         row.agent_id: effective_composite(
             KothEntry(
                 miner_hotkey=row.miner_hotkey,
                 agent_id=row.agent_id,
-                composite=row.composite,
+                composite=authoritative_quality(row),
                 first_seen=row.first_seen,
                 raw_rank=0,
                 bench_version=row.bench_version,
-                quorum_composites=tuple(quorum.get(row.agent_id, ())),
+                quorum_composites=(
+                    ()
+                    if row.bench_version == 9
+                    and getattr(row, "v9_confirmation", None) is not None
+                    else tuple(quorum.get(row.agent_id, ()))
+                ),
                 completed_wave_composites=tuple(
                     value
                     for _seed, value in sorted(
-                        completed_waves.get(row.agent_id, {}).items()
+                        (
+                            {}
+                            if row.bench_version == 9
+                            and getattr(row, "v9_confirmation", None) is not None
+                            else completed_waves.get(row.agent_id, {})
+                        ).items()
                     )
                 ),
                 efficiency_bonus=(
                     bonuses.get(row.agent_id) if efficiency_fold_active else None
+                ),
+                efficiency_factor=(
+                    factors.get(row.agent_id)
+                    if efficiency_fold_active
+                    and row.bench_version == 9
+                    and getattr(row, "v9_confirmation", None) is not None
+                    else None
                 ),
             )
         )
@@ -210,6 +326,8 @@ async def resolve_official_composites(
     bench_version: int,
     continual_mean_active: bool,
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> dict[UUID, float]:
     """Read whatever the continual mean needs and return it per agent.
 
@@ -222,9 +340,26 @@ async def resolve_official_composites(
     from ditto.db.queries.confirmation_scores import confirmation_composites_by_seed
     from ditto.db.queries.scores import quorum_composites
 
-    if not rows or not continual_mean_active:
+    if not rows:
+        return {}
+
+    bonuses, factors = await resolve_efficiency_adjustments(
+        session,
+        rows=rows,
+        efficiency_config=efficiency_config,
+        now=now,
+    )
+
+    adjustment_active = bool(bonuses or factors)
+    if not continual_mean_active:
         return official_composites(
-            rows, quorum={}, completed_waves={}, continual_mean_active=False
+            rows,
+            quorum={},
+            completed_waves={},
+            continual_mean_active=False,
+            efficiency_bonuses=bonuses,
+            efficiency_factors=factors,
+            efficiency_fold_active=adjustment_active,
         )
     agent_ids = [row.agent_id for row in rows]
     quorum = await quorum_composites(
@@ -250,7 +385,95 @@ async def resolve_official_composites(
         quorum=quorum,
         completed_waves=completed_by_seed,
         continual_mean_active=True,
+        efficiency_bonuses=bonuses,
+        efficiency_factors=factors,
+        efficiency_fold_active=adjustment_active,
     )
+
+
+async def resolve_efficiency_adjustments(
+    session: AsyncSession,
+    *,
+    rows: Sequence[F],
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
+    requesting_validator_hotkey: str | None = None,
+) -> tuple[dict[UUID, float], dict[UUID, float]]:
+    """Resolve the fleet-safe adjustments shared by every official fold.
+
+    The scoring ledger, queue floors, and Platform KOTH scheduler must not each
+    interpret assignment rows independently. This keeps the policy, epoch,
+    v9/full-confirmation eligibility, and protocol-19 gate identical across
+    those authority paths.
+
+    App callers pass the resolver's effective config so an env-seeded rollout
+    is honored. Bare DB callers read the latest persisted revision; with no
+    revision the historical default-off policy remains in force.
+    """
+    from ditto.api_server.config import EfficiencyBonusConfig
+    from ditto.api_server.efficiency import epoch_index_for
+    from ditto.api_server.efficiency_settings import effective_config, settings_from_row
+    from ditto.db.models import ValidatorHeartbeat
+    from ditto.db.queries.efficiency import get_bonus_rows
+    from ditto.db.queries.efficiency_settings import (
+        latest_efficiency_settings_revision,
+    )
+    from ditto.db.queries.heartbeats import live_weight_setter_fleet_supports_protocol
+
+    if not rows:
+        return {}, {}
+    if efficiency_config is None:
+        revision = await latest_efficiency_settings_revision(session)
+        settings = settings_from_row(revision)
+        efficiency_config = effective_config(EfficiencyBonusConfig(), settings)
+    if not efficiency_config.enabled or not efficiency_config.fold_enabled:
+        return {}, {}
+
+    resolved_now = now or datetime.now(UTC)
+    assignments = await get_bonus_rows(
+        session,
+        [row.agent_id for row in rows],
+        bench_versions={row.agent_id: row.bench_version for row in rows},
+        epoch_index=epoch_index_for(resolved_now, efficiency_config.epoch_hours),
+    )
+    by_id = {row.agent_id: row for row in rows}
+    bonuses = {
+        agent_id: assignment.bonus
+        for agent_id, assignment in assignments.items()
+        if assignment.factor is None and agent_id in by_id
+    }
+    factor_candidates = {
+        agent_id: float(assignment.factor)
+        for agent_id, assignment in assignments.items()
+        if assignment.factor is not None
+        and agent_id in by_id
+        and by_id[agent_id].bench_version == 9
+        and getattr(by_id[agent_id], "v9_confirmation", None) is not None
+    }
+    factors: dict[UUID, float] = {}
+    if factor_candidates and requesting_validator_hotkey is not None:
+        requester = await session.get(ValidatorHeartbeat, requesting_validator_hotkey)
+        if (
+            requester is None
+            or requester.seen_at < resolved_now - VALIDATOR_STALE_WINDOW
+        ):
+            # A requester absent from the fresh fleet would escape the global
+            # protocol minimum and could consume a factor that its local fold
+            # does not understand. A fresh pre-v19 requester, by contrast, is
+            # deliberately admitted: its heartbeat remains in the global query
+            # below and neutralizes factors for every validator atomically.
+            raise EfficiencyFactorRequesterNotReady(
+                "a fresh validator heartbeat is required before serving "
+                "bounded efficiency factors"
+            )
+    if factor_candidates and await live_weight_setter_fleet_supports_protocol(
+        session,
+        minimum_protocol=BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+        now=resolved_now,
+        freshness=VALIDATOR_STALE_WINDOW,
+    ):
+        factors = factor_candidates
+    return bonuses, factors
 
 
 async def resolve_ranking_scores(
@@ -258,6 +481,7 @@ async def resolve_ranking_scores(
     *,
     rows: Sequence[F],
     bench_version: int | None,
+    efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
 ) -> dict[UUID, float]:
     """The canonical score for every row, settings and all, from a bare session.
@@ -298,4 +522,6 @@ async def resolve_ranking_scores(
         bench_version=era,
         continual_mean_active=active,
         wave_membership=settings.wave_membership,
+        efficiency_config=efficiency_config,
+        now=now,
     )

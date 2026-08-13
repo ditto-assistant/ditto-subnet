@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -49,6 +50,7 @@ from ditto.api_models.stack_health import (
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.attestation import expected_netuid
 from ditto.api_server.bench import CURRENT_BENCH_VERSION
+from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.crn import champion_anchored_seeds
 from ditto.api_server.datapipeline import DataPipelineError
 from ditto.api_server.dependencies import (
@@ -471,6 +473,205 @@ def test_v9_effective_composite_fails_closed_while_signed_gate_is_shadow(
 
     assert v9.effective_composite == 0.0
     assert legacy.effective_composite == 0.0
+
+
+def test_v9_bounded_factor_applies_after_full_confirmed_quality_only() -> None:
+    def row(bench_version: int) -> LedgerRow:
+        return LedgerRow(
+            miner_hotkey=_MINER_A,
+            agent_id=UUID(int=bench_version),
+            composite=0.7,
+            tool_mean=0.8,
+            memory_mean=0.8,
+            first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+            sha256="ab" * 32,
+            size_bytes=123,
+            run_id=f"run-v{bench_version}",
+            seed=42,
+            validator_hotkey=_VALIDATOR_C,
+            signature=None,
+            status=AgentStatus.SCORED,
+            bench_version=bench_version,
+            n=280,
+            eligible=True,
+        )
+
+    confirmation = V9ConfirmationPublicProjection(
+        result_status="full_confirmed",
+        full_confirmed_composite=0.8,
+        evidence_sha256="ab" * 32,
+    )
+    v9 = public_endpoint._public_entry(
+        1,
+        row(9),
+        "v9-agent",
+        1,
+        official_composite=0.8 * 0.85,
+        pre_efficiency_composite=0.8,
+        efficiency_factor=0.85,
+        v9_confirmation=confirmation,
+    )
+    legacy = public_endpoint._public_entry(
+        1,
+        row(8),
+        "v8-agent",
+        1,
+        pre_efficiency_composite=0.8,
+        efficiency_factor=0.85,
+    )
+
+    assert v9.efficiency_factor == pytest.approx(0.85)
+    assert v9.effective_composite == pytest.approx(0.8 * 0.85)
+    assert legacy.efficiency_factor is None
+    assert legacy.effective_composite is None
+
+
+def test_v9_bounded_factor_projection_scales_remaining_headroom() -> None:
+    row = LedgerRow(
+        miner_hotkey=_MINER_A,
+        agent_id=UUID(int=9),
+        composite=0.95,
+        tool_mean=0.95,
+        memory_mean=0.95,
+        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id="run-v9",
+        seed=42,
+        validator_hotkey=_VALIDATOR_C,
+        signature=None,
+        status=AgentStatus.SCORED,
+        bench_version=9,
+        n=280,
+        eligible=True,
+    )
+    confirmation = V9ConfirmationPublicProjection(
+        result_status="full_confirmed",
+        full_confirmed_composite=0.95,
+        evidence_sha256="ab" * 32,
+    )
+
+    entry = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        official_composite=0.955,
+        pre_efficiency_composite=0.95,
+        efficiency_factor=1.1,
+        efficiency_fold_applied=True,
+        v9_confirmation=confirmation,
+    )
+
+    assert entry.effective_composite == pytest.approx(0.955)
+
+
+def test_v9_audit_only_factor_projection_also_scales_remaining_headroom() -> None:
+    row = LedgerRow(
+        miner_hotkey=_MINER_A,
+        agent_id=UUID(int=91),
+        composite=0.95,
+        tool_mean=0.95,
+        memory_mean=0.95,
+        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id="run-v9-observe",
+        seed=42,
+        validator_hotkey=_VALIDATOR_C,
+        signature=None,
+        status=AgentStatus.SCORED,
+        bench_version=9,
+        n=280,
+        eligible=True,
+    )
+    confirmation = V9ConfirmationPublicProjection(
+        result_status="full_confirmed",
+        full_confirmed_composite=0.95,
+        evidence_sha256="ab" * 32,
+    )
+
+    entry = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        official_composite=0.95,
+        pre_efficiency_composite=0.95,
+        efficiency_factor=1.1,
+        efficiency_fold_applied=False,
+        v9_confirmation=confirmation,
+    )
+
+    assert entry.effective_composite == pytest.approx(0.955)
+    assert entry.official_composite == pytest.approx(0.95)
+    assert entry.efficiency_fold_applied is False
+
+
+@pytest.mark.parametrize("fold_enabled", [False, True])
+def test_v9_factor_stays_visible_as_audit_evidence_before_authority(
+    fold_enabled: bool,
+) -> None:
+    """Observe mode and a not-yet-ready fleet expose arithmetic, not rank it."""
+    agent_id = UUID(int=90)
+    row = LedgerRow(
+        miner_hotkey=_MINER_A,
+        agent_id=agent_id,
+        composite=0.8,
+        tool_mean=0.8,
+        memory_mean=0.8,
+        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id="run-v9",
+        seed=42,
+        validator_hotkey=_VALIDATOR_C,
+        signature=None,
+        status=AgentStatus.SCORED,
+        bench_version=9,
+        n=280,
+        eligible=True,
+        v9_confirmation={"full_effective_micros": 800_000},
+    )
+    view = cast(
+        public_endpoint.EfficiencyBoardView,
+        SimpleNamespace(
+            preview=False,
+            snapshot=SimpleNamespace(curve_version=3),
+            bonuses={
+                agent_id: SimpleNamespace(factor=1.0, bonus=0.0, snapshot_id=uuid4())
+            },
+        ),
+    )
+
+    displayed = public_endpoint._displayed_efficiency_factors(view, {agent_id: row})
+    _legacy, official = public_endpoint._fleet_safe_efficiency_adjustments(
+        {},
+        displayed if fold_enabled else {},
+        factor_fleet_ready=False,
+    )
+    entry = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        official_composite=0.8,
+        pre_efficiency_composite=0.8,
+        efficiency_factor=displayed[agent_id],
+        efficiency_fold_applied=agent_id in official,
+        v9_confirmation=V9ConfirmationPublicProjection(
+            result_status="full_confirmed",
+            full_confirmed_composite=0.8,
+            evidence_sha256="ab" * 32,
+        ),
+    )
+
+    assert displayed == {agent_id: 1.0}
+    assert official == {}
+    assert entry.efficiency_factor == pytest.approx(1.0)
+    assert entry.effective_composite == pytest.approx(0.8)
+    assert entry.official_composite == pytest.approx(0.8)
+    assert entry.efficiency_fold_applied is False
 
 
 @pytest.mark.parametrize(
@@ -2983,6 +3184,78 @@ class TestPublicLeaderboard:
 
         assert pipeline["submission_family"] == family
 
+    async def test_agent_detail_family_uses_current_factor_adjusted_representative(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Family detail must not reuse the pre-efficiency SQL representative."""
+        coldkey = "5FactorAdjustedFamilyColdkey"
+        canonical_leader = await _seed_k3(
+            session_maker,
+            miner="5" + "X" * 47,
+            composites=[0.94, 0.95, 0.96],
+            created_at=datetime(2026, 6, 8, 12, 0, tzinfo=UTC),
+        )
+        efficient_winner = await _seed_k3(
+            session_maker,
+            miner="5" + "Y" * 47,
+            composites=[0.89, 0.90, 0.91],
+            created_at=datetime(2026, 6, 8, 13, 0, tzinfo=UTC),
+        )
+        await _seed_payment(
+            session_maker,
+            agent_id=canonical_leader,
+            miner_hotkey="5" + "X" * 47,
+            miner_coldkey=coldkey,
+            index=45,
+        )
+        await _seed_payment(
+            session_maker,
+            agent_id=efficient_winner,
+            miner_hotkey="5" + "Y" * 47,
+            miner_coldkey=coldkey,
+            index=46,
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        async def factor_adjusted_scores(
+            _session: AsyncSession, **kwargs: object
+        ) -> dict[UUID, float]:
+            rows = cast(list[LedgerRow], kwargs["rows"])
+            assert kwargs["bench_version"] is None
+            assert {str(row.agent_id) for row in rows} == {
+                canonical_leader,
+                efficient_winner,
+            }
+            # This is the bounded-factor inversion the shared resolver returns:
+            # 0.95 * 0.85 loses to 0.90 * 1.10 despite the canonical medians.
+            return {
+                UUID(canonical_leader): 0.95 * 0.85,
+                UUID(efficient_winner): 0.90 * 1.10,
+            }
+
+        monkeypatch.setattr(
+            public_endpoint, "resolve_ranking_scores", factor_adjusted_scores
+        )
+
+        pipeline = (
+            await client.get(f"/api/v1/public/agent/{canonical_leader}/pipeline")
+        ).json()
+        family = pipeline["submission_family"]
+
+        assert [member["agent_id"] for member in family["members"]] == [
+            canonical_leader,
+            efficient_winner,
+        ]
+        assert [member["representative"] for member in family["members"]] == [
+            False,
+            True,
+        ]
+
     async def test_owner_family_with_a_zero_score_child_still_serves(
         self,
         app: FastAPI,
@@ -3344,6 +3617,49 @@ class TestPublicLeaderboard:
             settled.headers["Cache-Control"]
             == "public, max-age=3600, stale-while-revalidate=86400"
         )
+
+    async def test_only_settled_pinned_board_reads_historical_efficiency_epoch(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async with (
+            session_maker() as floor_session,
+            retired_era_writes_allowed(floor_session),
+        ):
+            await _seed_k3(
+                session_maker,
+                miner=_MINER_A,
+                composites=[0.70, 0.70, 0.70],
+                details={"bench_version": _PREV_ERA},
+            )
+        await _seed_k3(
+            session_maker,
+            miner=_MINER_B,
+            composites=[0.80, 0.80, 0.80],
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+        monkeypatch.setattr(
+            app.state.efficiency_settings,
+            "resolve",
+            AsyncMock(return_value=EfficiencyBonusConfig(enabled=True)),
+        )
+        read_board = AsyncMock(return_value=None)
+        monkeypatch.setattr(public_endpoint, "read_efficiency_board", read_board)
+
+        current = await client.get(f"/api/v1/public/leaderboard?bench_version={_ERA}")
+        settled = await client.get(
+            f"/api/v1/public/leaderboard?bench_version={_PREV_ERA}"
+        )
+
+        assert current.status_code == settled.status_code == 200
+        assert [call.kwargs["historical"] for call in read_board.await_args_list] == [
+            False,
+            True,
+        ]
 
     async def test_exposes_advisory_calibration(
         self,

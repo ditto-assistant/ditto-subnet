@@ -9,7 +9,8 @@ import { Dynamic } from "solid-js/web";
 
 import { esc, fx } from "../../lib/format";
 import {
-  displayComposite,
+  curveV3ScoreAdjustment,
+  efficiencyFoldIsApplied,
   qualityGateChipLabel,
   scoreQuorum,
   continualWaves,
@@ -202,23 +203,110 @@ export function TokenPenaltyChip(props: { entry: BoardEntry }): JSX.Element {
   );
 }
 
-/** Bench v7+ frozen relative-efficiency award, applied after continual aggregation. */
+/** Frozen relative-efficiency adjustment, applied after authoritative quality. */
 export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
   const active = (): boolean =>
-    props.entry.efficiency_bonus != null && props.entry.pre_efficiency_composite != null;
+    (props.entry.efficiency_factor != null || props.entry.efficiency_bonus != null) &&
+    props.entry.pre_efficiency_composite != null;
   const bonus = (): number => Math.max(0, Number(props.entry.efficiency_bonus) || 0);
-  const tip = (): string =>
-    "Relative token efficiency adds " +
-    (bonus() * 100).toFixed(1) +
-    "% after continual retest aggregation: " +
-    fx(Number(props.entry.pre_efficiency_composite)) +
-    " becomes " +
-    fx(displayComposite(props.entry)) +
-    ". This is the score used for ranking and emissions.";
+  const factor = (): number | null =>
+    props.entry.efficiency_factor == null ? null : Number(props.entry.efficiency_factor);
+  const applied = (): boolean => efficiencyFoldIsApplied(props.entry);
+  const effective = (): string =>
+    props.entry.effective_composite == null
+      ? "unavailable"
+      : fx(Number(props.entry.effective_composite));
+  const official = (): string =>
+    fx(Number(props.entry.official_composite ?? props.entry.composite));
+  const scoreAdjustment = () => curveV3ScoreAdjustment(props.entry);
+  const adjustmentExplanation = (): string => {
+    const adjustment = scoreAdjustment();
+    if (adjustment == null) return "";
+    if (adjustment.mode === "headroom") {
+      return (
+        " Bench v9 applies positive efficiency only to remaining quality headroom: " +
+        fx(adjustment.quality) +
+        " + (" +
+        fx(adjustment.factor) +
+        " − 1) × (1 − " +
+        fx(adjustment.quality) +
+        ") = " +
+        fx(adjustment.adjusted) +
+        "."
+      );
+    }
+    return (
+      " Bench v9 multiplies quality by neutral-or-downside efficiency: " +
+      fx(adjustment.quality) +
+      " × " +
+      fx(adjustment.factor) +
+      " = " +
+      fx(adjustment.adjusted) +
+      "."
+    );
+  };
+  const delta = (): number => ((factor() ?? 1 + bonus()) - 1) * 100;
+  const signedDelta = (): string => (delta() >= 0 ? "+" : "−") + Math.abs(delta()).toFixed(1) + "%";
+  const tip = (): string => {
+    if (factor() == null && applied()) {
+      // Keep the established v7/v8 explanation unchanged. Curve-v3 factors
+      // use different reference and downside semantics below.
+      return (
+        "Relative token efficiency adds " +
+        (bonus() * 100).toFixed(1) +
+        "% after continual retest aggregation: " +
+        fx(Number(props.entry.pre_efficiency_composite)) +
+        " becomes " +
+        effective() +
+        ". This is the score used for ranking and emissions."
+      );
+    }
+    const source =
+      factor() == null
+        ? "The legacy frozen cohort bonus"
+        : "The bounded factor against this epoch's frozen cohort P25 reference";
+    if (!applied()) {
+      return (
+        source +
+        (factor() == null
+          ? " would change the authoritative quality score by " + signedDelta() + ": "
+          : " would apply a " + signedDelta() + " factor to the authoritative quality score: ") +
+        fx(Number(props.entry.pre_efficiency_composite)) +
+        " projects to " +
+        effective() +
+        "." +
+        adjustmentExplanation() +
+        " This is an audit-only projection; current ranking and emissions remain based on " +
+        official() +
+        "."
+      );
+    }
+    return (
+      source +
+      (factor() == null
+        ? " changes the authoritative quality score by " + signedDelta() + ": "
+        : " applies a " + signedDelta() + " factor to the authoritative quality score: ") +
+      fx(Number(props.entry.pre_efficiency_composite)) +
+      " becomes " +
+      effective() +
+      "." +
+      adjustmentExplanation() +
+      " This is the score used for ranking and emissions."
+    );
+  };
   return (
     <Show when={active()}>
-      <ChipTip class="rollout-chip settled efficiency-bonus-chip tip" tabindex={0} text={tip()}>
-        {"efficiency +" + (bonus() * 100).toFixed(1) + "%"}
+      <ChipTip
+        class={
+          "rollout-chip " +
+          (applied() ? "settled" : "partial") +
+          " efficiency-bonus-chip tip" +
+          (delta() < 0 ? " penalized" : "")
+        }
+        tabindex={0}
+        text={tip()}
+      >
+        {"efficiency " + (applied() ? "" : "projection ") + signedDelta()}
       </ChipTip>
     </Show>
   );

@@ -1,9 +1,10 @@
-"""Reads + insert-once writes for the relative token-efficiency bonus tables.
+"""Reads + insert-once writes for relative token-efficiency adjustments.
 
 Both tables are append-only by contract (see the model docstrings):
 ``efficiency_cohort_snapshots`` gains one immutable row per epoch and
-``efficiency_bonuses`` one immutable row per ``(agent_id, bench_version)``.
-Nothing in this module UPDATEs either table — published bonuses never move.
+``efficiency_bonuses`` one immutable row per
+``(agent_id, bench_version, epoch_index)``. Nothing in this module UPDATEs
+either table — published adjustments never move.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from ditto.db.models import EfficiencyBonus, EfficiencyCohortSnapshot
 
@@ -96,6 +97,9 @@ async def insert_snapshot(
         curve_version=reference.curve_version,
         deep_bonus_cap=reference.deep_bonus_cap,
         deep_frontier_ratio=reference.deep_frontier_ratio,
+        factor_alpha=reference.factor_alpha,
+        minimum_factor=reference.minimum_factor,
+        maximum_factor=reference.maximum_factor,
         quality_floor=reference.quality_floor,
         memory_floor=reference.memory_floor,
         reference_p25_tokens=reference.reference_p25_tokens,
@@ -111,6 +115,11 @@ async def insert_snapshot(
                 "collapsed_agent_ids": [
                     str(agent_id) for agent_id in member.collapsed_agent_ids
                 ],
+                "first_seen": (
+                    member.first_seen.isoformat()
+                    if member.first_seen is not None
+                    else None
+                ),
             }
             for member in reference.members
         ],
@@ -142,9 +151,24 @@ async def get_bonus_rows(
     """
     if not agent_ids:
         return {}
-    statement = select(EfficiencyBonus).where(
-        EfficiencyBonus.agent_id.in_(agent_ids),
-        EfficiencyBonus.bench_version.in_(set(bench_versions.values())),
+    statement = (
+        select(EfficiencyBonus)
+        .join(
+            EfficiencyCohortSnapshot,
+            EfficiencyCohortSnapshot.snapshot_id == EfficiencyBonus.snapshot_id,
+        )
+        .where(
+            EfficiencyBonus.agent_id.in_(agent_ids),
+            EfficiencyBonus.bench_version.in_(set(bench_versions.values())),
+            # SQL CHECK constraints cannot inspect the referenced snapshot.
+            # Fail a malformed/imported factor row closed unless its immutable
+            # provenance really is curve v3; legacy null-factor rows remain
+            # readable exactly as before.
+            or_(
+                EfficiencyBonus.factor.is_(None),
+                EfficiencyCohortSnapshot.curve_version == 3,
+            ),
+        )
     )
     if epoch_index is not None:
         statement = statement.where(EfficiencyBonus.epoch_index == epoch_index)
@@ -167,6 +191,7 @@ async def insert_bonus(
     snapshot_id: UUID,
     token_total: float | None,
     bonus: float,
+    factor: float | None = None,
 ) -> EfficiencyBonus:
     """Persist one immutable bonus assignment (caller-managed transaction).
 
@@ -185,7 +210,32 @@ async def insert_bonus(
         snapshot_id=snapshot_id,
         token_total=token_total,
         bonus=bonus,
+        factor=factor,
     )
     session.add(row)
+    await session.flush()
+    return row
+
+
+async def promote_v3_compatibility_placeholder(
+    session: AsyncSession,
+    row: EfficiencyBonus,
+    *,
+    token_total: float,
+    factor: float,
+) -> EfficiencyBonus:
+    """Promote one neutral row emitted by the previous binary to v3 authority.
+
+    The migration's trigger converts an old writer's would-be legacy award
+    against a curve-v3 snapshot into ``bonus=0, factor=NULL``. Such a row is a
+    non-authoritative compatibility placeholder, not a published assignment;
+    after the new writer validates the exact signed v9 evidence it fills the
+    token total and factor once. Every already-authoritative row remains
+    immutable.
+    """
+    if row.factor is not None or row.bonus != 0.0:
+        raise ValueError("only a neutral curve-v3 compatibility row may be promoted")
+    row.token_total = token_total
+    row.factor = factor
     await session.flush()
     return row

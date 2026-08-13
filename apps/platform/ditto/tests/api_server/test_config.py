@@ -328,6 +328,9 @@ class TestEfficiencyBonusConfig:
             "DITTO_EFFICIENCY_BONUS_ENABLED",
             "DITTO_EFFICIENCY_BONUS_FOLD_ENABLED",
             "DITTO_EFFICIENCY_BONUS_CAP",
+            "DITTO_EFFICIENCY_BONUS_FACTOR_ALPHA",
+            "DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR",
+            "DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR",
         ):
             monkeypatch.delenv(name, raising=False)
         config = parse_api_server_config_from_env(commit_hash="abc")
@@ -337,6 +340,9 @@ class TestEfficiencyBonusConfig:
         assert efficiency.cap == 0.05
         assert efficiency.deep_cap == 0.10
         assert efficiency.deep_frontier_ratio == 0.5
+        assert efficiency.factor_alpha == 0.25
+        assert efficiency.minimum_factor == 0.85
+        assert efficiency.maximum_factor == 1.10
         assert efficiency.cohort_size == 25
         assert efficiency.min_cohort == 8
         assert efficiency.epoch_hours == 24
@@ -350,6 +356,9 @@ class TestEfficiencyBonusConfig:
         monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_MIN_COHORT", "10")
         monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_DEEP_CAP", "0.08")
         monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_DEEP_FRONTIER_RATIO", "0.25")
+        monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_FACTOR_ALPHA", "0.5")
+        monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR", "0.9")
+        monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR", "1.08")
         monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_EPOCH_HOURS", "12")
         monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_QUALITY_FLOOR", "0.4")
         monkeypatch.setenv("DITTO_EFFICIENCY_BONUS_MEMORY_FLOOR", "0.3")
@@ -359,6 +368,9 @@ class TestEfficiencyBonusConfig:
         assert efficiency.cap == 0.06
         assert efficiency.deep_cap == 0.08
         assert efficiency.deep_frontier_ratio == 0.25
+        assert efficiency.factor_alpha == 0.5
+        assert efficiency.minimum_factor == 0.9
+        assert efficiency.maximum_factor == 1.08
         assert efficiency.cohort_size == 30
         assert efficiency.min_cohort == 10
         assert efficiency.epoch_hours == 12
@@ -383,6 +395,12 @@ class TestEfficiencyBonusConfig:
             ({"enabled": True, "deep_frontier_ratio": 0.0}, "in \\(0, 1\\)"),
             ({"enabled": True, "deep_frontier_ratio": 1.0}, "in \\(0, 1\\)"),
             ({"enabled": True, "deep_frontier_ratio": -0.5}, "in \\(0, 1\\)"),
+            ({"enabled": True, "factor_alpha": 0.0}, "FACTOR_ALPHA"),
+            ({"enabled": True, "factor_alpha": 1.1}, "FACTOR_ALPHA"),
+            ({"enabled": True, "minimum_factor": 0.84}, "MINIMUM_FACTOR"),
+            ({"enabled": True, "minimum_factor": 1.01}, "MINIMUM_FACTOR"),
+            ({"enabled": True, "maximum_factor": 0.99}, "MAXIMUM_FACTOR"),
+            ({"enabled": True, "maximum_factor": 1.11}, "MAXIMUM_FACTOR"),
             ({"enabled": True, "min_cohort": 1}, "at least 2"),
             (
                 {"enabled": True, "cohort_size": 5, "min_cohort": 8},

@@ -179,12 +179,11 @@ from ditto.api_server.efficiency import (
     preview_efficiency_board,
     read_efficiency_board,
 )
-from ditto.api_server.efficiency import (
-    effective_composite as bonus_effective_composite,
-)
 from ditto.api_server.endpoints.scoring import (
+    _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
     _confirmation_composites,
     _confirmation_seeds,
+    _fleet_safe_efficiency_adjustments,
     _ledger_stderr,
 )
 from ditto.api_server.endpoints.screener import GeneratorDep
@@ -200,6 +199,7 @@ from ditto.api_server.koth import (
     KOTH_RANK_SHARES,
     KOTH_TAIL_SIZE,
     KothEntry,
+    bounded_efficiency_adjusted_quality,
     project_koth,
 )
 from ditto.api_server.model_use import model_use_factor, model_use_policy
@@ -268,6 +268,7 @@ from ditto.db.queries.heartbeats import (
     list_screener_heartbeats,
     list_validator_heartbeats,
     live_validator_fleet_supports_protocol,
+    live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
 from ditto.db.queries.orphaned_leases import OrphanedLease, list_orphaned_leases
@@ -284,11 +285,13 @@ from ditto.db.queries.retry_state import (
 )
 from ditto.db.queries.score_ranking import (
     completed_wave_data,
+    dedupe_owner_rows,
     official_composites,
-    rank_submissions,
+    resolve_ranking_scores,
 )
 from ditto.db.queries.scores import (
     SCORING_QUORUM,
+    LedgerFamilyMember,
     LedgerRow,
     SubmissionRow,
     V9ConfirmationPublicProjection,
@@ -1796,8 +1799,11 @@ def _public_entry(
     confirmation_seed_composites: tuple[float, ...] = (),
     continual_aggregate_active: bool = False,
     efficiency_bonus: float | None = None,
+    efficiency_factor: float | None = None,
+    efficiency_fold_applied: bool = False,
     efficiency_snapshot_id: UUID | None = None,
     efficiency_bonus_preview: float | None = None,
+    efficiency_factor_preview: float | None = None,
     submission_family: PublicLeaderboardFamily | None = None,
     average_run_cost_microusd: int | None = None,
     inference_run_count: int = 0,
@@ -1811,13 +1817,22 @@ def _public_entry(
         ModelUseVerdict(public_model_use.verdict) if public_model_use else None
     )
     bench_version = r.bench_version
+    if bench_version != 9:
+        # Curve v3 is deliberately v9-only. Neutralize a mismatched row rather
+        # than exposing or folding a factor under a legacy scoring contract.
+        efficiency_factor = None
+        efficiency_factor_preview = None
     v9_base = _safe_v9_base(details) if bench_version == 9 else None
     # A shadow gate is diagnostic, not score authority. Keep every v9 public
     # projection fail-closed until the signed root itself says the frozen gate
     # is in enforce mode; validators independently impose the same condition on
     # base-only v9 ledger rows.
     platform_model_use_factor = (
-        (
+        1.0
+        if bench_version == 9
+        and v9_confirmation is not None
+        and v9_confirmation.result_status == "full_confirmed"
+        else (
             v9_base.applied_gate_factor_bps / 10_000
             if v9_base is not None and v9_base.score_gates.rollout_mode == "enforce"
             else 0.0
@@ -1836,6 +1851,25 @@ def _public_entry(
     # dashboard shows a sparkline only when there's an actual trajectory.
     trend = history if history and len(history) >= 2 else None
     calibration_brier, calibration_n = _safe_calibration(details)
+    efficiency_base = (
+        pre_efficiency_composite
+        if pre_efficiency_composite is not None
+        else official_composite
+        if official_composite is not None
+        else r.composite
+    )
+    effective_projection: float | None = None
+    if efficiency_factor is not None:
+        effective_projection = bounded_efficiency_adjusted_quality(
+            efficiency_base * platform_model_use_factor,
+            efficiency_factor,
+        )
+    elif efficiency_bonus is not None:
+        # Preserve the frozen v1/v2 replay contract. Only curve v3 uses the
+        # asymmetric downside / remaining-headroom transform.
+        effective_projection = (
+            efficiency_base * (1.0 + efficiency_bonus) * platform_model_use_factor
+        )
     return PublicLeaderboardEntry(
         rank=(
             None
@@ -1906,30 +1940,18 @@ def _public_entry(
             else None
         ),
         efficiency_bonus=efficiency_bonus,
-        # The model-use gate composes with the efficiency bonus as another
-        # multiplier on the platform-side ranking composite -- never on the
-        # composite the validator signed. In SHADOW (the default) the factor is
-        # always 1.0, so this line is a no-op until an operator enables
-        # enforcement against a threshold that has already been published.
-        effective_composite=(
-            bonus_effective_composite(
-                pre_efficiency_composite
-                if pre_efficiency_composite is not None
-                else (
-                    official_composite
-                    if official_composite is not None
-                    else r.composite
-                ),
-                efficiency_bonus,
-            )
-            * platform_model_use_factor
-            if efficiency_bonus is not None
-            else None
-        ),
+        efficiency_factor=efficiency_factor,
+        efficiency_fold_applied=efficiency_fold_applied,
+        # Full-confirmed v9 quality already includes its signature-bound model,
+        # tool and semantic gates. Apply curve v3 after that authoritative
+        # quality exactly once; legacy eras retain their historical model-use
+        # reconciliation composition.
+        effective_composite=effective_projection,
         efficiency_snapshot_id=efficiency_snapshot_id,
         # Deliberately NOT folded into effective_composite above: a preview is
         # arithmetic about a hypothetical, not a component of any score.
         efficiency_bonus_preview=efficiency_bonus_preview,
+        efficiency_factor_preview=efficiency_factor_preview,
         # Use the exact uncertainty value sent to validators: a stashed re-score
         # SE when present, otherwise the k=3 quorum SEM. This keeps the displayed
         # band and the KOTH projection aligned with the real fold.
@@ -2027,10 +2049,12 @@ def _public_koth_emissions(
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
     anchor_version: int | None = None,
     efficiency_bonuses: dict[UUID, float] | None = None,
+    efficiency_factors: dict[UUID, float] | None = None,
 ) -> PublicKothEmissions | None:
     """Project the finalized score pool through the validator's pure fold."""
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
+    factor_values = efficiency_factors or {}
     candidates, by_seed, depths = completed_wave_data(
         rows,
         stderrs=stderrs,
@@ -2042,19 +2066,25 @@ def _public_koth_emissions(
 
     fold_entries = []
     for raw_rank, row in enumerate(candidates, start=1):
+        v9_confirmed = row.bench_version == 9 and row.v9_confirmation is not None
         details = row.details if isinstance(row.details, dict) else {}
         merged_confirmations: dict[int, float] = {}
         legacy_seeds = (
-            _confirmation_seeds(details) if include_continual_scores else None
+            _confirmation_seeds(details)
+            if include_continual_scores and not v9_confirmed
+            else None
         )
         legacy_composites = (
-            _confirmation_composites(details) if include_continual_scores else None
+            _confirmation_composites(details)
+            if include_continual_scores and not v9_confirmed
+            else None
         )
         if legacy_seeds is not None and legacy_composites is not None:
             merged_confirmations.update(
                 zip(legacy_seeds, legacy_composites, strict=False)
             )
-        merged_confirmations.update(by_seed.get(row.agent_id, {}))
+        if not v9_confirmed:
+            merged_confirmations.update(by_seed.get(row.agent_id, {}))
         confirmations = (
             sorted(merged_confirmations.items())
             if len(merged_confirmations) >= 2
@@ -2073,10 +2103,14 @@ def _public_koth_emissions(
                 raw_rank=raw_rank,
                 bench_version=row.bench_version,
                 composite_stderr=stderrs.get(row.agent_id),
-                quorum_composites=tuple(quorum_values.get(row.agent_id, ())),
+                quorum_composites=(
+                    () if v9_confirmed else tuple(quorum_values.get(row.agent_id, ()))
+                ),
                 completed_wave_composites=tuple(
                     value
-                    for _seed, value in sorted(by_seed.get(row.agent_id, {}).items())
+                    for _seed, value in sorted(
+                        ({} if v9_confirmed else by_seed.get(row.agent_id, {})).items()
+                    )
                 ),
                 confirmation_composites=(
                     tuple(composite for _seed, composite in confirmations)
@@ -2089,6 +2123,7 @@ def _public_koth_emissions(
                     else None
                 ),
                 efficiency_bonus=bonus_values.get(row.agent_id),
+                efficiency_factor=factor_values.get(row.agent_id),
             )
         )
 
@@ -2283,6 +2318,34 @@ _LEADERBOARD_DETAIL_FIELDS = {
 }
 
 
+def _displayed_efficiency_factors(
+    view: EfficiencyBoardView | None,
+    finalized_by_id: dict[UUID, LedgerRow],
+) -> dict[UUID, float]:
+    """Return persisted v3 factors that are safe to expose as audit evidence.
+
+    Display is intentionally independent of ``fold_enabled`` and protocol-19
+    fleet readiness: operators need to inspect the frozen projection before
+    activation. Authority remains separate—the caller passes this map through
+    the fold/fleet gate before changing official ranking or KOTH.
+    """
+    if (
+        view is None
+        or view.preview
+        or view.snapshot is None
+        or view.snapshot.curve_version != 3
+    ):
+        return {}
+    return {
+        agent_id: float(assignment.factor)
+        for agent_id, assignment in view.bonuses.items()
+        if assignment.factor is not None
+        and agent_id in finalized_by_id
+        and finalized_by_id[agent_id].bench_version == 9
+        and finalized_by_id[agent_id].v9_confirmation is not None
+    }
+
+
 @router.get(
     "/leaderboard",
     response_model=PublicLeaderboardResponse,
@@ -2351,9 +2414,9 @@ async def leaderboard(
         session,
         include_fingerprints=False,
         include_details=False,
-        include_family_members=True,
         bench_version=bench_version,
         owner_score="canonical" if bench_version is not None else "official",
+        dedupe_owners=False,
     )
     # Enforce mode deliberately removes base-only/provisional v9 rows from the
     # authoritative ledger. Keep a separate, explicitly non-authoritative read
@@ -2386,13 +2449,17 @@ async def leaderboard(
         bench_versions=selected_versions,
     )
     fold_stderrs = {
-        row.agent_id: _ledger_stderr(
-            (
-                {"composite_stderr": row.stored_composite_stderr}
-                if row.stored_composite_stderr is not None
-                else None
-            ),
-            quorum.get(row.agent_id, []),
+        row.agent_id: (
+            row.v9_confirmation["full_stderr_micros"] / 1_000_000
+            if row.bench_version == 9 and row.v9_confirmation is not None
+            else _ledger_stderr(
+                (
+                    {"composite_stderr": row.stored_composite_stderr}
+                    if row.stored_composite_stderr is not None
+                    else None
+                ),
+                quorum.get(row.agent_id, []),
+            )
         )
         for row in visible_rows
     }
@@ -2432,6 +2499,7 @@ async def leaderboard(
                     agent_ids=finalized_ids,
                     bench_versions=selected_versions,
                     now=datetime.now(UTC),
+                    historical=settled_bench_version,
                 )
             else:
                 # Switched off, so show what the boost WOULD be rather than
@@ -2483,17 +2551,47 @@ async def leaderboard(
         and efficiency_view is not None
         and not efficiency_view.preview
     )
+    finalized_by_id = {row.agent_id: row for row in finalized_rows}
     efficiency_bonuses = (
         {
             agent_id: bonus_row.bonus
             for agent_id, bonus_row in efficiency_view.bonuses.items()
-            if not any(
-                row.agent_id == agent_id and row.v9_confirmation is not None
-                for row in finalized_rows
-            )
+            if bonus_row.factor is None
+            and efficiency_view.snapshot is not None
+            and efficiency_view.snapshot.curve_version < 3
+            and agent_id in finalized_by_id
         }
         if efficiency_fold_active and efficiency_view is not None
         else {}
+    )
+    # Persisted assignments remain public audit evidence before activation.
+    # Keep this map separate from the factor map allowed to change official
+    # ranking/KOTH: observing the frozen arithmetic must not require turning on
+    # a consensus-affecting fold or waiting for fleet protocol readiness.
+    displayed_efficiency_factors = _displayed_efficiency_factors(
+        efficiency_view,
+        finalized_by_id,
+    )
+    # A curve-v3 factor may reduce an agent's score.  Suppress it from both the
+    # public official projection and the validator-equivalent KOTH projection
+    # until every recently-live weight setter advertises protocol 19, the first
+    # fold that consumes this additive field.  This population is deliberately
+    # independent of ``active_version``: during a v8 -> v9 rollout the official
+    # ledger can switch atomically to v9 before rollout activation, and an
+    # explicitly pinned v9 view still represents the v9 contract. Historical
+    # v1/v2 bonuses above deliberately do not inherit this new gate.
+    factor_fleet_ready = False
+    if displayed_efficiency_factors and efficiency_fold_active:
+        factor_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+            session,
+            minimum_protocol=_BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+            now=now,
+            freshness=_VALIDATOR_STALE_WINDOW,
+        )
+    efficiency_bonuses, efficiency_factors = _fleet_safe_efficiency_adjustments(
+        efficiency_bonuses,
+        displayed_efficiency_factors if efficiency_fold_active else {},
+        factor_fleet_ready=factor_fleet_ready,
     )
     board_official_composites = official_composites(
         finalized_rows,
@@ -2501,19 +2599,37 @@ async def leaderboard(
         completed_waves=completed_by_seed,
         continual_mean_active=continual_mean_active,
         efficiency_bonuses=efficiency_bonuses,
+        efficiency_factors=efficiency_factors,
         efficiency_fold_active=efficiency_fold_active,
     )
-    for row in finalized_rows:
-        if row.v9_confirmation is not None:
-            full = row.v9_confirmation["full_effective_micros"] / 1_000_000
-            pre_efficiency_composites[row.agent_id] = full
-            board_official_composites[row.agent_id] = full
-    finalized_rows = rank_submissions(finalized_rows, scores=board_official_composites)
-    # The finalized board is already one row per owner (``list_eligible_ledger``
-    # partitions on ``emission_owner``), so the provisional overlay has to
-    # suppress and dedupe on that same owner. Keyed on the hotkey it showed an
-    # owner's second hotkey as an extra provisional row beside the finalized one
-    # it is not separately ranked against.
+    finalized_rows = dedupe_owner_rows(finalized_rows, scores=board_official_composites)
+    if finalized_rows:
+        family_groups = await list_submission_family_members(
+            session,
+            bench_version=finalized_rows[0].bench_version,
+        )
+        family_by_agent = {
+            member.agent_id: members
+            for members in family_groups.values()
+            for member in members
+        }
+        finalized_rows = [
+            replace(
+                row,
+                family_members=tuple(
+                    LedgerFamilyMember(
+                        agent_id=member.agent_id,
+                        agent_name=member.agent_name,
+                        agent_version=member.agent_version,
+                        canonical_composite=member.canonical_composite,
+                    )
+                    for member in family_by_agent.get(row.agent_id, [])
+                ),
+            )
+            for row in finalized_rows
+        ]
+    # The factor-adjusted finalized board is now one row per owner, so the
+    # provisional overlay suppresses and dedupes on that same owner graph.
     provisional_candidates = (
         [
             (row, score_counts.get(row.agent_id, 0))
@@ -2644,6 +2760,20 @@ async def leaderboard(
             if efficiency_view is not None
             else None
         )
+        # Read from the fleet-gated map, never directly from the persisted row:
+        # the latter exists before protocol activation and is also visible on a
+        # pinned v9 board.
+        bounded_factor = displayed_efficiency_factors.get(row.agent_id)
+        legacy_bonus = (
+            bonus_row.bonus
+            if bonus_row is not None
+            and bounded_factor is None
+            and efficiency_view is not None
+            and efficiency_view.snapshot is not None
+            and efficiency_view.snapshot.curve_version < 3
+            else None
+        )
+        adjustment_present = bounded_factor is not None or legacy_bonus is not None
         entries.append(
             _public_entry(
                 i,
@@ -2654,12 +2784,24 @@ async def leaderboard(
                 settled_composite=settled,
                 rollout_composite=rolling,
                 rollout_score_count=rolling_count,
-                efficiency_bonus=bonus_row.bonus if bonus_row is not None else None,
+                efficiency_bonus=legacy_bonus,
+                efficiency_factor=bounded_factor,
+                efficiency_fold_applied=(
+                    row.agent_id in efficiency_bonuses
+                    or row.agent_id in efficiency_factors
+                ),
                 efficiency_snapshot_id=(
-                    bonus_row.snapshot_id if bonus_row is not None else None
+                    bonus_row.snapshot_id
+                    if adjustment_present and bonus_row is not None
+                    else None
                 ),
                 efficiency_bonus_preview=(
                     (efficiency_view.preview_bonuses or {}).get(row.agent_id)
+                    if efficiency_view is not None and efficiency_view.preview
+                    else None
+                ),
+                efficiency_factor_preview=(
+                    (efficiency_view.preview_factors or {}).get(row.agent_id)
                     if efficiency_view is not None and efficiency_view.preview
                     else None
                 ),
@@ -2781,6 +2923,7 @@ async def leaderboard(
                 wave_membership=continual_settings.wave_membership,
                 anchor_version=active_version,
                 efficiency_bonuses=efficiency_bonuses,
+                efficiency_factors=efficiency_factors,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),
@@ -2826,6 +2969,9 @@ def _efficiency_status(
             curve_version=reference.curve_version,
             deep_bonus_cap=reference.deep_bonus_cap,
             deep_frontier_tokens=deep_frontier,
+            factor_alpha=reference.factor_alpha,
+            minimum_factor=reference.minimum_factor,
+            maximum_factor=reference.maximum_factor,
             reference_p25_tokens=reference.reference_p25_tokens,
             reference_median_tokens=reference.reference_median_tokens,
         )
@@ -2851,6 +2997,9 @@ def _efficiency_status(
         curve_version=snapshot.curve_version,
         deep_bonus_cap=snapshot.deep_bonus_cap,
         deep_frontier_tokens=deep_frontier_tokens,
+        factor_alpha=snapshot.factor_alpha,
+        minimum_factor=snapshot.minimum_factor,
+        maximum_factor=snapshot.maximum_factor,
         reference_p25_tokens=snapshot.reference_p25_tokens,
         reference_median_tokens=snapshot.reference_median_tokens,
     )
@@ -2909,6 +3058,9 @@ async def efficiency_snapshot(
         curve_version=snapshot.curve_version,
         deep_bonus_cap=snapshot.deep_bonus_cap,
         deep_frontier_ratio=snapshot.deep_frontier_ratio,
+        factor_alpha=snapshot.factor_alpha,
+        minimum_factor=snapshot.minimum_factor,
+        maximum_factor=snapshot.maximum_factor,
         quality_floor=snapshot.quality_floor,
         memory_floor=snapshot.memory_floor,
         reference_p25_tokens=snapshot.reference_p25_tokens,
@@ -4215,6 +4367,7 @@ async def _ath_review_public_snapshot(
 
 @router.get("/activity", response_model=PublicActivityResponse)
 async def activity(
+    request: Request,
     response: Response,
     session: SessionDep,
     page: int = Query(default=1, ge=1),
@@ -4232,6 +4385,12 @@ async def activity(
     private.
     """
     response.headers["Cache-Control"] = "public, max-age=10"
+    efficiency_config = await request.app.state.efficiency_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    now = datetime.now(UTC)
+    if efficiency_config.enabled:
+        await ensure_efficiency_state(session, efficiency_config, now=now)
     requested_statuses = set(status or [])
     unknown_statuses = requested_statuses - _PUBLIC_ACTIVITY_STATUSES
     if unknown_statuses:
@@ -4241,7 +4400,6 @@ async def activity(
             + ", ".join(sorted(unknown_statuses)),
         )
 
-    now = datetime.now(UTC)
     active_version = await active_bench_version(session)
     rows, _ = await list_public_activity(session, bench_version=active_version)
     admitted = await admitted_agent_ids(
@@ -4259,7 +4417,12 @@ async def activity(
     (
         score_continuation_floor,
         provisional_contender_floor,
-    ) = await get_score_priority_floors(session, bench_version=active_version)
+    ) = await get_score_priority_floors(
+        session,
+        bench_version=active_version,
+        efficiency_config=efficiency_config,
+        now=now,
+    )
     artifact_releases = await _artifact_release_snapshot(
         session,
         statuses={row.agent.agent_id: row.agent.status for row in rows},
@@ -4443,6 +4606,11 @@ async def operations(
     # after the signed progress heartbeat had already landed.
     response.headers["Cache-Control"] = _OPERATIONS_CACHE_CONTROL
     now = datetime.now(UTC)
+    efficiency_config = await request.app.state.efficiency_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    if efficiency_config.enabled:
+        await ensure_efficiency_state(session, efficiency_config, now=now)
     benchmark_rollout = await rollout_state(session, now=now)
     active_version = cast(int, benchmark_rollout["active_version"])
     activity_rows, _ = await list_public_activity(session, bench_version=active_version)
@@ -4462,7 +4630,12 @@ async def operations(
     (
         score_continuation_floor,
         provisional_contender_floor,
-    ) = await get_score_priority_floors(session, bench_version=active_version)
+    ) = await get_score_priority_floors(
+        session,
+        bench_version=active_version,
+        efficiency_config=efficiency_config,
+        now=now,
+    )
     artifact_releases = await _artifact_release_snapshot(
         session,
         statuses={row.agent.agent_id: row.agent.status for row in activity_rows},
@@ -4674,6 +4847,7 @@ async def create_screening_dispute(
 
 @router.get("/agent/{agent_id}/summary", response_model=PublicAgentSummary)
 async def agent_summary(
+    request: Request,
     response: Response,
     session: SessionDep,
     agent_id: UUID,
@@ -4687,6 +4861,11 @@ async def agent_summary(
     """
     response.headers["Cache-Control"] = "public, max-age=10"
     now = datetime.now(UTC)
+    efficiency_config = await request.app.state.efficiency_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    if efficiency_config.enabled:
+        await ensure_efficiency_state(session, efficiency_config, now=now)
     active_version = await active_bench_version(session)
     row = await get_public_activity_by_id(
         session,
@@ -4734,6 +4913,8 @@ async def agent_summary(
         await get_score_continuation_floor(
             session,
             bench_version=active_version,
+            efficiency_config=efficiency_config,
+            now=now,
         )
         if row.agent.status == AgentStatus.EVALUATING
         and row.score_count == SCORING_QUORUM - 1
@@ -4805,6 +4986,7 @@ async def agent_summary(
 
 @router.get("/agent/{agent_id}/pipeline", response_model=PublicSubmissionPipeline)
 async def agent_pipeline(
+    request: Request,
     response: Response,
     session: SessionDep,
     agent_id: UUID,
@@ -4816,6 +4998,12 @@ async def agent_pipeline(
     null until the independent-score quorum is reached.
     """
     response.headers["Cache-Control"] = "public, max-age=10"
+    now = datetime.now(UTC)
+    efficiency_config = await request.app.state.efficiency_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
+    if efficiency_config.enabled:
+        await ensure_efficiency_state(session, efficiency_config, now=now)
     agent = await session.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="submission not found")
@@ -4898,8 +5086,24 @@ async def agent_pipeline(
         )
     )
     canonical_version = await active_bench_version(session)
+    # Read every generation before owner reduction, then run the same current
+    # official-score resolver and canonical owner dedupe used by ranking/floor
+    # authority. The old detail path read the SQL pre-efficiency representative,
+    # so a cheaper equal-quality generation could lead the board/ledger while
+    # its own family panel still marked its expensive sibling representative.
+    current_ledger_rows = await list_eligible_ledger(
+        session,
+        include_fingerprints=False,
+        include_details=False,
+        dedupe_owners=False,
+    )
+    family_bench_version = (
+        current_ledger_rows[0].bench_version
+        if current_ledger_rows
+        else canonical_version
+    )
     current_families = await list_submission_family_members(
-        session, bench_version=canonical_version
+        session, bench_version=family_bench_version
     )
     agent_family_members = next(
         (
@@ -4911,14 +5115,21 @@ async def agent_pipeline(
     )
     if agent_family_members:
         family_agent_ids = {member.agent_id for member in agent_family_members}
+        current_ranking_scores = await resolve_ranking_scores(
+            session,
+            rows=current_ledger_rows,
+            bench_version=None,
+            efficiency_config=efficiency_config,
+            now=now,
+        )
+        current_representatives = dedupe_owner_rows(
+            current_ledger_rows,
+            scores=current_ranking_scores,
+        )
         official_representative_id = next(
             (
                 ledger_row.agent_id
-                for ledger_row in await list_eligible_ledger(
-                    session,
-                    include_fingerprints=False,
-                    include_details=False,
-                )
+                for ledger_row in current_representatives
                 if ledger_row.agent_id in family_agent_ids
             ),
             agent_family_members[0].agent_id,
@@ -4995,7 +5206,10 @@ async def agent_pipeline(
     # One read, so the quoted floor and the agent credited with it cannot come
     # from two different snapshots of a ledger that moves between calls.
     score_floor = await get_score_continuation_floor_row(
-        session, bench_version=canonical_version
+        session,
+        bench_version=canonical_version,
+        efficiency_config=efficiency_config,
+        now=now,
     )
     score_continuation_floor = score_floor.score if score_floor is not None else None
     score_floor_agent = (

@@ -39,6 +39,7 @@ from ditto.api_models.validator import (
     V9ConfirmationReceipt,
 )
 from ditto.api_server.continual_retest_settings import aggregate_is_active
+from ditto.api_server.efficiency import ensure_efficiency_state
 from ditto.api_server.endpoints.validator import (
     ChainDep,
     SessionDep,
@@ -52,9 +53,15 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     confirmation_history_by_agent,
 )
-from ditto.db.queries.efficiency import get_bonus_rows
-from ditto.db.queries.heartbeats import live_validator_fleet_supports_protocol
-from ditto.db.queries.score_ranking import official_composites
+from ditto.db.queries.heartbeats import (
+    live_validator_fleet_supports_protocol,
+)
+from ditto.db.queries.score_ranking import (
+    EfficiencyFactorRequesterNotReady,
+    dedupe_owner_rows,
+    official_composites,
+    resolve_efficiency_adjustments,
+)
 from ditto.db.queries.scores import (
     list_eligible_ledger,
     quorum_composites,
@@ -79,6 +86,20 @@ router = APIRouter(prefix="/scoring", tags=["scoring"])
 _MAX_STALE_SECONDS = 300
 _LEDGER_REQUEST_MAX_AGE = timedelta(minutes=2)
 _CONTINUAL_MEAN_PROTOCOL = 14
+# The first validator protocol that understands the curve-v3 downside/upside
+# factor.  Older validators ignore the additive field, so exposing it to a
+# mixed active-benchmark fleet would produce different KOTH/weight folds.
+_BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 19
+
+
+def _fleet_safe_efficiency_adjustments(
+    legacy_bonuses: dict[UUID, float],
+    bounded_factors: dict[UUID, float],
+    *,
+    factor_fleet_ready: bool,
+) -> tuple[dict[UUID, float], dict[UUID, float]]:
+    """Fail curve-v3 exposure closed without changing legacy bonus policy."""
+    return legacy_bonuses, bounded_factors if factor_fleet_ready else {}
 
 
 def _ledger_signing_message(
@@ -312,7 +333,20 @@ async def scores(
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
     try:
-        rows = await list_eligible_ledger(session, include_fingerprints=False)
+        # The validator ledger is an authority path, not a dependent of the
+        # public leaderboard. Materialize this epoch before reading either the
+        # ledger or its adjustment rows so a quiet dashboard cannot leave every
+        # validator folding an old/missing efficiency epoch. The resolver uses
+        # its independent session and the nonce transaction above is complete,
+        # leaving this session clean for ensure_efficiency_state's transaction.
+        efficiency_config = await request.app.state.efficiency_settings.resolve(
+            getattr(request.app.state, "session_maker", None)
+        )
+        if efficiency_config.enabled:
+            await ensure_efficiency_state(session, efficiency_config, now=auth_now)
+        rows = await list_eligible_ledger(
+            session, include_fingerprints=False, dedupe_owners=False
+        )
         v9_confirmation_mode: Literal["enforce"] | None = (
             "enforce" if await v9_confirmation_enforcement_active(session) else None
         )
@@ -362,27 +396,25 @@ async def scores(
         # read at compute time from the hot-swappable policy (latest revision,
         # short TTL) so a backroom flip lands here with no restart; the
         # `fold requires enabled` invariant is enforced by the resolver.
-        efficiency_config = await request.app.state.efficiency_settings.resolve(
-            getattr(request.app.state, "session_maker", None)
+        efficiency_bonuses, efficiency_factors = await resolve_efficiency_adjustments(
+            session,
+            rows=rows,
+            efficiency_config=efficiency_config,
+            now=auth_now,
+            requesting_validator_hotkey=x_validator_hotkey,
         )
-        if efficiency_config.enabled and efficiency_config.fold_enabled:
-            bonus_rows = await get_bonus_rows(
-                session,
-                [r.agent_id for r in rows if r.v9_confirmation is None],
-                bench_versions={r.agent_id: r.bench_version for r in rows},
-            )
-        else:
-            bonus_rows = {}
         ranking_scores = official_composites(
             rows,
             quorum=quorum,
             completed_waves=confirmation_by_seed,
             continual_mean_active=continual_mean_active,
-            efficiency_bonuses={
-                agent_id: row.bonus for agent_id, row in bonus_rows.items()
-            },
-            efficiency_fold_active=bool(bonus_rows),
+            efficiency_bonuses=efficiency_bonuses,
+            efficiency_factors=efficiency_factors,
+            efficiency_fold_active=bool(efficiency_bonuses or efficiency_factors),
         )
+        rows = dedupe_owner_rows(rows, scores=ranking_scores)
+    except EfficiencyFactorRequesterNotReady as exc:
+        raise HTTPException(status_code=428, detail=str(exc)) from exc
     except SQLAlchemyError as e:
         return _serve_last_known(request, x_validator_hotkey, e)
 
@@ -441,11 +473,12 @@ async def scores(
                 if continual_mean_active and r.v9_confirmation is None
                 else None
             ),
-            efficiency_bonus=(
-                bonus_rows[r.agent_id].bonus if r.agent_id in bonus_rows else None
-            ),
+            efficiency_bonus=(efficiency_bonuses.get(r.agent_id)),
+            efficiency_factor=efficiency_factors.get(r.agent_id),
             effective_composite=(
-                ranking_scores[r.agent_id] if r.agent_id in bonus_rows else None
+                ranking_scores[r.agent_id]
+                if r.agent_id in efficiency_bonuses or r.agent_id in efficiency_factors
+                else None
             ),
             v9_confirmation=(
                 V9ConfirmationReceipt.model_validate(r.v9_confirmation)
@@ -529,19 +562,27 @@ def _serve_last_known(
         error,
     )
     # Capability truth lives in the same database that just failed.  Strip the
-    # additive marker rather than replaying an active snapshot into a fleet that
-    # may have regressed to a legacy protocol while the database was unavailable.
-    entries = [
-        entry.model_copy(
-            update={
-                "continual_aggregate_method": None,
-                "confirmation_composites": None,
-                "confirmation_seeds": None,
-                "confirmation_history": None,
-            }
+    # additive markers rather than replaying an active snapshot into a fleet
+    # that may have regressed to a legacy protocol while the database was
+    # unavailable.  Preserve the established v1/v2 bonus behavior; only the new
+    # protocol-19 factor and its projection fail closed here.
+    entries = []
+    for entry in snapshot.entries:
+        had_factor = entry.efficiency_factor is not None
+        entries.append(
+            entry.model_copy(
+                update={
+                    "continual_aggregate_method": None,
+                    "confirmation_composites": None,
+                    "confirmation_seeds": None,
+                    "confirmation_history": None,
+                    "efficiency_factor": None,
+                    "effective_composite": (
+                        None if had_factor else entry.effective_composite
+                    ),
+                }
+            )
         )
-        for entry in snapshot.entries
-    ]
     return LedgerResponse(
         entries=entries,
         # Replayed from the same last-known-good snapshot as the rows. Never

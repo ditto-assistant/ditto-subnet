@@ -58,7 +58,7 @@ from ditto.db.queries.queue_order import (
     selected_owner_agent_id,
 )
 from ditto.db.queries.score_ranking import (
-    rank_submissions,
+    dedupe_owner_rows,
     resolve_ranking_scores,
 )
 from ditto.db.queries.scores import (
@@ -84,6 +84,8 @@ from ditto.db.queries.validator_slot_occupancy import (
 if TYPE_CHECKING:
     from sqlalchemy import ColumnElement, Select
     from sqlalchemy.ext.asyncio import AsyncSession
+
+    from ditto.api_server.config import EfficiencyBonusConfig
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +157,11 @@ class ScoreFloor:
 
 
 async def get_score_priority_floor_rows(
-    session: AsyncSession, *, bench_version: int | None = None
+    session: AsyncSession,
+    *,
+    bench_version: int | None = None,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> tuple[ScoreFloor | None, ScoreFloor | None]:
     """Return the fifth- and tenth-place floors with the rows that hold them.
 
@@ -192,6 +198,7 @@ async def get_score_priority_floor_rows(
             include_fingerprints=False,
             include_details=False,
             bench_version=bench_version,
+            dedupe_owners=False,
         )
         if row.eligible
     ]
@@ -200,9 +207,13 @@ async def get_score_priority_floor_rows(
     if len(eligible) < EMISSION_CONTENDER_COUNT:
         return None, None
     official = await resolve_ranking_scores(
-        session, rows=eligible, bench_version=bench_version
+        session,
+        rows=eligible,
+        bench_version=bench_version,
+        efficiency_config=efficiency_config,
+        now=now,
     )
-    ranked = rank_submissions(eligible, scores=official)
+    ranked = dedupe_owner_rows(eligible, scores=official)
 
     def floor_at(position: int) -> ScoreFloor | None:
         if len(ranked) < position:
@@ -214,7 +225,11 @@ async def get_score_priority_floor_rows(
 
 
 async def get_score_priority_floors(
-    session: AsyncSession, *, bench_version: int | None = None
+    session: AsyncSession,
+    *,
+    bench_version: int | None = None,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> tuple[float | None, float | None]:
     """Return finalized fifth-place and tenth-place floors for one benchmark era.
 
@@ -222,7 +237,10 @@ async def get_score_priority_floors(
     ranks them on -- not the raw quorum median stored on the ledger row.
     """
     continuation, provisional = await get_score_priority_floor_rows(
-        session, bench_version=bench_version
+        session,
+        bench_version=bench_version,
+        efficiency_config=efficiency_config,
+        now=now,
     )
     return (
         continuation.score if continuation is not None else None,
@@ -231,7 +249,11 @@ async def get_score_priority_floors(
 
 
 async def get_score_continuation_floor_row(
-    session: AsyncSession, *, bench_version: int | None = None
+    session: AsyncSession,
+    *,
+    bench_version: int | None = None,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> ScoreFloor | None:
     """Return the fifth-place continuation floor and the row that holds it.
 
@@ -240,13 +262,20 @@ async def get_score_continuation_floor_row(
     separate reads of a moving ledger.
     """
     continuation, _ = await get_score_priority_floor_rows(
-        session, bench_version=bench_version
+        session,
+        bench_version=bench_version,
+        efficiency_config=efficiency_config,
+        now=now,
     )
     return continuation
 
 
 async def get_score_continuation_floor(
-    session: AsyncSession, *, bench_version: int | None = None
+    session: AsyncSession,
+    *,
+    bench_version: int | None = None,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> float | None:
     """Return the finalized fifth-place score for one benchmark era, if five exist.
 
@@ -273,13 +302,20 @@ async def get_score_continuation_floor(
     number has to be attributed to an agent a miner can look up.
     """
     continuation, _ = await get_score_priority_floors(
-        session, bench_version=bench_version
+        session,
+        bench_version=bench_version,
+        efficiency_config=efficiency_config,
+        now=now,
     )
     return continuation
 
 
 async def get_provisional_contender_floor(
-    session: AsyncSession, *, bench_version: int | None = None
+    session: AsyncSession,
+    *,
+    bench_version: int | None = None,
+    efficiency_config: EfficiencyBonusConfig | None = None,
+    now: datetime | None = None,
 ) -> float | None:
     """Return the finalized tenth-place score for provisional fast-lane admission.
 
@@ -294,7 +330,10 @@ async def get_provisional_contender_floor(
     its bootstrap behavior.
     """
     _, provisional = await get_score_priority_floors(
-        session, bench_version=bench_version
+        session,
+        bench_version=bench_version,
+        efficiency_config=efficiency_config,
+        now=now,
     )
     return provisional
 
@@ -340,6 +379,7 @@ async def issue_ticket(
     completion_first: bool = False,
     slot_id: str = "slot-0",
     only_agent_ids: Collection[UUID] | None = None,
+    efficiency_config: EfficiencyBonusConfig | None = None,
     owner_concurrent_submission_limit: int = OWNER_CONCURRENT_SUBMISSION_LIMIT_DEFAULT,
     similarity_policy: SimilarityBudgetPolicy | None = None,
     similarity_concurrent_submission_limit: int = (
@@ -509,7 +549,12 @@ async def issue_ticket(
     score_continuation_floor, provisional_contender_floor = (
         (None, None)
         if completion_first
-        else await get_score_priority_floors(session, bench_version=bench_version)
+        else await get_score_priority_floors(
+            session,
+            bench_version=bench_version,
+            efficiency_config=efficiency_config,
+            now=now,
+        )
     )
 
     # Agents this validator must not receive right now: live/scored tickets,

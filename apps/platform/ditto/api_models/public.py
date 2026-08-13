@@ -677,13 +677,12 @@ class PublicLeaderboardEntry(BaseModel):
             ge=0.0,
             le=1.1,
             description=(
-                "Composite used for the current leaderboard and weight fold. It "
-                "starts as the canonical three-validator median, then becomes "
-                "the arithmetic mean of those three scores plus every retained "
-                "per-seed sample accepted for this agent. When the Bench v7+ "
-                "relative-efficiency fold is active, the frozen bonus multiplies "
-                "that continual aggregate. Scheduling membership never removes "
-                "an accepted sample."
+                "Composite used for the current leaderboard and weight fold. "
+                "Legacy eras use the canonical median or activated continual "
+                "mean; full-confirmed Bench v9 uses its verified full quality. "
+                "An activated frozen efficiency bonus or v9 factor is applied "
+                "after that authoritative quality scalar; curve-v3 downside "
+                "multiplies quality and upside scales its remaining headroom."
             ),
         ),
     ]
@@ -729,9 +728,9 @@ class PublicLeaderboardEntry(BaseModel):
             ge=0.0,
             le=1.0,
             description=(
-                "The ranking composite after continual aggregation but before "
-                "the Bench v7+ relative-efficiency bonus. Equal to "
-                "official_composite while the bonus fold is inactive."
+                "The authoritative quality composite before the frozen "
+                "efficiency bonus or factor. Equal to official_composite while "
+                "the adjustment fold is inactive."
             ),
         ),
     ] = None
@@ -808,6 +807,30 @@ class PublicLeaderboardEntry(BaseModel):
             ),
         ),
     ] = None
+    efficiency_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.85,
+            le=1.1,
+            description=(
+                "Frozen curve-v3 bounded efficiency factor in [0.85, 1.10]. "
+                "Applied after authoritative Bench-v9 full quality: downside "
+                "multiplies quality and upside scales remaining headroom. When "
+                "present it supersedes the legacy efficiency_bonus."
+            ),
+        ),
+    ] = None
+    efficiency_fold_applied: Annotated[
+        bool,
+        Field(
+            description=(
+                "Whether the surfaced efficiency adjustment is currently part "
+                "of official_composite, ranking, KOTH, and emissions. False "
+                "means effective_composite is an audit-only projection."
+            ),
+        ),
+    ] = False
     effective_composite: Annotated[
         float | None,
         Field(
@@ -815,12 +838,14 @@ class PublicLeaderboardEntry(BaseModel):
             ge=0.0,
             le=1.1,
             description=(
-                "pre_efficiency_composite * (1 + efficiency_bonus): the final "
-                "ranking score with the frozen relative-efficiency bonus "
-                "applied after continual aggregation. Equal to "
-                "official_composite while the fold is active, and null whenever "
-                "efficiency_bonus is null. The validator's signed composite is "
-                "never modified."
+                "Frozen-adjustment projection. Curve v3 multiplies downside or "
+                "applies upside to pre_efficiency_composite's remaining "
+                "headroom; legacy curves multiply by one plus their bonus. "
+                "It equals official_composite while the coordinated fold is "
+                "active; with the fold off it is audit-only and does not rank "
+                "the board. Null "
+                "whenever both adjustment fields are null. Signed quality "
+                "evidence is never modified."
             ),
         ),
     ] = None
@@ -849,6 +874,19 @@ class PublicLeaderboardEntry(BaseModel):
                 "separate from efficiency_bonus so that no consumer can mistake "
                 "an unapplied preview for an awarded bonus. It is never folded "
                 "into effective_composite and never reaches validator weights."
+            ),
+        ),
+    ] = None
+    efficiency_factor_preview: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.85,
+            le=1.1,
+            description=(
+                "What curve v3's bounded factor would be if enabled. Computed "
+                "at read time, persisted nowhere, never folded into ranking, "
+                "and never sent to validators."
             ),
         ),
     ] = None
@@ -1286,7 +1324,8 @@ class PublicEfficiencyStatus(BaseModel):
             description=(
                 "Frozen bonus-curve policy: 1 = single-tier (cap at/below "
                 "P25), 2 = two-tier (cap ramps to deep_bonus_cap between P25 "
-                "and the deep frontier, then saturates flat)."
+                "and the deep frontier, then saturates flat), 3 = bounded "
+                "power factor around the P25 reference (Bench v9 only)."
             ),
         ),
     ] = 1
@@ -1316,15 +1355,42 @@ class PublicEfficiencyStatus(BaseModel):
             ),
         ),
     ] = None
+    factor_alpha: Annotated[
+        float | None,
+        Field(
+            default=None,
+            gt=0.0,
+            le=1.0,
+            description="Frozen power exponent for curve v3; null for v1/v2.",
+        ),
+    ] = None
+    minimum_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.85,
+            le=1.0,
+            description="Frozen lower multiplier clamp for curve v3.",
+        ),
+    ] = None
+    maximum_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=1.0,
+            le=1.1,
+            description="Frozen upper multiplier clamp for curve v3.",
+        ),
+    ] = None
     reference_p25_tokens: Annotated[
         float | None,
         Field(
             default=None,
             ge=0.0,
             description=(
-                "Efficient-quartile frontier (nearest-rank P25 of the cohort's "
-                "audited chat token totals): the tier-1 full-bonus point. "
-                "Null while inactive."
+                "Nearest-rank P25 of the qualified cohort's audited chat-token "
+                "costs. It is the efficient frontier for v1/v2 and the neutral "
+                "Reference Cost (factor 1.0) for v3. Null while inactive."
             ),
         ),
     ] = None
@@ -1350,7 +1416,13 @@ class PublicEfficiencyCohortMember(BaseModel):
     memory_mean: Annotated[float, Field(ge=0.0, le=1.0)]
     token_total: Annotated[
         float,
-        Field(ge=0.0, description="Audited chat token total (quorum median)."),
+        Field(
+            ge=0.0,
+            description=(
+                "Audited chat-token cost: legacy quorum median or curve-v3 "
+                "quorum-plus-comparable-retest arithmetic mean."
+            ),
+        ),
     ]
     lineage_group: Annotated[
         int,
@@ -1392,6 +1464,9 @@ class PublicEfficiencySnapshotResponse(BaseModel):
     deep_frontier_ratio: Annotated[
         float | None, Field(default=None, gt=0.0, lt=1.0)
     ] = None
+    factor_alpha: Annotated[float | None, Field(default=None, gt=0.0, le=1.0)] = None
+    minimum_factor: Annotated[float | None, Field(default=None, ge=0.85, le=1.0)] = None
+    maximum_factor: Annotated[float | None, Field(default=None, ge=1.0, le=1.1)] = None
     quality_floor: Annotated[float, Field(ge=0.0, le=1.0)]
     memory_floor: Annotated[float, Field(ge=0.0, le=1.0)]
     reference_p25_tokens: Annotated[float | None, Field(default=None, ge=0.0)] = None

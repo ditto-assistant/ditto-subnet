@@ -119,8 +119,10 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
         const entries = (payload.entries ?? []).map((entry) => ({
           ...entry,
           official_composite: 0.756,
+          effective_composite: 0.756,
           pre_efficiency_composite: 0.72,
           efficiency_bonus: 0.05,
+          efficiency_fold_applied: true,
         }));
         return { ...payload, entries };
       },
@@ -133,7 +135,117 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     );
     const chip = document.querySelector(".cline2 .efficiency-bonus-chip");
     expect(chip?.textContent).toBe("efficiency +5.0%");
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining(
+        "Relative token efficiency adds 5.0% after continual retest aggregation",
+      ),
+    );
     expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("0.720 becomes 0.756"));
+  });
+
+  it("shows a bounded v9 efficiency penalty without calling it an upside award", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        const entries = (payload.entries ?? []).map((entry) => ({
+          ...entry,
+          bench_version: 9,
+          official_composite: 0.612,
+          effective_composite: 0.612,
+          pre_efficiency_composite: 0.72,
+          efficiency_bonus: null,
+          efficiency_factor: 0.85,
+          efficiency_fold_applied: true,
+        }));
+        return { ...payload, entries };
+      },
+    });
+    await waitForBoard();
+    const chip = await waitFor(() => {
+      const value = document.querySelector(".cline2 .efficiency-bonus-chip");
+      expect(value?.textContent).toBe("efficiency −15.0%");
+      return value;
+    });
+    expect(chip).toHaveClass("penalized");
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("frozen cohort P25 reference"),
+    );
+    expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("0.720 becomes 0.612"));
+  });
+
+  it("makes the Bench v9 remaining-headroom uplift visible", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        const entries = (payload.entries ?? []).map((entry) => ({
+          ...entry,
+          bench_version: 9,
+          official_composite: 0.955,
+          effective_composite: 0.955,
+          pre_efficiency_composite: 0.95,
+          efficiency_bonus: null,
+          efficiency_factor: 1.1,
+          efficiency_fold_applied: true,
+        }));
+        return { ...payload, entries };
+      },
+    });
+    await waitForBoard();
+    const chip = await waitFor(() => {
+      const value = document.querySelector(".cline2 .efficiency-bonus-chip");
+      expect(value?.textContent).toBe("efficiency +10.0%");
+      return value;
+    });
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("remaining quality headroom"),
+    );
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("applies a +10.0% factor"),
+    );
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("0.950 + (1.100 − 1) × (1 − 0.950) = 0.955"),
+    );
+    expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("becomes 0.955"));
+  });
+
+  it("marks an unapplied v9 factor as an audit-only projection", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        const entries = (payload.entries ?? []).map((entry) => ({
+          ...entry,
+          bench_version: 9,
+          official_composite: 0.72,
+          effective_composite: 0.612,
+          pre_efficiency_composite: 0.72,
+          efficiency_bonus: null,
+          efficiency_factor: 0.85,
+        }));
+        return { ...payload, entries };
+      },
+    });
+    await waitForBoard();
+    const chip = await waitFor(() => {
+      const value = document.querySelector(".cline2 .efficiency-bonus-chip");
+      expect(value?.textContent).toBe("efficiency projection −15.0%");
+      return value;
+    });
+    expect(chip).toHaveClass("partial", "penalized");
+    expect(chip).not.toHaveClass("settled");
+    expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("projects to 0.612"));
+    expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("audit-only projection"));
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("current ranking and emissions remain based on 0.720"),
+    );
   });
 
   it("re-asserts hide-md/hide-sm as table-cell for this board only (the pinned CSS)", () => {

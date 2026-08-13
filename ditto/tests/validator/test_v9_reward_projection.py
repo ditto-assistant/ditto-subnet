@@ -28,7 +28,11 @@ from ditto.validator.signing import (
     sign_v9_confirmation_bundle,
     verify_ledger_entry,
 )
-from ditto.validator.weights import compute_weights, filter_weight_confirmed
+from ditto.validator.weights import (
+    _effective_composite,
+    compute_weights,
+    filter_weight_confirmed,
+)
 
 _VECTOR = (
     Path(__file__).resolve().parents[3]
@@ -164,6 +168,7 @@ def _entry(
     ordinary_micros: int = 812_345,
     longmem_micros: int = 500_000,
     first_seen: datetime = datetime(2026, 8, 8, tzinfo=UTC),
+    efficiency_factor: float | None = None,
 ) -> LedgerEntry:
     base = _base(quality_micros=ordinary_micros)
     validators = [
@@ -296,6 +301,7 @@ def _entry(
         signature=median.signature,
         score_proofs=proofs,
         composite_stderr=full_stderr / 1_000_000,
+        efficiency_factor=efficiency_factor,
         v9_confirmation=receipt,
         status=AgentStatus.SCORED,
     )
@@ -415,3 +421,62 @@ def test_weights_use_verified_full_composite_for_v9_enforce() -> None:
         rank_shares=(0.8, 0.2),
     )
     assert weights[full_leader.miner_hotkey] == pytest.approx(0.8)
+
+
+@pytest.mark.parametrize("factor", [0.85, 1.0, 1.1])
+def test_v9_efficiency_factor_applies_after_verified_full_quality(
+    factor: float,
+) -> None:
+    entry = _entry(efficiency_factor=factor)
+    assert entry.v9_confirmation is not None
+
+    full_quality = entry.v9_confirmation.full_effective_micros / 1_000_000
+    expected = (
+        full_quality * factor
+        if factor <= 1.0
+        else full_quality + (factor - 1.0) * (1.0 - full_quality)
+    )
+    assert _effective_composite(entry) == pytest.approx(expected)
+
+
+def test_v9_efficiency_factor_preserves_perfect_quality() -> None:
+    entry = _entry(
+        ordinary_micros=1_000_000,
+        longmem_micros=1_000_000,
+        efficiency_factor=1.1,
+    )
+
+    assert _effective_composite(entry) == 1.0
+
+
+def test_v9_full_quality_replays_a_frozen_legacy_curve_bonus() -> None:
+    entry = _entry().model_copy(update={"efficiency_bonus": 0.1})
+    assert entry.v9_confirmation is not None
+
+    full_quality = entry.v9_confirmation.full_effective_micros / 1_000_000
+    assert _effective_composite(entry) == pytest.approx(full_quality * 1.1)
+
+
+async def test_v9_efficiency_factor_survives_serialized_http_ledger_round_trip() -> (
+    None
+):
+    entry = _entry(efficiency_factor=0.85)
+    payload = LedgerResponse(
+        entries=[entry],
+        v9_confirmation_mode="enforce",
+        count=1,
+        generated_at=datetime(2026, 8, 9, tzinfo=UTC),
+    ).model_dump(mode="json")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=payload)
+
+    caller = bittensor.Keypair.create_from_uri("//Alice")
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=caller.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        received = await PlatformClient(config, http, caller).get_ledger()  # type: ignore[arg-type]
+
+    assert received.entries[0].efficiency_factor == pytest.approx(0.85)

@@ -61,6 +61,9 @@ def seed_settings(seed: EfficiencyBonusConfig) -> EfficiencyBonusSettings:
         cap=seed.cap,
         deep_cap=seed.deep_cap,
         deep_frontier_ratio=seed.deep_frontier_ratio,
+        factor_alpha=seed.factor_alpha,
+        minimum_factor=seed.minimum_factor,
+        maximum_factor=seed.maximum_factor,
         cohort_size=seed.cohort_size,
         min_cohort=seed.min_cohort,
         epoch_hours=seed.epoch_hours,
@@ -88,6 +91,9 @@ def effective_config(
         cap=settings.cap,
         deep_cap=settings.deep_cap,
         deep_frontier_ratio=settings.deep_frontier_ratio,
+        factor_alpha=settings.factor_alpha,
+        minimum_factor=settings.minimum_factor,
+        maximum_factor=settings.maximum_factor,
         cohort_size=settings.cohort_size,
         min_cohort=settings.min_cohort,
         epoch_hours=settings.epoch_hours,
@@ -207,16 +213,19 @@ def effective_view(
         scope = row.scope
         checksum = row.checksum
         source = "revision"
+        checksum_settings = dict(row.settings)
     else:
         revision = 0
         scope = "*"
         checksum = ""
         source = "seed"
         settings = seed_settings(seed)
+        checksum_settings = settings.model_dump(mode="json")
     return EffectiveEfficiencyBonusSettings(
         revision=revision,
         scope=scope,
         settings=settings,
+        checksum_settings=checksum_settings,
         checksum=checksum,
         source=source,
         fold_effective=config.fold_enabled,

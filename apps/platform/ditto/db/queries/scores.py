@@ -174,6 +174,9 @@ class LedgerRow:
     This is moderation-only metadata and is not exposed on the public scoring
     wire model. ``None`` is retained for legacy rows that predate payments.
     """
+    emission_owner_root: str | None = None
+    """Canonical payment/attestation owner component used for one-position
+    ranking. Internal only; never exposed on public or validator wire models."""
     bench_version: int = 1
     content_fingerprint: dict | None = None
     """Shingle MinHash sketch of the tarball source (see
@@ -262,6 +265,9 @@ class LedgerRow:
     ``None`` on rows built outside the owner-family query (provisional
     ``evaluating`` rows, moderation fixtures); :attr:`fold_first_seen` falls back
     to :attr:`first_seen` there, which is exactly the pre-anchor behaviour.
+    Factor-aware consumers replace this derived value after resolving final
+    scores, because SQL cannot know the frozen Platform factor while selecting
+    the raw owner family.
     """
     v9_confirmation: dict[str, Any] | None = None
     """Signed full-confirmation receipt for an enforce-mode Bench v9 row.
@@ -330,7 +336,6 @@ async def list_submission_family_members(
                 Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
                 Score.bench_version == bench_version,
                 Score.n >= MIN_ELIGIBLE_CASES,
-                Score.composite > 0.0,
             )
             .order_by(Agent.created_at, Agent.agent_id, Score.validator_hotkey)
         )
@@ -1477,6 +1482,7 @@ async def list_eligible_ledger(
     bench_version: int | None = None,
     owner_score: Literal["official", "canonical"] = "official",
     apply_v9_confirmation_policy: bool = True,
+    dedupe_owners: bool = True,
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
 
@@ -2062,11 +2068,14 @@ async def list_eligible_ledger(
         .over(partition_by=owner_ranked.c.owner_root)
         .label("crown_first_seen"),
     ).cte("owner_provenance")
-    winners = (
-        select(owner_provenance)
-        .where(owner_provenance.c.owner_rank == 1)
-        .cte("ledger_winners")
-    )
+    winner_select = select(owner_provenance)
+    if dedupe_owners:
+        winner_select = winner_select.where(owner_provenance.c.owner_rank == 1)
+    elif include_family_members:
+        raise ValueError(
+            "include_family_members cannot be combined with dedupe_owners=False"
+        )
+    winners = winner_select.cte("ledger_winners")
 
     if details_keys is not None:
         # Narrow projection: build an object holding ONLY the requested keys, so
@@ -2337,6 +2346,7 @@ async def list_eligible_ledger(
                 signature=row.signature,
                 status=AgentStatus(row.status),
                 miner_coldkey=row.miner_coldkey,
+                emission_owner_root=row.owner_root,
                 bench_version=row.bench_version,
                 content_fingerprint=row.content_fingerprint,
                 structural_fingerprint=row.structural_fingerprint,

@@ -1117,6 +1117,20 @@ class ConfirmationScore(Base):
     """The reporting validator's sr25519 signature over the parent score payload,
     hex encoded, so the ledger row is self-verifying alongside the k=3 receipt."""
 
+    v9_efficiency_token_total: Mapped[int | None] = mapped_column(
+        BigInteger, nullable=True
+    )
+    """Prompt-plus-completion token cost for a protocol-19 single-seed v9
+    retest, whose base-evidence digest is bound into this row's signature.
+    Null for historical, multi-seed, and non-v9 confirmation rows."""
+
+    v9_efficiency_cost_eligible: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    """Cost-evidence state for curve-v3 averaging: true with a positive token
+    total, false for an explicit integrity failure, null when no new cost
+    authority was available. An explicit false fails the agent's factor closed."""
+
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,
@@ -1152,6 +1166,15 @@ class ConfirmationScore(Base):
             "bench_version >= 7", name="confirmation_scores_bench_version_floor"
         ),
         CheckConstraint("seed >= 0", name="confirmation_scores_seed_check"),
+        CheckConstraint(
+            "(v9_efficiency_cost_eligible IS NULL "
+            "AND v9_efficiency_token_total IS NULL) OR "
+            "(v9_efficiency_cost_eligible = false "
+            "AND v9_efficiency_token_total IS NULL) OR "
+            "(v9_efficiency_cost_eligible = true "
+            "AND bench_version = 9 AND v9_efficiency_token_total > 0)",
+            name="confirmation_scores_efficiency_cost_check",
+        ),
         Index("confirmation_scores_agent_version_idx", "agent_id", "bench_version"),
     )
 
@@ -1216,6 +1239,18 @@ class EfficiencyCohortSnapshot(Base):
     """Deep frontier as a fraction of the P25 reference (two-tier curve
     only), in (0, 1). Null under the single-tier policy."""
 
+    factor_alpha: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Exponent applied to the reference/agent token-cost ratio by the
+    bounded-factor curve (curve v3). Null for legacy v1/v2 snapshots."""
+
+    minimum_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Lower multiplier bound frozen for a bounded-factor snapshot. Null for
+    legacy v1/v2 snapshots."""
+
+    maximum_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """Upper multiplier bound frozen for a bounded-factor snapshot. Null for
+    legacy v1/v2 snapshots."""
+
     quality_floor: Mapped[float] = mapped_column(Float, nullable=False)
     """Composite floor (``Q_min``) applied at freeze time."""
 
@@ -1233,10 +1268,11 @@ class EfficiencyCohortSnapshot(Base):
 
     members: Mapped[list | None] = mapped_column(_JSON_VARIANT, nullable=True)
     """Frozen cohort membership: a list of ``{agent_id, miner_hotkey,
-    lineage_key, composite, memory_mean, token_total, collapsed_agent_ids}``
-    dicts, the full audit record a bonus is reproducible from. Lineage keys
-    are moderation-adjacent digests; public projections expose only opaque
-    group ordinals, never the raw keys."""
+    lineage_key, composite, memory_mean, token_total, first_seen,
+    collapsed_agent_ids}`` dicts, the full audit record a bonus is reproducible
+    from. ``first_seen`` is absent on legacy snapshots and present on every new
+    one. Lineage keys are moderation-adjacent digests; public projections expose
+    only opaque group ordinals, never the raw keys."""
 
     computed_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
@@ -1251,6 +1287,16 @@ class EfficiencyCohortSnapshot(Base):
             "run_size",
             "epoch_index",
             name="efficiency_cohort_snapshots_epoch_key",
+        ),
+        # Redundant with snapshot_id's PK for uniqueness, but deliberately
+        # names the exact referenced column set used by the assignment
+        # identity FK below. This lets Postgres enforce that a bonus cannot
+        # point at a snapshot from another benchmark or epoch.
+        UniqueConstraint(
+            "snapshot_id",
+            "bench_version",
+            "epoch_index",
+            name="efficiency_cohort_snapshots_assignment_identity_key",
         ),
         CheckConstraint(
             "bench_version >= 7",
@@ -1274,6 +1320,16 @@ class EfficiencyCohortSnapshot(Base):
             "curve_version >= 1",
             name="efficiency_cohort_snapshots_curve_version_check",
         ),
+        CheckConstraint(
+            "(curve_version IN (1, 2) AND factor_alpha IS NULL "
+            "AND minimum_factor IS NULL AND maximum_factor IS NULL) OR "
+            "(curve_version = 3 AND bench_version = 9 "
+            "AND deep_bonus_cap IS NULL AND deep_frontier_ratio IS NULL "
+            "AND factor_alpha > 0 AND factor_alpha <= 1 "
+            "AND minimum_factor >= 0.85 AND minimum_factor <= 1 "
+            "AND maximum_factor >= 1 AND maximum_factor <= 1.1)",
+            name="efficiency_cohort_snapshots_factor_parameters_check",
+        ),
         CheckConstraint("n_min >= 2", name="efficiency_cohort_snapshots_n_min_check"),
         Index(
             "efficiency_cohort_snapshots_board_idx",
@@ -1285,14 +1341,15 @@ class EfficiencyCohortSnapshot(Base):
 
 
 class EfficiencyBonus(Base):
-    """One agent's frozen relative token-efficiency bonus (bench_version >= 7).
+    """One agent's frozen relative token-efficiency adjustment (version >= 7).
 
     Insert-once per ``(agent_id, bench_version, epoch_index)``: assigned against
     the frozen cohort snapshot of that epoch (strictly-upside zero rows included,
     so "no bonus" is as frozen as "5%") and **never updated**, so a published
-    effective score can never drift. ``effective_composite = composite *
-    (1 + bonus)`` is derived at read time; the validator's composite is never
-    modified.
+    effective score can never drift. Legacy curves derive
+    ``effective_composite = composite * (1 + bonus)``; bounded curve v3 derives
+    downside as ``composite * factor`` and upside against the remaining quality
+    headroom. The validator's base composite is never modified.
 
     The key carries ``epoch_index`` because the bonus is *relative*: it is a
     position against a cohort's token distribution, and that distribution moves.
@@ -1309,7 +1366,12 @@ class EfficiencyBonus(Base):
 
     Recomputation is additive, never destructive. A new epoch writes a NEW row;
     prior epochs' rows are untouched, so ``/public/efficiency/snapshots/{id}``
-    stays immutable and the audit trail is complete.
+    stays immutable and the audit trail is complete. The sole compatibility
+    exception is a curve-v3 ``factor IS NULL, bonus = 0`` placeholder written
+    by the immediately previous binary during deploy/rollback: it carries no
+    scoring authority and may be promoted once to a signed factor by the v3
+    writer. A database trigger neutralizes that old writer and rejects factors
+    attached to legacy snapshots.
     """
 
     __tablename__ = "efficiency_bonuses"
@@ -1341,7 +1403,12 @@ class EfficiencyBonus(Base):
     carried complete audited usage (bonus is then necessarily 0)."""
 
     bonus: Mapped[float] = mapped_column(Float, nullable=False)
-    """The frozen additive bonus fraction in ``[0, 0.1]``; never negative."""
+    """The frozen legacy additive bonus fraction in ``[0, 0.1]``; never
+    negative. Bounded-factor rows keep this compatibility column at zero."""
+
+    factor: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """The frozen bounded efficiency multiplier in ``[0.85, 1.10]`` for
+    curve-v3 assignments. Null for legacy v1/v2 bonus rows."""
 
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
@@ -1368,8 +1435,24 @@ class EfficiencyBonus(Base):
             ["efficiency_cohort_snapshots.snapshot_id"],
             name="efficiency_bonuses_snapshot_id_fkey",
         ),
+        ForeignKeyConstraint(
+            ["snapshot_id", "bench_version", "epoch_index"],
+            [
+                "efficiency_cohort_snapshots.snapshot_id",
+                "efficiency_cohort_snapshots.bench_version",
+                "efficiency_cohort_snapshots.epoch_index",
+            ],
+            name="efficiency_bonuses_snapshot_identity_fkey",
+        ),
         CheckConstraint(
             "bonus >= 0 AND bonus <= 0.1", name="efficiency_bonuses_bonus_range_check"
+        ),
+        CheckConstraint(
+            "factor IS NULL OR (bench_version = 9 "
+            "AND bonus = 0 AND token_total IS NOT NULL AND token_total > 0 "
+            "AND token_total < 'Infinity'::double precision "
+            "AND factor >= 0.85 AND factor <= 1.1)",
+            name="efficiency_bonuses_factor_range_check",
         ),
         CheckConstraint(
             "bench_version >= 7", name="efficiency_bonuses_bench_version_check"

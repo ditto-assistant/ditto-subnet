@@ -18,6 +18,7 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_catchup_seeds,
     confirmation_composites_by_seed,
     confirmation_depths,
+    confirmation_efficiency_costs_by_agent,
     confirmation_history_by_agent,
     fold_eligible_seeds_by_agent,
     lane_seed_universe,
@@ -52,7 +53,13 @@ async def _seed_agent(session: AsyncSession, name: str = "a") -> UUID:
 
 
 def _row(
-    agent_id: UUID, validator: str, seed: int, composite: float
+    agent_id: UUID,
+    validator: str,
+    seed: int,
+    composite: float,
+    *,
+    token_total: int | None = None,
+    cost_eligible: bool | None = None,
 ) -> ConfirmationSeedScore:
     return ConfirmationSeedScore(
         agent_id=agent_id,
@@ -61,6 +68,8 @@ def _row(
         composite=composite,
         run_id=f"run-{validator}-{seed}",
         signature="ab" * 64,
+        v9_efficiency_token_total=token_total,
+        v9_efficiency_cost_eligible=cost_eligible,
     )
 
 
@@ -127,6 +136,89 @@ class TestAppendConfirmationScores:
 
 
 class TestConfirmationAggregates:
+    async def test_efficiency_costs_include_valid_v9_retests_and_fail_closed(
+        self, session: AsyncSession
+    ) -> None:
+        valid = await _seed_agent(session, "valid-cost")
+        invalid = await _seed_agent(session, "invalid-cost")
+        async with session.begin():
+            await append_confirmation_scores(
+                session,
+                rows=[
+                    _row(
+                        valid,
+                        "5V1",
+                        100,
+                        0.80,
+                        token_total=1_200,
+                        cost_eligible=True,
+                    ),
+                    _row(
+                        valid,
+                        "5V2",
+                        200,
+                        0.82,
+                        token_total=1_800,
+                        cost_eligible=True,
+                    ),
+                    _row(valid, "5Legacy", 300, 0.81),
+                    _row(invalid, "5V1", 100, 0.80, cost_eligible=False),
+                ],
+                bench_version=9,
+                created_at=_NOW,
+            )
+
+        costs = await confirmation_efficiency_costs_by_agent(
+            session, agent_ids=[valid, invalid], bench_version=9
+        )
+
+        assert costs[valid].seed_token_totals == (1_200, 1_800)
+        assert costs[valid].evidence_valid is True
+        assert costs[invalid].seed_token_totals == ()
+        assert costs[invalid].evidence_valid is False
+
+    async def test_efficiency_costs_median_each_seed_across_validators(
+        self, session: AsyncSession
+    ) -> None:
+        """One seed is one observation, whatever the validator count.
+
+        Quality already medians a seed across validators, so cost must too:
+        otherwise a seed three validators happened to draw would outweigh one a
+        single validator drew, and a lone validator could set an agent's cost.
+        """
+        agent = await _seed_agent(session, "per-seed-median")
+        async with session.begin():
+            await append_confirmation_scores(
+                session,
+                rows=[
+                    # Seed 100 drawn by three validators, one of them an outlier.
+                    _row(
+                        agent, "5V1", 100, 0.80, token_total=1_000, cost_eligible=True
+                    ),
+                    _row(
+                        agent, "5V2", 100, 0.81, token_total=1_200, cost_eligible=True
+                    ),
+                    _row(
+                        agent, "5V3", 100, 0.80, token_total=90_000, cost_eligible=True
+                    ),
+                    # Seed 200 drawn by one validator.
+                    _row(
+                        agent, "5V1", 200, 0.79, token_total=2_000, cost_eligible=True
+                    ),
+                ],
+                bench_version=9,
+                created_at=_NOW,
+            )
+
+        costs = await confirmation_efficiency_costs_by_agent(
+            session, agent_ids=[agent], bench_version=9
+        )
+
+        # Two seeds -> two observations, ascending by seed. The 90k outlier is
+        # medianed away rather than counted as a third sample.
+        assert costs[agent].seed_token_totals == (1_200.0, 2_000.0)
+        assert costs[agent].evidence_valid is True
+
     def test_only_complete_cohort_waves_are_fold_eligible(self) -> None:
         first, second, third = uuid4(), uuid4(), uuid4()
         assert completed_confirmation_wave_seeds(

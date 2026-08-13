@@ -1890,6 +1890,19 @@
         ],
         "default": null
       },
+      "efficiency_factor": {
+        "anyOf": [
+          {
+            "maximum": 1.1,
+            "minimum": 0.85,
+            "type": "number"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "first_seen": {
         "format": "date-time",
         "type": "string"
@@ -2580,6 +2593,19 @@
               {
                 "maximum": 0.1,
                 "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "efficiency_factor": {
+            "anyOf": [
+              {
+                "maximum": 1.1,
+                "minimum": 0.85,
                 "type": "number"
               },
               {

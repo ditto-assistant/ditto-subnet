@@ -18,7 +18,7 @@ it holds even for a directly-edited row.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Any
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -50,6 +50,15 @@ class EfficiencyBonusSettings(BaseModel):
     deep_frontier_ratio: Annotated[float, Field(gt=0, lt=1)] = 0.5
     """Deep frontier as a fraction of P25, in ``(0, 1)``."""
 
+    factor_alpha: Annotated[float, Field(gt=0, le=1)] = 0.25
+    """Exponent for the bounded v3 cost ratio, in ``(0, 1]``."""
+
+    minimum_factor: Annotated[float, Field(ge=0.85, le=1)] = 0.85
+    """Lower clamp for the bounded v3 efficiency factor, in ``[0.85, 1]``."""
+
+    maximum_factor: Annotated[float, Field(ge=1, le=1.10)] = 1.10
+    """Upper clamp for the bounded v3 efficiency factor, in ``[1, 1.10]``."""
+
     cohort_size: Annotated[int, Field(ge=2)] = 25
     """Top-N cap on cohort membership (``>= min_cohort``)."""
 
@@ -70,9 +79,34 @@ class EfficiencyBonusSettings(BaseModel):
         """The cross-field bounds ``check_config`` enforces at boot."""
         if not self.cap <= self.deep_cap:
             raise ValueError("deep_cap must satisfy cap <= deep_cap <= 0.10")
+        if self.minimum_factor > self.maximum_factor:
+            raise ValueError("minimum_factor must not exceed maximum_factor")
         if self.cohort_size < self.min_cohort:
             raise ValueError("cohort_size must be at least min_cohort")
         return self
+
+
+class EfficiencyBonusSettingsWrite(EfficiencyBonusSettings):
+    """Whole-policy write shape with every policy field explicit.
+
+    Read models keep defaults so revisions written before curve v3 remain
+    usable. New writes must name every knob, preventing a partial or older
+    client from silently resetting policy while changing an unrelated switch.
+    """
+
+    enabled: bool
+    fold_enabled: bool
+    cap: Annotated[float, Field(gt=0, le=0.10)]
+    deep_cap: Annotated[float, Field(gt=0, le=0.10)]
+    deep_frontier_ratio: Annotated[float, Field(gt=0, lt=1)]
+    factor_alpha: Annotated[float, Field(gt=0, le=1)]
+    minimum_factor: Annotated[float, Field(ge=0.85, le=1)]
+    maximum_factor: Annotated[float, Field(ge=1, le=1.10)]
+    cohort_size: Annotated[int, Field(ge=2)]
+    min_cohort: Annotated[int, Field(ge=2)]
+    epoch_hours: Annotated[int, Field(ge=1)]
+    quality_floor: Annotated[float, Field(ge=0, le=1)]
+    memory_floor: Annotated[float, Field(ge=0, le=1)]
 
 
 class EfficiencyBonusSettingsRevision(BaseModel):
@@ -84,6 +118,10 @@ class EfficiencyBonusSettingsRevision(BaseModel):
     parent_revision: int
     scope: str
     settings: EfficiencyBonusSettings
+    checksum_settings: dict[str, Any]
+    """Exact immutable JSON payload hashed by ``checksum``. It may omit fields
+    that did not exist when a historical revision was written; ``settings`` is
+    the normalized/default-expanded compute view."""
     reason: str
     actor: str
     created_at: datetime
@@ -101,6 +139,7 @@ class EffectiveEfficiencyBonusSettings(BaseModel):
 
     scope: str
     settings: EfficiencyBonusSettings
+    checksum_settings: dict[str, Any]
     checksum: str
     source: Annotated[str, Field(pattern="^(revision|seed)$")]
     """``revision`` when a stored revision governs, ``seed`` for the env
@@ -128,7 +167,7 @@ class AdminEfficiencyBonusSettingsRequest(BaseModel):
     """The revision the operator believes is current (0 = none yet). A
     mismatch is a 409 so a concurrent change is never silently clobbered."""
 
-    settings: EfficiencyBonusSettings
+    settings: EfficiencyBonusSettingsWrite
     reason: Annotated[str, Field(min_length=8)]
     actor: Annotated[str, Field(min_length=1, max_length=120)] = "admin_api"
     confirmation: str

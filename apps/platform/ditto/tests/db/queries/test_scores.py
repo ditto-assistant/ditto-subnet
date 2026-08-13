@@ -219,6 +219,34 @@ class TestListEligibleLedger:
     async def test_empty_when_nothing_scored(self, session: AsyncSession) -> None:
         assert await list_eligible_ledger(session) == []
 
+    async def test_internal_read_can_keep_all_owner_generations(
+        self, session: AsyncSession
+    ) -> None:
+        coldkey = "5SharedOwner" + "x" * 36
+        first = await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=0.8,
+            created_at=_FIRST_SEEN,
+            n=MIN_ELIGIBLE_CASES,
+            coldkey=coldkey,
+        )
+        second = await _seed_scored(
+            session,
+            miner=_MINER_B,
+            composite=0.8,
+            created_at=_FIRST_SEEN + timedelta(minutes=1),
+            n=MIN_ELIGIBLE_CASES,
+            coldkey=coldkey,
+        )
+
+        public = await list_eligible_ledger(session)
+        internal = await list_eligible_ledger(session, dedupe_owners=False)
+
+        assert len(public) == 1
+        assert {row.agent_id for row in internal} == {first.agent_id, second.agent_id}
+        assert len({row.emission_owner_root for row in internal}) == 1
+
     async def test_can_omit_large_score_details(self, session: AsyncSession) -> None:
         agent = await _seed_scored(
             session,

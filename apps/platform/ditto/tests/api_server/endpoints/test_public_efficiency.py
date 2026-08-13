@@ -722,9 +722,9 @@ class TestValidatorLedgerFoldFlag:
     ) -> None:
         agents = await _seed_v7_board(session_maker)
         fold_on = EfficiencyBonusConfig(enabled=True, fold_enabled=True, min_cohort=3)
-        async with session_maker() as s:
-            await ensure_efficiency_state(s, fold_on, now=_T0)
 
+        # The validator ledger is itself an epoch materializer; no public page
+        # visit or test-side pre-materialization is required for consensus data.
         payload = await self._ledger(session_maker, fold_on)
         by_agent = {entry["agent_id"]: entry for entry in payload["entries"]}
         lean = by_agent[str(agents["lean"])]

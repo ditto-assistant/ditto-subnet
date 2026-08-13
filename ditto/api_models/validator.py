@@ -1351,6 +1351,24 @@ class LedgerEntry(BaseModel):
             ),
         ),
     ] = None
+    efficiency_factor: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.85,
+            le=1.1,
+            description=(
+                "Frozen platform-side bounded efficiency factor for this "
+                "entry. Curve v3 applies a penalty or bonus in [0.85, 1.10] "
+                "after the authoritative Bench-v9 full quality score. Downside "
+                "multiplies quality; upside closes part of its remaining headroom. "
+                "Populated only while the coordinated efficiency fold is active "
+                "and every recently-live weight-setting validator reports "
+                "heartbeat protocol 19+, regardless of scorer capability; "
+                "when present it supersedes efficiency_bonus."
+            ),
+        ),
+    ] = None
     effective_composite: Annotated[
         float | None,
         Field(
@@ -1358,10 +1376,11 @@ class LedgerEntry(BaseModel):
             ge=0.0,
             le=1.1,
             description=(
-                "Platform-projected ranking score with the frozen bonus applied. "
+                "Platform-projected ranking score with the frozen efficiency "
+                "adjustment applied; curve-v3 upside scales remaining headroom. "
                 "The validator independently derives the consensus value from "
-                "the continual evidence and efficiency_bonus; the signed "
-                "composite is never modified."
+                "the authoritative quality evidence and efficiency_factor (or "
+                "legacy efficiency_bonus); the signed composite is never modified."
             ),
         ),
     ] = None

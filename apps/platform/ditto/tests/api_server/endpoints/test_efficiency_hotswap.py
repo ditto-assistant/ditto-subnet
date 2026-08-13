@@ -112,6 +112,9 @@ def _settings_body(**overrides: Any) -> dict[str, Any]:
         "cap": 0.05,
         "deep_cap": 0.10,
         "deep_frontier_ratio": 0.5,
+        "factor_alpha": 0.25,
+        "minimum_factor": 0.85,
+        "maximum_factor": 1.10,
         "cohort_size": 25,
         "min_cohort": 3,  # the seeded board has 3 agents
         "epoch_hours": 24,

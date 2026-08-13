@@ -438,6 +438,19 @@ finalized ledger, and Pylon handles UID resolution, commit-reveal, retries, and
 the on-chain extrinsic on an independent cadence that honors the chain rate
 limit and subnet tempo.
 
+Heartbeat protocol 19 declares support for the optional Bench-v9 bounded
+`efficiency_factor` ledger field. A v19 validator applies that factor only after
+verified full-confirmed v9 quality. A factor at or below `1.0` multiplies
+quality; a factor above `1.0` closes `(factor - 1)` of quality's remaining
+headroom to `1.0`. The factor remains bounded in `[0.85, 1.10]`; absent or
+malformed factors are neutral. Imperfect quality cannot become `1.0` merely
+through efficiency.
+The platform withholds factors until every recently-live weight-setting
+validator reports protocol 19 or newer, regardless of scorer capability. This
+prevents an older validator that still consumes the ledger but ignores the
+additive field from disagreeing on KOTH or weights.
+Historical upside-only `efficiency_bonus` behavior is unchanged.
+
 During a benchmark-version rollout, the platform selects one authoritative row
 per agent: the desired-version median after 3/3, otherwise its active-version
 fallback. The ledger can therefore intentionally contain both v2 and v3 rows.

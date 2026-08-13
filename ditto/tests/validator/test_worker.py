@@ -1682,7 +1682,7 @@ class TestRunOnce:
         ]
         heartbeat = heartbeats[0]
         assert heartbeat.validator_hotkey == _VALIDATOR_HOTKEY
-        assert heartbeat.protocol_version == 18
+        assert heartbeat.protocol_version == 19
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.benchmark_capacity is not None
         assert heartbeat.benchmark_capacity.configured_slots == 1
@@ -2414,7 +2414,7 @@ class TestRunOnce:
         assert heartbeat.stack.components.dittobench_api.version == "source-build"
         assert heartbeat.stack.components.dittobench_api.source_revision == revision
         assert heartbeat.capabilities is not None
-        assert heartbeat.protocol_version == 18
+        assert heartbeat.protocol_version == 19
         assert heartbeat.capabilities.signed_score_quorum is True
         assert heartbeat.capabilities.scorer_benchmarks == scorer
 
@@ -2436,7 +2436,7 @@ class TestRunOnce:
 
         assert await worker._report_heartbeat("idle") is True
         heartbeat = platform.submit_heartbeat.await_args.args[0]
-        assert heartbeat.protocol_version == 18
+        assert heartbeat.protocol_version == 19
         assert heartbeat.capabilities is not None
         scorer = heartbeat.capabilities.scorer_benchmarks
         assert scorer is not None and scorer.probe is not None

@@ -87,7 +87,10 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
 - `GET /api/v1/public/leaderboard` → `{ generated_at, count,
   active_bench_version, desired_bench_version, selection_mode, entries: [
   { rank, agent_id, agent_name, miner_hotkey, registered, emission_eligible,
-    composite, official_composite, effective_composite, efficiency_bonus,
+    composite, official_composite, pre_efficiency_composite,
+    effective_composite, efficiency_bonus, efficiency_factor,
+    efficiency_bonus_preview, efficiency_factor_preview,
+    efficiency_snapshot_id,
     aggregate_method, finalized, score_count, tool_mean, memory_mean,
     first_seen, n,
     median_ms, bench_version, dataset_sha256, models, per_category,
@@ -101,12 +104,32 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   not `composite`**. Sorting the board yourself by `composite` reproduces `rank`
   only while every entry is still on the canonical median
   (`aggregate_method == 'canonical_median'`); once any agent has completed
-  continual cohort waves the two orderings diverge, and `official_composite` is
-  the one that ranks the board and drives the weight fold. Ties break on
+  continual cohort waves or has a frozen efficiency adjustment, the two
+  orderings can diverge. `official_composite` is the value that ranks the board
+  and drives the weight fold. Ties break on
   `first_seen`, then `agent_id`. The same official score selects the
   representative inside each `submission_family`; historical views use the
   canonical median. Provisional (pre-quorum) rows are ranked among
   themselves and always trail the finalized board.
+  Curves v1/v2 expose the historical upside-only `efficiency_bonus`. A newly
+  created Bench-v9 snapshot uses curve v3 and exposes `efficiency_factor` in
+  `[0.85, 1.10]`; the factor supersedes the legacy bonus and produces
+  a multiplicative downside when the factor is at most `1.0`, or closes
+  `(factor - 1)` of the quality score's remaining headroom when it is above
+  `1.0`. The factor itself remains visible up to `1.10`. Its Reference Cost is
+  the snapshot's dynamic nearest-rank P25 of qualified agents' retest-aware
+  average signed model-use token totals. Each average starts with the three
+  canonical v9 receipts and includes accepted protocol-19 single-seed continual
+  retests available when the daily snapshot freezes. It is not
+  `average_run_cost_microusd`, not a fixed dollar target, and not values copied
+  from two example agents. The response's
+  `efficiency` block publishes the frozen curve version, P25, exponent, clamps,
+  cohort size, activation state, and snapshot id. Preview fields are explicitly
+  unapplied. `official_composite` is always the score that currently ranks the
+  board; `effective_composite` shows the frozen-adjustment arithmetic and equals
+  the official value only while the coordinated fold is active. For curve v3,
+  `effective_composite` is also capped at `1.0`; curves v1/v2 retain their
+  historical upside-only arithmetic without this new ceiling.
   Different names and hotkeys under one coldkey compete for one position; the
   best eligible generation wins and its hotkey remains the weight destination.
   `submission_family` keeps the other finalized, full-benchmark generations

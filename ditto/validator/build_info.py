@@ -37,7 +37,20 @@ from ditto import __version__
 # not forbid extras, a v17 validator against a pre-v17 platform simply parses
 # ``leases`` as absent -- "not answered" -- and cancels nothing. So this side
 # can ship first, and the platform half can land whenever it is ready.
-HEARTBEAT_PROTOCOL_VERSION = 18
+#
+# v18 removed the validator-local inference sidecars and reports the resulting
+# four-component stack identity.  The heartbeat signing domain remains v11.
+#
+# v19 consumes the optional ``LedgerEntry.efficiency_factor`` field: a bounded
+# Bench-v9 multiplier in [0.85, 1.10]. Downside multiplies quality; upside
+# closes only ``factor - 1`` of the remaining headroom to 1.0, so imperfect
+# quality cannot collapse into a 1.0 tie plateau. The heartbeat request and
+# signing bytes are unchanged; this is a capability-negotiation bump. Platform
+# must not expose the factor until every recently-live weight-setting validator
+# reports v19+, regardless of scorer capability, because an older validator
+# still consumes the ledger and would otherwise disagree on KOTH and weights.
+# Historical ``efficiency_bonus`` behavior is unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 19
 
 
 @dataclass(frozen=True)

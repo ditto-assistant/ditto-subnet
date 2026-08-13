@@ -555,42 +555,92 @@ export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControl
 // input the platform would reject never reaches the admin API.
 export const EFFICIENCY_BONUS_SCOPE = '*'
 export const EFFICIENCY_BONUS_MAX_CAP = 0.1
+export const EFFICIENCY_FACTOR_MINIMUM = 0.85
+export const EFFICIENCY_FACTOR_MAXIMUM = 1.1
+
+const efficiencyBonusSettingsShape = {
+  enabled: z.boolean(),
+  fold_enabled: z.boolean(),
+  cap: z.number().gt(0).max(EFFICIENCY_BONUS_MAX_CAP),
+  deep_cap: z.number().gt(0).max(EFFICIENCY_BONUS_MAX_CAP),
+  deep_frontier_ratio: z.number().gt(0).lt(1),
+  // Defaults keep revisions written before the bounded v3 curve readable.
+  factor_alpha: z.number().gt(0).max(1).default(0.25),
+  minimum_factor: z
+    .number()
+    .min(EFFICIENCY_FACTOR_MINIMUM)
+    .max(1)
+    .default(EFFICIENCY_FACTOR_MINIMUM),
+  maximum_factor: z
+    .number()
+    .min(1)
+    .max(EFFICIENCY_FACTOR_MAXIMUM)
+    .default(EFFICIENCY_FACTOR_MAXIMUM),
+  cohort_size: z.number().int().min(2),
+  min_cohort: z.number().int().min(2),
+  epoch_hours: z.number().int().min(1),
+  quality_floor: z.number().min(0).max(1),
+  memory_floor: z.number().min(0).max(1),
+}
+
+type EfficiencyBonusSettingsEnvelope = {
+  cap: number
+  deep_cap: number
+  minimum_factor: number
+  maximum_factor: number
+  cohort_size: number
+  min_cohort: number
+}
+
+function refineEfficiencyBonusSettings(
+  value: EfficiencyBonusSettingsEnvelope,
+  context: z.RefinementCtx,
+) {
+  if (value.cap > value.deep_cap) {
+    context.addIssue({
+      code: 'custom',
+      message: 'deep_cap must satisfy cap <= deep_cap <= 0.10',
+      path: ['deep_cap'],
+    })
+  }
+  if (value.minimum_factor > value.maximum_factor) {
+    context.addIssue({
+      code: 'custom',
+      message: 'minimum_factor must not exceed maximum_factor',
+      path: ['minimum_factor'],
+    })
+  }
+  if (value.cohort_size < value.min_cohort) {
+    context.addIssue({
+      code: 'custom',
+      message: 'cohort_size must be at least min_cohort',
+      path: ['cohort_size'],
+    })
+  }
+}
 
 export const efficiencyBonusSettingsSchema = z
+  .object(efficiencyBonusSettingsShape)
+  .superRefine(refineEfficiencyBonusSettings)
+
+// Whole-policy writes must name the v3 authority knobs. Read schemas retain
+// defaults for historical rows, but an older admin client must not silently
+// reset a non-default policy while changing an unrelated setting.
+export const efficiencyBonusSettingsWriteSchema = z
   .object({
-    enabled: z.boolean(),
-    fold_enabled: z.boolean(),
-    cap: z.number().gt(0).max(EFFICIENCY_BONUS_MAX_CAP),
-    deep_cap: z.number().gt(0).max(EFFICIENCY_BONUS_MAX_CAP),
-    deep_frontier_ratio: z.number().gt(0).lt(1),
-    cohort_size: z.number().int().min(2),
-    min_cohort: z.number().int().min(2),
-    epoch_hours: z.number().int().min(1),
-    quality_floor: z.number().min(0).max(1),
-    memory_floor: z.number().min(0).max(1),
+    ...efficiencyBonusSettingsShape,
+    factor_alpha: z.number().gt(0).max(1),
+    minimum_factor: z.number().min(EFFICIENCY_FACTOR_MINIMUM).max(1),
+    maximum_factor: z.number().min(1).max(EFFICIENCY_FACTOR_MAXIMUM),
   })
-  .superRefine((value, context) => {
-    if (value.cap > value.deep_cap) {
-      context.addIssue({
-        code: 'custom',
-        message: 'deep_cap must satisfy cap <= deep_cap <= 0.10',
-        path: ['deep_cap'],
-      })
-    }
-    if (value.cohort_size < value.min_cohort) {
-      context.addIssue({
-        code: 'custom',
-        message: 'cohort_size must be at least min_cohort',
-        path: ['cohort_size'],
-      })
-    }
-  })
+  .superRefine(refineEfficiencyBonusSettings)
 
 export const efficiencyBonusSettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
   scope: z.string(),
   settings: efficiencyBonusSettingsSchema,
+  checksum_settings: z.record(z.string(), z.unknown()),
   reason: z.string(),
   actor: z.string(),
   created_at: z.string(),
@@ -601,6 +651,7 @@ export const effectiveEfficiencyBonusSettingsSchema = z.object({
   revision: z.number().int().nonnegative(),
   scope: z.string(),
   settings: efficiencyBonusSettingsSchema,
+  checksum_settings: z.record(z.string(), z.unknown()),
   // Revision 0 is the deployment env seed. It was never written to a row, so
   // it carries no checksum.
   checksum: z.string().regex(/^(?:[0-9a-f]{64})?$/),
@@ -626,7 +677,7 @@ export const setEfficiencyBonusSettingsInputSchema = z
   .object({
     scope: z.literal(EFFICIENCY_BONUS_SCOPE).default(EFFICIENCY_BONUS_SCOPE),
     expectedRevision: z.number().int().nonnegative(),
-    settings: efficiencyBonusSettingsSchema,
+    settings: efficiencyBonusSettingsWriteSchema,
     reason: auditReasonSchema(8),
     confirmation: z.string(),
   })

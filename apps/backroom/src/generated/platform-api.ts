@@ -4636,7 +4636,7 @@ export interface components {
              * @default *
              */
             scope: string;
-            settings: components["schemas"]["EfficiencyBonusSettings"];
+            settings: components["schemas"]["EfficiencyBonusSettingsWrite"];
         };
         /**
          * AdminEfficiencyBonusSettingsResponse
@@ -8609,6 +8609,10 @@ export interface components {
         EffectiveEfficiencyBonusSettings: {
             /** Checksum */
             checksum: string;
+            /** Checksum Settings */
+            checksum_settings: {
+                [key: string]: unknown;
+            };
             /** Fold Effective */
             fold_effective: boolean;
             /** Max Age Seconds */
@@ -8774,10 +8778,20 @@ export interface components {
              */
             epoch_hours: number;
             /**
+             * Factor Alpha
+             * @default 0.25
+             */
+            factor_alpha: number;
+            /**
              * Fold Enabled
              * @default false
              */
             fold_enabled: boolean;
+            /**
+             * Maximum Factor
+             * @default 1.1
+             */
+            maximum_factor: number;
             /**
              * Memory Floor
              * @default 0
@@ -8788,6 +8802,11 @@ export interface components {
              * @default 8
              */
             min_cohort: number;
+            /**
+             * Minimum Factor
+             * @default 0.85
+             */
+            minimum_factor: number;
             /**
              * Quality Floor
              * @default 0
@@ -8803,6 +8822,10 @@ export interface components {
             actor: string;
             /** Checksum */
             checksum: string;
+            /** Checksum Settings */
+            checksum_settings: {
+                [key: string]: unknown;
+            };
             /**
              * Created At
              * Format: date-time
@@ -8817,6 +8840,42 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["EfficiencyBonusSettings"];
+        };
+        /**
+         * EfficiencyBonusSettingsWrite
+         * @description Whole-policy write shape with every policy field explicit.
+         *
+         *     Read models keep defaults so revisions written before curve v3 remain
+         *     usable. New writes must name every knob, preventing a partial or older
+         *     client from silently resetting policy while changing an unrelated switch.
+         */
+        EfficiencyBonusSettingsWrite: {
+            /** Cap */
+            cap: number;
+            /** Cohort Size */
+            cohort_size: number;
+            /** Deep Cap */
+            deep_cap: number;
+            /** Deep Frontier Ratio */
+            deep_frontier_ratio: number;
+            /** Enabled */
+            enabled: boolean;
+            /** Epoch Hours */
+            epoch_hours: number;
+            /** Factor Alpha */
+            factor_alpha: number;
+            /** Fold Enabled */
+            fold_enabled: boolean;
+            /** Maximum Factor */
+            maximum_factor: number;
+            /** Memory Floor */
+            memory_floor: number;
+            /** Min Cohort */
+            min_cohort: number;
+            /** Minimum Factor */
+            minimum_factor: number;
+            /** Quality Floor */
+            quality_floor: number;
         };
         /**
          * EvalPricingResponse
@@ -9398,7 +9457,7 @@ export interface components {
             continual_aggregate_method?: "mean_after_quorum" | null;
             /**
              * Effective Composite
-             * @description composite * (1 + efficiency_bonus), the platform-side ranking score with the frozen bonus applied. Additive-optional, gated with efficiency_bonus; the signed composite is never modified.
+             * @description Platform-projected ranking score with the frozen efficiency adjustment applied; curve-v3 upside scales remaining headroom. Validators independently derive it from the authoritative quality evidence and efficiency_factor (or legacy efficiency_bonus); signed evidence is never modified.
              */
             effective_composite?: number | null;
             /**
@@ -9406,6 +9465,11 @@ export interface components {
              * @description Frozen platform-side relative token-efficiency bonus fraction for this entry (bench_version >= 7). Populated only while the platform's DITTO_EFFICIENCY_BONUS_FOLD_ENABLED flag is on; absent otherwise so existing folds are byte-identical. Advisory until the subnet's weight fold ships a consensus change that consumes it — a validator must never fold this field unilaterally.
              */
             efficiency_bonus?: number | null;
+            /**
+             * Efficiency Factor
+             * @description Frozen platform-side bounded efficiency factor for this entry. Curve v3 applies a penalty or bonus in [0.85, 1.10] after the authoritative Bench-v9 full quality score. Downside multiplies quality; upside closes part of its remaining headroom. Populated only while the coordinated efficiency fold is active and every recently-live weight-setting validator reports heartbeat protocol 19+, regardless of scorer capability; when present it supersedes efficiency_bonus.
+             */
+            efficiency_factor?: number | null;
             /**
              * First Seen
              * Format: date-time
@@ -11251,7 +11315,7 @@ export interface components {
             miner_hotkey: string;
             /**
              * Token Total
-             * @description Audited chat token total (quorum median).
+             * @description Audited chat-token cost: legacy quorum median or curve-v3 quorum-plus-comparable-retest arithmetic mean.
              */
             token_total: number;
         };
@@ -11285,6 +11349,10 @@ export interface components {
             deep_frontier_ratio?: number | null;
             /** Epoch Index */
             epoch_index: number;
+            /** Factor Alpha */
+            factor_alpha?: number | null;
+            /** Maximum Factor */
+            maximum_factor?: number | null;
             /**
              * Members
              * @description Frozen deduped cohort entries.
@@ -11292,6 +11360,8 @@ export interface components {
             members?: components["schemas"]["PublicEfficiencyCohortMember"][];
             /** Memory Floor */
             memory_floor: number;
+            /** Minimum Factor */
+            minimum_factor?: number | null;
             /** N Min */
             n_min: number;
             /** Quality Floor */
@@ -11348,7 +11418,7 @@ export interface components {
             cohort_size: number;
             /**
              * Curve Version
-             * @description Frozen bonus-curve policy: 1 = single-tier (cap at/below P25), 2 = two-tier (cap ramps to deep_bonus_cap between P25 and the deep frontier, then saturates flat).
+             * @description Frozen bonus-curve policy: 1 = single-tier (cap at/below P25), 2 = two-tier (cap ramps to deep_bonus_cap between P25 and the deep frontier, then saturates flat), 3 = bounded power factor around the P25 reference (Bench v9 only).
              * @default 1
              */
             curve_version: number;
@@ -11368,6 +11438,21 @@ export interface components {
              */
             epoch_index: number;
             /**
+             * Factor Alpha
+             * @description Frozen power exponent for curve v3; null for v1/v2.
+             */
+            factor_alpha?: number | null;
+            /**
+             * Maximum Factor
+             * @description Frozen upper multiplier clamp for curve v3.
+             */
+            maximum_factor?: number | null;
+            /**
+             * Minimum Factor
+             * @description Frozen lower multiplier clamp for curve v3.
+             */
+            minimum_factor?: number | null;
+            /**
              * N Min
              * @description Activation gate on the deduped cohort size.
              */
@@ -11385,7 +11470,7 @@ export interface components {
             reference_median_tokens?: number | null;
             /**
              * Reference P25 Tokens
-             * @description Efficient-quartile frontier (nearest-rank P25 of the cohort's audited chat token totals): the tier-1 full-bonus point. Null while inactive.
+             * @description Nearest-rank P25 of the qualified cohort's audited chat-token costs. It is the efficient frontier for v1/v2 and the neutral Reference Cost (factor 1.0) for v3. Null while inactive.
              */
             reference_p25_tokens?: number | null;
             /**
@@ -11778,7 +11863,7 @@ export interface components {
             dataset_sha256?: string | null;
             /**
              * Effective Composite
-             * @description pre_efficiency_composite * (1 + efficiency_bonus): the final ranking score with the frozen relative-efficiency bonus applied after continual aggregation. Equal to official_composite while the fold is active, and null whenever efficiency_bonus is null. The validator's signed composite is never modified.
+             * @description Frozen-adjustment projection. Curve v3 multiplies downside or applies upside to pre_efficiency_composite's remaining headroom; legacy curves multiply by one plus their bonus. It equals official_composite while the coordinated fold is active; with the fold off it is audit-only and does not rank the board. Null whenever both adjustment fields are null. Signed quality evidence is never modified.
              */
             effective_composite?: number | null;
             /**
@@ -11791,6 +11876,22 @@ export interface components {
              * @description What the bonus WOULD be if the feature were switched on, computed at read time and persisted nowhere. Populated only while efficiency.preview is true, and deliberately kept separate from efficiency_bonus so that no consumer can mistake an unapplied preview for an awarded bonus. It is never folded into effective_composite and never reaches validator weights.
              */
             efficiency_bonus_preview?: number | null;
+            /**
+             * Efficiency Factor
+             * @description Frozen curve-v3 bounded efficiency factor in [0.85, 1.10]. Applied after authoritative Bench-v9 full quality: downside multiplies quality and upside scales remaining headroom. When present it supersedes the legacy efficiency_bonus.
+             */
+            efficiency_factor?: number | null;
+            /**
+             * Efficiency Factor Preview
+             * @description What curve v3's bounded factor would be if enabled. Computed at read time, persisted nowhere, never folded into ranking, and never sent to validators.
+             */
+            efficiency_factor_preview?: number | null;
+            /**
+             * Efficiency Fold Applied
+             * @description Whether the surfaced efficiency adjustment is currently part of official_composite, ranking, KOTH, and emissions. False means effective_composite is an audit-only projection.
+             * @default false
+             */
+            efficiency_fold_applied: boolean;
             /**
              * Efficiency Snapshot Id
              * @description Id of the frozen cohort snapshot the bonus was computed against (the bonus_reference provenance pointer); resolvable at /public/efficiency/snapshots/{snapshot_id}. Null whenever efficiency_bonus is null.
@@ -11865,7 +11966,7 @@ export interface components {
             n?: number | null;
             /**
              * Official Composite
-             * @description Composite used for the current leaderboard and weight fold. It starts as the canonical three-validator median, then becomes the arithmetic mean of those three scores plus every retained per-seed sample accepted for this agent. When the Bench v7+ relative-efficiency fold is active, the frozen bonus multiplies that continual aggregate. Scheduling membership never removes an accepted sample.
+             * @description Composite used for the current leaderboard and weight fold. Legacy eras use the canonical median or activated continual mean; full-confirmed Bench v9 uses its verified full quality. An activated frozen efficiency bonus or v9 factor is applied after that authoritative quality scalar; curve-v3 downside multiplies quality and upside scales its remaining headroom.
              */
             official_composite: number;
             /**
@@ -11875,7 +11976,7 @@ export interface components {
             per_category?: components["schemas"]["PublicCategoryStat"][] | null;
             /**
              * Pre Efficiency Composite
-             * @description The ranking composite after continual aggregation but before the Bench v7+ relative-efficiency bonus. Equal to official_composite while the bonus fold is inactive.
+             * @description The authoritative quality composite before the frozen efficiency bonus or factor. Equal to official_composite while the adjustment fold is inactive.
              */
             pre_efficiency_composite?: number | null;
             /**

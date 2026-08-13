@@ -20,11 +20,13 @@ from ditto.validator.weights import (
     _beats,
     _dethrone_band_scale,
     _effective_composite,
+    _efficiency_stderr_scale,
     _elastic_confirmation_seed_ceiling,
     _entry_confirmations,
     _entry_seed_composites,
     _entry_stderr,
     _paired_dethrone,
+    _unpaired_band,
     compute_weights,
     contested_confirmation_set,
     top5_confirmation_set,
@@ -44,6 +46,8 @@ def _e(
     wave_scores: dict[int, list[float]] | None = None,
     continual_method: str | None = None,
     efficiency_bonus: float | None = None,
+    efficiency_factor: float | None = None,
+    v9_full_composite: float | None = None,
     bench_version: int | None = None,
     minutes: int = 0,
 ) -> Any:
@@ -76,6 +80,12 @@ def _e(
         ns.continual_aggregate_method = continual_method
     if efficiency_bonus is not None:
         ns.efficiency_bonus = efficiency_bonus
+    if efficiency_factor is not None:
+        ns.efficiency_factor = efficiency_factor
+    if v9_full_composite is not None:
+        ns.v9_confirmation = SimpleNamespace(
+            full_effective_micros=round(v9_full_composite * 1_000_000)
+        )
     if bench_version is not None:
         ns.bench_version = bench_version
     return ns
@@ -97,6 +107,29 @@ class TestEntryStderr:
         assert _entry_stderr(_e("a", 0.5, stderr=float("nan"))) is None
         assert _entry_stderr(_e("a", 0.5, stderr=float("inf"))) is None
         assert _entry_stderr(_e("a", 0.5, stderr=-0.01)) is None
+
+
+class TestEfficiencyStderrScale:
+    @pytest.mark.parametrize(
+        ("factor", "expected"), [(0.85, 0.85), (1.0, 1.0), (1.1, 0.9)]
+    )
+    def test_curve_v3_uses_quality_transform_slope(
+        self, factor: float, expected: float
+    ) -> None:
+        entry = _e(
+            "a",
+            0.5,
+            bench_version=9,
+            efficiency_factor=factor,
+            v9_full_composite=0.5,
+        )
+
+        assert _efficiency_stderr_scale(entry) == pytest.approx(expected)
+
+    def test_legacy_bonus_remains_multiplicative(self) -> None:
+        entry = _e("a", 0.5, efficiency_bonus=0.1)
+
+        assert _efficiency_stderr_scale(entry) == pytest.approx(1.1)
 
 
 class TestVersionedHighScoreBandDecay:
@@ -456,11 +489,86 @@ class TestEffectiveComposite:
 
         assert _effective_composite(entry) == pytest.approx(0.78 * 1.1)
 
+    def test_legacy_efficiency_bonus_replay_remains_uncapped(self) -> None:
+        entry = _e("a", 0.95, efficiency_bonus=0.1, bench_version=8)
+
+        assert _effective_composite(entry) == pytest.approx(1.045)
+
+    @pytest.mark.parametrize("factor", [0.85, 1.0, 1.1])
+    def test_efficiency_factor_adjusts_v9_full_quality(self, factor: float) -> None:
+        entry = _e(
+            "a",
+            0.8,
+            efficiency_factor=factor,
+            v9_full_composite=0.78,
+            bench_version=9,
+        )
+
+        expected = 0.78 * factor if factor <= 1.0 else 0.78 + (factor - 1.0) * 0.22
+        assert _effective_composite(entry) == pytest.approx(expected)
+
+    def test_efficiency_factor_does_not_saturate_imperfect_v9_quality(self) -> None:
+        entry = _e(
+            "a",
+            0.95,
+            efficiency_factor=1.1,
+            v9_full_composite=0.95,
+            bench_version=9,
+        )
+
+        assert _effective_composite(entry) == pytest.approx(0.955)
+
+    def test_efficiency_factor_supersedes_legacy_bonus(self) -> None:
+        entry = _e(
+            "a",
+            0.8,
+            efficiency_bonus=0.1,
+            efficiency_factor=0.85,
+            v9_full_composite=0.8,
+            bench_version=9,
+        )
+
+        assert _effective_composite(entry) == pytest.approx(0.8 * 0.85)
+
+    def test_legacy_v9_bonus_replays_after_full_confirmation(self) -> None:
+        entry = _e(
+            "a",
+            0.8,
+            efficiency_bonus=0.1,
+            v9_full_composite=0.78,
+            bench_version=9,
+        )
+
+        assert _effective_composite(entry) == pytest.approx(0.78 * 1.1)
+
     @pytest.mark.parametrize("bonus", [-0.1, 0.1001, float("nan")])
     def test_invalid_efficiency_bonus_fails_closed(self, bonus: float) -> None:
         assert _effective_composite(
             _e("a", 0.73, efficiency_bonus=bonus)
         ) == pytest.approx(0.73)
+
+    @pytest.mark.parametrize("factor", [0.8499, 1.1001, float("nan")])
+    def test_invalid_efficiency_factor_fails_closed(self, factor: float) -> None:
+        assert _effective_composite(
+            _e(
+                "a",
+                0.73,
+                efficiency_bonus=0.1,
+                efficiency_factor=factor,
+                v9_full_composite=0.73,
+                bench_version=9,
+            )
+        ) == pytest.approx(0.73)
+
+    def test_efficiency_factor_is_v9_only(self) -> None:
+        entry = _e("a", 0.8, efficiency_factor=0.85, bench_version=8)
+
+        assert _effective_composite(entry) == pytest.approx(0.8)
+
+    def test_efficiency_factor_requires_full_v9_confirmation(self) -> None:
+        entry = _e("a", 0.8, efficiency_factor=0.85, bench_version=9)
+
+        assert _effective_composite(entry) == pytest.approx(0.8)
 
 
 class TestBeatsWithConfirmations:
@@ -526,6 +634,31 @@ class TestBeats:
         champ = _champ()
         assert _beats(_e("c", 0.88, stderr=0.03, minutes=1), champ, 0.04, 1.64)
 
+    def test_curve_v3_upside_uses_headroom_slope_for_unpaired_stderr(self) -> None:
+        champ = _e(
+            "champ",
+            0.4,
+            stderr=0.04,
+            bench_version=9,
+            efficiency_factor=1.1,
+            v9_full_composite=0.4,
+        )
+        challenger = _e(
+            "challenger",
+            0.5,
+            stderr=0.04,
+            bench_version=9,
+            efficiency_factor=1.1,
+            v9_full_composite=0.5,
+            minutes=1,
+        )
+        lead = _effective_composite(challenger) - _effective_composite(champ)
+        transformed_band = 1.64 * math.sqrt(2 * (0.04 * 0.9) ** 2)
+        factor_scaled_band = 1.64 * math.sqrt(2 * (0.04 * 1.1) ** 2)
+
+        assert transformed_band < lead < factor_scaled_band
+        assert _beats(challenger, champ, margin=0.02, dethrone_z=1.64)
+
     def test_z_zero_disables_statistical_band(self) -> None:
         champ = _champ()
         # With z=0 the band is the flat margin (0.04); a 0.05 lead dethrones.
@@ -549,6 +682,59 @@ class TestBeats:
 
 
 class TestComputeWeightsWithBand:
+    def test_live_v9_regression_makes_ban_raw_leader_but_white_bolt_champion(
+        self,
+    ) -> None:
+        entries = [
+            _e(
+                "white-bolt",
+                0.996348,
+                stderr=0.001,
+                bench_version=9,
+                efficiency_factor=1.045905257,
+                v9_full_composite=0.996348,
+                minutes=0,
+            ),
+            _e(
+                "omar",
+                0.997012,
+                stderr=0.001718,
+                bench_version=9,
+                efficiency_factor=0.85,
+                v9_full_composite=0.997012,
+                minutes=5,
+            ),
+            _e(
+                "crown-v9",
+                0.980723,
+                stderr=0.006474,
+                bench_version=9,
+                efficiency_factor=1.09426,
+                v9_full_composite=0.980723,
+                minutes=14,
+            ),
+            _e(
+                "banblackycat-v7",
+                0.997012,
+                stderr=0.001718,
+                bench_version=9,
+                efficiency_factor=1.034716,
+                v9_full_composite=0.997012,
+                minutes=29,
+            ),
+        ]
+
+        weights = compute_weights(
+            entries,
+            margin=0.007,
+            tail_size=0,
+            rank_shares=(1.0,),
+            dethrone_z=1.64,
+        )
+
+        assert _effective_composite(entries[-1]) > _effective_composite(entries[0])
+        assert weights == {"white-bolt": pytest.approx(1.0)}
+
     def test_default_z_zero_is_backward_compatible(self) -> None:
         # No dethrone_z passed → fixed composite-point margin, even with stderr present.
         entries = [
@@ -743,6 +929,76 @@ class TestContestedConfirmationSet:
             [champ, chall], current_version=1, margin=0.02, dethrone_z=1.64
         )
         assert [e.agent_id for e in got] == [champ.agent_id, chall.agent_id]
+
+    def test_v9_factor_scales_the_contested_uncertainty_band(self) -> None:
+        champ = _e(
+            "5A" + "a" * 44,
+            0.8,
+            stderr=0.04,
+            bench_version=9,
+            efficiency_factor=0.85,
+            v9_full_composite=0.8,
+        )
+        chall = _e(
+            "5B" + "b" * 44,
+            0.62,
+            stderr=0.04,
+            bench_version=9,
+            efficiency_factor=1.1,
+            v9_full_composite=0.62,
+            minutes=1,
+        )
+
+        got = contested_confirmation_set(
+            [champ, chall], current_version=9, margin=0.02, dethrone_z=1.64
+        )
+
+        assert [entry.agent_id for entry in got] == [champ.agent_id, chall.agent_id]
+
+    def test_headroom_slope_keeps_clear_v9_pair_out_of_contested_set(self) -> None:
+        champ = _e(
+            "5A" + "a" * 44,
+            0.4,
+            stderr=0.04,
+            bench_version=9,
+            efficiency_factor=1.1,
+            v9_full_composite=0.4,
+        )
+        chall = _e(
+            "5B" + "b" * 44,
+            0.5,
+            stderr=0.04,
+            bench_version=9,
+            efficiency_factor=1.1,
+            v9_full_composite=0.5,
+            minutes=1,
+        )
+        expected_band = 1.64 * math.sqrt(2 * (0.04 * 0.9) ** 2)
+
+        assert _unpaired_band(chall, champ, margin=0.02, dethrone_z=1.64) == (
+            pytest.approx(expected_band)
+        )
+        assert (
+            contested_confirmation_set(
+                [champ, chall], current_version=9, margin=0.02, dethrone_z=1.64
+            )
+            == []
+        )
+
+    def test_legacy_bonus_keeps_unpaired_band_scaling(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.4, stderr=0.04, efficiency_bonus=0.1)
+        chall = _e(
+            "5B" + "b" * 44,
+            0.5,
+            stderr=0.04,
+            efficiency_bonus=0.1,
+            minutes=1,
+        )
+        expected_band = 1.64 * math.sqrt(2 * (0.04 * 1.1) ** 2)
+
+        assert _unpaired_band(chall, champ, margin=0.02, dethrone_z=1.64) == (
+            pytest.approx(expected_band)
+        )
 
     def test_settled_pair_never_retriggers(self) -> None:
         champ = _e(

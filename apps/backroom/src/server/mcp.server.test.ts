@@ -153,7 +153,15 @@ describe('Backroom MCP tools', () => {
     // its descriptions bounded so a new operational tutorial cannot silently
     // tax every MCP session. Before catalog summaries this was ~109k chars,
     // including ~57k chars of descriptions alone.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(75_000)
+    //
+    // Prose is guarded exactly by the two description assertions below; this
+    // number is the coarse whole-payload backstop, and input schemas dominate
+    // it. Curve v3 added three required numeric policy knobs to
+    // set_efficiency_bonus_settings (~240 chars of schema, no new prose) and
+    // the previous 75k ceiling had only 24 chars of slack left, so it tripped
+    // on a legitimate field rather than on bloat. Raised with headroom; tighten
+    // the description budgets, not this one, to push back on tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(78_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
       20_000,
@@ -1198,6 +1206,9 @@ describe('Backroom MCP tools', () => {
       cap: 0.05,
       deep_cap: 0.1,
       deep_frontier_ratio: 0.5,
+      factor_alpha: 0.25,
+      minimum_factor: 0.85,
+      maximum_factor: 1.1,
       cohort_size: 25,
       min_cohort: 8,
       epoch_hours: 24,
@@ -1213,6 +1224,7 @@ describe('Backroom MCP tools', () => {
           revision: 0,
           scope: '*',
           settings: seed,
+          checksum_settings: seed,
           checksum: '',
           source: 'seed',
           fold_effective: false,
@@ -1358,6 +1370,9 @@ describe('Backroom MCP tools', () => {
       cap: 0.05,
       deep_cap: 0.1,
       deep_frontier_ratio: 0.5,
+      factor_alpha: 0.25,
+      minimum_factor: 0.85,
+      maximum_factor: 1.1,
       cohort_size: 25,
       min_cohort: 8,
       epoch_hours: 24,
@@ -1370,6 +1385,7 @@ describe('Backroom MCP tools', () => {
         parent_revision: 0,
         scope: '*',
         settings,
+        checksum_settings: settings,
         reason: 'Enable the v7 efficiency bonus and watch the shadow board',
         actor: 'peyton@omniaura.ai',
         created_at: '2026-07-23T12:00:00Z',
@@ -1450,6 +1466,9 @@ describe('Backroom MCP tools', () => {
           cap: 0.05,
           deep_cap: 0.1,
           deep_frontier_ratio: 0.5,
+          factor_alpha: 0.25,
+          minimum_factor: 0.85,
+          maximum_factor: 1.1,
           cohort_size: 25,
           min_cohort: 8,
           epoch_hours: 24,

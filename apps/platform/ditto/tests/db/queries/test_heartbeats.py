@@ -26,6 +26,7 @@ from ditto.db.models import Agent, ValidatorHeartbeat
 from ditto.db.queries.heartbeats import (
     _STAGE_ORDER,
     live_validator_fleet_supports_protocol,
+    live_weight_setter_fleet_supports_protocol,
     upsert_validator_heartbeat,
 )
 
@@ -222,6 +223,96 @@ async def test_fleet_protocol_gate_fails_closed_without_capable_validators(
         session,
         minimum_protocol=14,
         bench_version=6,
+        now=now,
+    )
+
+
+@pytest.mark.parametrize("scorer_state", ["absent", "stale", "unreachable"])
+async def test_weight_setter_protocol_gate_includes_live_pre_v19_without_fresh_scorer(
+    session: AsyncSession,
+    scorer_state: str,
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    legacy = _fleet_heartbeat(
+        f"legacy-{scorer_state}",
+        now=now,
+        protocol_version=18,
+        supported_bench_versions=(None if scorer_state == "absent" else [9]),
+    )
+    if scorer_state == "stale":
+        assert legacy.capabilities is not None
+        legacy.capabilities["scorer_benchmarks"]["observed_at"] = int(
+            (now - timedelta(days=1)).timestamp()
+        )
+    elif scorer_state == "unreachable":
+        assert legacy.capabilities is not None
+        legacy.capabilities["scorer_benchmarks"] = {
+            "status": "unreachable",
+            "supported_bench_versions": [],
+        }
+
+    async with session.begin():
+        session.add_all(
+            [
+                _fleet_heartbeat(
+                    "current",
+                    now=now,
+                    protocol_version=19,
+                    supported_bench_versions=[9],
+                ),
+                legacy,
+            ]
+        )
+
+    assert not await live_weight_setter_fleet_supports_protocol(
+        session,
+        minimum_protocol=19,
+        now=now,
+    )
+
+
+async def test_weight_setter_protocol_gate_fails_closed_for_empty_live_fleet(
+    session: AsyncSession,
+) -> None:
+    assert not await live_weight_setter_fleet_supports_protocol(
+        session,
+        minimum_protocol=19,
+        now=datetime.now(UTC),
+    )
+
+
+async def test_weight_setter_protocol_gate_accepts_all_live_v19_and_ignores_stale_rows(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    stale = _fleet_heartbeat(
+        "stale-pre-v19",
+        now=now - timedelta(minutes=16),
+        protocol_version=18,
+        supported_bench_versions=None,
+    )
+    async with session.begin():
+        session.add_all(
+            [
+                _fleet_heartbeat(
+                    "v19-with-scorer",
+                    now=now,
+                    protocol_version=19,
+                    supported_bench_versions=[9],
+                ),
+                _fleet_heartbeat(
+                    "v20-without-scorer",
+                    now=now,
+                    protocol_version=20,
+                    supported_bench_versions=None,
+                ),
+                stale,
+            ]
+        )
+
+    assert await live_weight_setter_fleet_supports_protocol(
+        session,
+        minimum_protocol=19,
         now=now,
     )
 

@@ -925,18 +925,29 @@ def top5_confirmation_score_signing_message(
     bench_version: int,
     confirmation_seeds: list[int],
     confirmation_composites: list[float],
+    base_evidence_sha256: str | None = None,
 ) -> bytes:
-    """Bind every append-only seed/composite pair into one score receipt."""
+    """Bind every append-only seed/composite pair into one score receipt.
+
+    Protocol 19 appends the representative v9 base-evidence digest under a v2
+    domain tag. That makes its audited token counters durable authority for the
+    daily retest-aware average. Absence retains the historical v1 bytes for
+    non-v9 and pre-protocol-19 compatibility.
+    """
     deadline = ticket_deadline.astimezone(UTC).isoformat(timespec="microseconds")
     pairs = json.dumps(
         list(zip(confirmation_seeds, confirmation_composites, strict=True)),
         separators=(",", ":"),
     )
-    return (
-        "validator-top5-confirmation-score:v1:"
+    version = "v2" if base_evidence_sha256 else "v1"
+    message = (
+        f"validator-top5-confirmation-score:{version}:"
         f"{validator_hotkey}:{agent_id}:{deadline}:{run_id}:"
         f"{bench_version}:{pairs}"
-    ).encode()
+    )
+    if base_evidence_sha256:
+        message += f":{base_evidence_sha256}"
+    return message.encode()
 
 
 def sign_top5_confirmation_score(

@@ -370,13 +370,36 @@ def _entry_confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
     return {seed: _median(values) for seed, values in grouped.items()}
 
 
+def _bounded_efficiency_factor(entry: LedgerEntry) -> float | None:
+    """Return a surfaced curve-v3 factor, neutralizing malformed values."""
+    factor = getattr(entry, "efficiency_factor", None)
+    if factor is None:
+        return None
+    if _entry_version(entry) != 9 or getattr(entry, "v9_confirmation", None) is None:
+        return 1.0
+    if (
+        isinstance(factor, bool)
+        or not isinstance(factor, (int, float))
+        or not math.isfinite(factor)
+        or not 0.85 <= factor <= 1.1
+    ):
+        return 1.0
+    return float(factor)
+
+
 def _efficiency_multiplier(entry: LedgerEntry) -> float:
     """Return the bounded, platform-awarded relative-efficiency multiplier.
 
-    The platform omits ``efficiency_bonus`` until the operator activates the
-    fold.  Missing or malformed values therefore preserve the pre-bonus fold
-    byte-for-byte; a valid frozen bonus is strictly upside and capped at 10%.
+    Curve v3 exposes a signed factor in [0.85, 1.10], allowing a bounded penalty
+    or bonus.  It supersedes the legacy upside-only ``efficiency_bonus`` when
+    present.  The platform omits both fields until the operator activates the
+    fold, so missing or malformed values preserve the pre-efficiency fold
+    byte-for-byte.
     """
+    factor = _bounded_efficiency_factor(entry)
+    if factor is not None:
+        return factor
+
     bonus = getattr(entry, "efficiency_bonus", None)
     if (
         isinstance(bonus, bool)
@@ -386,6 +409,37 @@ def _efficiency_multiplier(entry: LedgerEntry) -> float:
     ):
         return 1.0
     return 1.0 + float(bonus)
+
+
+def _efficiency_adjusted_composite(entry: LedgerEntry, quality: float) -> float:
+    """Apply the frozen adjustment without exceeding the score domain.
+
+    Curve v3 is a two-sided factor, but Bench-v9 scores remain probabilities in
+    ``[0, 1]``. Its upside closes a bounded share of the remaining headroom;
+    legacy v1/v2 bonuses retain their frozen historical arithmetic for replay
+    compatibility.
+    """
+    factor = _bounded_efficiency_factor(entry)
+    if factor is not None:
+        if factor <= 1.0:
+            return quality * factor
+        return quality + (factor - 1.0) * (1.0 - quality)
+    return quality * _efficiency_multiplier(entry)
+
+
+def _efficiency_stderr_scale(entry: LedgerEntry) -> float:
+    """Return the score transform's slope on the entry's quality scale.
+
+    ``composite_stderr`` is measured before relative efficiency is applied, so
+    its first-order propagation uses the derivative of the frozen transform.
+    Curve-v3 downside has slope ``factor`` and remaining-headroom upside has
+    slope ``2 - factor``. Legacy v1/v2 bonuses stay multiplicative, preserving
+    their historical ``1 + bonus`` uncertainty scaling.
+    """
+    factor = _bounded_efficiency_factor(entry)
+    if factor is not None:
+        return factor if factor <= 1.0 else 2.0 - factor
+    return _efficiency_multiplier(entry)
 
 
 def _continual_composite(entry: LedgerEntry) -> float:
@@ -434,19 +488,24 @@ def _continual_composite(entry: LedgerEntry) -> float:
 def _effective_composite(entry: LedgerEntry) -> float:
     """Return the score used by the weight fold.
 
-    Continual retest evidence is aggregated first.  When the platform exposes
-    a frozen relative-efficiency bonus, that bonus then multiplies the same
-    continual score used everywhere else in KOTH.  This ordering lets the two
-    independently activated mechanisms compose without rewriting signed
-    validator scores or reviving the legacy pre-v7 token penalty.
+    Authoritative quality evidence is selected first: the verified full receipt
+    for Bench v9, otherwise the continual aggregate.  The platform's frozen
+    relative-efficiency adjustment then multiplies that quality score.  This
+    ordering lets the independently activated mechanisms compose without
+    rewriting signed validator scores.
     """
     receipt = getattr(entry, "v9_confirmation", None)
     if _entry_version(entry) == 9 and receipt is not None:
         value = getattr(receipt, "full_effective_micros", None)
         if isinstance(value, int) and not isinstance(value, bool):
-            return value / 1_000_000
+            quality = value / 1_000_000
+            # Assignment shape carries its frozen curve authority: v1/v2 use
+            # the legacy bonus, v3 uses the bounded factor. This also replays a
+            # pre-upgrade v9 snapshot exactly instead of dropping its bonus
+            # merely because full-confirmation evidence arrived later.
+            return _efficiency_adjusted_composite(entry, quality)
         return 0.0
-    return _continual_composite(entry) * _efficiency_multiplier(entry)
+    return _efficiency_adjusted_composite(entry, _continual_composite(entry))
 
 
 def _entry_stderr(entry: LedgerEntry) -> float | None:
@@ -695,15 +754,16 @@ def _paired_dethrone(
     common = sorted(set(chall_map) & set(champ_map))
     if len(common) < 2:
         return None
-    chall_multiplier = _efficiency_multiplier(challenger)
-    champ_multiplier = _efficiency_multiplier(champion)
     diffs = [
-        chall_map[s] * chall_multiplier - champ_map[s] * champ_multiplier
+        _efficiency_adjusted_composite(challenger, chall_map[s])
+        - _efficiency_adjusted_composite(champion, champ_map[s])
         for s in common
     ]
     n = len(diffs)
     mean_diff = sum(diffs) / n
-    champ_ref = sum(champ_map[s] * champ_multiplier for s in common) / n
+    champ_ref = (
+        sum(_efficiency_adjusted_composite(champion, champ_map[s]) for s in common) / n
+    )
     var = sum((d - mean_diff) ** 2 for d in diffs) / (n - 1)
     se_diff = math.sqrt(var / n)
     return mean_diff, champ_ref, se_diff
@@ -746,8 +806,8 @@ def _beats(
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)
         if se_c is not None and se_champ is not None:
-            se_c *= _efficiency_multiplier(challenger)
-            se_champ *= _efficiency_multiplier(champion)
+            se_c *= _efficiency_stderr_scale(challenger)
+            se_champ *= _efficiency_stderr_scale(champion)
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
@@ -828,6 +888,13 @@ def _unpaired_band(
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)
         if se_c is not None and se_champ is not None:
+            # Standard error is expressed on the same pre-efficiency score
+            # scale as the entry's quality.  The contested-set predicate must
+            # compare the same transformed distributions as ``_beats``;
+            # otherwise a curve-v3 penalty/bonus can make scheduling disagree
+            # with the actual dethrone decision.
+            se_c *= _efficiency_stderr_scale(challenger)
+            se_champ *= _efficiency_stderr_scale(champion)
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band

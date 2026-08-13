@@ -35,6 +35,7 @@ from ditto.db.queries.confirmation_scores import (
     ConfirmationSeedScore,
     append_confirmation_scores,
 )
+from ditto.db.queries.score_ranking import EfficiencyFactorRequesterNotReady
 from ditto.db.queries.scores import upsert_score
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
@@ -318,6 +319,105 @@ class TestScoringLedger:
         # a real full run.
         assert body["entries"][0]["n"] == 20
         assert len(body["entries"][0]["score_proofs"]) == 1
+
+    async def test_absent_heartbeat_does_not_block_ledger_without_factor_candidates(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+
+        assert response.status_code == 200
+        assert response.json()["entries"][0]["efficiency_factor"] is None
+
+    async def test_stale_requester_is_428_when_factor_candidates_exist(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        stale = datetime.now(UTC) - timedelta(hours=1)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.28.0",
+                    protocol_version=18,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=stale,
+                    seen_at=stale,
+                    signature="cd" * 64,
+                )
+            )
+
+        resolver = AsyncMock(
+            side_effect=EfficiencyFactorRequesterNotReady(
+                "a fresh validator heartbeat is required before serving "
+                "bounded efficiency factors"
+            )
+        )
+        monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+
+        assert response.status_code == 428
+        assert response.json()["message"] == (
+            "a fresh validator heartbeat is required before serving "
+            "bounded efficiency factors"
+        )
+        assert resolver.await_args is not None
+        assert resolver.await_args.kwargs["requesting_validator_hotkey"] == (
+            _VALIDATOR_HOTKEY
+        )
+
+    async def test_fresh_protocol_18_requester_receives_factor_neutral_ledger(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.8)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_HOTKEY,
+                    software_version="0.28.0",
+                    protocol_version=18,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                )
+            )
+
+        # The shared resolver owns requester/global readiness. Its neutral result
+        # represents the broad fleet minimum seeing this fresh protocol-18 row.
+        resolver = AsyncMock(return_value=({}, {}))
+        monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+
+        assert response.status_code == 200
+        assert response.json()["entries"][0]["efficiency_factor"] is None
+        assert resolver.await_args is not None
+        assert resolver.await_args.kwargs["requesting_validator_hotkey"] == (
+            _VALIDATOR_HOTKEY
+        )
 
     async def test_continual_mean_activates_globally_only_for_protocol_14_fleet(
         self,

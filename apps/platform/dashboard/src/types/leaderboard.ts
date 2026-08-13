@@ -128,9 +128,13 @@ export interface LeaderboardEntry {
   official_composite?: number | null;
   /** Score after continual aggregation but before relative efficiency. */
   pre_efficiency_composite?: number | null;
-  /** Frozen Bench v7+ upside fraction, when the fold is active. */
+  /** Frozen legacy curve-v1/v2 upside fraction, when that fold is active. */
   efficiency_bonus?: number | null;
-  /** Final folded score; equal to official_composite while the fold is active. */
+  /** Frozen Bench-v9 bounded multiplier; supersedes efficiency_bonus when present. */
+  efficiency_factor?: number | null;
+  /** True only when the surfaced adjustment is official ranking/emission authority. */
+  efficiency_fold_applied?: boolean;
+  /** Adjustment projection; equal to official_composite only while the fold is active. */
   effective_composite?: number | null;
   /** Settled active-version median shown mid-rollout (loose != null check). */
   settled_composite?: number | null;
@@ -231,6 +235,16 @@ export interface LeaderboardPayload {
   selection_mode?: string;
   generated_at?: string;
   emissions?: EmissionsFold | null;
+  efficiency?: {
+    active: boolean;
+    preview?: boolean;
+    bench_version: number;
+    curve_version?: number;
+    reference_p25_tokens?: number | null;
+    factor_alpha?: number | null;
+    minimum_factor?: number | null;
+    maximum_factor?: number | null;
+  } | null;
   count?: number;
 }
 

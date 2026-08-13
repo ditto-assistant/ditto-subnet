@@ -47,6 +47,9 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "cap": 0.05,
         "deep_cap": 0.10,
         "deep_frontier_ratio": 0.5,
+        "factor_alpha": 0.25,
+        "minimum_factor": 0.85,
+        "maximum_factor": 1.10,
         "cohort_size": 25,
         "min_cohort": 8,
         "epoch_hours": 24,
@@ -147,6 +150,42 @@ class TestSeedAndRoundTrip:
         assert second.json()["revision"] == 2
         assert second.json()["parent_revision"] == 1
 
+    async def test_epoch_duration_is_immutable_across_revisions(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        first = await client.post(_URL, headers=_ADMIN_HEADERS, json=_payload())
+        assert first.status_code == 200, first.text
+
+        changed = await client.post(
+            _URL,
+            headers=_ADMIN_HEADERS,
+            json=_payload(expected=1, epoch_hours=12),
+        )
+
+        assert changed.status_code == 409
+        assert "epoch_hours is immutable" in changed.json()["message"]
+
+    async def test_first_revision_must_keep_seed_epoch_duration(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+
+        changed = await client.post(
+            _URL,
+            headers=_ADMIN_HEADERS,
+            json=_payload(epoch_hours=12),
+        )
+
+        assert changed.status_code == 409
+        assert "deployment seed" in changed.json()["message"]
+
 
 class TestConfirmationAndConcurrency:
     async def test_wrong_confirmation_is_409(
@@ -178,6 +217,39 @@ class TestConfirmationAndConcurrency:
 
 
 class TestValidation:
+    async def test_partial_write_cannot_reset_existing_policy(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        payload = _payload()
+        payload["settings"] = {
+            "factor_alpha": 0.25,
+            "minimum_factor": 0.85,
+            "maximum_factor": 1.10,
+        }
+
+        resp = await client.post(_URL, headers=_ADMIN_HEADERS, json=payload)
+
+        assert resp.status_code == 422
+
+    async def test_legacy_write_shape_cannot_default_v3_authority(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        payload = _payload()
+        for field in ("factor_alpha", "minimum_factor", "maximum_factor"):
+            payload["settings"].pop(field)
+
+        resp = await client.post(_URL, headers=_ADMIN_HEADERS, json=payload)
+
+        assert resp.status_code == 422
+
     async def test_non_global_scope_rejected(
         self,
         app: FastAPI,

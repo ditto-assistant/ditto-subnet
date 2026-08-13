@@ -824,6 +824,7 @@ class PlatformClient:
             bench_version=report.bench_version,
             confirmation_seeds=report.confirmation_seeds,
             confirmation_composites=report.confirmation_composites,
+            base_evidence_sha256=report.base_evidence_sha256,
         )
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/top5-confirmation-score"
         payload = SubmitScoreRequest(
