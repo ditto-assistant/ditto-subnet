@@ -76,6 +76,8 @@ const DEFERRED_MODE_DESCRIPTION = {
     'Full source review still runs before scoring while the platform records which submissions would qualify for deferred review.',
   enforce:
     'Cheap admission and prescoring run first; top-five entrants and configured score anomalies then receive deep source review.',
+  bypass:
+    'No source review at all: cheap admission only, no post-score qualification, no holds. Copy/plagiarism enforcement is a separate path and stays armed.',
 } as const
 
 function DeferredSourceReviewPolicy({
@@ -185,8 +187,8 @@ function DeferredSourceReviewPolicy({
       </div>
 
       <div className="space-y-5 p-4 sm:p-5">
-        <div className="grid gap-3 sm:grid-cols-3" aria-label="Deferred review mode">
-          {(['off', 'observe', 'enforce'] as const).map((mode) => (
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4" aria-label="Deferred review mode">
+          {(['off', 'observe', 'enforce', 'bypass'] as const).map((mode) => (
             <button
               key={mode}
               type="button"

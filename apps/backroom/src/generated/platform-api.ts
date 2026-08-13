@@ -8320,10 +8320,11 @@ export interface components {
          * DeferredSourceReviewSettings
          * @description Hot-swappable post-score deep-review admission and anomaly policy.
          *
-         *     This board decides *when* the expensive source review runs, not whether
-         *     source integrity is checked at all. Every mode reviews every submission; they
-         *     differ in whether the review happens before scoring (automatic, by a
-         *     screener) or after it (as an operator-adjudicated hold).
+         *     This board decides *where* the expensive source review runs -- before
+         *     scoring (automatic, by a screener), after it (as an operator-adjudicated
+         *     hold), or, in ``bypass``, nowhere at all. Three of the four modes review
+         *     every submission somewhere; ``bypass`` is the one that does not, and it is
+         *     the only way to send admitted submissions straight to validator scoring.
          *
          *     SCOPE -- source integrity only
          *     ==============================
@@ -8333,9 +8334,10 @@ export interface components {
          *     score finalization, which never reads this board, runs *before* the deferred
          *     path, and wins outright: a copy hold moves the agent to
          *     ``ATH_PENDING_REVIEW``, and the deferred path only acts on agents still in
-         *     ``SCORED``/``LIVE``. Setting ``mode="off"`` disables the deferred
-         *     source-integrity branch and **leaves plagiarism detection fully armed**.
-         *     The same is true of the transform/overfit audit, which has its own switch.
+         *     ``SCORED``/``LIVE``. Setting ``mode="off"`` or ``mode="bypass"`` disables the
+         *     deferred source-integrity branch and **leaves plagiarism detection fully
+         *     armed**. The same is true of the transform/overfit audit, which has its own
+         *     switch. "No source review" never means "no copy detection".
          */
         DeferredSourceReviewSettings: {
             /**
@@ -8368,7 +8370,7 @@ export interface components {
              * @default off
              * @enum {string}
              */
-            mode: "off" | "observe" | "enforce";
+            mode: "off" | "observe" | "enforce" | "bypass";
         };
         /**
          * DockerHealth

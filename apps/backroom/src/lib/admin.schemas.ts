@@ -1166,7 +1166,17 @@ export const DEFERRED_SOURCE_REVIEW_DEFAULT = {
   min_axis_delta: 0.15,
 } as const
 
-export const deferredSourceReviewModeSchema = z.enum(['off', 'observe', 'enforce'])
+// `bypass` is the no-source-review mode: build-only admission and no post-score
+// qualification, so an admitted submission goes straight to validator scoring.
+// It is the source-integrity branch only -- copy/plagiarism holds are opened by
+// a separate path that never reads this policy. Note `off` is the HEAVIEST mode
+// (full deep screen on every submission), not the off switch its name suggests.
+export const deferredSourceReviewModeSchema = z.enum([
+  'off',
+  'observe',
+  'enforce',
+  'bypass',
+])
 
 const deferredSourceReviewSchema = z.object({
   mode: deferredSourceReviewModeSchema.default(DEFERRED_SOURCE_REVIEW_DEFAULT.mode),

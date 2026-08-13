@@ -1785,6 +1785,25 @@ describe('queue policy settings schemas', () => {
     ).toThrow()
   })
 
+  it.each(['off', 'observe', 'enforce', 'bypass'] as const)(
+    'carries the %s source-review mode through read and write',
+    (mode) => {
+      // `bypass` is the no-source-review mode. The read schema matters as much
+      // as the write one: an enum that did not know the value would fail the
+      // whole queue-policy read the moment an operator selected it, taking the
+      // board down with it.
+      const deferred = { ...settings.deferred_source_review, mode }
+      expect(
+        queuePolicySettingsWriteSchema.parse({ ...settings, deferred_source_review: deferred })
+          .deferred_source_review.mode,
+      ).toBe(mode)
+      expect(
+        queuePolicySettingsSchema.parse({ ...settings, deferred_source_review: deferred })
+          .deferred_source_review.mode,
+      ).toBe(mode)
+    },
+  )
+
   it('surfaces whether an open rollout is actually locking the lane fields', () => {
     // `rollout_locked_fields` is a constant; `rollout_is_open` is the only
     // field that says whether the lock is live. It was being stripped.
