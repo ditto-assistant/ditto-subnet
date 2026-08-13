@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.db.models import Agent, Score
+from ditto.db.models import Agent, AgentKingship, Score
 from ditto.db.queries.artifact_release_settings import ArtifactReleasePolicy
 from ditto.db.queries.king_reign import get_king_reveal
 
@@ -171,3 +171,38 @@ async def list_public_source_releases(
         for agent_id, weight_confirmed_at in confirmed.items()
         if agent_id in releasable
     }
+
+
+async def available_public_source_agent_ids(
+    session: AsyncSession,
+    *,
+    quorum: int,
+    policy: ArtifactReleasePolicy,
+    now: datetime,
+) -> set[UUID]:
+    """Return currently downloadable source ids without scanning submissions.
+
+    Kingship is intentionally the leading relation: it is the tiny eligibility
+    ledger, while ``agents`` is the unbounded public activity history. Only the
+    already-confirmed, embargo-complete kings reach the score-quorum window.
+    """
+    if not policy.releases_publicly:
+        return set()
+    cutoff = now - timedelta(hours=policy.embargo_hours)
+    candidates = set(
+        await session.scalars(
+            select(AgentKingship.agent_id)
+            .join(Agent, Agent.agent_id == AgentKingship.agent_id)
+            .where(
+                AgentKingship.weight_confirmed_at.is_not(None),
+                AgentKingship.weight_confirmed_at <= cutoff,
+                Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE)),
+            )
+        )
+    )
+    if not candidates:
+        return set()
+    quorums = await list_first_score_quorums(
+        session, agent_ids=candidates, quorum=quorum
+    )
+    return set(quorums)

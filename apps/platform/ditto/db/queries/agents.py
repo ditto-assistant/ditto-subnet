@@ -12,13 +12,25 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import func, select, text
+from sqlalchemy import Text, case, cast, false, func, literal, or_, select, text, true
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import undefer_group
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.db.errors import IntegrityError as DbIntegrityError
-from ditto.db.models import Agent, EvaluationPayment, Score, ScreeningAttempt
+from ditto.db.models import (
+    Agent,
+    EvaluationPayment,
+    Score,
+    ScreeningAttempt,
+    SubmissionRetirement,
+)
+from ditto.db.queries.benchmark_admission import (
+    activated_rollout_for_version,
+    benchmark_admission_predicate,
+    validator_queue_admission_predicate,
+)
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -32,6 +44,11 @@ class SubmissionCooldownError(Exception):
     def __init__(self, retry_at: datetime) -> None:
         self.retry_at = retry_at
         super().__init__(f"submission cooldown active until {retry_at.isoformat()}")
+
+
+# Avoid importing ``queries.scores`` back into the agents module it already
+# imports. The public projection is the same fixed k=3 contract as the API.
+_PUBLIC_SCORE_QUORUM = 3
 
 
 async def get_submission_retry_at(
@@ -303,12 +320,341 @@ class PublicActivityRow:
     screening_attempt: ScreeningAttempt | None
     score_composite: float | None = None
     miner_coldkey: str | None = None
+    public_status: str | None = None
     """Payment-time owner identity, ``None`` for rows that predate payments.
 
     Carried so the public queue-rank preview can group contenders by the same
     owner the validator ticket allocator partitions on
     (:func:`ditto.db.queries.scores.emission_owner_key`) instead of by hotkey.
     Moderation-only, never exposed on the wire."""
+
+
+@dataclass(frozen=True)
+class PublicActivityPage:
+    """SQL-bounded activity rows plus independently aggregated totals."""
+
+    rows: list[PublicActivityRow]
+    total: int
+    status_counts: dict[str, int]
+    downloadable_count: int
+    waiting_agent_ids: list[UUID]
+
+
+async def query_public_activity_page(
+    session: AsyncSession,
+    *,
+    bench_version: int,
+    page: int,
+    limit: int,
+    requested_statuses: set[str],
+    downloadable_only: bool,
+    downloadable_agent_ids: set[UUID],
+    query: str | None,
+    ath_only: bool,
+    active_validation_agent_ids: set[UUID],
+    active_assignment_agent_ids: set[UUID],
+    score_continuation_floor: float | None,
+    operations_terminal_history_limit: int | None = None,
+) -> PublicActivityPage:
+    """Filter, aggregate, and paginate the public activity projection in SQL.
+
+    Only the selected page (or operations board population) hydrates ``Agent``
+    entities. Status totals and fleet-wide queue membership are narrow scalar
+    queries over the same derived status expression, so adding a filter cannot
+    quietly restore the previous all-submission ORM materialization.
+    """
+    rollout = await activated_rollout_for_version(session, bench_version=bench_version)
+    score_counts = (
+        select(
+            Score.agent_id.label("agent_id"),
+            func.count(Score.validator_hotkey).label("score_count"),
+            func.avg(Score.composite).label("provisional_composite"),
+            func.max(Score.composite).label("highest_composite"),
+            func.max(Score.updated_at).label("last_scored_at"),
+        )
+        .where(Score.bench_version == bench_version)
+        .group_by(Score.agent_id)
+        .cte("public_activity_scores")
+    )
+    score_count = func.coalesce(score_counts.c.score_count, 0)
+    has_active_attempt = (
+        select(ScreeningAttempt.agent_id)
+        .where(
+            ScreeningAttempt.agent_id == Agent.agent_id,
+            ScreeningAttempt.status == "running",
+        )
+        .correlate(Agent)
+        .exists()
+    )
+    retired = (
+        select(SubmissionRetirement.agent_id)
+        .where(SubmissionRetirement.agent_id == Agent.agent_id)
+        .correlate(Agent)
+        .exists()
+    )
+    admitted = validator_queue_admission_predicate(bench_version=bench_version)
+    if rollout is not None:
+        admitted &= benchmark_admission_predicate(
+            rollout=rollout, bench_version=bench_version
+        )
+    active_validation = (
+        Agent.agent_id.in_(active_validation_agent_ids)
+        if active_validation_agent_ids
+        else false()
+    )
+    live_assignment = (
+        Agent.agent_id.in_(active_assignment_agent_ids)
+        if active_assignment_agent_ids
+        else false()
+    )
+    needs_rescreen = Agent.status.in_(
+        (AgentStatus.EVALUATING, AgentStatus.REJECTED)
+    ) & (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+    below_floor = (
+        (Agent.status == AgentStatus.EVALUATING)
+        & ~live_assignment
+        & (score_count == _PUBLIC_SCORE_QUORUM - 1)
+        & score_counts.c.highest_composite.is_not(None)
+        & (
+            score_counts.c.highest_composite < score_continuation_floor
+            if score_continuation_floor is not None
+            else false()
+        )
+    )
+    waiting_state = Agent.status.in_(
+        (AgentStatus.SCREENING_PASSED, AgentStatus.EVALUATING)
+    )
+    public_status = case(
+        (
+            has_active_attempt | (Agent.status == AgentStatus.SCREENING),
+            literal(AgentStatus.SCREENING.value),
+        ),
+        (
+            Agent.status.in_((AgentStatus.UPLOADED, AgentStatus.SCREENING_FAILED))
+            | needs_rescreen,
+            literal("waiting_screening"),
+        ),
+        (waiting_state & retired, literal("retired")),
+        (
+            waiting_state & ~admitted & ~active_validation & ~live_assignment,
+            literal("not_queued"),
+        ),
+        (waiting_state & below_floor, literal("below_score_floor")),
+        (waiting_state & active_validation, literal("evaluating")),
+        (waiting_state, literal("waiting_validator")),
+        (
+            Agent.status.in_((AgentStatus.ATH_PENDING_REVIEW, AgentStatus.QUARANTINED)),
+            literal("under_review"),
+        ),
+        (Agent.status == AgentStatus.BANNED, literal("rejected")),
+        else_=cast(Agent.status, Text),
+    ).label("public_status")
+    projected = (
+        select(
+            Agent.agent_id.label("agent_id"),
+            Agent.created_at.label("created_at"),
+            public_status,
+            score_count.label("score_count"),
+            score_counts.c.provisional_composite,
+            score_counts.c.highest_composite,
+            score_counts.c.last_scored_at,
+        )
+        .outerjoin(score_counts, score_counts.c.agent_id == Agent.agent_id)
+        .cte("public_activity_projected")
+    )
+
+    base_filters = []
+    if ath_only:
+        base_filters.append(Agent.status == AgentStatus.ATH_PENDING_REVIEW)
+    normalized_query = query.strip().casefold() if query else ""
+    if normalized_query:
+        base_filters.append(
+            func.lower(
+                func.concat_ws(
+                    " ",
+                    Agent.name,
+                    cast(Agent.agent_id, Text),
+                    Agent.miner_hotkey,
+                    projected.c.public_status,
+                )
+            ).contains(normalized_query)
+        )
+
+    base = (
+        select(projected)
+        .join(Agent, Agent.agent_id == projected.c.agent_id)
+        .where(*base_filters)
+        .subquery("public_activity_base")
+    )
+    status_rows = (
+        await session.execute(
+            select(base.c.public_status, func.count())
+            .group_by(base.c.public_status)
+            .order_by(base.c.public_status)
+        )
+    ).all()
+    status_counts = {str(status): int(count) for status, count in status_rows}
+
+    filtered_statement = select(base)
+    if requested_statuses:
+        filtered_statement = filtered_statement.where(
+            base.c.public_status.in_(requested_statuses)
+        )
+    if downloadable_only:
+        filtered_statement = filtered_statement.where(
+            base.c.agent_id.in_(downloadable_agent_ids)
+            if downloadable_agent_ids
+            else false()
+        )
+    filtered = filtered_statement.subquery("public_activity_filtered")
+    total, downloadable_count = (
+        await session.execute(
+            select(
+                select(func.count()).select_from(filtered).scalar_subquery(),
+                select(func.count())
+                .select_from(base)
+                .where(
+                    base.c.agent_id.in_(downloadable_agent_ids)
+                    if downloadable_agent_ids
+                    else false()
+                )
+                .scalar_subquery(),
+            )
+        )
+    ).one()
+
+    if operations_terminal_history_limit is None:
+        selected_ids = (
+            select(*filtered.c, literal(0).label("board_group"))
+            .order_by(filtered.c.created_at.desc(), filtered.c.agent_id.desc())
+            .offset((page - 1) * limit)
+            .limit(limit)
+            .subquery("public_activity_selected")
+        )
+    else:
+        board_statuses = (
+            "waiting_screening",
+            "screening",
+            "waiting_validator",
+            "below_score_floor",
+            "evaluating",
+            "under_review",
+        )
+        actionable = select(*filtered.c, literal(0).label("board_group")).where(
+            or_(
+                filtered.c.public_status.in_(board_statuses),
+                filtered.c.agent_id.in_(active_validation_agent_ids)
+                if active_validation_agent_ids
+                else false(),
+            )
+        )
+        terminal = (
+            select(*filtered.c, literal(1).label("board_group"))
+            .where(
+                filtered.c.public_status.in_(("scored", "live")),
+                ~filtered.c.agent_id.in_(active_validation_agent_ids)
+                if active_validation_agent_ids
+                else true(),
+            )
+            .order_by(filtered.c.created_at.desc(), filtered.c.agent_id.desc())
+            .limit(operations_terminal_history_limit)
+        )
+        selected_ids = actionable.union_all(terminal).subquery(
+            "public_activity_selected"
+        )
+
+    first_composite = (
+        select(Score.composite)
+        .where(
+            Score.agent_id == Agent.agent_id,
+            Score.bench_version == bench_version,
+        )
+        .order_by(Score.created_at.asc(), Score.validator_hotkey.asc())
+        .limit(1)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    detail_rows = (
+        await session.execute(
+            select(
+                Agent,
+                selected_ids.c.score_count,
+                selected_ids.c.provisional_composite,
+                first_composite,
+                selected_ids.c.highest_composite,
+                selected_ids.c.last_scored_at,
+                ScreeningAttempt,
+                EvaluationPayment.miner_coldkey,
+                selected_ids.c.public_status,
+                selected_ids.c.board_group,
+            )
+            .join(selected_ids, selected_ids.c.agent_id == Agent.agent_id)
+            .outerjoin(
+                ScreeningAttempt,
+                (ScreeningAttempt.agent_id == Agent.agent_id)
+                & (ScreeningAttempt.status == "running"),
+            )
+            .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
+            .order_by(
+                selected_ids.c.board_group,
+                Agent.created_at.desc(),
+                Agent.agent_id.desc(),
+            )
+        )
+    ).all()
+    rows = [
+        PublicActivityRow(
+            agent=agent,
+            score_count=int(row_score_count),
+            provisional_composite=(
+                float(provisional_composite)
+                if provisional_composite is not None
+                else None
+            ),
+            first_composite=(
+                float(first_composite_value)
+                if first_composite_value is not None
+                else None
+            ),
+            highest_composite=(
+                float(highest_composite) if highest_composite is not None else None
+            ),
+            last_scored_at=last_scored_at,
+            screening_attempt=screening_attempt,
+            miner_coldkey=miner_coldkey,
+            public_status=str(row_public_status),
+        )
+        for (
+            agent,
+            row_score_count,
+            provisional_composite,
+            first_composite_value,
+            highest_composite,
+            last_scored_at,
+            screening_attempt,
+            miner_coldkey,
+            row_public_status,
+            _board_group,
+        ) in detail_rows
+    ]
+    waiting_agent_ids = list(
+        await session.scalars(
+            select(projected.c.agent_id)
+            .where(
+                projected.c.public_status.in_(
+                    ("waiting_validator", "below_score_floor")
+                )
+            )
+            .order_by(projected.c.created_at.desc(), projected.c.agent_id.desc())
+        )
+    )
+    return PublicActivityPage(
+        rows=rows,
+        total=int(total),
+        status_counts=status_counts,
+        downloadable_count=int(downloadable_count),
+        waiting_agent_ids=waiting_agent_ids,
+    )
 
 
 async def get_public_activity_by_id(

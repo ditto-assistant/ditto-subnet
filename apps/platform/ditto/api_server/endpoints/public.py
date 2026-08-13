@@ -226,13 +226,18 @@ from ditto.db.models import (
     SubmissionImageBuild,
     ValidatorTicket,
 )
-from ditto.db.queries.agents import get_public_activity_by_id, list_public_activity
+from ditto.db.queries.agents import (
+    get_public_activity_by_id,
+    list_public_activity,  # noqa: F401 - legacy test seam for targeted deep links
+    query_public_activity_page,
+)
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_PUBLIC_ARTIFACT,
     record_artifact_fetch,
 )
 from ditto.db.queries.artifact_release import (
     ArtifactScoreQuorum,
+    available_public_source_agent_ids,
     list_first_score_quorums,
 )
 from ditto.db.queries.artifact_release_settings import (
@@ -242,7 +247,6 @@ from ditto.db.queries.artifact_release_settings import (
 from ditto.db.queries.audit import GENESIS_HASH, list_audit_entries
 from ditto.db.queries.benchmark_admission import (
     activated_rollout_for_version,
-    admitted_agent_ids,
     agent_is_admitted,
 )
 from ditto.db.queries.benchmark_rollout import (
@@ -851,6 +855,7 @@ async def _artifact_release_snapshot(
     *,
     statuses: dict[UUID, AgentStatus],
     now: datetime,
+    policy: ArtifactReleasePolicy | None = None,
 ) -> dict[UUID, PublicArtifactRelease]:
     """Batch-load release metadata for a public response.
 
@@ -866,7 +871,7 @@ async def _artifact_release_snapshot(
     king_reveals = await get_king_reveal(session, agent_ids=list(statuses))
     # One policy read for the whole batch: the setting is subnet-wide, so there
     # is nothing per-agent to look up and no per-agent column to join.
-    policy = await artifact_release_policy(session)
+    policy = policy or await artifact_release_policy(session)
     return {
         agent_id: _public_artifact_release(
             status=status,
@@ -3888,6 +3893,7 @@ async def queue_preview_for_rows(
     now: datetime,
     score_continuation_floor: float | None,
     provisional_contender_floor: float | None,
+    waiting_agent_ids: list[UUID] | None = None,
 ) -> dict[UUID, QueuePreviewEntry]:
     """Rank the waiting population with the allocator's own ordering.
 
@@ -3896,7 +3902,11 @@ async def queue_preview_for_rows(
     how the operations board kept ranking a stranded previous-generation
     backlog at the head of the queue after ``/activity`` had been corrected.
     """
-    waiting = _waiting_validator_agent_ids(rows, statuses=statuses)
+    waiting = (
+        waiting_agent_ids
+        if waiting_agent_ids is not None
+        else _waiting_validator_agent_ids(rows, statuses=statuses)
+    )
     if not waiting:
         return {}
     return await preview_queue_order(
@@ -4006,6 +4016,12 @@ def _public_activity_response(
     retired_agent_ids: set[UUID] | None = None,
     ath_only: bool = False,
     terminal_history_limit: int | None = None,
+    precomputed_statuses: dict[UUID, str] | None = None,
+    precomputed_status_counts: dict[str, int] | None = None,
+    precomputed_downloadable_count: int | None = None,
+    precomputed_total: int | None = None,
+    already_paginated: bool = False,
+    precomputed_page_size: int | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health."""
     active_by_agent: dict[UUID, list[PublicBenchmarkProgress]] = {}
@@ -4022,14 +4038,18 @@ def _public_activity_response(
         )
     }
     retry_by_agent = retry_states or {}
-    statuses = _public_activity_statuses(
-        rows,
-        active_work=active_work,
-        active_assignment_agent_ids=active_assignment_agent_ids,
-        score_continuation_floor=score_continuation_floor,
-        active_bench_version=active_bench_version,
-        benchmark_admitted_agent_ids=benchmark_admitted_agent_ids,
-        retired_agent_ids=retired_agent_ids,
+    statuses = (
+        precomputed_statuses
+        if precomputed_statuses is not None
+        else _public_activity_statuses(
+            rows,
+            active_work=active_work,
+            active_assignment_agent_ids=active_assignment_agent_ids,
+            score_continuation_floor=score_continuation_floor,
+            active_bench_version=active_bench_version,
+            benchmark_admitted_agent_ids=benchmark_admitted_agent_ids,
+            retired_agent_ids=retired_agent_ids,
+        )
     )
     projected = [(row, statuses[row.agent.agent_id]) for row in rows]
     if ath_only:
@@ -4054,29 +4074,37 @@ def _public_activity_response(
             ).casefold()
         ]
 
-    status_counts: dict[str, int] = {}
-    for _, row_status in projected:
-        status_counts[row_status] = status_counts.get(row_status, 0) + 1
-    downloadable_count = sum(
-        1
-        for row, _ in projected
-        if artifact_releases[row.agent.agent_id].download_available
+    status_counts: dict[str, int] = precomputed_status_counts or {}
+    if precomputed_status_counts is None:
+        for _, row_status in projected:
+            status_counts[row_status] = status_counts.get(row_status, 0) + 1
+    downloadable_count = (
+        precomputed_downloadable_count
+        if precomputed_downloadable_count is not None
+        else sum(
+            1
+            for row, _ in projected
+            if artifact_releases[row.agent.agent_id].download_available
+        )
     )
-    if requested_statuses:
+    if requested_statuses and not already_paginated:
         projected = [
             (row, row_status)
             for row, row_status in projected
             if row_status in requested_statuses
         ]
-    if downloadable_only:
+    if downloadable_only and not already_paginated:
         projected = [
             (row, row_status)
             for row, row_status in projected
             if artifact_releases[row.agent.agent_id].download_available
         ]
 
-    total = len(projected)
-    if terminal_history_limit is None:
+    total = precomputed_total if precomputed_total is not None else len(projected)
+    if already_paginated:
+        page_rows = projected
+        page_size = precomputed_page_size or limit
+    elif terminal_history_limit is None:
         page_rows = projected[(page - 1) * limit : page * limit]
         page_size = limit
     else:
@@ -4401,15 +4429,6 @@ async def activity(
         )
 
     active_version = await active_bench_version(session)
-    rows, _ = await list_public_activity(session, bench_version=active_version)
-    admitted = await admitted_agent_ids(
-        session,
-        bench_version=active_version,
-        agent_ids=[row.agent.agent_id for row in rows],
-    )
-    ath_reviews: dict[UUID, _PublicAthReviewSnapshot] = {}
-    ath_composite: dict[UUID, float] = {}
-    ath_reviews, ath_composite = await _ath_review_public_snapshot(session, rows)
     assignments = await list_active_validator_assignments(session, now=now)
     active_work = await list_active_validator_work(
         session, now=now, cutoff=now - _VALIDATOR_ONLINE_WINDOW
@@ -4423,37 +4442,55 @@ async def activity(
         efficiency_config=efficiency_config,
         now=now,
     )
-    artifact_releases = await _artifact_release_snapshot(
-        session,
-        statuses={row.agent.agent_id: row.agent.status for row in rows},
-        now=now,
-    )
     active_assignment_agent_ids = {
         assignment.agent.agent_id
         for assignment in assignments
         if assignment.ticket.bench_version == active_version
     }
-    # Read once and feed both the preview population and the projected labels.
-    # If the preview did not know about retirement it would rank a row this
-    # response calls "retired", which is the preview/allocator divergence the
-    # shared ordering exists to make impossible.
-    retired = await retired_agent_ids(session)
+    active_validation_agent_ids = {
+        work.agent.agent_id
+        for work in active_work
+        if work.ticket.bench_version == active_version
+    }
+    release_policy = await artifact_release_policy(session)
+    downloadable_agent_ids = await available_public_source_agent_ids(
+        session,
+        quorum=SCORING_QUORUM,
+        policy=release_policy,
+        now=now,
+    )
+    activity_page = await query_public_activity_page(
+        session,
+        bench_version=active_version,
+        page=page,
+        limit=limit,
+        requested_statuses=requested_statuses,
+        downloadable_only=downloadable,
+        downloadable_agent_ids=downloadable_agent_ids,
+        query=q,
+        ath_only=review == "ath",
+        active_validation_agent_ids=active_validation_agent_ids,
+        active_assignment_agent_ids=active_assignment_agent_ids,
+        score_continuation_floor=score_continuation_floor,
+    )
+    rows = activity_page.rows
+    statuses = {row.agent.agent_id: cast(str, row.public_status) for row in rows}
+    artifact_releases = await _artifact_release_snapshot(
+        session,
+        statuses={row.agent.agent_id: row.agent.status for row in rows},
+        now=now,
+        policy=release_policy,
+    )
+    ath_reviews, ath_composite = await _ath_review_public_snapshot(session, rows)
     queue_preview = await queue_preview_for_rows(
         session,
         rows=rows,
-        statuses=_public_activity_statuses(
-            rows,
-            active_work=active_work,
-            active_assignment_agent_ids=active_assignment_agent_ids,
-            score_continuation_floor=score_continuation_floor,
-            active_bench_version=active_version,
-            benchmark_admitted_agent_ids=admitted,
-            retired_agent_ids=retired,
-        ),
+        statuses=statuses,
         bench_version=active_version,
         now=now,
         score_continuation_floor=score_continuation_floor,
         provisional_contender_floor=provisional_contender_floor,
+        waiting_agent_ids=activity_page.waiting_agent_ids,
     )
     return _public_activity_response(
         rows=rows,
@@ -4469,15 +4506,18 @@ async def activity(
         artifact_releases=artifact_releases,
         queue_preview=queue_preview,
         active_bench_version=active_version,
-        benchmark_admitted_agent_ids=admitted,
         retry_states=await classify_agent_retry_states(
             session, agents=[row.agent for row in rows], now=now
         ),
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
-        retired_agent_ids=retired,
-        ath_only=review == "ath",
+        precomputed_statuses=statuses,
+        precomputed_status_counts=activity_page.status_counts,
+        precomputed_downloadable_count=activity_page.downloadable_count,
+        precomputed_total=activity_page.total,
+        already_paginated=True,
+        precomputed_page_size=limit,
     )
 
 
@@ -4613,19 +4653,10 @@ async def operations(
         await ensure_efficiency_state(session, efficiency_config, now=now)
     benchmark_rollout = await rollout_state(session, now=now)
     active_version = cast(int, benchmark_rollout["active_version"])
-    activity_rows, _ = await list_public_activity(session, bench_version=active_version)
-    admitted = await admitted_agent_ids(
-        session,
-        bench_version=active_version,
-        agent_ids=[row.agent.agent_id for row in activity_rows],
-    )
     heartbeat_rows = await list_validator_heartbeats(session)
     assignments = await list_active_validator_assignments(session, now=now)
     active_work = await list_active_validator_work(
         session, now=now, cutoff=now - _VALIDATOR_ONLINE_WINDOW
-    )
-    retry_states = await classify_agent_retry_states(
-        session, agents=[row.agent for row in activity_rows], now=now
     )
     (
         score_continuation_floor,
@@ -4636,19 +4667,51 @@ async def operations(
         efficiency_config=efficiency_config,
         now=now,
     )
-    artifact_releases = await _artifact_release_snapshot(
-        session,
-        statuses={row.agent.agent_id: row.agent.status for row in activity_rows},
-        now=now,
-    )
     active_assignment_agent_ids = {
         assignment.agent.agent_id
         for assignment in assignments
         if assignment.ticket.bench_version == active_version
     }
-    # One read, shared by the preview population and the projected labels --
-    # same reason as ``/activity`` above.
-    retired = await retired_agent_ids(session)
+    active_validation_agent_ids = {
+        work.agent.agent_id
+        for work in active_work
+        if work.ticket.bench_version == active_version
+    }
+    release_policy = await artifact_release_policy(session)
+    downloadable_agent_ids = await available_public_source_agent_ids(
+        session,
+        quorum=SCORING_QUORUM,
+        policy=release_policy,
+        now=now,
+    )
+    activity_page = await query_public_activity_page(
+        session,
+        bench_version=active_version,
+        page=1,
+        limit=1,
+        requested_statuses=set(),
+        downloadable_only=False,
+        downloadable_agent_ids=downloadable_agent_ids,
+        query=None,
+        ath_only=False,
+        active_validation_agent_ids=active_validation_agent_ids,
+        active_assignment_agent_ids=active_assignment_agent_ids,
+        score_continuation_floor=score_continuation_floor,
+        operations_terminal_history_limit=50,
+    )
+    activity_rows = activity_page.rows
+    activity_statuses = {
+        row.agent.agent_id: cast(str, row.public_status) for row in activity_rows
+    }
+    retry_states = await classify_agent_retry_states(
+        session, agents=[row.agent for row in activity_rows], now=now
+    )
+    artifact_releases = await _artifact_release_snapshot(
+        session,
+        statuses={row.agent.agent_id: row.agent.status for row in activity_rows},
+        now=now,
+        policy=release_policy,
+    )
     ath_reviews, ath_composite = await _ath_review_public_snapshot(
         session, activity_rows
     )
@@ -4657,7 +4720,7 @@ async def operations(
         active_work=active_work,
         now=now,
         page=1,
-        limit=max(1, len(activity_rows)),
+        limit=max(1, activity_page.total),
         requested_statuses=set(),
         downloadable_only=False,
         query=None,
@@ -4671,28 +4734,24 @@ async def operations(
         queue_preview=await queue_preview_for_rows(
             session,
             rows=activity_rows,
-            statuses=_public_activity_statuses(
-                activity_rows,
-                active_work=active_work,
-                active_assignment_agent_ids=active_assignment_agent_ids,
-                score_continuation_floor=score_continuation_floor,
-                active_bench_version=active_version,
-                benchmark_admitted_agent_ids=admitted,
-                retired_agent_ids=retired,
-            ),
+            statuses=activity_statuses,
             bench_version=active_version,
             now=now,
             score_continuation_floor=score_continuation_floor,
             provisional_contender_floor=provisional_contender_floor,
+            waiting_agent_ids=activity_page.waiting_agent_ids,
         ),
         active_bench_version=active_version,
-        benchmark_admitted_agent_ids=admitted,
         retry_states=retry_states,
         duplicate_metadata=await _duplicate_submission_metadata(session, activity_rows),
         ath_reviews=ath_reviews,
         ath_review_composite=ath_composite,
-        retired_agent_ids=retired,
-        terminal_history_limit=50,
+        precomputed_statuses=activity_statuses,
+        precomputed_status_counts=activity_page.status_counts,
+        precomputed_downloadable_count=activity_page.downloadable_count,
+        precomputed_total=activity_page.total,
+        already_paginated=True,
+        precomputed_page_size=max(1, len(activity_rows)),
     )
     validator_snapshot = _validator_heartbeats_response(
         rows=heartbeat_rows,

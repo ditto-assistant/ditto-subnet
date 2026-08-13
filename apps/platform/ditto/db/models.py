@@ -306,6 +306,7 @@ class Agent(Base):
         ),
         Index("agents_miner_hotkey_idx", "miner_hotkey"),
         Index("agents_sha256_idx", "sha256"),
+        Index("agents_created_agent_idx", "created_at", "agent_id"),
         # Exact-repack duplicate lookups for the quarantine review console.
         Index("agents_normalized_source_hash_idx", "normalized_source_hash"),
         Index(
