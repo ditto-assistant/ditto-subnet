@@ -59,6 +59,9 @@ from ditto.api_server.endpoints.admin_screener_capacity import (
 from ditto.api_server.endpoints.admin_screener_review_settings import (
     router as admin_screener_review_settings_router,
 )
+from ditto.api_server.endpoints.admin_submission_deposit_address import (
+    router as admin_submission_deposit_address_router,
+)
 from ditto.api_server.endpoints.admin_submission_settings import (
     router as admin_submission_settings_router,
 )
@@ -105,6 +108,7 @@ __all__ = [
     "admin_screener_review_settings_router",
     "admin_screener_capacity_router",
     "admin_submission_settings_router",
+    "admin_submission_deposit_address_router",
     "admin_validation_retry_router",
     "admin_validator_slot_settings_router",
     "metrics_router",

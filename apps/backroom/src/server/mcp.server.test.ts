@@ -141,6 +141,9 @@ describe('Backroom MCP tools', () => {
         'set_submission_cooldown',
       ].sort(),
     )
+    expect(response.tools.map((tool) => tool.name)).not.toContain(
+      'set_submission_deposit_address',
+    )
     for (const tool of response.tools) {
       const reason = (
         tool.inputSchema as {

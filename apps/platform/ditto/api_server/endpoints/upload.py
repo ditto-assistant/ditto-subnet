@@ -166,11 +166,13 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 async def eval_pricing(request: Request, session: SessionDep) -> EvalPricingResponse:
     """Quote the operator-controlled, TAO-denominated upload fee."""
     config = request.app.state.config
-    settings = await effective_submission_settings(session)
+    settings = await effective_submission_settings(
+        session, default_payment_address=config.upload_payment_address
+    )
 
     return EvalPricingResponse(
         amount_rao=settings.fee_amount_rao,
-        send_address=config.upload_payment_address,
+        send_address=settings.payment_address,
     )
 
 
@@ -246,7 +248,10 @@ async def check(
                 "Set allow_identical_rescore=true only to purchase another seed."
             )
 
-    settings = await effective_submission_settings(session)
+    settings = await effective_submission_settings(
+        session,
+        default_payment_address=request.app.state.config.upload_payment_address,
+    )
     reserved_admission = (
         await get_upload_admission_for_coldkey(session, miner_coldkey=owner_coldkey)
         if owner_coldkey is not None
@@ -265,6 +270,12 @@ async def check(
         reserved_admission.legacy_payment_cutoff_at
         if reserved_admission is not None
         else None
+    )
+    recovery_payment_send_address = (
+        reserved_admission.payment_send_address
+        if reserved_admission is not None
+        and reserved_admission.payment_send_address is not None
+        else settings.payment_address
     )
     recovery_payment_verified = False
     if (
@@ -316,6 +327,7 @@ async def check(
                     expected_hotkey=body.hotkey,
                     expected_amount_rao=expected_recovery_amount_rao,
                     legacy_amount_cutoff_at=recovery_legacy_amount_cutoff_at,
+                    expected_send_address=recovery_payment_send_address,
                 )
             except ChainError as e:
                 logger.warning(f"chain unreachable during /upload/check recovery: {e}")
@@ -353,7 +365,10 @@ async def check(
                 await rollback_result
         try:
             async with session.begin():
-                settings = await effective_submission_settings(session)
+                settings = await effective_submission_settings(
+                    session,
+                    default_payment_address=request.app.state.config.upload_payment_address,
+                )
                 admission = await reserve_upload_admission(
                     session,
                     miner_coldkey=owner_coldkey,
@@ -385,7 +400,7 @@ async def check(
             else None
         ),
         payment_send_address=(
-            request.app.state.config.upload_payment_address
+            admission.payment_send_address
             if admission is not None and payment_required
             else None
         ),
@@ -563,10 +578,18 @@ async def upload_agent(
     if admission is not None:
         expected_amount_rao = admission.fee_amount_rao
         legacy_payment_cutoff_at = admission.legacy_payment_cutoff_at
+        expected_send_address = (
+            admission.payment_send_address
+            or request.app.state.config.upload_payment_address
+        )
     else:
-        settings = await effective_submission_settings(session)
+        settings = await effective_submission_settings(
+            session,
+            default_payment_address=request.app.state.config.upload_payment_address,
+        )
         expected_amount_rao = settings.fee_amount_rao
         legacy_payment_cutoff_at = None
+        expected_send_address = settings.payment_address
 
     # The replay lookup autobegan a read transaction. Release that pooled
     # connection before the slow chain/storage/fingerprint work below.
@@ -596,6 +619,7 @@ async def upload_agent(
                 expected_hotkey=hotkey,
                 expected_amount_rao=expected_amount_rao,
                 legacy_amount_cutoff_at=legacy_payment_cutoff_at,
+                expected_send_address=expected_send_address,
             )
         except ChainError as e:
             logger.warning(f"chain unreachable during /upload/agent verify: {e}")
@@ -703,7 +727,10 @@ async def upload_agent(
     # (3207) and the envelope handler maps it to HTTP 402.
     try:
         async with session.begin():
-            settings = await effective_submission_settings(session)
+            settings = await effective_submission_settings(
+                session,
+                default_payment_address=request.app.state.config.upload_payment_address,
+            )
             await consume_or_enforce_upload_admission(
                 session,
                 miner_coldkey=owner_coldkey,

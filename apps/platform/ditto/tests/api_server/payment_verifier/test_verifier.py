@@ -160,6 +160,19 @@ class TestVerifyPaymentHappyPath:
         )
         assert result.dest_address == "5SendAddress"
 
+    async def test_request_snapshot_can_override_boot_address(self):
+        ext = _make_extrinsic_info(dest="5ReservedAddress")
+        verifier = _make_verifier(extrinsic_info=ext)
+
+        result = await verifier.verify_payment(
+            _make_proof(),
+            expected_hotkey="5Hotkey",
+            expected_amount_rao=QUOTE_RAO,
+            expected_send_address="5ReservedAddress",
+        )
+
+        assert result.dest_address == "5ReservedAddress"
+
     async def test_usd_reporting_outage_does_not_reject_payment(self):
         verifier = _make_verifier()
         verifier._oracle.get_tao_usd = AsyncMock(side_effect=RuntimeError("down"))

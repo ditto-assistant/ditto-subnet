@@ -85,6 +85,7 @@ class PaymentVerifier:
         expected_hotkey: str,
         expected_amount_rao: int,
         legacy_amount_cutoff_at: datetime | None = None,
+        expected_send_address: str | None = None,
     ) -> VerifiedPayment:
         """Verify a payment proof end-to-end. See class docstring for flow."""
         # 1. Bind the miner-supplied number/hash pair before combining Pylon's
@@ -131,10 +132,11 @@ class PaymentVerifier:
 
         # 5. Destination address.
         dest = _to_ss58(ext.call_args.get("dest"))
-        if dest != self._send_address:
+        send_address = expected_send_address or self._send_address
+        if dest != send_address:
             raise PaymentDestinationMismatch(
                 f"destination {dest!r} does not match configured "
-                f"send_address {self._send_address!r}"
+                f"send_address {send_address!r}"
             )
 
         # 6. Amount must equal the operator-controlled TAO fee reserved before

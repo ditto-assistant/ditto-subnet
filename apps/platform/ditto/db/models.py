@@ -2410,6 +2410,44 @@ class SubmissionSettingsRevision(Base):
     )
 
 
+class SubmissionDepositAddressRevision(Base):
+    """Append-only, operator-audited upload payment destination revision."""
+
+    __tablename__ = "submission_deposit_address_revisions"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    payment_address: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "payment_address ~ '^[1-9A-HJ-NP-Za-km-z]{32,64}$'",
+            name="submission_deposit_address_ss58_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="submission_deposit_address_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="submission_deposit_address_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="submission_deposit_address_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="submission_deposit_address_parent_revision_key",
+        ),
+    )
+
+
 class UploadAdmissionReservation(Base):
     """Short-lived pre-payment reservation for one payment coldkey."""
 
@@ -2424,6 +2462,7 @@ class UploadAdmissionReservation(Base):
     settings_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     cooldown_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     fee_amount_rao: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    payment_send_address: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     legacy_payment_cutoff_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True

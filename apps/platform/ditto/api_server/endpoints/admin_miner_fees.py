@@ -14,6 +14,9 @@ from ditto.api_models.admin_miner_fees import AdminMinerFeeSummary, MinerFeeDay
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import EvaluationPayment
+from ditto.db.queries.submission_deposit_address import (
+    effective_submission_deposit_address,
+)
 
 router = APIRouter(prefix="/admin/miner-fees", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -68,9 +71,12 @@ async def get_miner_fee_summary(
 
     paid_submissions = int(totals[0])
     priced_submissions = int(totals[2])
+    payment_address = await effective_submission_deposit_address(
+        session, default_address=request.app.state.config.upload_payment_address
+    )
     return AdminMinerFeeSummary(
         generated_at=generated_at,
-        payment_address=request.app.state.config.upload_payment_address,
+        payment_address=payment_address,
         paid_submissions=paid_submissions,
         gross_amount_rao=int(totals[1]),
         priced_submissions=priced_submissions,

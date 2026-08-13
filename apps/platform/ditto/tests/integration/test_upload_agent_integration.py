@@ -93,9 +93,11 @@ def _build_fake_verifier(
         expected_hotkey: str,
         expected_amount_rao: int,
         legacy_amount_cutoff_at=None,
+        expected_send_address: str | None = None,
     ) -> VerifiedPayment:
         assert expected_amount_rao == _QUOTE_RAO
         assert legacy_amount_cutoff_at is None
+        assert expected_send_address == dest_address
         return VerifiedPayment(
             block_hash=block_hash,
             extrinsic_index=ext_idx,

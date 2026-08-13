@@ -165,6 +165,10 @@ import {
   platformPublicRequest,
 } from './ditto.server'
 import { minerFeeSummarySchema } from '../lib/miner-fees'
+import {
+  submissionDepositAddressControlSchema,
+  updateSubmissionDepositAddressInputSchema,
+} from '../lib/submission-deposit-address'
 import { deriveRequestId } from '../lib/idempotency'
 
 
@@ -220,6 +224,29 @@ export async function fetchBenchmarkRolloutControl() {
 export async function fetchMinerFeeSummary() {
   const payload = await platformAdminRequest('/api/v1/admin/miner-fees')
   return minerFeeSummarySchema.parse(payload)
+}
+
+const SUBMISSION_DEPOSIT_ADDRESS_PATH = '/api/v1/admin/submission-deposit-address'
+
+export async function fetchSubmissionDepositAddressControl() {
+  const payload = await platformAdminRequest(SUBMISSION_DEPOSIT_ADDRESS_PATH)
+  return submissionDepositAddressControlSchema.parse(payload)
+}
+
+export async function updateSubmissionDepositAddress(actor: string, rawInput: unknown) {
+  const input = updateSubmissionDepositAddressInputSchema.parse(rawInput)
+  await platformAdminRequest(SUBMISSION_DEPOSIT_ADDRESS_PATH, {
+    method: 'POST',
+    actor,
+    body: {
+      expected_revision: input.expectedRevision,
+      payment_address: input.paymentAddress,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchSubmissionDepositAddressControl()
 }
 
 export async function fetchInferenceRoutes() {

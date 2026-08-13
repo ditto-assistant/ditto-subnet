@@ -84,15 +84,18 @@ def _stub_ban_check(monkeypatch: pytest.MonkeyPatch) -> None:
         "ditto.api_server.endpoints.upload.get_upload_admission_for_coldkey",
         AsyncMock(return_value=None),
     )
+
+    async def _settings(_session, *, default_payment_address: str):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(
+            revision=0,
+            cooldown_seconds=3600,
+            fee_amount_rao=40_000_000,
+            payment_address=default_payment_address,
+        )
+
     monkeypatch.setattr(
         "ditto.api_server.endpoints.upload.effective_submission_settings",
-        AsyncMock(
-            return_value=SimpleNamespace(
-                revision=0,
-                cooldown_seconds=3600,
-                fee_amount_rao=40_000_000,
-            )
-        ),
+        AsyncMock(side_effect=_settings),
     )
     monkeypatch.setattr(
         "ditto.api_server.endpoints.upload.consume_or_enforce_upload_admission",
@@ -212,6 +215,7 @@ class TestUploadCheck:
                 expires_at=expires_at,
                 cooldown_seconds=3600,
                 fee_amount_rao=40_000_000,
+                payment_send_address=_make_keypair().ss58_address,
             )
         )
         monkeypatch.setattr(
@@ -245,6 +249,8 @@ class TestUploadCheck:
                 token=token,
                 expires_at=datetime(2026, 7, 25, 20, 30, tzinfo=UTC),
                 cooldown_seconds=3600,
+                fee_amount_rao=40_000_000,
+                payment_send_address=_make_keypair().ss58_address,
             )
         )
         monkeypatch.setattr(
@@ -320,6 +326,7 @@ class TestUploadCheck:
                     expires_at=datetime.now(UTC) + timedelta(hours=1),
                     cooldown_seconds=3600,
                     fee_amount_rao=40_000_000,
+                    payment_send_address=_make_keypair().ss58_address,
                 )
             ),
         )
@@ -391,6 +398,7 @@ class TestUploadCheck:
         class Reservation:
             expires_at = datetime.now(UTC) + timedelta(hours=1)
             fee_amount_rao = 40_000_000
+            payment_send_address = _make_keypair().ss58_address
 
             @property
             def legacy_payment_cutoff_at(self) -> datetime:
@@ -819,6 +827,7 @@ class TestUploadAgentHappyPath:
             miner_hotkey = kp.ss58_address
             sha256 = _GOOD_TAR_SHA
             fee_amount_rao = 40_000_000
+            payment_send_address = _make_keypair().ss58_address
 
             @property
             def legacy_payment_cutoff_at(self) -> datetime:

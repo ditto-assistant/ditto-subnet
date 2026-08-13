@@ -39,6 +39,8 @@ import {
   updateArtifactReleaseSettings,
   fetchSubmissionSettingsControl,
   updateSubmissionSettings,
+  fetchSubmissionDepositAddressControl,
+  updateSubmissionDepositAddress,
   fetchBurnSettings,
   setBurnSettings,
   fetchContinualRetestSettings,
@@ -1126,6 +1128,65 @@ describe('submission cooldown administration', () => {
           reason: 'reduce cadence for the current capacity window',
           actor: 'operator@omniaura.ai',
           confirmation: 'SET SUBMISSION COOLDOWN 1800 SECONDS FEE 40000000 RAO',
+        }),
+      }),
+    )
+  })
+})
+
+describe('submission deposit address administration', () => {
+  const oldAddress = '5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY'
+  const newAddress = '5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty'
+  const control = {
+    current: {
+      revision: 0,
+      parent_revision: 0,
+      payment_address: oldAddress,
+      reason: 'Boot-configured submission deposit address',
+      actor: 'platform',
+      created_at: null,
+    },
+    history: [],
+  }
+
+  it('reads and updates the UI-only platform control', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(control))
+      .mockResolvedValueOnce(
+        Response.json({
+          current: { ...control.current, revision: 1, payment_address: newAddress },
+          history: [],
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          current: { ...control.current, revision: 1, payment_address: newAddress },
+          history: [],
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(fetchSubmissionDepositAddressControl()).resolves.toEqual(control)
+    await updateSubmissionDepositAddress('operator@omniaura.ai', {
+      expectedRevision: 0,
+      paymentAddress: newAddress,
+      reason: 'move submission earnings to the treasury coldkey',
+      confirmation: `SET SUBMISSION DEPOSIT ADDRESS ${newAddress}`,
+    })
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://platform-api.heyditto.ai/api/v1/admin/submission-deposit-address',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          expected_revision: 0,
+          payment_address: newAddress,
+          reason: 'move submission earnings to the treasury coldkey',
+          actor: 'operator@omniaura.ai',
+          confirmation: `SET SUBMISSION DEPOSIT ADDRESS ${newAddress}`,
         }),
       }),
     )

@@ -17,12 +17,16 @@ from ditto.db.queries.submission_settings import (
 
 pytestmark = pytest.mark.asyncio
 
+_PAYMENT_ADDRESS = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+
 
 async def test_payment_admission_remains_reusable_for_24_hours(
     session: AsyncSession,
 ) -> None:
     now = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
-    settings = EffectiveSubmissionSettings(revision=1, cooldown_seconds=3600)
+    settings = EffectiveSubmissionSettings(
+        revision=1, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
     async with session.begin():
         admission = await reserve_upload_admission(
             session,
@@ -48,7 +52,9 @@ async def test_unpaid_admission_stops_blocking_after_short_anti_race_window(
     session: AsyncSession,
 ) -> None:
     now = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
-    settings = EffectiveSubmissionSettings(revision=1, cooldown_seconds=3600)
+    settings = EffectiveSubmissionSettings(
+        revision=1, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
     async with session.begin():
         admission = await reserve_upload_admission(
             session,
@@ -75,7 +81,9 @@ async def test_reservation_is_idempotent_and_blocks_competing_series(
     session: AsyncSession,
 ) -> None:
     now = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
-    settings = EffectiveSubmissionSettings(revision=4, cooldown_seconds=3600)
+    settings = EffectiveSubmissionSettings(
+        revision=4, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
     async with session.begin():
         first = await reserve_upload_admission(
             session,
@@ -112,7 +120,9 @@ async def test_matching_token_is_consumed_and_legacy_upload_cannot_steal_slot(
     session: AsyncSession,
 ) -> None:
     now = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
-    settings = EffectiveSubmissionSettings(revision=1, cooldown_seconds=3600)
+    settings = EffectiveSubmissionSettings(
+        revision=1, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
     async with session.begin():
         admission = await reserve_upload_admission(
             session,
@@ -149,7 +159,9 @@ async def test_exact_retry_releases_only_its_matching_reservation(
     session: AsyncSession,
 ) -> None:
     now = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
-    settings = EffectiveSubmissionSettings(revision=1, cooldown_seconds=3600)
+    settings = EffectiveSubmissionSettings(
+        revision=1, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
     async with session.begin():
         admission = await reserve_upload_admission(
             session,
@@ -183,7 +195,9 @@ async def test_verified_payment_rotates_reservation_to_new_archive(
     session: AsyncSession,
 ) -> None:
     now = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
-    settings = EffectiveSubmissionSettings(revision=4, cooldown_seconds=3600)
+    settings = EffectiveSubmissionSettings(
+        revision=4, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
     async with session.begin():
         original = await reserve_upload_admission(
             session,
@@ -234,7 +248,9 @@ async def test_legacy_payment_reassignment_preserves_original_recovery_deadline(
     now = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
     expires_at = now + timedelta(hours=24)
     cutoff_at = now + timedelta(minutes=1)
-    settings = EffectiveSubmissionSettings(revision=4, cooldown_seconds=3600)
+    settings = EffectiveSubmissionSettings(
+        revision=4, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
     async with session.begin():
         session.add(
             UploadAdmissionReservation(
@@ -270,7 +286,9 @@ async def test_verified_payment_cannot_move_reservation_to_different_hotkey(
     session: AsyncSession,
 ) -> None:
     now = datetime(2026, 7, 24, 20, 0, tzinfo=UTC)
-    settings = EffectiveSubmissionSettings(revision=4, cooldown_seconds=3600)
+    settings = EffectiveSubmissionSettings(
+        revision=4, cooldown_seconds=3600, payment_address=_PAYMENT_ADDRESS
+    )
     async with session.begin():
         await reserve_upload_admission(
             session,

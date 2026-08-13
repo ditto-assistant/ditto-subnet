@@ -64,6 +64,7 @@ import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
   fetchMinerFeeSummary,
+  fetchSubmissionDepositAddressControl,
   fetchQuarantineBaselineDiff,
   fetchQuarantineBaselineDiffFile,
   fetchQuarantineSourceExcerpt,
@@ -108,6 +109,7 @@ import {
   updateArtifactReleaseSettings as updateArtifactReleaseSettingsService,
   fetchSubmissionSettingsControl,
   updateSubmissionSettings as updateSubmissionSettingsService,
+  updateSubmissionDepositAddress as updateSubmissionDepositAddressService,
   fetchBurnSettings,
   setBurnSettings as setBurnSettingsService,
   fetchContinualRetestSettings,
@@ -127,6 +129,7 @@ import {
   batchRetryValidation as batchRetryValidationService,
   fetchStuckSubmissions,
 } from './admin.service'
+import { updateSubmissionDepositAddressInputSchema } from '../lib/submission-deposit-address'
 import { authMiddleware, sameOriginMiddleware, writeAuthMiddleware } from './auth.functions'
 
 export const listStuckSubmissions = createServerFn({ method: 'GET' })
@@ -205,6 +208,23 @@ export const getMinerFeeSummary = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return fetchMinerFeeSummary()
+  })
+
+export const getSubmissionDepositAddressControl = createServerFn({ method: 'GET' })
+  .middleware([authMiddleware])
+  .handler(() => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return fetchSubmissionDepositAddressControl()
+  })
+
+export const setSubmissionDepositAddress = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(updateSubmissionDepositAddressInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return updateSubmissionDepositAddressService(context.session.email, data)
   })
 
 export const listInferenceRoutes = createServerFn({ method: 'GET' })

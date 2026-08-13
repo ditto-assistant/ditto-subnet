@@ -1338,6 +1338,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/submission-deposit-address": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Submission Deposit Address */
+        get: operations["get_submission_deposit_address_api_v1_admin_submission_deposit_address_get"];
+        put?: never;
+        /** Set Submission Deposit Address */
+        post: operations["set_submission_deposit_address_api_v1_admin_submission_deposit_address_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/submission-settings": {
         parameters: {
             query?: never;
@@ -6361,6 +6379,28 @@ export interface components {
             quorum: number;
             /** Submissions */
             submissions: components["schemas"]["AdminStuckSubmission"][];
+        };
+        /** AdminSubmissionDepositAddressRequest */
+        AdminSubmissionDepositAddressRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Payment Address */
+            payment_address: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminSubmissionDepositAddressResponse */
+        AdminSubmissionDepositAddressResponse: {
+            current: components["schemas"]["SubmissionDepositAddressRevision"];
+            /** History */
+            history: components["schemas"]["SubmissionDepositAddressRevision"][];
         };
         /**
          * AdminSubmissionRetirement
@@ -15166,6 +15206,21 @@ export interface components {
             /** Upload Url B64 */
             upload_url_b64: string;
         };
+        /** SubmissionDepositAddressRevision */
+        SubmissionDepositAddressRevision: {
+            /** Actor */
+            actor: string;
+            /** Created At */
+            created_at: string | null;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Payment Address */
+            payment_address: string;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+        };
         /** SubmissionImageBuildClaimResponse */
         SubmissionImageBuildClaimResponse: {
             build: components["schemas"]["SubmissionImageBuildClaimView"] | null;
@@ -19165,6 +19220,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminSourceSearchResult"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_deposit_address_api_v1_admin_submission_deposit_address_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSubmissionDepositAddressResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_submission_deposit_address_api_v1_admin_submission_deposit_address_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminSubmissionDepositAddressRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminSubmissionDepositAddressResponse"];
                 };
             };
             /** @description Validation Error */

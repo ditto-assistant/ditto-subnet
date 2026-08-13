@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.db.models import SubmissionSettingsRevision, UploadAdmissionReservation
 from ditto.db.queries.agents import SubmissionCooldownError, get_submission_retry_at
+from ditto.db.queries.submission_deposit_address import (
+    effective_submission_deposit_address,
+)
 
 DEFAULT_SUBMISSION_COOLDOWN_SECONDS = 3600
 DEFAULT_SUBMISSION_FEE_RAO = 40_000_000
@@ -27,6 +30,7 @@ UPLOAD_ADMISSION_BLOCK_TTL = timedelta(minutes=15)
 class EffectiveSubmissionSettings:
     revision: int
     cooldown_seconds: int
+    payment_address: str
     fee_amount_rao: int = DEFAULT_SUBMISSION_FEE_RAO
 
 
@@ -37,6 +41,7 @@ class UploadAdmission:
     cooldown_seconds: int
     fee_amount_rao: int
     legacy_payment_cutoff_at: datetime | None
+    payment_send_address: str
 
 
 async def latest_submission_settings(
@@ -51,18 +56,25 @@ async def latest_submission_settings(
 
 async def effective_submission_settings(
     session: AsyncSession,
+    *,
+    default_payment_address: str,
 ) -> EffectiveSubmissionSettings:
     latest = await latest_submission_settings(session)
+    payment_address = await effective_submission_deposit_address(
+        session, default_address=default_payment_address
+    )
     if latest is None:
         return EffectiveSubmissionSettings(
             revision=0,
             cooldown_seconds=DEFAULT_SUBMISSION_COOLDOWN_SECONDS,
             fee_amount_rao=DEFAULT_SUBMISSION_FEE_RAO,
+            payment_address=payment_address,
         )
     return EffectiveSubmissionSettings(
         revision=latest.revision,
         cooldown_seconds=latest.cooldown_seconds,
         fee_amount_rao=latest.fee_amount_rao,
+        payment_address=payment_address,
     )
 
 
@@ -117,6 +129,9 @@ async def reserve_upload_admission(
                 cooldown_seconds=existing.cooldown_seconds,
                 fee_amount_rao=existing.fee_amount_rao,
                 legacy_payment_cutoff_at=existing.legacy_payment_cutoff_at,
+                payment_send_address=(
+                    existing.payment_send_address or settings.payment_address
+                ),
             )
         if replace_existing and existing.miner_hotkey == miner_hotkey:
             # A verified, still-unconsumed payment for this hotkey may fund a
@@ -135,6 +150,9 @@ async def reserve_upload_admission(
                 cooldown_seconds=existing.cooldown_seconds,
                 fee_amount_rao=existing.fee_amount_rao,
                 legacy_payment_cutoff_at=existing.legacy_payment_cutoff_at,
+                payment_send_address=(
+                    existing.payment_send_address or settings.payment_address
+                ),
             )
         block_until = _reservation_block_until(existing)
         if block_until > current:
@@ -161,6 +179,7 @@ async def reserve_upload_admission(
         settings_revision=settings.revision,
         cooldown_seconds=settings.cooldown_seconds,
         fee_amount_rao=settings.fee_amount_rao,
+        payment_send_address=settings.payment_address,
         legacy_payment_cutoff_at=None,
         created_at=current,
         expires_at=current + UPLOAD_ADMISSION_TTL,
@@ -173,6 +192,7 @@ async def reserve_upload_admission(
         cooldown_seconds=row.cooldown_seconds,
         fee_amount_rao=row.fee_amount_rao,
         legacy_payment_cutoff_at=row.legacy_payment_cutoff_at,
+        payment_send_address=row.payment_send_address or settings.payment_address,
     )
 
 
