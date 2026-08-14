@@ -5,6 +5,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERVICE=/etc/systemd/system/ditto-validator-stack-auto-update.service
 TIMER=/etc/systemd/system/ditto-validator-stack-auto-update.timer
+PREFETCH_SERVICE=/etc/systemd/system/ditto-validator-stack-prefetch.service
+PREFETCH_TIMER=/etc/systemd/system/ditto-validator-stack-prefetch.timer
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 require_systemd_path() {
@@ -89,20 +91,70 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 SystemCallArchitectures=native
 EOF
 
+cat >"$PREFETCH_SERVICE" <<EOF
+[Unit]
+Description=Prefetch the next authenticated Ditto validator stack
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+User=$service_user
+WorkingDirectory=$ROOT_DIR
+Environment="HOME=$service_home"
+Environment="PATH=$service_path"
+Environment="DOCKER_CONFIG=$docker_config"
+Environment="DITTO_BITTENSOR_WALLETS_DIR=$wallets_dir"
+Environment=DITTO_SUBNET_ENV_FILE=$ROOT_DIR/.env
+Environment=DITTO_VALIDATOR_STACK_UPDATE_STATE_DIR=$state_dir
+ExecStart=$ROOT_DIR/scripts/validator-stack-auto-update.sh prefetch
+TimeoutStartSec=1800
+TimeoutStopSec=60
+UMask=0077
+NoNewPrivileges=true
+CapabilityBoundingSet=
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=$state_dir $sigstore_dir
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+SystemCallArchitectures=native
+EOF
+
 cat >"$TIMER" <<'EOF'
 [Unit]
 Description=Poll for compatible complete Ditto validator-stack releases
 
 [Timer]
-OnBootSec=5m
-OnUnitInactiveSec=5m
-RandomizedDelaySec=1m
+OnBootSec=1m
+OnUnitInactiveSec=1m
+RandomizedDelaySec=30s
 Persistent=true
 Unit=ditto-validator-stack-auto-update.service
 
 [Install]
 WantedBy=timers.target
 EOF
+cat >"$PREFETCH_TIMER" <<'EOF'
+[Unit]
+Description=Poll for the next authenticated Ditto validator-stack candidate
+
+[Timer]
+OnBootSec=1m
+OnUnitInactiveSec=1m
+RandomizedDelaySec=30s
+Persistent=true
+Unit=ditto-validator-stack-prefetch.service
+
+[Install]
+WantedBy=timers.target
+EOF
 systemctl daemon-reload
-systemctl enable --now ditto-validator-stack-auto-update.timer
+systemctl enable --now \
+  ditto-validator-stack-auto-update.timer \
+  ditto-validator-stack-prefetch.timer
 printf 'installed complete-stack updater for %s\n' "$service_user"

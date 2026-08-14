@@ -17,6 +17,14 @@ manifest; the updater rejects mutable component references, unexpected
 repositories, missing or extra services, build contexts, and mismatched release
 metadata — all before draining the validator.
 
+The separate `candidate-compat-2` discovery tag exists only to reduce rollout
+latency. The release workflow advances it after assembling and signing the
+complete descriptor, while the remaining release smoke tests continue. The
+prefetch timer resolves and authenticates the immutable descriptor digest, then
+pulls and validates every component image. It never drains, recreates, or
+resumes a service. Only the stable `compat-2` channel can start an update, and
+that channel advances only after all release gates pass.
+
 The host-side launcher, systemd unit, Docker Engine, wallet directory, and
 `.env` are deliberately outside the signed bundle so a candidate workload can
 never replace its own trust anchor. Any change to the updater protocol, Compose
@@ -45,13 +53,14 @@ timers disabled and use `recover`.
 
 ## Transaction guarantees
 
-Each automatic update: resolves the channel to a digest, validates the
-descriptor, pre-pulls every component without touching the running stack,
-drains the validator via `USR1` (an active lease finishes first, and the
-platform must accept the drained heartbeat), writes a durable journal,
-reconciles the full candidate stack, requires healthy services plus a fresh
-platform-accepted heartbeat from the candidate validator, records the
-descriptor atomically, and resumes lease intake via `USR2`.
+Each automatic update: resolves the stable channel to a digest, validates the
+descriptor, ensures every component is present without touching the running
+stack (normally reusing the prefetch cache), drains the validator via `USR1`
+(an active lease finishes first, and the platform must accept the drained
+heartbeat), writes a durable journal, reconciles the full candidate stack,
+requires healthy services plus a fresh platform-accepted heartbeat from the
+candidate validator, records the descriptor atomically, and resumes lease
+intake via `USR2`.
 
 Any failure rolls **all four services** back to the retained previous
 descriptor and resumes the old validator only once that stack is healthy; the
@@ -65,6 +74,9 @@ touched; no managed update ever builds from source.
 
 - `status` is read-only and network-free; `recover` and `rollback` are
   supervised — keep the timer disabled while running them.
+- The one-minute prefetch and stable update timers share a lock. Prefetch
+  defers to an update or interrupted transaction and records no activation
+  state; repeated polls reuse the authenticated warm image cache.
 - Keep enough free disk for two stacks concurrently, and never prune images
   referenced by the installed, previous, or pending descriptors.
 - Source-built installs are never silently converted, and a registry outage

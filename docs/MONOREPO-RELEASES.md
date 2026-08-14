@@ -32,6 +32,10 @@ resulting immutable release commit:
 - screener image publication queues a dedicated Targon Kaniko rental first,
   then uses the existing GitHub/GCP build runner only after an explicit
   provider fallback;
+- an assembled, signed validator-stack descriptor advances the non-activating
+  `candidate-compat-2` channel while remaining smoke tests continue, allowing
+  opted-in validators to authenticate and pre-pull its exact component images;
+  only the later `compat-2` promotion authorizes a transactional update;
 - the capacity controller and its trusted-builder sibling deploy together from
   the exact release commit over IAP whenever either orchestrator or screener
   source changes;

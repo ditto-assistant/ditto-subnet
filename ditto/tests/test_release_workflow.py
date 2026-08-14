@@ -451,6 +451,10 @@ def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None
         jobs["promote-stack-release"]["steps"],
         "Promote only the authenticated stack descriptor",
     )["run"]
+    staging = _step(
+        jobs["stage-stack-release"]["steps"],
+        "Stage the authenticated descriptor for fleet prefetch",
+    )["run"]
 
     # The first transition release must satisfy the frozen v0.47 updater,
     # while the relay retains its standalone compatibility identity. The
@@ -471,6 +475,17 @@ def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None
         assert "io.heyditto.validator.build-source=" in labels
         assert "io.heyditto.validator.build-source-revision=" in labels
 
+    assert 'candidate="$STACK_REPOSITORY:candidate-compat-$COMPATIBILITY_EPOCH"' in (
+        staging
+    )
+    assert 'test "$staged" = "$STACK_DIGEST"' in staging
+    assert jobs["stage-stack-release"]["needs"] == [
+        "plan",
+        "release",
+        "assemble-stack",
+    ]
+    assert "smoke-validator-arm64" in jobs["promote-stack-release"]["needs"]
+    assert "stage-stack-release" in jobs["promote-stack-release"]["needs"]
     assert '--tag "$STACK_REPOSITORY:compat-$COMPATIBILITY_EPOCH"' in promotion
     assert 'test "$promoted" = "$STACK_DIGEST"' in promotion
 
@@ -581,6 +596,7 @@ def test_validator_release_smokes_each_architecture_before_promotion() -> None:
         "release",
         "assemble-stack",
         "smoke-validator-arm64",
+        "stage-stack-release",
     ]
 
 

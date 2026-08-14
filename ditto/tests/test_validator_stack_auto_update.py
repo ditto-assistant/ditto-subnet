@@ -488,9 +488,12 @@ def test_stack_bootstrap_persists_registry_wallet_and_signature_context() -> Non
     assert 'find "$sigstore_dir" -type d -exec chmod 0700 {} +' in installer
     assert 'find "$sigstore_dir" -type f -exec chmod 0600 {} +' in installer
     assert "VALIDATOR_STACK_AUTO_UPDATE=true" in installer
-    assert "OnBootSec=5m" in installer
-    assert "OnUnitInactiveSec=5m" in installer
-    assert "RandomizedDelaySec=1m" in installer
+    assert installer.count("OnBootSec=1m") == 2
+    assert installer.count("OnUnitInactiveSec=1m") == 2
+    assert installer.count("RandomizedDelaySec=30s") == 2
+    assert "ditto-validator-stack-prefetch.service" in installer
+    assert "ditto-validator-stack-prefetch.timer" in installer
+    assert "validator-stack-auto-update.sh prefetch" in installer
     assert "DITTO_BITTENSOR_WALLETS_DIR" in compose
     assert (
         "managed stack mutation must run through validator-stack-auto-update.sh"
@@ -891,6 +894,83 @@ def test_disabled_stack_updater_does_not_touch_docker(
     state = json.loads(state_path.read_text())
     assert state["calls"] == []
     assert state["compose_calls"] == []
+
+
+def test_disabled_stack_prefetch_does_not_touch_docker(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, _ = stack_updater_env
+
+    result = _run_updater(env, "prefetch")
+
+    assert result.returncode == 0, result.stderr
+    state = json.loads(state_path.read_text())
+    assert state["calls"] == []
+    assert state["compose_calls"] == []
+
+
+def test_candidate_prefetch_authenticates_and_warms_without_draining(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["compose_calls"] = []
+    state["cosign_calls"] = []
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "prefetch")
+
+    assert result.returncode == 0, result.stderr
+    prefetched = _manifest(state_dir / "prefetched-release.env")
+    assert prefetched == {
+        "CANDIDATE_RELEASE": STACK_DIGEST,
+        "CANDIDATE_VERSION": "0.10.1",
+    }
+    assert not (state_dir / "staged").exists()
+    final = json.loads(state_path.read_text())
+    assert [
+        "pull",
+        "ghcr.io/ditto-assistant/ditto-subnet-stack:candidate-compat-2",
+    ] in (final["calls"])
+    assert any(STACK_DIGEST in call for call in final["cosign_calls"])
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert not any("up" in call for call in final["compose_calls"])
+
+
+def test_repeated_candidate_prefetch_reuses_authenticated_warm_state(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    first = _run_updater(env, "prefetch")
+    assert first.returncode == 0, first.stderr
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["compose_calls"] = []
+    state_path.write_text(json.dumps(state))
+
+    repeated = _run_updater(env, "prefetch")
+
+    assert repeated.returncode == 0, repeated.stderr
+    assert "candidate already prefetched" in repeated.stderr
+    final = json.loads(state_path.read_text())
+    assert final["calls"] == [
+        ["pull", "ghcr.io/ditto-assistant/ditto-subnet-stack:candidate-compat-2"],
+        [
+            "image",
+            "inspect",
+            "--format",
+            "{{range .RepoDigests}}{{println .}}{{end}}",
+            "ghcr.io/ditto-assistant/ditto-subnet-stack:candidate-compat-2",
+        ],
+    ]
+    assert final["compose_calls"] == []
 
 
 def test_supervised_adoption_binds_every_running_service(

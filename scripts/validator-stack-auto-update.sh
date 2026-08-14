@@ -9,11 +9,13 @@ STACK_COMPOSE="${DITTO_VALIDATOR_STACK_COMPOSE:-$ROOT_DIR/scripts/validator-stac
 ENV_FILE="${DITTO_SUBNET_ENV_FILE:-$ROOT_DIR/.env}"
 STATE_DIR="${DITTO_VALIDATOR_STACK_UPDATE_STATE_DIR:-$ROOT_DIR/.validator-stack-update}"
 DESCRIPTOR_REPOSITORY="ghcr.io/ditto-assistant/ditto-subnet-stack"
-CANDIDATE_CHANNEL="$DESCRIPTOR_REPOSITORY:compat-2"
+RELEASE_CHANNEL="$DESCRIPTOR_REPOSITORY:compat-2"
+PREFETCH_CHANNEL="$DESCRIPTOR_REPOSITORY:candidate-compat-2"
 MANAGED_FILE="$STATE_DIR/managed-release.env"
 TRANSACTION_FILE="$STATE_DIR/transaction.env"
 FAILED_CANDIDATE_FILE="$STATE_DIR/failed-candidate"
 LAST_UPDATE_FILE="$STATE_DIR/last-update.env"
+PREFETCHED_FILE="$STATE_DIR/prefetched-release.env"
 LOCK_FILE="$STATE_DIR/lock"
 CURRENT_DIR="$STATE_DIR/current"
 PREVIOUS_DIR="$STATE_DIR/previous"
@@ -511,6 +513,35 @@ semver_greater_same_major() {
   [ "$cm" = "$om" ] && { ((10#$cn>10#$on)) || { [ "$cn" = "$on" ] && ((10#$cp>10#$op)); }; }
 }
 
+prefetch_release() {
+  local candidate_ref="$1" previous_ref current_version candidate_version temporary
+  previous_ref="$(managed_release)"
+  if [ "$candidate_ref" = "$previous_ref" ]; then
+    rm -f "$PREFETCHED_FILE"
+    log "candidate channel still points at the installed release"
+    return 0
+  fi
+  if [ "$(manifest_value "$PREFETCHED_FILE" CANDIDATE_RELEASE 2>/dev/null || true)" = "$candidate_ref" ]; then
+    log "candidate already prefetched: $candidate_ref"
+    return 0
+  fi
+  current_version="$(manifest_value "$CURRENT_DIR/manifest.env" STACK_VERSION)"
+  [[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "managed current version is malformed"
+  docker pull "$candidate_ref" >/dev/null
+  extract_descriptor "$candidate_ref" "$STAGED_DIR" || die "prefetch descriptor is invalid"
+  candidate_version="$(manifest_value "$STAGED_DIR/manifest.env" STACK_VERSION)"
+  if ! semver_greater_same_major "$candidate_version" "$current_version"; then
+    die "prefetch candidate $candidate_version requires supervised major migration or is not newer"
+  fi
+  pull_release_images "$STAGED_DIR" || die "prefetch component verification failed"
+  temporary="$PREFETCHED_FILE.tmp"
+  printf 'CANDIDATE_RELEASE=%s\nCANDIDATE_VERSION=%s\n' \
+    "$candidate_ref" "$candidate_version" >"$temporary"
+  mv "$temporary" "$PREFETCHED_FILE"
+  rm -rf -- "$STAGED_DIR"
+  log "prefetched authenticated complete stack $candidate_version ($candidate_ref)"
+}
+
 install_staged_as_current() {
   local old="$STATE_DIR/old-current.$$"
   rm -rf -- "$old" "$PREVIOUS_DIR"
@@ -619,7 +650,7 @@ perform_update() {
   resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "candidate may be working; committed journal retained"
   record_managed "$candidate_ref"
   printf 'PREVIOUS_RELEASE=%s\nCURRENT_RELEASE=%s\nCURRENT_VERSION=%s\n' "$previous_ref" "$candidate_ref" "$candidate_version" >"$LAST_UPDATE_FILE"
-  rm -f "$FAILED_CANDIDATE_FILE" "$TRANSACTION_FILE"
+  rm -f "$FAILED_CANDIDATE_FILE" "$PREFETCHED_FILE" "$TRANSACTION_FILE"
   log "updated complete validator stack $current_version -> $candidate_version"
 }
 
@@ -653,7 +684,7 @@ cleanup() {
 }
 
 show_status() {
-  printf 'enabled=%s\nchannel=%s\nmanaged_release=%s\n' "$(setting VALIDATOR_STACK_AUTO_UPDATE false)" "$CANDIDATE_CHANNEL" "$(manifest_value "$MANAGED_FILE" STACK_RELEASE 2>/dev/null || printf unmanaged)"
+  printf 'enabled=%s\nchannel=%s\nprefetch_channel=%s\nmanaged_release=%s\n' "$(setting VALIDATOR_STACK_AUTO_UPDATE false)" "$RELEASE_CHANNEL" "$PREFETCH_CHANNEL" "$(manifest_value "$MANAGED_FILE" STACK_RELEASE 2>/dev/null || printf unmanaged)"
   if [ -f "$CURRENT_DIR/manifest.env" ] && [ ! -L "$CURRENT_DIR/manifest.env" ]; then
     while IFS= read -r line; do
       case "$line" in
@@ -665,11 +696,12 @@ show_status() {
   fi
   [ ! -f "$TRANSACTION_FILE" ] || printf 'transaction_phase=%s\n' "$(transaction_value PHASE)"
   [ ! -f "$LAST_UPDATE_FILE" ] || cat "$LAST_UPDATE_FILE"
+  [ ! -f "$PREFETCHED_FILE" ] || cat "$PREFETCHED_FILE"
   [ ! -f "$FAILED_CANDIDATE_FILE" ] || printf 'failed_candidate=%s\n' "$(cat "$FAILED_CANDIDATE_FILE")"
 }
 
 mode="${1:-run}"
-case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; run|recover|status|budget) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|status|recover|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback]";; esac
+case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; run|prefetch|recover|status|budget) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|prefetch|status|recover|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback]";; esac
 if [ "$mode" = budget ]; then printf 'TIMEOUT_START_SECONDS=10800\nTIMEOUT_STOP_SECONDS=600\n'; exit 0; fi
 command -v docker >/dev/null 2>&1 || die "Docker is not installed"
 [ -x "$STACK_COMPOSE" ] || die "stack Compose wrapper is not executable"
@@ -679,12 +711,32 @@ command -v cosign >/dev/null 2>&1 || die "cosign is required to authenticate sta
 case "$STATE_DIR" in /*) ;; *) die "stack update state directory must be absolute";; esac
 [ "$STATE_DIR" != / ] || die "refusing to use the filesystem root as updater state"
 [ ! -L "$STATE_DIR" ] || die "stack update state directory must not be a symbolic link"
-mkdir -p "$STATE_DIR"; chmod 0700 "$STATE_DIR"; exec 9>>"$LOCK_FILE"; flock -n 9 || die "another stack update is running"; LOCK_HELD=true
+mkdir -p "$STATE_DIR"; chmod 0700 "$STATE_DIR"; exec 9>>"$LOCK_FILE"
+if ! flock -n 9; then
+  [ "$mode" = prefetch ] && { log "stack update is active; deferring candidate prefetch"; exit 0; }
+  die "another stack update is running"
+fi
+LOCK_HELD=true
 drain_timeout="$(setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 4800)"; ready_timeout="$(setting VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS 300)"; check_seconds="$(setting VALIDATOR_AUTO_UPDATE_CHECK_SECONDS 5)"
 failure_backoff_seconds="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_BACKOFF_SECONDS 900)"; failure_max_attempts="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_MAX_ATTEMPTS 3)"
 require_positive_integer drain_timeout "$drain_timeout"; require_positive_integer ready_timeout "$ready_timeout"; require_positive_integer check_seconds "$check_seconds"
 require_positive_integer failure_backoff_seconds "$failure_backoff_seconds"; require_positive_integer failure_max_attempts "$failure_max_attempts"
 trap 'cleanup $?' EXIT; trap 'exit 143' INT TERM
+if [ "$mode" = prefetch ]; then
+  [ ! -f "$TRANSACTION_FILE" ] || { log "transaction recovery takes priority; deferring candidate prefetch"; exit 0; }
+  if is_true "$(setting VALIDATOR_AUTO_UPDATE false)"; then
+    die "the retired validator-only updater is still enabled: stop ditto-validator-auto-update.timer and remove VALIDATOR_AUTO_UPDATE from .env"
+  fi
+  if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)"; then
+    log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt in)"
+    exit 0
+  fi
+  prefetched_candidate="$(resolve_channel_digest "$PREFETCH_CHANNEL")"
+  verify_descriptor_signature "$prefetched_candidate" || die "prefetch descriptor publisher identity is invalid"
+  if failed_candidate_is_suppressed "$prefetched_candidate"; then exit 0; fi
+  prefetch_release "$prefetched_candidate"
+  exit 0
+fi
 recover_transaction
 if [ "$mode" = recover ]; then log "recovery complete"; exit 0; fi
 if is_true "$(setting VALIDATOR_AUTO_UPDATE false)"; then
@@ -736,7 +788,12 @@ if [ "$mode" = rollback ]; then
   perform_update "$rollback_ref" true; exit 0
 fi
 if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)"; then log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt in)"; exit 0; fi
-candidate="$(resolve_channel_digest "$CANDIDATE_CHANNEL")"
+candidate="$(resolve_channel_digest "$RELEASE_CHANNEL")"
 verify_descriptor_signature "$candidate" || die "candidate descriptor publisher identity is invalid"
 if failed_candidate_is_suppressed "$candidate"; then exit 0; fi
+if [ "$candidate" = "$(managed_release)" ]; then
+  rm -f "$PREFETCHED_FILE"
+  log "already running stack release $candidate"
+  exit 0
+fi
 perform_update "$candidate" false

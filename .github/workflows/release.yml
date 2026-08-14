@@ -1843,8 +1843,43 @@ jobs:
           docker volume rm "$volume"
           trap - EXIT
 
+  stage-stack-release:
+    needs: [plan, release, assemble-stack]
+    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # This channel is never an activation authority. Managed hosts resolve it
+      # to the signed immutable descriptor, authenticate that digest, and pull
+      # its components without draining or changing the running stack.
+      - name: Stage the authenticated descriptor for fleet prefetch
+        env:
+          STACK_DIGEST: ${{ needs.assemble-stack.outputs.stack_digest }}
+        run: |
+          set -euo pipefail
+          source="$STACK_REPOSITORY@$STACK_DIGEST"
+          candidate="$STACK_REPOSITORY:candidate-compat-$COMPATIBILITY_EPOCH"
+          docker buildx imagetools create --tag "$candidate" "$source"
+          staged="$(
+            docker buildx imagetools inspect "$candidate" \
+              --format '{{json .Manifest}}' | jq -r .digest
+          )"
+          test "$staged" = "$STACK_DIGEST"
+
   promote-stack-release:
-    needs: [plan, release, assemble-stack, smoke-validator-arm64]
+    needs: [plan, release, assemble-stack, smoke-validator-arm64, stage-stack-release]
     if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
     runs-on: ubuntu-24.04
     permissions:

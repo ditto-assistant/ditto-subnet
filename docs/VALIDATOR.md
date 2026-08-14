@@ -393,7 +393,9 @@ else
 fi
 sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
   ./scripts/install-validator-stack-auto-update.sh
-systemctl list-timers ditto-validator-stack-auto-update.timer
+systemctl list-timers \
+  ditto-validator-stack-prefetch.timer \
+  ditto-validator-stack-auto-update.timer
 ./scripts/validator-stack-auto-update.sh status
 ```
 
@@ -402,18 +404,24 @@ unprivileged-user-namespace exception. Keep the host dedicated to validation;
 the nested executor remains privileged while stronger rootless/AppArmor
 isolation is redesigned as a separately migrated security boundary.
 
-Compatible patch and minor releases then install automatically: the updater
-drains the validator (an active benchmark finishes first), replaces all four
-services as one transaction, and rolls the complete previous stack back if the
-new one fails verification. Major or schema changes require supervised
-migration.
+Compatible patch and minor releases then install automatically. A separate
+timer authenticates and pre-pulls a signed candidate while release smoke tests
+finish, without touching the running services. Once that exact descriptor
+reaches `compat-2`, the updater drains the validator (an active benchmark
+finishes first), replaces all four services as one transaction, and rolls the
+complete previous stack back if the new one fails verification. Major or schema
+changes require supervised migration.
 
 To disable updates, inspect an interrupted run, or roll back manually:
 
 ```sh
 sed -i 's/^VALIDATOR_STACK_AUTO_UPDATE=.*/VALIDATOR_STACK_AUTO_UPDATE=false/' .env
-sudo systemctl disable --now ditto-validator-stack-auto-update.timer
-sudo systemctl stop ditto-validator-stack-auto-update.service
+sudo systemctl disable --now \
+  ditto-validator-stack-prefetch.timer \
+  ditto-validator-stack-auto-update.timer
+sudo systemctl stop \
+  ditto-validator-stack-prefetch.service \
+  ditto-validator-stack-auto-update.service
 ./scripts/validator-stack-auto-update.sh status
 ./scripts/validator-stack-auto-update.sh rollback   # manual rollback only
 ```
