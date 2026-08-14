@@ -48,9 +48,11 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     )
     assert jobs["release"]["needs"] == ["plan", "verify-source"]
     assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
+    assert jobs["admit-current"]["needs"] == "plan"
     assert (
-        "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["verify-source"]["if"]
+        "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["admit-current"]["if"]
     )
+    assert jobs["verify-source"]["if"] == "always()"
 
     image_jobs = (
         "build-validator",
@@ -143,14 +145,16 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     # Verification runs before semantic release, so hosted deploys and image
     # publication cannot race ahead of the exact merged source gate.
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    verify_steps = workflow["jobs"]["verify-source"]["steps"]
+    jobs = workflow["jobs"]
+    verify_steps = jobs["verify-root"]["steps"]
     verify_checkout = _step(
         verify_steps, "Check out the exact merge commit before release"
     )
     assert verify_checkout["with"]["fetch-depth"] == 1
+    platform_steps = jobs["verify-platform"]["steps"]
     node_setup = next(
         step
-        for step in verify_steps
+        for step in platform_steps
         if str(step.get("uses", "")).startswith("actions/setup-node@")
     )
     assert node_setup["with"]["node-version"] == 24
@@ -159,42 +163,105 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert workflow["jobs"]["release"]["needs"] == ["plan", "verify-source"]
 
     starter_verification = _step(
-        verify_steps, "Gate starter-kit release on exact merge source"
+        jobs["verify-starter-kit"]["steps"],
+        "Gate starter-kit release on exact merge source",
     )
-    assert starter_verification["if"] == (
+    assert (
         "needs.plan.outputs.miner_starter_kit == 'true'"
+        in (jobs["verify-starter-kit"]["if"])
     )
     assert "cargo build --locked --verbose" in starter_verification["run"]
     assert "cargo test --locked --verbose" in starter_verification["run"]
 
     datagen_verification = _step(
-        verify_steps, "Gate DittoBench datagen release on exact merge source"
+        jobs["verify-dittobench-datagen"]["steps"],
+        "Gate DittoBench datagen release on exact merge source",
     )
-    assert datagen_verification["if"] == (
+    assert (
         "needs.plan.outputs.dittobench_datagen == 'true'"
+        in (jobs["verify-dittobench-datagen"]["if"])
     )
-    assert datagen_verification["working-directory"] == ("research/dittobench-datagen")
+    assert jobs["verify-dittobench-datagen"]["defaults"]["run"][
+        "working-directory"
+    ] == ("research/dittobench-datagen")
     assert "go test ./..." in datagen_verification["run"]
 
     component_gates = {
-        "Gate Platform release on exact merge source": (
-            "needs.plan.outputs.platform == 'true'"
+        "verify-platform": (
+            "Gate Platform release on exact merge source",
+            "needs.plan.outputs.platform == 'true'",
         ),
-        "Gate Backroom release on exact merge source": (
-            "needs.plan.outputs.backroom == 'true'"
+        "verify-backroom": (
+            "Gate Backroom release on exact merge source",
+            "needs.plan.outputs.backroom == 'true'",
         ),
-        "Gate DittoBench API release on exact merge source": (
-            "needs.plan.outputs.dittobench_api == 'true'"
+        "verify-dittobench-api": (
+            "Gate DittoBench API release on exact merge source",
+            "needs.plan.outputs.dittobench_api == 'true'",
         ),
-        "Gate screener release on exact merge source": (
-            "needs.plan.outputs.screener == 'true'"
+        "verify-screener": (
+            "Gate screener release on exact merge source",
+            "needs.plan.outputs.screener == 'true'",
         ),
-        "Gate screener orchestrator release on exact merge source": (
-            "needs.plan.outputs.screener_orchestrator == 'true'"
+        "verify-screener-orchestrator": (
+            "Gate screener orchestrator release on exact merge source",
+            "needs.plan.outputs.screener_orchestrator == 'true'",
         ),
     }
-    for name, condition in component_gates.items():
-        assert _step(verify_steps, name)["if"] == condition
+    for job_name, (step_name, condition) in component_gates.items():
+        assert condition in jobs[job_name]["if"]
+        _step(jobs[job_name]["steps"], step_name)
+
+    aggregate = jobs["verify-source"]
+    assert aggregate["if"] == "always()"
+    assert {
+        "verify-root",
+        "verify-starter-kit",
+        "verify-platform",
+        "verify-model-relay",
+        "verify-backroom",
+        "verify-dittobench-api",
+        "verify-dittobench-datagen",
+        "verify-screener",
+        "verify-screener-orchestrator",
+    } < set(aggregate["needs"])
+    gate = _step(aggregate["steps"], "Require every selected exact-source gate")
+    assert 'test "$ROOT_RESULT" = success' in gate["run"]
+    assert "require_selected" in gate["run"]
+
+
+def test_superseded_candidate_skips_expensive_source_verification_early() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+    admission = jobs["admit-current"]
+    admission_step = _step(admission["steps"], "Admit only the current main candidate")
+
+    assert admission["needs"] == "plan"
+    assert admission["outputs"]["current"] == (
+        "${{ steps.release-head.outputs.current }}"
+    )
+    assert "+refs/heads/main:refs/remotes/origin/main" in admission_step["run"]
+    assert '[[ "$upstream_sha" != "${{ github.sha }}" ]]' in admission_step["run"]
+    assert 'echo "current=false" >> "$GITHUB_OUTPUT"' in admission_step["run"]
+    assert (
+        "No source gate, version, tag, release, build, or deployment"
+        in (admission_step["run"])
+    )
+
+    for job_name in (
+        "verify-root",
+        "verify-starter-kit",
+        "verify-platform",
+        "verify-model-relay",
+        "verify-backroom",
+        "verify-dittobench-api",
+        "verify-dittobench-datagen",
+        "verify-screener",
+        "verify-screener-orchestrator",
+    ):
+        job = jobs[job_name]
+        assert "admit-current" in job["needs"]
+        assert "needs.admit-current.outputs.current == 'true'" in job["if"]
 
 
 def test_superseded_verified_source_skips_release_mutations() -> None:
@@ -232,9 +299,7 @@ def test_release_uses_the_root_projects_minimum_python() -> None:
     assert project["requires-python"] == ">=3.12,<3.14"
 
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    verify_setup = _step(
-        workflow["jobs"]["verify-source"]["steps"], "Set up Python 3.12"
-    )
+    verify_setup = _step(workflow["jobs"]["verify-root"]["steps"], "Set up Python 3.12")
     assemble_setup = _step(
         workflow["jobs"]["assemble-stack"]["steps"], "Set up Python 3.12"
     )

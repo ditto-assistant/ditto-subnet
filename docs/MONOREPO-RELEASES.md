@@ -10,8 +10,10 @@ The scorer's Go module replaces `dittobench-datagen` with the in-tree
 `research/dittobench-datagen` module. A datagen change therefore selects the
 generator, scorer, and validator-stack components in one release plan.
 
-The `Release` workflow first verifies the exact merged source and then creates
-one semantic monorepo release. Hosted deploys and image publication consume the
+The `Release` workflow first rejects a merge that a newer queued `main` push
+already superseded. For the current merge, the root and every selected
+component verify the exact source in parallel before one aggregate gate permits
+the semantic monorepo release. Hosted deploys and image publication consume the
 resulting immutable release commit:
 
 - the miner starter kit is released from `miners/dittobench-starter-kit`
@@ -41,13 +43,14 @@ failed pre-tag runs carry their changes into the next attempt. Once semantic
 release has published a tag, that tag becomes the next planning baseline even
 if a downstream deploy fails. Recover that release by re-running its failed
 jobs; do not rely on a later source push to select already-tagged components.
-After exact-source verification, the release job refreshes `origin/main` before
-making any version, tag, or release mutation. If the verified merge is no
-longer current, the run reports itself as superseded and exits successfully
-without releasing or deploying; GitHub's latest queued `main` run then carries
-every change since the last published tag. Python Semantic Release retains its
-own upstream check as the final fail-closed guard for a push in the remaining
-race window.
+Before spending runners on exact-source verification, a release attempt
+refreshes `origin/main` and reports an already-stale merge as superseded. The
+release job repeats that check immediately before making any version, tag, or
+release mutation. If the verified merge is no longer current, it exits
+successfully without releasing or deploying; GitHub's latest queued `main` run
+then carries every change since the last published tag. Python Semantic Release
+retains its own upstream check as the final fail-closed guard for a push in the
+remaining race window.
 Semantic release writes the monorepo version into datagen's Go provenance,
 publishes the source-SHA tag once, and attaches that same monorepo release tag
 to the exact digest so a partial rerun converges without overwriting immutable

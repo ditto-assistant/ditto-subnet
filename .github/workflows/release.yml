@@ -112,6 +112,55 @@ jobs:
 
       # The plan checkout already has the release ancestry needed by this gate.
       # Keep verify-source shallow instead of fetching the same history twice.
+  admit-current:
+    needs: plan
+    if: >-
+      needs.plan.outputs.miner_cli == 'true' ||
+      needs.plan.outputs.miner_starter_kit == 'true' ||
+      needs.plan.outputs.validator_stack == 'true' ||
+      needs.plan.outputs.dittobench_api == 'true' ||
+      needs.plan.outputs.dittobench_datagen == 'true' ||
+      needs.plan.outputs.platform == 'true' ||
+      needs.plan.outputs.backroom == 'true' ||
+      needs.plan.outputs.screener == 'true' ||
+      needs.plan.outputs.screener_orchestrator == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      current: ${{ steps.release-head.outputs.current }}
+    steps:
+      - name: Check out the exact merge candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      # A newer main push can arrive while this run waits behind the previous
+      # non-cancellable release. Reject it before repeating the complete source
+      # gate; release performs the same check again immediately before mutation.
+      - name: Admit only the current main candidate
+        id: release-head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin \
+            '+refs/heads/main:refs/remotes/origin/main'
+          upstream_sha=$(git rev-parse refs/remotes/origin/main)
+          if [[ "$upstream_sha" != "${{ github.sha }}" ]]; then
+            echo "current=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Release candidate superseded::Merge ${{ github.sha }} was superseded by $upstream_sha before source verification."
+            {
+              echo "### Release candidate superseded"
+              echo
+              echo "Merge \`${{ github.sha }}\` was superseded by current main \`$upstream_sha\` before source verification."
+              echo "No source gate, version, tag, release, build, or deployment was started by this run."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "current=true" >> "$GITHUB_OUTPUT"
+
   release:
     needs: [plan, verify-source]
     if: >-
@@ -197,23 +246,14 @@ jobs:
           git_committer_email: actions@users.noreply.github.com
 
   # ---------------------------------------------------------------------------
-  # Fan-out: independent verification + the five first-party image builds all run
-  # in parallel off the release commit. Release commits use [skip ci], so each
-  # re-derives from the exact published source rather than trusting a prior run.
+  # Fan-out: root and selected-component verification run in parallel from the
+  # exact merge commit. After semantic release, the first-party image builds
+  # fan out independently from the immutable release commit.
   # ---------------------------------------------------------------------------
 
-  verify-source:
-    needs: plan
-    if: >-
-      needs.plan.outputs.miner_cli == 'true' ||
-      needs.plan.outputs.miner_starter_kit == 'true' ||
-      needs.plan.outputs.validator_stack == 'true' ||
-      needs.plan.outputs.dittobench_api == 'true' ||
-      needs.plan.outputs.dittobench_datagen == 'true' ||
-      needs.plan.outputs.platform == 'true' ||
-      needs.plan.outputs.backroom == 'true' ||
-      needs.plan.outputs.screener == 'true' ||
-      needs.plan.outputs.screener_orchestrator == 'true'
+  verify-root:
+    needs: [plan, admit-current]
+    if: needs.admit-current.outputs.current == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -233,56 +273,6 @@ jobs:
       - name: Set up Python 3.12
         run: uv python install 3.12
 
-      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
-        if: needs.plan.outputs.backroom == 'true'
-        with:
-          version: 10.34.5
-          run_install: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        if: >-
-          needs.plan.outputs.platform == 'true' ||
-          needs.plan.outputs.backroom == 'true'
-        with:
-          node-version: 24
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        if: needs.plan.outputs.dittobench_api == 'true'
-        with:
-          go-version: "1.23"
-          cache-dependency-path: services/dittobench-api/go.sum
-
-      - name: Install Go for model-relay verification
-        if: needs.plan.outputs.platform == 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.25"
-          cache-dependency-path: services/model-relay/go.sum
-
-      - name: Install Rust for starter-kit verification
-        if: needs.plan.outputs.miner_starter_kit == 'true'
-        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
-        with:
-          toolchain: stable
-          components: rustfmt
-
-      - name: Install Go for datagen verification
-        if: needs.plan.outputs.dittobench_datagen == 'true'
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.25"
-          cache-dependency-path: research/dittobench-datagen/go.mod
-
-      - name: Cache starter-kit Cargo dependencies
-        if: needs.plan.outputs.miner_starter_kit == 'true'
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            miners/dittobench-starter-kit/target
-          key: ${{ runner.os }}-starter-kit-${{ hashFiles('miners/dittobench-starter-kit/Cargo.lock') }}
-
       - name: Gate the release on exact merge source
         run: |
           uv sync --locked --group dev
@@ -294,18 +284,79 @@ jobs:
             ditto/tests/test_validator_compose.py \
             ditto/tests/test_validator_stack_auto_update.py
 
-      - name: Gate starter-kit release on exact merge source
-        if: needs.plan.outputs.miner_starter_kit == 'true'
+  verify-starter-kit:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.miner_starter_kit == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
         working-directory: miners/dittobench-starter-kit
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Rust for starter-kit verification
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt
+
+      - name: Cache starter-kit Cargo dependencies
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            miners/dittobench-starter-kit/target
+          key: ${{ runner.os }}-starter-kit-${{ hashFiles('miners/dittobench-starter-kit/Cargo.lock') }}
+
+      - name: Gate starter-kit release on exact merge source
         run: |
           cargo fmt --check
           cargo build --locked --verbose
           cargo test --locked --verbose
           python3 -m unittest scripts/test_submission_lab.py scripts/test_submission_workbench.py
 
-      - name: Gate Platform release on exact merge source
-        if: needs.plan.outputs.platform == 'true'
+  verify-platform:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.platform == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
         working-directory: apps/platform
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Gate Platform release on exact merge source
         run: |
           uv sync --locked --group dev --python 3.12
           uv run ruff format --check .
@@ -319,17 +370,32 @@ jobs:
           npm --prefix dashboard test
           npm --prefix dashboard run build
 
-      - name: Gate model-relay release on exact merge source
-        # services/model-relay/** selects the platform component
-        # (release/components.toml), and the platform release rolls the relay
-        # binary — so the Go suite must gate the SAME merge source as the
-        # artifact build, like every other Go component here. gen-schema.sh
-        # both proves db/schema.sql still mirrors the Alembic chain and leaves
-        # the ambient test Postgres running for the pg-backed suites;
-        # TEST_POSTGRES_REQUIRED turns their local-convenience skip into a
-        # failure so this gate can never silently lose its DB coverage.
-        if: needs.plan.outputs.platform == 'true'
+  verify-model-relay:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.platform == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
         working-directory: services/model-relay
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install Go for model-relay verification
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+          cache-dependency-path: services/model-relay/go.sum
+
+      - name: Gate model-relay release on exact merge source
         run: |
           unformatted="$(gofmt -l .)"
           if [ -n "$unformatted" ]; then
@@ -343,9 +409,35 @@ jobs:
           git diff --exit-code -- db/schema.sql
           TEST_POSTGRES_REQUIRED=1 go test ./...
 
-      - name: Gate Backroom release on exact merge source
-        if: needs.plan.outputs.backroom == 'true'
+  verify-backroom:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.backroom == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
         working-directory: apps/backroom
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.34.5
+          run_install: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Gate Backroom release on exact merge source
         run: |
           pnpm install --frozen-lockfile
           pnpm generate-routes
@@ -353,19 +445,90 @@ jobs:
           pnpm test
           pnpm build
 
-      - name: Gate DittoBench API release on exact merge source
-        if: needs.plan.outputs.dittobench_api == 'true'
+  verify-dittobench-api:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.dittobench_api == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
         working-directory: services/dittobench-api
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.23"
+          cache-dependency-path: services/dittobench-api/go.sum
+
+      - name: Gate DittoBench API release on exact merge source
         run: go test ./...
+
+  verify-dittobench-datagen:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.dittobench_datagen == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: research/dittobench-datagen
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+          cache-dependency-path: research/dittobench-datagen/go.mod
 
       - name: Gate DittoBench datagen release on exact merge source
-        if: needs.plan.outputs.dittobench_datagen == 'true'
-        working-directory: research/dittobench-datagen
         run: go test ./...
 
-      - name: Gate screener release on exact merge source
-        if: needs.plan.outputs.screener == 'true'
+  verify-screener:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.screener == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
         working-directory: workers/screener
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Gate screener release on exact merge source
         run: |
           uv sync --locked --group dev --python 3.12
           uv run ruff format --check .
@@ -373,15 +536,106 @@ jobs:
           uv run mypy ditto_screener
           uv run pytest -m "not integration"
 
-      - name: Gate screener orchestrator release on exact merge source
-        if: needs.plan.outputs.screener_orchestrator == 'true'
+  verify-screener-orchestrator:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.screener_orchestrator == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    defaults:
+      run:
         working-directory: services/screener-orchestrator
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.11
+        run: uv python install 3.11
+
+      - name: Gate screener orchestrator release on exact merge source
         run: |
           uv sync --locked --group dev --python 3.11
           uv run ruff format --check .
           uv run ruff check .
           uv run mypy screener_capacity
           uv run pytest
+
+  verify-source:
+    needs:
+      - plan
+      - admit-current
+      - verify-root
+      - verify-starter-kit
+      - verify-platform
+      - verify-model-relay
+      - verify-backroom
+      - verify-dittobench-api
+      - verify-dittobench-datagen
+      - verify-screener
+      - verify-screener-orchestrator
+    if: always()
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Require every selected exact-source gate
+        shell: bash
+        env:
+          CURRENT: ${{ needs.admit-current.outputs.current }}
+          ROOT_RESULT: ${{ needs.verify-root.result }}
+          STARTER_REQUIRED: ${{ needs.plan.outputs.miner_starter_kit }}
+          STARTER_RESULT: ${{ needs.verify-starter-kit.result }}
+          PLATFORM_REQUIRED: ${{ needs.plan.outputs.platform }}
+          PLATFORM_RESULT: ${{ needs.verify-platform.result }}
+          MODEL_RELAY_RESULT: ${{ needs.verify-model-relay.result }}
+          BACKROOM_REQUIRED: ${{ needs.plan.outputs.backroom }}
+          BACKROOM_RESULT: ${{ needs.verify-backroom.result }}
+          DITTOBENCH_API_REQUIRED: ${{ needs.plan.outputs.dittobench_api }}
+          DITTOBENCH_API_RESULT: ${{ needs.verify-dittobench-api.result }}
+          DITTOBENCH_DATAGEN_REQUIRED: ${{ needs.plan.outputs.dittobench_datagen }}
+          DITTOBENCH_DATAGEN_RESULT: ${{ needs.verify-dittobench-datagen.result }}
+          SCREENER_REQUIRED: ${{ needs.plan.outputs.screener }}
+          SCREENER_RESULT: ${{ needs.verify-screener.result }}
+          ORCHESTRATOR_REQUIRED: ${{ needs.plan.outputs.screener_orchestrator }}
+          ORCHESTRATOR_RESULT: ${{ needs.verify-screener-orchestrator.result }}
+        run: |
+          set -euo pipefail
+          if [ "$CURRENT" != true ]; then
+            echo "Candidate is no longer current; exact-source gates were skipped."
+            exit 0
+          fi
+          test "$ROOT_RESULT" = success
+          require_selected() {
+            local required="$1" result="$2" name="$3"
+            if [ "$required" = true ]; then
+              if [ "$result" != success ]; then
+                echo "selected exact-source gate failed: $name ($result)" >&2
+                exit 1
+              fi
+            elif [ "$result" != skipped ]; then
+              echo "unselected exact-source gate unexpectedly ran: $name ($result)" >&2
+              exit 1
+            fi
+          }
+          require_selected "$STARTER_REQUIRED" "$STARTER_RESULT" starter-kit
+          require_selected "$PLATFORM_REQUIRED" "$PLATFORM_RESULT" platform
+          require_selected "$PLATFORM_REQUIRED" "$MODEL_RELAY_RESULT" model-relay
+          require_selected "$BACKROOM_REQUIRED" "$BACKROOM_RESULT" backroom
+          require_selected "$DITTOBENCH_API_REQUIRED" "$DITTOBENCH_API_RESULT" dittobench-api
+          require_selected "$DITTOBENCH_DATAGEN_REQUIRED" "$DITTOBENCH_DATAGEN_RESULT" dittobench-datagen
+          require_selected "$SCREENER_REQUIRED" "$SCREENER_RESULT" screener
+          require_selected "$ORCHESTRATOR_REQUIRED" "$ORCHESTRATOR_RESULT" screener-orchestrator
 
   deploy_platform:
     needs: [plan, release]
