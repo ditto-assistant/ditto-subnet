@@ -46,8 +46,12 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         step.get("name") != "Require a new datagen component version"
         for step in plan["steps"]
     )
-    assert jobs["release"]["needs"] == ["plan", "verify-source"]
-    assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
+    release = jobs["release"]
+    assert release["needs"] == ["plan", "admit-current", "verify-source"]
+    assert "always()" in release["if"]
+    assert "needs.admit-current.outputs.current == 'true'" in release["if"]
+    assert "needs.verify-source.result == 'success'" in release["if"]
+    assert "needs.plan.outputs.miner_starter_kit == 'true'" in release["if"]
     assert jobs["admit-current"]["needs"] == "plan"
     assert (
         "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["admit-current"]["if"]
@@ -160,7 +164,11 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert node_setup["with"]["node-version"] == 24
     verification = _step(verify_steps, "Gate the release on exact merge source")
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
-    assert workflow["jobs"]["release"]["needs"] == ["plan", "verify-source"]
+    assert workflow["jobs"]["release"]["needs"] == [
+        "plan",
+        "admit-current",
+        "verify-source",
+    ]
 
     starter_verification = _step(
         jobs["verify-starter-kit"]["steps"],
@@ -275,7 +283,10 @@ def test_superseded_verified_source_skips_release_mutations() -> None:
     steps = release["steps"]
     release_head = _step(steps, "Classify a superseded release attempt")
 
-    assert release["needs"] == ["plan", "verify-source"]
+    assert release["needs"] == ["plan", "admit-current", "verify-source"]
+    assert "always()" in release["if"]
+    assert "needs.admit-current.outputs.current == 'true'" in release["if"]
+    assert "needs.verify-source.result == 'success'" in release["if"]
     assert release_head["id"] == "release-head"
     assert "+refs/heads/main:refs/remotes/origin/main" in release_head["run"]
     assert (
