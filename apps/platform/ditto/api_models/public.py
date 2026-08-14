@@ -2162,6 +2162,27 @@ class PublicBenchmarkProgress(BaseModel):
     ] = False
 
 
+class PublicConfirmationSubject(BaseModel):
+    """Public-safe subject identity in one shared confirmation bundle."""
+
+    agent_id: UUID
+    agent_name: str
+
+
+class PublicConfirmationProgress(BaseModel):
+    """Live LongMemEval/ablation work on independent validator capacity."""
+
+    bundle_id: UUID
+    slot_id: str
+    bench_version: Literal[9] = 9
+    mode: Literal["shadow", "enforce"]
+    profile_revision: str
+    attempt: Annotated[int, Field(ge=1)]
+    issued_at: datetime
+    deadline: datetime
+    subjects: list[PublicConfirmationSubject] = Field(default_factory=list)
+
+
 class PublicActivityEntry(BaseModel):
     """One submission's safe, public lifecycle state."""
 
@@ -3368,6 +3389,17 @@ class PublicValidatorHeartbeat(BaseModel):
     admission: BenchmarkAdmission = "accepting"
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
     assigned_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)
+    confirmation_benchmarks: Annotated[
+        list[PublicConfirmationProgress],
+        Field(
+            default_factory=list,
+            description=(
+                "Live LongMemEval and ablation confirmation tickets. These use "
+                "independent longmem slots and never consume ordinary benchmark "
+                "capacity."
+            ),
+        ),
+    ]
     orphaned_slots: Annotated[
         list[PublicOrphanedSlot],
         Field(

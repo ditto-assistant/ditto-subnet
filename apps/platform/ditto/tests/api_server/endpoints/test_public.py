@@ -105,6 +105,7 @@ from ditto.db.queries.benchmark_rollout import (
     MIN_SCOREABLE_BENCH_VERSION,
 )
 from ditto.db.queries.confirmation_bundles import (
+    ActiveConfirmationWork,
     insert_confirmation_bundle_settings_revision,
 )
 from ditto.db.queries.scores import (
@@ -4207,6 +4208,53 @@ def _liveness_row(
     )
 
 
+def test_confirmation_work_is_public_without_consuming_ordinary_slots() -> None:
+    now = datetime(2026, 8, 14, 15, 0, tzinfo=UTC)
+    bundle_id = uuid4()
+    subject_id = uuid4()
+    confirmation = cast(
+        ActiveConfirmationWork,
+        SimpleNamespace(
+            ticket=SimpleNamespace(
+                validator_hotkey=_VALIDATOR_C,
+                slot_id="longmem-0",
+                attempt=2,
+                issued_at=now - timedelta(minutes=7),
+                deadline=now + timedelta(minutes=83),
+            ),
+            bundle=SimpleNamespace(
+                bundle_id=bundle_id,
+                profile_revision="longmemeval-s-native-memory-tools-v2",
+            ),
+            mode=ConfirmationBundleMode.SHADOW,
+            subjects=(SimpleNamespace(agent_id=subject_id, agent_name="Memory agent"),),
+        ),
+    )
+
+    response = public_endpoint._validator_heartbeats_response(
+        rows=[_liveness_row(now, protocol_version=16, scorer=None)],
+        assignments=[],
+        active_work=[],
+        confirmation_work=[confirmation],
+        orphaned_leases=[],
+        now=now,
+        active_bench_version=LEGACY_BENCH_VERSION,
+        slot_settings=SLOT_SETTINGS_DEFAULT,
+    )
+
+    [entry] = response.validators
+    assert entry.active_benchmarks == []
+    assert entry.assigned_benchmarks == []
+    assert len(entry.confirmation_benchmarks) == 1
+    [published] = entry.confirmation_benchmarks
+    assert published.bundle_id == bundle_id
+    assert published.slot_id == "longmem-0"
+    assert published.mode == "shadow"
+    assert [
+        (subject.agent_id, subject.agent_name) for subject in published.subjects
+    ] == [(subject_id, "Memory agent")]
+
+
 class TestScorerLivenessSurfacing:
     """A validator whose scorer is not serving must not read like a warning.
 
@@ -4233,6 +4281,7 @@ class TestScorerLivenessSurfacing:
             rows=[_liveness_row(now, protocol_version=protocol_version, scorer=scorer)],
             assignments=[],
             active_work=[],
+            confirmation_work=[],
             orphaned_leases=[],
             now=now,
             active_bench_version=active_bench_version,
@@ -4558,6 +4607,7 @@ class TestActiveBenchCapabilityGate:
             rows=rows,
             assignments=[],
             active_work=[],
+            confirmation_work=[],
             orphaned_leases=[],
             now=now,
             active_bench_version=version,
@@ -5087,7 +5137,8 @@ class TestPublicActivity:
         # Budget the complete handler, not just its five-query page helper.
         # This fixture exercises an open rollout, validator assignments, retry
         # classification, fleet/orphan snapshots, and build telemetry.
-        assert len(statements) <= 33
+        # Includes one bounded query for the independent live LongMem lane.
+        assert len(statements) <= 34
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA

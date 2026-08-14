@@ -8,7 +8,7 @@ import type { JSX } from "solid-js";
 
 import { relTime, shortKey } from "../../lib/format";
 import { pushEntityRoute } from "../../stores/routeStore";
-import type { FleetEntry, SystemMetrics } from "../../types/fleet";
+import type { ConfirmationProgress, FleetEntry, SystemMetrics } from "../../types/fleet";
 import type { BenchmarkProgress } from "../../types/pipeline";
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
@@ -67,6 +67,10 @@ function stageClass(tone: string): string {
 
 function SlotLabel(props: { slotId: string }): JSX.Element {
   return <span class="fleet-protocol">{props.slotId}</span>;
+}
+
+function confirmationSubjectLabel(work: ConfirmationProgress): string {
+  return work.subjects.length === 1 ? "1 subject" : String(work.subjects.length) + " subjects";
 }
 
 function hotkeyOf(entry: FleetEntryExt, singular: FleetSingular): string {
@@ -393,6 +397,48 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
   );
 }
 
+function ConfirmationRows(props: { entry: FleetEntryExt }): JSX.Element {
+  const rows = () => props.entry.confirmation_benchmarks || [];
+  return (
+    <Show when={rows().length > 0}>
+      <section class="fleet-confirmation-lane" aria-label="LongMem confirmation work">
+        <div class="fleet-confirmation-heading">
+          <strong>LongMemEval</strong>
+          <span>Independent confirmation lane · ablations included</span>
+        </div>
+        <For each={rows()}>
+          {(work) => (
+            <div class="fleet-confirmation-work" title={work.profile_revision}>
+              <span class="fleet-protocol">{work.slot_id}</span>
+              <span class={stageClass(work.mode === "enforce" ? "warn" : "success")}>
+                {work.mode === "enforce" ? "Enforce" : "Shadow"}
+              </span>
+              <span class="fleet-time" title={work.issued_at}>
+                Running {relTime(work.issued_at)}
+              </span>
+              <span class="fleet-confirmation-subjects">
+                {confirmationSubjectLabel(work)}
+                <Show when={work.subjects.length === 1 ? work.subjects[0] : undefined}>
+                  {(subject) => (
+                    <>
+                      <span> · </span>
+                      <EntityButton
+                        kind="agent"
+                        id={subject().agent_id}
+                        label={subject().agent_name}
+                      />
+                    </>
+                  )}
+                </Show>
+              </span>
+            </div>
+          )}
+        </For>
+      </section>
+    </Show>
+  );
+}
+
 function rowActivation(
   singular: FleetSingular,
   hotkey: () => string,
@@ -505,6 +551,7 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
           }
         >
           <SlotRows entry={props.entry} slotPolicy={props.slotPolicy} />
+          <ConfirmationRows entry={props.entry} />
         </Show>
       </td>
       <td>

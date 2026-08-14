@@ -1065,6 +1065,39 @@
 .fleet-slot-overview {
   min-width: 0;
 }
+
+.fleet-confirmation-lane {
+  display: grid;
+  gap: 6px;
+  margin-top: 10px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.fleet-confirmation-heading,
+.fleet-confirmation-work {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.fleet-confirmation-heading strong {
+  color: var(--text);
+}
+
+.fleet-confirmation-heading span,
+.fleet-confirmation-subjects {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+
+.fleet-confirmation-work + .fleet-confirmation-work {
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
 .fleet-slot {
   display: flex;
   align-items: baseline;

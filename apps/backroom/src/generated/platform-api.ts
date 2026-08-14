@@ -11403,6 +11403,46 @@ export interface components {
             tool_weight: number;
         };
         /**
+         * PublicConfirmationProgress
+         * @description Live LongMemEval/ablation work on independent validator capacity.
+         */
+        PublicConfirmationProgress: {
+            /** Attempt */
+            attempt: number;
+            /**
+             * Bench Version
+             * @default 9
+             * @constant
+             */
+            bench_version: 9;
+            /**
+             * Bundle Id
+             * Format: uuid
+             */
+            bundle_id: string;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "shadow" | "enforce";
+            /** Profile Revision */
+            profile_revision: string;
+            /** Slot Id */
+            slot_id: string;
+            /** Subjects */
+            subjects?: components["schemas"]["PublicConfirmationSubject"][];
+        };
+        /**
          * PublicConfirmationScore
          * @description One append-only shared-seed score from a continual top-five retest.
          */
@@ -11423,6 +11463,19 @@ export interface components {
             seed: string;
             /** Validator Hotkey */
             validator_hotkey: string;
+        };
+        /**
+         * PublicConfirmationSubject
+         * @description Public-safe subject identity in one shared confirmation bundle.
+         */
+        PublicConfirmationSubject: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
         };
         /**
          * PublicDatasetReveal
@@ -13641,6 +13694,11 @@ export interface components {
              * @default 1
              */
             configured_slots: number;
+            /**
+             * Confirmation Benchmarks
+             * @description Live LongMemEval and ablation confirmation tickets. These use independent longmem slots and never consume ordinary benchmark capacity.
+             */
+            confirmation_benchmarks?: components["schemas"]["PublicConfirmationProgress"][];
             /** First Seen At */
             first_seen_at?: string | null;
             /**

@@ -70,6 +70,7 @@ def _snapshot(row: SimpleNamespace, settings: ValidatorSlotSettings):
         rows=[row],
         assignments=[],
         active_work=[],
+        confirmation_work=[],
         orphaned_leases=[],
         now=_NOW,
         active_bench_version=7,

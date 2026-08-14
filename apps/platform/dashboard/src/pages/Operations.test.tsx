@@ -586,6 +586,64 @@ describe("accessible benchmark progress (row 22)", () => {
       "2026-07-31T13:50:00Z",
     );
   });
+
+  it("shows LongMem confirmation separately from ordinary validator slots", async () => {
+    const confirmation = {
+      ...operations,
+      validators: {
+        ...operations.validators,
+        validators: [
+          {
+            ...operations.validators.validators?.[1],
+            active_benchmarks: [],
+            assigned_benchmarks: [],
+            configured_slots: 2,
+            allowed_slots: 2,
+            healthy_slots: ["slot-0", "slot-1"],
+            admission: "accepting",
+            confirmation_benchmarks: [
+              {
+                bundle_id: "b6b0b030-4ef6-4918-b083-60de95e6a8d1",
+                slot_id: "longmem-0",
+                bench_version: 9 as const,
+                mode: "shadow" as const,
+                profile_revision: "longmemeval-s-native-memory-tools-v2",
+                attempt: 1,
+                issued_at: "2026-07-31T13:00:00Z",
+                deadline: "2026-07-31T14:30:00Z",
+                subjects: [
+                  {
+                    agent_id: "fd870bca-b6b0-4ef6-8918-b08360de95e6",
+                    agent_name: "Memory agent",
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    } satisfies OperationsPayload;
+    restoreFetch?.();
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/public/operations")) {
+        return Promise.resolve(new Response(JSON.stringify(confirmation), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ validators: [] }), { status: 200 }));
+    }) as typeof fetch;
+
+    render(() => <OperationsPage />);
+    await waitFor(() => expect(document.querySelector(".fleet-confirmation-lane")).toBeTruthy());
+    const lane = document.querySelector(".fleet-confirmation-lane") as HTMLElement;
+    expect(lane.textContent).toContain("LongMemEval");
+    expect(lane.textContent).toContain("Independent confirmation lane · ablations included");
+    expect(lane.textContent).toContain("longmem-0");
+    expect(lane.textContent).toContain("Shadow");
+    expect(lane.querySelector('[data-entity-link="agent"]')).toBeTruthy();
+    expect(document.querySelector(".fleet-slot-disclosure")?.textContent).toContain(
+      "2 slots · 0 running · 2 idle",
+    );
+  });
 });
 
 // ── Row 26: test_validator_names_remain_optional_untrusted_decoration ───────

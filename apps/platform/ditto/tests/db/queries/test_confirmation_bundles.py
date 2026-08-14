@@ -52,6 +52,7 @@ from ditto.db.queries.confirmation_bundles import (
     insert_confirmation_bundle_settings_revision,
     issue_confirmation_bundle_ticket,
     latest_confirmation_bundle_settings_revision,
+    list_active_confirmation_work,
     list_confirmation_bundle_settings_revisions,
     record_base_only_subject,
     reserve_confirmation_bundle_budget,
@@ -193,6 +194,52 @@ async def reserve_and_issue(
         now=_NOW,
     )
     return decision.reservation, ticket
+
+
+class TestActiveConfirmationWork:
+    async def test_live_ticket_reports_all_subjects_without_ordinary_slot_state(
+        self, session: AsyncSession
+    ) -> None:
+        policy = settings(mode="shadow")
+        async with session.begin():
+            first_id, revision, policy, bundle = await seed_bundle(
+                session, policy=policy, name="first"
+            )
+            second_id = await seed_agent(session, name="second")
+            second = await get_or_create_confirmation_bundle(
+                session,
+                agent_id=second_id,
+                bench_version=9,
+                **base_proof_kwargs(quality_micros=800_000, stderr_micros=30_000),
+                settings_revision=revision.revision,
+                settings=policy,
+                verification_profile=verification_profile(),
+            )
+            assert second.bundle is not None
+            assert second.bundle.bundle_id == bundle.bundle_id
+            _, ticket = await reserve_and_issue(
+                session, bundle=bundle, revision=revision, policy=policy
+            )
+
+        active = await list_active_confirmation_work(
+            session, now=_NOW + timedelta(minutes=1)
+        )
+        assert len(active) == 1
+        [work] = active
+        assert work.ticket.ticket_id == ticket.ticket_id
+        assert work.ticket.slot_id == "longmem-0"
+        assert work.mode == ConfirmationBundleMode.SHADOW
+        assert {(item.agent_id, item.agent_name) for item in work.subjects} == {
+            (first_id, "first"),
+            (second_id, "second"),
+        }
+
+        assert (
+            await list_active_confirmation_work(
+                session, now=ticket.deadline + timedelta(seconds=1)
+            )
+            == []
+        )
 
 
 class TestSettingsLedger:

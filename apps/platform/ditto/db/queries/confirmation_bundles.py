@@ -111,6 +111,103 @@ class ConfirmationShadowCalibration:
     observed_through: datetime | None
 
 
+@dataclass(frozen=True)
+class ActiveConfirmationSubject:
+    """Public-safe identity for one subject in a live confirmation bundle."""
+
+    agent_id: UUID
+    agent_name: str
+
+
+@dataclass(frozen=True)
+class ActiveConfirmationWork:
+    """One issued LongMem/ablation ticket, independent of ordinary slots."""
+
+    ticket: ConfirmationBundleTicket
+    bundle: ConfirmationBundle
+    mode: ConfirmationBundleMode
+    subjects: tuple[ActiveConfirmationSubject, ...]
+
+
+async def list_active_confirmation_work(
+    session: AsyncSession, *, now: datetime
+) -> list[ActiveConfirmationWork]:
+    """Return live confirmation tickets for the public fleet snapshot.
+
+    Confirmation tickets intentionally use their own ``longmem-*`` capacity.
+    Keeping this query separate from ordinary validator work prevents an
+    expensive confirmation run from consuming or fabricating a DittoBench slot.
+    """
+    rows = (
+        await session.execute(
+            select(
+                ConfirmationBundleTicket,
+                ConfirmationBundle,
+                ConfirmationBundleSettingsRevision,
+            )
+            .join(
+                ConfirmationBundle,
+                ConfirmationBundle.bundle_id == ConfirmationBundleTicket.bundle_id,
+            )
+            .join(
+                ConfirmationBundleSettingsRevision,
+                ConfirmationBundleSettingsRevision.revision
+                == ConfirmationBundle.settings_revision,
+            )
+            .where(
+                ConfirmationBundleTicket.status == "issued",
+                ConfirmationBundleTicket.deadline > now,
+                ConfirmationBundle.state == ConfirmationBundleState.LEASED.value,
+            )
+            .order_by(
+                ConfirmationBundleTicket.validator_hotkey,
+                ConfirmationBundleTicket.slot_id,
+                ConfirmationBundleTicket.issued_at,
+            )
+        )
+    ).all()
+    if not rows:
+        return []
+
+    bundle_ids = [bundle.bundle_id for _, bundle, _ in rows]
+    subjects_by_bundle: dict[UUID, list[ActiveConfirmationSubject]] = {}
+    subject_rows = (
+        await session.execute(
+            select(
+                ConfirmationBundleSubject.bundle_id,
+                Agent.agent_id,
+                Agent.name,
+            )
+            .join(Agent, Agent.agent_id == ConfirmationBundleSubject.agent_id)
+            .where(ConfirmationBundleSubject.bundle_id.in_(bundle_ids))
+            .order_by(
+                ConfirmationBundleSubject.bundle_id, Agent.created_at, Agent.agent_id
+            )
+        )
+    ).all()
+    for bundle_id, agent_id, agent_name in subject_rows:
+        if bundle_id is None:  # pragma: no cover - constrained by the input filter
+            continue
+        subjects_by_bundle.setdefault(bundle_id, []).append(
+            ActiveConfirmationSubject(agent_id=agent_id, agent_name=agent_name)
+        )
+
+    active: list[ActiveConfirmationWork] = []
+    for ticket, bundle, settings_row in rows:
+        settings = ConfirmationBundleSettings.model_validate(settings_row.settings)
+        if settings.mode == ConfirmationBundleMode.OFF:
+            continue
+        active.append(
+            ActiveConfirmationWork(
+                ticket=ticket,
+                bundle=bundle,
+                mode=settings.mode,
+                subjects=tuple(subjects_by_bundle.get(bundle.bundle_id, ())),
+            )
+        )
+    return active
+
+
 async def confirmation_shadow_calibration(
     session: AsyncSession,
     *,
@@ -1406,6 +1503,8 @@ async def confirmation_budget_day(
 
 
 __all__ = [
+    "ActiveConfirmationSubject",
+    "ActiveConfirmationWork",
     "BudgetReservationDecision",
     "BundleResolution",
     "CONFIRMATION_TICKET_TTL",
@@ -1428,6 +1527,7 @@ __all__ = [
     "issue_confirmation_bundle_ticket",
     "latest_confirmation_bundle_settings_revision",
     "lock_confirmation_budget_day",
+    "list_active_confirmation_work",
     "list_confirmation_bundle_settings_revisions",
     "list_confirmation_bundles",
     "record_base_only_subject",

@@ -84,6 +84,25 @@ export interface ScreeningProgress {
   started_at?: string;
 }
 
+export interface ConfirmationSubject {
+  agent_id: string;
+  agent_name: string;
+}
+
+/** Independent LongMemEval + ablation confirmation work. It is deliberately
+ * excluded from ordinary slot capacity and active_benchmarks. */
+export interface ConfirmationProgress {
+  bundle_id: string;
+  slot_id: string;
+  bench_version: 9;
+  mode: "shadow" | "enforce";
+  profile_revision: string;
+  attempt: number;
+  issued_at: string;
+  deadline: string;
+  subjects: ConfirmationSubject[];
+}
+
 /** One fleet row. Validators are keyed by validator_hotkey; the screener
  * fleet shares one hotkey, so each worker is distinguished by instance_id. */
 export interface FleetEntry {
@@ -114,10 +133,13 @@ export interface FleetEntry {
   active_benchmark?: BenchmarkProgress | null;
   active_benchmarks?: BenchmarkProgress[];
   assigned_benchmarks?: BenchmarkProgress[];
+  confirmation_benchmarks?: ConfirmationProgress[];
   healthy_slots?: string[];
   configured_slots?: number | null;
   /** Backroom refuses new work for this exact validator; live leases may drain. */
   issuance_paused?: boolean;
+  /** Ordinary slots currently funded by Platform policy. Confirmation slots are separate. */
+  allowed_slots?: number | null;
   /** "accepting" or a warn label. */
   admission?: string | null;
   capabilities?: ValidatorCapabilities | null;

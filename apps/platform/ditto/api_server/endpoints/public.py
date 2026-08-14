@@ -82,7 +82,9 @@ from ditto.api_models import (
     PublicChainWeight,
     PublicChainWeightsResponse,
     PublicCompositeBreakdown,
+    PublicConfirmationProgress,
     PublicConfirmationScore,
+    PublicConfirmationSubject,
     PublicDatasetReveal,
     PublicDethroneDecision,
     PublicEfficiencyCohortMember,
@@ -261,6 +263,10 @@ from ditto.db.queries.benchmark_rollout import (
     protocol_serves_version,
     rollout_state,
     verified_scorer_for_version,
+)
+from ditto.db.queries.confirmation_bundles import (
+    ActiveConfirmationWork,
+    list_active_confirmation_work,
 )
 from ditto.db.queries.confirmation_scores import (
     DEFAULT_WAVE_MEMBERSHIP,
@@ -3309,6 +3315,7 @@ def _validator_heartbeats_response(
     rows: list[Any],
     assignments: list[ActiveValidatorAssignment],
     active_work: list[ActiveValidatorWork],
+    confirmation_work: list[ActiveConfirmationWork],
     orphaned_leases: list[OrphanedLease],
     now: datetime,
     active_bench_version: int,
@@ -3316,7 +3323,11 @@ def _validator_heartbeats_response(
 ) -> PublicValidatorHeartbeatsResponse:
     """Reconcile platform leases and signed heartbeat claims without conflating them.
 
-    ``orphaned_leases`` is the third input, and it is not derivable from the
+    ``confirmation_work`` is deliberately independent of ordinary active work:
+    its ``longmem-*`` tickets use a separate capacity lane and must never alter
+    the ordinary slot accounting or health classification rendered here.
+
+    ``orphaned_leases`` is another independent input, and it is not derivable from the
     other two: a lease an operator evicted is gone from ``assignments`` by
     construction, and its slot is filtered out of the stored capacity that backs
     ``active_work`` for the same reason -- yet the validator may still be running
@@ -3345,6 +3356,11 @@ def _validator_heartbeats_response(
     active_by_hotkey: dict[str, list[ActiveValidatorWork]] = {}
     for work in active_work:
         active_by_hotkey.setdefault(work.heartbeat.validator_hotkey, []).append(work)
+    confirmation_by_hotkey: dict[str, list[ActiveConfirmationWork]] = {}
+    for confirmation in confirmation_work:
+        confirmation_by_hotkey.setdefault(
+            confirmation.ticket.validator_hotkey, []
+        ).append(confirmation)
     entries = []
     for row in rows:
         seen_at = cast(datetime, _aware(row.seen_at))
@@ -3522,6 +3538,25 @@ def _validator_heartbeats_response(
                 admission=(capacity.admission if capacity else "accepting"),
                 active_benchmarks=active_benchmarks,
                 assigned_benchmarks=assigned_benchmarks,
+                confirmation_benchmarks=[
+                    PublicConfirmationProgress(
+                        bundle_id=work.bundle.bundle_id,
+                        slot_id=work.ticket.slot_id,
+                        mode=cast(Literal["shadow", "enforce"], work.mode.value),
+                        profile_revision=work.bundle.profile_revision,
+                        attempt=work.ticket.attempt,
+                        issued_at=work.ticket.issued_at,
+                        deadline=work.ticket.deadline,
+                        subjects=[
+                            PublicConfirmationSubject(
+                                agent_id=subject.agent_id,
+                                agent_name=subject.agent_name,
+                            )
+                            for subject in work.subjects
+                        ],
+                    )
+                    for work in confirmation_by_hotkey.get(row.validator_hotkey, [])
+                ],
                 orphaned_slots=orphans_by_hotkey.get(row.validator_hotkey, []),
                 first_seen_at=_aware(row.first_seen_at),
                 reported_at=cast(datetime, _aware(row.reported_at)),
@@ -3602,6 +3637,7 @@ async def validators(
         active_work=await list_active_validator_work(
             session, now=now, cutoff=now - _VALIDATOR_ONLINE_WINDOW
         ),
+        confirmation_work=await list_active_confirmation_work(session, now=now),
         orphaned_leases=await list_orphaned_leases(
             session, now=now, live_slots=_leased_slots(assignments)
         ),
@@ -4787,6 +4823,7 @@ async def operations(
         heartbeat_rows=heartbeat_rows,
         assignments=assignments,
     )
+    confirmation_work = await list_active_confirmation_work(session, now=now)
     (
         score_continuation_floor,
         provisional_contender_floor,
@@ -4891,6 +4928,7 @@ async def operations(
         rows=heartbeat_rows,
         assignments=assignments,
         active_work=active_work,
+        confirmation_work=confirmation_work,
         orphaned_leases=await list_orphaned_leases(
             session, now=now, live_slots=_leased_slots(assignments)
         ),
