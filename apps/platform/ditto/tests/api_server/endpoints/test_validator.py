@@ -9416,7 +9416,7 @@ class TestTop5ConfirmationLane:
                 == 0
             )
 
-    async def test_paused_validator_can_resume_live_continual_retest(
+    async def test_paused_validator_preserves_live_continual_retest(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -9431,6 +9431,26 @@ class TestTop5ConfirmationLane:
             json=_top5_job_payload(champion, champion),
         )
         assert first.status_code == 200, first.text
+        async with session_maker() as session:
+            ticket_before = await session.get(
+                ValidatorTicket,
+                (champion, _BENCH_VERSION, _VALIDATOR_HOTKEY),
+            )
+            grant_before = await session.scalar(
+                select(InferenceGrant).where(
+                    InferenceGrant.agent_id == champion,
+                    InferenceGrant.validator_hotkey == _VALIDATOR_HOTKEY,
+                    InferenceGrant.bench_version == _BENCH_VERSION,
+                )
+            )
+            assert ticket_before is not None
+            assert grant_before is not None
+            original_deadline = ticket_before.deadline
+            original_slot = ticket_before.slot_id
+            original_purpose_revision = ticket_before.purpose_revision
+            original_grant_id = grant_before.grant_id
+            original_grant_generation = grant_before.generation
+            original_grant_status = grant_before.status
         async with session_maker() as session, session.begin():
             session.add(
                 ValidatorSlotSettingsRevision(
@@ -9452,15 +9472,39 @@ class TestTop5ConfirmationLane:
         app.state.session_maker = session_maker
         app.state.validator_slot_settings.invalidate()
 
-        resumed = await client.post(
+        duplicate = await client.post(
             "/api/v1/validator/top5-confirmation-job",
             headers=_AUTH_HEADER,
             json=_top5_job_payload(champion, champion),
         )
 
-        assert resumed.status_code == 200, resumed.text
-        assert resumed.json()["agent_id"] == first.json()["agent_id"]
-        assert resumed.json()["deadline"] == first.json()["deadline"]
+        # Pause is issuance-only: the process that already holds this lease may
+        # keep reporting and submit it. A second local task cannot "resume" a
+        # stateless 351-case run, however. Handing the job out again would bind
+        # two scorers to one ticket and rotate the first scorer's inference
+        # grant, which is the continual-retest reset loop this guard prevents.
+        assert duplicate.status_code == 409, duplicate.text
+        assert "another live assignment" in duplicate.json()["message"]
+        async with session_maker() as session:
+            ticket_after = await session.get(
+                ValidatorTicket,
+                (champion, _BENCH_VERSION, _VALIDATOR_HOTKEY),
+            )
+            grant_after = await session.scalar(
+                select(InferenceGrant).where(
+                    InferenceGrant.agent_id == champion,
+                    InferenceGrant.validator_hotkey == _VALIDATOR_HOTKEY,
+                    InferenceGrant.bench_version == _BENCH_VERSION,
+                )
+            )
+            assert ticket_after is not None
+            assert grant_after is not None
+            assert ticket_after.deadline == original_deadline
+            assert ticket_after.slot_id == original_slot
+            assert ticket_after.purpose_revision == original_purpose_revision
+            assert grant_after.grant_id == original_grant_id
+            assert grant_after.generation == original_grant_generation
+            assert grant_after.status == original_grant_status
 
     async def test_emission_set_uses_completed_wave_mean_for_champion(
         self,
