@@ -15086,6 +15086,16 @@ export interface components {
              */
             mode: "off" | "shadow" | "enforce" | "inherit";
             /**
+             * Source Review Max Read Bytes
+             * @default 1200000
+             */
+            source_review_max_read_bytes: number;
+            /**
+             * Source Review Max Steps
+             * @default 24
+             */
+            source_review_max_steps: number;
+            /**
              * Timeout Seconds
              * @default 900
              */

@@ -17,6 +17,7 @@ from ditto_screener.platform import PlatformClient
 from ditto_screener.review_settings import (
     CachedReviewSettings,
     EffectiveReviewSettings,
+    ReviewSettings,
     ReviewSettingsCache,
     ShadowReviewObservationRequest,
     ShadowReviewUsage,
@@ -107,20 +108,75 @@ async def test_platform_settings_are_cached_and_apply_every_budget(
     assert ReviewSettingsCache(config.review_settings_cache_file).load() is not None
 
 
-def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
-    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+def _legacy_payload(config, dropped: tuple[str, ...]) -> dict:
+    """Replay a stored revision minted before ``dropped`` existed.
+
+    A revision omits a control only if it predates it, and controls are only
+    ever appended, so the omitted set is always a suffix of the introduction
+    order. Absent keys parse back as their model default, which is what makes
+    the recomputed checksum reproducible.
+    """
     baseline = bootstrap_review_settings(config)
-    legacy = baseline.settings.model_dump(mode="json")
-    legacy.pop("l3_enabled")
-    legacy_checksum = hashlib.sha256(
+    defaults = {
+        name: ReviewSettings.model_fields[name].default
+        for name in (
+            "l3_enabled",
+            "source_review_max_steps",
+            "source_review_max_read_bytes",
+        )
+    }
+    settings = baseline.settings.model_copy(update=defaults)
+    legacy = settings.model_dump(mode="json")
+    for name in dropped:
+        legacy.pop(name)
+    payload = baseline.model_dump()
+    payload["settings"] = settings.model_dump()
+    payload["checksum"] = hashlib.sha256(
         json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    return payload
 
-    payload = baseline.model_dump()
-    payload["checksum"] = legacy_checksum
+
+def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
+    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+    payload = _legacy_payload(
+        config,
+        ("l3_enabled", "source_review_max_steps", "source_review_max_read_bytes"),
+    )
+
     compatible = EffectiveReviewSettings.model_validate(payload)
 
     assert compatible.settings.l3_enabled is True
+
+
+def test_pre_source_review_budget_checksum_remains_valid(make_config, tmp_path) -> None:
+    """A revision minted after L3 but before the L1 budget still validates."""
+    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+    payload = _legacy_payload(
+        config, ("source_review_max_steps", "source_review_max_read_bytes")
+    )
+
+    compatible = EffectiveReviewSettings.model_validate(payload)
+
+    assert compatible.settings.source_review_max_steps == 24
+    assert compatible.settings.source_review_max_read_bytes == 1_200_000
+
+
+def test_explicit_budget_is_never_dropped_from_the_checksum(
+    make_config, tmp_path
+) -> None:
+    """An operator-set budget was checksummed, so omitting it must not validate.
+
+    Otherwise a revision could quietly run under a budget nobody approved.
+    """
+    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+    payload = _legacy_payload(
+        config, ("source_review_max_steps", "source_review_max_read_bytes")
+    )
+    payload["settings"]["source_review_max_read_bytes"] = 2_000_000
+
+    with pytest.raises(ValidationError):
+        EffectiveReviewSettings.model_validate(payload)
 
 
 @pytest.mark.asyncio

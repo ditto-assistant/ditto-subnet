@@ -88,6 +88,10 @@ class ReviewSettings(BaseModel):
     l3_model: Literal["openai/gpt-5.6-sol"]
     timeout_seconds: Annotated[int, Field(ge=30, le=900)]
     max_steps: Annotated[int, Field(ge=1, le=20)]
+    source_review_max_steps: Annotated[int, Field(ge=1, le=40)] = 24
+    source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=4_000_000)] = (
+        1_200_000
+    )
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
@@ -106,6 +110,18 @@ class ReviewSettings(BaseModel):
         return self
 
 
+# Ordered oldest-first by the revision in which each control was introduced.
+# Checksums minted before a given entry omit it and every later entry.
+_POST_CHECKSUM_FIELDS: tuple[str, ...] = (
+    "l3_enabled",
+    "source_review_max_steps",
+    "source_review_max_read_bytes",
+)
+_DEFAULTS = {
+    name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
+}
+
+
 class EffectiveReviewSettings(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
@@ -117,25 +133,27 @@ class EffectiveReviewSettings(BaseModel):
 
     @model_validator(mode="after")
     def validate_checksum(self) -> EffectiveReviewSettings:
-        payload = json.dumps(
-            self.settings.model_dump(mode="json"),
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-        if hashlib.sha256(payload).hexdigest() != self.checksum:
-            # Revisions written before the independent L3 control do not have
-            # ``l3_enabled`` in their canonical JSON. Accept their immutable
-            # checksum only when the newly defaulted behavior remains enabled.
-            legacy = self.settings.model_dump(mode="json")
-            if not self.settings.l3_enabled:
-                raise ValueError("review settings checksum mismatch")
-            legacy.pop("l3_enabled")
-            legacy_payload = json.dumps(
+        current = self.settings.model_dump(mode="json")
+        payload = json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
+        if hashlib.sha256(payload).hexdigest() == self.checksum:
+            return self
+        # A revision minted before a control existed cannot carry that key in
+        # the canonical JSON its immutable checksum was taken over, so replay
+        # the payload as it stood when each field was introduced, newest first.
+        # A field is only droppable while it still holds its default: once an
+        # operator sets one explicitly the value was checksummed, and silently
+        # ignoring it would apply a budget nobody approved.
+        legacy = dict(current)
+        for name in reversed(_POST_CHECKSUM_FIELDS):
+            if getattr(self.settings, name) != _DEFAULTS[name]:
+                break
+            legacy.pop(name, None)
+            candidate = json.dumps(
                 legacy, sort_keys=True, separators=(",", ":")
             ).encode()
-            if hashlib.sha256(legacy_payload).hexdigest() != self.checksum:
-                raise ValueError("review settings checksum mismatch")
-        return self
+            if hashlib.sha256(candidate).hexdigest() == self.checksum:
+                return self
+        raise ValueError("review settings checksum mismatch")
 
     def apply_to(self, config: ScreenerConfig) -> ScreenerConfig:
         value = self.settings
@@ -148,6 +166,8 @@ class EffectiveReviewSettings(BaseModel):
             l3_review_model=value.l3_model,
             l2_timeout_seconds=float(value.timeout_seconds),
             l2_max_steps=value.max_steps,
+            source_review_max_steps=value.source_review_max_steps,
+            source_review_max_read_bytes=value.source_review_max_read_bytes,
             l2_max_input_tokens=value.max_input_tokens,
             l2_max_output_tokens=value.max_output_tokens,
             l2_max_completion_tokens=value.max_completion_tokens,
@@ -208,6 +228,8 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "l3_model": config.l3_review_model,
             "timeout_seconds": int(config.l2_timeout_seconds),
             "max_steps": config.l2_max_steps,
+            "source_review_max_steps": config.source_review_max_steps,
+            "source_review_max_read_bytes": config.source_review_max_read_bytes,
             "max_input_tokens": config.l2_max_input_tokens,
             "max_output_tokens": config.l2_max_output_tokens,
             "max_completion_tokens": config.l2_max_completion_tokens,

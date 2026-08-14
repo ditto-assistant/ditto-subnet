@@ -162,6 +162,7 @@ class SourceReviewBudgetExhausted(ValueError):
         steps_used: int,
         read_bytes_used: int,
         read_files_used: int,
+        max_read_bytes: int = _MAX_TOTAL_TOOL_CHARS,
     ) -> None:
         super().__init__(code)
         self.code = code
@@ -169,6 +170,7 @@ class SourceReviewBudgetExhausted(ValueError):
         self.steps_used = steps_used
         self.read_bytes_used = read_bytes_used
         self.read_files_used = read_files_used
+        self.max_read_bytes = max_read_bytes
 
     def audit(self) -> ScreenReviewAudit:
         return ScreenReviewAudit(
@@ -177,7 +179,7 @@ class SourceReviewBudgetExhausted(ValueError):
             prompt_revision=_PROMPT_REVISION,
             max_steps=self.max_steps,
             steps_used=self.steps_used,
-            max_read_bytes=_MAX_TOTAL_TOOL_CHARS,
+            max_read_bytes=self.max_read_bytes,
             read_bytes_used=self.read_bytes_used,
         )
 
@@ -1991,6 +1993,7 @@ class OpenRouterSourceReviewAgent:
         base_url: str,
         timeout_seconds: float,
         max_steps: int,
+        max_read_bytes: int = _MAX_TOTAL_TOOL_CHARS,
         static_preflight_v2_mode: str = "off",
         provenance_manifest_file: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -2000,6 +2003,7 @@ class OpenRouterSourceReviewAgent:
         self._base_url = base_url.rstrip("/")
         self._timeout_seconds = timeout_seconds
         self._max_steps = max_steps
+        self._max_read_bytes = max_read_bytes
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._provenance_manifest_files = (
             (provenance_manifest_file,)
@@ -2166,13 +2170,14 @@ class OpenRouterSourceReviewAgent:
                             isinstance(path, str) and _is_generator_runtime_source(path)
                         )
                     delivered += len(output.encode("utf-8"))
-                    if delivered > _MAX_TOTAL_TOOL_CHARS:
+                    if delivered > self._max_read_bytes:
                         raise SourceReviewBudgetExhausted(
                             "source-review-read-budget-exhausted",
                             max_steps=self._max_steps,
                             steps_used=_step + 1,
                             read_bytes_used=delivered,
                             read_files_used=len(read_files),
+                            max_read_bytes=self._max_read_bytes,
                         )
                     messages.append(
                         {"role": "tool", "tool_call_id": call_id, "content": output}
@@ -2185,6 +2190,7 @@ class OpenRouterSourceReviewAgent:
             steps_used=self._max_steps,
             read_bytes_used=delivered,
             read_files_used=len(read_files),
+            max_read_bytes=self._max_read_bytes,
         )
 
     async def _post_completion(

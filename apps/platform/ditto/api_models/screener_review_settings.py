@@ -32,6 +32,14 @@ class ScreenerReviewSettings(BaseModel):
     l3_model: Literal["openai/gpt-5.6-sol"] = "openai/gpt-5.6-sol"
     timeout_seconds: Annotated[int, Field(ge=30, le=900)] = 900
     max_steps: Annotated[int, Field(ge=1, le=20)] = 18
+    # L1 budget. Distinct from ``max_steps``, which bounds L2. A submission that
+    # exhausts either L1 bound yields no verdict at all and lands in the human
+    # ATH queue carrying a null finding, so these are the knobs that decide how
+    # much of the queue is real review capacity versus operator backlog.
+    source_review_max_steps: Annotated[int, Field(ge=1, le=40)] = 24
+    source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=4_000_000)] = (
+        1_200_000
+    )
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 425_000
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)] = 20_000
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)] = 2_400

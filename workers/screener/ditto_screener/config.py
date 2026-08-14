@@ -140,6 +140,10 @@ class ScreenerConfig:
     source_review_base_url: str
     source_review_timeout_seconds: float
     source_review_max_steps: int
+    source_review_max_read_bytes: int
+    """L1 tool-output budget. Miner crates now reach 1.6MB of reachable source,
+    so a cap tuned for the starter kit ends the review before it reaches a
+    verdict and routes an unjudged submission to the human queue."""
     static_preflight_v2_mode: str
     """V2 detector rollout: legacy authority in off/shadow, v2 in enforce."""
     static_preflight_audit_file: str | None
@@ -320,7 +324,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         source_review_timeout_seconds=_parse_float(
             "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "180"
         ),
-        source_review_max_steps=_parse_int("SCREENER_SOURCE_REVIEW_MAX_STEPS", "10"),
+        source_review_max_steps=_parse_int("SCREENER_SOURCE_REVIEW_MAX_STEPS", "24"),
+        source_review_max_read_bytes=_parse_int(
+            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "1200000"
+        ),
         static_preflight_v2_mode=os.environ.get(
             "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
         ),
@@ -391,9 +398,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_API_KEY_FILE is required by screening policy v8"
         )
-    if not 1 <= config.source_review_max_steps <= 20:
+    if not 1 <= config.source_review_max_steps <= 40:
         raise ScreenerConfigError(
-            "SCREENER_SOURCE_REVIEW_MAX_STEPS must be between 1 and 20"
+            "SCREENER_SOURCE_REVIEW_MAX_STEPS must be between 1 and 40"
+        )
+    if not 32_000 <= config.source_review_max_read_bytes <= 4_000_000:
+        raise ScreenerConfigError(
+            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES must be between 32000 and 4000000"
         )
     if config.static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
         raise ScreenerConfigError(
