@@ -14,8 +14,6 @@ Three invariants pinned:
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import bittensor
 
 from ditto.miner_cli.models import WalletHandle
@@ -178,9 +176,12 @@ class TestBuildHarnessLogsPayload:
         agent_id = "5fdadd33-bd0f-492d-ba71-49bef159f069"
         requested_at = "2026-08-14T13:27:36.760189+00:00"
 
+        class _LiveWallet:
+            hotkey = keypair
+
         signature = sign_harness_logs_request(
             handle=handle,
-            live_wallet=SimpleNamespace(hotkey=keypair),
+            live_wallet=_LiveWallet(),  # type: ignore[arg-type]
             agent_id=agent_id,
             requested_at=requested_at,
         )
@@ -202,11 +203,14 @@ class TestBuildHarnessLogsPayload:
         agent_id = "5fdadd33-bd0f-492d-ba71-49bef159f069"
         requested_at = "2026-08-14T13:27:36.760189+00:00"
 
+        class _BobWallet:
+            hotkey = bob
+
         forged = sign_harness_logs_request(
             handle=WalletHandle(
                 coldkey_name="t", hotkey_name="t", hotkey_ss58=alice.ss58_address
             ),
-            live_wallet=SimpleNamespace(hotkey=bob),
+            live_wallet=_BobWallet(),  # type: ignore[arg-type]
             agent_id=agent_id,
             requested_at=requested_at,
         )
