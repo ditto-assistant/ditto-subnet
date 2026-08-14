@@ -991,7 +991,6 @@ async def _materialize_epoch(
         run_size=BONUS_RUN_SIZE,
         epoch_index=epoch,
     )
-    score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
     curve_version = (
         snapshot.curve_version
         if snapshot is not None
@@ -1001,6 +1000,34 @@ async def _materialize_epoch(
             else CURVE_VERSION_TWO_TIER
         )
     )
+    existing = {}
+    if snapshot is not None:
+        # A frozen inactive snapshot can never activate later in its epoch.
+        # More importantly, an active snapshot normally already has an
+        # immutable assignment for every finalized row. Check that narrow,
+        # indexed ledger before loading and decoding the quorum's score-detail
+        # JSON. Validator job polling calls this materializer frequently; doing
+        # the expensive audit again for a complete epoch was pure CPU churn.
+        if not snapshot.active:
+            return
+        existing = await get_bonus_rows(
+            session, agent_ids, bench_versions=versions, epoch_index=epoch
+        )
+        rows = [
+            row
+            for row in rows
+            if row.agent_id not in existing
+            or (
+                curve_version == CURVE_VERSION_BOUNDED_FACTOR
+                and existing[row.agent_id].factor is None
+            )
+        ]
+        if not rows:
+            return
+        agent_ids = [row.agent_id for row in rows]
+        versions = dict.fromkeys(agent_ids, bench_version)
+
+    score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
     if curve_version == CURVE_VERSION_BOUNDED_FACTOR:
         from ditto.db.queries.confirmation_scores import (
             ConfirmationEfficiencyCosts,
@@ -1096,9 +1123,10 @@ async def _materialize_epoch(
     # the life of the bench version -- the defect this key widening fixes. Rows
     # from earlier epochs are still present and still immutable; they simply no
     # longer suppress the current epoch's recomputation.
-    existing = await get_bonus_rows(
-        session, agent_ids, bench_versions=versions, epoch_index=epoch
-    )
+    if not existing:
+        existing = await get_bonus_rows(
+            session, agent_ids, bench_versions=versions, epoch_index=epoch
+        )
     for candidate in candidates:
         factor = factor_for_submission(
             candidate.composite,

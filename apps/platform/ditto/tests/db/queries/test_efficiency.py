@@ -1052,3 +1052,83 @@ class TestBoundedFactorMaterialization:
         assert replayed.snapshot_id == snapshot_id
         assert replayed.reference_p25_tokens == 10_000.0
         assert replayed.factor_alpha == 0.25
+
+    async def test_complete_epoch_skips_score_details_but_materializes_new_agent(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
+        agents = [await _seed_agent(session) for _ in range(6)]
+
+        def ledger_row(agent: Agent, index: int) -> SimpleNamespace:
+            return SimpleNamespace(
+                agent_id=agent.agent_id,
+                miner_hotkey=agent.miner_hotkey,
+                normalized_source_hash=None,
+                sha256=f"{index + 1:064x}",
+                composite=0.8,
+                memory_mean=0.8,
+                first_seen=now,
+                bench_version=9,
+                v9_confirmation={"full_effective_micros": 800_000},
+            )
+
+        rows = [ledger_row(agent, index) for index, agent in enumerate(agents[:5])]
+        score_rows = {
+            agent.agent_id: [
+                SimpleNamespace(details=_v9_details(10_000)),
+                SimpleNamespace(details=_v9_details(10_000)),
+                SimpleNamespace(details=_v9_details(10_000)),
+            ]
+            for agent in agents
+        }
+        quorum_calls: list[list[UUID]] = []
+        continual_calls: list[list[UUID]] = []
+
+        async def finalized(_session: AsyncSession):
+            return rows
+
+        async def quorum(_session, agent_ids, *, bench_versions):
+            ids = list(agent_ids)
+            assert bench_versions == dict.fromkeys(ids, 9)
+            quorum_calls.append(ids)
+            return {agent_id: score_rows[agent_id] for agent_id in ids}
+
+        async def continual(_session, *, agent_ids, bench_version):
+            ids = list(agent_ids)
+            assert bench_version == 9
+            continual_calls.append(ids)
+            return {}
+
+        monkeypatch.setattr(
+            "ditto.api_server.efficiency._finalized_ranked_rows", finalized
+        )
+        monkeypatch.setattr("ditto.db.queries.scores.quorum_score_rows", quorum)
+        monkeypatch.setattr(
+            "ditto.db.queries.confirmation_scores."
+            "confirmation_efficiency_costs_by_agent",
+            continual,
+        )
+        config = EfficiencyBonusConfig(enabled=True, min_cohort=5)
+
+        await ensure_efficiency_state(session, config, now=now)
+        assert quorum_calls == [[agent.agent_id for agent in agents[:5]]]
+        assert continual_calls == [[agent.agent_id for agent in agents[:5]]]
+
+        # Polling a fully assigned frozen epoch must stay on the scalar ledger
+        # and assignment indexes; it must not decode score or confirmation JSON.
+        await ensure_efficiency_state(session, config, now=now)
+        assert len(quorum_calls) == 1
+        assert len(continual_calls) == 1
+
+        rows.append(ledger_row(agents[5], 5))
+        await ensure_efficiency_state(session, config, now=now)
+        assert quorum_calls[-1] == [agents[5].agent_id]
+        assert continual_calls[-1] == [agents[5].agent_id]
+
+        assignments = await get_bonus_rows(
+            session,
+            [agent.agent_id for agent in agents],
+            bench_versions={agent.agent_id: 9 for agent in agents},
+            epoch_index=epoch_index_for(now, 24),
+        )
+        assert len(assignments) == 6
