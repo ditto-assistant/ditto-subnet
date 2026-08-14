@@ -690,13 +690,26 @@ _STATIC_MALICIOUS_RULES = (
         "data_exfiltration",
         "sensitive-data-exfiltration",
         (
+            # Exfiltration means sweeping up secrets the submission was never
+            # handed. Reading ONE named variable is how every API client
+            # authenticates -- `os.environ.get("OPENROUTER_API_KEY")` beside a
+            # `post` is the shape of a working model client, not a leak, and
+            # matching it quarantined two honest submissions at confidence 1.0
+            # (white-bolt v2 and Omar-miner_v9, both on a dev script that only
+            # posts to the provider whose key it just read). So the environment
+            # roles below match ENUMERATION -- `env::vars()`, `/proc/self/environ`,
+            # `GetEnvironmentVariables`, or `os.environ` consumed as a whole
+            # mapping -- while a subscripted or `.get()` lookup of a single named
+            # key is excluded. Wallets, private keys, and SSH/cloud credential
+            # stores stay decisive on any read, targeted or not: there is no
+            # ordinary reason to hand those to an outbound call.
             _Role(
                 "sensitive-source",
                 _words(
                     r"(?:/proc/(?:1|self)/environ|(?:^|[/\\])\.env\b|"
                     r"(?:^|[/\\])\.(?:ssh|aws|azure)(?:[/\\]|\b)|"
                     r"\.config[/\\]gcloud|\.bittensor[/\\]wallets|"
-                    r"std::env::vars|env::vars|os\.environ|"
+                    r"std::env::vars|env::vars|os\.environ(?!\s*(?:\.get\b|\[))|"
                     r"GetEnvironmentVariables|private[-_ ]?key|mnemonic)"
                 ),
             ),
