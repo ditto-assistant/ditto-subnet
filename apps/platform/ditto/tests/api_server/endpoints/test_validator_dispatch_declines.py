@@ -387,25 +387,34 @@ class TestRecordDispatchDecline:
         assert _declines("no_candidate") == before
 
     def test_the_log_line_carries_what_the_counter_cannot(
-        self, caplog: pytest.LogCaptureFixture
+        self,
+        caplog: pytest.LogCaptureFixture,
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """Hotkey and slot are too high-cardinality for a label, so they land here."""
-        target_logger = logging.getLogger("ditto.api_server.endpoints.validator")
-        was_disabled = target_logger.disabled
-        target_logger.disabled = False
-        target_logger.addHandler(caplog.handler)
+        dispatch_logger = logging.getLogger("ditto.api_server.endpoints.validator")
+        # Reproduce the xdist order where another test's logging setup leaves an
+        # already-imported named logger disabled in this worker.
+        monkeypatch.setattr(dispatch_logger, "disabled", True)
+        was_disabled = dispatch_logger.disabled
+        dispatch_logger.disabled = False
+        dispatch_logger.addHandler(caplog.handler)
         try:
-            with caplog.at_level(logging.INFO, logger=target_logger.name):
+            with caplog.at_level(logging.INFO, logger=dispatch_logger.name):
                 _record_dispatch_decline(
                     "disk_breaker",
                     validator_hotkey="5DiskFullValidator",
                     slot_id="slot-2",
                 )
         finally:
-            target_logger.removeHandler(caplog.handler)
-            target_logger.disabled = was_disabled
+            dispatch_logger.removeHandler(caplog.handler)
+            dispatch_logger.disabled = was_disabled
 
-        message = caplog.records[-1].getMessage()
+        message = next(
+            record.getMessage()
+            for record in caplog.records
+            if "declined job reason=disk_breaker" in record.getMessage()
+        )
         assert "reason=disk_breaker" in message
         assert "5DiskFullValidator" in message
         assert "slot-2" in message
