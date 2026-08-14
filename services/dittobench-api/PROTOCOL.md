@@ -208,6 +208,20 @@ seeded memory. The field is **additive-optional**: a harness that ignores it
 still scores, but selection-only and at a **capped ceiling (0.5)** on the
 categories the endpoint would have served.
 
+For bench v10 scored tool cases, observed execution has a second, independent
+authority check. The ticket-bound inference broker records the tool calls in
+the model's successful OpenAI-compatible response, and the validator forwards
+a `tool_endpoint` request only when its tool name and canonical JSON arguments
+match an unconsumed model-emitted call from the active case. Calls that have no
+model backing, change the selected arguments, replay a consumed call, or cross
+a case boundary are rejected before the mock tool runs and invalidate tool
+credit for that case. A model-emitted call that is never executed also
+invalidates tool credit. The harness's returned `tool_calls` remain useful as a
+graded transcript, but cannot create model-provenance credit by themselves.
+
+This provenance rule is v10-only. Bench v2 through v9 retain their frozen
+observed-execution and scoring behavior.
+
 ```jsonc
 // ToolExecRequest  (harness → validator tool_endpoint)
 { "case_id": "web_search-…-0003", "user_id": "miner", "name": "search_web",
@@ -469,7 +483,9 @@ separate authority that selects which supported version is dispatched.
 
 V10 retains the v9-and-later agent-selected reasoning route and hostile-harness
 projection, while its ordinary score is independent of the v9-only confirmation
-receipt contract.
+receipt contract. Its scored tool trajectory is additionally restricted to the
+intersection of broker-observed model tool selections and case-bound
+`tool_endpoint` executions; see *Observed tool execution* above.
 
 ### Prohibited: content-keyed mutation of the graded response
 

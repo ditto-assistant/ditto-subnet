@@ -283,13 +283,14 @@ type AttemptTelemetry struct {
 // It is published beside that question in the content-addressed transcript;
 // none of these values come from the harness response.
 type CaseExecution struct {
-	Attempts                 []AttemptTelemetry `json:"attempts"`
-	TotalDurationMs          int64              `json:"total_duration_ms"`
-	TimedOut                 bool               `json:"timed_out,omitempty"`
-	Cancelled                bool               `json:"cancelled,omitempty"`
-	TerminalOutcome          string             `json:"terminal_outcome"`
-	ModelInferenceObserved   bool               `json:"model_inference_observed,omitempty"`
-	ModelAttributionComplete bool               `json:"model_attribution_complete,omitempty"`
+	Attempts                 []AttemptTelemetry               `json:"attempts"`
+	TotalDurationMs          int64                            `json:"total_duration_ms"`
+	TimedOut                 bool                             `json:"timed_out,omitempty"`
+	Cancelled                bool                             `json:"cancelled,omitempty"`
+	TerminalOutcome          string                           `json:"terminal_outcome"`
+	ModelInferenceObserved   bool                             `json:"model_inference_observed,omitempty"`
+	ModelAttributionComplete bool                             `json:"model_attribution_complete,omitempty"`
+	ToolProvenance           *protocol.ToolProvenanceEvidence `json:"tool_provenance,omitempty"`
 	// RelayInjectedDelayMs is the total delay-fingerprint hold the trusted
 	// relay imposed inside this case's window; RelayDelayConsistent reports
 	// whether the case's wall time can contain it (nil = unmeasured). Shadow

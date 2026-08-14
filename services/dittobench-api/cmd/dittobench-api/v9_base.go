@@ -20,10 +20,10 @@ func (s *server) runCaseWithModelAttribution(
 	tools []protocol.ToolDefinition,
 	opts runner.CaseOptions,
 ) (protocol.RunResponse, runner.CaseExecution, error) {
-	if opts.BenchVersion != protocol.BenchVersionV9 || inferenceSessionID == "" {
+	if opts.BenchVersion < protocol.BenchVersionV9 || inferenceSessionID == "" {
 		return runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
 	}
-	generation, before, beforeErr := s.broker.beginCaseSnapshot(inferenceSessionID)
+	generation, before, beforeErr := s.broker.beginCaseSnapshot(inferenceSessionID, caseID)
 	response, execution, runErr := runner.RunCaseWithTelemetry(
 		ctx, harnessURL, caseID, prompt, tools, opts,
 	)
@@ -33,6 +33,9 @@ func (s *server) runCaseWithModelAttribution(
 	if execution.ModelAttributionComplete {
 		execution.RelayInjectedDelayMs, execution.RelayDelayConsistent =
 			v9RelayDelayEvidence(before, after, execution.TotalDurationMs)
+	}
+	if opts.BenchVersion >= protocol.BenchVersionV10 && beforeErr == nil && afterErr == nil {
+		execution.ToolProvenance = toolProvenanceEvidence(after)
 	}
 	return response, execution, runErr
 }

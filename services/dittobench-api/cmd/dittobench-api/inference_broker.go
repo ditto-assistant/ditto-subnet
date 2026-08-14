@@ -174,14 +174,16 @@ type brokerSession struct {
 	confirmationGrants        map[string]brokerConfirmationGrant
 	embeddingGrant            brokerConfirmationGrant
 	inFlight                  int
-	// caseGeneration binds every admitted v9 chat request to the ordinary case
+	// caseGeneration binds every admitted v9+ chat request to the ordinary case
 	// window in which it started. A harness may return its /run response while
 	// a background request is still inside the broker's bounded recovery loop;
 	// run-wide counter deltas cannot distinguish that tail from the next case.
 	// Generation-local counters keep the tail attached to its original window.
 	caseGeneration        uint64
 	activeCaseGeneration  uint64
+	activeCaseID          string
 	caseSnapshots         map[uint64]brokerCaseSnapshot
+	caseToolCalls         map[uint64][]brokerModelToolCall
 	embeddingPhaseStarted bool
 	embeddingPhaseActive  bool
 	embeddingInFlight     int
@@ -635,6 +637,7 @@ type toolRoute struct {
 	expectedSourceIP      string
 	allowNATFallback      bool
 	requireCaseCapability bool
+	provenanceSessionID   string
 	capabilityKey         []byte
 	handler               http.Handler
 	slots                 chan struct{}
@@ -649,6 +652,21 @@ type registeredToolRoute struct {
 	requireCaseCapability bool
 	capabilityKey         []byte
 }
+
+type brokerModelToolCall struct {
+	id         string
+	name       string
+	argsSHA256 string
+	consumed   bool
+}
+
+const (
+	toolFindingUnbacked uint64 = 1 << iota
+	toolFindingNameArgumentMismatch
+	toolFindingDuplicateExecution
+	toolFindingCrossCaseReplay
+	toolFindingInvalidModelEmission
+)
 
 // platformGrantDenied marks a platform inference response that declined to
 // reserve capacity for this ticket's grant rather than reporting an upstream
@@ -1287,6 +1305,18 @@ func (b *inferenceBroker) registerTool(
 	allowNATFallback bool,
 	requireCaseCapability bool,
 ) (registeredToolRoute, func(), error) {
+	return b.registerToolWithProvenance(
+		h, expectedSourceIP, allowNATFallback, requireCaseCapability, "",
+	)
+}
+
+func (b *inferenceBroker) registerToolWithProvenance(
+	h http.Handler,
+	expectedSourceIP string,
+	allowNATFallback bool,
+	requireCaseCapability bool,
+	provenanceSessionID string,
+) (registeredToolRoute, func(), error) {
 	id, err := randomToken(18)
 	if err != nil {
 		return registeredToolRoute{}, func() {}, err
@@ -1300,6 +1330,7 @@ func (b *inferenceBroker) registerTool(
 		expectedSourceIP:      expectedSourceIP,
 		allowNATFallback:      allowNATFallback && requireCaseCapability,
 		requireCaseCapability: requireCaseCapability,
+		provenanceSessionID:   provenanceSessionID,
 		capabilityKey:         key,
 		handler:               h,
 		slots:                 make(chan struct{}, brokerPerSourceConcurrency),
@@ -1352,8 +1383,21 @@ func (b *inferenceBroker) handleTool(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusTooManyRequests, "tool source is at capacity")
 		return
 	}
-	if route.requireCaseCapability && !toolRequestMatchesCapability(w, r, caseID, userID) {
-		return
+	var requestBody []byte
+	if route.requireCaseCapability {
+		var matches bool
+		requestBody, matches = toolRequestMatchesCapability(w, r, caseID, userID)
+		if !matches {
+			return
+		}
+	}
+	if route.provenanceSessionID != "" {
+		var call protocol.ToolExecRequest
+		if json.Unmarshal(requestBody, &call) != nil ||
+			!b.consumeModelToolCall(route.provenanceSessionID, caseID, call) {
+			writeError(w, http.StatusConflict, "tool provenance unavailable")
+			return
+		}
 	}
 	forwarded := r.Clone(r.Context())
 	forwarded.URL.Path = "/tool"
@@ -1391,15 +1435,15 @@ func validToolCapability(key []byte, caseID, userID, provided string) bool {
 	return len(provided) == len(want) && subtle.ConstantTimeCompare([]byte(provided), []byte(want)) == 1
 }
 
-func toolRequestMatchesCapability(w http.ResponseWriter, r *http.Request, caseID, userID string) bool {
+func toolRequestMatchesCapability(w http.ResponseWriter, r *http.Request, caseID, userID string) ([]byte, bool) {
 	body, err := io.ReadAll(io.LimitReader(r.Body, toolRouteBodyLimit+1))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid tool request")
-		return false
+		return nil, false
 	}
 	if len(body) > toolRouteBodyLimit {
 		writeError(w, http.StatusRequestEntityTooLarge, "tool request too large")
-		return false
+		return nil, false
 	}
 	var identity struct {
 		CaseID string `json:"case_id"`
@@ -1407,14 +1451,166 @@ func toolRequestMatchesCapability(w http.ResponseWriter, r *http.Request, caseID
 	}
 	if err := json.Unmarshal(body, &identity); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid tool request")
-		return false
+		return nil, false
 	}
 	if identity.CaseID != caseID || identity.UserID != userID {
 		writeError(w, http.StatusUnauthorized, "tool route unavailable")
-		return false
+		return nil, false
 	}
 	r.Body = io.NopCloser(bytes.NewReader(body))
-	return true
+	return body, true
+}
+
+func canonicalToolArguments(raw []byte) (string, error) {
+	if len(bytes.TrimSpace(raw)) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		raw = []byte("{}")
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil || decoder.Decode(&struct{}{}) != io.EOF {
+		return "", fmt.Errorf("invalid tool arguments")
+	}
+	if _, ok := value.(map[string]any); !ok {
+		return "", fmt.Errorf("tool arguments must be an object")
+	}
+	canonical, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("canonicalize tool arguments: %w", err)
+	}
+	digest := sha256.Sum256(canonical)
+	return hex.EncodeToString(digest[:]), nil
+}
+
+func (b *inferenceBroker) consumeModelToolCall(
+	sessionID string,
+	caseID string,
+	call protocol.ToolExecRequest,
+) bool {
+	b.mu.RLock()
+	session := b.sessions[sessionID]
+	b.mu.RUnlock()
+	if session == nil {
+		return false
+	}
+	argsSHA256, argsErr := canonicalToolArguments(call.Args)
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	generation := session.activeCaseGeneration
+	if generation == 0 {
+		return false
+	}
+	snapshot := session.caseSnapshots[generation]
+	snapshot.EndpointAttempts++
+	if session.activeCaseID != caseID {
+		snapshot.UnmatchedToolCalls++
+		snapshot.ToolFindings |= toolFindingCrossCaseReplay
+		session.caseSnapshots[generation] = snapshot
+		return false
+	}
+	if call.Name == "" || argsErr != nil {
+		snapshot.UnmatchedToolCalls++
+		snapshot.ToolFindings |= toolFindingNameArgumentMismatch
+		session.caseSnapshots[generation] = snapshot
+		return false
+	}
+	calls := session.caseToolCalls[generation]
+	sameName := false
+	consumedMatch := false
+	for index := range calls {
+		candidate := &calls[index]
+		if candidate.name != call.Name {
+			continue
+		}
+		sameName = true
+		if candidate.argsSHA256 != argsSHA256 {
+			continue
+		}
+		if candidate.consumed {
+			consumedMatch = true
+			continue
+		}
+		candidate.consumed = true
+		session.caseToolCalls[generation] = calls
+		snapshot.MatchedToolCalls++
+		session.caseSnapshots[generation] = snapshot
+		return true
+	}
+	snapshot.UnmatchedToolCalls++
+	switch {
+	case consumedMatch:
+		snapshot.ToolFindings |= toolFindingDuplicateExecution
+	case sameName:
+		snapshot.ToolFindings |= toolFindingNameArgumentMismatch
+	default:
+		snapshot.ToolFindings |= toolFindingUnbacked
+	}
+	session.caseSnapshots[generation] = snapshot
+	return false
+}
+
+func decodeModelToolCalls(responseBody []byte) ([]brokerModelToolCall, error) {
+	var response struct {
+		Choices []struct {
+			Message struct {
+				ToolCalls []struct {
+					ID       string `json:"id"`
+					Type     string `json:"type"`
+					Function struct {
+						Name      string `json:"name"`
+						Arguments string `json:"arguments"`
+					} `json:"function"`
+				} `json:"tool_calls"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal(responseBody, &response); err != nil || len(response.Choices) == 0 {
+		return nil, fmt.Errorf("invalid chat completion")
+	}
+	calls := response.Choices[0].Message.ToolCalls
+	out := make([]brokerModelToolCall, 0, len(calls))
+	seen := make(map[string]struct{}, len(calls))
+	for _, call := range calls {
+		if call.ID == "" || call.Function.Name == "" || (call.Type != "" && call.Type != "function") {
+			return nil, fmt.Errorf("invalid model tool call")
+		}
+		if _, duplicate := seen[call.ID]; duplicate {
+			return nil, fmt.Errorf("duplicate model tool call id")
+		}
+		seen[call.ID] = struct{}{}
+		argsSHA256, err := canonicalToolArguments([]byte(call.Function.Arguments))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, brokerModelToolCall{
+			id: call.ID, name: call.Function.Name, argsSHA256: argsSHA256,
+		})
+	}
+	return out, nil
+}
+
+func recordModelToolCallsLocked(
+	session *brokerSession,
+	caseGeneration uint64,
+	responseBody []byte,
+) {
+	if session.benchVersion < protocol.BenchVersionV10 || caseGeneration == 0 {
+		return
+	}
+	snapshot := session.caseSnapshots[caseGeneration]
+	calls, err := decodeModelToolCalls(responseBody)
+	if err != nil {
+		snapshot.ToolEvidenceComplete = false
+		snapshot.ToolFindings |= toolFindingInvalidModelEmission
+		session.caseSnapshots[caseGeneration] = snapshot
+		return
+	}
+	if session.caseToolCalls == nil {
+		session.caseToolCalls = make(map[uint64][]brokerModelToolCall)
+	}
+	session.caseToolCalls[caseGeneration] = append(session.caseToolCalls[caseGeneration], calls...)
+	snapshot.ModelToolCalls += uint64(len(calls))
+	session.caseSnapshots[caseGeneration] = snapshot
 }
 
 func randomToken(n int) (string, error) {
@@ -3120,6 +3316,7 @@ func (b *inferenceBroker) proxy(
 		}
 		session.caseSnapshots[caseGeneration] = snapshot
 	}
+	recordModelToolCallsLocked(session, caseGeneration, responseBody)
 	session.providerLatency += totalLatency
 	if usageOK {
 		session.usageAvailable++
@@ -3229,14 +3426,20 @@ type brokerCaseSnapshot struct {
 	// many successful completions were held, and for how long in total. Booked
 	// under the session lock at the same moment as Successes, so the scorer's
 	// begin/end deltas attribute them with the same exactness.
-	DelayedRequests uint64
-	InjectedDelayMS uint64
+	DelayedRequests      uint64
+	InjectedDelayMS      uint64
+	ModelToolCalls       uint64
+	EndpointAttempts     uint64
+	MatchedToolCalls     uint64
+	UnmatchedToolCalls   uint64
+	ToolEvidenceComplete bool
+	ToolFindings         uint64
 }
 
 // beginCaseSnapshot advances the source-bound generation before one ordinary
 // v9 case starts. Requests admitted before this point remain attached to the
 // preceding generation even if their provider recovery finishes later.
-func (b *inferenceBroker) beginCaseSnapshot(id string) (uint64, brokerCaseSnapshot, error) {
+func (b *inferenceBroker) beginCaseSnapshot(id string, caseIDs ...string) (uint64, brokerCaseSnapshot, error) {
 	b.mu.RLock()
 	session := b.sessions[id]
 	b.mu.RUnlock()
@@ -3248,13 +3451,23 @@ func (b *inferenceBroker) beginCaseSnapshot(id string) (uint64, brokerCaseSnapsh
 	if session.activeCaseGeneration != 0 {
 		return 0, brokerCaseSnapshot{}, fmt.Errorf("inference case generation already active")
 	}
+	caseID := ""
+	if len(caseIDs) > 0 {
+		caseID = caseIDs[0]
+	}
+	if session.benchVersion >= protocol.BenchVersionV10 && caseID == "" {
+		return 0, brokerCaseSnapshot{}, fmt.Errorf("v10 inference case id unavailable")
+	}
 	session.caseGeneration++
 	if session.caseSnapshots == nil {
 		session.caseSnapshots = make(map[uint64]brokerCaseSnapshot)
 	}
 	generation := session.caseGeneration
 	session.activeCaseGeneration = generation
-	session.caseSnapshots[generation] = brokerCaseSnapshot{}
+	session.activeCaseID = caseID
+	session.caseSnapshots[generation] = brokerCaseSnapshot{
+		ToolEvidenceComplete: session.benchVersion >= protocol.BenchVersionV10,
+	}
 	snapshot := session.caseSnapshots[generation]
 	return generation, snapshot, nil
 }
@@ -3276,7 +3489,50 @@ func (b *inferenceBroker) endCaseSnapshot(id string, generation uint64) (brokerC
 		return brokerCaseSnapshot{}, fmt.Errorf("inference case generation unavailable")
 	}
 	session.activeCaseGeneration = 0
+	session.activeCaseID = ""
 	return session.caseSnapshots[generation], nil
+}
+
+func toolProvenanceEvidence(snapshot brokerCaseSnapshot) *protocol.ToolProvenanceEvidence {
+	if !snapshot.ToolEvidenceComplete && snapshot.ModelToolCalls == 0 &&
+		snapshot.EndpointAttempts == 0 && snapshot.ToolFindings == 0 {
+		return nil
+	}
+	selectedNotExecuted := uint64(0)
+	if snapshot.ModelToolCalls > snapshot.MatchedToolCalls {
+		selectedNotExecuted = snapshot.ModelToolCalls - snapshot.MatchedToolCalls
+	}
+	findings := make([]string, 0, 6)
+	for _, finding := range []struct {
+		bit  uint64
+		name string
+	}{
+		{toolFindingUnbacked, "unbacked_harness_execution"},
+		{toolFindingNameArgumentMismatch, "name_argument_mismatch"},
+		{toolFindingDuplicateExecution, "duplicate_tool_execution"},
+		{toolFindingCrossCaseReplay, "cross_case_replay"},
+		{toolFindingInvalidModelEmission, "invalid_model_tool_emission"},
+	} {
+		if snapshot.ToolFindings&finding.bit != 0 {
+			findings = append(findings, finding.name)
+		}
+	}
+	if selectedNotExecuted > 0 {
+		findings = append(findings, "model_selected_not_executed")
+	}
+	complete := snapshot.ToolEvidenceComplete && snapshot.InFlight == 0
+	if !complete {
+		findings = append(findings, "tool_provenance_incomplete")
+	}
+	return &protocol.ToolProvenanceEvidence{
+		ModelEmitted:             int(snapshot.ModelToolCalls),
+		EndpointAttempts:         int(snapshot.EndpointAttempts),
+		Matched:                  int(snapshot.MatchedToolCalls),
+		Unmatched:                int(snapshot.UnmatchedToolCalls),
+		ModelSelectedNotExecuted: int(selectedNotExecuted),
+		Complete:                 complete,
+		Findings:                 findings,
+	}
 }
 
 // generationCaseSnapshot returns only calls admitted during one ordinary case

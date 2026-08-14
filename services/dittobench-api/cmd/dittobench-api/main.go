@@ -1587,7 +1587,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	if handle != nil {
 		toolSourceIP = handle.SourceIP
 	}
-	toolEndpoint, stopToolSrv, err := s.startToolServer(toolSrv, toolSourceIP, req.BenchVersion)
+	toolEndpoint, stopToolSrv, err := s.startToolServerForSession(
+		toolSrv, toolSourceIP, req.BenchVersion, inferenceSessionID,
+	)
 	if err != nil {
 		s.store.FailWith(runID, "tool endpoint start failed: "+err.Error(), toolEndpointInfrastructureFailure())
 		return
@@ -1636,7 +1638,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	// future protocol carries a per-case broker capability, the only way to bind
 	// trusted broker successes to distinct cases is a non-overlapping case
 	// window. V8 and earlier retain their existing concurrency exactly.
-	if scope == scorer.ScopeScored && req.BenchVersion == protocol.BenchVersionV9 {
+	if scope == scorer.ScopeScored && req.BenchVersion >= protocol.BenchVersionV9 {
 		effectiveCaseConcurrency = 1
 	}
 	toolRunUserID := ""
@@ -1671,6 +1673,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
 		observed := toolSrv.Observed(c.ID)
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
+		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
 		fixture := toolFixtureByInternalID[c.ID]
 		if harnessProjection != nil {
 			internalID, reverseErr := harnessProjection.InternalCaseID(c.ID)
@@ -1830,6 +1833,9 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				gradedResp = projected.Response
 			}
 			cs := gradeProjectedMemoryCase(mc, resp, projected, len(observedCalls) > 0)
+			cs = applyV10ToolProvenance(
+				req.BenchVersion, scope, cs, resp, observedCalls, execution,
+			)
 			if runErr != nil {
 				// The case still scores 0 on its own accuracy (an empty response
 				// grades 0); this only tells the group metrics to drop it, so a
@@ -1947,6 +1953,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		RawPairsCases:     memSuite.TierBCases,
 		ObservedToolCases: observedTool,
 		CappedToolCases:   cappedTool,
+		ToolProvenance:    summarizeV10ToolProvenance(perCase),
 		IsolationCases:    len(iso.Cases),
 		LifecycleCases:    memSuite.LifecycleCases,
 		ToolEfficiency:    scorer.ToolEfficiencyFactorForVersion(perCase, req.BenchVersion),
@@ -2252,13 +2259,26 @@ func (s *server) startToolServer(
 	sandboxSourceIP string,
 	benchVersion int,
 ) (endpoint observedToolEndpoint, stop func(), err error) {
+	return s.startToolServerForSession(h, sandboxSourceIP, benchVersion, "")
+}
+
+func (s *server) startToolServerForSession(
+	h http.Handler,
+	sandboxSourceIP string,
+	benchVersion int,
+	inferenceSessionID string,
+) (endpoint observedToolEndpoint, stop func(), err error) {
 	if sandboxSourceIP != "" {
 		requireCaseCapability := benchVersion >= protocol.BenchVersionV9
-		route, unregister, registerErr := s.broker.registerTool(
-			h,
-			sandboxSourceIP,
-			s.allowPrivate,
-			requireCaseCapability,
+		provenanceSessionID := ""
+		if benchVersion >= protocol.BenchVersionV10 {
+			if inferenceSessionID == "" {
+				return observedToolEndpoint{}, func() {}, fmt.Errorf("v10 tool provenance session unavailable")
+			}
+			provenanceSessionID = inferenceSessionID
+		}
+		route, unregister, registerErr := s.broker.registerToolWithProvenance(
+			h, sandboxSourceIP, s.allowPrivate, requireCaseCapability, provenanceSessionID,
 		)
 		if registerErr != nil {
 			return observedToolEndpoint{}, func() {}, registerErr

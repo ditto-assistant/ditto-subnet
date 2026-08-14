@@ -353,6 +353,33 @@ const (
 	KindMemory = "memory"
 )
 
+// ToolProvenanceEvidence is trusted, per-case evidence that scored tool
+// execution was selected by the controlled model and then observed by the
+// validator. It is populated only by Bench v10+ scorers; historical report
+// bytes omit it.
+type ToolProvenanceEvidence struct {
+	ModelEmitted             int      `json:"model_emitted"`
+	EndpointAttempts         int      `json:"endpoint_attempts"`
+	Matched                  int      `json:"matched"`
+	Unmatched                int      `json:"unmatched"`
+	ModelSelectedNotExecuted int      `json:"model_selected_not_executed"`
+	Complete                 bool     `json:"complete"`
+	Findings                 []string `json:"findings,omitempty"`
+}
+
+// ToolProvenanceSummary aggregates ToolProvenanceEvidence over a run. Counts
+// are advisory evidence; per-case tool credit is already fail-closed before
+// aggregation.
+type ToolProvenanceSummary struct {
+	Cases                    int `json:"cases"`
+	IncompleteCases          int `json:"incomplete_cases"`
+	ModelEmitted             int `json:"model_emitted"`
+	EndpointAttempts         int `json:"endpoint_attempts"`
+	Matched                  int `json:"matched"`
+	Unmatched                int `json:"unmatched"`
+	ModelSelectedNotExecuted int `json:"model_selected_not_executed"`
+}
+
 // CaseScore is the score for one case (tool OR memory).
 //
 // For a tool case: Score = ToolAccuracy (deterministic trajectory + args;
@@ -413,8 +440,11 @@ type CaseScore struct {
 	// the first content-tool call to fail, so a correct harness must retry) from
 	// one where extra calls are waste. Without it the efficiency term charged the
 	// recovery those cases exist to test. Additive-optional.
-	AllowExtraTools bool     `json:"allow_extra_tools,omitempty"`
-	Notes           []string `json:"notes,omitempty"`
+	AllowExtraTools bool `json:"allow_extra_tools,omitempty"`
+	// ToolProvenance is the trusted broker-to-endpoint intersection for this
+	// case. It is nil before Bench v10, preserving every frozen contract.
+	ToolProvenance *ToolProvenanceEvidence `json:"tool_provenance,omitempty"`
+	Notes          []string                `json:"notes,omitempty"`
 	// Injection is true when the deterministic grader saw injection compliance:
 	// either the embedded injection payload in the harness output, or an observed
 	// call to the case's action bait tool (MemoryCase.BaitTool) in the trajectory,
@@ -651,6 +681,9 @@ type RunDetails struct {
 	// the tool suite ran under observed execution. Advisory calibration telemetry.
 	ObservedToolCases int `json:"observed_tool_cases,omitempty"`
 	CappedToolCases   int `json:"capped_tool_cases,omitempty"`
+	// ToolProvenance is the v10+ aggregate of broker-emitted and
+	// validator-executed tool calls. Historical reports omit it.
+	ToolProvenance *ToolProvenanceSummary `json:"tool_provenance,omitempty"`
 	// IsolationCases is how many multi-graph isolation cases ran: a second
 	// persona seeded under a different user_id with a conflicting value, so a
 	// cross-graph memory leak scores wrong. Advisory telemetry.

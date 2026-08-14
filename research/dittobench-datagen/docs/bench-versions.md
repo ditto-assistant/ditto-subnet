@@ -53,6 +53,15 @@ Across the qualification seeds, at least half of evidence-bound answers must be
 computed or transformed, and fewer than half may be copied verbatim. Missing
 evidence fails the audit instead of counting as artificial difficulty.
 
+The runtime tool slice makes model selection authoritative in v10. For each
+serialized scored case, the ticket-bound inference broker records successful
+model-emitted tool calls and the tool endpoint consumes exact name plus
+canonical-argument matches once. Unbacked execution, changed arguments,
+duplicate or cross-case replay, incomplete evidence, and model selections that
+were never executed all receive zero tool credit. Self-reported calls cannot
+supply the missing provenance. This rule is version-gated so the immutable v2
+through v9 contracts retain their historical behavior.
+
 ```sh
 go run ./cmd/memoryprobe -seed 41 -run-size full
 ```
