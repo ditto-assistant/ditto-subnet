@@ -43,7 +43,7 @@ jobs:
 
       # The action itself is commit-pinned; it installs the explicit Packer
       # version below. This is a version pin, not a locally verified binary hash.
-      - uses: hashicorp/setup-packer@c53928b6ab74a1fe01b014715f51f43e5d1e9545
+      - uses: hashicorp/setup-packer@c4e4b2636b98ce7566f9ec9c309e26821f695bd2
         with:
           version: 1.14.2
 
