@@ -253,7 +253,7 @@ func validV7RouteProfile(profile string) bool {
 }
 
 func validBenchmarkRouteProfile(benchVersion int, profile string) bool {
-	if benchVersion == protocol.BenchVersionV9 {
+	if benchVersion >= protocol.BenchVersionV9 {
 		return profile == llm.V9AggregateProfileRevision
 	}
 	return validV7RouteProfile(profile)
@@ -320,8 +320,9 @@ func requireCompleteV7Usage(benchVersion int, usage protocol.TokenUsage, executi
 			)
 		}
 		return fmt.Errorf(
-			"%w: benchmark v8 requires at least one authoritative model call",
+			"%w: benchmark v%d requires at least one authoritative model call",
 			errAgentModelUseMissing,
+			benchVersion,
 		)
 	}
 	if execution.AgentRequestRejections > 0 && execution.AgentRequestRejections >= usage.UsageUnavailable {

@@ -72,12 +72,12 @@ func TestSampleIncludesAnswerKeys(t *testing.T) {
 
 // TestSampleShapeMatchesProfile checks the sample is a real full-profile dataset
 // (60 tool cases), so the community sees the real size, and it pins the
-// two executable contracts at the API surface without changing the generator's
+// executable contracts at the API surface without changing the generator's
 // separate CurrentBenchVersion activation boundary.
 func TestSampleShapeMatchesProfile(t *testing.T) {
 	s := &server{}
 
-	for _, version := range []int{8, 9} {
+	for _, version := range []int{8, 9, 10} {
 		_, artifact := getSample(t, s, "?run_size=full&bench_version="+itoa(version))
 		if artifact.BenchVersion != version {
 			t.Fatalf("sample version = %d, want %d", artifact.BenchVersion, version)
@@ -124,7 +124,7 @@ func TestSampleRejectsBadInput(t *testing.T) {
 		{"index too high", "?sample=99", "sample must be between"},
 		{"negative index", "?sample=-1", "sample must be between"},
 		{"retired bench version", "?bench_version=7", "unsupported bench_version"},
-		{"unsupported bench version", "?bench_version=10", "unsupported bench_version"},
+		{"unsupported bench version", "?bench_version=11", "unsupported bench_version"},
 		{"non-integer bench version", "?bench_version=latest", "bench_version must be an integer"},
 	}
 	for _, c := range cases {
@@ -191,6 +191,7 @@ func TestPracticeDatasetDefaultsToV9AndCanSelectV8(t *testing.T) {
 	}{
 		{name: "default v9", query: "?seed=42&n=12", version: protocol.BenchVersionV9},
 		{name: "explicit v8", query: "?seed=42&n=12&bench_version=8", version: protocol.BenchVersionV8},
+		{name: "explicit v10", query: "?seed=42&n=12&bench_version=10", version: protocol.BenchVersionV10},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
@@ -222,7 +223,7 @@ func TestPracticeDatasetAndCatalogRejectUnsupportedVersions(t *testing.T) {
 	s := &server{allowPrivate: true}
 	for _, path := range []string{
 		"/v1/dataset?bench_version=7",
-		"/v1/catalog?bench_version=10",
+		"/v1/catalog?bench_version=11",
 		"/v1/dataset?bench_version=not-a-number",
 	} {
 		rr := httptest.NewRecorder()

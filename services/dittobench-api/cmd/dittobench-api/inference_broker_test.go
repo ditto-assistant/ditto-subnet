@@ -1785,6 +1785,35 @@ func TestNormalizeV8ReasoningRemainsCallerOpaque(t *testing.T) {
 	}
 }
 
+func TestNormalizeV10InheritsV9ReasoningContract(t *testing.T) {
+	got, err := normalizeChatRequest(
+		[]byte(`{"reasoning_effort":"high"}`),
+		llm.V7HarnessModel,
+		protocol.BenchVersionV10,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, present := decoded["reasoning_effort"]; present {
+		t.Fatal("v10 retained the flat reasoning alias")
+	}
+	reasoning, ok := decoded["reasoning"].(map[string]any)
+	if !ok || reasoning["effort"] != "high" || reasoning["exclude"] != true {
+		t.Fatalf("v10 reasoning = %#v, want v9 contract", reasoning)
+	}
+	if _, err := normalizeChatRequest(
+		[]byte(`{"reasoning_effort":"minimal"}`),
+		llm.V7HarnessModel,
+		protocol.BenchVersionV10,
+	); err == nil || err.Error() != "invalid reasoning_effort" {
+		t.Fatalf("v10 invalid reasoning error = %v", err)
+	}
+}
+
 func TestV9BrokerNormalizesReasoningBeforePlatformAndAccountsRejections(t *testing.T) {
 	var delivered []map[string]any
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

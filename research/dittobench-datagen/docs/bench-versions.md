@@ -21,7 +21,7 @@ applied to an existing version. It ships as a new one.
 | 7 | `2026-11-01` | Platform-owned OpenRouter inference with locked `openai/gpt-oss-20b`, and the difficulty release: a version-gated hard-case suite roughly an order of magnitude harder for a non-reasoning harness while a correct trajectory still scores full marks. |
 | 8 | `2026-12-01` | The answering-machine-proof release: natural requests whose route depends on seeded prior context, semantic enum/identifier resolution without magic free-form strings, a larger computed-memory share, and stricter deterministic answer grading. |
 | 9 (pre-activation) | `2027-01-01` | A qualification contract for the Bench v9 family mix and launch gates. Explicit generation, offline audit, and ordinary runtime execution are available; Platform activation remains separate and v8 stays current until rollout. |
-| 10 (private, pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime activation remains separate. |
+| 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 
 ## V10 generator-as-spec contract
 
@@ -35,9 +35,9 @@ counterfactual changes one source fact and must change the answer.
 
 The generated artifact carries reviewer-only provenance sufficient to replay
 the specification and verify those relations. The harness projection continues
-to expose only ordinary memory and questions. V10 is explicit-generation only:
-it does not change `CurrentBenchVersion`, advertise a new runtime version, or
-activate scoring.
+to expose only ordinary memory and questions. V10 is an executable runtime
+contract, but it does not change `CurrentBenchVersion` or activate Platform
+scoring. Capability advertisement and rollout authority remain separate.
 
 Its tool-routing slice also makes the execution mode depend on a seed-scoped
 planning record rather than prompt keywords. The same request may require a

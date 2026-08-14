@@ -110,7 +110,7 @@ func TestVersionedScoreRequiresSupportedBenchVersion(t *testing.T) {
 	}{
 		{name: "omitted", body: `{` + base + `}`, want: "bench_version is required"},
 		{name: "old v1", body: `{"bench_version":1,` + base + `}`, want: "unsupported bench_version"},
-		{name: "future", body: `{"bench_version":10,` + base + `}`, want: "unsupported bench_version"},
+		{name: "future", body: `{"bench_version":11,` + base + `}`, want: "unsupported bench_version"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rr := httptest.NewRecorder()
@@ -152,7 +152,7 @@ func TestRetiredBenchmarkVersionsAreRejected(t *testing.T) {
 }
 
 func TestCurrentBenchmarksIntrinsicallyRequireTicketInference(t *testing.T) {
-	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9} {
+	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10} {
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			s := newScoreTestServer()
 			rr := httptest.NewRecorder()
@@ -166,7 +166,7 @@ func TestCurrentBenchmarksIntrinsicallyRequireTicketInference(t *testing.T) {
 	}
 }
 
-func TestRequestedBenchVersionSupportsV8AndV9WithoutImplicitDefault(t *testing.T) {
+func TestRequestedBenchVersionSupportsV8ThroughV10WithoutImplicitDefault(t *testing.T) {
 	if got, msg := requestedBenchVersion(0); got != 0 || !strings.Contains(msg, "required") {
 		t.Fatalf("omitted version accepted: (%d, %q)", got, msg)
 	}
@@ -176,12 +176,15 @@ func TestRequestedBenchVersionSupportsV8AndV9WithoutImplicitDefault(t *testing.T
 	if got, msg := requestedBenchVersion(9); got != 9 || msg != "" {
 		t.Fatalf("explicit v9 rejected: (%d, %q)", got, msg)
 	}
+	if got, msg := requestedBenchVersion(10); got != 10 || msg != "" {
+		t.Fatalf("explicit v10 rejected: (%d, %q)", got, msg)
+	}
 	for version := 2; version <= 7; version++ {
 		if got, msg := requestedBenchVersion(version); got != 0 || !strings.Contains(msg, "unsupported") {
 			t.Fatalf("retired v%d accepted: (%d, %q)", version, got, msg)
 		}
 	}
-	if got, msg := requestedBenchVersion(10); got != 0 || !strings.Contains(msg, "unsupported") {
-		t.Fatalf("future v10 accepted: (%d, %q)", got, msg)
+	if got, msg := requestedBenchVersion(11); got != 0 || !strings.Contains(msg, "unsupported") {
+		t.Fatalf("future v11 accepted: (%d, %q)", got, msg)
 	}
 }

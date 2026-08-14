@@ -63,6 +63,20 @@ func TestPracticeSubmitDefaultsOmittedVersionToV9(t *testing.T) {
 	}
 }
 
+func TestPracticeSubmitAcceptsReleasedV10(t *testing.T) {
+	version, message := requestedPracticeBenchVersion(protocol.BenchVersionV10)
+	if message != "" || version != protocol.BenchVersionV10 {
+		t.Fatalf("v10 practice = (%d, %q), want (%d, empty)", version, message, protocol.BenchVersionV10)
+	}
+	found := false
+	for _, advertised := range supportedBenchVersions() {
+		found = found || advertised == protocol.BenchVersionV10
+	}
+	if !found {
+		t.Fatalf("released v10 is missing from capabilities: %v", supportedBenchVersions())
+	}
+}
+
 // The exemption is keyed on the source kind, so both build modes stay gated on
 // the same deployment.
 func TestPracticeSubmitStillRejectsV8SourceBuilds(t *testing.T) {

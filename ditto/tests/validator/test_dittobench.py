@@ -319,14 +319,14 @@ async def test_v044_rolling_upgrade_negotiates_v8_and_preserves_capacity() -> No
 
 
 @pytest.mark.asyncio
-async def test_dual_version_scorer_preserves_versions_and_run_capacity() -> None:
+async def test_current_scorer_preserves_versions_and_run_capacity() -> None:
     def handler(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
             json={
                 "software_version": "0.22.0",
                 "source_revision": _REVISION,
-                "supported_bench_versions": [8, 9],
+                "supported_bench_versions": [8, 9, 10],
                 "full_run_capacity": 2,
             },
         )
@@ -341,7 +341,7 @@ async def test_dual_version_scorer_preserves_versions_and_run_capacity() -> None
         observed = await client.scorer_benchmark_capability(_stack())
 
     assert observed.status == "fresh_verified"
-    assert observed.supported_bench_versions == (8, 9)
+    assert observed.supported_bench_versions == (8, 9, 10)
     assert client.full_run_capacity == 2
 
 
@@ -856,7 +856,7 @@ async def test_recovered_scorer_clears_the_reported_fault() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [8, 9])
+@pytest.mark.parametrize("bench_version", [8, 9, 10])
 async def test_current_versions_use_versioned_route_and_bind_request(
     bench_version: int,
 ) -> None:
@@ -888,7 +888,7 @@ async def test_current_versions_use_versioned_route_and_bind_request(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [None, 0, 1, 6, 10])
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 6, 11])
 async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     bench_version: int | None,
 ) -> None:
@@ -1360,7 +1360,7 @@ async def test_current_poll_returns_v8_version_bound_report() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 6, 10])
+@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 6, 11])
 async def test_poll_rejects_missing_or_unsupported_expected_version(
     expected_bench_version: int | None,
 ) -> None:

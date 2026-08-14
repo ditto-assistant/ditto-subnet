@@ -1924,7 +1924,7 @@ jobs:
               .source_revision == $sha and
               .software_version == $version and
               (.source_revision_mismatch | not) and
-              (.supported_bench_versions | sort == [8, 9])
+              (.supported_bench_versions | sort == [8, 9, 10])
             ' >/dev/null
           for bench_version in 8 9; do
             headers_file="$(mktemp)"

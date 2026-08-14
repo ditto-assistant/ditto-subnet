@@ -60,7 +60,7 @@ func TestValidateScreenedImageAccess(t *testing.T) {
 }
 
 func TestValidateBenchmarkImageContract(t *testing.T) {
-	for _, benchVersion := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9} {
+	for _, benchVersion := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10} {
 		if msg := validateBenchmarkImageContract(submitRequest{BenchVersion: benchVersion, TarballURL: "https://example.com/source.tgz"}); msg == "" {
 			t.Fatalf("benchmark v%d allowed an untrusted source build", benchVersion)
 		}

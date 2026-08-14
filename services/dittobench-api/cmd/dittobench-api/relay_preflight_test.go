@@ -459,7 +459,7 @@ func TestV7RequiresExactModelProfileAndAdmitsQualityOnly(t *testing.T) {
 	}
 }
 
-func TestV9RequiresReviewedVariableReasoningProfile(t *testing.T) {
+func TestV9AndV10RequireReviewedVariableReasoningProfile(t *testing.T) {
 	snapshot := relayHealthSnapshot{
 		AccountingVersion: 2,
 		Status:            "ok",
@@ -467,8 +467,10 @@ func TestV9RequiresReviewedVariableReasoningProfile(t *testing.T) {
 		ProfileRevision:   llm.V9AggregateProfileRevision,
 		Model:             llm.V7HarnessModel,
 	}
-	if err := requireTokenAccounting(snapshot, protocol.BenchVersionV9, "full"); err != nil {
-		t.Fatalf("v9 rejected reviewed variable-reasoning profile: %v", err)
+	for _, version := range []int{protocol.BenchVersionV9, protocol.BenchVersionV10} {
+		if err := requireTokenAccounting(snapshot, version, "full"); err != nil {
+			t.Fatalf("v%d rejected reviewed variable-reasoning profile: %v", version, err)
+		}
 	}
 
 	for _, profile := range []string{
@@ -478,8 +480,10 @@ func TestV9RequiresReviewedVariableReasoningProfile(t *testing.T) {
 	} {
 		wrong := snapshot
 		wrong.ProfileRevision = profile
-		if err := requireTokenAccounting(wrong, protocol.BenchVersionV9, "full"); err == nil || !strings.Contains(err.Error(), "profile") {
-			t.Fatalf("v9 accepted unreviewed profile %q: %v", profile, err)
+		for _, version := range []int{protocol.BenchVersionV9, protocol.BenchVersionV10} {
+			if err := requireTokenAccounting(wrong, version, "full"); err == nil || !strings.Contains(err.Error(), "profile") {
+				t.Fatalf("v%d accepted unreviewed profile %q: %v", version, profile, err)
+			}
 		}
 	}
 

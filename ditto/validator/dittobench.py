@@ -166,7 +166,7 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # Executable scorer contracts. This is deliberately separate from the
 # platform-selected active benchmark: validators can advertise and execute v9
 # before the rollout control plane starts issuing v9 tickets.
-SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = (8, 9)
+SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = (8, 9, 10)
 
 
 # Scorer identity faults. Both stop benchmark advertisement and both

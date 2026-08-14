@@ -335,9 +335,11 @@ func TestEmbeddedV7ManifestIsQualityOnlyProductionReady(t *testing.T) {
 	}
 }
 
-func TestV9TechnicalReadinessDoesNotActivateCurrentVersion(t *testing.T) {
-	if !ProductionReadyForVersion(protocol.BenchVersionV9) {
-		t.Fatal("v9 ordinary execution should inherit the reviewed quality-only authority")
+func TestV9AndV10TechnicalReadinessDoesNotActivateCurrentVersion(t *testing.T) {
+	for _, version := range []int{protocol.BenchVersionV9, protocol.BenchVersionV10} {
+		if !ProductionReadyForVersion(version) {
+			t.Fatalf("v%d ordinary execution should inherit the reviewed quality-only authority", version)
+		}
 	}
 	if protocol.CurrentBenchVersion != protocol.BenchVersionV8 {
 		t.Fatalf("technical readiness changed active version to %d", protocol.CurrentBenchVersion)

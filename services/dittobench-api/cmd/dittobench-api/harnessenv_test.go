@@ -76,7 +76,7 @@ func TestV8HarnessEnvironmentCannotBeOverridden(t *testing.T) {
 }
 
 func TestCompatibilityEnvironmentRoutesEveryAliasToBroker(t *testing.T) {
-	for _, benchVersion := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9} {
+	for _, benchVersion := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10} {
 		t.Run(fmt.Sprintf("v%d", benchVersion), func(t *testing.T) {
 			env := harnessSandboxEnvForProvider(nil, benchVersion, v8CompatLockedProvider, "session-route")
 			if env["DITTOBENCH_PROVIDER"] != v8CompatLockedProvider {
@@ -92,7 +92,7 @@ func TestCompatibilityEnvironmentRoutesEveryAliasToBroker(t *testing.T) {
 					t.Fatalf("%s = %q, want non-secret broker placeholder", key, got)
 				}
 			}
-			if benchVersion == protocol.BenchVersionV9 {
+			if benchVersion >= protocol.BenchVersionV9 {
 				assertExactV9HarnessEnv(t, env)
 			}
 		})
@@ -112,6 +112,11 @@ func TestV9HarnessEnvironmentIsAnExactAllowlist(t *testing.T) {
 		"GOOGLE_APPLICATION_CREDENTIALS": "/attacker/key.json",
 	}
 	env := harnessSandboxEnv(hostile, protocol.BenchVersionV9, "session-route")
+	assertExactV9HarnessEnv(t, env)
+}
+
+func TestV10HarnessEnvironmentInheritsTheExactV9Allowlist(t *testing.T) {
+	env := harnessSandboxEnv(map[string]string{"BENIGN": "not-allowed"}, protocol.BenchVersionV10, "session-route")
 	assertExactV9HarnessEnv(t, env)
 }
 

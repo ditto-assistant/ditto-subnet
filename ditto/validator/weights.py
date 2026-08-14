@@ -208,13 +208,16 @@ def filter_weight_confirmed(
     presence of v9 as enforce used to drop the whole post-rollout ledger, build
     an empty weight vector, and leave the previous 100% burn visible on-chain.
 
-    Versions beyond v9 remain fail closed.  The default preserves the stricter
-    behavior for callers that do not possess the signed ledger-level mode.
+    Bench v10 has no v9 confirmation receipt contract, so its ordinary quorum
+    is payable. Versions beyond the latest executable contract remain fail
+    closed. The default preserves the stricter v9 behavior for callers that do
+    not possess the signed ledger-level mode.
     """
     return [
         entry
         for entry in entries
         if _entry_version(entry) < 9
+        or _entry_version(entry) == 10
         or (
             _entry_version(entry) == 9
             and (not enforce or getattr(entry, "v9_confirmation", None) is not None)

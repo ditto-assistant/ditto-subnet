@@ -219,8 +219,12 @@ class TestComputeWeights:
 
         assert filter_weight_confirmed([receipt_bearing_v9]) == [receipt_bearing_v9]
 
+    def test_v10_ordinary_quorum_is_payable_without_a_v9_receipt(self) -> None:
+        v10 = _entry("v10", 0.9, bench_version=10)
+        assert filter_weight_confirmed([v10]) == [v10]
+
     def test_preconfirmation_fold_fails_closed_for_unknown_future_version(self) -> None:
-        assert filter_weight_confirmed([_entry("future", 0.9, bench_version=10)]) == []
+        assert filter_weight_confirmed([_entry("future", 0.9, bench_version=11)]) == []
 
     def test_champion_and_tail_split(self) -> None:
         entries = [
@@ -3690,7 +3694,7 @@ class TestRunOnce:
             "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
         )
 
-    @pytest.mark.parametrize("bench_version", [8, 9])
+    @pytest.mark.parametrize("bench_version", [8, 9, 10])
     async def test_ticket_artifact_scorer_and_signature_are_version_bound(
         self, bench_version: int
     ) -> None:

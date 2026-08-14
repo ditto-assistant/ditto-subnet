@@ -2766,10 +2766,10 @@ func (b *inferenceBroker) proxy(
 	// failing closed with an error it cannot act on. The platform proxy re-locks
 	// the same value independently, so this is convenience, not the boundary.
 	requestedModel := modelRequest.Model
-	if requestedModel != session.requestModel || session.benchVersion == protocol.BenchVersionV9 {
+	if requestedModel != session.requestModel || session.benchVersion >= protocol.BenchVersionV9 {
 		rewritten, rewriteErr := normalizeChatRequest(body, session.requestModel, session.benchVersion)
 		if rewriteErr != nil {
-			if session.benchVersion == protocol.BenchVersionV9 {
+			if session.benchVersion >= protocol.BenchVersionV9 {
 				session.agentRequestRejections++
 			}
 			session.mu.Unlock()
@@ -3361,7 +3361,7 @@ var benchV9ReasoningEfforts = map[string]struct{}{
 	"low": {}, "medium": {}, "high": {},
 }
 
-// normalizeChatRequest pins the ticket model and, for v9, canonicalizes the
+// normalizeChatRequest pins the ticket model and, for v9 and later, canonicalizes the
 // agent-owned reasoning strategy before either a Platform reservation or a
 // local relay is reachable. The flat OpenAI alias and nested OpenRouter form
 // collapse to one nested block. Provider-only controls never survive the
@@ -3374,7 +3374,7 @@ func normalizeChatRequest(body []byte, model string, benchVersion int) ([]byte, 
 		return nil, fmt.Errorf("inference request is not a JSON object")
 	}
 	decoded["model"] = model
-	if benchVersion != protocol.BenchVersionV9 {
+	if benchVersion < protocol.BenchVersionV9 {
 		return json.Marshal(decoded)
 	}
 

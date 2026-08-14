@@ -47,7 +47,7 @@ def test_hosted_deploy_is_release_only_and_commit_stamped() -> None:
     assert ":sha-$SOURCE_SHA" not in deploy_step["run"]
 
 
-def test_hosted_release_fails_closed_unless_v8_and_v9_are_advertised() -> None:
+def test_hosted_release_fails_closed_unless_current_contracts_are_advertised() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     deploy = workflow["jobs"]["deploy-dittobench"]
     verify = _step(
@@ -55,7 +55,7 @@ def test_hosted_release_fails_closed_unless_v8_and_v9_are_advertised() -> None:
         "Verify the live practice endpoint reports its release identity",
     )
 
-    assert "(.supported_bench_versions | sort == [8, 9])" in verify["run"]
+    assert "(.supported_bench_versions | sort == [8, 9, 10])" in verify["run"]
 
 
 def test_every_dittobench_surface_triggers_ci() -> None:

@@ -15,6 +15,8 @@ result use, and post-model insertion. Transport failures and inconclusive
 results are rendered as `uncertain`; they never become evidence of guilt or a
 benchmark pass. Any uncertainty on a non-control fixture blocks readiness.
 
-The evaluator is deliberately independent of runtime capability negotiation.
-It consumes retained aggregate evidence and performs no scorer configuration,
-release, deployment, or activation step.
+The retained evaluator remains useful for independently rechecking the private
+content-addressed qualification evidence and performs no scorer configuration,
+release, deployment, or activation step. Runtime releases may advertise and
+execute v10 after that gate passes; capability advertisement still does not
+open or activate a Platform rollout.
