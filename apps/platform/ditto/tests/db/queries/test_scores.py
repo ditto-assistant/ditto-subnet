@@ -802,7 +802,12 @@ class TestListEligibleLedger:
 # ancestor scores below sit either side of that by a wide margin, so nothing here
 # turns on the third decimal place of the decay.
 _WINNER_COMPOSITE = 0.90
-_WITHIN_BAND = 0.898
+_WITHIN_BAND = 0.8999
+# 0.0007 behind the winner: inside the *dethrone* band and comfortably outside
+# the crown-anchor band. This is the gap that crowned white-bolt on 2026-08-13
+# while it had never once led the rival it outranked, and it is the whole reason
+# the two bands are separate numbers.
+_BEHIND_A_RIVAL = 0.8993
 _OUTSIDE_BAND = 0.88
 
 
@@ -847,6 +852,43 @@ class TestCrownFirstSeen:
         # The two questions stay separate: this tarball really did arrive later,
         # and the anti-copy comparison and public board still say so.
         assert row.first_seen == later
+
+    async def test_an_ancestor_that_never_led_confers_no_seniority(
+        self, session: AsyncSession
+    ) -> None:
+        """The 2026-08-13 crown, in miniature.
+
+        An owner arrives early but *behind*, a rival passes it and holds the top
+        score for days, then the owner matches that score with a new generation
+        and takes the crown on the early arrival. Sharing one band between
+        seniority and indifference made that inheritance legal: the ancestor was
+        inside the dethrone band, so it read as "already at this score" despite
+        never having led anyone. The crown-anchor band is tighter precisely so
+        this ancestor confers nothing and the winner stands on its own arrival.
+        """
+        early_but_behind = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        matched_it_later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_BEHIND_A_RIVAL,
+            created_at=early_but_behind,
+            n=MIN_ELIGIBLE_CASES,
+            name="early-but-behind",
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=matched_it_later,
+            n=MIN_ELIGIBLE_CASES,
+            name="matched-it-later",
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.crown_first_seen == matched_it_later
+        assert row.fold_first_seen == matched_it_later
 
     async def test_a_distinctly_worse_ancestor_confers_no_seniority(
         self, session: AsyncSession

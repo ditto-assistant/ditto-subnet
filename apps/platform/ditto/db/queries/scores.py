@@ -95,40 +95,63 @@ def _is_ranked() -> ColumnElement[bool]:
     return and_(Score.n >= MIN_ELIGIBLE_CASES, Score.composite > 0.0)
 
 
+# How far below the winner an ancestor may score and still hand it the
+# lineage's arrival time. Deliberately far tighter than the dethrone band.
+#
+# Seniority and indifference are different questions and used to share one
+# number. The dethrone band asks "is this challenger distinguishable from the
+# incumbent" and is correctly generous, because crowning on noise churns the
+# board. This asks "did this owner already *hold* the score it now defends",
+# and being generous there grants a reign the ancestor never earned: on
+# 2026-08-13 an ancestor scoring 0.996348 — measurably behind a rival sitting
+# at 0.997012 since two days earlier — was inside the decayed 0.003164 band, so
+# it conferred its own earlier arrival onto a later generation that had merely
+# *matched* that rival. The owner took the crown without ever leading.
+#
+# The floor cannot be zero: an owner that resubmits at a plateau must keep its
+# reign, which is the entire reason the anchor is a lineage value and not the
+# winning tarball's upload time. Saturated agents re-measure to the *same*
+# composite, so only genuine re-measurement jitter needs absorbing, and this is
+# roughly a third of a typical per-row standard error. Widen it only with a
+# concrete case where a legitimate reign was forfeited.
+CROWN_ANCHOR_MARGIN = 0.0005
+
+
 def _crown_band(
     top_score: ColumnElement[Any], bench_version: ColumnElement[Any]
 ) -> ColumnElement[Any]:
     """How close an ancestor must be to count as the same score, in SQL.
 
-    This is the *flat* half of the validator's indifference band — the fixed
-    ``KOTH_MARGIN``, scaled by the same versioned high-score decay
-    (:func:`ditto.api_server.koth._dethrone_band_scale`) — and deliberately not
-    the statistical half. The dethrone requirement is
-    ``max(margin, z * sqrt(se² + se²))``, so the flat term is its floor: taking
-    only the floor admits *fewer* ancestors than the fold would call
-    indistinguishable, never more. Seniority is the thing being granted here, so
-    the conservative direction is the correct one — and it keeps the anchor off
-    the per-row standard errors, which move under every retest and would make a
-    lineage's provenance wobble with measurement noise rather than with what it
-    actually achieved.
+    :data:`CROWN_ANCHOR_MARGIN` scaled by the same versioned high-score decay
+    the fold uses (:func:`ditto.api_server.koth._dethrone_band_scale`), so a
+    saturated board tightens the seniority test exactly where scores bunch and
+    an unearned inheritance is worth the most. It is deliberately *not* the
+    dethrone band's flat term, and never the statistical half: standard errors
+    move under every retest and would make a lineage's provenance wobble with
+    measurement noise rather than with what it actually achieved.
+
+    Platform-side and consensus-safe by construction. ``/scoring/scores`` serves
+    the resolved anchor as ``LedgerEntry.first_seen``, and the validator folds
+    the ledger exactly as served, so this band reaches every validator on its
+    next read at any protocol version — there is no second copy to keep aligned
+    and no version gate to stage.
     """
     from ditto.api_server.koth import (
         KOTH_BAND_DECAY_MIN_BENCH_VERSION,
         KOTH_BAND_DECAY_RATE,
         KOTH_BAND_DECAY_START_COMPOSITE,
-        KOTH_MARGIN,
     )
 
     bounded = func.least(func.greatest(top_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
     return case(
         (
             bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION,
-            KOTH_MARGIN
+            CROWN_ANCHOR_MARGIN
             * func.exp(
                 -KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE)
             ),
         ),
-        else_=KOTH_MARGIN,
+        else_=CROWN_ANCHOR_MARGIN,
     )
 
 
@@ -272,12 +295,16 @@ class LedgerRow:
 
     So the anchor is the lineage's, not the submission's: the earliest
     :attr:`first_seen` among this owner's ``scored`` agents that are at the
-    winner's ``bench_version`` and within the flat dethrone band of the winner's
+    winner's ``bench_version`` and within :func:`_crown_band` of the winner's
     official score. Only band-equivalent ancestors count, so an early low-scoring
     submission confers nothing; the version match keeps the comparison on one
     scale; ``scored`` excludes banned and rejected generations. The winner always
     satisfies its own filter, so this can only ever move the anchor *earlier* —
     never later than :attr:`first_seen`.
+
+    That band is :data:`CROWN_ANCHOR_MARGIN`, not the dethrone margin. Inheriting
+    seniority and surviving a challenge are different questions, and sharing one
+    number let an ancestor that never led confer a reign it had not earned.
 
     ``None`` on rows built outside the owner-family query (provisional
     ``evaluating`` rows, moderation fixtures); :attr:`fold_first_seen` falls back
