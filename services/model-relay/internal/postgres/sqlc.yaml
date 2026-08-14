@@ -1,0 +1,22 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries:
+      - "validator_nonces_queries.sql"
+      - "validator_tickets_queries.sql"
+      - "inference_grants_queries.sql"
+      - "inference_requests_queries.sql"
+      - "inference_routes_queries.sql"
+      - "concurrency_settings_queries.sql"
+    # schema.sql is GENERATED from the apps/platform Alembic chain by
+    # scripts/gen-schema.sh — never hand-edit it. Alembic owns the schema;
+    # this service only reads/writes existing tables.
+    schema: "../../db/schema.sql"
+    gen:
+      go:
+        package: "postgres"
+        out: "."
+        emit_json_tags: true
+        json_tags_case_style: camel
+        sql_package: "pgx/v5"
+        omit_unused_structs: true

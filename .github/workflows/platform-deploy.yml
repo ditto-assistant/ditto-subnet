@@ -9,10 +9,11 @@ name: Deploy Platform
 # workflow only ships new code. The ordinary API deploy authenticates with
 # Workload Identity Federation (no static keys), IAP-SSHes into the matching
 # VM, and runs scripts/update.sh. On main pushes that touch relay runtime paths,
-# a sibling job builds a wheel plus locked dependencies at the same time. After
-# the API deploy has migrated and verified that exact commit, relay-release
-# installs the artifact under a commit-specific path and rolls the two PM2
-# relay services one at a time. There is always one relay left behind Caddy.
+# a sibling job builds the statically linked Go model-relay binary at the same
+# time. After the API deploy has migrated and verified that exact commit,
+# relay-release installs the artifact under a commit-specific path and rolls
+# the two PM2 relay services one at a time. There is always one relay left
+# behind Caddy.
 #
 # A green run means the public host answered /health on the revision the deploy
 # put there. It does NOT mean only that a script exited 0: update.sh compares
@@ -125,17 +126,29 @@ jobs:
           ref: ${{ env.DEPLOY_REVISION }}
           persist-credentials: false
 
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # services/model-relay/go.mod declares go 1.25.0 (pgx v5.9.x
+          # requires it); install a matching toolchain so the build does
+          # not pause to auto-download one.
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: services/model-relay/go.sum
 
       - name: Build immutable relay artifact
+        # The tarball is created BEFORE upload on purpose: actions/upload-artifact
+        # does not maintain file permissions (documented), so shipping the raw
+        # directory would hand relay-release a 0644 model-relay binary. Tarring
+        # first preserves the modes the builder set end to end.
         run: |
           set -euo pipefail
           ./scripts/build-relay-release.sh relay-artifact "$DEPLOY_REVISION"
+          tar --create --gzip --file relay-artifact.tgz --directory relay-artifact .
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: platform-relay-${{ env.DEPLOY_REVISION }}
-          path: apps/platform/relay-artifact/
+          path: apps/platform/relay-artifact.tgz
           if-no-files-found: error
           retention-days: 1
 
@@ -470,7 +483,9 @@ jobs:
             target_vm=ditto-platform-dev
           fi
           remote_artifact="/tmp/platform-relay-$DEPLOY_REVISION"
-          tar --create --gzip --file relay-artifact.tgz --directory relay-artifact .
+          # The artifact IS the tarball (created before upload by relay-build,
+          # because the artifact store strips file permissions); ship it as-is.
+          mv relay-artifact/relay-artifact.tgz relay-artifact.tgz
           gcloud compute scp relay-artifact.tgz \
             "$target_vm:$remote_artifact.tgz" \
             --zone "$GCP_ZONE" --tunnel-through-iap --quiet

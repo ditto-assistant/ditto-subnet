@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
-import sys
 from pathlib import Path
-
-import pytest
 
 ROOT = Path(__file__).parents[3]
 COMMIT = "a" * 40
 RELEASE_SCRIPT = ROOT / "scripts" / "deploy-relay-release.sh"
+ARTIFACT_FILES = (
+    "model-relay",
+    "ecosystem.config.js",
+    "deploy-relay-release.sh",
+    "source-commit",
+)
 
 
 def _write_executable(path: Path, source: str) -> None:
@@ -22,10 +26,11 @@ def _run_release(
     tmp_path: Path,
     *,
     fail_relay_2: bool = False,
-    platform_wheel_count: int = 1,
-    protocol_wheel_count: int = 1,
-    requirements: str = "# locked in CI\n",
     artifact_commit: str = COMMIT,
+    with_binary: bool = True,
+    with_sha256sums: bool = True,
+    corrupt_binary_after_sums: bool = False,
+    strip_exec_bit: bool = False,
 ):
     artifact = tmp_path / "artifact"
     fake_bin = tmp_path / "bin"
@@ -36,18 +41,29 @@ def _run_release(
     (old / "scripts").mkdir(parents=True)
 
     (artifact / "source-commit").write_text(f"{artifact_commit}\n")
-    (artifact / "requirements.lock").write_text(requirements)
-    for index in range(platform_wheel_count):
-        platform_version = index + 1
-        (
-            artifact / f"ditto_platform-0.0.{platform_version}-py3-none-any.whl"
-        ).write_text("wheel")
-    for index in range(protocol_wheel_count):
-        protocol_version = f"0.13.{index}"
-        (
-            artifact / f"ditto_screening_protocol-{protocol_version}-py3-none-any.whl"
-        ).write_text("wheel")
+    if with_binary:
+        # A runnable stand-in for the statically linked Go binary: stays alive
+        # as the canary until the deploy script SIGTERMs it.
+        _write_executable(
+            artifact / "model-relay",
+            "trap 'exit 0' TERM INT\nwhile true; do sleep 1; done\n",
+        )
     (artifact / "ecosystem.config.js").write_text("module.exports = {apps: []};\n")
+    (artifact / "deploy-relay-release.sh").write_text("# shipped copy\n")
+    if with_sha256sums:
+        present = [name for name in ARTIFACT_FILES if (artifact / name).exists()]
+        lines = [
+            f"{hashlib.sha256((artifact / name).read_bytes()).hexdigest()}  {name}"
+            for name in present
+        ]
+        (artifact / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+    if corrupt_binary_after_sums:
+        with (artifact / "model-relay").open("a") as handle:
+            handle.write("# tampered after checksum generation\n")
+    if strip_exec_bit:
+        # actions/upload-artifact does not maintain file permissions: a CI
+        # artifact round-trip hands the host a 0644 binary with intact bytes.
+        (artifact / "model-relay").chmod(0o644)
     platform_env = tmp_path / "platform.env"
     platform_env.write_text(
         "PYLON_URL=http://127.0.0.1:1\nPERPLEXITY_API_KEY=direct-provider-test-key\n"
@@ -64,24 +80,6 @@ def _run_release(
         ]
     )
 
-    _write_executable(
-        fake_bin / "uv",
-        f"""
-echo "uv $*" >> "$TEST_COMMAND_LOG"
-if [ "$1" = venv ]; then
-  target="${{@: -1}}"
-  mkdir -p "$target/bin"
-  cat > "$target/bin/python" <<'PYTHON'
-#!{sys.executable}
-import signal, time
-signal.signal(signal.SIGTERM, lambda *_: raise SystemExit(0))
-while True:
-    time.sleep(1)
-PYTHON
-  chmod +x "$target/bin/python"
-fi
-""",
-    )
     _write_executable(
         fake_bin / "curl",
         'printf \'{"commit":"%s"}\\n\' "$TEST_COMMIT"\n',
@@ -136,17 +134,24 @@ fi
     return result, commands, state, old
 
 
-def test_release_builds_once_and_rolls_slots_in_order(tmp_path: Path) -> None:
+def test_release_installs_binary_once_and_rolls_slots_in_order(
+    tmp_path: Path,
+) -> None:
     result, commands, state, _ = _run_release(tmp_path)
 
     assert result.returncode == 0, result.stderr
     assert (state / "ditto-api-relay-1.commit").read_text().strip() == COMMIT
     assert (state / "ditto-api-relay-2.commit").read_text().strip() == COMMIT
-    assert commands.count("uv venv") == 1
-    assert "--requirement" in commands
-    assert commands.index("ditto_screening_protocol-0.13.0") < commands.index(
-        "ditto_platform-0.0.1"
-    )
+
+    # The immutable release dir holds the binary plus the pm2 config; there is
+    # no venv and no host-side dependency resolution any more.
+    release_dir = state / "releases" / COMMIT
+    binary = release_dir / "model-relay"
+    assert binary.is_file()
+    assert os.access(binary, os.X_OK)
+    assert (release_dir / "scripts" / "ecosystem.config.js").is_file()
+    assert (release_dir / "logs").is_dir()
+
     assert commands.index("pm2 delete ditto-api-relay-1") < commands.index(
         "--only ditto-api-relay-1"
     )
@@ -181,45 +186,55 @@ def test_release_restores_failed_second_slot(tmp_path: Path) -> None:
     assert "restoring ditto-api-relay-2" in result.stderr
 
 
-@pytest.mark.parametrize(
-    ("platform_count", "protocol_count", "error"),
-    [
-        (0, 1, "exactly one platform wheel"),
-        (2, 1, "exactly one platform wheel"),
-        (1, 0, "exactly one screening-protocol wheel"),
-        (1, 2, "exactly one screening-protocol wheel"),
-    ],
-)
-def test_release_rejects_missing_or_ambiguous_wheels(
-    tmp_path: Path, platform_count: int, protocol_count: int, error: str
+def test_release_normalizes_a_stripped_exec_bit(tmp_path: Path) -> None:
+    # The CI artifact store (actions/upload-artifact) does not maintain file
+    # permissions; a 0644 binary with intact bytes must still deploy — the
+    # install -m 0755 normalizes the mode and SHA256SUMS proves integrity.
+    result, _, state, _ = _run_release(tmp_path, strip_exec_bit=True)
+
+    assert result.returncode == 0, result.stderr
+    binary = state / "releases" / COMMIT / "model-relay"
+    assert binary.is_file()
+    assert os.access(binary, os.X_OK)
+
+
+def test_release_rejects_a_missing_binary_before_install(tmp_path: Path) -> None:
+    result, commands, state, _ = _run_release(tmp_path, with_binary=False)
+
+    assert result.returncode != 0
+    assert "model-relay binary" in result.stderr
+    assert not (state / "releases").exists()
+    assert "pm2" not in commands
+
+
+def test_release_rejects_a_missing_checksum_manifest_before_install(
+    tmp_path: Path,
 ) -> None:
-    result, commands, _, _ = _run_release(
-        tmp_path,
-        platform_wheel_count=platform_count,
-        protocol_wheel_count=protocol_count,
+    result, commands, state, _ = _run_release(tmp_path, with_sha256sums=False)
+
+    assert result.returncode != 0
+    assert "SHA256SUMS" in result.stderr
+    assert not (state / "releases").exists()
+    assert "pm2" not in commands
+
+
+def test_release_rejects_a_tampered_binary_before_install(tmp_path: Path) -> None:
+    result, commands, state, _ = _run_release(
+        tmp_path, corrupt_binary_after_sums=True
     )
 
     assert result.returncode != 0
-    assert error in result.stderr
-    assert "uv venv" not in commands
-
-
-def test_release_rejects_local_path_requirements_before_install(tmp_path: Path) -> None:
-    result, commands, _, _ = _run_release(
-        tmp_path,
-        requirements="ditto-screening-protocol @ file:///packages/ditto-screening-protocol\n",
-    )
-
-    assert result.returncode != 0
-    assert "local shared-package reference" in result.stderr
-    assert "uv venv" not in commands
+    assert "SHA256SUMS verification failed" in result.stderr
+    assert not (state / "releases").exists()
+    assert "pm2" not in commands
 
 
 def test_release_rejects_artifact_commit_mismatch_before_install(
     tmp_path: Path,
 ) -> None:
-    result, commands, _, _ = _run_release(tmp_path, artifact_commit="b" * 40)
+    result, commands, state, _ = _run_release(tmp_path, artifact_commit="b" * 40)
 
     assert result.returncode != 0
     assert "artifact commit does not match" in result.stderr
-    assert "uv venv" not in commands
+    assert not (state / "releases").exists()
+    assert "pm2" not in commands

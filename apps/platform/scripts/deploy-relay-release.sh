@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install an immutable relay wheel release and roll the two PM2 slots one at a
+# Install an immutable relay binary release and roll the two PM2 slots one at a
 # time. The ordinary Platform deploy owns migrations; this starts only after
 # that workflow job has succeeded on this exact source commit.
 
@@ -28,25 +28,27 @@ start_timeout="${DITTO_RELAY_START_TIMEOUT_SECONDS:-120}"
   echo "ERROR: artifact commit does not match $source_commit" >&2
   exit 1
 }
-[ -r "$artifact_dir/requirements.lock" ] || { echo "ERROR: artifact has no requirements.lock" >&2; exit 1; }
+# Existence only, deliberately NOT an -x check: artifact transports (for one,
+# actions/upload-artifact, whose docs say permissions are not maintained) can
+# legitimately strip the exec bit, and the install -m 0755 below normalizes it
+# for every file that reaches a release dir. Integrity is SHA256SUMS' job.
+[ -e "$artifact_dir/model-relay" ] || { echo "ERROR: artifact has no model-relay binary" >&2; exit 1; }
 [ -r "$artifact_dir/ecosystem.config.js" ] || { echo "ERROR: artifact has no ecosystem config" >&2; exit 1; }
+[ -r "$artifact_dir/SHA256SUMS" ] || { echo "ERROR: artifact has no SHA256SUMS" >&2; exit 1; }
 [ -r "$platform_env" ] || { echo "ERROR: missing $platform_env" >&2; exit 1; }
-if grep -Eq 'file:|packages/ditto-screening-protocol|ditto-screening-protocol' \
-  "$artifact_dir/requirements.lock"; then
-  echo "ERROR: requirements.lock contains a local shared-package reference" >&2
-  exit 1
-fi
 
-shopt -s nullglob
-platform_wheels=("$artifact_dir"/ditto_platform-*.whl)
-protocol_wheels=("$artifact_dir"/ditto_screening_protocol-*.whl)
-shopt -u nullglob
-[ "${#platform_wheels[@]}" -eq 1 ] || {
-  echo "ERROR: artifact must contain exactly one platform wheel" >&2
-  exit 1
+# Defense in depth on the host: the builder wrote SHA256SUMS over every file it
+# staged, so a truncated upload or a tampered binary fails here before anything
+# on this host is touched.
+sha256_check() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum --check --strict --quiet SHA256SUMS
+  else
+    shasum -a 256 --check --strict --quiet SHA256SUMS
+  fi
 }
-[ "${#protocol_wheels[@]}" -eq 1 ] || {
-  echo "ERROR: artifact must contain exactly one screening-protocol wheel" >&2
+(cd "$artifact_dir" && sha256_check) || {
+  echo "ERROR: artifact SHA256SUMS verification failed" >&2
   exit 1
 }
 
@@ -58,13 +60,7 @@ if [ ! -d "$release_dir" ]; then
   staging="$(mktemp -d "$release_root/.${source_commit}.XXXXXX")"
   cleanup_staging() { rm -rf -- "$staging"; }
   trap cleanup_staging EXIT
-  uv venv --python 3.12 "$staging/.venv"
-  uv pip install --python "$staging/.venv/bin/python" \
-    --requirement "$artifact_dir/requirements.lock"
-  uv pip install --python "$staging/.venv/bin/python" --no-deps \
-    "${protocol_wheels[0]}"
-  uv pip install --python "$staging/.venv/bin/python" --no-deps \
-    "${platform_wheels[0]}"
+  install -m 0755 "$artifact_dir/model-relay" "$staging/model-relay"
   mkdir -p "$staging/scripts" "$staging/logs"
   cp "$artifact_dir/ecosystem.config.js" "$staging/scripts/ecosystem.config.js"
   mv "$staging" "$release_dir"
@@ -129,10 +125,10 @@ wait_for_any_health() {
   return 1
 }
 
-# Prove the artifact can import, connect, and answer before either serving slot
+# Prove the artifact can boot, connect, and answer before either serving slot
 # is touched. The canary is never behind Caddy.
 canary_log="$state_root/logs/canary-$source_commit.log"
-"$release_dir/.venv/bin/python" -m ditto.api_server --port "$canary_port" \
+"$release_dir/model-relay" --port "$canary_port" \
   >"$canary_log" 2>&1 &
 canary_pid=$!
 stop_canary() {
@@ -203,7 +199,7 @@ roll_slot ditto-api-relay-1 8010 8011
 roll_slot ditto-api-relay-2 8011 8010
 pm2 save >/dev/null
 
-# Keep the active release and one wheel-based rollback release. Names are
+# Keep the active release and one binary-based rollback release. Names are
 # validated full SHAs and children are resolved under the script-owned root
 # before deletion, so this can never widen into /opt or a user directory.
 python3 - "$release_root" "$source_commit" "$previous_commit" <<'PY'

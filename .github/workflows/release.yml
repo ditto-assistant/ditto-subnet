@@ -55,6 +55,7 @@ jobs:
       dittobench_api: ${{ steps.components.outputs.dittobench_api }}
       dittobench_datagen: ${{ steps.components.outputs.dittobench_datagen }}
       platform: ${{ steps.components.outputs.platform }}
+      deploy_relay: ${{ steps.relay.outputs.deploy_relay }}
       backroom: ${{ steps.components.outputs.backroom }}
       screener: ${{ steps.components.outputs.screener }}
       screener_orchestrator: ${{ steps.components.outputs.screener_orchestrator }}
@@ -89,6 +90,25 @@ jobs:
             --base "${{ steps.release-base.outputs.sha }}" \
             --head "${{ github.sha }}" \
             --github-output "$GITHUB_OUTPUT"
+
+      # Dashboard-only (and other non-relay) platform releases must not roll
+      # the two relay PM2 slots. The filter consumes REPO-ROOT-relative paths
+      # (plain `git diff --name-only` from the checkout root) — that base is
+      # part of relay-runtime-changed.sh's documented contract.
+      - name: Resolve whether the relay runtime changed
+        id: relay
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="${{ steps.release-base.outputs.sha }}"
+          if [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            echo "deploy_relay=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "$base" "${{ github.sha }}" \
+              | bash apps/platform/scripts/relay-runtime-changed.sh; then
+            echo "deploy_relay=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deploy_relay=false" >> "$GITHUB_OUTPUT"
+          fi
 
       # The plan checkout already has the release ancestry needed by this gate.
       # Keep verify-source shallow instead of fetching the same history twice.
@@ -232,6 +252,13 @@ jobs:
           go-version: "1.23"
           cache-dependency-path: services/dittobench-api/go.sum
 
+      - name: Install Go for model-relay verification
+        if: needs.plan.outputs.platform == 'true'
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+          cache-dependency-path: services/model-relay/go.sum
+
       - name: Install Rust for starter-kit verification
         if: needs.plan.outputs.miner_starter_kit == 'true'
         uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
@@ -292,6 +319,30 @@ jobs:
           npm --prefix dashboard test
           npm --prefix dashboard run build
 
+      - name: Gate model-relay release on exact merge source
+        # services/model-relay/** selects the platform component
+        # (release/components.toml), and the platform release rolls the relay
+        # binary — so the Go suite must gate the SAME merge source as the
+        # artifact build, like every other Go component here. gen-schema.sh
+        # both proves db/schema.sql still mirrors the Alembic chain and leaves
+        # the ambient test Postgres running for the pg-backed suites;
+        # TEST_POSTGRES_REQUIRED turns their local-convenience skip into a
+        # failure so this gate can never silently lose its DB coverage.
+        if: needs.plan.outputs.platform == 'true'
+        working-directory: services/model-relay
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt required on:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+          go build ./...
+          go vet ./...
+          scripts/gen-schema.sh
+          git diff --exit-code -- db/schema.sql
+          TEST_POSTGRES_REQUIRED=1 go test ./...
+
       - name: Gate Backroom release on exact merge source
         if: needs.plan.outputs.backroom == 'true'
         working-directory: apps/backroom
@@ -342,7 +393,11 @@ jobs:
     with:
       revision: ${{ needs.release.outputs.commit_sha }}
       environment: prod
-      deploy_relay: true
+      # Computed by the plan job from relay-runtime-changed.sh: a
+      # dashboard-only platform release must not roll the relay slots.
+      # Operators can still force a roll via platform-deploy.yml's manual
+      # dispatch (deploy_relay defaults true there).
+      deploy_relay: ${{ needs.plan.outputs.deploy_relay == 'true' }}
     secrets: inherit
 
   deploy-backroom:

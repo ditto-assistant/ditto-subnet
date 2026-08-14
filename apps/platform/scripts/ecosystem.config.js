@@ -65,12 +65,25 @@ const RELAY_PORTS = [8010, 8011];
 // max_connections goes up -- that is a postmaster setting and needs a full
 // database RESTART, so it is a separate, quieter change.
 const relayApp = (port, index) => ({
-  // A SECOND (and third) process of the SAME codebase running with
-  // DITTO_ROLE=relay, which mounts only /health, /metrics and
-  // /api/v1/inference/* (see factory.py _process_role). Caddy load-balances
-  // /api/v1/inference/* across them, so the proxy hot path stops sharing an
-  // event loop with validator heartbeat ingest -- which is what lets the
-  // platform force-expire live leases and destroy healthy in-flight runs.
+  // The Go model-relay binary serving the relay plane: /health, /metrics and
+  // /api/v1/inference/* only (the Python ditto-api keeps everything else).
+  // Caddy load-balances /api/v1/inference/* across the two slots, so the
+  // proxy hot path never shares an event loop with validator heartbeat ingest
+  // -- which is what lets the platform force-expire live leases and destroy
+  // healthy in-flight runs.
+  //
+  // !! The binary exists ONLY inside a relay release dir
+  // !! (/opt/ditto-platform-relay/releases/<sha>/model-relay). Starting the
+  // !! relay apps from the git checkout (where this file also lives) will
+  // !! crash-loop: relays are rolled exclusively by deploy-relay-release.sh,
+  // !! which starts this file from the release dir; update.sh and start.sh
+  // !! must keep skipping ditto-api-relay-*.
+  //
+  // !! MOVING FROM THE PYTHON WHEEL RELAY TO THIS BINARY CHANGES `script`,
+  // !! WHICH REQUIRES RECREATING THE APP, NOT RELOADING IT (see the header).
+  // !! deploy-relay-release.sh always does delete+start per slot, so the
+  // !! transition release is safe only through the relay-release path --
+  // !! never via a manual `pm2 reload`.
   //
   // !! NEVER set exec_mode: "cluster" on this or any app here. pm2's cluster
   // !! mode is Node's `cluster` module: God.js does
@@ -83,10 +96,14 @@ const relayApp = (port, index) => ({
   // !! crash-looping the app. Verified against pm2 7.0.3 on the prod host.
   name: `ditto-api-relay-${index + 1}`,
   cwd: root,
-  script: venvPython,
-  // --port beats $API_PORT (the argparse default in __main__.py). `args` IS
-  // reconciled by `pm2 reload`, unlike script/interpreter/exec_mode/cwd.
-  args: `-m ditto.api_server --port ${port}`,
+  // When deploy-relay-release.sh starts this file from a release dir, `root`
+  // is that release dir and this resolves to the statically linked linux/amd64
+  // binary shipped in the artifact. pm2 owns the server process directly (no
+  // launcher shim), so max_memory_restart measures the real working set.
+  script: path.join(root, "model-relay"),
+  // --port beats $API_PORT. `args` IS reconciled by `pm2 reload`, unlike
+  // script/interpreter/exec_mode/cwd.
+  args: `--port ${port}`,
   interpreter: "none",
   instances: 1,
   exec_mode: "fork",
@@ -94,7 +111,7 @@ const relayApp = (port, index) => ({
     // The only per-process differences. The Ansible-owned Platform env is
     // shared by every process here, so the role cannot come from there.
     DITTO_ROLE: "relay",
-    // Wheel-based relay releases have no .git checkout. CI supplies the exact
+    // Binary relay releases have no .git checkout. CI supplies the exact
     // source SHA and /health validates it before each rolling handover.
     DITTO_BUILD_COMMIT: process.env.DITTO_BUILD_COMMIT || "",
     API_PORT: String(port),
