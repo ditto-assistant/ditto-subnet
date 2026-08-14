@@ -47,6 +47,7 @@ from ditto.db.queries.score_ranking import EfficiencyFactorRequesterNotReady
 from ditto.db.queries.scores import upsert_score
 
 _KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
+_BOB = bittensor.Keypair.create_from_uri("//Bob")
 _VALIDATOR_HOTKEY = _KEYPAIR.ss58_address
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
@@ -111,13 +112,14 @@ def _ledger_headers(
     nonce: UUID | None = None,
     requested_at: datetime | None = None,
     signing_keypair: bittensor.Keypair = _KEYPAIR,
+    validator_hotkey: str = _VALIDATOR_HOTKEY,
 ) -> dict[str, str]:
     nonce = nonce or uuid4()
     requested_at = requested_at or datetime.now(UTC)
     requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
-    signed = (f"validator-ledger:v1:{_VALIDATOR_HOTKEY}:{nonce}:{requested}").encode()
+    signed = (f"validator-ledger:v1:{validator_hotkey}:{nonce}:{requested}").encode()
     return {
-        **_AUTH_HEADER,
+        "X-Validator-Hotkey": validator_hotkey,
         "X-Validator-Ledger-Nonce": str(nonce),
         "X-Validator-Ledger-Requested-At": requested_at.isoformat(),
         "X-Validator-Ledger-Signature": signing_keypair.sign(signed).hex(),
@@ -132,18 +134,24 @@ def _install_db(app: FastAPI, maker: async_sessionmaker[AsyncSession]) -> None:
     app.dependency_overrides[get_session] = _session
 
 
-def _install_chain(app: FastAPI, *, permitted: bool = True) -> None:
+def _install_chain(
+    app: FastAPI,
+    *,
+    permitted: bool = True,
+    validator_hotkeys: tuple[str, ...] = (_VALIDATOR_HOTKEY,),
+) -> None:
     async def _chain() -> MagicMock:
         c = MagicMock()
         c.get_recent_neurons = AsyncMock(
             return_value=[
                 NeuronInfo(
-                    hotkey=_VALIDATOR_HOTKEY,
+                    hotkey=hotkey,
                     coldkey="5GReceiverColdkeyPlaceholderXXXXXXXXXXXXXXXXXXX",
-                    uid=1,
+                    uid=index,
                     stake=1000.0,
                     validator_permit=permitted,
                 )
+                for index, hotkey in enumerate(validator_hotkeys, start=1)
             ]
         )
         return c
@@ -745,6 +753,110 @@ class TestScoringLiveness:
         )
         assert third_response.status_code == 200
         assert calls == 2
+
+    async def test_factor_ready_validators_share_inflight_materialization(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    ValidatorHeartbeat(
+                        validator_hotkey=keypair.ss58_address,
+                        software_version="0.28.0",
+                        protocol_version=21,
+                        code_digest="ab" * 32,
+                        state="idle",
+                        reported_at=now,
+                        seen_at=now,
+                        signature="cd" * 64,
+                        capabilities=_scorer_capabilities(
+                            now, versions=[_BENCH_VERSION]
+                        ),
+                    )
+                    for keypair in (_KEYPAIR, _BOB)
+                ]
+            )
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        _install_chain(
+            app,
+            validator_hotkeys=(_VALIDATOR_HOTKEY, _BOB.ss58_address),
+        )
+
+        real_list = scoring_mod.list_eligible_ledger
+        first_read_started = asyncio.Event()
+        release_first_read = asyncio.Event()
+        calls = 0
+
+        async def _gated_list(*args: Any, **kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_read_started.set()
+                await release_first_read.wait()
+            return await real_list(*args, **kwargs)
+
+        async def _factor_adjustments(*_args: Any, **kwargs: Any) -> Any:
+            return {}, {row.agent_id: 1.05 for row in kwargs["rows"]}
+
+        def _stable_tiebreaks(
+            rows: Any, *, official: Any, efficiency_factors: Any
+        ) -> Any:
+            assert efficiency_factors
+            return {row.agent_id: official[row.agent_id] for row in rows}
+
+        monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _gated_list)
+        monkeypatch.setattr(
+            scoring_mod, "resolve_efficiency_adjustments", _factor_adjustments
+        )
+        monkeypatch.setattr(
+            scoring_mod,
+            "efficiency_tiebreak_composites",
+            _stable_tiebreaks,
+        )
+        first = asyncio.create_task(
+            client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        )
+        await asyncio.wait_for(first_read_started.wait(), timeout=2)
+        second = asyncio.create_task(
+            client.get(
+                "/api/v1/scoring/scores",
+                headers=_ledger_headers(
+                    signing_keypair=_BOB,
+                    validator_hotkey=_BOB.ss58_address,
+                ),
+            )
+        )
+        await asyncio.sleep(0.05)
+        assert calls == 1
+
+        release_first_read.set()
+        first_response, second_response = await asyncio.gather(first, second)
+        assert first_response.status_code == 200, first_response.text
+        assert second_response.status_code == 200, second_response.text
+        assert calls == 1
+        assert first_response.json()["entries"][0]["efficiency_factor"] == 1.05
+        assert second_response.json() == first_response.json()
+
+        # A waiter outside the factor-capable protocol cohort must still take
+        # the normal materialization path, where the resolver can return its
+        # neutral or fail-closed response instead of inheriting these factors.
+        async with session_maker() as session, session.begin():
+            bob = await session.get(ValidatorHeartbeat, _BOB.ss58_address)
+            assert bob is not None
+            bob.protocol_version = 20
+        assert not await scoring_mod._snapshot_can_be_shared(
+            cast(Any, SimpleNamespace(app=app)),
+            app.state.ledger_snapshot,
+            _BOB.ss58_address,
+            now=datetime.now(UTC),
+        )
 
     async def test_nonce_db_failure_returns_503_without_serving_cache(
         self,

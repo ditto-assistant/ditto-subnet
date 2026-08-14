@@ -52,7 +52,7 @@ from ditto.api_server.endpoints.validator import (
     _assert_validator_permitted,
     _verify_signature,
 )
-from ditto.db.models import Score
+from ditto.db.models import Score, ValidatorHeartbeat
 from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
@@ -62,6 +62,7 @@ from ditto.db.queries.heartbeats import (
     live_validator_fleet_supports_protocol,
 )
 from ditto.db.queries.score_ranking import (
+    VALIDATOR_STALE_WINDOW,
     EfficiencyFactorRequesterNotReady,
     dedupe_owner_rows,
     efficiency_tiebreak_composites,
@@ -265,16 +266,43 @@ def _store_snapshot(request: Request, snapshot: _LedgerSnapshot) -> None:
     request.app.state.ledger_snapshot = snapshot
 
 
-def _snapshot_can_be_shared(snapshot: _LedgerSnapshot, validator_hotkey: str) -> bool:
+async def _snapshot_can_be_shared(
+    request: Request,
+    snapshot: _LedgerSnapshot,
+    validator_hotkey: str,
+    *,
+    now: datetime,
+) -> bool:
     """Whether one successful materialization is safe for this requester.
 
     Curve-v3 efficiency factors can depend on the requesting validator's
-    protocol readiness. Until a snapshot contains those factors, the ledger is
-    fleet-wide and concurrent validators may share it. Once factors are
-    present, only requests from the same validator may reuse the result.
+    protocol readiness. Factor-free snapshots are fleet-wide. Factor-bearing
+    snapshots are also fleet-wide after a cheap requester heartbeat check
+    proves the waiter belongs to the factor-capable fleet.
     """
-    return snapshot.requesting_validator_hotkey == validator_hotkey or not any(
+    if snapshot.requesting_validator_hotkey == validator_hotkey or not any(
         entry.efficiency_factor is not None for entry in snapshot.entries
+    ):
+        return True
+
+    # The resolver exposes factors only after every fresh active-benchmark
+    # validator satisfies the protocol floor, so the payload is otherwise
+    # identical across that fleet. Preserve its requester-specific fail-closed
+    # edge without rebuilding the entire ledger: a stale or older waiter does
+    # not share and rematerializes to the resolver's normal neutral/428 result.
+    session_maker = getattr(request.app.state, "session_maker", None)
+    if session_maker is None:
+        return False
+    async with session_maker() as share_session:
+        requester = await share_session.get(ValidatorHeartbeat, validator_hotkey)
+    if requester is None:
+        return False
+    seen_at = requester.seen_at
+    if seen_at.tzinfo is None:
+        seen_at = seen_at.replace(tzinfo=UTC)
+    return (
+        seen_at >= now - VALIDATOR_STALE_WINDOW
+        and requester.protocol_version >= _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
     )
 
 
@@ -297,7 +325,10 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
 
 
 async def _join_ledger_materialization(
-    request: Request, validator_hotkey: str
+    request: Request,
+    validator_hotkey: str,
+    *,
+    now: datetime,
 ) -> tuple[_LedgerSnapshot | None, asyncio.Event]:
     """Join a concurrent ledger read, or claim the next materialization.
 
@@ -326,7 +357,9 @@ async def _join_ledger_materialization(
         if (
             snapshot_after is not None
             and snapshot_after is not snapshot_before
-            and _snapshot_can_be_shared(snapshot_after, validator_hotkey)
+            and await _snapshot_can_be_shared(
+                request, snapshot_after, validator_hotkey, now=now
+            )
         ):
             return snapshot_after, inflight
 
@@ -425,7 +458,7 @@ async def scores(
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
     joined_snapshot, materialization = await _join_ledger_materialization(
-        request, x_validator_hotkey
+        request, x_validator_hotkey, now=auth_now
     )
     if joined_snapshot is not None:
         logger.info(
