@@ -110,6 +110,14 @@ func TestMissingPylonAuthFailsBoot(t *testing.T) {
 	if _, err := Load(MapLookup(env)); err == nil {
 		t.Fatal("identity name without token must fail boot")
 	}
+
+	// A configured open-access token does not make a malformed identity pair
+	// valid; Python's ChainConfig rejects the half-pair unconditionally.
+	env = minimalEnv()
+	env["PYLON_IDENTITY_NAME"] = "relay"
+	if _, err := Load(MapLookup(env)); err == nil {
+		t.Fatal("identity name without token must fail even when open-access auth is set")
+	}
 }
 
 func TestRoleValidation(t *testing.T) {
@@ -231,5 +239,33 @@ func TestPublicBaseURLTrailingSlashStripped(t *testing.T) {
 	env["DITTO_INFERENCE_PUBLIC_BASE_URL"] = "not-a-url"
 	if _, err := Load(MapLookup(env)); err == nil {
 		t.Fatal("relative public base url must fail boot")
+	}
+	env["DITTO_INFERENCE_PUBLIC_BASE_URL"] = "https:relay.heyditto.ai"
+	if _, err := Load(MapLookup(env)); err == nil {
+		t.Fatal("public base url without a host must fail boot")
+	}
+}
+
+func TestProviderURLsArePinnedCredentialBoundaries(t *testing.T) {
+	tests := []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "chat wrong host", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "https://example.com/api/v1/chat/completions"},
+		{name: "chat plaintext", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "http://openrouter.ai/api/v1/chat/completions"},
+		{name: "chat wrong path", key: "DITTO_INFERENCE_UPSTREAM_URL", value: "https://openrouter.ai/api/v1/embeddings"},
+		{name: "embedding wrong host", key: "DITTO_EMBEDDING_UPSTREAM_URL", value: "https://example.com/api/v1/embeddings"},
+		{name: "fallback wrong host", key: "DITTO_EMBEDDING_FALLBACK_URL", value: "https://example.com/v1/embeddings"},
+		{name: "fallback wrong path", key: "DITTO_EMBEDDING_FALLBACK_URL", value: "https://api.perplexity.ai/api/v1/embeddings"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			env := minimalEnv()
+			env[tc.key] = tc.value
+			if _, err := Load(MapLookup(env)); err == nil {
+				t.Fatalf("%s=%q must fail boot", tc.key, tc.value)
+			}
+		})
 	}
 }

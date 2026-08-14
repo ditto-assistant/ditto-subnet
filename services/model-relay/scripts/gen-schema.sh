@@ -123,4 +123,15 @@ HEADER
     | grep -v '^\\' | grep -v '^-- Dumped \(from database\|by pg_dump\) version'
 } > "${OUT_FILE}"
 
+# pg_dump terminates with multiple blank lines. Keep one final newline but no
+# trailing blank lines so the generated artifact is stable under git diff
+# --check as well as the schema drift guard.
+python3 - "${OUT_FILE}" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+path.write_text(path.read_text().rstrip() + "\n")
+PY
+
 log "done: $(wc -l < "${OUT_FILE}") lines"

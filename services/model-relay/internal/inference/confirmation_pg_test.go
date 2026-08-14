@@ -501,9 +501,9 @@ func TestConfirmationEmbeddingsFullFlow(t *testing.T) {
 	defer pplx.Close()
 	cfg := testConfig(t, map[string]string{
 		"PERPLEXITY_API_KEY":              "test-pplx-key",
-		"DITTO_EMBEDDING_FALLBACK_URL":    pplx.URL,
 		"DITTO_INFERENCE_TIMEOUT_SECONDS": "5",
 	})
+	cfg.Inference.EmbeddingFallbackURL = pplx.URL
 	f := newConfirmationFixture(t, cfg, "embedding", config.PinnedEmbeddingModel, config.PinnedEmbeddingProvider)
 
 	nonce := uuid.New()

@@ -318,6 +318,9 @@ func Load(lookup Lookup) (*Config, error) {
 		IdentityToken:                r.str("PYLON_IDENTITY_TOKEN", ""),
 		DevAllowUnpermittedValidator: r.boolval("DITTO_DEV_ALLOW_UNPERMITTED_VALIDATOR", false),
 	}
+	if (cfg.Chain.IdentityName == "") != (cfg.Chain.IdentityToken == "") {
+		r.fail("PYLON_IDENTITY_NAME and PYLON_IDENTITY_TOKEN must be provided together")
+	}
 	hasIdentityPair := cfg.Chain.IdentityName != "" && cfg.Chain.IdentityToken != ""
 	if cfg.Chain.OpenAccessToken == "" && !hasIdentityPair {
 		r.fail("Pylon auth is required: set PYLON_OPEN_ACCESS_TOKEN or both PYLON_IDENTITY_NAME and PYLON_IDENTITY_TOKEN")
@@ -399,9 +402,25 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 	if ip.Required && !ip.Enabled {
 		r.fail("DITTO_INFERENCE_PROXY_REQUIRED requires DITTO_INFERENCE_PROXY_ENABLED")
 	}
-	if u, err := url.Parse(ip.PublicBaseURL); err != nil || !u.IsAbs() || (u.Scheme != "http" && u.Scheme != "https") {
+	if u, err := url.Parse(ip.PublicBaseURL); err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
 		r.fail("DITTO_INFERENCE_PUBLIC_BASE_URL must be an absolute http/https URL, got %q", ip.PublicBaseURL)
 	}
+	validateProviderURL := func(name, raw, host, path, description string) {
+		u, err := url.Parse(raw)
+		if err != nil || u.Scheme != "https" || !strings.EqualFold(u.Hostname(), host) || u.Path != path {
+			r.fail("%s must be %s, got %q", name, description, raw)
+		}
+	}
+	// These pins are credential boundaries, not just convenient defaults. The
+	// relay attaches provider bearer tokens to these URLs, so a typo or hostile
+	// environment override must fail boot instead of forwarding a secret to an
+	// arbitrary host. Keep this identical to apps/platform check_config().
+	validateProviderURL("DITTO_INFERENCE_UPSTREAM_URL", ip.UpstreamURL,
+		"openrouter.ai", "/api/v1/chat/completions", "OpenRouter chat completions")
+	validateProviderURL("DITTO_EMBEDDING_UPSTREAM_URL", ip.EmbeddingUpstreamURL,
+		"openrouter.ai", "/api/v1/embeddings", "OpenRouter embeddings")
+	validateProviderURL("DITTO_EMBEDDING_FALLBACK_URL", ip.EmbeddingFallbackURL,
+		"api.perplexity.ai", "/v1/embeddings", "Perplexity embeddings")
 	if ip.RoutingMode != RoutingModeAggregateThroughput && ip.RoutingMode != RoutingModeAdaptive {
 		r.fail("DITTO_INFERENCE_ROUTING_MODE must be %q or %q, got %q",
 			RoutingModeAggregateThroughput, RoutingModeAdaptive, ip.RoutingMode)

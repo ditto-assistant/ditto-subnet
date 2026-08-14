@@ -44,7 +44,7 @@ only the relay process on the relay hosts.
   concurrency-settings resolver. Endpoint-level transaction semantics
   mirror the deployed Python exactly: admission DECLINES roll the admission
   transaction back; settlement always runs (detached from the request
-  context, so a client disconnect cancels the upstream call but never skips
+  context, so a client disconnect neither cancels the upstream call nor skips
   accounting). No route streams: `stream: true` is refused legibly and
   upstream responses are fully buffered, sanitized, and re-serialized.
 - `internal/chain` — Pylon client: `/health` block probe and the

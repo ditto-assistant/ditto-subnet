@@ -4436,5 +4436,3 @@ ALTER TABLE ONLY public.validator_tickets
 --
 -- PostgreSQL database dump complete
 --
-
-

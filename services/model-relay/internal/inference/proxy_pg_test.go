@@ -138,9 +138,12 @@ func (f *pgFixture) signedProxyHeaders(generation int64, nonce uuid.UUID, body [
 
 func chatTestConfig(t *testing.T, upstreamURL string) *config.Config {
 	cfg := testConfig(t, map[string]string{
-		"DITTO_INFERENCE_UPSTREAM_URL":    upstreamURL,
 		"DITTO_INFERENCE_TIMEOUT_SECONDS": "5",
 	})
+	// Production config only accepts the reviewed provider credential boundary.
+	// Tests replace the destination after validation so an in-process upstream
+	// can exercise the real proxy without adding a boot-time bypass.
+	cfg.Inference.UpstreamURL = upstreamURL
 	return cfg
 }
 
@@ -694,9 +697,9 @@ func TestEmbeddingsFullFlowDirect(t *testing.T) {
 
 	cfg := testConfig(t, map[string]string{
 		"PERPLEXITY_API_KEY":              "test-pplx-key",
-		"DITTO_EMBEDDING_FALLBACK_URL":    pplx.URL,
 		"DITTO_INFERENCE_TIMEOUT_SECONDS": "5",
 	})
+	cfg.Inference.EmbeddingFallbackURL = pplx.URL
 	f := newPGFixture(t, cfg)
 
 	nonce := uuid.New()
@@ -764,9 +767,9 @@ func TestEmbeddingsBackpressure(t *testing.T) {
 	defer busy.Close()
 
 	cfg := testConfig(t, map[string]string{
-		"DITTO_EMBEDDING_UPSTREAM_URL":    busy.URL,
 		"DITTO_INFERENCE_TIMEOUT_SECONDS": "5",
 	})
+	cfg.Inference.EmbeddingUpstreamURL = busy.URL
 	f := newPGFixture(t, cfg)
 
 	nonce := uuid.New()
@@ -815,9 +818,9 @@ func TestEmbeddingSettingsBoardRaisesTicketLimit(t *testing.T) {
 	defer pplx.Close()
 	cfg := testConfig(t, map[string]string{
 		"PERPLEXITY_API_KEY":              "test-pplx-key",
-		"DITTO_EMBEDDING_FALLBACK_URL":    pplx.URL,
 		"DITTO_INFERENCE_TIMEOUT_SECONDS": "5",
 	})
+	cfg.Inference.EmbeddingFallbackURL = pplx.URL
 	f := newPGFixture(t, cfg)
 	checksum := strings.Repeat("ab", 32)
 	testutil.SeedSQL(t, f.pool,
