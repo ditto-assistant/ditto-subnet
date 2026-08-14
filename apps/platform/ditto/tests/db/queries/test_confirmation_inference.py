@@ -2,12 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import event
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+)
 
 from ditto.db.queries.confirmation_inference import (
     ConfirmationInferenceDecline,
@@ -208,3 +214,96 @@ async def test_model_substitution_nonce_replay_and_budget_exhaustion_fail_closed
             )
             is ConfirmationInferenceDecline.BUDGET_EXHAUSTED
         )
+
+
+async def test_successful_request_admission_uses_five_statements_end_to_end(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+    engine: AsyncEngine,
+) -> None:
+    """Include the endpoint's proof snapshot and the durable reservation flush."""
+    async with session.begin():
+        _, offers = await _grants(session)
+        reader, bearer = next(
+            (grant, token) for grant, token in offers if grant.lane == "reader"
+        )
+        grant_id = reader.grant_id
+        model = reader.model
+
+    statements: list[str] = []
+
+    def record_statement(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        statements.append(statement)
+
+    event.listen(engine.sync_engine, "before_cursor_execute", record_statement)
+    try:
+        async with session_maker() as request_session, request_session.begin():
+            # Both confirmation endpoints load this row to validate the signed
+            # proof and freeze the upstream request before admission.
+            proof_grant = await request_session.get(type(reader), grant_id)
+            assert proof_grant is not None
+            admitted = await begin_confirmation_inference_request(
+                request_session,
+                grant_id=grant_id,
+                nonce=uuid4(),
+                bearer=bearer,
+                model=model,
+                token_reservation=10,
+                max_chargeable_tokens=20,
+                now=_NOW,
+            )
+            assert not isinstance(admitted, ConfirmationInferenceDecline)
+    finally:
+        event.remove(engine.sync_engine, "before_cursor_execute", record_statement)
+
+    assert len(statements) == 5
+    assert sum("FOR UPDATE" in statement for statement in statements) == 2
+    assert any("ON CONFLICT" in statement for statement in statements)
+    assert not any(
+        statement.lstrip().startswith("SELECT confirmation_inference_requests")
+        for statement in statements
+    )
+
+
+async def test_concurrent_same_nonce_admits_once_and_replay_fails_closed(
+    session: AsyncSession,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session.begin():
+        _, offers = await _grants(session)
+        reader, bearer = next(
+            (grant, token) for grant, token in offers if grant.lane == "reader"
+        )
+        grant_id = reader.grant_id
+        model = reader.model
+        nonce = uuid4()
+
+    async def admit():
+        async with session_maker() as contender, contender.begin():
+            return await begin_confirmation_inference_request(
+                contender,
+                grant_id=grant_id,
+                nonce=nonce,
+                bearer=bearer,
+                model=model,
+                token_reservation=10,
+                max_chargeable_tokens=20,
+                now=_NOW,
+            )
+
+    outcomes = await asyncio.gather(admit(), admit())
+    assert (
+        sum(
+            not isinstance(outcome, ConfirmationInferenceDecline)
+            for outcome in outcomes
+        )
+        == 1
+    )
+    assert outcomes.count(ConfirmationInferenceDecline.NONCE_REPLAYED) == 1

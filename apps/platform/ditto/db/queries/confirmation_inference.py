@@ -9,6 +9,7 @@ from enum import StrEnum
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as postgresql_insert
 
 from ditto.api_server.confirmation_evidence import ConfirmationVerificationProfile
 from ditto.db.models import (
@@ -247,36 +248,52 @@ async def begin_confirmation_inference_request(
         return ConfirmationInferenceDecline.LEASE_EXPIRED
     if model != grant.model:
         return ConfirmationInferenceDecline.MODEL_NOT_PERMITTED
-    if await session.get(ConfirmationInferenceRequest, (grant_id, nonce)) is not None:
+    request = await session.scalar(
+        postgresql_insert(ConfirmationInferenceRequest)
+        .values(
+            grant_id=grant_id,
+            nonce=nonce,
+            generation=grant.generation,
+            status="started",
+            model=model,
+            # Keep the provisional row constraint-valid so replay detection
+            # stays ahead of malformed-reservation classification exactly as
+            # before. A malformed fresh request deletes this row below.
+            reserved_tokens=max(1, token_reservation),
+            max_chargeable_tokens=max(1, token_reservation, max_chargeable_tokens),
+            prompt_tokens=0,
+            completion_tokens=0,
+            cost_microusd=0,
+            started_at=now,
+        )
+        .on_conflict_do_nothing(
+            index_elements=(
+                ConfirmationInferenceRequest.grant_id,
+                ConfirmationInferenceRequest.nonce,
+            )
+        )
+        .returning(ConfirmationInferenceRequest)
+    )
+    if request is None:
         return ConfirmationInferenceDecline.NONCE_REPLAYED
     if grant.request_count >= grant.request_budget:
         grant.status = "exhausted"
+        await session.delete(request)
         return ConfirmationInferenceDecline.BUDGET_EXHAUSTED
     if token_reservation < 1 or max_chargeable_tokens < token_reservation:
+        await session.delete(request)
         return ConfirmationInferenceDecline.UNATTRIBUTED
     if (
         grant.prompt_tokens + grant.completion_tokens + token_reservation
         > grant.token_budget
     ):
         grant.status = "exhausted"
+        await session.delete(request)
         return ConfirmationInferenceDecline.TOKEN_BUDGET_EXHAUSTED
     if grant.cost_microusd >= grant.cost_budget_microusd > 0:
         grant.status = "exhausted"
+        await session.delete(request)
         return ConfirmationInferenceDecline.COST_BUDGET_EXHAUSTED
-    request = ConfirmationInferenceRequest(
-        grant_id=grant_id,
-        nonce=nonce,
-        generation=grant.generation,
-        status="started",
-        model=model,
-        reserved_tokens=token_reservation,
-        max_chargeable_tokens=max_chargeable_tokens,
-        prompt_tokens=0,
-        completion_tokens=0,
-        cost_microusd=0,
-        started_at=now,
-    )
-    session.add(request)
     grant.request_count += 1
     grant.active_requests += 1
     grant.updated_at = now
