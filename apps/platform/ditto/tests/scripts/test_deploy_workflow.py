@@ -168,3 +168,34 @@ def test_relay_artifact_is_tarred_before_upload() -> None:
     )
     assert "tar --create" not in roll["run"]
     assert "relay-artifact.tgz" in roll["run"]
+
+
+def test_relay_artifact_is_extracted_as_the_deploy_user() -> None:
+    workflow = _workflow()
+    release = workflow["jobs"]["relay-release"]
+    roll = next(
+        step
+        for step in release["steps"]
+        if step.get("name") == "Roll relay services without shared downtime"
+    )["run"]
+
+    create = "sudo install -d -o deploy -g ditto -m 0750 '$remote_artifact'"
+    stage = (
+        "sudo install -o deploy -g ditto -m 0640 '$remote_artifact.tgz' "
+        "'$remote_artifact/relay-artifact.tgz'"
+    )
+    extract = "sudo -u deploy tar --extract --gzip"
+    launch = "sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh'"
+
+    assert create in roll
+    assert stage in roll
+    assert extract in roll
+    assert launch in roll
+    assert (
+        roll.index(create)
+        < roll.index(stage)
+        < roll.index(extract)
+        < roll.index(launch)
+    )
+    assert "mkdir -p '$remote_artifact'" not in roll
+    assert "sudo rm -rf -- '$remote_artifact' '$remote_artifact.tgz'" in roll

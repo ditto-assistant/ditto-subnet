@@ -491,7 +491,7 @@ jobs:
             --zone "$GCP_ZONE" --tunnel-through-iap --quiet
           gcloud compute ssh "$target_vm" \
             --zone "$GCP_ZONE" --tunnel-through-iap --quiet \
-            --command "mkdir -p '$remote_artifact' && tar --extract --gzip --file '$remote_artifact.tgz' --directory '$remote_artifact' && sudo install -d -o deploy -g ditto /opt/ditto-platform-relay && sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh' '$remote_artifact' '$DEPLOY_REVISION'; code=\$?; rm -rf '$remote_artifact' '$remote_artifact.tgz'; exit \$code"
+            --command "sudo install -d -o deploy -g ditto -m 0750 '$remote_artifact' && sudo install -o deploy -g ditto -m 0640 '$remote_artifact.tgz' '$remote_artifact/relay-artifact.tgz' && sudo -u deploy tar --extract --gzip --file '$remote_artifact/relay-artifact.tgz' --directory '$remote_artifact' && sudo -u deploy rm -- '$remote_artifact/relay-artifact.tgz' && sudo install -d -o deploy -g ditto /opt/ditto-platform-relay && sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh' '$remote_artifact' '$DEPLOY_REVISION'; code=\$?; sudo rm -rf -- '$remote_artifact' '$remote_artifact.tgz'; exit \$code"
 
       - name: Deregister release SSH key
         if: always()
