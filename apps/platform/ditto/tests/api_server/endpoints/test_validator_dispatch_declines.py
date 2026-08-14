@@ -390,14 +390,20 @@ class TestRecordDispatchDecline:
         self, caplog: pytest.LogCaptureFixture
     ) -> None:
         """Hotkey and slot are too high-cardinality for a label, so they land here."""
-        with caplog.at_level(
-            logging.INFO, logger="ditto.api_server.endpoints.validator"
-        ):
-            _record_dispatch_decline(
-                "disk_breaker",
-                validator_hotkey="5DiskFullValidator",
-                slot_id="slot-2",
-            )
+        target_logger = logging.getLogger("ditto.api_server.endpoints.validator")
+        was_disabled = target_logger.disabled
+        target_logger.disabled = False
+        target_logger.addHandler(caplog.handler)
+        try:
+            with caplog.at_level(logging.INFO, logger=target_logger.name):
+                _record_dispatch_decline(
+                    "disk_breaker",
+                    validator_hotkey="5DiskFullValidator",
+                    slot_id="slot-2",
+                )
+        finally:
+            target_logger.removeHandler(caplog.handler)
+            target_logger.disabled = was_disabled
 
         message = caplog.records[-1].getMessage()
         assert "reason=disk_breaker" in message
