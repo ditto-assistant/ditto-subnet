@@ -115,7 +115,7 @@ export function BenchmarkPage(): JSX.Element {
               <span
                 class="tag tip"
                 tabindex="0"
-                data-tooltip="Memory cases contribute half of the unadjusted composite. Quality gates and token efficiency can then reduce the final score."
+                data-tooltip="Memory cases contribute half of the unadjusted composite. Benchmark quality gates can then reduce the final score; token usage is metered but does not adjust any current-bench score."
               >
                 50%
               </span>
@@ -170,11 +170,15 @@ export function BenchmarkPage(): JSX.Element {
                   applying it to newer benches.
                 </li>
                 <li>
-                  <b>How the current token-efficiency bonus works.</b> On Bench v7 and newer,
-                  audited relative efficiency is strictly upside. The platform first computes the
-                  continual score from the original quorum and every retained retest sample, then
-                  applies the frozen cohort bonus. The leaderboard shows the pre-bonus score, bonus
-                  percentage, and final folded score separately.
+                  <b>Where token efficiency stands.</b> On Bench v7 and newer, no token-efficiency
+                  adjustment is applied today: ranking, the crown, and emissions use audited quality
+                  alone. Validators meter token usage and a relative-efficiency design exists behind
+                  an operator switch, but that switch is off — the leaderboard's efficiency strip
+                  reports its live state, and any per-row efficiency figures shown while it is off
+                  are audit-only projections that move nothing. Per miner feedback, token totals at
+                  today's scale mostly measure system-prompt length rather than capability, so the
+                  design is being reworked before any activation, which would be announced ahead of
+                  time.
                 </li>
                 <li>
                   <b>Which runs rank.</b> Only runs that administer the <b>full</b> benchmark

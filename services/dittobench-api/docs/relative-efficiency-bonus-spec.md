@@ -1,7 +1,9 @@
 # Relative efficiency adjustment — platform-layer specification (v7+)
 
 Status: IMPLEMENTED in `ditto-platform` behind operator-controlled shadow and
-enforcement settings. Nothing here changes the deterministic benchmark scorer.
+enforcement settings, but DISABLED pending redesign — see "2026-08-13 miner
+feedback — enablement preconditions" at the end of this document. Nothing here
+changes the deterministic benchmark scorer.
 Under the v7+ quality-only contract, quality evidence is deterministic and
 time-invariant; the platform separately computes relative efficiency over a
 frozen cohort. Historical curves v1/v2 are upside-only. A newly created Bench
@@ -226,3 +228,22 @@ For each cohort `(bench_version, run_size, epoch)`:
    regardless of scorer capability, so old validators cannot split KOTH/weight
    projections. This new readiness gate does not alter historical curve-v1/v2
    bonus exposure.
+
+## 2026-08-13 miner feedback — enablement preconditions
+
+The curve-v3 fold is DISABLED and must not be re-enabled in the shape
+specified above. Miner feedback (2026-08-13), confirmed against the live v9
+board, identified that at today's scale audited token totals are dominated by
+system-prompt length (every competitive harness answers in ~2 turns), the
+penalized prompt tokens are largely cache-served and nearly free, and — with
+multiple agents tied at the top composite — the equal-quality
+lower-cost-ranks-higher clause would let system-prompt length decide the crown.
+
+Binding preconditions before any activation, specified in detail in
+`apps/platform/docs/relative-efficiency-bonus.md` (same-titled section):
+
+* a frozen cohort cost-dispersion gate (tight-spread epochs freeze neutral);
+* a cache-aware cost basis that does not scale with system-prompt length;
+* removal of the equal-quality pre-`first_seen` ranking clause — the factor
+  never reorders quality-tied agents;
+* all existing rollout-sequence gates unchanged.

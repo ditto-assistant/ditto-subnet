@@ -1,5 +1,9 @@
 # Relative token-efficiency adjustment (bench_version >= 7)
 
+> **Status:** the curve-v3 fold is disabled and stays disabled until the
+> preconditions in "2026-08-13 miner feedback — enablement preconditions"
+> (end of this document) are met.
+
 Platform-side implementation of the v7 efficiency contract. The other half of
 the contract already shipped validator-side: for `bench_version >= 7` the
 deterministic scorer is **quality-only** — it reports audited token usage
@@ -548,3 +552,51 @@ Residual risks (honest list):
 * `ditto/tests/api_server/test_config.py` — env parsing + boot validation.
 * Platform and root `ditto/tests/contract/` — regenerated, byte-identical
   `LedgerEntry` goldens for the additive factor field.
+
+## 2026-08-13 miner feedback — enablement preconditions
+
+The curve-v3 fold is DISABLED (Backroom efficiency-bonus settings revision 2)
+and stays disabled until the defects below are designed out. Direct miner
+feedback (2026-08-13) identified a real incentive problem, confirmed against
+the live v9 board:
+
+1. **Token totals measure system-prompt length, not capability.** Every
+   competitive harness answers a case in about two turns and a few thousand
+   tokens, so variance in `prompt_tokens + completion_tokens` is dominated by
+   system-prompt size. At that dispersion a cost ranking selects for shorter
+   system prompts — i.e. against edge-case coverage and recovery instructions —
+   which is the opposite of the robustness the benchmark exists to reward.
+2. **The penalized tokens are nearly free.** Prompt tokens are largely
+   cache-served; a 3–4k system prompt has negligible marginal cost and latency.
+   The factor would impose a scoring penalty with no corresponding real-world
+   saving.
+3. **At saturated quality the factor becomes the crown-decider.** The v9 board
+   has had six agents tied at the top composite. The spec clause that ranks a
+   lower-cost qualified agent higher before the `first_seen` tie break would
+   make token counts — i.e. system-prompt length — the signal that moves the
+   crown and the champion emission share. This is the strongest form of
+   defect 1 and is retracted as a design goal.
+
+Preconditions before any future enablement. Each must be designed,
+implemented, tested, and announced to miners before `enabled` or
+`fold_enabled` is ever switched on again:
+
+* **Dispersion gate.** An epoch assigns factors only when the qualified
+  cohort's cost spread is materially larger than system-prompt noise (for
+  example, a frozen minimum P75/P25 cost ratio recorded in the epoch
+  snapshot). A cohort whose costs cluster freezes a neutral epoch: tight
+  spread means the differences are prompt-length differences, and there is
+  nothing legitimate to reward.
+* **Cache-aware cost basis.** The durable cost proxy must not charge repeated
+  cache-served prompt tokens at full weight. Either weight cache-read tokens
+  at their real relative price or adopt a marginal-cost proxy that does not
+  scale with system-prompt length.
+* **No tie-deciding.** The factor must never be the sole signal that reorders
+  agents whose authoritative quality is equal; the pre-`first_seen`
+  equal-quality ranking clause is removed from the target design.
+* The existing activation-lifecycle gates (cohort health, protocol-19 fleet
+  readiness, fail-closed evidence rules) all still apply on top.
+
+Until every precondition is met, the public leaderboard's efficiency strip
+reports the fold as off, and dashboard copy must not describe any token
+adjustment as applied to current benches.
