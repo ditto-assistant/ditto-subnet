@@ -1181,6 +1181,24 @@ jobs:
           tags: |
             ${{ env.PYLON_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
 
+      # Authenticate Pylon while the slower validator/scorer lanes are still
+      # running instead of serializing this 28-second pull on assemble-stack.
+      - name: Verify the patched Pylon artifact
+        env:
+          VERSION: ${{ needs.release.outputs.version }}
+          REVISION: ${{ needs.release.outputs.commit_sha }}
+          PYLON_DIGEST: ${{ steps.pylon.outputs.digest }}
+        run: |
+          [[ "$PYLON_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          exact="$PYLON_REPOSITORY@$PYLON_DIGEST"
+          docker pull --platform linux/amd64 "$exact"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$exact")" = "https://github.com/ditto-assistant/ditto-subnet"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
+          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.turbobt-revision" }}' "$exact")" = "$PYLON_TURBOBT_REVISION"
+          docker run --rm --platform linux/amd64 --entrypoint python "$exact" -c \
+            'from pathlib import Path; p=Path("/app/pylon_service/.venv/lib/python3.13/site-packages/turbobt/substrate/pallets/author.py"); s=p.read_text(); assert "isinstance(subscription_id_raw, str)" in s'
+
   prepare-dittobench:
     needs: [plan, release]
     if: >-
@@ -1848,7 +1866,8 @@ jobs:
             ["$DITTOBENCH_API_REPOSITORY"]="dittobench-api"
             ["$MODEL_RELAY_REPOSITORY"]="model-relay"
           )
-          for repository in "${!artifacts[@]}"; do
+          verify_artifact() {
+            local repository="$1" digest raw amd64_digest child
             digest="${artifacts[$repository]}"
             [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
             raw="$(docker buildx imagetools inspect --raw "$repository@$digest")"
@@ -1883,6 +1902,14 @@ jobs:
               test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.build-source-revision" }}' "$child")" = "$REVISION"
               test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.compat-source-revision" }}' "$child")" = "$MODEL_RELAY_COMPAT_REVISION"
             fi
+          }
+          pids=()
+          for repository in "${!artifacts[@]}"; do
+            verify_artifact "$repository" &
+            pids+=("$!")
+          done
+          for pid in "${pids[@]}"; do
+            wait "$pid"
           done
 
       - name: Smoke-test the amd64 validator artifact by exact child digest
@@ -1918,22 +1945,6 @@ jobs:
             'from ditto.validator.update_control import bootstrap_should_start_drained as s, mark_bootstrap_resumed as m; assert s(True); assert m(); assert not s(True)'
           docker volume rm "$volume"
           trap - EXIT
-
-      - name: Verify the patched Pylon artifact
-        env:
-          VERSION: ${{ needs.release.outputs.version }}
-          REVISION: ${{ needs.release.outputs.commit_sha }}
-          PYLON_DIGEST: ${{ needs.build-pylon.outputs.digest }}
-        run: |
-          [[ "$PYLON_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          exact="$PYLON_REPOSITORY@$PYLON_DIGEST"
-          docker pull --platform linux/amd64 "$exact"
-          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.source" }}' "$exact")" = "https://github.com/ditto-assistant/ditto-subnet"
-          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "$exact")" = "$VERSION"
-          test "$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$exact")" = "$REVISION"
-          test "$(docker image inspect --format '{{ index .Config.Labels "io.heyditto.validator.turbobt-revision" }}' "$exact")" = "$PYLON_TURBOBT_REVISION"
-          docker run --rm --platform linux/amd64 --entrypoint python "$exact" -c \
-            'from pathlib import Path; p=Path("/app/pylon_service/.venv/lib/python3.13/site-packages/turbobt/substrate/pallets/author.py"); s=p.read_text(); assert "isinstance(subscription_id_raw, str)" in s'
 
       # Frozen compat-2 hosts authenticate components with Docker's local image
       # inspector before they drain. Bind each descriptor architecture directly

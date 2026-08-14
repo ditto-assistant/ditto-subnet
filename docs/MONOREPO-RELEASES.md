@@ -82,6 +82,13 @@ larger-runner group lets its two builds run concurrently with the scorer builds.
 The v0.63.2 release's emulated multi-platform validator job took 3m53s,
 including 3m24s in the build-and-publish step.
 
+Stack assembly keeps authentication fail-closed while overlapping independent
+network work. The four first-party image indexes authenticate concurrently;
+Pylon authenticates in its own build lane before that lane can satisfy the
+assembly dependency; and the generated runtime smoke pulls its two exact
+dependency images concurrently before startup. In v0.63.2 those serialized
+operations occupied about 92 seconds of the assembly critical path.
+
 Do not move short planning, tagging, verification, deployment, smoke, or
 promotion jobs to the billed pools without measured job-level evidence. If
 either larger runner or the group is removed, restore its native build job to

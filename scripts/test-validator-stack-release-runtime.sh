@@ -20,12 +20,22 @@ export VALIDATOR_HOTKEY=release-smoke
 # The release bundle uses pull_policy=never so production never substitutes a
 # floating tag. Pull the exact digest-bound images explicitly, then boot the
 # actual generated runtime services rather than a source-Compose fixture.
+images=()
 for service in sandbox-docker ollama; do
-  image="$(docker compose --project-name "$project" --file "$compose_file" \
+  images+=("$(docker compose --project-name "$project" --file "$compose_file" \
     config --format json | jq -er --arg service "$service" \
-      '.services[$service].image')"
-  docker pull --platform linux/amd64 "$image" >/dev/null
-  docker image inspect "$image" >/dev/null
+      '.services[$service].image')")
+done
+pids=()
+for image in "${images[@]}"; do
+  (
+    docker pull --platform linux/amd64 "$image" >/dev/null
+    docker image inspect "$image" >/dev/null
+  ) &
+  pids+=("$!")
+done
+for pid in "${pids[@]}"; do
+  wait "$pid"
 done
 
 docker compose --project-name "$project" --file "$compose_file" \

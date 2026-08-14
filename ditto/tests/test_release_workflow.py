@@ -808,9 +808,14 @@ def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     )
     assert context.endswith("${{ env.PYLON_TURBOBT_REVISION }}\n")
 
-    assembly = workflow["jobs"]["assemble-stack"]
-    verify = _step(assembly["steps"], "Verify the patched Pylon artifact")
+    verify = _step(build["steps"], "Verify the patched Pylon artifact")
+    assert verify["env"]["PYLON_DIGEST"] == "${{ steps.pylon.outputs.digest }}"
     assert "isinstance(subscription_id_raw, str)" in verify["run"]
+    assembly = workflow["jobs"]["assemble-stack"]
+    assert all(
+        step.get("name") != "Verify the patched Pylon artifact"
+        for step in assembly["steps"]
+    )
     runtime = _step(assembly["steps"], "Resolve frozen-updater runtime manifests")
     assert runtime["env"]["PYLON_DIGEST"] == "${{ needs.build-pylon.outputs.digest }}"
     assert (
@@ -819,6 +824,20 @@ def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     )
     render = _step(assembly["steps"], "Render the architecture-bound stack bundles")
     assert "steps.compat-runtime.outputs.pylon_digest" in render["run"]
+
+
+def test_release_parallelizes_independent_artifact_authentication() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    verify = _step(
+        workflow["jobs"]["assemble-stack"]["steps"],
+        "Verify every first-party multi-platform index",
+    )["run"]
+
+    assert "verify_artifact()" in verify
+    assert 'verify_artifact "$repository" &' in verify
+    assert 'pids+=("$!")' in verify
+    assert 'for pid in "${pids[@]}"' in verify
+    assert 'wait "$pid"' in verify
 
 
 def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> None:
@@ -856,6 +875,16 @@ def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> 
     ).read_text()
     assert "export VALIDATOR_STACK_DESCRIPTOR_REF=release-smoke" in runtime_script
     assert "export VALIDATOR_HOTKEY=release-smoke" in runtime_script
+    assert "images=()" in runtime_script
+    assert 'for image in "${images[@]}"' in runtime_script
+    assert ") &" in runtime_script
+    assert 'pids+=("$!")' in runtime_script
+    assert 'wait "$pid"' in runtime_script
+    compose_up = (
+        'docker compose --project-name "$project" --file "$compose_file" '
+        "\\\n  up --detach --wait"
+    )
+    assert runtime_script.index("pids=()") < runtime_script.index(compose_up)
 
 
 def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
