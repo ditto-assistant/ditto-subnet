@@ -16,12 +16,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
 	"strconv"
 
+	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 	"github.com/ditto-assistant/dittobench-api/internal/refharness"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
@@ -32,6 +34,7 @@ const fixedLatencyMs = 1
 func main() {
 	port := flag.Int("port", 9000, "HTTP listen port")
 	flag.Parse()
+	pprofserver.Start(context.Background(), "refharness", *port)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {

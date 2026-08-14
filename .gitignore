@@ -16,6 +16,7 @@ build/
 .ruff_cache/
 .coverage
 htmlcov/
+**/.tmp/pprof/
 
 # Env files
 .env

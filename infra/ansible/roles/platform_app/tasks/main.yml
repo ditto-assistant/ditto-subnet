@@ -95,6 +95,31 @@
     global: true
     state: present
 
+# --- Python sampling profiler (operator-only, never imported by the API) ---
+- name: Read installed py-spy version
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/py-spy
+      - --version
+  register: platform_py_spy_check
+  changed_when: false
+  failed_when: false
+
+- name: Install pinned py-spy as an isolated uv tool
+  ansible.builtin.command:
+    argv:
+      - /usr/local/bin/uv
+      - tool
+      - install
+      - --force
+      - "py-spy=={{ platform_py_spy_version }}"
+  environment:
+    UV_TOOL_BIN_DIR: /usr/local/bin
+    UV_TOOL_DIR: "{{ platform_uv_tool_dir }}"
+  when: >-
+    platform_py_spy_check.rc != 0 or
+    ('py-spy ' ~ platform_py_spy_version) not in platform_py_spy_check.stdout
+
 # --- Read-only GitHub deploy key (clone/pull the private repo over SSH) ---
 - name: Ensure deploy user .ssh dir
   ansible.builtin.file:

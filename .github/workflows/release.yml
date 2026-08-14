@@ -451,7 +451,7 @@ jobs:
       - name: Install Go for model-relay verification
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.26.6"
           cache-dependency-path: services/model-relay/go.sum
 
       - name: Gate model-relay release on exact merge source
@@ -526,7 +526,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.23"
+          go-version: "1.26.6"
           cache-dependency-path: services/dittobench-api/go.sum
 
       - name: Gate DittoBench API release on exact merge source
@@ -1320,7 +1320,7 @@ jobs:
       - name: Set up the scorer toolchain
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.23"
+          go-version: "1.26.6"
           cache-dependency-path: services/dittobench-api/go.sum
 
       - name: Verify the exact dittobench-api source

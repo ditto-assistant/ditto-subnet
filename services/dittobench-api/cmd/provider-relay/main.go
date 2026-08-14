@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"flag"
 	"io"
@@ -13,10 +14,12 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 	"github.com/ditto-assistant/dittobench-api/internal/providercert"
 )
 
@@ -72,6 +75,11 @@ func main() {
 	upstream := flag.String("upstream", providercert.DefaultAPIURL+"/chat/completions", "upstream chat completions endpoint")
 	port := flag.String("port", "11435", "listen port")
 	flag.Parse()
+	parsedPort, err := strconv.Atoi(*port)
+	if err != nil || parsedPort < 1 || parsedPort > 65535 {
+		log.Fatalf("invalid -port %q", *port)
+	}
+	pprofserver.Start(context.Background(), "provider-relay", parsedPort)
 	apiKey := strings.TrimSpace(os.Getenv("PROVIDER_RELAY_API_KEY"))
 	if apiKey == "" {
 		apiKey = strings.TrimSpace(os.Getenv("OPENROUTER_API_KEY"))

@@ -62,6 +62,12 @@ platform_repo_url: "git@github.com:ditto-assistant/ditto-subnet.git"
 platform_owner: "{{ deploy_user | default('deploy') }}"
 platform_group: "{{ deploy_group | default('ditto') }}"
 
+# Python sampling profiler installed as an isolated uv tool. It is not placed
+# in the application environment, so profiling dependencies cannot perturb the
+# API lockfile or import graph.
+platform_py_spy_version: "0.4.2"
+platform_uv_tool_dir: /opt/uv-tools
+
 # App listen port (Caddy reverse-proxies the public 443 -> here).
 #
 # This ALSO renders API_PORT into /opt/ditto-platform/.env, which

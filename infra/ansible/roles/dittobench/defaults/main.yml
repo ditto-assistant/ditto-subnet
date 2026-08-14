@@ -86,8 +86,8 @@ dittobench_scorer_model: "google/gemini-3.1-flash-lite"
 
 # Pinned Go toolchain used to build the (pure-Go) binary on the VM. Kept >= the
 # repo's go.mod directive. Installed to /usr/local/go if absent/mismatched.
-dittobench_go_version: "1.23.6"
-dittobench_go_linux_amd64_sha256: "9379441ea310de000f33a4dc767bd966e72ab2826270e038e78b2c53c2e7802d"
+dittobench_go_version: "1.26.6"
+dittobench_go_linux_amd64_sha256: "708effb774be8237570d0add163225abbdfaf4fca28b2611df167beba4feef89"
 dittobench_go_root: /usr/local/go
 
 # GCP project the VM's attached SA reads Secret Manager from.

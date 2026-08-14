@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.26.6"
           cache: true
           cache-dependency-path: services/model-relay/go.sum
       - name: gofmt
@@ -94,7 +94,7 @@ jobs:
           enable-cache: true
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.26.6"
           cache: true
           cache-dependency-path: services/model-relay/go.sum
       - name: Regenerate db/schema.sql from the real Alembic chain
@@ -126,7 +126,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.25"
+          go-version: "1.26.6"
           cache: true
           cache-dependency-path: services/model-relay/go.sum
       # Mirrors build-relay-release.sh's artifact build and --version smoke

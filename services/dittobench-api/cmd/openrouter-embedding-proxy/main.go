@@ -20,6 +20,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 )
 
 const (
@@ -372,6 +374,7 @@ func main() {
 	if err != nil || port < 1 || port > 65535 {
 		log.Fatal("OPENROUTER_EMBED_PORT must be a valid port")
 	}
+	pprofserver.Start(context.Background(), "openrouter-embedding-proxy", port)
 	cacheDir := envOr("OPENROUTER_EMBED_CACHE_DIR", "/tmp/dittobench-openrouter-embeddings")
 	handler := newProxy(apiKey, openRouterURL, cacheDir, nil)
 	server := &http.Server{

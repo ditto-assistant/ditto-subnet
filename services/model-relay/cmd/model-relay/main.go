@@ -25,6 +25,7 @@ import (
 	"github.com/ditto-assistant/model-relay/internal/config"
 	"github.com/ditto-assistant/model-relay/internal/inference"
 	"github.com/ditto-assistant/model-relay/internal/postgres"
+	"github.com/ditto-assistant/model-relay/internal/pprofserver"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/server"
 	"github.com/ditto-assistant/model-relay/internal/upload"
@@ -151,6 +152,7 @@ func run() error {
 		return err
 	}
 	defer pool.Close()
+	pprofserver.Start(ctx, logger, "model-relay", cfg.Port)
 
 	prober := chain.NewPylonClient(cfg.Chain)
 

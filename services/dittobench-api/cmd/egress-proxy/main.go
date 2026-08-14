@@ -18,17 +18,30 @@
 package main
 
 import (
+	"context"
 	"io"
 	"log"
 	"net"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 )
 
 func main() {
 	cfg := configFromEnv()
+	_, portText, err := net.SplitHostPort(cfg.addr)
+	if err != nil {
+		log.Fatalf("egress-proxy: invalid EGRESS_PROXY_ADDR %q: %v", cfg.addr, err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		log.Fatalf("egress-proxy: invalid EGRESS_PROXY_ADDR port %q", portText)
+	}
+	pprofserver.Start(context.Background(), "egress-proxy", port)
 	p := newProxy(cfg)
 	if len(p.allow) == 0 {
 		log.Printf("egress-proxy: WARNING empty allowlist (EGRESS_PROXY_ALLOW) — every CONNECT will be denied (fail-closed)")

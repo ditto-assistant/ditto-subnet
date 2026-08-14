@@ -22,7 +22,7 @@ ansible_ssh_common_args: >-
 # OS Login user Ansible connects as).
 base_ssh_set_allow_users: false
 
-# The dittobench role installs its own checksum-pinned Go 1.23.6 toolchain,
+# The dittobench role installs its own checksum-pinned Go 1.26.6 toolchain,
 # which actually builds dittobench-api. The base role's Go install is redundant
 # here, so rely on the dittobench role's independently pinned toolchain.
 base_install_go: false

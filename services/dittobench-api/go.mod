@@ -1,6 +1,6 @@
 module github.com/ditto-assistant/dittobench-api
 
-go 1.23
+go 1.26.6
 
 require (
 	github.com/ditto-assistant/dittobench-datagen v0.13.2

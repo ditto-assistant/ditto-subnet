@@ -32,6 +32,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/efficiency"
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
 	"github.com/ditto-assistant/dittobench-api/internal/netguard"
+	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 	"github.com/ditto-assistant/dittobench-api/internal/ratelimit"
 	"github.com/ditto-assistant/dittobench-api/internal/release"
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
@@ -215,6 +216,7 @@ func main() {
 			*port = v
 		}
 	}
+	pprofserver.Start(context.Background(), "dittobench-api", *port)
 
 	// SSRF guard is ON by default; opt out for local dev / sandbox containers.
 	allowPrivate := envBool("DITTOBENCH_ALLOW_PRIVATE_HARNESS")

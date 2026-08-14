@@ -1,6 +1,6 @@
 module github.com/ditto-assistant/model-relay
 
-go 1.25.5
+go 1.26.6
 
 tool github.com/sqlc-dev/sqlc/cmd/sqlc
 

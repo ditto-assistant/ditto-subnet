@@ -234,6 +234,84 @@ class TestGetRecentNeurons:
             with pytest.raises(ChainTimeoutError):
                 await client.get_recent_neurons(118)
 
+    async def test_collapses_concurrent_refreshes(
+        self, install_pylon_module: AsyncMock
+    ):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def fetch(_netuid: int):
+            started.set()
+            await release.wait()
+            return make_neurons_response({"5HK1": make_pylon_neuron()})
+
+        install_pylon_module.v1.open_access.get_recent_neurons.side_effect = fetch
+        async with ChainClient(make_chain_config()) as client:
+            calls = [
+                asyncio.create_task(client.get_recent_neurons(118)) for _ in range(32)
+            ]
+            await started.wait()
+            release.set()
+            results = await asyncio.gather(*calls)
+
+        assert all(result[0].hotkey == "5HK1" for result in results)
+        install_pylon_module.v1.open_access.get_recent_neurons.assert_awaited_once_with(
+            118
+        )
+
+    async def test_refreshes_after_ttl(self, install_pylon_module: AsyncMock):
+        install_pylon_module.v1.open_access.get_recent_neurons.return_value = (
+            make_neurons_response({"5HK1": make_pylon_neuron()})
+        )
+        now = 1_700_000_000.0
+        async with ChainClient(make_chain_config()) as client:
+            client._clock = lambda: now
+            await client.get_recent_neurons(118)
+            now += 12.0
+            await client.get_recent_neurons(118)
+
+        assert install_pylon_module.v1.open_access.get_recent_neurons.await_count == 2
+
+    async def test_failed_refresh_is_not_cached(self, install_pylon_module: AsyncMock):
+        install_pylon_module.v1.open_access.get_recent_neurons.side_effect = [
+            RuntimeError("temporary"),
+            make_neurons_response({"5HK1": make_pylon_neuron()}),
+        ]
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainConnectionError):
+                await client.get_recent_neurons(118)
+            neurons = await client.get_recent_neurons(118)
+
+        assert neurons[0].hotkey == "5HK1"
+        assert install_pylon_module.v1.open_access.get_recent_neurons.await_count == 2
+
+    async def test_cancelled_waiter_does_not_cancel_shared_refresh(
+        self, install_pylon_module: AsyncMock
+    ):
+        started = asyncio.Event()
+        release = asyncio.Event()
+
+        async def fetch(_netuid: int):
+            started.set()
+            await release.wait()
+            return make_neurons_response({"5HK1": make_pylon_neuron()})
+
+        install_pylon_module.v1.open_access.get_recent_neurons.side_effect = fetch
+        async with ChainClient(make_chain_config()) as client:
+            cancelled = asyncio.create_task(client.get_recent_neurons(118))
+            await started.wait()
+            waiter = asyncio.create_task(client.get_recent_neurons(118))
+            cancelled.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await cancelled
+            release.set()
+            neurons = await waiter
+
+        assert neurons[0].hotkey == "5HK1"
+        install_pylon_module.v1.open_access.get_recent_neurons.assert_awaited_once_with(
+            118
+        )
+
 
 class TestIsRegistered:
     """Tests for ChainClient.is_registered."""

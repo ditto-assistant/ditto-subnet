@@ -169,10 +169,13 @@ pm2 logs ditto-api           # tail logs
 pm2 status                   # process state
 ./scripts/update.sh          # git pull + uv sync + migrate + pm2 reload + health gate
 ./scripts/stop.sh            # stop the API process
+./scripts/profile-python.sh --seconds 30  # bounded py-spy capture on a deployed VM
 ```
 
 - pm2 config: [`scripts/ecosystem.config.js`](scripts/ecosystem.config.js)
 - Logs are written to `./logs/ditto-api.{out,err}.log` and via `pm2 logs`.
+- Cross-language production profiling is documented in
+  [`docs/PERFORMANCE-PROFILING.md`](../../docs/PERFORMANCE-PROFILING.md).
 - `pm2 startup` + `pm2 save` will resurrect the process across host reboots.
 - **Updates are not zero-downtime.** The app runs as a single `fork`-mode pm2
   process, so `pm2 reload` has no second instance to shift traffic onto and

@@ -128,10 +128,10 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # services/model-relay/go.mod declares go 1.25.5 (go-kit/tasker
-          # requires it); install a matching toolchain so the build does
+          # services/model-relay/go.mod declares the exact stable Go patch;
+          # install a matching toolchain so the build does
           # not pause to auto-download one.
-          go-version: "1.25"
+          go-version: "1.26.6"
           cache: true
           cache-dependency-path: services/model-relay/go.sum
 

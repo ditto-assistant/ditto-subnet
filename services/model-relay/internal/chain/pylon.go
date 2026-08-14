@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ditto-assistant/model-relay/internal/config"
@@ -51,6 +52,24 @@ type PylonClient struct {
 	// identityName is empty in open-access mode.
 	identityName string
 	httpClient   *http.Client
+	mu           sync.Mutex
+	neurons      map[string]recentNeuron
+	fetchedAt    time.Time
+	flight       *neuronFlight
+	now          func() time.Time
+	cacheTTL     time.Duration
+}
+
+// Pylon's recent-neurons response is already a block-cached snapshot. Holding
+// it for one block locally avoids downloading and JSON-decoding the same
+// multi-megabyte metagraph independently for every concurrent request while
+// bounding the additional permit/owner staleness to one block.
+const recentNeuronsCacheTTL = 12 * time.Second
+
+type neuronFlight struct {
+	done    chan struct{}
+	neurons map[string]recentNeuron
+	err     error
 }
 
 // NewPylonClient builds the client from chain config. Open-access mode is
@@ -62,6 +81,8 @@ func NewPylonClient(cfg config.ChainConfig) *PylonClient {
 		httpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
+		now:      time.Now,
+		cacheTTL: recentNeuronsCacheTTL,
 	}
 	if cfg.OpenAccessToken != "" {
 		c.token = cfg.OpenAccessToken
@@ -103,19 +124,71 @@ type recentNeuron struct {
 }
 
 func (c *PylonClient) recentNeuron(ctx context.Context, hotkey string) (recentNeuron, bool, error) {
+	neurons, err := c.recentNeurons(ctx)
+	if err != nil {
+		return recentNeuron{}, false, err
+	}
+	neuron, registered := neurons[hotkey]
+	return neuron, registered, nil
+}
+
+func (c *PylonClient) recentNeurons(ctx context.Context) (map[string]recentNeuron, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	now := c.now()
+	c.mu.Lock()
+	if c.neurons != nil && now.Sub(c.fetchedAt) < c.cacheTTL {
+		neurons := c.neurons
+		c.mu.Unlock()
+		return neurons, nil
+	}
+	flight := c.flight
+	if flight == nil {
+		flight = &neuronFlight{done: make(chan struct{})}
+		c.flight = flight
+		go c.refreshRecentNeurons(flight)
+	}
+	c.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-flight.done:
+		return flight.neurons, flight.err
+	}
+}
+
+func (c *PylonClient) refreshRecentNeurons(flight *neuronFlight) {
+	// A caller disconnect must not cancel the shared upstream fetch for every
+	// waiter. The HTTP client's 10-second timeout remains the hard bound.
+	neurons, err := c.fetchRecentNeurons(context.Background())
+	c.mu.Lock()
+	flight.neurons = neurons
+	flight.err = err
+	if err == nil {
+		c.neurons = neurons
+		c.fetchedAt = c.now()
+	}
+	c.flight = nil
+	close(flight.done)
+	c.mu.Unlock()
+}
+
+func (c *PylonClient) fetchRecentNeurons(ctx context.Context) (map[string]recentNeuron, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.recentNeuronsURL(), nil)
 	if err != nil {
-		return recentNeuron{}, false, fmt.Errorf("build pylon request: %w", err)
+		return nil, fmt.Errorf("build pylon request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return recentNeuron{}, false, fmt.Errorf("pylon unreachable: %w", err)
+		return nil, fmt.Errorf("pylon unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		_, _ = io.CopyN(io.Discard, resp.Body, 1<<16)
-		return recentNeuron{}, false, fmt.Errorf("pylon recent-neurons returned status %d", resp.StatusCode)
+		return nil, fmt.Errorf("pylon recent-neurons returned status %d", resp.StatusCode)
 	}
 	// GetNeuronsResponse: {"neurons": {"<hotkey>": {..., "validator_permit": bool}}}
 	var payload struct {
@@ -123,10 +196,9 @@ func (c *PylonClient) recentNeuron(ctx context.Context, hotkey string) (recentNe
 	}
 	// The metagraph payload for a large subnet runs to a few MB; bound it.
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&payload); err != nil {
-		return recentNeuron{}, false, fmt.Errorf("pylon recent-neurons decode: %w", err)
+		return nil, fmt.Errorf("pylon recent-neurons decode: %w", err)
 	}
-	neuron, registered := payload.Neurons[hotkey]
-	return neuron, registered, nil
+	return payload.Neurons, nil
 }
 
 // RegisteredColdkey mirrors ChainClient.get_registered_coldkey against the

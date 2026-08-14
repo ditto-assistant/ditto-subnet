@@ -1,5 +1,9 @@
 # DittoBench scoring engine
 
+Production Go processes expose loopback-only pprof listeners. Collection from
+both host services and the scorer's shared Compose network namespace is covered
+by [`../../docs/PERFORMANCE-PROFILING.md`](../../docs/PERFORMANCE-PROFILING.md).
+
 DittoBench is the benchmark for Bittensor SN118, the Ditto subnet. This repo is
 the engine that runs it: per submission it generates a fresh anti-cheat dataset
 (procedural tool cases and a procedural persona memory haystack), runs a miner's

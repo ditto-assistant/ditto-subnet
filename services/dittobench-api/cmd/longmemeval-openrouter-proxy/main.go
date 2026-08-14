@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 )
 
 const (
@@ -337,6 +339,7 @@ func main() {
 	if err != nil || port < 1 || port > 65535 {
 		log.Fatal("LONGMEMEVAL_PROXY_PORT must be a valid port")
 	}
+	pprofserver.Start(context.Background(), "longmemeval-openrouter-proxy", port)
 	handler := newProxy(selected, apiKey, chatUpstreamURL, nil)
 	server := &http.Server{
 		Addr: fmt.Sprintf(":%d", port), Handler: handler,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import TYPE_CHECKING, Any
 from urllib.parse import quote, urlsplit
 
@@ -29,6 +30,8 @@ if TYPE_CHECKING:
     from pylon_client.artanis import AsyncPylonClient
 
 logger = logging.getLogger(__name__)
+
+_RECENT_NEURONS_CACHE_TTL_SECONDS = 12.0
 
 
 # --- Substrate WebSocket URLs (used only for the Pylon events gap) ---
@@ -91,6 +94,10 @@ class ChainClient:
         """Store the config; the underlying Pylon client is built in ``__aenter__``."""
         self._config = config
         self._pylon: AsyncPylonClient | None = None
+        self._recent_neurons_lock = asyncio.Lock()
+        self._recent_neurons_cache: dict[int, tuple[float, tuple[NeuronInfo, ...]]] = {}
+        self._recent_neurons_flights: dict[int, asyncio.Task[list[NeuronInfo]]] = {}
+        self._clock = time.monotonic
 
     async def __aenter__(self) -> ChainClient:
         """Open the underlying Pylon client connection."""
@@ -123,6 +130,13 @@ class ChainClient:
         tb: TracebackType | None,
     ) -> None:
         """Close the underlying Pylon client."""
+        flights = tuple(self._recent_neurons_flights.values())
+        for flight in flights:
+            flight.cancel()
+        if flights:
+            await asyncio.gather(*flights, return_exceptions=True)
+        self._recent_neurons_flights.clear()
+        self._recent_neurons_cache.clear()
         if self._pylon is not None:
             await self._pylon.__aexit__(exc_type, exc, tb)
             self._pylon = None
@@ -148,17 +162,53 @@ class ChainClient:
             ChainConnectionError: When Pylon is unreachable or returns an error.
             ChainTimeoutError: When the request exceeds the configured timeout.
         """
+        self._ensure_pylon()
+        now = self._clock()
+        async with self._recent_neurons_lock:
+            cached = self._recent_neurons_cache.get(netuid)
+            if (
+                cached is not None
+                and now - cached[0] < _RECENT_NEURONS_CACHE_TTL_SECONDS
+            ):
+                return list(cached[1])
+
+            flight = self._recent_neurons_flights.get(netuid)
+            if flight is None:
+                flight = asyncio.create_task(
+                    self._refresh_recent_neurons(netuid),
+                    name=f"pylon-recent-neurons-{netuid}",
+                )
+                self._recent_neurons_flights[netuid] = flight
+
+        # A disconnected request must not cancel the shared Pylon refresh for
+        # every other waiter. The Pylon client retains its own request timeout.
+        return list(await asyncio.shield(flight))
+
+    async def _refresh_recent_neurons(self, netuid: int) -> list[NeuronInfo]:
+        """Fetch and translate one shared recent-neurons snapshot."""
         pylon = self._ensure_pylon()
         try:
-            response = await pylon.v1.open_access.get_recent_neurons(netuid)
-        except Exception as e:
-            raise _translate_pylon_error(
-                e, f"get_recent_neurons(netuid={netuid})"
-            ) from e
-        return [
-            NeuronInfo.from_pylon(neuron, hotkey=hotkey)
-            for hotkey, neuron in response.neurons.items()
-        ]
+            try:
+                response = await pylon.v1.open_access.get_recent_neurons(netuid)
+            except Exception as e:
+                raise _translate_pylon_error(
+                    e, f"get_recent_neurons(netuid={netuid})"
+                ) from e
+            neurons = [
+                NeuronInfo.from_pylon(neuron, hotkey=hotkey)
+                for hotkey, neuron in response.neurons.items()
+            ]
+            async with self._recent_neurons_lock:
+                self._recent_neurons_cache[netuid] = (
+                    self._clock(),
+                    tuple(neurons),
+                )
+            return neurons
+        finally:
+            async with self._recent_neurons_lock:
+                current = asyncio.current_task()
+                if self._recent_neurons_flights.get(netuid) is current:
+                    self._recent_neurons_flights.pop(netuid, None)
 
     async def is_registered(self, hotkey: str, netuid: int) -> bool:
         """Return ``True`` iff ``hotkey`` is registered on ``netuid``.

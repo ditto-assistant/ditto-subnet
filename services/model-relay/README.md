@@ -50,7 +50,8 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
   accounting). No route streams: `stream: true` is refused legibly and
   upstream responses are fully buffered, sanitized, and re-serialized.
 - `internal/chain` — Pylon client: `/health` block probe and the
-  validator-permit and registered-owner checks (`/block/recent/neurons`).
+  validator-permit and registered-owner checks (`/block/recent/neurons`), with
+  one-block snapshot caching and single-flight refreshes.
 - `internal/upload` — pricing and common pre-payment admission, including
   sr25519 ownership, registration, ban, duplicate, cooldown, and atomic
   reservation checks. Paid recovery remains a transparent Python fallback.
@@ -68,10 +69,14 @@ make gen-schema              # re-render db/schema.sql from the Alembic chain
 make sqlc-generate           # gen-schema + sqlc (pinned v1.30.0 via go.mod tool)
 make sqlc-check              # CI drift check
 make release-build           # CGO_ENABLED=0 linux/amd64 binary named model-relay
+go run ./cmd/pprofctl list --probe  # inspect deployed loopback pprof listeners
 
 # Reuse the monorepo test Postgres explicitly:
 TEST_POSTGRES_URI="postgres://ditto_test:ditto_test@localhost:15433/postgres?sslmode=disable" go test ./...
 ```
+
+See [`../../docs/PERFORMANCE-PROFILING.md`](../../docs/PERFORMANCE-PROFILING.md)
+for CPU, heap, goroutine, diff, and Python sampling workflows.
 
 After editing any `*_queries.sql`, add new files to the `queries:` list in
 `internal/postgres/sqlc.yaml` and run `make sqlc-generate`.
