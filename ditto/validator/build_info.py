@@ -62,7 +62,14 @@ from ditto import __version__
 # primary, and the adjusted efficiency projection breaks only exact quality
 # ties. Platform withholds factors until every recently-live weight setter is
 # v21+, preventing v19/v20 validators from applying the superseded ordering.
-HEARTBEAT_PROTOCOL_VERSION = 21
+#
+# v22 signs an independent ``confirmation_progress`` list for the bounded
+# ``longmem-*`` slots. It is deliberately separate from benchmark capacity:
+# LongMemEval and ablation work cannot consume or fabricate ordinary slots.
+# Platform must understand v22 before validators emit it because the request
+# model forbids unknown fields. The new v22 signing domain binds the complete
+# privacy-safe list; v1-v21 signing bytes remain unchanged.
+HEARTBEAT_PROTOCOL_VERSION = 22
 
 
 @dataclass(frozen=True)

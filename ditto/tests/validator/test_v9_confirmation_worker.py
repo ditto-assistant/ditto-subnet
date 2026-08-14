@@ -478,10 +478,13 @@ class TestV9ConfirmationExecution:
         assert report.longmemeval == _prepared(job).longmemeval
         assert report.inference_ablation == _prepared(job).inference_ablation
         assert report.embedding_ablation == _prepared(job).embedding_ablation
-        assert (
-            report.bundle_signature == hashlib.sha512(keypair.messages[-1]).hexdigest()
+        bundle_message = next(
+            message
+            for message in keypair.messages
+            if message.startswith(b"validator-v9-confirmation:v1:")
         )
-        signing_text = keypair.messages[-1].decode()
+        assert report.bundle_signature == hashlib.sha512(bundle_message).hexdigest()
+        signing_text = bundle_message.decode()
         assert signing_text.startswith("validator-v9-confirmation:v1:")
         assert str(job.bundle_id) in signing_text
         assert str(job.ticket_id) in signing_text

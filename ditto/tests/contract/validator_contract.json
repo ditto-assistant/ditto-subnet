@@ -4635,6 +4635,76 @@
         ],
         "type": "object"
       },
+      "ConfirmationProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "bundle_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "completed": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "slot_id": {
+            "pattern": "^longmem-[0-3]$",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "preparing",
+              "running_confirmation",
+              "finalizing",
+              "submitting_result",
+              "failed_retrying"
+            ],
+            "type": "string"
+          },
+          "ticket_deadline": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "ticket_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "total": {
+            "anyOf": [
+              {
+                "maximum": 10000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "bundle_id",
+          "ticket_id",
+          "agent_id",
+          "slot_id",
+          "stage",
+          "ticket_deadline"
+        ],
+        "type": "object"
+      },
       "DockerHealth": {
         "additionalProperties": false,
         "properties": {
@@ -5312,6 +5382,21 @@
       "code_digest": {
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
+      },
+      "confirmation_progress": {
+        "anyOf": [
+          {
+            "items": {
+              "$ref": "#/$defs/ConfirmationProgress"
+            },
+            "maxItems": 4,
+            "type": "array"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "protocol_version": {
         "maximum": 2147483647,

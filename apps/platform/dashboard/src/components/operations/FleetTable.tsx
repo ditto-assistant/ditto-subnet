@@ -73,6 +73,23 @@ function confirmationSubjectLabel(work: ConfirmationProgress): string {
   return work.subjects.length === 1 ? "1 subject" : String(work.subjects.length) + " subjects";
 }
 
+function confirmationStageLabel(work: ConfirmationProgress): string {
+  switch (work.stage) {
+    case "preparing":
+      return "Preparing";
+    case "running_confirmation":
+      return "Running LongMemEval";
+    case "finalizing":
+      return "Finalizing evidence";
+    case "submitting_result":
+      return "Submitting result";
+    case "failed_retrying":
+      return "Returning for retry";
+    default:
+      return "Progress not reported";
+  }
+}
+
 function hotkeyOf(entry: FleetEntryExt, singular: FleetSingular): string {
   return (singular === "validator" ? entry.validator_hotkey : entry.screener_hotkey) || "Unknown";
 }
@@ -416,6 +433,25 @@ function ConfirmationRows(props: { entry: FleetEntryExt }): JSX.Element {
               <span class="fleet-time" title={work.issued_at}>
                 Running {relTime(work.issued_at)}
               </span>
+              <span
+                class={stageClass(work.stage === "failed_retrying" ? "warn" : "")}
+                title={work.progress_reported_at || "Validator heartbeat has not reported progress"}
+              >
+                {confirmationStageLabel(work)}
+              </span>
+              <Show when={work.completed !== null && work.completed !== undefined && work.total}>
+                <span class="fleet-confirmation-progress-view">
+                  <span class="fleet-confirmation-progress-count">
+                    {work.completed || 0}/{work.total || 1}
+                  </span>
+                  <progress
+                    class="fleet-confirmation-progress"
+                    value={work.completed || 0}
+                    max={work.total || 1}
+                    aria-label={`${confirmationStageLabel(work)}: ${work.completed || 0} of ${work.total || 1}`}
+                  />
+                </span>
+              </Show>
               <span class="fleet-confirmation-subjects">
                 {confirmationSubjectLabel(work)}
                 <Show when={work.subjects.length === 1 ? work.subjects[0] : undefined}>

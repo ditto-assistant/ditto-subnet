@@ -1,5 +1,11 @@
 """Canonical, dependency-light protocol shared by Ditto screeners and platform."""
 
+from ditto_screening_protocol.confirmation_progress import (
+    MAX_CONFIRMATION_SLOTS,
+    ConfirmationProgress,
+    ConfirmationProgressStage,
+    confirmation_progress_signing_token,
+)
 from ditto_screening_protocol.models import (
     SCREENING_POLICY_VERSION,
     AgentStatus,
@@ -34,9 +40,12 @@ from ditto_screening_protocol.models import (
 from ditto_screening_protocol.signing import verdict_signing_message
 
 __all__ = [
+    "MAX_CONFIRMATION_SLOTS",
     "SCREENING_POLICY_VERSION",
     "AgentStatus",
     "ArtifactResponse",
+    "ConfirmationProgress",
+    "ConfirmationProgressStage",
     "ScreenerQueueItem",
     "ScreenerQueueResponse",
     "ScreenEvidenceItem",
@@ -63,5 +72,6 @@ __all__ = [
     "SourceReviewEvidenceRole",
     "SourceReviewFinding",
     "SourceReviewScorerVisibleEffect",
+    "confirmation_progress_signing_token",
     "verdict_signing_message",
 ]

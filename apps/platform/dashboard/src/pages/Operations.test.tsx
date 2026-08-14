@@ -611,6 +611,11 @@ describe("accessible benchmark progress (row 22)", () => {
                 attempt: 1,
                 issued_at: "2026-07-31T13:00:00Z",
                 deadline: "2026-07-31T14:30:00Z",
+                stage: "running_confirmation" as const,
+                completed: 117,
+                total: 500,
+                reported_agent_id: "fd870bca-b6b0-4ef6-8918-b08360de95e6",
+                progress_reported_at: "2026-07-31T13:15:00Z",
                 subjects: [
                   {
                     agent_id: "fd870bca-b6b0-4ef6-8918-b08360de95e6",
@@ -639,6 +644,10 @@ describe("accessible benchmark progress (row 22)", () => {
     expect(lane.textContent).toContain("Independent confirmation lane · ablations included");
     expect(lane.textContent).toContain("longmem-0");
     expect(lane.textContent).toContain("Shadow");
+    expect(lane.textContent).toContain("Running LongMemEval");
+    expect(lane.textContent).toContain("117/500");
+    expect(lane.querySelector("progress")).toHaveAttribute("value", "117");
+    expect(lane.querySelector("progress")).toHaveAttribute("max", "500");
     expect(lane.querySelector('[data-entity-link="agent"]')).toBeTruthy();
     expect(document.querySelector(".fleet-slot-disclosure")?.textContent).toContain(
       "2 slots · 0 running · 2 idle",

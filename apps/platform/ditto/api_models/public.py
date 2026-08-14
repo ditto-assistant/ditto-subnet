@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ditto.api_models.benchmark_capacity import BenchmarkAdmission
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
+from ditto.api_models.confirmation_progress import ConfirmationProgressStage
 from ditto.api_models.retry_state import RetryState
 from ditto.api_models.screener import ScreenerProgressStage, ScreenerRuntimeState
 from ditto.api_models.stack_health import ValidatorStackHealth
@@ -2180,6 +2181,11 @@ class PublicConfirmationProgress(BaseModel):
     attempt: Annotated[int, Field(ge=1)]
     issued_at: datetime
     deadline: datetime
+    stage: ConfirmationProgressStage | None = None
+    completed: Annotated[int | None, Field(default=None, ge=0)] = None
+    total: Annotated[int | None, Field(default=None, ge=1)] = None
+    reported_agent_id: UUID | None = None
+    progress_reported_at: datetime | None = None
     subjects: list[PublicConfirmationSubject] = Field(default_factory=list)
 
 

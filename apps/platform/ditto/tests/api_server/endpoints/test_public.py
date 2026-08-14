@@ -4171,6 +4171,7 @@ def _liveness_row(
         },
         benchmark_progress=None,
         benchmark_capacity=None,
+        confirmation_progress=None,
         capabilities=capabilities,
         stack={
             "mode": "managed",
@@ -4216,6 +4217,7 @@ def test_confirmation_work_is_public_without_consuming_ordinary_slots() -> None:
         ActiveConfirmationWork,
         SimpleNamespace(
             ticket=SimpleNamespace(
+                ticket_id=uuid4(),
                 validator_hotkey=_VALIDATOR_C,
                 slot_id="longmem-0",
                 attempt=2,
@@ -4231,8 +4233,21 @@ def test_confirmation_work_is_public_without_consuming_ordinary_slots() -> None:
         ),
     )
 
+    row = _liveness_row(now, protocol_version=22, scorer=None)
+    row.confirmation_progress = [
+        {
+            "bundle_id": str(bundle_id),
+            "ticket_id": str(confirmation.ticket.ticket_id),
+            "agent_id": str(subject_id),
+            "slot_id": "longmem-0",
+            "stage": "running_confirmation",
+            "completed": 117,
+            "total": 500,
+            "ticket_deadline": confirmation.ticket.deadline.isoformat(),
+        }
+    ]
     response = public_endpoint._validator_heartbeats_response(
-        rows=[_liveness_row(now, protocol_version=16, scorer=None)],
+        rows=[row],
         assignments=[],
         active_work=[],
         confirmation_work=[confirmation],
@@ -4250,9 +4265,33 @@ def test_confirmation_work_is_public_without_consuming_ordinary_slots() -> None:
     assert published.bundle_id == bundle_id
     assert published.slot_id == "longmem-0"
     assert published.mode == "shadow"
+    assert published.stage == "running_confirmation"
+    assert published.completed == 117
+    assert published.total == 500
+    assert published.reported_agent_id == subject_id
+    assert published.progress_reported_at == now
     assert [
         (subject.agent_id, subject.agent_name) for subject in published.subjects
     ] == [(subject_id, "Memory agent")]
+
+    # A superseded ticket may use the same bundle and slot. Its signed progress
+    # must never decorate the replacement ticket merely because those broader
+    # identities still match.
+    row.confirmation_progress[0]["ticket_id"] = str(uuid4())
+    replacement = public_endpoint._validator_heartbeats_response(
+        rows=[row],
+        assignments=[],
+        active_work=[],
+        confirmation_work=[confirmation],
+        orphaned_leases=[],
+        now=now,
+        active_bench_version=LEGACY_BENCH_VERSION,
+        slot_settings=SLOT_SETTINGS_DEFAULT,
+    )
+    [replacement_progress] = replacement.validators[0].confirmation_benchmarks
+    assert replacement_progress.stage is None
+    assert replacement_progress.completed is None
+    assert replacement_progress.progress_reported_at is None
 
 
 class TestScorerLivenessSurfacing:

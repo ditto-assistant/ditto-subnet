@@ -46,6 +46,10 @@ from ditto.api_models.confirmation_bundles import (
 from ditto.api_models.confirmation_bundles import (
     LongMemDimensionEnvelope as LongMemDimensionEnvelope,
 )
+from ditto.api_models.confirmation_progress import (
+    MAX_CONFIRMATION_SLOTS,
+    ConfirmationProgress,
+)
 from ditto.api_models.inference import InferenceGrantOffer
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import SystemMetrics
@@ -582,6 +586,17 @@ class ValidatorHeartbeatRequest(BaseModel):
             ),
         ),
     ] = None
+    confirmation_progress: Annotated[
+        list[ConfirmationProgress] | None,
+        Field(
+            default=None,
+            max_length=MAX_CONFIRMATION_SLOTS,
+            description=(
+                "Signed independent LongMemEval/ablation slot progress under "
+                "heartbeat protocol v22."
+            ),
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -656,6 +671,18 @@ class ValidatorHeartbeatRequest(BaseModel):
             ):
                 raise ValueError(
                     "heartbeat v11 requires exact v7 inference calibration identity"
+                )
+            if self.protocol_version >= 22:
+                if self.confirmation_progress is None:
+                    raise ValueError(
+                        "heartbeat protocol v22 requires confirmation progress"
+                    )
+                slots = [progress.slot_id for progress in self.confirmation_progress]
+                if len(slots) != len(set(slots)):
+                    raise ValueError("confirmation progress contains duplicate slots")
+            elif self.confirmation_progress is not None:
+                raise ValueError(
+                    "confirmation progress requires heartbeat protocol v22"
                 )
             if self.protocol_version >= 12 and (
                 self.capabilities is None or not self.capabilities.signed_score_quorum

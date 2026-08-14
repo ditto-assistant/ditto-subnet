@@ -78,6 +78,10 @@ from ditto.api_models.benchmark_capacity import (
 )
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.benchmark_progress import benchmark_progress_signing_token
+from ditto.api_models.confirmation_progress import (
+    ConfirmationProgress,
+    confirmation_progress_signing_token,
+)
 from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.inference import InferenceGrantOffer
 from ditto.api_models.queue_policy_settings import (
@@ -185,6 +189,8 @@ from ditto.db.models import (
     AthReviewAction,
     BenchmarkDataset,
     BenchmarkRollout,
+    ConfirmationBundleSubject,
+    ConfirmationBundleTicket,
     ConfirmationScore,
     InferenceGrant,
     Score,
@@ -1995,12 +2001,15 @@ def _heartbeat_signing_message(
     stack: ValidatorStackIdentity | None = None,
     stack_health: ValidatorStackHealth | None = None,
     benchmark_capacity: BenchmarkCapacity | None = None,
+    confirmation_progress: list[ConfirmationProgress] | None = None,
 ) -> bytes:
     """Canonical heartbeat payload, mirrored by ``ditto-subnet``."""
     if stack_health is not None and protocol_version < 9:
         raise ValueError("per-component stack health requires heartbeat protocol v9")
     if benchmark_capacity is not None and protocol_version < 10:
         raise ValueError("benchmark capacity requires heartbeat protocol v10")
+    if confirmation_progress is not None and protocol_version < 22:
+        raise ValueError("confirmation progress requires heartbeat protocol v22")
     if protocol_version >= 10:
         if capabilities is None or stack is None or stack_health is None:
             raise ValueError(
@@ -2008,6 +2017,24 @@ def _heartbeat_signing_message(
             )
         if benchmark_capacity is None:
             raise ValueError("heartbeat protocol v10 requires benchmark capacity")
+        if protocol_version >= 22:
+            if confirmation_progress is None:
+                raise ValueError(
+                    "heartbeat protocol v22 requires confirmation progress"
+                )
+            active = str(active_agent_id) if active_agent_id is not None else ""
+            return (
+                "ditto-validator-heartbeat:v22:"
+                f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                f"{code_digest}:{state}:{active}:"
+                f"{system_metrics_signing_token(system_metrics)}:"
+                f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                f"{validator_identity_signing_token(capabilities, stack)}:"
+                f"{validator_stack_health_signing_token(stack_health)}:"
+                f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                f"{timestamp}"
+            ).encode()
         active = str(active_agent_id) if active_agent_id is not None else ""
         signing_revision = "v11" if protocol_version >= 11 else "v10"
         return (
@@ -2116,6 +2143,7 @@ class _HeartbeatWork:
     active_agent_id: UUID | None
     benchmark_progress: dict | None
     benchmark_capacity: BenchmarkCapacity | None
+    confirmation_progress: list[dict] | None
     # The signed occupancy claim, kept whole even when confirmation narrows
     # ``benchmark_capacity``. Never used to grant work or accept a score --
     # only to refuse a revocation. See ``ValidatorHeartbeat.claimed_slots``.
@@ -2128,6 +2156,7 @@ _LIVENESS_ONLY_WORK = _HeartbeatWork(
     active_agent_id=None,
     benchmark_progress=None,
     benchmark_capacity=None,
+    confirmation_progress=None,
     claimed_slots=None,
 )
 
@@ -2233,6 +2262,56 @@ async def _validated_heartbeat_work(
         else None
     )
     stored_benchmark_capacity = request_body.benchmark_capacity
+    stored_confirmation_progress: list[dict] | None = None
+    if request_body.confirmation_progress is not None:
+        stored_confirmation_progress = []
+        ticket_ids = {
+            progress.ticket_id for progress in request_body.confirmation_progress
+        }
+        confirmation_rows = (
+            await session.execute(
+                select(ConfirmationBundleTicket, ConfirmationBundleSubject.agent_id)
+                .join(
+                    ConfirmationBundleSubject,
+                    ConfirmationBundleSubject.bundle_id
+                    == ConfirmationBundleTicket.bundle_id,
+                )
+                .where(
+                    ConfirmationBundleTicket.ticket_id.in_(ticket_ids),
+                    ConfirmationBundleTicket.validator_hotkey == validator_hotkey,
+                    ConfirmationBundleTicket.status == "issued",
+                    ConfirmationBundleTicket.deadline > now,
+                )
+            )
+        ).all()
+        valid_confirmation_identities = {
+            (
+                ticket.ticket_id,
+                ticket.bundle_id,
+                ticket.slot_id,
+                agent_id,
+                _as_utc_deadline(ticket.deadline),
+            )
+            for ticket, agent_id in confirmation_rows
+        }
+        for progress in request_body.confirmation_progress:
+            identity = (
+                progress.ticket_id,
+                progress.bundle_id,
+                progress.slot_id,
+                progress.agent_id,
+                progress.ticket_deadline,
+            )
+            if identity in valid_confirmation_identities:
+                stored_confirmation_progress.append(progress.model_dump(mode="json"))
+            else:
+                logger.info(
+                    "validator heartbeat dropped stale confirmation progress "
+                    "validator=%s slot=%s ticket=%s",
+                    validator_hotkey,
+                    progress.slot_id,
+                    progress.ticket_id,
+                )
     # Captured BEFORE the confirmation filter below. A slot that fails to confirm
     # is dropped from the stored capacity, and the lease liveness gate reads that
     # absence as positive evidence the slot is idle -- so without this the filter
@@ -2384,6 +2463,7 @@ async def _validated_heartbeat_work(
         active_agent_id=stored_active_agent_id,
         benchmark_progress=stored_benchmark_progress,
         benchmark_capacity=stored_benchmark_capacity,
+        confirmation_progress=stored_confirmation_progress,
         claimed_slots=claimed,
     )
 
@@ -2488,6 +2568,7 @@ async def heartbeat(
         stack=request_body.stack,
         stack_health=request_body.stack_health,
         benchmark_capacity=request_body.benchmark_capacity,
+        confirmation_progress=request_body.confirmation_progress,
     )
     if not _verify_signature(validator_hotkey, payload, request_body.signature):
         raise ValidatorAuthError("heartbeat signature verification failed")
@@ -2573,6 +2654,7 @@ async def heartbeat(
                 if work.benchmark_capacity is not None
                 else None
             ),
+            confirmation_progress=work.confirmation_progress,
             claimed_slots=work.claimed_slots,
             reported_at=reported_at,
             seen_at=now,

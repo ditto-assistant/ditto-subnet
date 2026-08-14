@@ -1084,6 +1084,25 @@
   gap: 6px;
 }
 
+.fleet-confirmation-progress {
+  width: 6rem;
+  height: 0.45rem;
+  accent-color: var(--accent);
+}
+
+.fleet-confirmation-progress-view {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.fleet-confirmation-progress-count {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  white-space: nowrap;
+}
+
 .fleet-confirmation-heading strong {
   color: var(--text);
 }

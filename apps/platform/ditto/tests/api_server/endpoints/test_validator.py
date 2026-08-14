@@ -42,6 +42,10 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     benchmark_progress_signing_token,
 )
+from ditto.api_models.confirmation_progress import (
+    ConfirmationProgress,
+    confirmation_progress_signing_token,
+)
 from ditto.api_models.queue_policy_settings import (
     DeferredSourceReviewSettings,
     PrevGenCarryoverSettings,
@@ -99,6 +103,10 @@ from ditto.db.models import (
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutMember,
+    ConfirmationBundle,
+    ConfirmationBundleSettingsRevision,
+    ConfirmationBundleSubject,
+    ConfirmationBundleTicket,
     ConfirmationScore,
     ContinualRetestSettingsRevision,
     InferenceGrant,
@@ -577,6 +585,7 @@ def _heartbeat_payload(
     stack: dict[str, object] | None = None,
     stack_health: dict[str, object] | None = None,
     benchmark_capacity: dict[str, object] | None = None,
+    confirmation_progress: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     ts = timestamp if timestamp is not None else int(datetime.now(UTC).timestamp())
     hotkey = keypair.ss58_address
@@ -605,16 +614,33 @@ def _heartbeat_payload(
             typed_capacity = BenchmarkCapacity.model_validate_json(
                 json.dumps(benchmark_capacity)
             )
-            domain = "v11" if protocol_version >= 11 else "v10"
-            message = (
-                f"ditto-validator-heartbeat:{domain}:{hotkey}:0.1.0:{protocol_version}:"
-                f"{code_digest}:{state}:{active_agent_id or ''}:"
-                f"{system_metrics_signing_token(metrics)}:"
-                f"{benchmark_progress_signing_token(progress)}:"
-                f"{identity_token}:"
-                f"{validator_stack_health_signing_token(typed_health)}:"
-                f"{benchmark_capacity_signing_token(typed_capacity)}:{ts}"
-            )
+            if protocol_version >= 22:
+                typed_confirmation = [
+                    ConfirmationProgress.model_validate(item)
+                    for item in (confirmation_progress or [])
+                ]
+                message = (
+                    f"ditto-validator-heartbeat:v22:{hotkey}:0.1.0:{protocol_version}:"
+                    f"{code_digest}:{state}:{active_agent_id or ''}:"
+                    f"{system_metrics_signing_token(metrics)}:"
+                    f"{benchmark_progress_signing_token(progress)}:"
+                    f"{identity_token}:"
+                    f"{validator_stack_health_signing_token(typed_health)}:"
+                    f"{benchmark_capacity_signing_token(typed_capacity)}:"
+                    f"{confirmation_progress_signing_token(typed_confirmation)}:{ts}"
+                )
+            else:
+                domain = "v11" if protocol_version >= 11 else "v10"
+                message = (
+                    f"ditto-validator-heartbeat:{domain}:{hotkey}:0.1.0:"
+                    f"{protocol_version}:{code_digest}:{state}:"
+                    f"{active_agent_id or ''}:"
+                    f"{system_metrics_signing_token(metrics)}:"
+                    f"{benchmark_progress_signing_token(progress)}:"
+                    f"{identity_token}:"
+                    f"{validator_stack_health_signing_token(typed_health)}:"
+                    f"{benchmark_capacity_signing_token(typed_capacity)}:{ts}"
+                )
         elif protocol_version >= 9:
             typed_health = ValidatorStackHealth.model_validate_json(
                 json.dumps(stack_health)
@@ -697,6 +723,8 @@ def _heartbeat_payload(
         payload["stack_health"] = stack_health
     if benchmark_capacity is not None:
         payload["benchmark_capacity"] = benchmark_capacity
+    if confirmation_progress is not None:
+        payload["confirmation_progress"] = confirmation_progress
     return payload
 
 
@@ -1441,6 +1469,132 @@ _IDLE_CAPACITY: dict[str, object] = {
     "admission": "accepting",
     "active": [],
 }
+
+
+async def test_v22_heartbeat_persists_only_live_signed_confirmation_progress(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The independent LongMem lane is visible but cannot forge Platform work."""
+    agent_id = await _seed_agent(
+        session_maker,
+        status=AgentStatus.SCORED,
+        name="confirmation-progress-agent",
+        sha256="ef" * 32,
+    )
+    now = datetime.now(UTC)
+    deadline = now + timedelta(minutes=90)
+    bundle_id = uuid4()
+    ticket_id = uuid4()
+    async with session_maker() as session, session.begin():
+        revision = ConfirmationBundleSettingsRevision(
+            parent_revision=0,
+            scope="*",
+            settings={},
+            checksum="a" * 64,
+            reason="exercise signed confirmation heartbeat progress",
+            actor="pytest@example.com",
+        )
+        session.add(revision)
+        await session.flush()
+        session.add(
+            ConfirmationBundle(
+                bundle_id=bundle_id,
+                artifact_sha256="ef" * 32,
+                bench_version=9,
+                profile_revision="longmemeval-s-native-memory-tools-v2",
+                profile_checksum="b" * 64,
+                settings_revision=revision.revision,
+                settings_checksum=revision.checksum,
+                state="leased",
+            )
+        )
+        await session.flush()
+        session.add(
+            ConfirmationBundleSubject(
+                agent_id=agent_id,
+                bench_version=9,
+                artifact_sha256="ef" * 32,
+                bundle_id=bundle_id,
+                result_status="provisional",
+                base_evidence_sha256="c" * 64,
+                base_quality_micros=900_000,
+                base_stderr_micros=10_000,
+                base_model_factor_bps=10_000,
+                base_tool_factor_bps=10_000,
+            )
+        )
+        session.add(
+            ConfirmationBundleTicket(
+                ticket_id=ticket_id,
+                bundle_id=bundle_id,
+                validator_hotkey=_KEYPAIR.ss58_address,
+                slot_id="longmem-0",
+                status="issued",
+                attempt=1,
+                issued_at=now,
+                deadline=deadline,
+            )
+        )
+    _install_db(app, session_maker)
+    _install_chain(app)
+    capabilities = _quorum_capabilities()
+    progress = {
+        "bundle_id": str(bundle_id),
+        "ticket_id": str(ticket_id),
+        "agent_id": str(agent_id),
+        "slot_id": "longmem-0",
+        "stage": "running_confirmation",
+        "completed": 17,
+        "total": 500,
+        "ticket_deadline": deadline.isoformat(),
+    }
+    accepted = await client.post(
+        "/api/v1/validator/heartbeat",
+        headers=_AUTH_HEADER,
+        json=_heartbeat_payload(
+            protocol_version=22,
+            state="polling",
+            timestamp=int(now.timestamp()),
+            capabilities=capabilities,
+            stack=_V7_STACK,
+            stack_health=_V9_STACK_HEALTH,
+            benchmark_capacity=_IDLE_CAPACITY,
+            confirmation_progress=[progress],
+        ),
+    )
+    assert accepted.status_code == 200, accepted.text
+    async with session_maker() as session:
+        stored = await session.get(ValidatorHeartbeat, _KEYPAIR.ss58_address)
+        assert stored is not None
+        assert stored.confirmation_progress is not None
+        assert ConfirmationProgress.model_validate(
+            stored.confirmation_progress[0]
+        ) == ConfirmationProgress.model_validate(progress)
+        assert stored.benchmark_capacity is not None
+        assert stored.benchmark_capacity["active"] == []
+
+    forged = {**progress, "ticket_id": str(uuid4())}
+    dropped = await client.post(
+        "/api/v1/validator/heartbeat",
+        headers=_AUTH_HEADER,
+        json=_heartbeat_payload(
+            protocol_version=22,
+            state="polling",
+            timestamp=int(now.timestamp()) + 1,
+            capabilities=capabilities,
+            stack=_V7_STACK,
+            stack_health=_V9_STACK_HEALTH,
+            benchmark_capacity=_IDLE_CAPACITY,
+            confirmation_progress=[forged],
+        ),
+    )
+    assert dropped.status_code == 200, dropped.text
+    async with session_maker() as session:
+        stored = await session.get(ValidatorHeartbeat, _KEYPAIR.ss58_address)
+        assert stored is not None
+        assert stored.confirmation_progress == []
 
 
 def _quorum_capabilities() -> dict[str, object]:

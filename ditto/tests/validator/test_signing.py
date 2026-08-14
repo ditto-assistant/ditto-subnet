@@ -10,7 +10,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import bittensor
 import pytest
@@ -18,6 +18,7 @@ import pytest
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
+from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
     ValidatorStackHealth,
@@ -1113,6 +1114,82 @@ def test_protocol_v11_heartbeat_uses_the_platform_v11_domain() -> None:
 
     assert message.startswith(b"ditto-validator-heartbeat:v11:")
     assert b":11:" in message
+
+
+def test_protocol_v22_heartbeat_binds_independent_confirmation_progress() -> None:
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 22
+    capacity = BenchmarkCapacity(configured_slots=2, healthy_slots=["slot-0", "slot-1"])
+    progress = ConfirmationProgress(
+        bundle_id=UUID("11111111-2222-4333-8444-555555555555"),
+        ticket_id=UUID("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+        agent_id=_AGENT,
+        slot_id="longmem-0",
+        stage="running_confirmation",
+        completed=17,
+        total=500,
+        ticket_deadline=_DEADLINE,
+    )
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_heartbeat(
+        keypair,
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+        confirmation_progress=[progress],
+    )
+    original = heartbeat_signing_message(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+        confirmation_progress=[progress],
+    )
+
+    assert original.startswith(b"ditto-validator-heartbeat:v22:")
+    assert keypair.verify(original, bytes.fromhex(signature))
+    for tampered in (
+        progress.model_copy(update={"completed": 18}),
+        progress.model_copy(update={"stage": "failed_retrying"}),
+        progress.model_copy(update={"ticket_id": uuid4()}),
+        progress.model_copy(update={"agent_id": uuid4()}),
+    ):
+        message = heartbeat_signing_message(
+            **request,
+            capabilities=capabilities,
+            stack=stack,
+            stack_health=stack_health,
+            benchmark_capacity=capacity,
+            confirmation_progress=[tampered],
+        )
+        assert not keypair.verify(message, bytes.fromhex(signature))
+
+
+def test_protocol_v22_requires_progress_and_v21_rejects_the_extension() -> None:
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    capacity = BenchmarkCapacity()
+    shared = {
+        **request,
+        "capabilities": capabilities,
+        "stack": stack,
+        "stack_health": stack_health,
+        "benchmark_capacity": capacity,
+    }
+
+    with pytest.raises(ValueError, match="v22 requires confirmation progress"):
+        heartbeat_signing_message(**(shared | {"protocol_version": 22}))
+    with pytest.raises(ValueError, match="requires heartbeat protocol v22"):
+        heartbeat_signing_message(
+            **(shared | {"protocol_version": 21}), confirmation_progress=[]
+        )
+    assert heartbeat_signing_message(**(shared | {"protocol_version": 21})).startswith(
+        b"ditto-validator-heartbeat:v11:"
+    )
 
 
 def _signed_ledger_entry(

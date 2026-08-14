@@ -37,6 +37,10 @@ from pydantic import (
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
+from ditto.api_models.confirmation_progress import (
+    MAX_CONFIRMATION_SLOTS,
+    ConfirmationProgress,
+)
 from ditto.api_models.inference import InferenceGrantOffer
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import SystemMetrics
@@ -438,6 +442,17 @@ class ValidatorHeartbeatRequest(BaseModel):
             ),
         ),
     ] = None
+    confirmation_progress: Annotated[
+        list[ConfirmationProgress] | None,
+        Field(
+            default=None,
+            max_length=MAX_CONFIRMATION_SLOTS,
+            description=(
+                "Signed independent LongMemEval/ablation slot progress under "
+                "heartbeat protocol v22."
+            ),
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -520,6 +535,16 @@ class ValidatorHeartbeatRequest(BaseModel):
                 )
         elif self.benchmark_capacity is not None:
             raise ValueError("benchmark capacity requires heartbeat protocol v10+")
+        if self.protocol_version >= 22:
+            if self.confirmation_progress is None:
+                raise ValueError(
+                    "heartbeat protocol v22 requires confirmation progress"
+                )
+            slots = [progress.slot_id for progress in self.confirmation_progress]
+            if len(slots) != len(set(slots)):
+                raise ValueError("confirmation progress contains duplicate slots")
+        elif self.confirmation_progress is not None:
+            raise ValueError("confirmation progress requires heartbeat protocol v22")
         return self
 
 

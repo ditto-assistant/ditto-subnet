@@ -35,6 +35,10 @@ from ditto.api_models.benchmark_progress import (
     BenchmarkProgress,
     BenchmarkProgressStage,
 )
+from ditto.api_models.confirmation_progress import (
+    ConfirmationProgress,
+    ConfirmationProgressStage,
+)
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.validator import (
     ConfirmationDatasetPin,
@@ -48,6 +52,7 @@ from ditto.api_models.validator_capabilities import (
 )
 from ditto.api_models.validator_confirmation import (
     V9ConfirmationCompletionReport,
+    V9ConfirmationJobResponse,
     V9ConfirmationScorerReadiness,
 )
 from ditto.chain import ChainError
@@ -483,6 +488,7 @@ class ValidatorWorker:
         self._longmem_slots = tuple(
             f"longmem-{index}" for index in range(configured_longmem_slots)
         )
+        self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
         self._resource_blocked_until: dict[str, float] = {}
         self._admission: BenchmarkAdmission = "accepting"
@@ -1215,6 +1221,7 @@ class ValidatorWorker:
                 stack=stack,
                 stack_health=stack_health,
                 benchmark_capacity=capacity,
+                confirmation_progress=self._confirmation_progress_snapshot(),
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -1230,6 +1237,7 @@ class ValidatorWorker:
                 stack=stack,
                 stack_health=stack_health,
                 benchmark_capacity=capacity,
+                confirmation_progress=self._confirmation_progress_snapshot(),
                 timestamp=timestamp,
                 signature=signature,
             )
@@ -1450,6 +1458,57 @@ class ValidatorWorker:
         except Exception:  # noqa: BLE001 - telemetry validation is fail-open
             logger.warning("benchmark progress update dropped; scoring continues")
             return False
+
+    def _confirmation_progress_snapshot(self) -> list[ConfirmationProgress]:
+        """Return one atomic, stable-order view of independent LongMem slots."""
+        return [
+            self._confirmation_progress[slot_id]
+            for slot_id in sorted(self._confirmation_progress)
+        ]
+
+    async def _publish_confirmation_progress(
+        self,
+        job: V9ConfirmationJobResponse,
+        stage: ConfirmationProgressStage,
+        *,
+        completed: int | None = None,
+        total: int | None = None,
+    ) -> bool:
+        """Publish privacy-safe ticket progress without gating confirmation work."""
+        try:
+            previous = self._confirmation_progress.get(job.slot_id)
+            progress = ConfirmationProgress(
+                bundle_id=job.bundle_id,
+                ticket_id=job.ticket_id,
+                agent_id=job.agent_id,
+                slot_id=job.slot_id,
+                stage=stage,
+                completed=completed,
+                total=total,
+                ticket_deadline=job.deadline,
+            )
+            self._confirmation_progress[job.slot_id] = progress
+            if previous != progress:
+                return await self._report_heartbeat_bounded("polling")
+        except Exception:  # noqa: BLE001 - progress must never gate execution
+            logger.warning(
+                "confirmation progress update dropped; execution continues slot=%s",
+                job.slot_id,
+            )
+        return False
+
+    async def _clear_confirmation_progress(self, slot_id: str) -> None:
+        """Clear a completed/returned confirmation slot from the next heartbeat."""
+        if self._confirmation_progress.pop(slot_id, None) is None:
+            return
+        try:
+            await self._report_heartbeat_bounded("polling")
+        except Exception:  # noqa: BLE001 - cleanup telemetry is fail-open
+            logger.warning(
+                "confirmation progress clear dropped; next heartbeat will reconcile "
+                "slot=%s",
+                slot_id,
+            )
 
     async def _on_dittobench_progress(
         self, snapshot: DittobenchProgressSnapshot
@@ -1775,6 +1834,12 @@ class ValidatorWorker:
             ) -> None:
                 if job is None:
                     return
+                await self._publish_confirmation_progress(
+                    job,
+                    "failed_retrying",
+                    completed=0,
+                    total=1,
+                )
                 try:
                     await asyncio.wait_for(
                         asyncio.shield(
@@ -1824,12 +1889,19 @@ class ValidatorWorker:
                     raise LeaseDeadlineError(
                         "v9 confirmation lease cannot preserve its reporting margin"
                     )
+                await self._publish_confirmation_progress(job, "preparing")
 
                 await self._dittobench.activate_confirmation_inference_session(
                     inference_session,
                     job=job,
                 )
                 artifact = await self._platform.get_v9_confirmation_artifact(job)
+                await self._publish_confirmation_progress(
+                    job,
+                    "running_confirmation",
+                    completed=0,
+                    total=1,
+                )
                 result = await self._dittobench.execute_v9_confirmation(
                     job=job,
                     artifact=artifact,
@@ -1839,6 +1911,12 @@ class ValidatorWorker:
                     raise LeaseDeadlineError(
                         "v9 confirmation execution finished after its ticket deadline"
                     )
+                await self._publish_confirmation_progress(
+                    job,
+                    "finalizing",
+                    completed=1,
+                    total=1,
+                )
                 prepared = await self._platform.prepare_v9_confirmation_report(
                     job, result
                 )
@@ -1872,6 +1950,12 @@ class ValidatorWorker:
                         evidence_sha256=evidence_sha256,
                     ),
                 )
+                await self._publish_confirmation_progress(
+                    job,
+                    "submitting_result",
+                    completed=1,
+                    total=1,
+                )
                 await self._platform.submit_v9_confirmation_report(job, report)
             except asyncio.CancelledError:
                 await hand_back("cancelled")
@@ -1903,15 +1987,15 @@ class ValidatorWorker:
                     await self._dittobench.cancel_inference_session(
                         inference_session.session_id
                     )
+                await self._clear_confirmation_progress(slot_id)
 
         heartbeat_stop = asyncio.Event()
 
         async def keep_validator_visible() -> None:
-            # V9 occupancy is intentionally absent from the canonical heartbeat
-            # lease roster.  Still send ordinary liveness while a LongMem run is
-            # active so the validator does not look offline to operators.  The
-            # empty v9 slot stays out of ``benchmark_capacity.active``; Platform
-            # owns its liveness independently in the confirmation ticket table.
+            # Confirmation occupancy remains absent from ordinary benchmark
+            # capacity, but protocol v22 signs its own longmem-slot progress
+            # list. Periodic liveness therefore refreshes both independent lanes
+            # without letting confirmation work fabricate ordinary occupancy.
             while not heartbeat_stop.is_set():
                 try:
                     await asyncio.wait_for(

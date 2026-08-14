@@ -1730,6 +1730,9 @@ class ValidatorHeartbeat(Base):
     benchmark_capacity: Mapped[dict | None] = mapped_column(
         _JSON_VARIANT, nullable=True
     )
+    confirmation_progress: Mapped[list | None] = mapped_column(
+        _JSON_VARIANT, nullable=True
+    )
     # The slots the validator's SIGNED capacity claimed as busy, recorded before
     # the ticket-confirmation filter in ``_validated_heartbeat_work`` narrows
     # ``benchmark_capacity`` to work the ledger could confirm. A slot can be

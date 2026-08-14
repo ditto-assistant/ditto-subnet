@@ -100,6 +100,17 @@ export interface ConfirmationProgress {
   attempt: number;
   issued_at: string;
   deadline: string;
+  stage?:
+    | "preparing"
+    | "running_confirmation"
+    | "finalizing"
+    | "submitting_result"
+    | "failed_retrying"
+    | null;
+  completed?: number | null;
+  total?: number | null;
+  reported_agent_id?: string | null;
+  progress_reported_at?: string | null;
   subjects: ConfirmationSubject[];
 }
 

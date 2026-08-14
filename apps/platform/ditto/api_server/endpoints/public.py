@@ -142,6 +142,7 @@ from ditto.api_models import bench_glossary as bench_glossary_data
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
+from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.model_use import ModelUseVerdict
 from ditto.api_models.public import (
     BenchServiceability,
@@ -3310,6 +3311,36 @@ def _public_orphaned_slot(orphan: OrphanedLease) -> PublicOrphanedSlot:
     )
 
 
+def _public_confirmation_progress(
+    work: ActiveConfirmationWork,
+    reported: ConfirmationProgress | None,
+    *,
+    reported_at: datetime,
+) -> PublicConfirmationProgress:
+    """Join signed validator progress to Platform's authoritative live ticket."""
+    return PublicConfirmationProgress(
+        bundle_id=work.bundle.bundle_id,
+        slot_id=work.ticket.slot_id,
+        mode=cast(Literal["shadow", "enforce"], work.mode.value),
+        profile_revision=work.bundle.profile_revision,
+        attempt=work.ticket.attempt,
+        issued_at=work.ticket.issued_at,
+        deadline=work.ticket.deadline,
+        stage=reported.stage if reported is not None else None,
+        completed=reported.completed if reported is not None else None,
+        total=reported.total if reported is not None else None,
+        reported_agent_id=reported.agent_id if reported is not None else None,
+        progress_reported_at=reported_at if reported is not None else None,
+        subjects=[
+            PublicConfirmationSubject(
+                agent_id=subject.agent_id,
+                agent_name=subject.agent_name,
+            )
+            for subject in work.subjects
+        ],
+    )
+
+
 def _validator_heartbeats_response(
     *,
     rows: list[Any],
@@ -3420,6 +3451,14 @@ def _validator_heartbeats_response(
             # against the closed schema, never raw stored JSON.
             with contextlib.suppress(ValidationError):
                 stack_health = ValidatorStackHealth.model_validate(row.stack_health)
+        reported_confirmation: dict[tuple[UUID, UUID, str], ConfirmationProgress] = {}
+        if row.protocol_version >= 22 and isinstance(row.confirmation_progress, list):
+            for raw_progress in row.confirmation_progress:
+                with contextlib.suppress(ValidationError):
+                    progress = ConfirmationProgress.model_validate(raw_progress)
+                    reported_confirmation[
+                        (progress.bundle_id, progress.ticket_id, progress.slot_id)
+                    ] = progress
         assignment_state: ValidatorAssignmentState
         if assignment is None:
             # No live lease. Reporting an agent with no assignment is a genuine
@@ -3539,21 +3578,16 @@ def _validator_heartbeats_response(
                 active_benchmarks=active_benchmarks,
                 assigned_benchmarks=assigned_benchmarks,
                 confirmation_benchmarks=[
-                    PublicConfirmationProgress(
-                        bundle_id=work.bundle.bundle_id,
-                        slot_id=work.ticket.slot_id,
-                        mode=cast(Literal["shadow", "enforce"], work.mode.value),
-                        profile_revision=work.bundle.profile_revision,
-                        attempt=work.ticket.attempt,
-                        issued_at=work.ticket.issued_at,
-                        deadline=work.ticket.deadline,
-                        subjects=[
-                            PublicConfirmationSubject(
-                                agent_id=subject.agent_id,
-                                agent_name=subject.agent_name,
+                    _public_confirmation_progress(
+                        work,
+                        reported_confirmation.get(
+                            (
+                                work.bundle.bundle_id,
+                                work.ticket.ticket_id,
+                                work.ticket.slot_id,
                             )
-                            for subject in work.subjects
-                        ],
+                        ),
+                        reported_at=cast(datetime, _aware(row.reported_at)),
                     )
                     for work in confirmation_by_hotkey.get(row.validator_hotkey, [])
                 ],
