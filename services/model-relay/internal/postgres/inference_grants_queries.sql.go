@@ -242,6 +242,64 @@ func (q *Queries) ApplyGrantEmbeddingSettlement(ctx context.Context, arg ApplyGr
 	return i, err
 }
 
+const countFreshGlobalActiveRequests = `-- name: CountFreshGlobalActiveRequests :one
+SELECT COUNT(*)::bigint
+FROM inference_requests r
+JOIN inference_grants g ON g.grant_id = r.grant_id
+WHERE g.status = 'active'
+  AND r.status = 'started'
+  AND r.request_kind = $1::text
+  AND r.started_at >= $2::timestamptz
+`
+
+type CountFreshGlobalActiveRequestsParams struct {
+	RequestKind string             `json:"requestKind"`
+	StaleCutoff pgtype.Timestamptz `json:"staleCutoff"`
+}
+
+// Cross-grant global concurrency rail; same fresh-row, best-effort semantics
+// as CountFreshValidatorActiveRequests.
+func (q *Queries) CountFreshGlobalActiveRequests(ctx context.Context, arg CountFreshGlobalActiveRequestsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFreshGlobalActiveRequests, arg.RequestKind, arg.StaleCutoff)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countFreshValidatorActiveRequests = `-- name: CountFreshValidatorActiveRequests :one
+SELECT COUNT(*)::bigint
+FROM inference_requests r
+JOIN inference_grants g ON g.grant_id = r.grant_id
+WHERE g.status = 'active'
+  AND r.status = 'started'
+  AND r.request_kind = $1::text
+  AND r.started_at >= $2::timestamptz
+  AND g.validator_hotkey = $3::text
+`
+
+type CountFreshValidatorActiveRequestsParams struct {
+	RequestKind     string             `json:"requestKind"`
+	StaleCutoff     pgtype.Timestamptz `json:"staleCutoff"`
+	ValidatorHotkey string             `json:"validatorHotkey"`
+}
+
+// Cross-grant per-validator concurrency rail (PR #735). Aggregates the
+// authoritative request rows, not the denormalized grant counters: a
+// validator ticket can expire before its scorer finishes the request, and
+// older cleanup paths left the corresponding *_active_requests value behind
+// on an otherwise-active grant — one such ghost permanently consumed a fleet
+// concurrency slot. Only fresh 'started' rows (started_at >= the same
+// 2*timeout recovery cutoff the stale sweep uses) on active grants count.
+// DELIBERATELY unlocked and best-effort: a burst may overshoot by at most the
+// number of racers. Do NOT add locks (a global advisory lock was removed
+// because it capped horizontal scaling).
+func (q *Queries) CountFreshValidatorActiveRequests(ctx context.Context, arg CountFreshValidatorActiveRequestsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFreshValidatorActiveRequests, arg.RequestKind, arg.StaleCutoff, arg.ValidatorHotkey)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const getInferenceGrant = `-- name: GetInferenceGrant :one
 
 SELECT grant_id, agent_id, bench_version, validator_hotkey, slot_id, ticket_deadline, status, bearer_digest, broker_public_key, generation, allowed_models, request_budget, token_budget, request_count, prompt_tokens, completion_tokens, cost_microusd, active_requests, expires_at, created_at, updated_at, route_provider, route_profile, route_quantization, route_prompt_price_per_token, route_completion_price_per_token, embedding_model, embedding_profile, embedding_provider, embedding_dimensions, embedding_request_budget, embedding_token_budget, embedding_request_count, embedding_tokens, embedding_cost_microusd, embedding_active_requests, usage_accounting_version FROM inference_grants
@@ -476,51 +534,4 @@ type SetGrantEmbeddingActiveRequestsParams struct {
 func (q *Queries) SetGrantEmbeddingActiveRequests(ctx context.Context, arg SetGrantEmbeddingActiveRequestsParams) error {
 	_, err := q.db.Exec(ctx, setGrantEmbeddingActiveRequests, arg.EmbeddingActiveRequests, arg.Now, arg.GrantID)
 	return err
-}
-
-const sumGlobalActiveLaneRequests = `-- name: SumGlobalActiveLaneRequests :one
-SELECT
-    COALESCE(SUM(active_requests), 0)::bigint AS chat_active,
-    COALESCE(SUM(embedding_active_requests), 0)::bigint AS embedding_active
-FROM inference_grants
-WHERE status = 'active'
-`
-
-type SumGlobalActiveLaneRequestsRow struct {
-	ChatActive      int64 `json:"chatActive"`
-	EmbeddingActive int64 `json:"embeddingActive"`
-}
-
-// Cross-grant global concurrency rail; same best-effort semantics as
-// SumValidatorActiveLaneRequests.
-func (q *Queries) SumGlobalActiveLaneRequests(ctx context.Context) (SumGlobalActiveLaneRequestsRow, error) {
-	row := q.db.QueryRow(ctx, sumGlobalActiveLaneRequests)
-	var i SumGlobalActiveLaneRequestsRow
-	err := row.Scan(&i.ChatActive, &i.EmbeddingActive)
-	return i, err
-}
-
-const sumValidatorActiveLaneRequests = `-- name: SumValidatorActiveLaneRequests :one
-SELECT
-    COALESCE(SUM(active_requests), 0)::bigint AS chat_active,
-    COALESCE(SUM(embedding_active_requests), 0)::bigint AS embedding_active
-FROM inference_grants
-WHERE validator_hotkey = $1::text
-  AND status = 'active'
-`
-
-type SumValidatorActiveLaneRequestsRow struct {
-	ChatActive      int64 `json:"chatActive"`
-	EmbeddingActive int64 `json:"embeddingActive"`
-}
-
-// Cross-grant per-validator concurrency rail. DELIBERATELY unlocked and
-// best-effort: a burst may overshoot by at most the number of racers. Do NOT
-// add locks (a global advisory lock was removed because it capped horizontal
-// scaling).
-func (q *Queries) SumValidatorActiveLaneRequests(ctx context.Context, validatorHotkey string) (SumValidatorActiveLaneRequestsRow, error) {
-	row := q.db.QueryRow(ctx, sumValidatorActiveLaneRequests, validatorHotkey)
-	var i SumValidatorActiveLaneRequestsRow
-	err := row.Scan(&i.ChatActive, &i.EmbeddingActive)
-	return i, err
 }

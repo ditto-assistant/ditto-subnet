@@ -35,7 +35,8 @@ only the relay process on the relay hosts.
 - `internal/server` — `/health`, `/metrics`, and the inference handler
   registration point (`server.InferenceHandlers`).
 - `internal/inference` — the inference plane: `POST /api/v1/inference/
-  {exchange,chat/completions,embeddings}` handlers, the admission
+  {exchange,chat/completions,embeddings,confirmation/chat/completions,
+  confirmation/embeddings}` handlers, the admission
   (`begin_inference_request` 17-step gate order) and settlement
   (`finish_inference_request` + `record_route_observation`) transaction
   orchestration, the OpenRouter/Perplexity provider calls with the bounded

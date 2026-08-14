@@ -24,20 +24,24 @@ import (
 )
 
 // InferenceHandlers is the registration point for the inference plane. The
-// three handlers are nil in the foundation; the follow-up inference-proxy
-// change supplies them and they are mounted at EXACTLY these routes:
+// handlers are nil in the foundation; the follow-up inference-proxy change
+// supplies them and they are mounted at EXACTLY these routes:
 //
 //	POST /api/v1/inference/exchange
 //	POST /api/v1/inference/chat/completions
 //	POST /api/v1/inference/embeddings
+//	POST /api/v1/inference/confirmation/chat/completions
+//	POST /api/v1/inference/confirmation/embeddings
 //
 // Handlers are plain http.Handlers; they receive the request-ID context from
 // the middleware stack and are expected to write relayhttp envelopes for
 // every error path.
 type InferenceHandlers struct {
-	Exchange        http.Handler
-	ChatCompletions http.Handler
-	Embeddings      http.Handler
+	Exchange                    http.Handler
+	ChatCompletions             http.Handler
+	Embeddings                  http.Handler
+	ConfirmationChatCompletions http.Handler
+	ConfirmationEmbeddings      http.Handler
 }
 
 // Server owns the relay HTTP surface and its dependencies.
@@ -132,6 +136,12 @@ func (s *Server) registerInferenceRoutes(register func(method, path string, h ht
 	}
 	if s.inference.Embeddings != nil {
 		register(http.MethodPost, "/api/v1/inference/embeddings", s.inference.Embeddings)
+	}
+	if s.inference.ConfirmationChatCompletions != nil {
+		register(http.MethodPost, "/api/v1/inference/confirmation/chat/completions", s.inference.ConfirmationChatCompletions)
+	}
+	if s.inference.ConfirmationEmbeddings != nil {
+		register(http.MethodPost, "/api/v1/inference/confirmation/embeddings", s.inference.ConfirmationEmbeddings)
 	}
 }
 

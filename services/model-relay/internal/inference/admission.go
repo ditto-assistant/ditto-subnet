@@ -341,11 +341,26 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	}
 	// Step 16: cross-grant best-effort rails (deliberately unlocked; a burst
 	// may overshoot by at most the number of racers — do NOT add locks).
-	validatorActive, err := q.SumValidatorActiveLaneRequests(ctx, grant.ValidatorHotkey)
+	//
+	// PR #735: these rails COUNT the authoritative fresh request rows
+	// (status='started', this lane, started_at >= the same recovery cutoff as
+	// step 9, joined to active grants) instead of summing the denormalized
+	// grant counters. A ghost *_active_requests value left behind on an
+	// otherwise-active grant by an older cleanup path must not starve
+	// unrelated leases; the per-grant row-locked counter (step 14) remains the
+	// exact ticket rail.
+	validatorLaneActive, err := q.CountFreshValidatorActiveRequests(ctx, postgres.CountFreshValidatorActiveRequestsParams{
+		RequestKind:     p.kind,
+		StaleCutoff:     pgTime(staleCutoff),
+		ValidatorHotkey: grant.ValidatorHotkey,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	globalActive, err := q.SumGlobalActiveLaneRequests(ctx)
+	globalLaneActive, err := q.CountFreshGlobalActiveRequests(ctx, postgres.CountFreshGlobalActiveRequestsParams{
+		RequestKind: p.kind,
+		StaleCutoff: pgTime(staleCutoff),
+	})
 	if err != nil {
 		return nil, nil, err
 	}
@@ -372,12 +387,6 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	})
 	if err != nil {
 		return nil, nil, err
-	}
-	validatorLaneActive := validatorActive.ChatActive
-	globalLaneActive := globalActive.ChatActive
-	if p.kind == kindEmbedding {
-		validatorLaneActive = validatorActive.EmbeddingActive
-		globalLaneActive = globalActive.EmbeddingActive
 	}
 	// Narrowest-to-widest; the FIRST at-limit gate names the metric scope.
 	type gate struct {

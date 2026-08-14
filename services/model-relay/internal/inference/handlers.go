@@ -77,14 +77,17 @@ func NewUpstreamClient(cfg config.InferenceProxyConfig) *http.Client {
 	}
 }
 
-// NewHandlers builds the server registration struct for the three routes.
-// The routes are always mounted; each handler answers 404 "inference proxy
-// is disabled" itself when the proxy is off, exactly like the Python app.
+// NewHandlers builds the server registration struct for the inference
+// routes. The routes are always mounted; each handler answers its own 404
+// ("inference proxy is disabled" / "confirmation proxy is disabled") when the
+// proxy is off, exactly like the Python app.
 func NewHandlers(deps *Deps) *server.InferenceHandlers {
 	return &server.InferenceHandlers{
-		Exchange:        http.HandlerFunc(deps.handleExchange),
-		ChatCompletions: http.HandlerFunc(deps.handleChatCompletions),
-		Embeddings:      http.HandlerFunc(deps.handleEmbeddings),
+		Exchange:                    http.HandlerFunc(deps.handleExchange),
+		ChatCompletions:             http.HandlerFunc(deps.handleChatCompletions),
+		Embeddings:                  http.HandlerFunc(deps.handleEmbeddings),
+		ConfirmationChatCompletions: http.HandlerFunc(deps.handleConfirmationChatCompletions),
+		ConfirmationEmbeddings:      http.HandlerFunc(deps.handleConfirmationEmbeddings),
 	}
 }
 

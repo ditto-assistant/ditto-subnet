@@ -70,6 +70,8 @@ func serve(deps *Deps, r *http.Request) *httptest.ResponseRecorder {
 	mux.Handle("POST /api/v1/inference/exchange", handlers.Exchange)
 	mux.Handle("POST /api/v1/inference/chat/completions", handlers.ChatCompletions)
 	mux.Handle("POST /api/v1/inference/embeddings", handlers.Embeddings)
+	mux.Handle("POST /api/v1/inference/confirmation/chat/completions", handlers.ConfirmationChatCompletions)
+	mux.Handle("POST /api/v1/inference/confirmation/embeddings", handlers.ConfirmationEmbeddings)
 	logger := slog.New(slog.NewTextHandler(nullWriter{}, nil))
 	h := relayhttp.RequestIDMiddleware(logger, relayhttp.RecoverMiddleware(logger, mux))
 	w := httptest.NewRecorder()
@@ -336,6 +338,85 @@ func TestEmbeddingGates(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestConfirmationGates(t *testing.T) {
+	deps := newGateDeps(t, testConfig(t, nil))
+	const path = "/api/v1/inference/confirmation/chat/completions"
+
+	t.Run("malformed header precedes everything", func(t *testing.T) {
+		disabled := newGateDeps(t, testConfig(t, map[string]string{"DITTO_INFERENCE_PROXY_ENABLED": "0", "OPENROUTER_API_KEY": ""}))
+		h := validProxyHeaders()
+		h["X-Ditto-Grant"] = "not-a-uuid"
+		w := serve(disabled, proxyRequest(path, "{}", h))
+		expectEnvelope(t, w, 422, relayhttp.CodeRequestValidation, "request validation failed")
+	})
+
+	t.Run("disabled proxy", func(t *testing.T) {
+		disabled := newGateDeps(t, testConfig(t, map[string]string{"DITTO_INFERENCE_PROXY_ENABLED": "0", "OPENROUTER_API_KEY": ""}))
+		w := serve(disabled, proxyRequest(path, "{}", validProxyHeaders()))
+		expectEnvelope(t, w, 404, relayhttp.CodeHTTPException, "confirmation proxy is disabled")
+	})
+
+	t.Run("missing headers", func(t *testing.T) {
+		h := validProxyHeaders()
+		delete(h, "X-Ditto-Proof")
+		w := serve(deps, proxyRequest(path, "{}", h))
+		expectEnvelope(t, w, 401, relayhttp.CodeHTTPException, "missing confirmation proof")
+	})
+
+	t.Run("bad authorization scheme is also the missing-proof 401", func(t *testing.T) {
+		// Unlike the ordinary lane, _confirmation_headers folds a non-Bearer
+		// Authorization into the same uniform 401 detail.
+		h := validProxyHeaders()
+		h["Authorization"] = "Basic zzz"
+		w := serve(deps, proxyRequest(path, "{}", h))
+		expectEnvelope(t, w, 401, relayhttp.CodeHTTPException, "missing confirmation proof")
+	})
+
+	t.Run("stale request precedes the body-size gate", func(t *testing.T) {
+		// _confirmation_headers runs before request.body() in Python, so an
+		// oversized stale request answers 409, not 413.
+		h := validProxyHeaders()
+		h["X-Ditto-Requested-At"] = time.Now().UTC().Add(-time.Minute).Format(time.RFC3339Nano)
+		w := serve(deps, proxyRequest(path, strings.Repeat("x", 262145), h))
+		expectEnvelope(t, w, 409, relayhttp.CodeHTTPException, "confirmation request is stale")
+	})
+
+	t.Run("body too large", func(t *testing.T) {
+		w := serve(deps, proxyRequest(path, strings.Repeat("x", 262145), validProxyHeaders()))
+		expectEnvelope(t, w, 413, relayhttp.CodeHTTPException, "confirmation request is too large")
+	})
+
+	t.Run("invalid JSON", func(t *testing.T) {
+		w := serve(deps, proxyRequest(path, "{", validProxyHeaders()))
+		expectEnvelope(t, w, 400, relayhttp.CodeHTTPException, "invalid JSON request")
+	})
+
+	t.Run("embedding lane gates", func(t *testing.T) {
+		const embPath = "/api/v1/inference/confirmation/embeddings"
+		w := serve(deps, proxyRequest(embPath, strings.Repeat("x", 1024*1024+1), validProxyHeaders()))
+		expectEnvelope(t, w, 413, relayhttp.CodeHTTPException, "embedding request is too large")
+		w = serve(deps, proxyRequest(embPath, `{"model":"other","input":["x"],"dimensions":768,"encoding_format":"float"}`, validProxyHeaders()))
+		expectEnvelope(t, w, 400, relayhttp.CodeHTTPException, "invalid embedding request")
+	})
+}
+
+func TestPythonFloatRepr(t *testing.T) {
+	for value, want := range map[float64]string{
+		0.0021:  "0.0021",
+		0.1:     "0.1",
+		2.0:     "2.0",
+		0.0001:  "0.0001",
+		5e-05:   "5e-05",
+		1e-06:   "1e-06",
+		0:       "0.0",
+		12.3456: "12.3456",
+	} {
+		if got := pythonFloatRepr(value); got != want {
+			t.Errorf("pythonFloatRepr(%v): want %q, got %q", value, want, got)
+		}
+	}
 }
 
 func TestParseHeaderDatetime(t *testing.T) {

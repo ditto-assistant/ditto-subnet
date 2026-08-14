@@ -155,15 +155,19 @@ func TestInferenceRoutesMountAtExactPaths(t *testing.T) {
 		})
 	}
 	h := newTestServer(server.WithInferenceHandlers(&server.InferenceHandlers{
-		Exchange:        mark("exchange"),
-		ChatCompletions: mark("chat"),
-		Embeddings:      mark("embeddings"),
+		Exchange:                    mark("exchange"),
+		ChatCompletions:             mark("chat"),
+		Embeddings:                  mark("embeddings"),
+		ConfirmationChatCompletions: mark("confirmation-chat"),
+		ConfirmationEmbeddings:      mark("confirmation-embeddings"),
 	}))
 
 	for path, name := range map[string]string{
-		"/api/v1/inference/exchange":         "exchange",
-		"/api/v1/inference/chat/completions": "chat",
-		"/api/v1/inference/embeddings":       "embeddings",
+		"/api/v1/inference/exchange":                      "exchange",
+		"/api/v1/inference/chat/completions":              "chat",
+		"/api/v1/inference/embeddings":                    "embeddings",
+		"/api/v1/inference/confirmation/chat/completions": "confirmation-chat",
+		"/api/v1/inference/confirmation/embeddings":       "confirmation-embeddings",
 	} {
 		req := httptest.NewRequest(http.MethodPost, path, nil)
 		rec := httptest.NewRecorder()

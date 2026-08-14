@@ -54,6 +54,64 @@ func (ns NullTicketstatus) Value() (driver.Value, error) {
 	return string(ns.Ticketstatus), nil
 }
 
+type ConfirmationBundleTicket struct {
+	TicketID        pgtype.UUID        `json:"ticketId"`
+	BundleID        pgtype.UUID        `json:"bundleId"`
+	ValidatorHotkey string             `json:"validatorHotkey"`
+	SlotID          string             `json:"slotId"`
+	Status          string             `json:"status"`
+	Attempt         int32              `json:"attempt"`
+	IssuedAt        pgtype.Timestamptz `json:"issuedAt"`
+	Deadline        pgtype.Timestamptz `json:"deadline"`
+	FailureReason   pgtype.Text        `json:"failureReason"`
+	FailedAt        pgtype.Timestamptz `json:"failedAt"`
+	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+}
+
+type ConfirmationInferenceGrant struct {
+	GrantID            pgtype.UUID        `json:"grantId"`
+	TicketID           pgtype.UUID        `json:"ticketId"`
+	BundleID           pgtype.UUID        `json:"bundleId"`
+	ValidatorHotkey    string             `json:"validatorHotkey"`
+	Lane               string             `json:"lane"`
+	Status             string             `json:"status"`
+	BearerDigest       string             `json:"bearerDigest"`
+	BrokerPublicKey    string             `json:"brokerPublicKey"`
+	Generation         int32              `json:"generation"`
+	Model              string             `json:"model"`
+	Provider           string             `json:"provider"`
+	RouteProvider      string             `json:"routeProvider"`
+	ReceiptProvider    string             `json:"receiptProvider"`
+	ProfileRevision    string             `json:"profileRevision"`
+	RequestBudget      int32              `json:"requestBudget"`
+	TokenBudget        int64              `json:"tokenBudget"`
+	CostBudgetMicrousd int64              `json:"costBudgetMicrousd"`
+	RequestCount       int32              `json:"requestCount"`
+	PromptTokens       int64              `json:"promptTokens"`
+	CompletionTokens   int64              `json:"completionTokens"`
+	CostMicrousd       int64              `json:"costMicrousd"`
+	ActiveRequests     int32              `json:"activeRequests"`
+	ExpiresAt          pgtype.Timestamptz `json:"expiresAt"`
+	CreatedAt          pgtype.Timestamptz `json:"createdAt"`
+	UpdatedAt          pgtype.Timestamptz `json:"updatedAt"`
+}
+
+type ConfirmationInferenceRequest struct {
+	GrantID             pgtype.UUID        `json:"grantId"`
+	Nonce               pgtype.UUID        `json:"nonce"`
+	Generation          int32              `json:"generation"`
+	Status              string             `json:"status"`
+	Model               string             `json:"model"`
+	ReservedTokens      int64              `json:"reservedTokens"`
+	MaxChargeableTokens int64              `json:"maxChargeableTokens"`
+	PromptTokens        int64              `json:"promptTokens"`
+	CompletionTokens    int64              `json:"completionTokens"`
+	CostMicrousd        int64              `json:"costMicrousd"`
+	UpstreamProvider    pgtype.Text        `json:"upstreamProvider"`
+	StartedAt           pgtype.Timestamptz `json:"startedAt"`
+	CompletedAt         pgtype.Timestamptz `json:"completedAt"`
+}
+
 type InferenceConcurrencySettingsRevision struct {
 	Revision       int32              `json:"revision"`
 	ParentRevision int32              `json:"parentRevision"`

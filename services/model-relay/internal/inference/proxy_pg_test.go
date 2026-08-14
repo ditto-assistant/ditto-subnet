@@ -315,6 +315,74 @@ func TestChatAtCapacityIsRetryable(t *testing.T) {
 	}
 }
 
+// seedSiblingGrant creates a second agent + issued ticket + active grant for
+// the same validator, returning the sibling grant id.
+func (f *pgFixture) seedSiblingGrant(t *testing.T, hotkey string) uuid.UUID {
+	t.Helper()
+	siblingAgent := uuid.New()
+	siblingGrant := uuid.New()
+	testutil.SeedSQL(t, f.pool,
+		`INSERT INTO agents (agent_id, miner_hotkey, name, sha256)
+		 VALUES ($1, 'miner-hotkey-2', 'test-agent-2', repeat('b', 64))`, siblingAgent)
+	testutil.SeedSQL(t, f.pool,
+		`INSERT INTO validator_tickets (agent_id, validator_hotkey, slot_id, status, deadline, bench_version, attempt_count)
+		 VALUES ($1, $2, 'slot-1', 'issued', $3, 9, 1)`,
+		siblingAgent, hotkey, f.deadline)
+	testutil.SeedSQL(t, f.pool,
+		`INSERT INTO inference_grants (
+		    grant_id, agent_id, bench_version, validator_hotkey, slot_id,
+		    ticket_deadline, status, bearer_digest, broker_public_key,
+		    generation, allowed_models, route_provider, route_profile,
+		    request_budget, token_budget, expires_at, usage_accounting_version)
+		 VALUES ($1, $2, 9, $3, 'slot-1', $4, 'active', 'sibling-digest', 'sibling-key', 1,
+		         '["openai/gpt-oss-20b"]'::jsonb, 'openrouter', $5,
+		         8192, 25000000, $4, 2)`,
+		siblingGrant, siblingAgent, hotkey, f.deadline, testProfile)
+	return siblingGrant
+}
+
+// PR #735: the cross-grant validator/global rails count fresh started request
+// rows, never the denormalized grant counters. A ghost counter left behind on
+// a sibling grant must not starve this lease — and real fresh rows must.
+func TestChatCrossGrantRailCountsFreshRowsNotGhostCounters(t *testing.T) {
+	upstream := fakeChatUpstream(t, nil)
+	defer upstream.Close()
+	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
+	f.seedRoute(t)
+	sibling := f.seedSiblingGrant(t, pgTestHotkey)
+
+	// Ghost counters at (and beyond) the validator ceiling, with zero rows:
+	// under the old counter-summing rails this admission would be starved
+	// forever; fresh-row counting must admit it.
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE inference_grants SET active_requests = 50 WHERE grant_id = $1`, sibling)
+	body := []byte(chatBody)
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, uuid.New(), body)))
+	if w.Code != 200 {
+		t.Fatalf("ghost counter must not gate admission: got %d: %s", w.Code, w.Body.String())
+	}
+
+	// Real fresh started rows on the sibling DO gate: fill the validator
+	// concurrency ceiling (boot default 24) with fresh rows.
+	testutil.SeedSQL(t, f.pool,
+		`INSERT INTO inference_requests (grant_id, nonce, generation, status, request_kind, model,
+		    reserved_tokens, max_chargeable_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at)
+		 SELECT $1, gen_random_uuid(), 1, 'started', 'chat', $2, 100, 100, 0, 0, 0, now()
+		 FROM generate_series(1, 24)`,
+		sibling, pgTestModel)
+	w = serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, uuid.New(), body)))
+	expectEnvelope(t, w, 503, relayhttp.CodeDeclineAtCapacity, "inference lane is at capacity")
+
+	// The same rows crossed the recovery window: no longer provider work, the
+	// rail releases without anyone revisiting the sibling grant.
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE inference_requests SET started_at = now() - interval '11 minutes' WHERE grant_id = $1`, sibling)
+	w = serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, uuid.New(), body)))
+	if w.Code != 200 {
+		t.Fatalf("stale rows must release the rail: got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestChatWrongBearerLearnsNothing(t *testing.T) {
 	upstream := fakeChatUpstream(t, nil)
 	defer upstream.Close()

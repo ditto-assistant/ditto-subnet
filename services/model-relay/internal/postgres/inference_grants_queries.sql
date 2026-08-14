@@ -137,23 +137,33 @@ SET embedding_active_requests = sqlc.arg(embedding_active_requests)::integer,
 WHERE grant_id = sqlc.arg(grant_id)::uuid
 RETURNING *;
 
--- name: SumValidatorActiveLaneRequests :one
--- Cross-grant per-validator concurrency rail. DELIBERATELY unlocked and
--- best-effort: a burst may overshoot by at most the number of racers. Do NOT
--- add locks (a global advisory lock was removed because it capped horizontal
--- scaling).
-SELECT
-    COALESCE(SUM(active_requests), 0)::bigint AS chat_active,
-    COALESCE(SUM(embedding_active_requests), 0)::bigint AS embedding_active
-FROM inference_grants
-WHERE validator_hotkey = sqlc.arg(validator_hotkey)::text
-  AND status = 'active';
+-- name: CountFreshValidatorActiveRequests :one
+-- Cross-grant per-validator concurrency rail (PR #735). Aggregates the
+-- authoritative request rows, not the denormalized grant counters: a
+-- validator ticket can expire before its scorer finishes the request, and
+-- older cleanup paths left the corresponding *_active_requests value behind
+-- on an otherwise-active grant — one such ghost permanently consumed a fleet
+-- concurrency slot. Only fresh 'started' rows (started_at >= the same
+-- 2*timeout recovery cutoff the stale sweep uses) on active grants count.
+-- DELIBERATELY unlocked and best-effort: a burst may overshoot by at most the
+-- number of racers. Do NOT add locks (a global advisory lock was removed
+-- because it capped horizontal scaling).
+SELECT COUNT(*)::bigint
+FROM inference_requests r
+JOIN inference_grants g ON g.grant_id = r.grant_id
+WHERE g.status = 'active'
+  AND r.status = 'started'
+  AND r.request_kind = sqlc.arg(request_kind)::text
+  AND r.started_at >= sqlc.arg(stale_cutoff)::timestamptz
+  AND g.validator_hotkey = sqlc.arg(validator_hotkey)::text;
 
--- name: SumGlobalActiveLaneRequests :one
--- Cross-grant global concurrency rail; same best-effort semantics as
--- SumValidatorActiveLaneRequests.
-SELECT
-    COALESCE(SUM(active_requests), 0)::bigint AS chat_active,
-    COALESCE(SUM(embedding_active_requests), 0)::bigint AS embedding_active
-FROM inference_grants
-WHERE status = 'active';
+-- name: CountFreshGlobalActiveRequests :one
+-- Cross-grant global concurrency rail; same fresh-row, best-effort semantics
+-- as CountFreshValidatorActiveRequests.
+SELECT COUNT(*)::bigint
+FROM inference_requests r
+JOIN inference_grants g ON g.grant_id = r.grant_id
+WHERE g.status = 'active'
+  AND r.status = 'started'
+  AND r.request_kind = sqlc.arg(request_kind)::text
+  AND r.started_at >= sqlc.arg(stale_cutoff)::timestamptz;

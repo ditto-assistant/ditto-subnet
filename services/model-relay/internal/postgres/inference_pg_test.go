@@ -478,12 +478,93 @@ func TestRateWindowCountsSettledRows(t *testing.T) {
 		t.Fatalf("windows must count settled rows: got %d/%d/%d", grantCount, validatorCount, globalCount)
 	}
 
-	chatEmb, err := f.queries.SumValidatorActiveLaneRequests(ctx, testHotkey)
+	staleCutoff := now.Add(-3 * time.Minute)
+	validatorActive, err := f.queries.CountFreshValidatorActiveRequests(ctx, dbpg.CountFreshValidatorActiveRequestsParams{
+		RequestKind:     "chat",
+		StaleCutoff:     pgTime(staleCutoff),
+		ValidatorHotkey: testHotkey,
+	})
 	if err != nil {
 		t.Fatalf("validator active: %v", err)
 	}
-	if chatEmb.ChatActive != 0 || chatEmb.EmbeddingActive != 0 {
-		t.Fatalf("active lane sums: settled rows must NOT count, got %+v", chatEmb)
+	globalActive, err := f.queries.CountFreshGlobalActiveRequests(ctx, dbpg.CountFreshGlobalActiveRequestsParams{
+		RequestKind: "chat",
+		StaleCutoff: pgTime(staleCutoff),
+	})
+	if err != nil {
+		t.Fatalf("global active: %v", err)
+	}
+	if validatorActive != 0 || globalActive != 0 {
+		t.Fatalf("active rails: settled rows must NOT count, got %d/%d", validatorActive, globalActive)
+	}
+}
+
+// The PR #735 rail semantics: the cross-grant concurrency rails count fresh
+// 'started' request rows joined to active grants — never the denormalized
+// grant counters, and never rows older than the recovery cutoff or rows whose
+// owning grant is no longer active.
+func TestFreshActiveRequestRailCountsRowsNotCounters(t *testing.T) {
+	f := newFixture(t)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	ctx := t.Context()
+	staleCutoff := now.Add(-3 * time.Minute)
+
+	// A ghost counter alone (no request rows) must not gate anything.
+	testutil.SeedSQL(t, f.pool,
+		"UPDATE inference_grants SET active_requests = 50, embedding_active_requests = 50 WHERE grant_id = $1",
+		f.grantID)
+	count := func(kind string) (int64, int64) {
+		t.Helper()
+		validator, err := f.queries.CountFreshValidatorActiveRequests(ctx, dbpg.CountFreshValidatorActiveRequestsParams{
+			RequestKind:     kind,
+			StaleCutoff:     pgTime(staleCutoff),
+			ValidatorHotkey: testHotkey,
+		})
+		if err != nil {
+			t.Fatalf("validator count: %v", err)
+		}
+		global, err := f.queries.CountFreshGlobalActiveRequests(ctx, dbpg.CountFreshGlobalActiveRequestsParams{
+			RequestKind: kind,
+			StaleCutoff: pgTime(staleCutoff),
+		})
+		if err != nil {
+			t.Fatalf("global count: %v", err)
+		}
+		return validator, global
+	}
+	if v, g := count("chat"); v != 0 || g != 0 {
+		t.Fatalf("ghost counters must not count: got %d/%d", v, g)
+	}
+
+	insertRequest := func(kind string, startedAt time.Time) {
+		t.Helper()
+		testutil.SeedSQL(t, f.pool,
+			`INSERT INTO inference_requests (grant_id, nonce, generation, status, request_kind, model,
+			    reserved_tokens, max_chargeable_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at)
+			 VALUES ($1, $2, 1, 'started', $3, 'openai/gpt-oss-20b', 100, 100, 0, 0, 0, $4)`,
+			f.grantID, uuid.New(), kind, startedAt)
+	}
+	// One fresh started row per lane counts exactly once, per lane.
+	insertRequest("chat", now)
+	insertRequest("embedding", now)
+	if v, g := count("chat"); v != 1 || g != 1 {
+		t.Fatalf("fresh chat row must count once: got %d/%d", v, g)
+	}
+	if v, g := count("embedding"); v != 1 || g != 1 {
+		t.Fatalf("fresh embedding row must count once: got %d/%d", v, g)
+	}
+
+	// A started row older than the recovery cutoff is no longer provider work.
+	insertRequest("chat", now.Add(-10*time.Minute))
+	if v, g := count("chat"); v != 1 || g != 1 {
+		t.Fatalf("stale started rows must not count: got %d/%d", v, g)
+	}
+
+	// Rows on a non-active grant stop counting entirely.
+	testutil.SeedSQL(t, f.pool,
+		"UPDATE inference_grants SET status = 'revoked' WHERE grant_id = $1", f.grantID)
+	if v, g := count("chat"); v != 0 || g != 0 {
+		t.Fatalf("rows on a revoked grant must not count: got %d/%d", v, g)
 	}
 }
 

@@ -923,6 +923,68 @@ CREATE TABLE public.confirmation_dimension_evidence (
 
 
 --
+-- Name: confirmation_inference_grants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.confirmation_inference_grants (
+    grant_id uuid NOT NULL,
+    ticket_id uuid NOT NULL,
+    bundle_id uuid NOT NULL,
+    validator_hotkey text NOT NULL,
+    lane text NOT NULL,
+    status text NOT NULL,
+    bearer_digest text NOT NULL,
+    broker_public_key text NOT NULL,
+    generation integer NOT NULL,
+    model text NOT NULL,
+    provider text NOT NULL,
+    route_provider text NOT NULL,
+    receipt_provider text NOT NULL,
+    profile_revision text NOT NULL,
+    request_budget integer NOT NULL,
+    token_budget bigint NOT NULL,
+    cost_budget_microusd bigint NOT NULL,
+    request_count integer DEFAULT 0 NOT NULL,
+    prompt_tokens bigint DEFAULT '0'::bigint NOT NULL,
+    completion_tokens bigint DEFAULT '0'::bigint NOT NULL,
+    cost_microusd bigint DEFAULT '0'::bigint NOT NULL,
+    active_requests integer DEFAULT 0 NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_confirmation_inference_grants_confirmation_inference_0c91 CHECK ((generation > 0)),
+    CONSTRAINT ck_confirmation_inference_grants_confirmation_inference_1ec2 CHECK (((request_budget > 0) AND (token_budget > 0) AND (cost_budget_microusd > 0))),
+    CONSTRAINT ck_confirmation_inference_grants_confirmation_inference_89b9 CHECK ((lane = ANY (ARRAY['reader'::text, 'judge'::text, 'embedding'::text]))),
+    CONSTRAINT ck_confirmation_inference_grants_confirmation_inference_b776 CHECK (((request_count >= 0) AND (prompt_tokens >= 0) AND (completion_tokens >= 0) AND (cost_microusd >= 0) AND (active_requests >= 0))),
+    CONSTRAINT ck_confirmation_inference_grants_confirmation_inference_cfcd CHECK ((status = ANY (ARRAY['active'::text, 'revoked'::text, 'exhausted'::text])))
+);
+
+
+--
+-- Name: confirmation_inference_requests; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.confirmation_inference_requests (
+    grant_id uuid NOT NULL,
+    nonce uuid NOT NULL,
+    generation integer NOT NULL,
+    status text NOT NULL,
+    model text NOT NULL,
+    reserved_tokens bigint NOT NULL,
+    max_chargeable_tokens bigint NOT NULL,
+    prompt_tokens bigint DEFAULT '0'::bigint NOT NULL,
+    completion_tokens bigint DEFAULT '0'::bigint NOT NULL,
+    cost_microusd bigint DEFAULT '0'::bigint NOT NULL,
+    upstream_provider text,
+    started_at timestamp with time zone NOT NULL,
+    completed_at timestamp with time zone,
+    CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_2e68 CHECK (((generation > 0) AND (reserved_tokens > 0) AND (max_chargeable_tokens >= reserved_tokens))),
+    CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_3a48 CHECK ((status = ANY (ARRAY['started'::text, 'completed'::text, 'failed'::text, 'canceled'::text]))),
+    CONSTRAINT ck_confirmation_inference_requests_confirmation_inferen_4e49 CHECK (((prompt_tokens >= 0) AND (completion_tokens >= 0) AND (cost_microusd >= 0)))
+);
+
+
+--
 -- Name: confirmation_retest_authorizations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2480,6 +2542,14 @@ ALTER TABLE ONLY public.confirmation_dimension_evidence
 
 
 --
+-- Name: confirmation_inference_grants confirmation_inference_grants_ticket_lane_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_inference_grants
+    ADD CONSTRAINT confirmation_inference_grants_ticket_lane_key UNIQUE (ticket_id, lane);
+
+
+--
 -- Name: confirmation_budget_reservations confirmation_reservations_attempt_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2749,6 +2819,22 @@ ALTER TABLE ONLY public.confirmation_bundle_tickets
 
 ALTER TABLE ONLY public.confirmation_bundles
     ADD CONSTRAINT pk_confirmation_bundles PRIMARY KEY (bundle_id);
+
+
+--
+-- Name: confirmation_inference_grants pk_confirmation_inference_grants; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_inference_grants
+    ADD CONSTRAINT pk_confirmation_inference_grants PRIMARY KEY (grant_id);
+
+
+--
+-- Name: confirmation_inference_requests pk_confirmation_inference_requests; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_inference_requests
+    ADD CONSTRAINT pk_confirmation_inference_requests PRIMARY KEY (grant_id, nonce);
 
 
 --
@@ -3367,6 +3453,20 @@ CREATE INDEX confirmation_bundles_state_created_idx ON public.confirmation_bundl
 
 
 --
+-- Name: confirmation_inference_grants_expiry_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_inference_grants_expiry_idx ON public.confirmation_inference_grants USING btree (expires_at);
+
+
+--
+-- Name: confirmation_inference_requests_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX confirmation_inference_requests_started_idx ON public.confirmation_inference_requests USING btree (started_at);
+
+
+--
 -- Name: confirmation_reservations_day_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3936,6 +4036,14 @@ ALTER TABLE ONLY public.confirmation_dimension_evidence
 
 
 --
+-- Name: confirmation_inference_grants confirmation_inference_grants_ticket_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_inference_grants
+    ADD CONSTRAINT confirmation_inference_grants_ticket_fkey FOREIGN KEY (ticket_id, bundle_id) REFERENCES public.confirmation_bundle_tickets(ticket_id, bundle_id) ON DELETE CASCADE;
+
+
+--
 -- Name: confirmation_budget_reservations confirmation_reservations_bundle_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -4093,6 +4201,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.benchmark_rollout_members
     ADD CONSTRAINT fk_benchmark_rollout_members_rollout_id_benchmark_rollouts FOREIGN KEY (rollout_id) REFERENCES public.benchmark_rollouts(rollout_id) ON DELETE CASCADE;
+
+
+--
+-- Name: confirmation_inference_requests fk_confirmation_inference_requests_grant_id_confirmatio_7cd5; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.confirmation_inference_requests
+    ADD CONSTRAINT fk_confirmation_inference_requests_grant_id_confirmatio_7cd5 FOREIGN KEY (grant_id) REFERENCES public.confirmation_inference_grants(grant_id) ON DELETE CASCADE;
 
 
 --
