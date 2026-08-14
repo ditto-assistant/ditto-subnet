@@ -315,7 +315,7 @@ from ditto.db.queries.scores import (
     list_scores_for_bench_version,
     list_submission_family_members,
     quorum_composites,
-    v9_confirmation_enforcement_active,
+    v9_confirmation_policy_mode,
     v9_confirmation_public_projections,
 )
 from ditto.db.queries.screening import (
@@ -2408,9 +2408,7 @@ async def leaderboard(
     rollout = await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else active_version
     display_version = bench_version or desired_version
-    v9_confirmation_mode: Literal["enforce"] | None = (
-        "enforce" if await v9_confirmation_enforcement_active(session) else None
-    )
+    v9_confirmation_mode = await v9_confirmation_policy_mode(session)
     # A board explicitly pinned to a version the rollout has already moved past
     # is settled history; the default (unpinned) board and the versions still in
     # play keep the short live window. The dashboard's timeline fetches one board

@@ -1627,13 +1627,14 @@ class PublicLeaderboardResponse(BaseModel):
         ),
     ]
     v9_confirmation_mode: Annotated[
-        Literal["enforce"] | None,
+        Literal["shadow", "enforce"] | None,
         Field(
             default=None,
             description=(
-                "Fail-closed marker: Bench v9 base-only and provisional rows "
-                "cannot rank or receive emissions while present. Null when "
-                "confirmation is not ranking-authoritative."
+                "Active Bench v9 confirmation policy. Shadow publishes measured "
+                "LongMemEval and ablation evidence without changing ranking or "
+                "emissions. Enforce makes full confirmation authoritative and "
+                "suppresses base-only or provisional rows. Null means off."
             ),
         ),
     ] = None

@@ -1609,13 +1609,13 @@ class TestPublicBenchmarkTimeline:
 
 
 class TestPublicLeaderboard:
-    async def test_leaderboard_publishes_only_authoritative_confirmation_mode(
+    async def test_leaderboard_publishes_confirmation_policy_mode(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        """The public marker mirrors the fail-closed validator ledger contract."""
+        """Shadow is visible while only enforce changes ranking authority."""
         _install_db(app, session_maker)
 
         assert (await client.get("/api/v1/public/leaderboard")).json()[
@@ -1669,8 +1669,7 @@ class TestPublicLeaderboard:
             )
 
         body = (await client.get("/api/v1/public/leaderboard")).json()
-        assert body["v9_confirmation_mode"] is None
-        assert "shadow" not in json.dumps(body)
+        assert body["v9_confirmation_mode"] == "shadow"
 
     async def test_leaderboard_averages_only_completed_run_cost(
         self,

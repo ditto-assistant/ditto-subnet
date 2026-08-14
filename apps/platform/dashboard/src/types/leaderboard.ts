@@ -255,8 +255,8 @@ export interface EfficiencyBoardState {
 
 export interface LeaderboardPayload {
   entries?: LeaderboardEntry[];
-  /** Fail-closed marker from the public API; null unless confirmation is authoritative. */
-  v9_confirmation_mode?: "enforce" | null;
+  /** Active confirmation policy; only enforce changes rank and emissions authority. */
+  v9_confirmation_mode?: "shadow" | "enforce" | null;
   available_bench_versions?: number[];
   active_bench_version?: number | null;
   desired_bench_version?: number | null;

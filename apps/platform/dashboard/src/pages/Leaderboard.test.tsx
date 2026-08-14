@@ -508,14 +508,14 @@ describe("board view controls (row 1 slice)", () => {
     expect(full?.querySelector(".rank")?.textContent).not.toBe("–");
   });
 
-  it("trusts authoritative rank and emissions when confirmation enforcement is null", async () => {
+  it("shows shadow collection while preserving authoritative base rank and emissions", async () => {
     renderPage({
       patch: (name, body) => {
         if (name !== "leaderboard") return body;
         const payload = body as LeaderboardPayload;
         return {
           ...payload,
-          v9_confirmation_mode: null,
+          v9_confirmation_mode: "shadow",
           entries: (payload.entries ?? []).map((entry, index) =>
             index < 2
               ? {
@@ -532,8 +532,9 @@ describe("board view controls (row 1 slice)", () => {
     });
     await waitForBoard();
     await waitFor(() => expect(document.querySelectorAll(".v9-confirmation-chip")).toHaveLength(2));
+    expect(el("leaderboard-notice")).toHaveTextContent("LongMemEval shadow is active");
     const rows = Array.from(document.querySelectorAll<HTMLElement>("#rows tr[data-i]"));
-    for (const label of ["Bench 9 base only", "Bench 9 confirmation pending"]) {
+    for (const label of ["Bench 9 LongMem shadow queued", "Bench 9 LongMem shadow running"]) {
       const row = rows.find((candidate) => candidate.textContent?.includes(label));
       expect(row).toBeTruthy();
       expect(row?.querySelector(".rank")?.textContent).not.toBe("–");

@@ -12416,9 +12416,9 @@ export interface components {
             selection_mode: "authoritative" | "historical";
             /**
              * V9 Confirmation Mode
-             * @description Fail-closed marker: Bench v9 base-only and provisional rows cannot rank or receive emissions while present. Null when confirmation is not ranking-authoritative.
+             * @description Active Bench v9 confirmation policy. Shadow publishes measured LongMemEval and ablation evidence without changing ranking or emissions. Enforce makes full confirmation authoritative and suppresses base-only or provisional rows. Null means off.
              */
-            v9_confirmation_mode?: "enforce" | null;
+            v9_confirmation_mode?: ("shadow" | "enforce") | null;
         };
         /**
          * PublicMetricDoc

@@ -923,6 +923,14 @@ function LeaderboardNotice(props: { store: LeaderboardStore }): JSX.Element {
     // all): the rows keep their badges and only gain this one-line caveat.
     const registrationStale = d.registration_stale === true;
     const notices: string[] = [];
+    if (!historicalView && d.v9_confirmation_mode === "shadow")
+      notices.push(
+        "<strong>LongMemEval shadow is active.</strong> Independent LongMemEval and ablation evidence is being collected and shown per agent. Shadow results do not change rankings or emissions. Qualified completed evidence is retained if Enforce later begins with the exact same frozen profile.",
+      );
+    else if (!historicalView && d.v9_confirmation_mode === "enforce")
+      notices.push(
+        "<strong>LongMemEval enforcement is active.</strong> Only agents with qualified full confirmation evidence can rank or receive emissions.",
+      );
     if (provisional.length)
       notices.push(
         "<strong>Provisional standings.</strong> " +

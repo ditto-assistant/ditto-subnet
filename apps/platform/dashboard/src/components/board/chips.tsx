@@ -313,9 +313,37 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
 }
 
 /** Reward-authority state for Bench v9's separate confirmation composite. */
-export function V9ConfirmationChip(props: { entry: BoardEntry }): JSX.Element {
+export function V9ConfirmationChip(props: {
+  entry: BoardEntry;
+  mode: "shadow" | "enforce" | null | undefined;
+}): JSX.Element {
   const status = () => props.entry.v9_confirmation_status;
   const state = (): { label: string; class: string; tip: string } | null => {
+    if (props.mode === "shadow") {
+      switch (status()) {
+        case "full_confirmed":
+          return {
+            label: "Bench " + props.entry.bench_version + " LongMem shadow measured",
+            class: "settled",
+            tip: "Independent LongMemEval and ablation evidence is complete. Shadow evidence is visible, but the ordinary base score remains authoritative for ranking and emissions until Enforce begins with this exact profile.",
+          };
+        case "provisional":
+          return {
+            label: "Bench " + props.entry.bench_version + " LongMem shadow running",
+            class: "partial",
+            tip: "LongMemEval and ablation evidence is in progress. Shadow mode does not change this agent's ranking or emissions.",
+          };
+        case "base_only":
+          return {
+            label: "Bench " + props.entry.bench_version + " LongMem shadow queued",
+            class: "pending",
+            tip: "Only the ordinary base score is available so far. Shadow mode keeps that base score authoritative while LongMemEval evidence is collected.",
+          };
+        default:
+          return null;
+      }
+    }
+    if (props.mode !== "enforce") return null;
     switch (status()) {
       case "full_confirmed":
         return {

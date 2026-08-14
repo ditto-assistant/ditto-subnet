@@ -306,7 +306,10 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
             settledView={props.store.settledView()}
             desiredVersion={props.store.bench().desired ?? props.store.bench().active}
           />
-          <V9ConfirmationChip entry={props.entry} />
+          <V9ConfirmationChip
+            entry={props.entry}
+            mode={props.store.payload()?.v9_confirmation_mode}
+          />
           <ContinualScoreChip entry={props.entry} />
           <EfficiencyBonusChip entry={props.entry} />
           <QualityGateChip entry={props.entry} />

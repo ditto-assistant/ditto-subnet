@@ -1288,16 +1288,10 @@ async def count_ranked_quorum_agents(
     return len(set(await attested_emission_owner_roots(session, identities)))
 
 
-async def _v9_confirmation_enforcement_settings(
+async def _v9_confirmation_policy_settings(
     session: AsyncSession,
 ) -> ConfirmationBundleSettings | None:
-    """Return the latest valid enforce policy, otherwise fail closed.
-
-    The profile identity is load-bearing when qualified evidence was completed
-    in shadow mode: immutable shadow evidence becomes authoritative only while
-    the current enforce policy names that exact frozen profile.  This mirrors
-    the database subject-authority trigger.
-    """
+    """Return the latest valid configured policy, otherwise fail closed."""
 
     row = await session.scalar(
         select(ConfirmationBundleSettingsRevision)
@@ -1311,7 +1305,39 @@ async def _v9_confirmation_enforcement_settings(
         settings = ConfirmationBundleSettings.model_validate(row.settings)
     except ValueError:
         return None
-    if settings.mode != ConfirmationBundleMode.ENFORCE:
+    if settings.mode == ConfirmationBundleMode.OFF:
+        return None
+    return settings
+
+
+async def v9_confirmation_policy_mode(
+    session: AsyncSession,
+) -> Literal["shadow", "enforce"] | None:
+    """Public policy state without implying that shadow changes authority."""
+
+    settings = await _v9_confirmation_policy_settings(session)
+    if settings is None:
+        return None
+    if settings.mode == ConfirmationBundleMode.SHADOW:
+        return "shadow"
+    if settings.mode == ConfirmationBundleMode.ENFORCE:
+        return "enforce"
+    return None
+
+
+async def _v9_confirmation_enforcement_settings(
+    session: AsyncSession,
+) -> ConfirmationBundleSettings | None:
+    """Return the latest valid enforce policy, otherwise fail closed.
+
+    The profile identity is load-bearing when qualified evidence was completed
+    in shadow mode: immutable shadow evidence becomes authoritative only while
+    the current enforce policy names that exact frozen profile.  This mirrors
+    the database subject-authority trigger.
+    """
+
+    settings = await _v9_confirmation_policy_settings(session)
+    if settings is None or settings.mode != ConfirmationBundleMode.ENFORCE:
         return None
     return settings
 
