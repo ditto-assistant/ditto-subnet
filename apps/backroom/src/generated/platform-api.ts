@@ -11879,6 +11879,8 @@ export interface components {
              * Format: uuid
              */
             champion_agent_id: string;
+            /** @description What the best rival miner would need to take the crown. Unlike ``raw_leader_decision`` this is populated whenever any rival exists, including when the champion is itself the raw leader -- the case where the old field goes null and the board silently stopped answering the one question every challenger asks. Read ``required_score`` against ``score_ceiling``: when ``ceiling_deadlocked`` is true the requirement has passed above the highest score the domain can express, so no submission can dethrone this champion at all and only ``allocation_mode`` ``score_ceiling_pool`` can redistribute the crown's share. */
+            champion_defense?: components["schemas"]["PublicDethroneDecision"] | null;
             /** Champion Miner Hotkey */
             champion_miner_hotkey: string;
             /** Champion Share */
@@ -12093,6 +12095,11 @@ export interface components {
              * @default 0
              */
             confirmation_seed_depth: number;
+            /**
+             * Crown First Seen
+             * @description The arrival time the KOTH champion fold actually orders on (UTC), and the single most misread number on this board. It is the *lineage's* earliest band-equivalent arrival, not this tarball's upload time, so a miner keeps its reign across a resubmission instead of forfeiting it by improving. When it is earlier than ``first_seen`` the difference comes from a sibling in ``submission_family`` -- match it against that member's ``submitted_at`` to see which generation supplies it, and note the sibling may sit on a different ``miner_hotkey``, because owner families are resolved across attested payment roots. Null on rows built outside the owner-family read, where the fold falls back to ``first_seen``.
+             */
+            crown_first_seen?: string | null;
             /**
              * Dataset Sha256
              * @description SHA-256 of the scored dataset artifact.
@@ -12320,6 +12327,16 @@ export interface components {
             agent_version?: number | null;
             /** Canonical Composite */
             canonical_composite: number;
+            /**
+             * Miner Hotkey
+             * @description This generation's own hotkey, which need not be the winner's. Owner families are resolved across attested payment roots, so crown seniority can be inherited from a sibling on a different hotkey. That is legitimate and previously invisible.
+             */
+            miner_hotkey?: string | null;
+            /**
+             * Submitted At
+             * @description When this generation arrived (UTC). The family's earliest band-equivalent value is what the KOTH fold orders on, so this is what lets a reader locate the generation supplying the winner's ``crown_first_seen`` rather than infer it.
+             */
+            submitted_at?: string | null;
         };
         /**
          * PublicLeaderboardResponse

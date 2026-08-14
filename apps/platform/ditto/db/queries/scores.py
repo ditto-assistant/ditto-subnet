@@ -140,6 +140,23 @@ class LedgerFamilyMember:
     agent_name: str
     agent_version: int | None
     canonical_composite: float
+    submitted_at: datetime | None = None
+    """When this generation arrived, for readers explaining the crown anchor.
+
+    Optional because the grouped ledger read projects only the columns its own
+    SQL selects; the leaderboard path rebuilds these members from
+    :func:`list_submission_family_members`, which carries the timestamp. A
+    reader that has it can point at the exact generation supplying
+    :attr:`LedgerRow.crown_first_seen` instead of asking the viewer to infer it.
+    """
+    miner_hotkey: str | None = None
+    """The generation's own hotkey, which need not be the winner's.
+
+    An owner family is resolved across attested payment roots, so seniority can
+    legitimately be inherited from a sibling on a *different* hotkey. Publishing
+    it is the point: that inheritance is invisible otherwise, and reads as a bug
+    to anyone comparing the board's hotkeys against the champion.
+    """
 
 
 @dataclass(frozen=True)

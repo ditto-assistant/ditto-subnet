@@ -506,6 +506,31 @@ class PublicLeaderboardFamilyMember(BaseModel):
     agent_name: str
     agent_version: Annotated[int | None, Field(default=None, ge=1)] = None
     canonical_composite: Annotated[float, Field(ge=_MIN_DISPLAY_COMPOSITE, le=1.0)]
+    submitted_at: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "When this generation arrived (UTC). The family's earliest "
+                "band-equivalent value is what the KOTH fold orders on, so this "
+                "is what lets a reader locate the generation supplying the "
+                "winner's ``crown_first_seen`` rather than infer it."
+            ),
+        ),
+    ] = None
+    miner_hotkey: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_SS58_PATTERN,
+            description=(
+                "This generation's own hotkey, which need not be the winner's. "
+                "Owner families are resolved across attested payment roots, so "
+                "crown seniority can be inherited from a sibling on a different "
+                "hotkey. That is legitimate and previously invisible."
+            ),
+        ),
+    ] = None
 
 
 class PublicLeaderboardFamily(BaseModel):
@@ -990,6 +1015,26 @@ class PublicLeaderboardEntry(BaseModel):
     first_seen: Annotated[
         datetime, Field(description="When the winning agent was first uploaded (UTC).")
     ]
+    crown_first_seen: Annotated[
+        datetime | None,
+        Field(
+            default=None,
+            description=(
+                "The arrival time the KOTH champion fold actually orders on "
+                "(UTC), and the single most misread number on this board. It is "
+                "the *lineage's* earliest band-equivalent arrival, not this "
+                "tarball's upload time, so a miner keeps its reign across a "
+                "resubmission instead of forfeiting it by improving. When it is "
+                "earlier than ``first_seen`` the difference comes from a sibling "
+                "in ``submission_family`` -- match it against that member's "
+                "``submitted_at`` to see which generation supplies it, and note "
+                "the sibling may sit on a different ``miner_hotkey``, because "
+                "owner families are resolved across attested payment roots. "
+                "Null on rows built outside the owner-family read, where the "
+                "fold falls back to ``first_seen``."
+            ),
+        ),
+    ] = None
     median_ms: Annotated[
         int | None,
         Field(default=None, ge=0, description="Median per-case latency (ms)."),
@@ -1285,6 +1330,24 @@ class PublicKothEmissions(BaseModel):
     raw_leader_agent_id: UUID
     raw_leader_miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     raw_leader_decision: PublicDethroneDecision | None = None
+    champion_defense: Annotated[
+        PublicDethroneDecision | None,
+        Field(
+            default=None,
+            description=(
+                "What the best rival miner would need to take the crown. Unlike "
+                "``raw_leader_decision`` this is populated whenever any rival "
+                "exists, including when the champion is itself the raw leader -- "
+                "the case where the old field goes null and the board silently "
+                "stopped answering the one question every challenger asks. Read "
+                "``required_score`` against ``score_ceiling``: when "
+                "``ceiling_deadlocked`` is true the requirement has passed above "
+                "the highest score the domain can express, so no submission can "
+                "dethrone this champion at all and only ``allocation_mode`` "
+                "``score_ceiling_pool`` can redistribute the crown's share."
+            ),
+        ),
+    ] = None
     recipients: list[PublicEmissionRecipient] = Field(default_factory=list)
 
 

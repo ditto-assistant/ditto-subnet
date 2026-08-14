@@ -215,6 +215,38 @@ def _score_ceiling_cohort(
     return tuple(cohort) if len(cohort) > 1 else ()
 
 
+def champion_defense(
+    entries: Sequence[KothEntry], projection: KothProjection | None
+) -> DethroneDecision | None:
+    """What the best rival miner currently needs to take the crown.
+
+    :attr:`KothProjection.raw_leader_decision` answers this only while the raw
+    leader is somebody *other* than the champion; the moment the champion is
+    also the raw leader it goes ``None`` and the board stops explaining the
+    requirement at exactly the point challengers most want it. That is not a
+    quiet gap: it hides :attr:`DethroneDecision.ceiling_deadlocked`, the state
+    where ``required_score`` has climbed past ``score_ceiling`` and no
+    submission can dethrone the incumbent at any score.
+
+    Same comparison the fold runs, against the same highest-ranked entry from a
+    different miner, so this never disagrees with the fold about who could win.
+    ``None`` only when there is no rival miner to compare.
+    """
+    if projection is None:
+        return None
+    challenger = next(
+        (
+            entry
+            for entry in _distinct_ranked(entries)
+            if entry.miner_hotkey != projection.champion.miner_hotkey
+        ),
+        None,
+    )
+    if challenger is None:
+        return None
+    return _dethrone_decision(challenger, projection.champion)
+
+
 def _distinct_ranked(entries: Sequence[KothEntry]) -> tuple[KothEntry, ...]:
     official = _official_scores(entries)
     ranked = rank_submissions(

@@ -203,6 +203,7 @@ from ditto.api_server.koth import (
     KOTH_TAIL_SIZE,
     KothEntry,
     bounded_efficiency_adjusted_quality,
+    champion_defense,
     emission_allocation,
     project_koth,
 )
@@ -1971,6 +1972,11 @@ def _public_entry(
         tool_mean=r.tool_mean,
         memory_mean=r.memory_mean,
         first_seen=r.first_seen,
+        # The fold's anchor, published beside the upload time rather than in
+        # place of it. Both are true answers to different questions, and serving
+        # only the upload time is what made a legitimately-held crown read as a
+        # ranking bug to every miner comparing timestamps.
+        crown_first_seen=r.crown_first_seen,
         median_ms=r.median_ms,
         n=r.n,
         eligible=r.eligible,
@@ -2041,6 +2047,8 @@ def _public_leaderboard_family(
             agent_name=member.agent_name,
             agent_version=member.agent_version,
             canonical_composite=member.canonical_composite,
+            submitted_at=member.submitted_at,
+            miner_hotkey=member.miner_hotkey,
         )
         for member in members
         if member.agent_id != representative_agent_id
@@ -2164,6 +2172,7 @@ def _public_koth_emissions(
         for index, entry in enumerate(allocation.members)
     ]
     decision = projection.raw_leader_decision
+    defense = champion_defense(fold_entries, projection)
     return PublicKothEmissions(
         margin=KOTH_MARGIN,
         dethrone_z=KOTH_DETHRONE_Z,
@@ -2196,6 +2205,21 @@ def _public_koth_emissions(
                 ceiling_deadlocked=decision.ceiling_deadlocked,
             )
             if decision is not None
+            else None
+        ),
+        champion_defense=(
+            PublicDethroneDecision(
+                challenger_lead=defense.challenger_lead,
+                required_lead=defense.required_lead,
+                margin_lead=defense.margin_lead,
+                statistical_lead=defense.statistical_lead,
+                method=defense.method,
+                dethrones=defense.dethrones,
+                required_score=defense.required_score,
+                score_ceiling=defense.score_ceiling,
+                ceiling_deadlocked=defense.ceiling_deadlocked,
+            )
+            if defense is not None
             else None
         ),
         recipients=recipients,
@@ -2650,6 +2674,8 @@ async def leaderboard(
                         agent_name=member.agent_name,
                         agent_version=member.agent_version,
                         canonical_composite=member.canonical_composite,
+                        submitted_at=member.submitted_at,
+                        miner_hotkey=member.miner_hotkey,
                     )
                     for member in family_by_agent.get(row.agent_id, [])
                 ),

@@ -18,7 +18,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
-from unittest.mock import AsyncMock
+from unittest.mock import ANY, AsyncMock
 from uuid import UUID, uuid4
 
 import httpx
@@ -3354,6 +3354,10 @@ class TestPublicLeaderboard:
                     "agent_name": "agent",
                     "agent_version": None,
                     "canonical_composite": pytest.approx(0.958),
+                    # Published so a reader can tell which generation supplies
+                    # the winner's crown_first_seen, and on whose hotkey.
+                    "submitted_at": ANY,
+                    "miner_hotkey": ANY,
                 }
             ]
         }
@@ -3585,6 +3589,8 @@ class TestPublicLeaderboard:
             "agent_name",
             "agent_version",
             "canonical_composite",
+            "submitted_at",
+            "miner_hotkey",
         }
         hidden_pipeline = (
             await client.get(f"/api/v1/public/agent/{hidden}/pipeline")

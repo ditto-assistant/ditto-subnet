@@ -28,6 +28,10 @@ export interface RawLeaderDecision {
   method?: string;
   challenger_lead: number;
   required_lead: number;
+  required_score?: number;
+  score_ceiling?: number;
+  /** Required score has passed the top of the score domain: nothing can win. */
+  ceiling_deadlocked?: boolean;
 }
 
 /** KOTH emissions fold parameters. Consensus constants are always read from
@@ -44,6 +48,9 @@ export interface EmissionsFold {
   champion_agent_id?: string | null;
   raw_leader_agent_id?: string | null;
   raw_leader_decision?: RawLeaderDecision | null;
+  /** What the best rival needs. Unlike raw_leader_decision this survives the
+   * champion also being the raw leader, which is when readers most want it. */
+  champion_defense?: RawLeaderDecision | null;
   allocation_mode?: "ranked" | "score_ceiling_pool";
   score_ceiling_pool_size?: number;
   recipients?: EmissionRecipient[];
@@ -104,6 +111,10 @@ export interface LeaderboardFamilyMember {
   agent_name: string;
   agent_version?: number | null;
   canonical_composite: number;
+  /** Match against the entry's crown_first_seen to find the generation that
+   * supplies the fold anchor. May sit on a different hotkey than the winner. */
+  submitted_at?: string | null;
+  miner_hotkey?: string | null;
 }
 
 export interface LeaderboardFamily {
@@ -149,6 +160,10 @@ export interface LeaderboardEntry {
   /** Cases scored; n >= 100 distinguishes a zero-scoring full run. */
   n?: number | null;
   first_seen?: string;
+  /** The arrival the KOTH fold orders on: the lineage's earliest
+   * band-equivalent submission, not this tarball's upload. Earlier than
+   * first_seen means a sibling generation supplies it. */
+  crown_first_seen?: string | null;
   bench_version?: number | null;
   /** Missing counts as eligible (older APIs omit it). */
   eligible?: boolean;

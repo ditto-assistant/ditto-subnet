@@ -19,6 +19,13 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   const championEntry = (): BoardEntry | null => store.champion();
   const hasChampion = (): boolean => emissions()?.champion_agent_id != null;
   const scoreCeilingPool = (): boolean => emissions()?.allocation_mode === "score_ceiling_pool";
+  /** True only when the crown rests on an earlier generation than the one on
+   * display, which is the case readers cannot otherwise account for. */
+  const heldFromLineage = (): boolean => {
+    const entry = championEntry();
+    const anchor = entry?.crown_first_seen;
+    return anchor != null && entry?.first_seen != null && anchor !== entry.first_seen;
+  };
   const jointChampions = () =>
     (emissions()?.recipients || []).filter((recipient) => recipient.role === "joint_champion");
   const name = (): string => {
@@ -128,6 +135,15 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
             <Show when={!scoreCeilingPool() && championEntry()?.first_seen}>
               <span>
                 First seen <b>{relTime(championEntry()?.first_seen)}</b>
+              </span>
+            </Show>
+            {/* The anchor, shown only when it disagrees with the upload time.
+                That disagreement is the whole of the "champion is newer than
+                the agents above it" complaint, and the board used to publish
+                only the number that made the fold look wrong. */}
+            <Show when={!scoreCeilingPool() && heldFromLineage()}>
+              <span>
+                Holds from <b>{relTime(championEntry()?.crown_first_seen as string)}</b>
               </span>
             </Show>
             <Show when={!scoreCeilingPool() && championEntry()?.bench_version != null}>

@@ -19,6 +19,7 @@ from ditto.api_server.koth import (
     _dethrone_decision,
     _efficiency_stderr_scale,
     _paired_statistic,
+    champion_defense,
     effective_composite,
     emission_allocation,
     emission_set,
@@ -903,3 +904,57 @@ def test_tempo_index_counts_360_block_windows() -> None:
     assert tempo_index(359) == 0
     assert tempo_index(360) == 1
     assert tempo_index(1440) == 4
+
+
+def test_champion_defense_answers_when_raw_leader_decision_goes_null() -> None:
+    """The gap this closes: champion == raw leader silences the old field.
+
+    ``project_koth`` only reports a decision when somebody *other* than the
+    champion leads on score. A saturated board puts the champion at the top of
+    both orderings, so the one number every challenger wants -- what score would
+    actually win -- disappears exactly when the board looks most unfair.
+    """
+    champion = _entry(1, 0.997012, minutes=0, stderr=0.001718, bench_version=9)
+    rival = _entry(2, 0.997012, minutes=60, stderr=0.001718, bench_version=9)
+    entries = [champion, rival]
+
+    projection = project_koth(entries)
+    assert projection is not None
+    assert projection.champion.agent_id == champion.agent_id
+    # Same agent leads both orderings, so the pre-existing field says nothing.
+    assert projection.raw_leader_decision is None
+
+    defense = champion_defense(entries, projection)
+    assert defense is not None
+    assert defense.dethrones is False
+    # Exactly tied, so the rival's lead is zero and no positive requirement can
+    # ever be met -- narrowing the dethrone band cannot resolve this board.
+    assert defense.challenger_lead == pytest.approx(0.0)
+    assert defense.required_score > defense.score_ceiling
+    assert defense.ceiling_deadlocked is True
+
+
+def test_champion_defense_is_none_without_a_rival_miner() -> None:
+    solo = _entry(1, 0.9, minutes=0, bench_version=9)
+    projection = project_koth([solo])
+
+    assert champion_defense([solo], projection) is None
+    assert champion_defense([], None) is None
+
+
+def test_champion_defense_matches_the_fold_when_a_rival_does_lead() -> None:
+    """Never a second opinion: same comparison the dethrone chain runs."""
+    champion = _entry(1, 0.80, minutes=0, bench_version=9)
+    challenger = _entry(2, 0.95, minutes=60, bench_version=9)
+    entries = [champion, challenger]
+
+    projection = project_koth(entries)
+    assert projection is not None
+    # A clear lead really does take the crown, so the fold's own decision is
+    # about the *new* champion and the defense is measured against it.
+    assert projection.champion.agent_id == challenger.agent_id
+
+    defense = champion_defense(entries, projection)
+    assert defense is not None
+    assert defense == _dethrone_decision(champion, challenger)
+    assert defense.dethrones is False
