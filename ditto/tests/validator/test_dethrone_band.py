@@ -682,7 +682,7 @@ class TestBeats:
 
 
 class TestComputeWeightsWithBand:
-    def test_live_v9_regression_makes_ban_raw_leader_but_white_bolt_champion(
+    def test_live_v9_regression_keeps_quality_primary_then_uses_efficiency(
         self,
     ) -> None:
         entries = [
@@ -733,7 +733,7 @@ class TestComputeWeightsWithBand:
         )
 
         assert _effective_composite(entries[-1]) > _effective_composite(entries[0])
-        assert weights == {"white-bolt": pytest.approx(1.0)}
+        assert weights == {"banblackycat-v7": pytest.approx(1.0)}
 
     def test_default_z_zero_is_backward_compatible(self) -> None:
         # No dethrone_z passed → fixed composite-point margin, even with stderr present.

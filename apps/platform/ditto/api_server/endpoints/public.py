@@ -294,6 +294,7 @@ from ditto.db.queries.retry_state import (
 from ditto.db.queries.score_ranking import (
     completed_wave_data,
     dedupe_owner_rows,
+    efficiency_tiebreak_composites,
     official_composites,
     resolve_ranking_scores,
 )
@@ -2620,11 +2621,11 @@ async def leaderboard(
         efficiency_view,
         finalized_by_id,
     )
-    # A curve-v3 factor may reduce an agent's score.  Suppress it from both the
-    # public official projection and the validator-equivalent KOTH projection
+    # A curve-v3 factor changes the exact-quality secondary order. Suppress it
+    # from both the public tiebreak and validator-equivalent KOTH projection
     # until every recently-live validator capable of serving Bench v9 advertises
-    # protocol 19, the first fold that consumes this additive field. Validators
-    # that cannot serve v9 are not part of this scoring contract and must not
+    # protocol 21, the first fold that consumes its quality-primary semantics.
+    # Validators that cannot serve v9 are not part of this scoring contract and must not
     # indefinitely veto activation. Historical v1/v2 bonuses above deliberately
     # do not inherit this new gate.
     factor_fleet_ready = False
@@ -2650,7 +2651,16 @@ async def leaderboard(
         efficiency_factors=efficiency_factors,
         efficiency_fold_active=efficiency_fold_active,
     )
-    finalized_rows = dedupe_owner_rows(finalized_rows, scores=board_official_composites)
+    board_efficiency_tiebreaks = efficiency_tiebreak_composites(
+        finalized_rows,
+        official=board_official_composites,
+        efficiency_factors=efficiency_factors,
+    )
+    finalized_rows = dedupe_owner_rows(
+        finalized_rows,
+        scores=board_official_composites,
+        secondary_scores=board_efficiency_tiebreaks,
+    )
     if finalized_rows:
         family_groups = await list_submission_family_members(
             session,

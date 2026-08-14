@@ -382,6 +382,10 @@ def _weight_tied(
     candidate: LedgerEntry, anchor: LedgerEntry, *, dethrone_z: float
 ) -> bool:
     """Whether two occupied slots may share weight without inventing evidence."""
+    if _quality_primary_efficiency_active((candidate, anchor)):
+        return _quality_composite(candidate) == _quality_composite(
+            anchor
+        ) and _effective_composite(candidate) == _effective_composite(anchor)
     if _effective_composite(candidate) == _effective_composite(anchor):
         return True
     paired = _paired_dethrone(candidate, anchor, dethrone_z)
@@ -405,6 +409,8 @@ def _score_ceiling_cohort(
     stops at the first distinguishable score, preventing both arbitrary rank
     cutoffs and transitive staircase grouping.
     """
+    if _quality_primary_efficiency_active(entries):
+        return []
     ranked = _distinct_ranked(entries)
     challenger = next(
         (entry for entry in ranked if entry.miner_hotkey != champion.miner_hotkey),
@@ -426,13 +432,10 @@ def _score_ceiling_cohort(
 
 def _distinct_ranked(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
     """Rank positive entries and retain one position per destination hotkey."""
+    quality_primary = _quality_primary_efficiency_active(entries)
     ranked = sorted(
         entries,
-        key=lambda entry: (
-            -_effective_composite(entry),
-            entry.first_seen,
-            entry.agent_id,
-        ),
+        key=lambda entry: _ranking_key(entry, quality_primary=quality_primary),
     )
     distinct: list[LedgerEntry] = []
     seen_hotkeys: set[str] = set()
@@ -631,26 +634,40 @@ def _continual_composite(entry: LedgerEntry) -> float:
 
 
 def _effective_composite(entry: LedgerEntry) -> float:
-    """Return the score used by the weight fold.
+    """Return the frozen efficiency projection used by the weight fold.
 
     Authoritative quality evidence is selected first: the verified full receipt
-    for Bench v9, otherwise the continual aggregate.  The platform's frozen
-    relative-efficiency adjustment then multiplies that quality score.  This
-    ordering lets the independently activated mechanisms compose without
-    rewriting signed validator scores.
+    for Bench v9, otherwise the continual aggregate. The platform's frozen
+    relative-efficiency adjustment then transforms that quality score. Protocol
+    21 considers the projection only after exact quality equality; legacy bonus
+    eras retain it as their primary score.
     """
+    return _efficiency_adjusted_composite(entry, _quality_composite(entry))
+
+
+def _quality_composite(entry: LedgerEntry) -> float:
+    """Return authoritative quality before relative efficiency is applied."""
     receipt = getattr(entry, "v9_confirmation", None)
     if _entry_version(entry) == 9 and receipt is not None:
         value = getattr(receipt, "full_effective_micros", None)
         if isinstance(value, int) and not isinstance(value, bool):
-            quality = value / 1_000_000
-            # Assignment shape carries its frozen curve authority: v1/v2 use
-            # the legacy bonus, v3 uses the bounded factor. This also replays a
-            # pre-upgrade v9 snapshot exactly instead of dropping its bonus
-            # merely because full-confirmation evidence arrived later.
-            return _efficiency_adjusted_composite(entry, quality)
+            return value / 1_000_000
         return 0.0
-    return _efficiency_adjusted_composite(entry, _continual_composite(entry))
+    return _continual_composite(entry)
+
+
+def _quality_primary_efficiency_active(entries: Sequence[LedgerEntry]) -> bool:
+    """Whether protocol-21 curve-v3 ordering is present in this ledger."""
+    return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
+
+
+def _ranking_key(
+    entry: LedgerEntry, *, quality_primary: bool
+) -> tuple[float, float, object, object]:
+    """Quality-first curve-v3 key; legacy folds retain adjusted-score order."""
+    effective = _effective_composite(entry)
+    primary = _quality_composite(entry) if quality_primary else effective
+    return (-primary, -effective, entry.first_seen, entry.agent_id)
 
 
 def _entry_stderr(entry: LedgerEntry) -> float | None:
@@ -1014,6 +1031,11 @@ def _champion(
     platform's job. It matters only in that a tied miner keeps its crown across
     a resubmission, which is the whole reason the anchor is served that way.
     """
+    if _quality_primary_efficiency_active(entries):
+        # Protocol 21 makes authoritative quality the hard outer order.
+        # Efficiency can choose only among entries with exactly equal quality,
+        # so a cheaper lower-quality incumbent cannot retain the crown.
+        return min(entries, key=lambda e: _ranking_key(e, quality_primary=True))
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
     champ = ordered[0]
     for e in ordered[1:]:
@@ -1033,14 +1055,15 @@ def _tail(
 
     The historical fold assumes Platform's owner-deduplicated ledger cannot
     repeat a destination. Tie pooling makes that invariant defensive too, but
-    only behind its activation marker so a protocol-20 rollout is byte-identical
+    only behind its activation marker so a pre-protocol-21 rollout is byte-identical
     until the operator enables the new fold.
     """
     if tail_size <= 0:
         return []
+    quality_primary = _quality_primary_efficiency_active(entries)
     ranked = sorted(
         (e for e in entries if e.miner_hotkey != champion.miner_hotkey),
-        key=lambda e: (-_effective_composite(e), e.first_seen, e.agent_id),
+        key=lambda e: _ranking_key(e, quality_primary=quality_primary),
     )
     if not distinct_hotkeys:
         return ranked[:tail_size]

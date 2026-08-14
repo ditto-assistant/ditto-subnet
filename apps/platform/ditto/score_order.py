@@ -51,11 +51,16 @@ class FinalizedRow(RankableRow, Protocol):
 R = TypeVar("R", bound=RankableRow)
 F = TypeVar("F", bound=FinalizedRow)
 
-ScoreOrderKey = tuple[bool, float, datetime, str]
+ScoreOrderKey = tuple[bool, float, float, datetime, str]
 
 
-def score_order_key(row: RankableRow, *, score: float | None = None) -> ScoreOrderKey:
-    """The canonical comparator: unranked last, best score first, then age, then id.
+def score_order_key(
+    row: RankableRow,
+    *,
+    score: float | None = None,
+    secondary_score: float | None = None,
+) -> ScoreOrderKey:
+    """The canonical comparator: quality first, optional tiebreak score second.
 
     ``score`` overrides the row's stored ``composite`` -- pass the agent's
     ``official_composite`` to rank on the continual mean. Omitted, the row ranks
@@ -63,13 +68,22 @@ def score_order_key(row: RankableRow, *, score: float | None = None) -> ScoreOrd
     are deliberately reporting the *raw* pool (the fold's ``raw_rank``
     provenance field) rather than a standing.
 
+    ``secondary_score`` is considered only after exact equality on ``score``.
+    Curve-v3 uses it for the efficiency-adjusted projection, so a lower-quality
+    agent can never outrank a higher-quality one merely by spending fewer
+    tokens. Omitted, it equals the primary score and preserves the historical
+    comparator byte-for-byte in outcome.
+
     A row with no ``eligible`` attribute is treated as ranked: pools that carry
     the flag use it to sink smoke runs and zero-scoring full runs below every
     real result, and pools that do not carry it have already filtered them out.
     """
+    primary = row.composite if score is None else score
+    secondary = primary if secondary_score is None else secondary_score
     return (
         not bool(getattr(row, "eligible", True)),
-        -(row.composite if score is None else score),
+        -primary,
+        -secondary,
         row.first_seen,
         str(row.agent_id),
     )
@@ -92,10 +106,26 @@ def score_order_terms(
 
 
 def rank_submissions(
-    rows: Iterable[R], *, scores: Mapping[UUID, float] | None = None
+    rows: Iterable[R],
+    *,
+    scores: Mapping[UUID, float] | None = None,
+    secondary_scores: Mapping[UUID, float] | None = None,
 ) -> list[R]:
-    """Return ``rows`` in the canonical order, ranked on ``scores`` when given."""
+    """Return rows in canonical quality-first order.
+
+    ``secondary_scores`` can reorder only exact primary-score ties.
+    """
     values = scores or {}
+    secondary = (
+        secondary_scores
+        if secondary_scores is not None
+        else getattr(scores, "secondary_scores", {})
+    )
     return sorted(
-        rows, key=lambda row: score_order_key(row, score=values.get(row.agent_id))
+        rows,
+        key=lambda row: score_order_key(
+            row,
+            score=values.get(row.agent_id),
+            secondary_score=secondary.get(row.agent_id),
+        ),
     )

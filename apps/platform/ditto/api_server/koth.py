@@ -191,6 +191,10 @@ def emission_allocation(
 def _score_ceiling_cohort(
     entries: Sequence[KothEntry], projection: KothProjection
 ) -> tuple[KothEntry, ...]:
+    # Curve-v3 protocol 21 has no continuous adjusted-score ceiling: quality is
+    # the primary order and efficiency only breaks an exact quality tie.
+    if _quality_primary_efficiency_active(entries):
+        return ()
     ranked = _distinct_ranked(entries)
     challenger = next(
         (
@@ -248,10 +252,7 @@ def champion_defense(
 
 
 def _distinct_ranked(entries: Sequence[KothEntry]) -> tuple[KothEntry, ...]:
-    official = _official_scores(entries)
-    ranked = rank_submissions(
-        (entry for entry in entries if entry.composite > 0.0), scores=official
-    )
+    ranked = _ranked_entries(entry for entry in entries if entry.composite > 0.0)
     distinct: list[KothEntry] = []
     seen_hotkeys: set[str] = set()
     for entry in ranked:
@@ -280,15 +281,21 @@ def indistinguishable_from(
     rank 11 holding the identical composite to rank 10 is not a ranking, it is a
     coin flip, and a fixed cutoff resolves it by arbitrary tiebreak.
     """
-    gap = effective_composite(cutoff) - effective_composite(candidate)
+    quality_primary = _quality_primary_efficiency_active((candidate, cutoff))
+    score = continual_composite if quality_primary else effective_composite
+    gap = score(cutoff) - score(candidate)
     if gap <= 0.0:
         return True
     # Stderr lives on the pre-efficiency quality scale. Propagate it through
     # the frozen score transform before deciding whether the cutoff is
     # unsettled, matching both Platform's dethrone decision and the validator
     # fold.
-    candidate_stderr = (_stderr(candidate) or 0.0) * _efficiency_stderr_scale(candidate)
-    cutoff_stderr = (_stderr(cutoff) or 0.0) * _efficiency_stderr_scale(cutoff)
+    candidate_stderr = (_stderr(candidate) or 0.0) * (
+        1.0 if quality_primary else _efficiency_stderr_scale(candidate)
+    )
+    cutoff_stderr = (_stderr(cutoff) or 0.0) * (
+        1.0 if quality_primary else _efficiency_stderr_scale(cutoff)
+    )
     tolerance = tolerance_z * math.sqrt(candidate_stderr**2 + cutoff_stderr**2)
     return gap <= tolerance
 
@@ -340,13 +347,10 @@ def retest_cohort(
     if projection is None:
         return ()
     champion = projection.champion
-    ranked = rank_submissions(
-        (
-            entry
-            for entry in entries
-            if entry.composite > 0.0 and entry.miner_hotkey != champion.miner_hotkey
-        ),
-        scores=_official_scores(entries),
+    ranked = _ranked_entries(
+        entry
+        for entry in entries
+        if entry.composite > 0.0 and entry.miner_hotkey != champion.miner_hotkey
     )
     base_size = max(1, size)
     ceiling = base_size if max_size is None else max(base_size, max_size)
@@ -422,15 +426,24 @@ def top5_round_is_due(
     return scheduled == reign_tempo
 
 
-def _official_scores(entries: Iterable[KothEntry]) -> dict[UUID, float]:
-    """Every entry's official composite, keyed for :func:`rank_submissions`.
+def _quality_primary_efficiency_active(entries: Iterable[KothEntry]) -> bool:
+    """Whether protocol-21 curve-v3 ordering is present in this ledger."""
+    return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
-    The fold ranks on :func:`effective_composite`, never on the raw ``composite``
-    the entry was built from -- that is the same rule the public board's ``rank``
-    and the queue's score floors follow, spelled once in
-    :mod:`ditto.score_order`.
-    """
-    return {entry.agent_id: effective_composite(entry) for entry in entries}
+
+def _ranked_entries(entries: Iterable[KothEntry]) -> list[KothEntry]:
+    """Rank quality first and efficiency only inside an exact quality tier."""
+    materialized = list(entries)
+    if not _quality_primary_efficiency_active(materialized):
+        return rank_submissions(
+            materialized,
+            scores={
+                entry.agent_id: effective_composite(entry) for entry in materialized
+            },
+        )
+    quality = {entry.agent_id: continual_composite(entry) for entry in materialized}
+    efficiency = {entry.agent_id: effective_composite(entry) for entry in materialized}
+    return rank_submissions(materialized, scores=quality, secondary_scores=efficiency)
 
 
 def project_koth(
@@ -451,17 +464,23 @@ def project_koth(
     if not scored:
         return None
 
-    ordered = sorted(scored, key=lambda entry: (entry.first_seen, entry.agent_id))
-    champion = ordered[0]
-    for challenger in ordered[1:]:
-        if _dethrone_decision(challenger, champion).dethrones:
-            champion = challenger
+    ranked = _ranked_entries(scored)
+    if _quality_primary_efficiency_active(scored):
+        # Protocol 21 intentionally removes the continuous-score KOTH hold: an
+        # incumbent outside the highest authoritative-quality tier cannot keep
+        # the crown because it is cheaper. Efficiency chooses only inside the
+        # exact top-quality tier.
+        champion = ranked[0]
+    else:
+        ordered = sorted(scored, key=lambda entry: (entry.first_seen, entry.agent_id))
+        champion = ordered[0]
+        for challenger in ordered[1:]:
+            if _dethrone_decision(challenger, champion).dethrones:
+                champion = challenger
 
-    official = _official_scores(scored)
-    ranked_tail = rank_submissions(
-        (entry for entry in scored if entry.miner_hotkey != champion.miner_hotkey),
-        scores=official,
-    )
+    ranked_tail = [
+        entry for entry in ranked if entry.miner_hotkey != champion.miner_hotkey
+    ]
     if distinct_hotkeys:
         tail_members: list[KothEntry] = []
         seen_hotkeys = {champion.miner_hotkey}
@@ -475,7 +494,7 @@ def project_koth(
         tail = tuple(tail_members)
     else:
         tail = tuple(ranked_tail[:KOTH_TAIL_SIZE])
-    raw_leader = rank_submissions(scored, scores=official)[0]
+    raw_leader = ranked[0]
     decision = (
         None
         if raw_leader.agent_id == champion.agent_id
@@ -629,14 +648,14 @@ def continual_composite(entry: KothEntry) -> float:
 
 
 def effective_composite(entry: KothEntry) -> float:
-    """Return the final score that drives ranking, KOTH, and emissions.
+    """Return the frozen efficiency projection for an entry.
 
     Continual evidence is aggregated first. A frozen relative-efficiency
-    multiplier, when awarded and activated for the fold, then multiplies that
-    aggregate. Curve v3 may move it down or up; positive efficiency closes a
-    bounded fraction of the remaining distance to 1.0, preserving score
-    resolution near the top. Legacy curves remain strictly upside under their
-    frozen arithmetic.
+    adjustment, when awarded and activated for the fold, then transforms that
+    aggregate. Protocol-21 curve v3 uses this value only to break exact
+    authoritative-quality ties; positive efficiency closes a bounded fraction
+    of the remaining distance to 1.0. Legacy curves retain this value as their
+    primary continuous score under their frozen arithmetic.
     Missing adjustment data remains byte-identical to the continual-only fold,
     and older benchmark token penalties remain inside their signed composites
     rather than entering this mechanism.
@@ -697,6 +716,10 @@ def _paired_statistic(
 
 def _weight_tied(candidate: KothEntry, anchor: KothEntry) -> bool:
     """Mirror the validator's fail-closed tie grouping rule."""
+    if _quality_primary_efficiency_active((candidate, anchor)):
+        return continual_composite(candidate) == continual_composite(
+            anchor
+        ) and effective_composite(candidate) == effective_composite(anchor)
     if effective_composite(candidate) == effective_composite(anchor):
         return True
     paired = _paired_statistic(candidate, anchor)

@@ -56,7 +56,13 @@ from ditto import __version__
 # signing bytes remain on the v11 domain. Platform must not expose the marker
 # until every recently-live weight setter reports v20+, because a v19 validator
 # ignores the additive field and would keep submitting the fixed rank vector.
-HEARTBEAT_PROTOCOL_VERSION = 20
+#
+# v21 changes the already-additive ``efficiency_factor`` interpretation from a
+# continuous quality blend to a lexicographic order: authoritative quality is
+# primary, and the adjusted efficiency projection breaks only exact quality
+# ties. Platform withholds factors until every recently-live weight setter is
+# v21+, preventing v19/v20 validators from applying the superseded ordering.
+HEARTBEAT_PROTOCOL_VERSION = 21
 
 
 @dataclass(frozen=True)

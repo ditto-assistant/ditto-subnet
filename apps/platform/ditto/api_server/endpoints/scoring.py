@@ -62,6 +62,7 @@ from ditto.db.queries.heartbeats import (
 from ditto.db.queries.score_ranking import (
     EfficiencyFactorRequesterNotReady,
     dedupe_owner_rows,
+    efficiency_tiebreak_composites,
     official_composites,
     resolve_efficiency_adjustments,
 )
@@ -94,7 +95,7 @@ _TIE_WEIGHTING_PROTOCOL = 20
 # The first validator protocol that understands the curve-v3 downside/upside
 # factor.  Older validators ignore the additive field, so exposing it to a
 # mixed active-benchmark fleet would produce different KOTH/weight folds.
-_BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 19
+_BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 21
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -434,7 +435,16 @@ async def scores(
             efficiency_factors=efficiency_factors,
             efficiency_fold_active=bool(efficiency_bonuses or efficiency_factors),
         )
-        rows = dedupe_owner_rows(rows, scores=ranking_scores)
+        efficiency_tiebreaks = efficiency_tiebreak_composites(
+            rows,
+            official=ranking_scores,
+            efficiency_factors=efficiency_factors,
+        )
+        rows = dedupe_owner_rows(
+            rows,
+            scores=ranking_scores,
+            secondary_scores=efficiency_tiebreaks,
+        )
     except EfficiencyFactorRequesterNotReady as exc:
         raise HTTPException(status_code=428, detail=str(exc)) from exc
     except SQLAlchemyError as e:
@@ -498,8 +508,10 @@ async def scores(
             efficiency_bonus=(efficiency_bonuses.get(r.agent_id)),
             efficiency_factor=efficiency_factors.get(r.agent_id),
             effective_composite=(
-                ranking_scores[r.agent_id]
-                if r.agent_id in efficiency_bonuses or r.agent_id in efficiency_factors
+                efficiency_tiebreaks[r.agent_id]
+                if r.agent_id in efficiency_factors
+                else ranking_scores[r.agent_id]
+                if r.agent_id in efficiency_bonuses
                 else None
             ),
             v9_confirmation=(

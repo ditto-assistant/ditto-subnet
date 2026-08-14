@@ -1468,12 +1468,12 @@ class LedgerEntry(BaseModel):
             le=1.1,
             description=(
                 "Frozen platform-side bounded efficiency factor for this "
-                "entry. Curve v3 applies a penalty or bonus in [0.85, 1.10] "
-                "after the authoritative Bench-v9 full quality score. Downside "
-                "multiplies quality; upside closes part of its remaining headroom. "
+                "entry. Protocol 21 keeps authoritative Bench-v9 quality as "
+                "the primary order and uses curve-v3's adjusted projection only "
+                "to break exact-quality ties. "
                 "Populated only while the coordinated efficiency fold is active "
                 "and every recently-live weight-setting validator reports "
-                "heartbeat protocol 19+, regardless of scorer capability; "
+                "heartbeat protocol 21+, regardless of scorer capability; "
                 "when present it supersedes efficiency_bonus."
             ),
         ),
@@ -1485,9 +1485,10 @@ class LedgerEntry(BaseModel):
             ge=0.0,
             le=1.1,
             description=(
-                "Platform-projected ranking score with the frozen efficiency "
+                "Platform-projected efficiency tiebreak with the frozen "
                 "adjustment applied; curve-v3 upside scales remaining headroom. "
-                "Validators independently derive it from "
+                "It is considered only after exact authoritative-quality "
+                "equality. Validators independently derive it from "
                 "the authoritative quality evidence and efficiency_factor (or "
                 "legacy efficiency_bonus); signed evidence is never modified."
             ),

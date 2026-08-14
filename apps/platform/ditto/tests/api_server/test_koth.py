@@ -138,8 +138,8 @@ def test_bounded_efficiency_factor_reaches_ceiling_only_for_perfect_quality() ->
     assert effective_composite(entry) == 1.0
 
 
-def test_live_v9_regression_makes_ban_raw_leader_but_white_bolt_holds_koth() -> None:
-    """Raw score order and the incumbent-protecting KOTH band stay distinct."""
+def test_live_v9_regression_keeps_quality_primary_then_uses_efficiency() -> None:
+    """A cheaper lower-quality incumbent cannot hold the curve-v3 crown."""
     white_bolt = _entry(
         4,
         0.996348,
@@ -181,7 +181,7 @@ def test_live_v9_regression_makes_ban_raw_leader_but_white_bolt_holds_koth() -> 
     assert effective_composite(banblackycat_v7) < 1.0
     assert projection is not None
     assert projection.raw_leader == banblackycat_v7
-    assert projection.champion == white_bolt
+    assert projection.champion == banblackycat_v7
 
 
 def test_bounded_factor_supersedes_legacy_bonus() -> None:

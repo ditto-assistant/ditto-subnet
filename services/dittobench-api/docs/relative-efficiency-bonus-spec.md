@@ -17,7 +17,8 @@ owns time-indexed state (the KOTH ledger) and can freeze cohorts by epoch.
 
 ## Bench v9 policy (curve v3)
 
-For a new active `(bench_version=9, run_size=full, epoch)` snapshot:
+For a new active `(bench_version=9, run_size=full, epoch)` snapshot, the frozen
+factor produces this audit/display projection:
 
 ```text
 Efficiency Factor = clamp((Reference Cost / Agent Cost)^alpha,
@@ -30,14 +31,25 @@ else:
                   + (Efficiency Factor - 1) × (1 - Authoritative Quality Score)
 ```
 
+That projection is not the primary ranking score. Protocol 21 orders Bench v9
+lexicographically:
+
+```text
+1. Authoritative Quality Score, descending
+2. Efficiency-adjusted projection, descending, only at exactly equal quality
+3. first_seen, ascending
+4. agent_id, ascending
+```
+
 The defaults are `alpha=0.25`, `minimum_factor=0.85`, and
 `maximum_factor=1.10`. The lower exponent deliberately softens cost ratios;
 the clamps bound both the penalty and reward. Positive efficiency scales only
 remaining quality headroom: quality `0.95` with factor `1.10` produces `0.955`,
 not `1.0`. At equal authoritative quality, a lower-cost qualified agent ranks
-higher before the existing `first_seen` tie break; genuinely equal results use
-the existing deterministic tie break. Historical curve-v1/v2 bonus replay is
-unchanged.
+higher before the existing `first_seen` tie break. Across different quality
+scores, quality always wins: efficiency cannot move an agent across a quality
+tier. Genuinely equal results use the existing deterministic tie break.
+Historical curve-v1/v2 bonus replay is unchanged.
 
 ### Cost and integrity authority
 
@@ -214,17 +226,18 @@ For each cohort `(bench_version, run_size, epoch)`:
 
 1. Validators report quality-only scores plus complete trusted usage and the
    signature-bound v9 roots used by curve v3.
-2. Deploy factor-aware Platform and heartbeat-protocol-19 validator releases,
+2. Deploy factor-aware Platform and heartbeat-protocol-21 validator releases,
    leaving the efficiency fold off. Let Platform freeze snapshots and audit
    cohort health/P25.
 3. Backroom enables assignment only after the live cohort is healthy. New v9
    snapshots use v3; legacy snapshots continue replaying v1/v2.
 4. Enable validator-ledger fold exposure only after all participating
-   validators report protocol 19+, prefer `efficiency_factor`, apply it after
-   authoritative v9 quality with the same downside/headroom transform, and
-   treat absent/malformed factors neutrally.
+   validators report protocol 21+, prefer `efficiency_factor`, and use the
+   downside/headroom projection only as an exact-quality secondary key.
+   Authoritative quality remains primary; treat absent/malformed factors
+   neutrally.
    Platform independently fails closed when the recently-live Bench-v9-capable
-   fleet is mixed or empty, even when the fold flag is set. A fresh pre-19
+   fleet is mixed or empty, even when the fold flag is set. A fresh pre-21
    requester receives no v3 factors, while a validator that cannot serve Bench
    v9 does not indefinitely veto the capable fleet. This new readiness gate
    does not alter historical curve-v1/v2 bonus exposure.

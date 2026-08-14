@@ -18,7 +18,7 @@ _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _VALIDATOR = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 
 
-def test_v20_factor_gate_preserves_legacy_bonus_behavior() -> None:
+def test_v21_factor_gate_preserves_legacy_bonus_behavior() -> None:
     legacy_id = uuid4()
     factor_id = uuid4()
 
@@ -39,7 +39,7 @@ def test_v20_factor_gate_preserves_legacy_bonus_behavior() -> None:
     assert factors == {factor_id: 0.85}
 
 
-def test_stale_cache_strips_v20_factor_but_preserves_legacy_bonus() -> None:
+def test_stale_cache_strips_v21_factor_but_preserves_legacy_bonus() -> None:
     now = datetime.now(UTC)
 
     def _entry(

@@ -215,9 +215,16 @@ class TestComparator:
 
     def test_the_key_is_a_plain_tuple_so_it_composes(self) -> None:
         row = _Row(_uuid("3"), _BASE, 0.25)
-        assert score_order_key(row) == (False, -0.25, _BASE, str(row.agent_id))
+        assert score_order_key(row) == (
+            False,
+            -0.25,
+            -0.25,
+            _BASE,
+            str(row.agent_id),
+        )
         assert score_order_key(row, score=0.5) == (
             False,
+            -0.5,
             -0.5,
             _BASE,
             str(row.agent_id),
@@ -259,9 +266,10 @@ class TestComparator:
             efficiency_fold_active=True,
         )
 
-        # Full v9 quality is authoritative; legacy bonus and continual samples
-        # are ignored, then curve v3 applies exactly once.
-        assert scores[row.agent_id] == pytest.approx(0.75 * 0.85)
+        # Full v9 quality is the primary order. Curve-v3 is retained only as
+        # the secondary exact-quality tiebreak projection.
+        assert scores[row.agent_id] == pytest.approx(0.75)
+        assert scores.secondary_scores[row.agent_id] == pytest.approx(0.75 * 0.85)
 
     def test_v9_factor_applies_to_authoritative_base_only_quality(self) -> None:
         row = _FinalRow(
@@ -282,7 +290,8 @@ class TestComparator:
             efficiency_fold_active=True,
         )
 
-        assert scores[row.agent_id] == pytest.approx(0.78 * 0.85)
+        assert scores[row.agent_id] == pytest.approx(0.78)
+        assert scores.secondary_scores[row.agent_id] == pytest.approx(0.78 * 0.85)
 
     def test_equal_v9_quality_lower_cost_factor_beats_submission_time(self) -> None:
         earlier = _FinalRow(
@@ -312,6 +321,38 @@ class TestComparator:
 
         assert rank_submissions([earlier, later], scores=scores) == [later, earlier]
 
+    def test_live_harry_regression_never_crosses_the_quality_tier(self) -> None:
+        harry = _FinalRow(
+            _uuid("1"),
+            "5" + "a" * 47,
+            _BASE,
+            0.995020,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 995_020},
+        )
+        higher_quality = _FinalRow(
+            _uuid("2"),
+            "5" + "b" * 47,
+            _BASE + timedelta(hours=1),
+            0.997012,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 997_012},
+        )
+        scores = official_composites(
+            [harry, higher_quality],
+            quorum={},
+            completed_waves={},
+            continual_mean_active=False,
+            efficiency_factors={harry.agent_id: 1.10},
+            efficiency_fold_active=True,
+        )
+
+        assert scores.secondary_scores[harry.agent_id] == pytest.approx(0.995518)
+        assert rank_submissions([harry, higher_quality], scores=scores) == [
+            higher_quality,
+            harry,
+        ]
+
     def test_equal_headroom_adjusted_scores_use_submission_time_tie_break(self) -> None:
         earlier = _FinalRow(
             _uuid("1"),
@@ -338,7 +379,11 @@ class TestComparator:
             efficiency_fold_active=True,
         )
 
-        assert scores == {earlier.agent_id: 0.955, later.agent_id: 0.955}
+        assert scores == {earlier.agent_id: 0.95, later.agent_id: 0.95}
+        assert scores.secondary_scores == {
+            earlier.agent_id: pytest.approx(0.955),
+            later.agent_id: pytest.approx(0.955),
+        }
         assert rank_submissions([later, earlier], scores=scores) == [earlier, later]
 
     def test_headroom_uplift_keeps_banblackycat_ahead_of_earlier_crown(self) -> None:
@@ -370,8 +415,12 @@ class TestComparator:
             efficiency_fold_active=True,
         )
 
-        assert scores[crown.agent_id] == pytest.approx(0.98254005002)
-        assert scores[banblackycat.agent_id] == pytest.approx(0.997115731408)
+        assert scores[crown.agent_id] == pytest.approx(0.980723)
+        assert scores[banblackycat.agent_id] == pytest.approx(0.997012)
+        assert scores.secondary_scores[crown.agent_id] == pytest.approx(0.98254005002)
+        assert scores.secondary_scores[banblackycat.agent_id] == pytest.approx(
+            0.997115731408
+        )
         assert rank_submissions([crown, banblackycat], scores=scores) == [
             banblackycat,
             crown,
@@ -408,7 +457,7 @@ class TestEfficiencyAdjustedFloors:
             }
 
         async def fleet_supports(*_args: object, **kwargs: object) -> bool:
-            assert kwargs["minimum_protocol"] == 19
+            assert kwargs["minimum_protocol"] == 21
             assert kwargs["bench_version"] == 9
             assert kwargs["now"] == _BASE
             return fleet_ready
@@ -427,7 +476,8 @@ class TestEfficiencyAdjustedFloors:
             now=_BASE,
         )
 
-        assert scores[row.agent_id] == pytest.approx(expected)
+        assert scores[row.agent_id] == pytest.approx(0.8)
+        assert scores.secondary_scores.get(row.agent_id, 0.8) == pytest.approx(expected)
 
     @pytest.mark.parametrize(
         "requester",
@@ -575,9 +625,9 @@ class TestEfficiencyAdjustedFloors:
         # Factor order is the reverse of submission-time order. Raw-score ties
         # would put rows[4] fifth; the canonical adjusted floor is rows[5].
         assert continuation.row.agent_id == rows[5].agent_id
-        assert continuation.score == pytest.approx(0.8 * factors[rows[5].agent_id])
+        assert continuation.score == pytest.approx(0.8)
         assert provisional.row.agent_id == rows[0].agent_id
-        assert provisional.score == pytest.approx(0.8 * factors[rows[0].agent_id])
+        assert provisional.score == pytest.approx(0.8)
 
 
 async def _seed(

@@ -562,9 +562,11 @@ class PublicLeaderboardEntry(BaseModel):
                 "while every entry is still on the canonical median "
                 "(``aggregate_method == 'canonical_median'``); once any agent "
                 "has completed continual cohort waves the two orderings differ, "
-                "and ``official_composite`` is the one that ranks the board and "
-                "drives the weight fold. Ties break on ``first_seen`` then "
-                "``agent_id``. Provisional (pre-quorum) rows are ranked among "
+                "and ``official_composite`` is the authoritative quality that "
+                "ranks the board and drives the weight fold. Bench-v9 curve-v3 "
+                "efficiency breaks only exact official-quality ties; lower "
+                "quality never crosses higher quality. Remaining ties break on "
+                "``first_seen`` then ``agent_id``. Provisional rows are ranked among "
                 "themselves and always trail the finalized board. Bench v9 "
                 "base/provisional rows in confirmation enforce mode are null: "
                 "only full-confirmed rows rank."
@@ -709,12 +711,13 @@ class PublicLeaderboardEntry(BaseModel):
             ge=0.0,
             le=1.1,
             description=(
-                "Composite used for the current leaderboard and weight fold. "
+                "Authoritative quality used as the primary key for the current "
+                "leaderboard and weight fold. "
                 "Legacy eras use the canonical median or activated continual "
                 "mean; full-confirmed Bench v9 uses its verified full quality. "
-                "An activated frozen efficiency bonus or v9 factor is applied "
-                "after that authoritative quality scalar; curve-v3 downside "
-                "multiplies quality and upside scales its remaining headroom."
+                "Historical bonuses remain in this scalar. A v9 curve-v3 "
+                "factor does not modify it; its adjusted projection is only an "
+                "exact-quality secondary key."
             ),
         ),
     ]
@@ -858,7 +861,8 @@ class PublicLeaderboardEntry(BaseModel):
         Field(
             description=(
                 "Whether the surfaced efficiency adjustment is currently part "
-                "of official_composite, ranking, KOTH, and emissions. False "
+                "of ranking, KOTH, and emissions. Curve-v3 does not modify "
+                "official_composite; it breaks exact-quality ties. False "
                 "means effective_composite is an audit-only projection."
             ),
         ),
@@ -873,9 +877,8 @@ class PublicLeaderboardEntry(BaseModel):
                 "Frozen-adjustment projection. Curve v3 multiplies downside or "
                 "applies upside to pre_efficiency_composite's remaining "
                 "headroom; legacy curves multiply by one plus their bonus. "
-                "It equals official_composite while the coordinated fold is "
-                "active; with the fold off it is audit-only and does not rank "
-                "the board. Null "
+                "With curve-v3 active it is the secondary key only after exact "
+                "official_composite equality; with the fold off it is audit-only. Null "
                 "whenever both adjustment fields are null. Signed quality "
                 "evidence is never modified."
             ),

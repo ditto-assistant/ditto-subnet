@@ -149,6 +149,7 @@ from ditto.api_server.inference_concurrency_settings import resolved_proxy_confi
 from ditto.api_server.inference_routing import record_ticket_route_quality
 from ditto.api_server.koth import (
     KothEntry,
+    continual_composite,
     effective_composite,
     emission_set,
     project_koth,
@@ -3557,8 +3558,23 @@ async def _current_koth_entries(
                 efficiency_factor=efficiency_factors.get(row.agent_id),
             )
         )
-    entry_scores = {entry.agent_id: effective_composite(entry) for entry in entries}
-    selected_rows = dedupe_owner_rows(rows, scores=entry_scores)
+    quality_primary = any(entry.efficiency_factor is not None for entry in entries)
+    entry_scores = {
+        entry.agent_id: (
+            continual_composite(entry)
+            if quality_primary
+            else effective_composite(entry)
+        )
+        for entry in entries
+    }
+    entry_tiebreaks = (
+        {entry.agent_id: effective_composite(entry) for entry in entries}
+        if quality_primary
+        else None
+    )
+    selected_rows = dedupe_owner_rows(
+        rows, scores=entry_scores, secondary_scores=entry_tiebreaks
+    )
     selected_by_id = {row.agent_id: row for row in selected_rows}
     return [
         replace(entry, first_seen=selected_by_id[entry.agent_id].fold_first_seen)

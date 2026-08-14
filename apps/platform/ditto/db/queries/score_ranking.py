@@ -17,14 +17,14 @@ first_seen, lowest agent_id``. The trailing terms are not decoration: they are
 what makes a tie deterministic across the API, the queue, and the fold, so two
 readers of the same ledger never see two different fifth places.
 
-**The score it orders by** (:func:`official_composites`) -- the authoritative
-quality scalar followed by any activated Platform adjustment. Legacy eras start
-on the canonical k=3 quorum median and may switch to the continual mean. A
-full-confirmed Bench-v9 row instead uses its independently verified full quality;
-curve-v3 efficiency, when activated, multiplies downside and applies upside to
-the remaining quality headroom. This is the estimator validators
-fold into weights, so every ranking surface must cut on it, including queue
-floors. See
+**The scores it orders by** (:func:`official_composites`) -- authoritative
+quality first, then an optional exact-tie secondary. Legacy eras start on the
+canonical k=3 quorum median and may switch to the continual mean. A
+full-confirmed Bench-v9 row instead uses its independently verified full quality.
+Protocol-21 curve-v3 efficiency never changes that primary order: its bounded
+downside/headroom projection breaks only exact quality ties. Historical v1/v2
+bonuses retain their frozen continuous arithmetic. Every ranking surface must
+use this same pair, including queue floors. See
 :func:`ditto.api_server.koth.effective_composite` for the legacy continual
 formula; this module is only about *who reads it*.
 """
@@ -68,6 +68,7 @@ __all__ = [
     "completed_wave_data",
     "continual_mean_is_active",
     "dedupe_owner_rows",
+    "efficiency_tiebreak_composites",
     "official_composites",
     "rank_submissions",
     "resolve_efficiency_adjustments",
@@ -81,7 +82,11 @@ __all__ = [
 # official score once every benchmark-capable validator that has been live
 # recently speaks the contract that produces it.
 CONTINUAL_MEAN_PROTOCOL = 14
-BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 19
+# Protocol 21 changes curve-v3 from a continuously blended score into a
+# quality-primary ordering with efficiency as an exact-quality tiebreak. Keep
+# factors hidden from older validators: protocol 19/20 would otherwise consume
+# the same field under the superseded arithmetic and disagree on weights.
+BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 21
 VALIDATOR_STALE_WINDOW = timedelta(minutes=15)
 
 
@@ -94,45 +99,77 @@ class EfficiencyFactorRequesterNotReady(RuntimeError):
     """
 
 
+class RankingScores(dict[UUID, float]):
+    """Primary official scores with an optional exact-tie secondary order."""
+
+    def __init__(
+        self,
+        primary: Mapping[UUID, float],
+        *,
+        secondary_scores: Mapping[UUID, float] | None = None,
+    ) -> None:
+        super().__init__(primary)
+        self.secondary_scores = dict(secondary_scores or {})
+
+
 def _row_details(row: object) -> dict | None:
     """The row's telemetry blob when it carries one, else ``None``."""
     details = getattr(row, "details", None)
     return details if isinstance(details, dict) else None
 
 
-def dedupe_owner_rows(rows: Sequence[F], *, scores: Mapping[UUID, float]) -> list[F]:
+def dedupe_owner_rows(
+    rows: Sequence[F],
+    *,
+    scores: Mapping[UUID, float],
+    secondary_scores: Mapping[UUID, float] | None = None,
+) -> list[F]:
     """Select one official representative per payment/attestation owner.
 
-    Callers pass the exact score their surface ranks—full-v9 quality followed
-    by the activated factor—so a leaner equal-quality generation wins before
-    first-seen. Rows without an internal owner root fall back to a unique agent
-    key, preserving fixtures and historical value objects.
+    Callers pass authoritative quality plus the optional curve-v3 secondary,
+    so a leaner equal-quality generation wins before first-seen without ever
+    crossing a quality tier. Rows without an internal owner root fall back to a
+    unique agent key, preserving fixtures and historical value objects.
     """
+    secondary = (
+        secondary_scores
+        if secondary_scores is not None
+        else getattr(scores, "secondary_scores", {})
+    )
     by_owner: dict[str, list[F]] = {}
     for row in rows:
         owner = getattr(row, "emission_owner_root", None) or f"agent:{row.agent_id}"
         by_owner.setdefault(str(owner), []).append(row)
     winners = [
         _with_resolved_crown(
-            rank_submissions(group, scores=scores)[0], group=group, scores=scores
+            rank_submissions(group, scores=scores, secondary_scores=secondary_scores)[
+                0
+            ],
+            group=group,
+            scores=scores,
+            secondary_scores=secondary,
         )
         for group in by_owner.values()
     ]
-    return rank_submissions(winners, scores=scores)
+    return rank_submissions(winners, scores=scores, secondary_scores=secondary)
 
 
 def _with_resolved_crown(
-    winner: F, *, group: Sequence[F], scores: Mapping[UUID, float]
+    winner: F,
+    *,
+    group: Sequence[F],
+    scores: Mapping[UUID, float],
+    secondary_scores: Mapping[UUID, float],
 ) -> F:
-    """Re-anchor owner seniority on the same final score that chose its row.
+    """Re-anchor owner seniority on the same ranking tier that chose its row.
 
     PostgreSQL computes ``crown_first_seen`` before Platform efficiency is
-    available. Once a factor changes which generation represents an owner, the
-    earlier raw-quality anchor is no longer authoritative: an expensive early
-    sibling must not lend seniority to a later efficient winner unless their
-    *final* scores are still inside the flat dethrone band. Ledger rows are
-    frozen dataclasses, so replace only that derived field; lightweight test or
-    moderation rows without it retain their ordinary upload timestamp.
+    available. In protocol-21 curve-v3 order, an expensive early sibling must
+    not lend seniority to a later efficient winner unless both its quality and
+    efficiency projection are exactly tied with the winner. Legacy continuous
+    scores retain the historical flat dethrone-band anchor. Ledger rows are
+    frozen dataclasses, so replace only that derived field; lightweight test
+    or moderation rows without it retain their ordinary upload timestamp.
     """
     if not is_dataclass(winner) or not hasattr(winner, "crown_first_seen"):
         return winner
@@ -145,18 +182,34 @@ def _with_resolved_crown(
     )
 
     winner_score = scores.get(winner.agent_id, winner.composite)
-    scale = 1.0
-    if winner.bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION:
-        bounded = min(max(winner_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
-        scale = exp(-KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE))
-    threshold = winner_score - KOTH_MARGIN * scale
-    ancestors = [
-        row.first_seen
-        for row in group
-        if bool(getattr(row, "eligible", True))
-        and row.bench_version == winner.bench_version
-        and scores.get(row.agent_id, row.composite) >= threshold
-    ]
+    if secondary_scores:
+        winner_secondary = secondary_scores.get(winner.agent_id, winner_score)
+        ancestors = [
+            row.first_seen
+            for row in group
+            if bool(getattr(row, "eligible", True))
+            and row.bench_version == winner.bench_version
+            and scores.get(row.agent_id, row.composite) == winner_score
+            and secondary_scores.get(
+                row.agent_id, scores.get(row.agent_id, row.composite)
+            )
+            == winner_secondary
+        ]
+    else:
+        scale = 1.0
+        if winner.bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION:
+            bounded = min(max(winner_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
+            scale = exp(
+                -KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE)
+            )
+        threshold = winner_score - KOTH_MARGIN * scale
+        ancestors = [
+            row.first_seen
+            for row in group
+            if bool(getattr(row, "eligible", True))
+            and row.bench_version == winner.bench_version
+            and scores.get(row.agent_id, row.composite) >= threshold
+        ]
     anchor = min(ancestors, default=winner.first_seen)
     return cast(F, replace(winner, crown_first_seen=anchor))
 
@@ -203,7 +256,7 @@ def official_composites(
     efficiency_bonuses: Mapping[UUID, float] | None = None,
     efficiency_factors: Mapping[UUID, float] | None = None,
     efficiency_fold_active: bool = False,
-) -> dict[UUID, float]:
+) -> RankingScores:
     """The score every ranking surface cuts on, per agent.
 
     With the continual mean inactive this is the stored quorum median except
@@ -213,10 +266,16 @@ def official_composites(
     canonical / continual quality normally and full-confirmed quality while
     confirmation enforcement is active.
     """
-    from ditto.api_server.koth import KothEntry, effective_composite
+    from ditto.api_server.koth import (
+        KothEntry,
+        continual_composite,
+        effective_composite,
+    )
 
+    rows = list(rows)
     bonuses = efficiency_bonuses or {}
     factors = efficiency_factors or {}
+    active_factors = factors if efficiency_fold_active else {}
 
     def authoritative_quality(row: FinalizedRow) -> float:
         """The quality scalar efficiency multiplies for this benchmark era."""
@@ -232,45 +291,81 @@ def official_composites(
         return row.composite
 
     if not continual_mean_active and not efficiency_fold_active:
-        return {row.agent_id: authoritative_quality(row) for row in rows}
-    return {
-        row.agent_id: effective_composite(
-            KothEntry(
-                miner_hotkey=row.miner_hotkey,
-                agent_id=row.agent_id,
-                composite=authoritative_quality(row),
-                first_seen=row.first_seen,
-                raw_rank=0,
-                bench_version=row.bench_version,
-                quorum_composites=(
-                    ()
-                    if row.bench_version == 9
-                    and getattr(row, "v9_confirmation", None) is not None
-                    else tuple(quorum.get(row.agent_id, ()))
-                ),
-                completed_wave_composites=tuple(
-                    value
-                    for _seed, value in sorted(
-                        (
-                            {}
-                            if row.bench_version == 9
-                            and getattr(row, "v9_confirmation", None) is not None
-                            else completed_waves.get(row.agent_id, {})
-                        ).items()
-                    )
-                ),
-                efficiency_bonus=(
-                    bonuses.get(row.agent_id) if efficiency_fold_active else None
-                ),
-                efficiency_factor=(
-                    factors.get(row.agent_id)
-                    if efficiency_fold_active and row.bench_version == 9
-                    else None
-                ),
-            )
+        return RankingScores({row.agent_id: authoritative_quality(row) for row in rows})
+    resolved: dict[UUID, float] = {}
+    for row in rows:
+        entry = KothEntry(
+            miner_hotkey=row.miner_hotkey,
+            agent_id=row.agent_id,
+            composite=authoritative_quality(row),
+            first_seen=row.first_seen,
+            raw_rank=0,
+            bench_version=row.bench_version,
+            quorum_composites=(
+                ()
+                if row.bench_version == 9
+                and getattr(row, "v9_confirmation", None) is not None
+                else tuple(quorum.get(row.agent_id, ()))
+            ),
+            completed_wave_composites=tuple(
+                value
+                for _seed, value in sorted(
+                    (
+                        {}
+                        if row.bench_version == 9
+                        and getattr(row, "v9_confirmation", None) is not None
+                        else completed_waves.get(row.agent_id, {})
+                    ).items()
+                )
+            ),
+            efficiency_bonus=(
+                bonuses.get(row.agent_id) if efficiency_fold_active else None
+            ),
+            efficiency_factor=(
+                factors.get(row.agent_id)
+                if efficiency_fold_active and row.bench_version == 9
+                else None
+            ),
         )
-        for row in rows
-    }
+        # Curve-v3 is quality-primary. Its adjusted projection is a secondary
+        # key only, so a cheaper lower-quality row cannot cross a quality tier.
+        # Historical v1/v2 bonuses retain their frozen score arithmetic.
+        resolved[row.agent_id] = (
+            continual_composite(entry)
+            if row.bench_version == 9 and row.agent_id in active_factors
+            else effective_composite(entry)
+        )
+    secondary = efficiency_tiebreak_composites(
+        rows,
+        official=resolved,
+        efficiency_factors=active_factors,
+    )
+    return RankingScores(resolved, secondary_scores=secondary)
+
+
+def efficiency_tiebreak_composites(
+    rows: Iterable[FinalizedRow],
+    *,
+    official: Mapping[UUID, float],
+    efficiency_factors: Mapping[UUID, float] | None = None,
+) -> dict[UUID, float]:
+    """Return the curve-v3 secondary key without changing quality order.
+
+    Entries without a Bench-v9 factor are omitted; the comparator defaults
+    their secondary to the primary official score. Callers pass this map to
+    :func:`rank_submissions` only as a secondary key, after exact equality on
+    authoritative quality.
+    """
+    from ditto.api_server.koth import bounded_efficiency_adjusted_quality
+
+    factors = efficiency_factors or {}
+    out: dict[UUID, float] = {}
+    for row in rows:
+        quality = official.get(row.agent_id, row.composite)
+        factor = factors.get(row.agent_id)
+        if row.bench_version == 9 and factor is not None:
+            out[row.agent_id] = bounded_efficiency_adjusted_quality(quality, factor)
+    return out
 
 
 async def continual_mean_is_active(
