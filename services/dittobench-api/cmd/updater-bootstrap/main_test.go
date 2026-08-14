@@ -178,6 +178,36 @@ func TestRequireReadOnlyTreeAcceptsNonWritableTree(t *testing.T) {
 	}
 }
 
+func TestRequireReadOnlyTreeAcceptsUntraversableTree(t *testing.T) {
+	directory := t.TempDir()
+	file := filepath.Join(directory, "updater")
+	if err := os.WriteFile(file, []byte("updater\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0o755) })
+	if err := requireReadOnlyTree(directory); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRequireReadOnlyTreeRejectsUnlistableTraversableTree(t *testing.T) {
+	directory := t.TempDir()
+	file := filepath.Join(directory, "updater")
+	if err := os.WriteFile(file, []byte("updater\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(directory, 0o111); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0o755) })
+	if err := requireReadOnlyTree(directory); err == nil {
+		t.Fatal("expected traversable tree with hidden entries to be rejected")
+	}
+}
+
 func TestRequireReadOnlyTreeRejectsSymlink(t *testing.T) {
 	directory := t.TempDir()
 	target := filepath.Join(directory, "target")

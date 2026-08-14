@@ -175,6 +175,25 @@ func replaceUpdater(source, target string) error {
 func requireReadOnlyTree(root string) error {
 	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
+			// A private host checkout (for example, mode 0700) is stronger
+			// isolation than an enumerable read-only tree. WalkDir reports the
+			// denied directory a second time after the initial entry callback.
+			// Accept it only when the scorer can neither mutate nor traverse the
+			// directory. If traversal remains possible, fail closed because an
+			// unlisted entry could still be reached by a known path.
+			if errors.Is(walkErr, os.ErrPermission) {
+				writeErr := syscall.Access(path, 2)
+				if writeErr == nil {
+					return fmt.Errorf("mounted host scripts remain writable at %q", path)
+				}
+				if !errors.Is(writeErr, syscall.EACCES) && !errors.Is(writeErr, syscall.EPERM) && !errors.Is(writeErr, syscall.EROFS) {
+					return fmt.Errorf("check mounted host scripts permissions at %q: %w", path, writeErr)
+				}
+				executeErr := syscall.Access(path, 1)
+				if errors.Is(executeErr, syscall.EACCES) || errors.Is(executeErr, syscall.EPERM) {
+					return filepath.SkipDir
+				}
+			}
 			return fmt.Errorf("inspect mounted host scripts: %w", walkErr)
 		}
 		if entry.Type()&os.ModeSymlink != 0 {
@@ -182,7 +201,7 @@ func requireReadOnlyTree(root string) error {
 		}
 		if err := syscall.Access(path, 2); err == nil {
 			return fmt.Errorf("mounted host scripts remain writable at %q", path)
-		} else if !errors.Is(err, syscall.EACCES) && !errors.Is(err, syscall.EROFS) {
+		} else if !errors.Is(err, syscall.EACCES) && !errors.Is(err, syscall.EPERM) && !errors.Is(err, syscall.EROFS) {
 			return fmt.Errorf("check mounted host scripts permissions at %q: %w", path, err)
 		}
 		return nil

@@ -58,12 +58,16 @@ for validator_hotkey in "$target_hotkey" "$peer_hotkey"; do
   volume="ditto-updater-bootstrap-${GITHUB_RUN_ID:-local}-${validator_hotkey:0:8}"
   BOOTSTRAP_VOLUMES+=("$volume")
   docker volume create "$volume" >/dev/null
+  scripts_mode=0755
+  [ "$validator_hotkey" != "$target_hotkey" ] || scripts_mode=0700
   docker run --rm --user 0:0 --entrypoint /bin/sh \
     --mount "type=volume,source=$volume,target=/host-scripts" \
+    --env "SCRIPTS_MODE=$scripts_mode" \
     "$BOOTSTRAP_IMAGE" -ceu \
     'printf "legacy updater\n" >/host-scripts/validator-stack-auto-update.sh
      chown 1000:1000 /host-scripts /host-scripts/validator-stack-auto-update.sh
-     chmod 0755 /host-scripts /host-scripts/validator-stack-auto-update.sh'
+     chmod "$SCRIPTS_MODE" /host-scripts
+     chmod 0755 /host-scripts/validator-stack-auto-update.sh'
   docker run --rm \
     --read-only \
     --tmpfs /tmp \
@@ -80,7 +84,7 @@ for validator_hotkey in "$target_hotkey" "$peer_hotkey"; do
     --env "DITTOBENCH_BOOTSTRAP_VALIDATOR_HOTKEY=$validator_hotkey" \
     "$BOOTSTRAP_IMAGE" version -json >/dev/null
 done
-docker run --rm --entrypoint /bin/sh \
+docker run --rm --user 0:0 --entrypoint /bin/sh \
   --mount "type=volume,source=${BOOTSTRAP_VOLUMES[0]},target=/host-scripts" \
   "$BOOTSTRAP_IMAGE" -ceu \
   'cmp /opt/ditto/validator-stack-auto-update.sh /host-scripts/validator-stack-auto-update.sh'
