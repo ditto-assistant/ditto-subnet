@@ -1294,7 +1294,7 @@ type brokerConfirmationAuthorizer struct {
 
 func (a brokerConfirmationAuthorizer) Authorize(
 	_ context.Context,
-	reference longmemeval.SecretManagerReference,
+	lane string,
 	request *http.Request,
 ) error {
 	if a.broker == nil || request == nil {
@@ -1307,7 +1307,7 @@ func (a brokerConfirmationAuthorizer) Authorize(
 		return errors.New("confirmation platform capability is unavailable")
 	}
 	session.mu.Lock()
-	grant, ok := session.confirmationGrants[reference.SecretID]
+	grant, ok := session.confirmationGrants[lane]
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	active := session.confirmationSession && session.expiresAt.After(time.Now())
 	session.mu.Unlock()
@@ -1363,9 +1363,8 @@ func (b *inferenceBroker) confirmationProviderRuntime(
 		}
 		lanes = append(lanes, longmemeval.ProviderLaneRuntimeConfig{
 			Lane: lane, UpstreamURL: grant.ProxyURL, RouteProvider: grant.RouteProvider,
-			ReceiptProvider:     grant.ReceiptProvider,
-			CredentialReference: longmemeval.SecretManagerReference{ProjectID: "platform", SecretID: lane, Version: "ticket"},
-			RequestTimeout:      10 * time.Minute,
+			ReceiptProvider: grant.ReceiptProvider,
+			RequestTimeout:  10 * time.Minute,
 		})
 	}
 	authorizer := brokerConfirmationAuthorizer{broker: b, sessionID: sessionID}

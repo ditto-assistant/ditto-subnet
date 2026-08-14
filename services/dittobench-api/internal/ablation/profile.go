@@ -19,7 +19,9 @@ type CoordinatorPolicy struct {
 }
 
 // FrozenProfile binds the artifact-independent public policy shared by all
-// ablation runs. The runtime artifact remains a per-run coordinator and
+// ablation runs. The legacy-named key digests are public profile commitments,
+// not hashes of mounted runtime secrets; the scorer derives per-bundle material
+// from the signed lease. The runtime artifact remains a per-run coordinator and
 // evaluation input. Threshold values remain in the separately checksummed
 // threshold manifest.
 type FrozenProfile struct {

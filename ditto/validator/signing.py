@@ -8,10 +8,9 @@ signature cannot be replayed against a different agent, and the composite the
 platform records cannot be altered without invalidating the signature. (The
 platform's ``/validator/.../score`` rebuilds the same string and verifies it.)
 
-The signing private key comes from a bittensor wallet on the host. We only hold
-the public hotkey (``5CZq6Mdanx...``) in config; the secret half must be
-provisioned on the VM as a wallet file (Secret Manager -> wallet file). Never log
-the key.
+The signing private key comes from an operator-provisioned Bittensor wallet on
+the host. Validator runtime code has no cloud credential or Secret Manager
+dependency. Never log the private key.
 """
 
 from __future__ import annotations

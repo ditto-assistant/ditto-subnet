@@ -29,29 +29,12 @@ const (
 	officialJudgeRevision    = "longmemeval-official-gpt4o-openrouter-v1"
 )
 
-// SecretManagerReference names credential material without containing it. The
-// confirmation request, execution profile, evidence, and logs must carry only
-// this reference; the trusted host supplies an Authorizer implementation.
-type SecretManagerReference struct {
-	ProjectID string
-	SecretID  string
-	Version   string
-}
-
-func (r SecretManagerReference) validate() error {
-	for _, value := range []string{r.ProjectID, r.SecretID, r.Version} {
-		if strings.TrimSpace(value) == "" || strings.ContainsAny(value, "\r\n\x00") {
-			return errors.New("provider credential reference is incomplete")
-		}
-	}
-	return nil
-}
-
 // RequestAuthorizer applies trusted provider authorization to one outbound
-// request. It receives a Secret Manager reference, never a credential value.
-// Implementations must not return errors containing credential material.
+// request. The lane is a public profile identity. The authorizer exchanges the
+// validator-signed, ticket-scoped Platform capability held by the broker; no
+// provider credential or cloud secret reference enters the scorer runtime.
 type RequestAuthorizer interface {
-	Authorize(context.Context, SecretManagerReference, *http.Request) error
+	Authorize(context.Context, string, *http.Request) error
 }
 
 // ProviderLaneRuntimeConfig binds one frozen profile lane to an exact upstream
@@ -59,12 +42,11 @@ type RequestAuthorizer interface {
 // provider slug sent in provider.only/order; ReceiptProvider is the exact
 // provider string that must be returned in every authoritative receipt.
 type ProviderLaneRuntimeConfig struct {
-	Lane                string
-	UpstreamURL         string
-	RouteProvider       string
-	ReceiptProvider     string
-	CredentialReference SecretManagerReference `json:"-"`
-	RequestTimeout      time.Duration
+	Lane            string
+	UpstreamURL     string
+	RouteProvider   string
+	ReceiptProvider string
+	RequestTimeout  time.Duration
 }
 
 // ProviderRuntimeConfig contains no credential values. A caller normally
@@ -228,9 +210,6 @@ func validateProviderLaneRuntime(policy ProviderPolicy, config ProviderLaneRunti
 	}
 	if config.RequestTimeout <= 0 {
 		return fmt.Errorf("provider runtime timeout must be positive for lane %q", policy.Lane)
-	}
-	if err := config.CredentialReference.validate(); err != nil {
-		return err
 	}
 	parsed, err := url.Parse(config.UpstreamURL)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -551,7 +530,7 @@ func (s *ProviderSession) execute(
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Accept", "application/json")
 	request.Header["User-Agent"] = []string{}
-	if err := s.authorizer.Authorize(ctx, lane.config.CredentialReference, request); err != nil {
+	if err := s.authorizer.Authorize(ctx, lane.config.Lane, request); err != nil {
 		request.Header.Del("Authorization")
 		s.releaseReservation(laneName, reservation, true)
 		return 0, nil, errors.New("provider authorization unavailable")

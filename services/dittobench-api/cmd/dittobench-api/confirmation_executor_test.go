@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -339,7 +340,7 @@ func TestTrustedConfirmationProfileStrictAndChecksumBound(t *testing.T) {
 				value, _ := json.Marshal(changed)
 				return value
 			},
-			needle: "projection key checksum",
+			needle: "derivation salts",
 		},
 		{
 			name: "wrong provider lane set",
@@ -572,11 +573,8 @@ func TestConfirmationRuntimeValidationRejectsEveryRequiredBinding(t *testing.T) 
 		{"case runner", func(value *confirmationRuntime) { value.AblationCaseRunner = nil }},
 		{"closer", func(value *confirmationRuntime) { value.Close = nil }},
 		{"longmem projection key", func(value *confirmationRuntime) { value.LongMemProjectionKey = nil }},
-		{"longmem projection key drift", func(value *confirmationRuntime) { value.LongMemProjectionKey[0] ^= 0xff }},
 		{"ablation selection key", func(value *confirmationRuntime) { value.AblationSelectionKey = nil }},
 		{"ablation projection key", func(value *confirmationRuntime) { value.AblationProjectionKey = nil }},
-		{"selection key drift", func(value *confirmationRuntime) { value.AblationSelectionKey[0] ^= 0xff }},
-		{"projection key drift", func(value *confirmationRuntime) { value.AblationProjectionKey[0] ^= 0xff }},
 		{"ordinary population", func(value *confirmationRuntime) { value.AblationPopulation.Confirmation = false }},
 		{"v8 population", func(value *confirmationRuntime) { value.AblationPopulation.BenchVersion = 8 }},
 	}
@@ -588,6 +586,77 @@ func TestConfirmationRuntimeValidationRejectsEveryRequiredBinding(t *testing.T) 
 				t.Fatal("invalid runtime was accepted")
 			}
 		})
+	}
+}
+
+func TestConfirmationRuntimeMaterialIsLeaseDerivedAndDomainSeparated(t *testing.T) {
+	t.Parallel()
+	profile, _ := validInstalledConfirmationProfile(t)
+	identity := confirmationRuntimeIdentity{
+		BundleID: "bundle-a", TicketID: "ticket-a", AgentID: "agent-a",
+		ArtifactSHA256: strings.Repeat("a", 64), ProfileChecksum: profile.Checksum,
+		SettingsChecksum: strings.Repeat("b", 64), SettingsRevision: 7, RetestGeneration: 2,
+	}
+	longMem, selection, projection, err := deriveConfirmationRuntimeMaterial(profile, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	againLongMem, againSelection, againProjection, err := deriveConfirmationRuntimeMaterial(profile, identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, pair := range map[string][2][]byte{
+		"longmem": {longMem, againLongMem}, "selection": {selection, againSelection},
+		"projection": {projection, againProjection},
+	} {
+		if len(pair[0]) != sha256.Size || !bytes.Equal(pair[0], pair[1]) {
+			t.Fatalf("%s derivation is not deterministic 32-byte material", name)
+		}
+	}
+	if bytes.Equal(longMem, selection) || bytes.Equal(longMem, projection) || bytes.Equal(selection, projection) {
+		t.Fatal("confirmation runtime derivation domains collided")
+	}
+	for name, mutate := range map[string]func(*confirmationRuntimeIdentity){
+		"bundle":            func(value *confirmationRuntimeIdentity) { value.BundleID += "-changed" },
+		"agent":             func(value *confirmationRuntimeIdentity) { value.AgentID += "-changed" },
+		"artifact":          func(value *confirmationRuntimeIdentity) { value.ArtifactSHA256 = strings.Repeat("c", 64) },
+		"profile":           func(value *confirmationRuntimeIdentity) { value.ProfileChecksum = strings.Repeat("d", 64) },
+		"settings":          func(value *confirmationRuntimeIdentity) { value.SettingsChecksum = strings.Repeat("e", 64) },
+		"settings revision": func(value *confirmationRuntimeIdentity) { value.SettingsRevision++ },
+		"generation":        func(value *confirmationRuntimeIdentity) { value.RetestGeneration++ },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := identity
+			mutate(&changed)
+			changedLongMem, changedSelection, changedProjection, changedErr :=
+				deriveConfirmationRuntimeMaterial(profile, changed)
+			if name == "profile" {
+				if changedErr == nil {
+					t.Fatal("profile checksum drift was accepted")
+				}
+				return
+			}
+			if changedErr != nil {
+				t.Fatal(changedErr)
+			}
+			if bytes.Equal(longMem, changedLongMem) || bytes.Equal(selection, changedSelection) ||
+				bytes.Equal(projection, changedProjection) {
+				t.Fatal("changed signed lease input did not move every runtime domain")
+			}
+		})
+	}
+	retry := identity
+	retry.TicketID = "ticket-retry"
+	retry.SlotID = "slot-retry"
+	retry.InferenceSessionID = "session-retry"
+	retry.Deadline = time.Now().Add(time.Hour)
+	retryLongMem, retrySelection, retryProjection, err := deriveConfirmationRuntimeMaterial(profile, retry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(longMem, retryLongMem) || !bytes.Equal(selection, retrySelection) ||
+		!bytes.Equal(projection, retryProjection) {
+		t.Fatal("transport-only confirmation retry changed stable runtime material")
 	}
 }
 

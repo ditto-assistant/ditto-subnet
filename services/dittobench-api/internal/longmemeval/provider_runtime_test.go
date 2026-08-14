@@ -21,16 +21,16 @@ import (
 
 type recordingAuthorizer struct {
 	mu         sync.Mutex
-	references []SecretManagerReference
+	lanes      []string
 	requests   []*http.Request
 	credential string
 	err        error
 }
 
-func (a *recordingAuthorizer) Authorize(_ context.Context, reference SecretManagerReference, request *http.Request) error {
+func (a *recordingAuthorizer) Authorize(_ context.Context, lane string, request *http.Request) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.references = append(a.references, reference)
+	a.lanes = append(a.lanes, lane)
 	a.requests = append(a.requests, request)
 	if a.err != nil {
 		return a.err
@@ -39,10 +39,10 @@ func (a *recordingAuthorizer) Authorize(_ context.Context, reference SecretManag
 	return nil
 }
 
-func (a *recordingAuthorizer) snapshot() []SecretManagerReference {
+func (a *recordingAuthorizer) snapshot() []string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return append([]SecretManagerReference(nil), a.references...)
+	return append([]string(nil), a.lanes...)
 }
 
 func (a *recordingAuthorizer) requestSnapshot() []*http.Request {
@@ -116,14 +116,12 @@ func runtimeProviderConfig(upstream *runtimeUpstream, authorizer RequestAuthoriz
 			{
 				Lane: ReaderLane, UpstreamURL: upstream.server.URL + "/v1/chat/completions",
 				RouteProvider: "openai", ReceiptProvider: "OpenAI",
-				CredentialReference: SecretManagerReference{ProjectID: "ditto-prod", SecretID: "openrouter-reader", Version: "7"},
-				RequestTimeout:      time.Second,
+				RequestTimeout: time.Second,
 			},
 			{
 				Lane: JudgeLane, UpstreamURL: upstream.server.URL + "/v1/chat/completions",
 				RouteProvider: "openai", ReceiptProvider: "OpenAI",
-				CredentialReference: SecretManagerReference{ProjectID: "ditto-prod", SecretID: "openrouter-judge", Version: "11"},
-				RequestTimeout:      time.Second,
+				RequestTimeout: time.Second,
 			},
 		},
 	}
@@ -223,8 +221,8 @@ func TestReaderRelayPinsFrozenIdentityAndRecordsAuthoritativeReceipt(t *testing.
 		t.Fatalf("trusted authorization boundary failed: %q", header.Get("Authorization"))
 	}
 	refs := authorizer.snapshot()
-	if len(refs) != 1 || refs[0].SecretID != "openrouter-reader" || refs[0].Version != "7" {
-		t.Fatalf("credential references=%#v", refs)
+	if len(refs) != 1 || refs[0] != ReaderLane {
+		t.Fatalf("authorized lanes=%#v", refs)
 	}
 	authorizedRequests := authorizer.requestSnapshot()
 	if len(authorizedRequests) != 1 || authorizedRequests[0].Header.Get("Authorization") != "" {
@@ -350,9 +348,6 @@ func TestProviderSessionConstructorFailsClosed(t *testing.T) {
 		"empty route":            func(_ *Profile, c *ProviderRuntimeConfig) { c.Lanes[0].RouteProvider = "" },
 		"header route":           func(_ *Profile, c *ProviderRuntimeConfig) { c.Lanes[0].RouteProvider = "openai\r\nX-Evil: yes" },
 		"zero timeout":           func(_ *Profile, c *ProviderRuntimeConfig) { c.Lanes[0].RequestTimeout = 0 },
-		"empty secret project":   func(_ *Profile, c *ProviderRuntimeConfig) { c.Lanes[0].CredentialReference.ProjectID = "" },
-		"empty secret name":      func(_ *Profile, c *ProviderRuntimeConfig) { c.Lanes[0].CredentialReference.SecretID = "" },
-		"empty secret version":   func(_ *Profile, c *ProviderRuntimeConfig) { c.Lanes[0].CredentialReference.Version = "" },
 		"URL credential": func(_ *Profile, c *ProviderRuntimeConfig) {
 			c.Lanes[0].UpstreamURL = "https://user:pass@openrouter.ai/api/v1/chat/completions"
 		},
@@ -670,7 +665,7 @@ func TestOfficialJudgePreservesPinnedPromptAndRouting(t *testing.T) {
 		t.Fatalf("official prompt=%q", message["content"])
 	}
 	refs := authorizer.snapshot()
-	if len(refs) != 1 || refs[0].SecretID != "openrouter-judge" || header.Get("Authorization") != "Bearer "+authorizer.credential {
+	if len(refs) != 1 || refs[0] != JudgeLane || header.Get("Authorization") != "Bearer "+authorizer.credential {
 		t.Fatalf("judge authorization refs=%#v header=%q", refs, header.Get("Authorization"))
 	}
 	judge := evidenceByLane(t, session)[JudgeLane]

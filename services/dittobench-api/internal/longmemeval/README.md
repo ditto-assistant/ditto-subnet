@@ -122,23 +122,17 @@ temperature, and output cap from LongMemEval revision
 answers and question types remain inside the trusted judge and never cross the
 harness reader route.
 
-Provider credentials are not accepted in execution profiles, environment
-variables, CLI flags, or job payloads. `GCPSecretManagerAuthorizer` takes a
-server-owned, numeric-version `SecretManagerReference`, obtains a workload identity token
-from the GCE metadata service, validates the exact Secret Manager resource and
-CRC32C, and applies the decoded value directly to the outbound request. The
-outbound authorization header necessarily holds the value until that request's
-transport completes; the authorizer and runtime configuration retain no copy.
-It does not cache the provider credential, follow redirects, return upstream
-bodies, or serialize the reference in runtime configuration. Tests use
-loopback fake servers only; no test reads a real secret.
+Provider credentials, cloud identities, and cloud secret references are not
+accepted in execution profiles, environment variables, CLI flags, job payloads,
+or scorer installation files. The validator signs its Platform lease. Platform
+then issues three short-lived, ticket-scoped lane capabilities; the broker
+exchanges the matching lane capability for each outbound reader, judge, or
+embedding request and removes the authorization header after transport.
 
-The same implementation satisfies `SecretBytesResolver` for non-provider
-confirmation keys such as the LongMem projection key and ablation selection or
-projection keys. `Resolve` accepts only an immutable numeric-version reference,
-returns a fresh caller-owned byte slice, and masks reference, transport,
-resource-identity, payload, and CRC failures behind one non-sensitive error.
-Callers must `defer ZeroSecretBytes(value)` immediately after resolution, copy
-only into runtime-owned ephemeral buffers, and zero those buffers during
-runtime cleanup. Plaintext keys do not belong in environment variables,
-execution profiles, job payloads, readiness output, or logs.
+LongMem projection and ablation selection/projection material grants no access
+to any service. The scorer derives domain-separated 32-byte values from the
+stable signed bundle identity (bundle, agent, artifact, profile, settings, and
+retest generation), and zeroes those runtime buffers during cleanup. Transport
+retry changes to the ticket, slot, session, or deadline do not reshuffle the
+selected population. No key file, GCP metadata call, Secret Manager client,
+provider API key, or durable credential is present on a validator.

@@ -207,8 +207,57 @@ type confirmationRuntimeIdentity struct {
 	SlotID             string
 	InferenceSessionID string
 	ArtifactSHA256     string
+	ProfileChecksum    string
+	SettingsChecksum   string
+	SettingsRevision   int
+	RetestGeneration   int
 	Deadline           time.Time
 	Source             sandbox.Source
+}
+
+type confirmationRuntimeDerivationInput struct {
+	Revision         string `json:"revision"`
+	BundleID         string `json:"bundle_id"`
+	AgentID          string `json:"agent_id"`
+	ArtifactSHA256   string `json:"artifact_sha256"`
+	ProfileChecksum  string `json:"profile_checksum"`
+	SettingsChecksum string `json:"settings_checksum"`
+	SettingsRevision int    `json:"settings_revision"`
+	RetestGeneration int    `json:"retest_generation"`
+}
+
+func deriveConfirmationRuntimeMaterial(
+	profile confirmationExecutionProfileWire,
+	identity confirmationRuntimeIdentity,
+) ([]byte, []byte, []byte, error) {
+	if identity.ProfileChecksum != profile.Checksum ||
+		!canonicalConfirmationSHA256(identity.ArtifactSHA256) ||
+		!canonicalConfirmationSHA256(identity.ProfileChecksum) ||
+		!canonicalConfirmationSHA256(identity.SettingsChecksum) ||
+		identity.BundleID == "" || identity.TicketID == "" || identity.AgentID == "" ||
+		identity.SettingsRevision < 1 || identity.RetestGeneration < 0 {
+		return nil, nil, nil, errors.New("confirmation signed lease derivation input is invalid")
+	}
+	payload, err := json.Marshal(confirmationRuntimeDerivationInput{
+		Revision: "confirmation-signed-lease-sha256-v1", BundleID: identity.BundleID,
+		AgentID: identity.AgentID, ArtifactSHA256: identity.ArtifactSHA256,
+		ProfileChecksum: identity.ProfileChecksum, SettingsChecksum: identity.SettingsChecksum,
+		SettingsRevision: identity.SettingsRevision, RetestGeneration: identity.RetestGeneration,
+	})
+	if err != nil {
+		return nil, nil, nil, errors.New("encode confirmation signed lease derivation input")
+	}
+	derive := func(domain string) []byte {
+		digest := sha256.Sum256(append(append([]byte("ditto-confirmation-runtime-v1\x00"+domain+"\x00"), payload...), '\n'))
+		return append([]byte(nil), digest[:]...)
+	}
+	return derive("longmem-projection"), derive("ablation-selection"), derive("ablation-projection"), nil
+}
+
+func zeroConfirmationBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
+	}
 }
 
 // confirmationRuntimeFactory is the only integration seam. Its production
@@ -245,11 +294,6 @@ func (runtime *confirmationRuntime) validate(profile confirmationExecutionProfil
 	if len(runtime.LongMemProjectionKey) < 32 || len(runtime.AblationSelectionKey) < 32 ||
 		len(runtime.AblationProjectionKey) < 32 {
 		return errors.New("confirmation runtime keys are incomplete")
-	}
-	if digestBytes(runtime.LongMemProjectionKey) != profile.LongMemProjectionKeySHA256 ||
-		digestBytes(runtime.AblationSelectionKey) != profile.AblationSelectionKeySHA256 ||
-		digestBytes(runtime.AblationProjectionKey) != profile.AblationProjectionKeySHA256 {
-		return errors.New("confirmation runtime keys do not match the installed profile")
 	}
 	if runtime.AblationPopulation.BenchVersion != confirmationBenchVersion || !runtime.AblationPopulation.Confirmation {
 		return errors.New("confirmation ablation population is not a v9 confirmation population")
@@ -342,7 +386,9 @@ func (executor *trustedConfirmationExecutor) Execute(
 	identity := confirmationRuntimeIdentity{
 		BundleID: request.BundleID, TicketID: request.TicketID, AgentID: request.AgentID, SlotID: request.SlotID,
 		InferenceSessionID: request.InferenceSessionID,
-		ArtifactSHA256:     request.ArtifactSHA256, Deadline: request.Deadline,
+		ArtifactSHA256:     request.ArtifactSHA256, ProfileChecksum: request.ProfileChecksum,
+		SettingsChecksum: request.SettingsChecksum, SettingsRevision: request.SettingsRevision,
+		RetestGeneration: request.RetestGeneration, Deadline: request.Deadline,
 		Source: sandbox.Source{
 			TarballURL: request.ArtifactURL, TarballSHA256: request.ArtifactSHA256,
 			ScreenedImageURL: request.ScreenedImageURL, ScreenedImageSHA256: request.ScreenedImageSHA256,
@@ -649,8 +695,10 @@ func (p confirmationExecutionProfileWire) validate() error {
 	if p.LongMemSeedBatchPairs <= 0 {
 		return errors.New("confirmation LongMem seed batch size must be positive")
 	}
-	if !canonicalConfirmationSHA256(p.LongMemProjectionKeySHA256) {
-		return errors.New("confirmation LongMem projection key checksum is invalid")
+	if !canonicalConfirmationSHA256(p.LongMemProjectionKeySHA256) ||
+		!canonicalConfirmationSHA256(p.AblationSelectionKeySHA256) ||
+		!canonicalConfirmationSHA256(p.AblationProjectionKeySHA256) {
+		return errors.New("confirmation runtime derivation salts are invalid")
 	}
 	if p.InferenceAblation.Intervention != string(ablation.InterventionInference) ||
 		p.EmbeddingAblation.Intervention != string(ablation.InterventionEmbedding) ||

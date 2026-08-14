@@ -60,7 +60,8 @@ tempt the heavy coding harness must still route to `run_code`, not
 
 The frozen reference model Qwen3-32B (`qwen/qwen3-32b`, the locked harness model)
 was run as a full-context honest reader against real generated v5 datasets via
-`cmd/v5onmodel` (validator OpenRouter key from gcloud). Two seeds: overall
+`cmd/v5onmodel` (historical validator-side route; current scorer provider access
+uses Platform-issued ticket capabilities). Two seeds: overall
 model-mean 0.68–0.77 vs grep-parser 0.48 (gap +0.20 to +0.29), with the
 conversational classes at the intended +1.00 gap (chitchat, declarative echo,
 declarative write). See `docs/BASELINES-v5-phaseA.md`. This confirms v5 winnability

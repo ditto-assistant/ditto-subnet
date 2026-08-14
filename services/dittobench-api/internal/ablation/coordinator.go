@@ -276,10 +276,8 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if config.FrozenProfile.CoordinatorPolicy != policy {
 		return nil, fmt.Errorf("coordinator config does not match frozen ablation profile")
 	}
-	if config.FrozenProfile.SelectionKeySHA256 != bytesSHA256(config.SelectionKey) ||
-		config.FrozenProfile.ProjectionKeySHA256 != bytesSHA256(config.ProjectionKey) {
-		return nil, fmt.Errorf("coordinator key config does not match frozen ablation profile")
-	}
+	// The frozen key digests are public domain salts retained for wire
+	// compatibility. The scorer derives per-bundle values from the signed lease.
 	selectionKey := append([]byte(nil), config.SelectionKey...)
 	projectionKey := append([]byte(nil), config.ProjectionKey...)
 	profile := config.FrozenProfile

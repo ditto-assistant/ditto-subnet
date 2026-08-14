@@ -285,7 +285,8 @@ func TestDecodeConfirmationAblationDatasetRejectsDuplicateAndIncompleteCases(t *
 func TestValidateScreenedConfirmationSourceRejectsSourceBuildFallback(t *testing.T) {
 	valid := confirmationRuntimeIdentity{
 		BundleID: "bundle", TicketID: "ticket", AgentID: "agent", SlotID: "slot-0",
-		ArtifactSHA256: strings.Repeat("a", 64), Deadline: time.Now().Add(time.Hour),
+		ArtifactSHA256: strings.Repeat("a", 64), ProfileChecksum: strings.Repeat("c", 64),
+		SettingsChecksum: strings.Repeat("d", 64), SettingsRevision: 1, Deadline: time.Now().Add(time.Hour),
 		Source: sandbox.Source{
 			TarballURL: "https://platform.example/artifact", TarballSHA256: strings.Repeat("a", 64),
 			ScreenedImageURL: "https://platform.example/image", ScreenedImageSHA256: strings.Repeat("b", 64),
@@ -306,35 +307,6 @@ func TestValidateScreenedConfirmationSourceRejectsSourceBuildFallback(t *testing
 	}
 }
 
-type fakeConfirmationSecretResolver struct{ value []byte }
-
-func (resolver *fakeConfirmationSecretResolver) Resolve(
-	context.Context,
-	longmemeval.SecretManagerReference,
-) ([]byte, error) {
-	resolver.value = []byte("0123456789abcdef0123456789abcdef")
-	return resolver.value, nil
-}
-
-func TestResolveConfirmationSecretCopiesAndZeroesResolverBuffer(t *testing.T) {
-	resolver := &fakeConfirmationSecretResolver{}
-	resolved, err := resolveConfirmationSecret(context.Background(), resolver, longmemeval.SecretManagerReference{
-		ProjectID: "ditto-project", SecretID: "projection-key", Version: "1",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(resolved) != "0123456789abcdef0123456789abcdef" {
-		t.Fatal("resolved runtime copy changed")
-	}
-	for _, value := range resolver.value {
-		if value != 0 {
-			t.Fatal("resolver-owned secret buffer was not zeroed")
-		}
-	}
-	longmemeval.ZeroSecretBytes(resolved)
-}
-
 func TestConfirmationActivationIsExplicitAndContentAddressed(t *testing.T) {
 	getenv := func(string) string { return "" }
 	if executor, err := confirmationExecutorFromEnvironment(getenv, nil, nil); err != nil || executor != nil {
@@ -350,7 +322,7 @@ func TestConfirmationActivationIsExplicitAndContentAddressed(t *testing.T) {
 	}
 	directory := t.TempDir()
 	path := filepath.Join(directory, "confirmation.json")
-	raw := []byte(`{"schema_version":1,"execution_profile":{},"calibration_manifest_sha256":"` + strings.Repeat("a", 64) + `","calibration_manifest_path":"/calibration.json","longmem_dataset_path":"/dataset","ablation_dataset_path":"/ablation","longmem_projection_key_path":"/keys/longmem","ablation_selection_key_path":"/keys/selection","ablation_projection_key_path":"/keys/projection","sandbox_health_timeout_ms":1000}`)
+	raw := []byte(`{"schema_version":1,"execution_profile":{},"calibration_manifest_sha256":"` + strings.Repeat("a", 64) + `","calibration_manifest_path":"/calibration.json","longmem_dataset_path":"/dataset","ablation_dataset_path":"/ablation","sandbox_health_timeout_ms":1000}`)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -360,95 +332,24 @@ func TestConfirmationActivationIsExplicitAndContentAddressed(t *testing.T) {
 	if installation, err := readConfirmationActivationFile(path, digestBytes(raw)); err != nil || installation.SchemaVersion != 1 {
 		t.Fatalf("content-addressed installation = %+v, %v", installation, err)
 	}
+	legacySecretMount := bytes.Replace(
+		raw,
+		[]byte(`"sandbox_health_timeout_ms":1000`),
+		[]byte(`"longmem_projection_key_path":"/run/secrets/longmem","sandbox_health_timeout_ms":1000`),
+		1,
+	)
+	if err := os.WriteFile(path, legacySecretMount, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readConfirmationActivationFile(path, digestBytes(legacySecretMount)); err == nil {
+		t.Fatal("legacy confirmation secret mount was accepted")
+	}
 	hostile := bytes.Replace(raw, []byte(`"schema_version":1`), []byte(`"schema_version":1,"schema_version":1`), 1)
 	if err := os.WriteFile(path, hostile, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readConfirmationActivationFile(path, digestBytes(hostile)); err == nil {
 		t.Fatal("duplicate installation identity accepted")
-	}
-}
-
-func TestConfirmationFileKeyResolverIsContentAddressedAndDetectsDrift(t *testing.T) {
-	directory := t.TempDir()
-	values := [][]byte{
-		bytes.Repeat([]byte{0x11}, 32),
-		bytes.Repeat([]byte{0x22}, 32),
-		bytes.Repeat([]byte{0x33}, 32),
-	}
-	paths := make([]string, len(values))
-	for index, value := range values {
-		paths[index] = filepath.Join(directory, fmt.Sprintf("key-%d", index))
-		if err := os.WriteFile(paths[index], value, 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	profile := confirmationExecutionProfileWire{
-		LongMemProjectionKeySHA256:  digestBytes(values[0]),
-		AblationSelectionKeySHA256:  digestBytes(values[1]),
-		AblationProjectionKeySHA256: digestBytes(values[2]),
-	}
-	installation := confirmationActivationFile{
-		LongMemProjectionKeyPath: paths[0], AblationSelectionKeyPath: paths[1], AblationProjectionKeyPath: paths[2],
-	}
-	resolver, references, err := newConfirmationFileKeyResolver(installation, profile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index, reference := range references {
-		resolved, err := resolver.Resolve(context.Background(), reference)
-		if err != nil || !bytes.Equal(resolved, values[index]) {
-			t.Fatalf("resolved key %d = %x, %v", index, resolved, err)
-		}
-		longmemeval.ZeroSecretBytes(resolved)
-	}
-	if err := os.WriteFile(paths[1], bytes.Repeat([]byte{0x44}, 32), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if resolved, err := resolver.Resolve(context.Background(), references[1]); err == nil || resolved != nil {
-		t.Fatal("post-installation key drift was accepted")
-	}
-	if resolved, err := resolver.Resolve(context.Background(), confirmationFileKeyReference("unknown")); err == nil || resolved != nil {
-		t.Fatal("unknown local key reference was accepted")
-	}
-}
-
-func TestConfirmationFileKeyResolverRejectsUnsafeOrMismatchedFiles(t *testing.T) {
-	directory := t.TempDir()
-	validPath := filepath.Join(directory, "valid")
-	value := bytes.Repeat([]byte{0x55}, 32)
-	if err := os.WriteFile(validPath, value, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	profile := confirmationExecutionProfileWire{
-		LongMemProjectionKeySHA256:  digestBytes(value),
-		AblationSelectionKeySHA256:  digestBytes(value),
-		AblationProjectionKeySHA256: digestBytes(value),
-	}
-	for name, path := range map[string]string{
-		"relative":     "relative-key",
-		"missing":      filepath.Join(directory, "missing"),
-		"undersized":   filepath.Join(directory, "undersized"),
-		"wrong digest": filepath.Join(directory, "wrong-digest"),
-	} {
-		t.Run(name, func(t *testing.T) {
-			if name == "undersized" {
-				if err := os.WriteFile(path, []byte("short"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			if name == "wrong digest" {
-				if err := os.WriteFile(path, bytes.Repeat([]byte{0x66}, 32), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			}
-			installation := confirmationActivationFile{
-				LongMemProjectionKeyPath: path, AblationSelectionKeyPath: validPath, AblationProjectionKeyPath: validPath,
-			}
-			if resolver, _, err := newConfirmationFileKeyResolver(installation, profile); err == nil || resolver != nil {
-				t.Fatal("unsafe local key installation was accepted")
-			}
-		})
 	}
 }
 
@@ -491,47 +392,11 @@ func TestVerifyImmutableConfirmationFileRejectsUnsafeIdentityAndDrift(t *testing
 	}
 }
 
-type recordingConfirmationResolver struct {
-	mu       sync.Mutex
-	values   map[string][]byte
-	failAt   int
-	calls    int
-	returned [][]byte
-}
-
-func (resolver *recordingConfirmationResolver) Resolve(
-	_ context.Context,
-	reference longmemeval.SecretManagerReference,
-) ([]byte, error) {
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	resolver.calls++
-	if resolver.failAt > 0 && resolver.calls == resolver.failAt {
-		return nil, fmt.Errorf("secret unavailable")
-	}
-	value := append([]byte(nil), resolver.values[reference.SecretID]...)
-	resolver.returned = append(resolver.returned, value)
-	return value, nil
-}
-
-func (resolver *recordingConfirmationResolver) allReturnedZero() bool {
-	resolver.mu.Lock()
-	defer resolver.mu.Unlock()
-	for _, value := range resolver.returned {
-		for _, octet := range value {
-			if octet != 0 {
-				return false
-			}
-		}
-	}
-	return true
-}
-
 type noOpConfirmationAuthorizer struct{}
 
 func (noOpConfirmationAuthorizer) Authorize(
 	context.Context,
-	longmemeval.SecretManagerReference,
+	string,
 	*http.Request,
 ) error {
 	return nil
@@ -540,7 +405,6 @@ func (noOpConfirmationAuthorizer) Authorize(
 type confirmationFactoryFixture struct {
 	factory         *screenedConfirmationRuntimeFactory
 	sandbox         *fakeConfirmationSandbox
-	resolver        *recordingConfirmationResolver
 	identity        confirmationRuntimeIdentity
 	longMemPath     string
 	ablationPath    string
@@ -670,12 +534,6 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 		embeddingCalls: make(map[chan struct{}]context.CancelFunc), cancels: make(map[string]context.CancelFunc),
 	}
 	sandboxBackend := &fakeConfirmationSandbox{harnessURL: harness.URL}
-	resolver := &recordingConfirmationResolver{values: map[string][]byte{
-		"longmem-key": longMemKey, "selection-key": selectionKey, "projection-key": projectionKey,
-	}}
-	reference := func(secret string) longmemeval.SecretManagerReference {
-		return confirmationFileKeyReference(secret)
-	}
 	longMemFile, _, err := verifyConfirmationFile(longMemPath, 1024)
 	if err != nil {
 		t.Fatal(err)
@@ -694,14 +552,13 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	}
 	factory := &screenedConfirmationRuntimeFactory{
 		profile: profile, sandbox: sandboxBackend, broker: broker, calibrationManifest: calibrationFile,
-		longMemDataset: longMemFile, longMemProjectionKeyReference: reference("longmem-key"),
-		ablationFile: ablationFile, ablationDataset: dataset,
-		ablationSelectionKeyReference: reference("selection-key"), ablationProjectionKeyReference: reference("projection-key"),
-		secretResolver: resolver, healthTimeout: 5 * time.Millisecond,
+		longMemDataset: longMemFile, ablationFile: ablationFile, ablationDataset: dataset,
+		healthTimeout: 5 * time.Millisecond,
 	}
 	identity := confirmationRuntimeIdentity{
 		BundleID: "bundle", TicketID: "ticket", AgentID: "agent", SlotID: "slot-0",
 		InferenceSessionID: sessionID, Deadline: deadline, ArtifactSHA256: strings.Repeat("a", 64),
+		ProfileChecksum: profile.Checksum, SettingsChecksum: strings.Repeat("d", 64), SettingsRevision: 1,
 		Source: sandbox.Source{
 			TarballURL: "https://platform.example/artifact", TarballSHA256: strings.Repeat("a", 64),
 			ScreenedImageURL: "https://platform.example/image", ScreenedImageSHA256: strings.Repeat("b", 64),
@@ -709,7 +566,7 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 		},
 	}
 	return confirmationFactoryFixture{
-		factory: factory, sandbox: sandboxBackend, resolver: resolver,
+		factory: factory, sandbox: sandboxBackend,
 		identity:    identity,
 		longMemPath: longMemPath, ablationPath: ablationPath, calibrationPath: calibrationPath,
 		harness: harness, embedding: embedding, provider: provider,
@@ -725,8 +582,8 @@ func TestConfirmationFactoryAcquireAndCloseOwnEveryResource(t *testing.T) {
 	if runtime, err := fixture.factory.Acquire(context.Background(), fixture.identity); err == nil || runtime != nil {
 		t.Fatal("production acquisition accepted synthetic dataset")
 	}
-	if fixture.resolver.calls != 0 || fixture.sandbox.builds != 0 {
-		t.Fatal("production acquisition reached secrets or sandbox before official validation")
+	if fixture.sandbox.builds != 0 {
+		t.Fatal("production acquisition reached sandbox before official validation")
 	}
 	runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity)
 	if err != nil {
@@ -755,32 +612,9 @@ func TestConfirmationFactoryAcquireAndCloseOwnEveryResource(t *testing.T) {
 			}
 		}
 	}
-	if !fixture.resolver.allReturnedZero() {
-		t.Fatal("resolver buffers survived acquisition")
-	}
 }
 
 func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *testing.T) {
-	t.Run("wrong key digest", func(t *testing.T) {
-		fixture := newConfirmationFactoryFixture(t, true)
-		fixture.resolver.values["longmem-key"] = bytes.Repeat([]byte{0x99}, 32)
-		if runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity); err == nil || runtime != nil {
-			t.Fatal("wrong projection key accepted")
-		}
-		if fixture.sandbox.builds != 0 || fixture.sandbox.runs != 0 || !fixture.resolver.allReturnedZero() {
-			t.Fatal("key mismatch spent sandbox work or retained key bytes")
-		}
-	})
-	t.Run("secret unavailable", func(t *testing.T) {
-		fixture := newConfirmationFactoryFixture(t, true)
-		fixture.resolver.failAt = 2
-		if runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity); err == nil || runtime != nil {
-			t.Fatal("missing secret accepted")
-		}
-		if fixture.sandbox.builds != 0 || !fixture.resolver.allReturnedZero() {
-			t.Fatal("secret failure spent sandbox work or retained key bytes")
-		}
-	})
 	for name, configure := range map[string]func(*confirmationFactoryFixture){
 		"sandbox unavailable": func(fixture *confirmationFactoryFixture) { fixture.sandbox.availableErr = fmt.Errorf("unavailable") },
 		"build failure":       func(fixture *confirmationFactoryFixture) { fixture.sandbox.buildErr = fmt.Errorf("build") },
@@ -796,12 +630,12 @@ func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *te
 			if name == "run failure" {
 				wantSessions = 0
 			}
-			if !fixture.resolver.allReturnedZero() || len(fixture.factory.broker.sessions) != wantSessions {
-				t.Fatalf("partial lifecycle retained keys or unexpected broker session count: got %d want %d",
+			if len(fixture.factory.broker.sessions) != wantSessions {
+				t.Fatalf("partial lifecycle retained unexpected broker session count: got %d want %d",
 					len(fixture.factory.broker.sessions), wantSessions)
 			}
-			if name == "sandbox unavailable" && (fixture.resolver.calls != 0 || fixture.sandbox.builds != 0) {
-				t.Fatal("sandbox availability failure reached Secret Manager or build")
+			if name == "sandbox unavailable" && fixture.sandbox.builds != 0 {
+				t.Fatal("sandbox availability failure reached build")
 			}
 			if name == "run failure" && fixture.sandbox.released != 1 {
 				t.Fatalf("run failure releases = %d", fixture.sandbox.released)
@@ -818,7 +652,7 @@ func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *te
 		if runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity); err == nil || runtime != nil {
 			t.Fatal("missing broker binding accepted")
 		}
-		if fixture.sandbox.stops != 1 || fixture.sandbox.released != 1 || !fixture.resolver.allReturnedZero() {
+		if fixture.sandbox.stops != 1 || fixture.sandbox.released != 1 {
 			t.Fatal("bind failure cleanup incomplete")
 		}
 	})
@@ -827,8 +661,7 @@ func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *te
 		if runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity); err == nil || runtime != nil {
 			t.Fatal("unhealthy harness accepted")
 		}
-		if fixture.sandbox.stops != 1 || fixture.sandbox.released != 1 || len(fixture.factory.broker.sessions) != 0 ||
-			!fixture.resolver.allReturnedZero() {
+		if fixture.sandbox.stops != 1 || fixture.sandbox.released != 1 || len(fixture.factory.broker.sessions) != 0 {
 			t.Fatal("health failure cleanup incomplete")
 		}
 	})
@@ -854,9 +687,6 @@ func TestConfirmationFactoryRejectsFileAndProviderDriftBeforeSecrets(t *testing.
 				t.Fatal(err)
 			}
 		},
-		"key reference": func(_ *testing.T, fixture *confirmationFactoryFixture) {
-			fixture.factory.longMemProjectionKeyReference.ProjectID = "gcp-project"
-		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newConfirmationFactoryFixture(t, true)
@@ -864,22 +694,18 @@ func TestConfirmationFactoryRejectsFileAndProviderDriftBeforeSecrets(t *testing.
 			if err := fixture.factory.ValidateInstallation(fixture.factory.profile); err == nil {
 				t.Fatal("installation drift accepted")
 			}
-			if fixture.resolver.calls != 0 || fixture.sandbox.builds != 0 {
-				t.Fatal("installation drift reached secrets or sandbox")
+			if fixture.sandbox.builds != 0 {
+				t.Fatal("installation drift reached sandbox")
 			}
 		})
 	}
 }
 
-func TestProductionFactoryRejectsNonProductionIsolationBeforeDatasetOrSecrets(t *testing.T) {
-	resolver := &recordingConfirmationResolver{}
+func TestProductionFactoryRejectsNonProductionIsolationBeforeDataset(t *testing.T) {
 	if factory, err := newScreenedConfirmationRuntimeFactory(screenedConfirmationRuntimeFactoryConfig{
-		Sandbox: &fakeConfirmationSandbox{}, Broker: newInferenceBroker(1), SecretResolver: resolver,
+		Sandbox: &fakeConfirmationSandbox{}, Broker: newInferenceBroker(1),
 	}); err == nil || factory != nil {
 		t.Fatal("non-LocalDocker confirmation sandbox accepted")
-	}
-	if resolver.calls != 0 {
-		t.Fatal("isolation rejection reached Secret Manager")
 	}
 	for name, mutate := range map[string]func(*sandbox.LocalDocker){
 		"not hardened": func(runtime *sandbox.LocalDocker) { runtime.Harden = false },
@@ -893,7 +719,7 @@ func TestProductionFactoryRejectsNonProductionIsolationBeforeDatasetOrSecrets(t 
 			runtime.EgressNetwork, runtime.EgressProxy = "confirmation-egress", "http://proxy.invalid:8080"
 			mutate(runtime)
 			if factory, err := newScreenedConfirmationRuntimeFactory(screenedConfirmationRuntimeFactoryConfig{
-				Sandbox: runtime, Broker: newInferenceBroker(1), SecretResolver: resolver,
+				Sandbox: runtime, Broker: newInferenceBroker(1),
 			}); err == nil || factory != nil {
 				t.Fatal("incomplete production isolation accepted")
 			}

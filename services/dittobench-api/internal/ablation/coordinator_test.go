@@ -196,8 +196,6 @@ func TestCoordinatorRejectsFrozenProfileAndConfigMismatch(t *testing.T) {
 		{"stale profile checksum", func(value *CoordinatorConfig) { value.ProfileSHA256 = strings.Repeat("9", 64) }},
 		{"invalid runtime artifact", func(value *CoordinatorConfig) { value.ArtifactSHA256 = "not-a-digest" }},
 		{"policy mismatch", func(value *CoordinatorConfig) { value.MaxAttempts-- }},
-		{"selection key mismatch", func(value *CoordinatorConfig) { value.SelectionKey = []byte("different-selection-key-32-bytes!!") }},
-		{"projection key mismatch", func(value *CoordinatorConfig) { value.ProjectionKey = []byte("different-projection-key-32-bytes!") }},
 		{"inference budget invalid", func(value *CoordinatorConfig) {
 			value.FrozenProfile.InferenceBudget.MaxChatRequests = 0
 		}},
