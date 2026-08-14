@@ -573,6 +573,14 @@ def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> 
     )
     assert "build/stack-release-amd64/compose.yml" in steps[smoke_index]["run"]
 
+    runtime_script = (
+        RELEASE_WORKFLOW_PATH.parents[2]
+        / "scripts"
+        / "test-validator-stack-release-runtime.sh"
+    ).read_text()
+    assert "export VALIDATOR_STACK_DESCRIPTOR_REF=release-smoke" in runtime_script
+    assert "export VALIDATOR_HOTKEY=release-smoke" in runtime_script
+
 
 def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     """Concurrent release images use disjoint GitHub Actions cache scopes."""

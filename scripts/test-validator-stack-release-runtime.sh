@@ -12,6 +12,10 @@ cleanup() {
 trap cleanup EXIT
 
 export VALIDATOR_STACK_DESCRIPTOR_REF=release-smoke
+# Compose interpolates required variables for the whole generated model even
+# when this smoke boots only the sandbox and Ollama dependencies. Production
+# hosts replace this obvious fixture with their public validator hotkey.
+export VALIDATOR_HOTKEY=release-smoke
 
 # The release bundle uses pull_policy=never so production never substitutes a
 # floating tag. Pull the exact digest-bound images explicitly, then boot the

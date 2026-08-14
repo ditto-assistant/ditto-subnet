@@ -30,10 +30,12 @@ type PermitChecker interface {
 }
 
 // PylonClient talks to the Pylon HTTP API. It mirrors the Python
-// pylon_client URL construction:
+// pylon_client URL construction. Latest-block reads are chain-global, while
+// recent-neuron reads carry subnet and, in identity mode, identity context:
 //
-//	open access: GET {base}/api/v1/subnet/{netuid}/block/latest
-//	identity:    GET {base}/api/v1/identity/{name}/subnet/{netuid}/block/latest
+//	latest block:     GET {base}/api/v1/block/latest
+//	recent neurons:   GET {base}/api/v1/subnet/{netuid}/block/recent/neurons
+//	identity neurons: GET {base}/api/v1/identity/{name}/subnet/{netuid}/block/recent/neurons
 //
 // with the corresponding token as a Bearer Authorization header.
 type PylonClient struct {
@@ -65,10 +67,7 @@ func NewPylonClient(cfg config.ChainConfig) *PylonClient {
 }
 
 func (c *PylonClient) latestBlockURL() string {
-	if c.identityName != "" {
-		return fmt.Sprintf("%s/api/v1/identity/%s/subnet/%d/block/latest", c.baseURL, c.identityName, c.netuid)
-	}
-	return fmt.Sprintf("%s/api/v1/subnet/%d/block/latest", c.baseURL, c.netuid)
+	return c.baseURL + "/api/v1/block/latest"
 }
 
 func (c *PylonClient) recentNeuronsURL() string {
