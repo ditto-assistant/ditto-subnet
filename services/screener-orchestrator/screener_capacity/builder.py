@@ -623,10 +623,11 @@ def run_one_runtime_smoke(
         os.unlink(raw_path)
         archive = Path(raw_path)
         _download_runtime_archive(artifact, archive)
-        registry_token = _mint_access_token(settings.candidate_registry_service_account)
+        promotion_token = _mint_access_token(settings.registry_service_account)
         image_reference = _promote_runtime_archive(
-            archive=archive, destination=destination, access_token=registry_token
+            archive=archive, destination=destination, access_token=promotion_token
         )
+        pull_token = _mint_access_token(settings.candidate_registry_service_account)
         created = client.create_rental(
             name=f"ditto-runtime-{build_id.replace('-', '')[:14]}"[:32],
             image=image_reference,
@@ -639,7 +640,7 @@ def run_one_runtime_smoke(
             registry_auth={
                 "server": destination.split("/", 1)[0],
                 "username": "oauth2accesstoken",
-                "password": registry_token,
+                "password": pull_token,
             },
         )
         uid = str(created["uid"])

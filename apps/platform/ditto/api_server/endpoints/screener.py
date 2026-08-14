@@ -1344,17 +1344,23 @@ async def consume_submission_image_build(
         }:
             raise AgentNotScreenableError("remote build is not discardable")
         output_key = row.output_key
+        now = datetime.now(UTC)
+        if row.runtime_status in {"pending", "running"}:
+            row.runtime_status = "skipped"
+            row.runtime_error_code = (
+                "TARGON_RUNTIME_SKIPPED_BUILD_CANCELED"
+                if active
+                else "TARGON_RUNTIME_SKIPPED_BUILD_CONSUMED"
+            )
+            row.runtime_completed_at = now
+            row.updated_at = now
         if active:
             row.status = "canceled"
-            if row.runtime_status in {"pending", "running"}:
-                row.runtime_status = "skipped"
-                row.runtime_error_code = "TARGON_RUNTIME_SKIPPED_BUILD_CANCELED"
-                row.runtime_completed_at = datetime.now(UTC)
-            row.completed_at = datetime.now(UTC)
+            row.completed_at = now
             row.lease_expires_at = None
             row.job_token_hash = None
             row.job_token_expires_at = None
-            row.updated_at = datetime.now(UTC)
+            row.updated_at = now
     if await storage.object_exists(key=output_key):
         await storage.delete_object(key=output_key)
     async with session.begin():
@@ -2265,8 +2271,24 @@ async def mark_submission_source_review_cleanup_required(
             raise HTTPException(
                 status_code=409, detail="source-review cleanup fence is stale"
             )
-        row.error_code = "TARGON_SOURCE_REVIEW_CLEANUP_REQUIRED"
+        if row.status != "succeeded" and row.error_code is None:
+            row.error_code = "TARGON_SOURCE_REVIEW_CLEANUP_REQUIRED"
         row.updated_at = now
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment=payload.environment,
+                event_type="provider_cleanup_required",
+                provider="targon",
+                node_id=None,
+                detail=(
+                    "A suspended zero-replica source-review rental requires "
+                    "provider deletion retry."
+                ),
+                controller_epoch=payload.controller_epoch,
+                created_at=now,
+            )
+        )
 
 
 @router.get(

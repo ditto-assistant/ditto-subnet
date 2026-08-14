@@ -1,11 +1,13 @@
 ###############################################################################
 # Trusted monorepo image-build and hosted DittoBench release identities.
 #
-# The Targon rental gets only one 30-minute Artifact Registry access token for
-# ditto-image-builder. It never receives a GCP key, the controller identity, or
-# Secret Manager authority. GitHub's release fallback is a separate prod-env
-# WIF principal. The two public repositories are readable without credentials
-# so Targon can pull the reviewed Kaniko executor and released screener image.
+# The trusted controller impersonates ditto-image-builder only while promoting
+# a verified runtime archive. The Targon runtime rental gets a separate
+# 30-minute reader token scoped to the private candidate repository. It never
+# receives a registry writer, GCP key, controller identity, or Secret Manager
+# authority. GitHub's release fallback is a separate prod-env WIF principal.
+# The two public repositories are readable without credentials so Targon can
+# pull the reviewed Kaniko executor and released screener image.
 ###############################################################################
 
 resource "google_artifact_registry_repository" "public_builders" {
@@ -96,9 +98,30 @@ resource "google_artifact_registry_repository_iam_member" "image_builder_candida
   member     = "serviceAccount:${google_service_account.image_builder.email}"
 }
 
+resource "google_service_account" "screening_candidate_pull" {
+  project      = var.project
+  account_id   = "ditto-screening-candidate-pull"
+  display_name = "Ditto Screening Candidate Pull"
+}
+
+resource "google_artifact_registry_repository_iam_member" "screening_candidate_reader" {
+  project    = var.project
+  location   = var.region
+  repository = google_artifact_registry_repository.screening_candidates.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${google_service_account.screening_candidate_pull.email}"
+}
+
 resource "google_service_account_iam_member" "screener_controller_mint_builder_tokens" {
   count              = local.screener_capacity_controller_count
   service_account_id = google_service_account.image_builder.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
+}
+
+resource "google_service_account_iam_member" "screener_controller_mint_candidate_pull_tokens" {
+  count              = local.screener_capacity_controller_count
+  service_account_id = google_service_account.screening_candidate_pull.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
@@ -188,8 +211,13 @@ output "subnet_build_sa_email" {
 }
 
 output "image_builder_sa_email" {
-  description = "Identity impersonated for 30-minute Targon registry tokens."
+  description = "Trusted controller identity for registry promotion and release builds."
   value       = google_service_account.image_builder.email
+}
+
+output "screening_candidate_pull_sa_email" {
+  description = "Candidates-only reader identity impersonated for Targon runtime pull tokens."
+  value       = google_service_account.screening_candidate_pull.email
 }
 
 output "dittobench_deploy_sa_email" {

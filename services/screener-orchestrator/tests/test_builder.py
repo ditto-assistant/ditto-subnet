@@ -236,14 +236,25 @@ def test_runtime_smoke_launches_promoted_image_directly(monkeypatch) -> None:
         "screener_capacity.builder._download_runtime_archive",
         lambda _artifact, destination: destination.write_bytes(b"image"),
     )
+    minted_accounts: list[str] = []
+
+    def _mint_access_token(service_account: str) -> str:
+        minted_accounts.append(service_account)
+        return "registry-" + service_account + "-" + "x" * 120
+
     monkeypatch.setattr(
-        "screener_capacity.builder._mint_access_token",
-        lambda _service_account: "registry-" + "x" * 120,
+        "screener_capacity.builder._mint_access_token", _mint_access_token
     )
     image = "registry.example/candidates/miner@sha256:" + "d" * 64
+    promotion: dict[str, object] = {}
+
+    def _promote_runtime_archive(**values: object) -> str:
+        promotion.update(values)
+        return image
+
     monkeypatch.setattr(
         "screener_capacity.builder._promote_runtime_archive",
-        lambda **_values: image,
+        _promote_runtime_archive,
     )
 
     class _Health:
@@ -267,6 +278,11 @@ def test_runtime_smoke_launches_promoted_image_directly(monkeypatch) -> None:
     assert targon.created["ports"] == [
         {"port": 8080, "protocol": "TCP", "routing": "PROXIED"}
     ]
+    assert minted_accounts == ["builder@example.test", "candidate@example.test"]
+    assert promotion["access_token"] == ("registry-builder@example.test-" + "x" * 120)
+    assert targon.created["registry_auth"]["password"] == (
+        "registry-candidate@example.test-" + "x" * 120
+    )
     assert control.updates[-1][1]["status"] == "succeeded"
     assert control.updates[-1][1]["image_reference"] == image
 

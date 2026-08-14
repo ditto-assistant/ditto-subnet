@@ -752,6 +752,17 @@ class TestFederatedScreenerNodes:
         job = leased.json()["review"]
         assert job["review_id"] == review_id
         assert job["image_reference"].endswith("@sha256:" + "b" * 64)
+        running = await client.put(
+            f"/api/v1/screener/controller/submission-source-reviews/{review_id}",
+            headers=controller_headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "status": "running",
+                "provider_resource_id": "wrk-source-review",
+            },
+        )
+        assert running.status_code == 204, running.text
         job_headers = {"Authorization": f"Bearer {job['job_token']}"}
         source = await client.get(
             f"/api/v1/screener/submission-source-reviews/{review_id}/source",
@@ -772,6 +783,17 @@ class TestFederatedScreenerNodes:
             },
         )
         assert complete.status_code == 200, complete.text
+        cleanup = await client.post(
+            f"/api/v1/screener/controller/submission-source-reviews/{review_id}"
+            "/cleanup-required",
+            headers=controller_headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "provider_resource_id": "wrk-source-review",
+            },
+        )
+        assert cleanup.status_code == 204, cleanup.text
         ready = await client.get(
             f"/api/v1/screener/agent/{agent_id}/submission-source-reviews/{review_id}",
             headers=_AUTH_HEADER,
@@ -783,6 +805,18 @@ class TestFederatedScreenerNodes:
             row = await session.get(SubmissionSourceReview, UUID(review_id))
             assert row is not None
             assert row.job_token_hash is None
+            assert row.status == "succeeded"
+            assert row.error_code is None
+            events = list(
+                await session.scalars(
+                    select(ScreenerCapacityEvent).where(
+                        ScreenerCapacityEvent.event_type == "provider_cleanup_required"
+                    )
+                )
+            )
+            assert len(events) == 1
+            assert events[0].provider == "targon"
+            assert "source-review" in events[0].detail
 
     async def test_submission_build_is_attempt_bound_and_fully_verified(
         self,
@@ -980,6 +1014,52 @@ class TestFederatedScreenerNodes:
         async with session_maker() as session:
             row = await session.get(SubmissionImageBuild, UUID(build_id))
             assert row is not None and row.status == "consumed"
+
+    async def test_consuming_succeeded_build_skips_pending_runtime(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        attempt_id = claim.json()["items"][0]["attempt_id"]
+        queued = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+            headers=_AUTH_HEADER,
+            json={"attempt_id": attempt_id},
+        )
+        assert queued.status_code == 200, queued.text
+        build_id = queued.json()["build_id"]
+        async with session_maker() as session, session.begin():
+            row = await session.get(SubmissionImageBuild, UUID(build_id))
+            assert row is not None
+            row.status = "succeeded"
+            row.output_sha256 = "12" * 32
+            row.output_size_bytes = 123
+            row.runtime_status = "pending"
+            row.completed_at = datetime.now(UTC)
+
+        consumed = await client.delete(
+            f"/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}",
+            headers=_AUTH_HEADER,
+            params={"attempt_id": attempt_id},
+        )
+
+        assert consumed.status_code == 204, consumed.text
+        storage.delete_object.assert_awaited_with(
+            key=f"remote-builds/{build_id}/image.tar"
+        )
+        async with session_maker() as session:
+            row = await session.get(SubmissionImageBuild, UUID(build_id))
+            assert row is not None
+            assert row.status == "consumed"
+            assert row.runtime_status == "skipped"
+            assert row.runtime_error_code == "TARGON_RUNTIME_SKIPPED_BUILD_CONSUMED"
+            assert row.runtime_completed_at is not None
 
     async def test_submission_build_rejects_wrong_attempt_and_job_token(
         self,
