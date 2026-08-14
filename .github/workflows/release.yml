@@ -164,10 +164,11 @@ jobs:
           echo "current=true" >> "$GITHUB_OUTPUT"
 
   release:
-    needs: [plan, verify-source]
+    needs: [plan, admit-current, verify-source]
     if: >-
       always() &&
       needs.plan.result == 'success' &&
+      needs.admit-current.outputs.current == 'true' &&
       needs.verify-source.result == 'success' &&
       (
         needs.plan.outputs.miner_cli == 'true' ||
@@ -620,9 +621,18 @@ jobs:
           require_selected "$SCREENER_REQUIRED" "$SCREENER_RESULT" screener
           require_selected "$ORCHESTRATOR_REQUIRED" "$ORCHESTRATOR_RESULT" screener-orchestrator
 
+  # verify-source intentionally tolerates skipped optional component gates.
+  # Every post-release job must therefore evaluate with always() and then
+  # require its direct prerequisites explicitly; GitHub's implicit success()
+  # otherwise propagates those harmless skips and suppresses the whole fan-out.
   deploy_platform:
     needs: [plan, release]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.platform == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.platform == 'true'
     permissions:
       contents: read
       id-token: write
@@ -639,7 +649,12 @@ jobs:
 
   deploy-backroom:
     needs: [plan, release]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.backroom == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.backroom == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     environment: prod
@@ -692,6 +707,8 @@ jobs:
     needs: [plan, release, deploy_platform]
     if: >-
       always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener_orchestrator == 'true' &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
@@ -739,6 +756,8 @@ jobs:
     needs: [plan, release, deploy_platform, build-submission-builder]
     if: >-
       always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener_orchestrator == 'true' &&
       vars.SCREENER_CAPACITY_CONTROLLER_ENABLED == 'true' &&
@@ -759,6 +778,8 @@ jobs:
     needs: [plan, release, deploy_platform, deploy-screener-controller]
     if: >-
       always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.screener == 'true' &&
       (needs.deploy-screener-controller.result == 'success' || needs.deploy-screener-controller.result == 'skipped') &&
@@ -898,7 +919,12 @@ jobs:
 
   build-validator:
     needs: [plan, release]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -946,7 +972,12 @@ jobs:
 
   build-sandbox-docker:
     needs: [plan, release]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -994,7 +1025,12 @@ jobs:
 
   build-pylon:
     needs: [plan, release]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1044,7 +1080,12 @@ jobs:
 
   build-dittobench:
     needs: [plan, release]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true'
     # This runs only after verification completes, so it safely reuses the
     # same maximum-concurrency-1 pool for Go tests and multi-platform builds.
     runs-on:
@@ -1178,7 +1219,12 @@ jobs:
 
   publish-datagen:
     needs: [plan, release]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.dittobench_datagen == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.dittobench_datagen == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: prod
@@ -1346,7 +1392,13 @@ jobs:
 
   deploy-dittobench:
     needs: [plan, release, build-dittobench]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.dittobench_api == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.dittobench_api == 'true' &&
+      needs.build-dittobench.result == 'success'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     environment: prod
@@ -1468,7 +1520,17 @@ jobs:
       - build-sandbox-docker
       - build-dittobench
       - build-pylon
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true' &&
+      needs.verify-source.result == 'success' &&
+      needs.build-validator.result == 'success' &&
+      needs.build-sandbox-docker.result == 'success' &&
+      needs.build-dittobench.result == 'success' &&
+      needs.build-pylon.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1777,7 +1839,13 @@ jobs:
 
   smoke-validator-arm64:
     needs: [plan, release, build-validator]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true' &&
+      needs.build-validator.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1832,7 +1900,13 @@ jobs:
 
   stage-stack-release:
     needs: [plan, release, assemble-stack]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true' &&
+      needs.assemble-stack.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -1867,7 +1941,15 @@ jobs:
 
   promote-stack-release:
     needs: [plan, release, assemble-stack, smoke-validator-arm64, stage-stack-release]
-    if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true' &&
+      needs.assemble-stack.result == 'success' &&
+      needs.smoke-validator-arm64.result == 'success' &&
+      needs.stage-stack-release.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: read

@@ -46,9 +46,10 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         step.get("name") != "Require a new datagen component version"
         for step in plan["steps"]
     )
-    assert jobs["release"]["needs"] == ["plan", "verify-source"]
+    assert jobs["release"]["needs"] == ["plan", "admit-current", "verify-source"]
     assert "always()" in jobs["release"]["if"]
     assert "needs.plan.result == 'success'" in jobs["release"]["if"]
+    assert "needs.admit-current.outputs.current == 'true'" in jobs["release"]["if"]
     assert "needs.verify-source.result == 'success'" in jobs["release"]["if"]
     assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
     assert jobs["admit-current"]["needs"] == "plan"
@@ -135,6 +136,67 @@ def test_platform_and_backroom_deploy_from_one_release_plan() -> None:
     assert "needs.plan.outputs.backroom == 'true'" in jobs["deploy-backroom"]["if"]
 
 
+def test_post_release_fanout_evaluates_after_optional_verification_skips() -> None:
+    jobs = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())["jobs"]
+    expected_post_release_jobs = {
+        "deploy_platform",
+        "deploy-backroom",
+        "build-submission-builder",
+        "deploy-screener-controller",
+        "build-screener",
+        "build-validator",
+        "build-sandbox-docker",
+        "build-pylon",
+        "build-dittobench",
+        "publish-datagen",
+        "deploy-dittobench",
+        "assemble-stack",
+        "smoke-validator-arm64",
+        "stage-stack-release",
+        "promote-stack-release",
+    }
+    post_release_jobs = {
+        job_name
+        for job_name, job in jobs.items()
+        if "release"
+        in (
+            [job["needs"]]
+            if isinstance(job.get("needs"), str)
+            else job.get("needs", [])
+        )
+    }
+    assert post_release_jobs == expected_post_release_jobs
+
+    for job_name in post_release_jobs:
+        condition = jobs[job_name]["if"]
+        assert "always()" in condition
+        assert "needs.plan.result == 'success'" in condition
+        assert "needs.release.result == 'success'" in condition
+        assert "needs.release.outputs.released == 'true'" in condition
+
+    dependency_results = {
+        "deploy-dittobench": ("build-dittobench",),
+        "assemble-stack": (
+            "verify-source",
+            "build-validator",
+            "build-sandbox-docker",
+            "build-dittobench",
+            "build-pylon",
+        ),
+        "smoke-validator-arm64": ("build-validator",),
+        "stage-stack-release": ("assemble-stack",),
+        "promote-stack-release": (
+            "assemble-stack",
+            "smoke-validator-arm64",
+            "stage-stack-release",
+        ),
+    }
+    for job_name, dependencies in dependency_results.items():
+        condition = jobs[job_name]["if"]
+        for dependency in dependencies:
+            assert f"needs.{dependency}.result == 'success'" in condition
+
+
 def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     config = tomllib.loads(PYPROJECT_PATH.read_text())["tool"]["semantic_release"]
     build_command = config["build_command"]
@@ -165,7 +227,11 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     )
     verification = _step(verify_steps, "Gate the release on exact merge source")
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
-    assert workflow["jobs"]["release"]["needs"] == ["plan", "verify-source"]
+    assert workflow["jobs"]["release"]["needs"] == [
+        "plan",
+        "admit-current",
+        "verify-source",
+    ]
 
     starter_verification = _step(
         jobs["verify-starter-kit"]["steps"],
@@ -278,7 +344,7 @@ def test_superseded_verified_source_skips_release_mutations() -> None:
     steps = release["steps"]
     release_head = _step(steps, "Classify a superseded release attempt")
 
-    assert release["needs"] == ["plan", "verify-source"]
+    assert release["needs"] == ["plan", "admit-current", "verify-source"]
     assert release_head["id"] == "release-head"
     assert "+refs/heads/main:refs/remotes/origin/main" in release_head["run"]
     assert (
