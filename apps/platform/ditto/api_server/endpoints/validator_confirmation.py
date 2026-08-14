@@ -91,7 +91,7 @@ from ditto.db.queries.confirmation_bundles import (
 from ditto.db.queries.confirmation_inference import (
     ensure_confirmation_inference_grants,
 )
-from ditto.db.queries.confirmation_policy_lock import lock_confirmation_policy
+from ditto.db.queries.confirmation_policy_lock import try_lock_confirmation_policy
 from ditto.db.queries.confirmation_ticket_recovery import (
     expire_overdue_confirmation_bundle_tickets,
 )
@@ -519,7 +519,14 @@ async def request_v9_confirmation_job(
             # total order: either issuance commits first, or OFF wins and this
             # request returns no work. Already-issued tickets above remain
             # resumable and reportable under their immutable contract.
-            await lock_confirmation_policy(session)
+            # Polling validators retry. Do not queue every slot behind a settings
+            # write or another claim's full-ledger reconciliation: that turns one
+            # expensive claim into a fleet-wide request and transaction pile-up.
+            # Returning no work preserves the policy total order because no
+            # ticket or reservation exists on this branch yet.
+            if not await try_lock_confirmation_policy(session):
+                response.status_code = 204
+                return response
             latest_settings_row = await latest_confirmation_bundle_settings_revision(
                 session
             )
@@ -543,6 +550,26 @@ async def request_v9_confirmation_job(
             budget = await lock_confirmation_budget_day(
                 session, utc_day=now.astimezone(UTC).date()
             )
+            reserve_microusd = (
+                sum(lane.max_cost_usd_micros for lane in profile.provider_lanes)
+                + profile.embedding_lane.max_cost_usd_micros
+            )
+            if reserve_microusd <= 0:
+                response.status_code = 204
+                return response
+            # The budget is authoritative and already locked. Once either daily
+            # cap is exhausted, reconciliation cannot make this poll issuable;
+            # doing the full ledger read under the global policy lock only burns
+            # the API worker and makes ordinary validator heartbeats wait.
+            if (
+                budget.issued_attempts >= latest_settings.daily_bundle_cap
+                or budget.outstanding_reserved_microusd
+                + budget.settled_microusd
+                + reserve_microusd
+                > latest_settings.daily_dollar_cap_microusd
+            ):
+                response.status_code = 204
+                return response
             await reconcile_v9_confirmation_candidates(
                 session,
                 verification_profiles=_profile_registry(request),
@@ -596,13 +623,6 @@ async def request_v9_confirmation_job(
                 settings.profile_revision != profile.revision
                 or settings.profile_checksum != profile.checksum()
             ):
-                response.status_code = 204
-                return response
-            reserve_microusd = (
-                sum(lane.max_cost_usd_micros for lane in profile.provider_lanes)
-                + profile.embedding_lane.max_cost_usd_micros
-            )
-            if reserve_microusd <= 0:
                 response.status_code = 204
                 return response
             reservation_id = uuid4()

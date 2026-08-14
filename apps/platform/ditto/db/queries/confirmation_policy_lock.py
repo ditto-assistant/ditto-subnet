@@ -20,4 +20,14 @@ async def lock_confirmation_policy(session: AsyncSession) -> None:
         )
 
 
-__all__ = ["lock_confirmation_policy"]
+async def try_lock_confirmation_policy(session: AsyncSession) -> bool:
+    """Take the policy lock without queueing a validator poll behind it."""
+    if session.get_bind().dialect.name != "postgresql":
+        return True
+    locked = await session.scalar(
+        select(func.pg_try_advisory_xact_lock(func.hashtextextended(_LOCK_KEY, 0)))
+    )
+    return bool(locked)
+
+
+__all__ = ["lock_confirmation_policy", "try_lock_confirmation_policy"]

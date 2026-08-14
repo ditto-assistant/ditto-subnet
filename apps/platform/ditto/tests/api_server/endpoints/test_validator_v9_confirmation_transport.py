@@ -47,6 +47,7 @@ from ditto.api_server.confirmation_evidence import (
 )
 from ditto.api_server.confirmation_wire import completion_report_from_go_dimensions
 from ditto.api_server.dependencies import get_chain_client, get_session
+from ditto.api_server.endpoints import validator_confirmation as confirmation_mod
 from ditto.api_server.endpoints.validator_confirmation import (
     v9_confirmation_claim_signing_message,
     v9_confirmation_fail_signing_message,
@@ -803,7 +804,7 @@ def _signed_prepared_report(
 
 
 class TestV9ConfirmationClaimAdmission:
-    async def test_off_revision_racing_claim_wins_before_any_new_spend(
+    async def test_policy_lock_contention_returns_no_work_without_queueing(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -812,16 +813,12 @@ class TestV9ConfirmationClaimAdmission:
         seeded = await _seed_bundle(session_maker)
         _install_transport(app, session_maker)
 
-        # Hold the exact policy lock used by the admin write, install OFF, and
-        # prove a concurrent claim cannot pass the boundary on stale settings.
+        # Hold the exact policy lock used by the admin write and prove a poll
+        # fails open to no work instead of occupying a request and DB session.
         async with session_maker() as session, session.begin():
             await lock_confirmation_policy(session)
             claim_task = asyncio.create_task(_claim(client))
-            await asyncio.sleep(0.05)
-            assert not claim_task.done()
-            await _append_off_revision(session, parent=seeded)
-
-        response = await claim_task
+            response = await asyncio.wait_for(claim_task, timeout=2)
 
         assert response.status_code == 204, response.text
         async with session_maker() as session:
@@ -840,7 +837,7 @@ class TestV9ConfirmationClaimAdmission:
                 == 0
             )
 
-    async def test_new_revision_commits_first_and_claim_issues_only_supersession(
+    async def test_claim_retries_after_contended_policy_update(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -852,11 +849,12 @@ class TestV9ConfirmationClaimAdmission:
         async with session_maker() as session, session.begin():
             await lock_confirmation_policy(session)
             claim_task = asyncio.create_task(_claim(client))
-            await asyncio.sleep(0.05)
-            assert not claim_task.done()
+            blocked = await asyncio.wait_for(claim_task, timeout=2)
             revision = await _append_enforce_revision(session, parent=seeded)
 
-        response = await claim_task
+        assert blocked.status_code == 204, blocked.text
+
+        response = await _claim(client)
 
         assert response.status_code == 200, response.text
         replacement_id = UUID(response.json()["bundle_id"])
@@ -886,6 +884,50 @@ class TestV9ConfirmationClaimAdmission:
             )
             assert stale_ticket_count == 0
             assert stale_reservation_count == 0
+
+    async def test_exhausted_daily_cap_skips_candidate_reconciliation(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        seeded = await _seed_bundle(session_maker)
+        _install_transport(app, session_maker)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ConfirmationBudgetDay(
+                    utc_day=datetime.now(UTC).date(),
+                    revision=seeded.settings.daily_bundle_cap,
+                    issued_attempts=seeded.settings.daily_bundle_cap,
+                    outstanding_reserved_microusd=0,
+                    settled_microusd=0,
+                )
+            )
+        reconcile = AsyncMock(
+            side_effect=AssertionError("exhausted budget must not reconcile")
+        )
+        monkeypatch.setattr(
+            confirmation_mod, "reconcile_v9_confirmation_candidates", reconcile
+        )
+
+        response = await _claim(client)
+
+        assert response.status_code == 204, response.text
+        reconcile.assert_not_awaited()
+        async with session_maker() as session:
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(ConfirmationBundleTicket)
+                )
+                == 0
+            )
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(ConfirmationBudgetReservation)
+                )
+                == 0
+            )
 
     async def test_claim_commits_first_and_live_generation_stays_frozen_completable(
         self,
