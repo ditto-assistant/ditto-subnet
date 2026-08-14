@@ -1899,6 +1899,9 @@ describe('Backroom MCP tools', () => {
   const inferenceConcurrencySettings = {
     chat_request_budget: 8192,
     chat_token_budget: 25_000_000,
+    chat_per_ticket_concurrency: 16,
+    chat_per_validator_concurrency: 48,
+    chat_global_concurrency: 96,
     embedding_per_ticket_concurrency: 12,
     embedding_per_validator_concurrency: 48,
     embedding_global_concurrency: 96,
@@ -2052,6 +2055,34 @@ describe('Backroom MCP tools', () => {
 
     expect(response.isError).toBe(true)
     expect(readTextResult(response)).toContain('embedding_per_validator_concurrency')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await client.close()
+    await server.close()
+  })
+
+  it('refuses an inverted chat concurrency hierarchy before any admin call', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    const response = await client.callTool({
+      name: 'set_inference_concurrency_settings',
+      arguments: {
+        expectedRevision: 4,
+        settings: {
+          ...inferenceConcurrencySettings,
+          chat_per_ticket_concurrency: 64,
+          chat_per_validator_concurrency: 48,
+        },
+        reason: 'widen the per-ticket chat lane for a benchmark run',
+        confirmation: 'APPLY INFERENCE CONCURRENCY SETTINGS',
+      },
+    })
+
+    expect(response.isError).toBe(true)
+    expect(readTextResult(response)).toContain('chat_per_validator_concurrency')
     expect(fetchMock).not.toHaveBeenCalled()
 
     await client.close()

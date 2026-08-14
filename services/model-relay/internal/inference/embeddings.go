@@ -109,9 +109,9 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The operator concurrency board is resolved BEFORE the admission
-	// transaction, on its own pooled connection (5s TTL cache).
-	admissionCfg := applySettings(cfg, d.Settings.Resolve(r.Context()))
+	// The operator policy is a background-refreshed atomic snapshot, resolved
+	// before the admission transaction without SQL on the request path.
+	admissionCfg := applySettings(cfg, d.Settings.Resolve())
 
 	// Detached from client cancellation for Python parity: a broker abort
 	// must not cancel the provider call mid-flight and charge the full

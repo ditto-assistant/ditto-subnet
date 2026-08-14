@@ -1,12 +1,11 @@
 """Operator-tunable admission policy for the hosted v7 inference lanes.
 
-This board governs the **hosted** embedding route
-(``perplexity/pplx-embed-v1-0.6b`` through the platform proxy) plus the two
-per-grant chat allowances: the request budget and the token budget.
+This board governs both hosted lanes: chat completions and embeddings through
+the platform proxy.
 
-* The chat lane's **concurrency and rate** limits keep their boot-time config.
-  They were never sized against a local resource, they are already 8/24/72, and
-  they are not what is throttling a v7 run.
+* The chat lane's **concurrency** limits are live admission controls here.
+  Request-per-minute limits remain boot-time safety rails so widening
+  simultaneous work does not also widen provider bursts.
 * The chat lane's **request and token budgets** are here because they are
   per-lease resource allowances, not rates. See ``chat_request_budget`` and
   ``chat_token_budget`` for why each moved.
@@ -41,6 +40,11 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+DEFAULT_CHAT_PER_TICKET_CONCURRENCY = 16
+DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY = 48
+DEFAULT_CHAT_GLOBAL_CONCURRENCY = 96
+MAX_CHAT_CONCURRENCY = 128
+
 # The shipped values. Every one of these is a raise -- there is no configuration
 # of this board that reproduces the old serialised behaviour by default, because
 # a knob whose default is the old value is a knob nobody turns.
@@ -48,11 +52,9 @@ DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY = 12
 DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY = 48
 DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY = 96
 
-# Ceilings, not recommendations. 128 is the same bound `check_config` already
-# enforces on the boot-time embedding limits, kept deliberately identical so the
-# board can never accept a value the boot check would have rejected. It exists
-# because a fat-fingered revision must not point the whole fleet at a number
-# that saturates the admission path (see `ditto/db/queries/inference.py`: a
+# Ceilings, not recommendations. A fat-fingered revision must not point the
+# whole fleet at a number that saturates the admission path (see
+# `ditto/db/queries/inference.py`: a
 # reservation no longer serialises fleet-wide, but it still takes a grant-row
 # `FOR UPDATE` plus the cross-grant admission aggregates on every call).
 #
@@ -183,19 +185,17 @@ MAX_CHAT_TOKEN_BUDGET = 100_000_000
 class InferenceConcurrencySettings(BaseModel):
     """The whole hosted-inference admission policy, stored as one object.
 
-    The three embedding limits are a strict hierarchy: one ticket may not exceed
-    its validator's allowance, and no validator may exceed the fleet's. The
-    validator enforces the same hierarchy from below, so under normal operation
-    the platform numbers are headroom rather than the operative valve.
+    Chat and embedding each have a strict hierarchy: one ticket may not exceed
+    its validator's allowance, and no validator may exceed the fleet's.
 
     ``chat_request_budget`` and ``chat_token_budget`` stand apart from the
-    three. Neither is a rate and neither is enforced fleet-wide at admission --
-    each is *stamped onto a grant when the grant is minted* and thereafter read
-    from the grant's own row. That is deliberate, and it is what makes both
-    fields safe to sit on a live board: a revision changes what the **next**
-    lease is issued, never what a running lease is already spending against. An
-    operator cannot exhaust a run in flight by lowering either number, which is
-    exactly the hazard that forced the embedding limits to grow a
+    concurrency controls. Neither is a rate and neither is enforced fleet-wide
+    at admission -- each is *stamped onto a grant when the grant is minted* and
+    thereafter read from the grant's own row. That is deliberate, and it is
+    what makes both fields safe to sit on a live board: a revision changes what
+    the **next** lease is issued, never what a running lease is already spending
+    against. An operator cannot exhaust a run in flight by lowering either
+    number, which is exactly the hazard that forced the embedding limits to grow a
     capacity-decline path.
     """
 
@@ -225,6 +225,21 @@ class InferenceConcurrencySettings(BaseModel):
     Note that it is a *cap*, not a spend: an agent is charged what it consumes,
     so raising the ceiling changes only which runs are permitted to finish.
     """
+
+    chat_per_ticket_concurrency: Annotated[
+        int, Field(ge=1, le=MAX_CHAT_CONCURRENCY)
+    ] = DEFAULT_CHAT_PER_TICKET_CONCURRENCY
+    """Concurrent hosted chat requests one scoring ticket may hold."""
+
+    chat_per_validator_concurrency: Annotated[
+        int, Field(ge=1, le=MAX_CHAT_CONCURRENCY)
+    ] = DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY
+    """Concurrent hosted chat requests summed over one validator's grants."""
+
+    chat_global_concurrency: Annotated[int, Field(ge=1, le=MAX_CHAT_CONCURRENCY)] = (
+        DEFAULT_CHAT_GLOBAL_CONCURRENCY
+    )
+    """Concurrent hosted chat requests across the fleet."""
 
     embedding_per_ticket_concurrency: Annotated[
         int, Field(ge=1, le=MAX_EMBEDDING_PER_TICKET_CONCURRENCY)
@@ -259,6 +274,19 @@ class InferenceConcurrencySettings(BaseModel):
 
     @model_validator(mode="after")
     def _hierarchy_holds(self) -> InferenceConcurrencySettings:
+        if self.chat_per_ticket_concurrency > self.chat_per_validator_concurrency:
+            raise ValueError(
+                "chat_per_ticket_concurrency "
+                f"({self.chat_per_ticket_concurrency}) may not exceed "
+                "chat_per_validator_concurrency "
+                f"({self.chat_per_validator_concurrency})"
+            )
+        if self.chat_per_validator_concurrency > self.chat_global_concurrency:
+            raise ValueError(
+                "chat_per_validator_concurrency "
+                f"({self.chat_per_validator_concurrency}) may not exceed "
+                f"chat_global_concurrency ({self.chat_global_concurrency})"
+            )
         if (
             self.embedding_per_ticket_concurrency
             > self.embedding_per_validator_concurrency

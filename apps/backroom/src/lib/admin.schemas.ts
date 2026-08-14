@@ -1478,12 +1478,12 @@ export const setQueuePolicySettingsInputSchema = z.object({
 export type QueuePolicySettings = z.infer<typeof queuePolicySettingsSchema>
 export type QueuePolicySettingsControl = z.infer<typeof queuePolicySettingsControlSchema>
 
-// SN118 hosted v7 inference admission policy.
+// SN118 hosted inference admission policy.
 //
-// The two per-grant chat allowances plus the three hosted-embedding concurrency
-// limits, stored by ditto-platform as one append-only revision and resolved on
-// the admission path behind a five-second TTL. This is the board an operator
-// reaches for *while watching* a v7 run -- and it is the board that was
+// The two per-grant chat allowances plus both three-level hosted concurrency
+// hierarchies, stored by ditto-platform as one append-only revision and
+// refreshed into the admission path every five seconds. This is the board an operator
+// reaches for *while watching* a benchmark run -- and it is the board that was
 // unreachable from here until now: the platform shipped it in #477 and backroom
 // had no schema, no service call, no MCP tool and no page, so the only way to
 // move `chat_token_budget` was a curl with an admin bearer.
@@ -1494,9 +1494,9 @@ export type QueuePolicySettingsControl = z.infer<typeof queuePolicySettingsContr
 //
 // Both budgets are stamped onto a grant when the grant is MINTED and read from
 // the grant's own row thereafter, so a revision governs the next lease and can
-// never retroactively exhaust one already in flight. The three embedding limits
-// are enforced at admission instead, which is what makes lowering
-// `embedding_per_ticket_concurrency` a live emergency brake: the platform
+// never retroactively exhaust one already in flight. Chat and embedding
+// concurrency are enforced at admission instead, which makes either per-ticket
+// value a live emergency brake: the platform
 // answers a concurrency decline with 503 + Retry-After, so a validator holding a
 // ticket backs off rather than discarding the run.
 //
@@ -1508,6 +1508,7 @@ export const INFERENCE_CONCURRENCY_CONFIRMATION = 'APPLY INFERENCE CONCURRENCY S
 
 export const MAX_CHAT_REQUEST_BUDGET = 16384
 export const MAX_CHAT_TOKEN_BUDGET = 100_000_000
+export const MAX_CHAT_CONCURRENCY = 128
 export const MAX_EMBEDDING_CONCURRENCY = 128
 
 const inferenceConcurrencySettingsBaseSchema = z.object({
@@ -1519,6 +1520,9 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   // strategy stuffs large contexts. It is a CAP, not a spend: raising it changes
   // only which runs are permitted to finish, never what an agent is charged.
   chat_token_budget: z.number().int().min(1).max(MAX_CHAT_TOKEN_BUDGET),
+  chat_per_ticket_concurrency: z.number().int().min(1).max(MAX_CHAT_CONCURRENCY),
+  chat_per_validator_concurrency: z.number().int().min(1).max(MAX_CHAT_CONCURRENCY),
+  chat_global_concurrency: z.number().int().min(1).max(MAX_CHAT_CONCURRENCY),
   // Concurrent hosted embedding requests one ticket's grant may hold. The
   // emergency brake: lowering it takes effect fleet-wide on the next admission,
   // with no release and no restart.
@@ -1537,6 +1541,21 @@ const refineInferenceConcurrencyHierarchy = (
   value: z.infer<typeof inferenceConcurrencySettingsBaseSchema>,
   context: z.RefinementCtx,
 ) => {
+  if (value.chat_per_ticket_concurrency > value.chat_per_validator_concurrency) {
+    context.addIssue({
+      code: 'custom',
+      message:
+        'chat_per_ticket_concurrency may not exceed chat_per_validator_concurrency',
+      path: ['chat_per_ticket_concurrency'],
+    })
+  }
+  if (value.chat_per_validator_concurrency > value.chat_global_concurrency) {
+    context.addIssue({
+      code: 'custom',
+      message: 'chat_per_validator_concurrency may not exceed chat_global_concurrency',
+      path: ['chat_per_validator_concurrency'],
+    })
+  }
   if (value.embedding_per_ticket_concurrency > value.embedding_per_validator_concurrency) {
     context.addIssue({
       code: 'custom',

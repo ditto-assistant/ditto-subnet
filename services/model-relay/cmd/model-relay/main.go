@@ -155,6 +155,20 @@ func run() error {
 	prober := chain.NewPylonClient(cfg.Chain)
 
 	queries := postgres.New(pool)
+	settings := inference.NewSettingsResolver(queries, logger)
+	if err := settings.Refresh(bootCtx); err != nil {
+		logger.Warn("initial inference policy refresh failed; using shipped defaults",
+			slog.String("error", err.Error()))
+	}
+	settingsErrors, err := settings.StartRefresh(ctx)
+	if err != nil {
+		return fmt.Errorf("start inference policy refresh: %w", err)
+	}
+	go func() {
+		for refreshErr := range settingsErrors {
+			logger.Error("inference policy refresh stopped", slog.String("error", refreshErr.Error()))
+		}
+	}()
 	handlers := inference.NewHandlers(&inference.Deps{
 		Cfg:      cfg,
 		Logger:   logger,
@@ -162,7 +176,7 @@ func run() error {
 		Queries:  queries,
 		Permits:  prober,
 		Upstream: inference.NewUpstreamClient(cfg.Inference),
-		Settings: inference.NewSettingsResolver(queries, logger),
+		Settings: settings,
 	})
 	legacyURL, err := url.Parse(cfg.Upload.LegacyBaseURL)
 	if err != nil {

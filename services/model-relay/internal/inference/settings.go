@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/omniaura/go-kit/tasker"
 
 	"github.com/ditto-assistant/model-relay/internal/config"
 	"github.com/ditto-assistant/model-relay/internal/postgres"
@@ -17,18 +19,22 @@ import (
 
 // Shipped defaults and hard ceilings, mirroring
 // ditto/api_models/inference_concurrency_settings.py. The defaults are
-// identical to the boot-time config defaults, so an empty settings board and
-// an absent resolver behave the same.
+// identical to the config fallbacks, so an empty settings board and an absent
+// resolver behave the same.
 const (
 	defaultChatRequestBudget                = 8192
 	maxChatRequestBudget                    = 16384
 	defaultChatTokenBudget                  = 25_000_000
 	maxChatTokenBudget                      = 100_000_000
+	defaultChatPerTicketConcurrency         = 16
+	defaultChatPerValidatorConcurrency      = 48
+	defaultChatGlobalConcurrency            = 96
+	maxChatConcurrency                      = 128
 	defaultEmbeddingPerTicketConcurrency    = 12
 	defaultEmbeddingPerValidatorConcurrency = 48
 	defaultEmbeddingGlobalConcurrency       = 96
 	maxEmbeddingConcurrency                 = 128
-	settingsTTL                             = 5 * time.Second
+	settingsRefreshInterval                 = 5 * time.Second
 )
 
 // concurrencySettings is the whole stored admission policy
@@ -36,6 +42,9 @@ const (
 type concurrencySettings struct {
 	ChatRequestBudget                int64
 	ChatTokenBudget                  int64
+	ChatPerTicketConcurrency         int
+	ChatPerValidatorConcurrency      int
+	ChatGlobalConcurrency            int
 	EmbeddingPerTicketConcurrency    int
 	EmbeddingPerValidatorConcurrency int
 	EmbeddingGlobalConcurrency       int
@@ -45,6 +54,9 @@ func defaultConcurrencySettings() concurrencySettings {
 	return concurrencySettings{
 		ChatRequestBudget:                defaultChatRequestBudget,
 		ChatTokenBudget:                  defaultChatTokenBudget,
+		ChatPerTicketConcurrency:         defaultChatPerTicketConcurrency,
+		ChatPerValidatorConcurrency:      defaultChatPerValidatorConcurrency,
+		ChatGlobalConcurrency:            defaultChatGlobalConcurrency,
 		EmbeddingPerTicketConcurrency:    defaultEmbeddingPerTicketConcurrency,
 		EmbeddingPerValidatorConcurrency: defaultEmbeddingPerValidatorConcurrency,
 		EmbeddingGlobalConcurrency:       defaultEmbeddingGlobalConcurrency,
@@ -53,8 +65,8 @@ func defaultConcurrencySettings() concurrencySettings {
 
 // parseConcurrencySettings validates a stored settings payload with the same
 // strictness Pydantic applies (strict=True, extra="forbid", per-field bounds,
-// hierarchy validator). Any violation returns an error and the caller falls
-// open to the shipped defaults.
+// hierarchy validator). Any violation returns an error and the resolver keeps
+// its last-known-good snapshot.
 func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	out := defaultConcurrencySettings()
 	var raw map[string]json.RawMessage
@@ -86,7 +98,9 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 		*dst = n
 		return nil
 	}
-	var perTicket, perValidator, global int64 = int64(out.EmbeddingPerTicketConcurrency),
+	var chatPerTicket, chatPerValidator, chatGlobal int64 = int64(out.ChatPerTicketConcurrency),
+		int64(out.ChatPerValidatorConcurrency), int64(out.ChatGlobalConcurrency)
+	var embeddingPerTicket, embeddingPerValidator, embeddingGlobal int64 = int64(out.EmbeddingPerTicketConcurrency),
 		int64(out.EmbeddingPerValidatorConcurrency), int64(out.EmbeddingGlobalConcurrency)
 	if err := intField("chat_request_budget", &out.ChatRequestBudget, 1, maxChatRequestBudget); err != nil {
 		return defaultConcurrencySettings(), err
@@ -94,90 +108,127 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	if err := intField("chat_token_budget", &out.ChatTokenBudget, 1, maxChatTokenBudget); err != nil {
 		return defaultConcurrencySettings(), err
 	}
-	if err := intField("embedding_per_ticket_concurrency", &perTicket, 1, maxEmbeddingConcurrency); err != nil {
+	if err := intField("chat_per_ticket_concurrency", &chatPerTicket, 1, maxChatConcurrency); err != nil {
 		return defaultConcurrencySettings(), err
 	}
-	if err := intField("embedding_per_validator_concurrency", &perValidator, 1, maxEmbeddingConcurrency); err != nil {
+	if err := intField("chat_per_validator_concurrency", &chatPerValidator, 1, maxChatConcurrency); err != nil {
 		return defaultConcurrencySettings(), err
 	}
-	if err := intField("embedding_global_concurrency", &global, 1, maxEmbeddingConcurrency); err != nil {
+	if err := intField("chat_global_concurrency", &chatGlobal, 1, maxChatConcurrency); err != nil {
+		return defaultConcurrencySettings(), err
+	}
+	if err := intField("embedding_per_ticket_concurrency", &embeddingPerTicket, 1, maxEmbeddingConcurrency); err != nil {
+		return defaultConcurrencySettings(), err
+	}
+	if err := intField("embedding_per_validator_concurrency", &embeddingPerValidator, 1, maxEmbeddingConcurrency); err != nil {
+		return defaultConcurrencySettings(), err
+	}
+	if err := intField("embedding_global_concurrency", &embeddingGlobal, 1, maxEmbeddingConcurrency); err != nil {
 		return defaultConcurrencySettings(), err
 	}
 	if len(raw) > 0 {
 		return defaultConcurrencySettings(), errors.New("unknown settings fields")
 	}
-	if perTicket > perValidator || perValidator > global {
+	if chatPerTicket > chatPerValidator || chatPerValidator > chatGlobal {
+		return defaultConcurrencySettings(), errors.New("chat concurrency hierarchy violated")
+	}
+	if embeddingPerTicket > embeddingPerValidator || embeddingPerValidator > embeddingGlobal {
 		return defaultConcurrencySettings(), errors.New("embedding concurrency hierarchy violated")
 	}
-	out.EmbeddingPerTicketConcurrency = int(perTicket)
-	out.EmbeddingPerValidatorConcurrency = int(perValidator)
-	out.EmbeddingGlobalConcurrency = int(global)
+	out.ChatPerTicketConcurrency = int(chatPerTicket)
+	out.ChatPerValidatorConcurrency = int(chatPerValidator)
+	out.ChatGlobalConcurrency = int(chatGlobal)
+	out.EmbeddingPerTicketConcurrency = int(embeddingPerTicket)
+	out.EmbeddingPerValidatorConcurrency = int(embeddingPerValidator)
+	out.EmbeddingGlobalConcurrency = int(embeddingGlobal)
 	return out, nil
 }
 
-// SettingsResolver is the 5s-TTL cache over the operator concurrency board
-// (InferenceConcurrencySettingsResolver). It reads on its own pooled
-// connection, NEVER inside the admission transaction. DB errors serve the
-// shipped defaults WITHOUT caching them; corrupt payloads fail open to the
-// defaults (which are cached, matching Python, since the read succeeded).
+// SettingsResolver owns a last-known-good atomic snapshot of the operator
+// concurrency board. A go-kit/tasker refreshes it every five seconds on its own
+// pooled connection, never from request traffic and never inside an admission
+// transaction. Refresh failures preserve the last-known-good policy.
 type SettingsResolver struct {
-	queries *postgres.Queries
+	load    func(context.Context) (postgres.InferenceConcurrencySettingsRevision, error)
 	logger  *slog.Logger
-	ttl     time.Duration
-
-	mu       sync.Mutex
-	cached   *concurrencySettings
-	loadedAt time.Time
+	current atomic.Pointer[concurrencySettings]
 }
 
 // NewSettingsResolver builds the resolver over the shared pool-backed
 // queries.
 func NewSettingsResolver(queries *postgres.Queries, logger *slog.Logger) *SettingsResolver {
-	return &SettingsResolver{queries: queries, logger: logger, ttl: settingsTTL}
+	return newSettingsResolver(queries.GetLatestInferenceConcurrencySettings, logger)
 }
 
-// Resolve returns the current settings, cached for the TTL.
-func (r *SettingsResolver) Resolve(ctx context.Context) concurrencySettings {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.cached != nil && time.Since(r.loadedAt) < r.ttl {
-		return *r.cached
+func newSettingsResolver(
+	load func(context.Context) (postgres.InferenceConcurrencySettingsRevision, error),
+	logger *slog.Logger,
+) *SettingsResolver {
+	r := &SettingsResolver{load: load, logger: logger}
+	defaults := defaultConcurrencySettings()
+	r.current.Store(&defaults)
+	return r
+}
+
+// Resolve returns the current in-memory policy without locking or querying DB.
+func (r *SettingsResolver) Resolve() concurrencySettings {
+	if current := r.current.Load(); current != nil {
+		return *current
 	}
-	row, err := r.queries.GetLatestInferenceConcurrencySettings(ctx)
+	return defaultConcurrencySettings()
+}
+
+// Refresh loads and validates the latest whole-policy revision. It only swaps
+// the atomic snapshot after a successful read and decode.
+func (r *SettingsResolver) Refresh(ctx context.Context) error {
+	row, err := r.load(ctx)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			// No operator override yet: shipped defaults, cached (the read
-			// itself succeeded).
 			settings := defaultConcurrencySettings()
-			r.cached = &settings
-			r.loadedAt = time.Now()
-			return settings
+			r.current.Store(&settings)
+			return nil
 		}
-		// A database blip must not fail an inference request. Serve the
-		// defaults and do NOT cache them, so the resolver recovers on the
-		// next admission rather than pinning defaults for a full TTL.
-		r.logger.Warn("could not read inference concurrency settings; using defaults",
-			slog.String("error", err.Error()))
-		return defaultConcurrencySettings()
+		return fmt.Errorf("read inference concurrency settings: %w", err)
 	}
 	settings, perr := parseConcurrencySettings(row.Settings)
 	if perr != nil {
-		r.logger.Warn("inference concurrency settings revision is invalid; using defaults",
-			slog.Int("revision", int(row.Revision)), slog.String("error", perr.Error()))
-		settings = defaultConcurrencySettings()
+		return fmt.Errorf("decode inference concurrency settings revision %d: %w", row.Revision, perr)
 	}
-	r.cached = &settings
-	r.loadedAt = time.Now()
-	return settings
+	r.current.Store(&settings)
+	return nil
 }
 
-// applySettings overlays the resolved policy onto a boot config copy
-// (apply_settings). The overlaid chat budgets are inert at admission (grants
-// compare their stamped columns); the three embedding concurrency limits are
-// the live fields.
+// StartRefresh starts the go-kit/tasker loop. A transient refresh failure is
+// logged and swallowed so the loop continues while admissions keep using the
+// last-known-good snapshot.
+func (r *SettingsResolver) StartRefresh(ctx context.Context) (<-chan error, error) {
+	return r.startRefresh(ctx, settingsRefreshInterval)
+}
+
+func (r *SettingsResolver) startRefresh(ctx context.Context, interval time.Duration) (<-chan error, error) {
+	refresh, err := tasker.New(r, func(ctx context.Context, resolver *SettingsResolver) error {
+		if err := resolver.Refresh(ctx); err != nil {
+			resolver.logger.Warn("could not refresh inference concurrency settings; keeping last-known-good policy",
+				slog.String("error", err.Error()))
+		}
+		return nil
+	}, tasker.WithInterval(interval))
+	if err != nil {
+		return nil, err
+	}
+	return refresh.Start(ctx), nil
+}
+
+// applySettings overlays the resolved policy onto a fallback config copy
+// (apply_settings). The overlaid chat budgets are inert at admission because
+// grants compare their stamped columns; both chat and embedding concurrency
+// limits are live fields.
 func applySettings(cfg config.InferenceProxyConfig, s concurrencySettings) config.InferenceProxyConfig {
 	cfg.RequestBudget = int(s.ChatRequestBudget)
 	cfg.TokenBudget = s.ChatTokenBudget
+	cfg.TicketConcurrency = s.ChatPerTicketConcurrency
+	cfg.ValidatorConcurrency = s.ChatPerValidatorConcurrency
+	cfg.GlobalConcurrency = s.ChatGlobalConcurrency
 	cfg.EmbeddingTicketConcurrency = s.EmbeddingPerTicketConcurrency
 	cfg.EmbeddingValidatorConcurrency = s.EmbeddingPerValidatorConcurrency
 	cfg.EmbeddingGlobalConcurrency = s.EmbeddingGlobalConcurrency

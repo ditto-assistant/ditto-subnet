@@ -221,6 +221,9 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, r, herr)
 		return
 	}
+	// Both hosted lanes use the same background-refreshed Backroom policy.
+	// Resolve is an in-memory atomic load; it performs no SQL on this path.
+	admissionCfg := applySettings(cfg, d.Settings.Resolve())
 
 	// Transaction A: admission. Declines and every pre-admission failure
 	// ROLL BACK (nothing they wrote survives).
@@ -275,7 +278,6 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, r, herr)
 		return
 	}
-	// Chat admission uses BOOT config (never the live settings resolver).
 	result, decline, err := beginInferenceRequest(ctx, tx, q, beginParams{
 		grantID:             headers.grant,
 		nonce:               headers.nonce,
@@ -285,8 +287,8 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		maxChargeableTokens: maxChargeableTokens(body, int64(maxTokens)),
 		now:                 now,
 		kind:                kindChat,
-		timeoutSeconds:      cfg.TimeoutSeconds,
-		limits:              limitsForKind(cfg, kindChat),
+		timeoutSeconds:      admissionCfg.TimeoutSeconds,
+		limits:              limitsForKind(admissionCfg, kindChat),
 	})
 	if err != nil {
 		d.Logger.Error("chat: admission", slog.String("error", err.Error()))

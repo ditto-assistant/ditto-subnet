@@ -44,7 +44,7 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	if ip.RequestBudget != 8192 || ip.TokenBudget != 25_000_000 {
 		t.Errorf("budget defaults wrong: %d/%d", ip.RequestBudget, ip.TokenBudget)
 	}
-	if ip.TicketConcurrency != 8 || ip.ValidatorConcurrency != 24 || ip.GlobalConcurrency != 72 {
+	if ip.TicketConcurrency != 16 || ip.ValidatorConcurrency != 48 || ip.GlobalConcurrency != 96 {
 		t.Errorf("chat concurrency defaults wrong: %+v", ip)
 	}
 	if ip.TicketRPM != 240 || ip.ValidatorRPM != 960 || ip.GlobalRPM != 2880 {
@@ -70,23 +70,6 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	}
 	if ip.RoutingMode != RoutingModeAggregateThroughput {
 		t.Errorf("routing mode default wrong: %s", ip.RoutingMode)
-	}
-}
-
-func TestInferenceTokenBudgetHardCeiling(t *testing.T) {
-	env := minimalEnv()
-	env["DITTO_INFERENCE_TOKEN_BUDGET"] = "100000000"
-	cfg, err := Load(MapLookup(env))
-	if err != nil {
-		t.Fatalf("100M hard ceiling must boot: %v", err)
-	}
-	if cfg.Inference.TokenBudget != 100_000_000 {
-		t.Fatalf("token budget = %d, want 100000000", cfg.Inference.TokenBudget)
-	}
-
-	env["DITTO_INFERENCE_TOKEN_BUDGET"] = "100000001"
-	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "DITTO_INFERENCE_TOKEN_BUDGET") {
-		t.Fatalf("over-ceiling token budget must fail with its variable named, got: %v", err)
 	}
 }
 
@@ -183,7 +166,7 @@ func TestRoleValidation(t *testing.T) {
 
 func TestNonNumericLimitFailsBoot(t *testing.T) {
 	env := minimalEnv()
-	env["DITTO_INFERENCE_TICKET_CONCURRENCY"] = "eight"
+	env["DITTO_INFERENCE_TICKET_RPM"] = "eight"
 	if _, err := Load(MapLookup(env)); err == nil {
 		t.Fatal("non-numeric numeric var must fail boot")
 	}
@@ -213,16 +196,38 @@ func TestProxyEnabledRequiresOpenRouterKey(t *testing.T) {
 
 func TestConcurrencyHierarchyValidated(t *testing.T) {
 	env := minimalEnv()
-	env["DITTO_INFERENCE_TICKET_CONCURRENCY"] = "50"
-	env["DITTO_INFERENCE_VALIDATOR_CONCURRENCY"] = "24" // ticket > validator
+	env["DITTO_INFERENCE_TICKET_RPM"] = "50"
+	env["DITTO_INFERENCE_VALIDATOR_RPM"] = "24" // ticket > validator
 	if _, err := Load(MapLookup(env)); err == nil {
-		t.Fatal("ticket > validator concurrency must fail boot")
+		t.Fatal("ticket > validator RPM must fail boot")
 	}
 
 	env = minimalEnv()
 	env["DITTO_EMBEDDING_GLOBAL_RPM"] = "200000" // above the 100000 cap
 	if _, err := Load(MapLookup(env)); err == nil {
 		t.Fatal("rpm above cap must fail boot")
+	}
+}
+
+func TestBackroomPolicyIsNotEnvironmentDriven(t *testing.T) {
+	env := minimalEnv()
+	env["DITTO_INFERENCE_REQUEST_BUDGET"] = "1"
+	env["DITTO_INFERENCE_TOKEN_BUDGET"] = "1"
+	env["DITTO_INFERENCE_TICKET_CONCURRENCY"] = "1"
+	env["DITTO_INFERENCE_VALIDATOR_CONCURRENCY"] = "1"
+	env["DITTO_INFERENCE_GLOBAL_CONCURRENCY"] = "1"
+	env["DITTO_EMBEDDING_TICKET_CONCURRENCY"] = "1"
+	env["DITTO_EMBEDDING_VALIDATOR_CONCURRENCY"] = "1"
+	env["DITTO_EMBEDDING_GLOBAL_CONCURRENCY"] = "1"
+	cfg, err := Load(MapLookup(env))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	ip := cfg.Inference
+	if ip.RequestBudget != 8192 || ip.TokenBudget != 25_000_000 ||
+		ip.TicketConcurrency != 16 || ip.ValidatorConcurrency != 48 || ip.GlobalConcurrency != 96 ||
+		ip.EmbeddingTicketConcurrency != 12 || ip.EmbeddingValidatorConcurrency != 48 || ip.EmbeddingGlobalConcurrency != 96 {
+		t.Fatalf("Backroom policy must use DB-policy fallbacks, got %+v", ip)
 	}
 }
 

@@ -58,15 +58,15 @@ func (d *Deps) now() time.Time {
 }
 
 // NewUpstreamClient builds the shared provider client: no redirects, a
-// connection pool sized to the chat global concurrency (matching the httpx
-// Limits(max_connections=global_concurrency) client), and NO client-level
-// deadline — per-attempt timeouts are applied in postOnce, mirroring the
-// per-operation httpx.Timeout.
-func NewUpstreamClient(cfg config.InferenceProxyConfig) *http.Client {
+// connection pool sized to the admission policy's hard ceiling. The live chat
+// global limit is DB-driven, so sizing the transport to a boot snapshot would
+// silently cap a later Backroom raise. There is NO client-level deadline —
+// per-attempt timeouts are applied in postOnce.
+func NewUpstreamClient(_ config.InferenceProxyConfig) *http.Client {
 	transport := &http.Transport{
-		MaxIdleConns:        cfg.GlobalConcurrency,
-		MaxIdleConnsPerHost: cfg.GlobalConcurrency,
-		MaxConnsPerHost:     cfg.GlobalConcurrency,
+		MaxIdleConns:        maxChatConcurrency,
+		MaxIdleConnsPerHost: maxChatConcurrency,
+		MaxConnsPerHost:     maxChatConcurrency,
 	}
 	return &http.Client{
 		Transport: transport,

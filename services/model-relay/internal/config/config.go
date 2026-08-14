@@ -148,12 +148,12 @@ type InferenceProxyConfig struct {
 	Provider      string   // DITTO_INFERENCE_PROVIDER, default nebius
 	RoutingMode   string   // DITTO_INFERENCE_ROUTING_MODE
 
-	RequestBudget int   // DITTO_INFERENCE_REQUEST_BUDGET, default 8192, max 16384
-	TokenBudget   int64 // DITTO_INFERENCE_TOKEN_BUDGET, default 25_000_000, max 100_000_000
+	RequestBudget int   // DB-policy fallback default 8192, max 16384
+	TokenBudget   int64 // DB-policy fallback default 25_000_000, max 100_000_000
 
-	TicketConcurrency    int // DITTO_INFERENCE_TICKET_CONCURRENCY, default 8
-	ValidatorConcurrency int // DITTO_INFERENCE_VALIDATOR_CONCURRENCY, default 24
-	GlobalConcurrency    int // DITTO_INFERENCE_GLOBAL_CONCURRENCY, default 72, cap 128
+	TicketConcurrency    int // DB-policy fallback default 16
+	ValidatorConcurrency int // DB-policy fallback default 48
+	GlobalConcurrency    int // DB-policy fallback default 96, cap 128
 	TicketRPM            int // DITTO_INFERENCE_TICKET_RPM, default 240
 	ValidatorRPM         int // DITTO_INFERENCE_VALIDATOR_RPM, default 960
 	GlobalRPM            int // DITTO_INFERENCE_GLOBAL_RPM, default 2880, cap 100000
@@ -171,9 +171,9 @@ type InferenceProxyConfig struct {
 	EmbeddingRequestBudget int   // DITTO_EMBEDDING_REQUEST_BUDGET, default+max 100000
 	EmbeddingTokenBudget   int64 // DITTO_EMBEDDING_TOKEN_BUDGET, default+max 1e9
 
-	EmbeddingTicketConcurrency    int // DITTO_EMBEDDING_TICKET_CONCURRENCY, default 12
-	EmbeddingValidatorConcurrency int // DITTO_EMBEDDING_VALIDATOR_CONCURRENCY, default 48
-	EmbeddingGlobalConcurrency    int // DITTO_EMBEDDING_GLOBAL_CONCURRENCY, default 96, cap 128
+	EmbeddingTicketConcurrency    int // DB-policy fallback default 12
+	EmbeddingValidatorConcurrency int // DB-policy fallback default 48
+	EmbeddingGlobalConcurrency    int // DB-policy fallback default 96, cap 128
 	EmbeddingTicketRPM            int // DITTO_EMBEDDING_TICKET_RPM, default 10000
 	EmbeddingValidatorRPM         int // DITTO_EMBEDDING_VALIDATOR_RPM, default 40000
 	EmbeddingGlobalRPM            int // DITTO_EMBEDDING_GLOBAL_RPM, default+cap 100000
@@ -378,12 +378,12 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		Provider:    r.str("DITTO_INFERENCE_PROVIDER", "nebius"),
 		RoutingMode: r.str("DITTO_INFERENCE_ROUTING_MODE", RoutingModeAggregateThroughput),
 
-		RequestBudget: r.intval("DITTO_INFERENCE_REQUEST_BUDGET", 8192),
-		TokenBudget:   r.int64val("DITTO_INFERENCE_TOKEN_BUDGET", 25_000_000),
+		RequestBudget: 8192,
+		TokenBudget:   25_000_000,
 
-		TicketConcurrency:    r.intval("DITTO_INFERENCE_TICKET_CONCURRENCY", 8),
-		ValidatorConcurrency: r.intval("DITTO_INFERENCE_VALIDATOR_CONCURRENCY", 24),
-		GlobalConcurrency:    r.intval("DITTO_INFERENCE_GLOBAL_CONCURRENCY", 72),
+		TicketConcurrency:    16,
+		ValidatorConcurrency: 48,
+		GlobalConcurrency:    96,
 		TicketRPM:            r.intval("DITTO_INFERENCE_TICKET_RPM", 240),
 		ValidatorRPM:         r.intval("DITTO_INFERENCE_VALIDATOR_RPM", 960),
 		GlobalRPM:            r.intval("DITTO_INFERENCE_GLOBAL_RPM", 2880),
@@ -401,9 +401,9 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		EmbeddingRequestBudget: r.intval("DITTO_EMBEDDING_REQUEST_BUDGET", 100_000),
 		EmbeddingTokenBudget:   r.int64val("DITTO_EMBEDDING_TOKEN_BUDGET", 1_000_000_000),
 
-		EmbeddingTicketConcurrency:    r.intval("DITTO_EMBEDDING_TICKET_CONCURRENCY", 12),
-		EmbeddingValidatorConcurrency: r.intval("DITTO_EMBEDDING_VALIDATOR_CONCURRENCY", 48),
-		EmbeddingGlobalConcurrency:    r.intval("DITTO_EMBEDDING_GLOBAL_CONCURRENCY", 96),
+		EmbeddingTicketConcurrency:    12,
+		EmbeddingValidatorConcurrency: 48,
+		EmbeddingGlobalConcurrency:    96,
 		EmbeddingTicketRPM:            r.intval("DITTO_EMBEDDING_TICKET_RPM", 10_000),
 		EmbeddingValidatorRPM:         r.intval("DITTO_EMBEDDING_VALIDATOR_RPM", 40_000),
 		EmbeddingGlobalRPM:            r.intval("DITTO_EMBEDDING_GLOBAL_RPM", 100_000),
@@ -462,8 +462,8 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 			r.fail("%s out of range: %d (must be 1..%d)", name, v, maxv)
 		}
 	}
-	pos("DITTO_INFERENCE_REQUEST_BUDGET", int64(ip.RequestBudget), 16384)
-	pos("DITTO_INFERENCE_TOKEN_BUDGET", ip.TokenBudget, 100_000_000)
+	pos("chat_request_budget", int64(ip.RequestBudget), 16384)
+	pos("chat_token_budget", ip.TokenBudget, 100_000_000)
 	pos("DITTO_INFERENCE_REQUEST_BODY_BYTES", ip.RequestBodyBytes, 1*1024*1024)
 	pos("DITTO_INFERENCE_RESPONSE_BODY_BYTES", ip.ResponseBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", int64(ip.MaxOutputTokens), 32768)
@@ -476,11 +476,11 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 			r.fail("%s <= %s <= %s <= %d violated: %d/%d/%d", names[0], names[1], names[2], cap, a, b, c)
 		}
 	}
-	hierarchy([3]string{"DITTO_INFERENCE_TICKET_CONCURRENCY", "DITTO_INFERENCE_VALIDATOR_CONCURRENCY", "DITTO_INFERENCE_GLOBAL_CONCURRENCY"},
+	hierarchy([3]string{"chat_per_ticket_concurrency", "chat_per_validator_concurrency", "chat_global_concurrency"},
 		ip.TicketConcurrency, ip.ValidatorConcurrency, ip.GlobalConcurrency, 128)
 	hierarchy([3]string{"DITTO_INFERENCE_TICKET_RPM", "DITTO_INFERENCE_VALIDATOR_RPM", "DITTO_INFERENCE_GLOBAL_RPM"},
 		ip.TicketRPM, ip.ValidatorRPM, ip.GlobalRPM, 100_000)
-	hierarchy([3]string{"DITTO_EMBEDDING_TICKET_CONCURRENCY", "DITTO_EMBEDDING_VALIDATOR_CONCURRENCY", "DITTO_EMBEDDING_GLOBAL_CONCURRENCY"},
+	hierarchy([3]string{"embedding_per_ticket_concurrency", "embedding_per_validator_concurrency", "embedding_global_concurrency"},
 		ip.EmbeddingTicketConcurrency, ip.EmbeddingValidatorConcurrency, ip.EmbeddingGlobalConcurrency, 128)
 	hierarchy([3]string{"DITTO_EMBEDDING_TICKET_RPM", "DITTO_EMBEDDING_VALIDATOR_RPM", "DITTO_EMBEDDING_GLOBAL_RPM"},
 		ip.EmbeddingTicketRPM, ip.EmbeddingValidatorRPM, ip.EmbeddingGlobalRPM, 100_000)

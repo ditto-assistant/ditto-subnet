@@ -8,8 +8,14 @@ from dataclasses import dataclass, field
 from urllib.parse import parse_qs, urlparse
 
 from ditto.api_models.inference_concurrency_settings import (
+    DEFAULT_CHAT_GLOBAL_CONCURRENCY,
+    DEFAULT_CHAT_PER_TICKET_CONCURRENCY,
+    DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY,
     DEFAULT_CHAT_REQUEST_BUDGET,
     DEFAULT_CHAT_TOKEN_BUDGET,
+    DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY,
+    DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY,
+    DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
     MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
 )
@@ -290,17 +296,19 @@ class ApiServerConfig:
             embedding_dimensions=768,
             embedding_request_budget=100_000,
             embedding_token_budget=1_000_000_000,
-            embedding_per_ticket_concurrency=12,
-            embedding_per_validator_concurrency=48,
-            embedding_global_concurrency=96,
+            embedding_per_ticket_concurrency=(DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY),
+            embedding_per_validator_concurrency=(
+                DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY
+            ),
+            embedding_global_concurrency=DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY,
             embedding_per_ticket_requests_per_minute=10_000,
             embedding_per_validator_requests_per_minute=40_000,
             embedding_global_requests_per_minute=100_000,
             embedding_request_body_bytes=1 << 20,
             embedding_response_body_bytes=16 << 20,
-            per_ticket_concurrency=8,
-            per_validator_concurrency=24,
-            global_concurrency=72,
+            per_ticket_concurrency=DEFAULT_CHAT_PER_TICKET_CONCURRENCY,
+            per_validator_concurrency=DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY,
+            global_concurrency=DEFAULT_CHAT_GLOBAL_CONCURRENCY,
             per_ticket_requests_per_minute=240,
             per_validator_requests_per_minute=960,
             global_requests_per_minute=2880,
@@ -467,16 +475,8 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             routing_mode=os.environ.get(
                 "DITTO_INFERENCE_ROUTING_MODE", "aggregate_throughput"
             ).strip(),
-            request_budget=int(
-                os.environ.get(
-                    "DITTO_INFERENCE_REQUEST_BUDGET", str(DEFAULT_CHAT_REQUEST_BUDGET)
-                )
-            ),
-            token_budget=int(
-                os.environ.get(
-                    "DITTO_INFERENCE_TOKEN_BUDGET", str(DEFAULT_CHAT_TOKEN_BUDGET)
-                )
-            ),
+            request_budget=DEFAULT_CHAT_REQUEST_BUDGET,
+            token_budget=DEFAULT_CHAT_TOKEN_BUDGET,
             embedding_upstream_url=os.environ.get(
                 "DITTO_EMBEDDING_UPSTREAM_URL",
                 "https://openrouter.ai/api/v1/embeddings",
@@ -504,15 +504,11 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             embedding_token_budget=int(
                 os.environ.get("DITTO_EMBEDDING_TOKEN_BUDGET", "1000000000")
             ),
-            embedding_per_ticket_concurrency=int(
-                os.environ.get("DITTO_EMBEDDING_TICKET_CONCURRENCY", "12")
+            embedding_per_ticket_concurrency=(DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY),
+            embedding_per_validator_concurrency=(
+                DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY
             ),
-            embedding_per_validator_concurrency=int(
-                os.environ.get("DITTO_EMBEDDING_VALIDATOR_CONCURRENCY", "48")
-            ),
-            embedding_global_concurrency=int(
-                os.environ.get("DITTO_EMBEDDING_GLOBAL_CONCURRENCY", "96")
-            ),
+            embedding_global_concurrency=DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY,
             embedding_per_ticket_requests_per_minute=int(
                 os.environ.get("DITTO_EMBEDDING_TICKET_RPM", "10000")
             ),
@@ -528,15 +524,9 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             embedding_response_body_bytes=int(
                 os.environ.get("DITTO_EMBEDDING_RESPONSE_BODY_BYTES", str(16 << 20))
             ),
-            per_ticket_concurrency=int(
-                os.environ.get("DITTO_INFERENCE_TICKET_CONCURRENCY", "8")
-            ),
-            per_validator_concurrency=int(
-                os.environ.get("DITTO_INFERENCE_VALIDATOR_CONCURRENCY", "24")
-            ),
-            global_concurrency=int(
-                os.environ.get("DITTO_INFERENCE_GLOBAL_CONCURRENCY", "72")
-            ),
+            per_ticket_concurrency=DEFAULT_CHAT_PER_TICKET_CONCURRENCY,
+            per_validator_concurrency=DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY,
+            global_concurrency=DEFAULT_CHAT_GLOBAL_CONCURRENCY,
             per_ticket_requests_per_minute=int(
                 os.environ.get("DITTO_INFERENCE_TICKET_RPM", "240")
             ),

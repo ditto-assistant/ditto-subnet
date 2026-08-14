@@ -5,6 +5,7 @@ import {
   INFERENCE_CONCURRENCY_CONFIRMATION,
   MAX_CHAT_REQUEST_BUDGET,
   MAX_CHAT_TOKEN_BUDGET,
+  MAX_CHAT_CONCURRENCY,
   MAX_EMBEDDING_CONCURRENCY,
   type InferenceConcurrencySettingsControl,
 } from '../lib/admin.schemas'
@@ -13,7 +14,7 @@ import {
   updateInferenceConcurrencySettings,
 } from '../server/admin.functions'
 
-// The five fields, in the order an operator reaches for them during an
+// The eight fields, in the order an operator reaches for them during an
 // incident: the allowance that actually binds first, then the brake.
 const fields = [
   {
@@ -29,6 +30,25 @@ const fields = [
     max: MAX_CHAT_REQUEST_BUDGET,
     detail:
       'Chat completions one ticket may spend in total. The bound that survives a pathological loop of tiny requests, which the token budget would absorb slowly.',
+  },
+  {
+    key: 'chat_per_ticket_concurrency',
+    label: 'Chat · per ticket',
+    max: MAX_CHAT_CONCURRENCY,
+    detail: 'Concurrent hosted chat requests one scoring ticket may hold.',
+  },
+  {
+    key: 'chat_per_validator_concurrency',
+    label: 'Chat · per validator',
+    max: MAX_CHAT_CONCURRENCY,
+    detail: 'Concurrent hosted chat requests summed over one validator’s grants.',
+  },
+  {
+    key: 'chat_global_concurrency',
+    label: 'Chat · fleet',
+    max: MAX_CHAT_CONCURRENCY,
+    detail:
+      'Concurrent hosted chat requests across the fleet. Live within five seconds without a relay restart.',
   },
   {
     key: 'embedding_per_ticket_concurrency',
@@ -60,6 +80,9 @@ function draftFrom(control: InferenceConcurrencySettingsControl): Draft {
   return {
     chat_token_budget: String(settings.chat_token_budget),
     chat_request_budget: String(settings.chat_request_budget),
+    chat_per_ticket_concurrency: String(settings.chat_per_ticket_concurrency),
+    chat_per_validator_concurrency: String(settings.chat_per_validator_concurrency),
+    chat_global_concurrency: String(settings.chat_global_concurrency),
     embedding_per_ticket_concurrency: String(settings.embedding_per_ticket_concurrency),
     embedding_per_validator_concurrency: String(settings.embedding_per_validator_concurrency),
     embedding_global_concurrency: String(settings.embedding_global_concurrency),
@@ -95,7 +118,9 @@ export function InferenceConcurrencyControlPanel({
   // the operator sees which field is wrong without spending a round trip.
   const hierarchyBroken =
     invalid.length === 0 &&
-    (parsed.embedding_per_ticket_concurrency > parsed.embedding_per_validator_concurrency ||
+    (parsed.chat_per_ticket_concurrency > parsed.chat_per_validator_concurrency ||
+      parsed.chat_per_validator_concurrency > parsed.chat_global_concurrency ||
+      parsed.embedding_per_ticket_concurrency > parsed.embedding_per_validator_concurrency ||
       parsed.embedding_per_validator_concurrency > parsed.embedding_global_concurrency)
 
   const changed = fields.some(
@@ -149,6 +174,9 @@ export function InferenceConcurrencyControlPanel({
           settings: {
             chat_request_budget: parsed.chat_request_budget,
             chat_token_budget: parsed.chat_token_budget,
+            chat_per_ticket_concurrency: parsed.chat_per_ticket_concurrency,
+            chat_per_validator_concurrency: parsed.chat_per_validator_concurrency,
+            chat_global_concurrency: parsed.chat_global_concurrency,
             embedding_per_ticket_concurrency: parsed.embedding_per_ticket_concurrency,
             embedding_per_validator_concurrency: parsed.embedding_per_validator_concurrency,
             embedding_global_concurrency: parsed.embedding_global_concurrency,
@@ -180,11 +208,9 @@ export function InferenceConcurrencyControlPanel({
           <div>
             <h2 className="text-sm font-semibold">Current admission policy</h2>
             <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">
-              What one v7 scoring ticket is allowed to spend on hosted inference, and how
-              parallel its embedding traffic may be. Reaches the admission path within
-              {' '}
-              {effective.source === 'revision' ? 'five seconds' : 'five seconds'} of applying,
-              fleet-wide, with no platform restart.
+              What one scoring ticket is allowed to spend on hosted inference, and how
+              parallel its chat and embedding traffic may be. Changes reach the admission path
+              within five seconds, fleet-wide, with no platform restart.
             </p>
           </div>
         </div>
@@ -222,10 +248,10 @@ export function InferenceConcurrencyControlPanel({
           <span>
             The two budgets are stamped onto a grant when it is minted, so a change here
             governs the <strong>next</strong> lease and can never retroactively exhaust a run
-            already in flight. The three embedding limits are enforced at admission instead —
-            which is what makes lowering the per-ticket limit safe to pull mid-run: a
-            concurrency decline is answered with 503 and Retry-After, so a validator backs off
-            and continues rather than discarding the run.
+            already in flight. Both chat and embedding concurrency limits are enforced at
+            admission instead — which is what makes lowering a per-ticket limit safe to pull
+            mid-run: a concurrency decline is answered with 503 and Retry-After, so a validator
+            backs off and continues rather than discarding the run.
           </span>
         </p>
 
@@ -277,9 +303,9 @@ export function InferenceConcurrencyControlPanel({
         {hierarchyBroken ? (
           <p className="mt-4 flex gap-3 rounded-lg border border-[var(--red)]/25 bg-[var(--red-dim)] p-4 text-xs leading-5 text-[var(--red)]">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-            The embedding limits must satisfy per-ticket ≤ per-validator ≤ fleet. A ticket
-            cannot be allowed more concurrency than the validator hosting it, and no validator
-            more than the fleet.
+            Both chat and embedding limits must satisfy per-ticket ≤ per-validator ≤ fleet.
+            A ticket cannot be allowed more concurrency than the validator hosting it, and no
+            validator more than the fleet.
           </p>
         ) : null}
 

@@ -14,11 +14,15 @@ import pytest
 from pydantic import ValidationError
 
 from ditto.api_models.inference_concurrency_settings import (
+    DEFAULT_CHAT_GLOBAL_CONCURRENCY,
+    DEFAULT_CHAT_PER_TICKET_CONCURRENCY,
+    DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY,
     DEFAULT_CHAT_REQUEST_BUDGET,
     DEFAULT_CHAT_TOKEN_BUDGET,
     DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY,
     DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY,
     DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
+    MAX_CHAT_CONCURRENCY,
     MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
     MAX_EMBEDDING_PER_TICKET_CONCURRENCY,
@@ -50,6 +54,14 @@ class TestDefaults:
     def test_defaults_match_the_documented_constants(self) -> None:
         settings = InferenceConcurrencySettings()
         assert (
+            settings.chat_per_ticket_concurrency == DEFAULT_CHAT_PER_TICKET_CONCURRENCY
+        )
+        assert (
+            settings.chat_per_validator_concurrency
+            == DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY
+        )
+        assert settings.chat_global_concurrency == DEFAULT_CHAT_GLOBAL_CONCURRENCY
+        assert (
             settings.embedding_per_ticket_concurrency
             == DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY
         )
@@ -62,14 +74,10 @@ class TestDefaults:
             == DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY
         )
 
-    def test_board_ceiling_matches_the_boot_time_check(self) -> None:
-        """A revision must never be accepted that ``check_config`` would reject.
-
-        ``check_config`` bounds the boot-time embedding limits at 128. If the
-        board allowed more, an operator could apply a revision that works until
-        the next restart and then refuses to boot.
-        """
+    def test_board_ceiling_matches_the_relay_hard_ceiling(self) -> None:
+        """The API must reject values the Go admission process cannot enforce."""
         assert MAX_EMBEDDING_GLOBAL_CONCURRENCY == 128
+        assert MAX_CHAT_CONCURRENCY == 128
 
     def test_chat_token_ceiling_has_room_for_the_measured_tail(self) -> None:
         assert DEFAULT_CHAT_TOKEN_BUDGET == 25_000_000
@@ -85,6 +93,22 @@ class TestDefaults:
 
 
 class TestHierarchy:
+    def test_chat_ticket_may_not_exceed_validator(self) -> None:
+        with pytest.raises(ValidationError, match="chat_per_ticket_concurrency"):
+            InferenceConcurrencySettings(
+                chat_per_ticket_concurrency=64,
+                chat_per_validator_concurrency=32,
+                chat_global_concurrency=96,
+            )
+
+    def test_chat_validator_may_not_exceed_global(self) -> None:
+        with pytest.raises(ValidationError, match="chat_per_validator_concurrency"):
+            InferenceConcurrencySettings(
+                chat_per_ticket_concurrency=16,
+                chat_per_validator_concurrency=96,
+                chat_global_concurrency=64,
+            )
+
     def test_ticket_may_not_exceed_validator(self) -> None:
         with pytest.raises(ValidationError, match="may not exceed"):
             InferenceConcurrencySettings(
@@ -143,6 +167,9 @@ class TestWriteContract:
         request = self._request(
             chat_request_budget=8192,
             chat_token_budget=25_000_000,
+            chat_per_ticket_concurrency=16,
+            chat_per_validator_concurrency=48,
+            chat_global_concurrency=96,
             embedding_per_ticket_concurrency=16,
             embedding_per_validator_concurrency=64,
             embedding_global_concurrency=128,
@@ -161,6 +188,9 @@ class TestWriteContract:
         with pytest.raises(ValidationError, match="chat_request_budget"):
             self._request(
                 chat_token_budget=25_000_000,
+                chat_per_ticket_concurrency=16,
+                chat_per_validator_concurrency=48,
+                chat_global_concurrency=96,
                 embedding_per_ticket_concurrency=16,
                 embedding_per_validator_concurrency=64,
                 embedding_global_concurrency=128,
@@ -177,6 +207,9 @@ class TestWriteContract:
         with pytest.raises(ValidationError, match="chat_token_budget"):
             self._request(
                 chat_request_budget=8192,
+                chat_per_ticket_concurrency=16,
+                chat_per_validator_concurrency=48,
+                chat_global_concurrency=96,
                 embedding_per_ticket_concurrency=16,
                 embedding_per_validator_concurrency=64,
                 embedding_global_concurrency=128,
@@ -236,6 +269,9 @@ class TestCeilingIsSizedFromMeasurement:
         settings = InferenceConcurrencySettings(
             chat_request_budget=DEFAULT_CHAT_REQUEST_BUDGET,
             chat_token_budget=DEFAULT_CHAT_TOKEN_BUDGET,
+            chat_per_ticket_concurrency=DEFAULT_CHAT_PER_TICKET_CONCURRENCY,
+            chat_per_validator_concurrency=DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY,
+            chat_global_concurrency=DEFAULT_CHAT_GLOBAL_CONCURRENCY,
             embedding_per_ticket_concurrency=MAX_EMBEDDING_PER_TICKET_CONCURRENCY,
             embedding_per_validator_concurrency=MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
             embedding_global_concurrency=MAX_EMBEDDING_GLOBAL_CONCURRENCY,

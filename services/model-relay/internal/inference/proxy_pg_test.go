@@ -306,9 +306,10 @@ func TestChatAtCapacityIsRetryable(t *testing.T) {
 	defer upstream.Close()
 	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
 
-	// Fill the per-ticket lane (boot default 8).
+	// Fill the configured per-ticket lane.
 	testutil.SeedSQL(t, f.pool,
-		`UPDATE inference_grants SET active_requests = 8 WHERE grant_id = $1`, f.grantID)
+		`UPDATE inference_grants SET active_requests = $2 WHERE grant_id = $1`,
+		f.grantID, f.deps.Cfg.Inference.TicketConcurrency)
 
 	body := []byte(chatBody)
 	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, uuid.New(), body)))
@@ -316,6 +317,32 @@ func TestChatAtCapacityIsRetryable(t *testing.T) {
 	if got := w.Header().Get("Retry-After"); got != "1" {
 		t.Fatalf("Retry-After: want 1, got %q", got)
 	}
+}
+
+func TestChatAdmissionUsesRefreshedBackroomConcurrency(t *testing.T) {
+	upstream := fakeChatUpstream(t, nil)
+	defer upstream.Close()
+	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
+
+	testutil.SeedSQL(t, f.pool,
+		`INSERT INTO inference_concurrency_settings_revisions
+		    (parent_revision, scope, settings, checksum, reason, actor)
+		 VALUES (0, '*', $1::jsonb, repeat('a', 64), $2, 'test')`,
+		`{
+			"chat_per_ticket_concurrency": 1,
+			"chat_per_validator_concurrency": 1,
+			"chat_global_concurrency": 1
+		}`,
+		"exercise the live chat concurrency policy")
+	if err := f.deps.Settings.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh settings: %v", err)
+	}
+	testutil.SeedSQL(t, f.pool,
+		`UPDATE inference_grants SET active_requests = 1 WHERE grant_id = $1`, f.grantID)
+
+	body := []byte(chatBody)
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, uuid.New(), body)))
+	expectEnvelope(t, w, 503, relayhttp.CodeDeclineAtCapacity, "inference lane is at capacity")
 }
 
 // seedSiblingGrant creates a second agent + issued ticket + active grant for
@@ -366,13 +393,13 @@ func TestChatCrossGrantRailCountsFreshRowsNotGhostCounters(t *testing.T) {
 	}
 
 	// Real fresh started rows on the sibling DO gate: fill the validator
-	// concurrency ceiling (boot default 24) with fresh rows.
+	// configured validator concurrency ceiling with fresh rows.
 	testutil.SeedSQL(t, f.pool,
 		`INSERT INTO inference_requests (grant_id, nonce, generation, status, request_kind, model,
 		    reserved_tokens, max_chargeable_tokens, prompt_tokens, completion_tokens, cost_microusd, started_at)
 		 SELECT $1, gen_random_uuid(), 1, 'started', 'chat', $2, 100, 100, 0, 0, 0, now()
-		 FROM generate_series(1, 24)`,
-		sibling, pgTestModel)
+		 FROM generate_series(1, $3)`,
+		sibling, pgTestModel, f.deps.Cfg.Inference.ValidatorConcurrency)
 	w = serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, uuid.New(), body)))
 	expectEnvelope(t, w, 503, relayhttp.CodeDeclineAtCapacity, "inference lane is at capacity")
 
@@ -808,8 +835,7 @@ func TestEmbeddingsFullLaneIsBackpressureNotALostLease(t *testing.T) {
 }
 
 func TestEmbeddingSettingsBoardRaisesTicketLimit(t *testing.T) {
-	// The live board can raise the embedding per-ticket ceiling; chat keeps
-	// boot config.
+	// The live board can raise the embedding per-ticket ceiling.
 	vector := make([]byte, 768)
 	pplx := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"model":"pplx-embed-v1-0.6b","data":[{"index":0,"embedding":"` +
@@ -830,6 +856,9 @@ func TestEmbeddingSettingsBoardRaisesTicketLimit(t *testing.T) {
 		     "embedding_per_ticket_concurrency":20,"embedding_per_validator_concurrency":48,
 		     "embedding_global_concurrency":96}'::jsonb, $1, 'raise the lane', 'test-operator')`,
 		checksum)
+	if err := f.deps.Settings.Refresh(t.Context()); err != nil {
+		t.Fatalf("refresh settings: %v", err)
+	}
 	// 12 in flight would exceed the shipped default but not the raised board.
 	testutil.SeedSQL(t, f.pool,
 		`UPDATE inference_grants SET embedding_active_requests = 12 WHERE grant_id = $1`, f.grantID)

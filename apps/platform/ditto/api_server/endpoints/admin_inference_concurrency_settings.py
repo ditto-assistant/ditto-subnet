@@ -1,12 +1,12 @@
-"""Audited operator control for hosted v7 embedding concurrency.
+"""Audited operator control for hosted inference concurrency and budgets.
 
-Append-only revisions of the one policy that decides how parallel a v7 run's
-embedding traffic is allowed to be. This is the lever an operator reaches for
-while *watching* -- raise it, watch run duration and the proxy's admission
-latency, raise it again, or slam it back down -- so it must not be a boot-time
-env var or a code constant. Both of those mean a release to turn a number.
+Append-only revisions of the policy governing hosted chat and embedding
+admission. This is the lever an operator reaches for while *watching* -- raise
+it, watch run duration and the proxy's admission latency, raise it again, or
+slam it back down -- so it must not be a boot-time env var or a code constant.
+Both of those mean a release to turn a number.
 
-Lowering ``embedding_per_ticket_concurrency`` is the emergency brake, and it is
+Lowering either per-ticket concurrency is an emergency brake, and it is
 deliberately safe to pull mid-run: the admission path answers a concurrency
 decline with ``503 + Retry-After`` rather than the ``429`` it reserves for a
 revoked lease, so a validator holding a live ticket backs off and continues

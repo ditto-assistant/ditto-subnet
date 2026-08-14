@@ -93,6 +93,9 @@ describe('admin API schemas', () => {
     const settings = {
       chat_request_budget: 8192,
       chat_token_budget: MAX_CHAT_TOKEN_BUDGET,
+      chat_per_ticket_concurrency: 16,
+      chat_per_validator_concurrency: 48,
+      chat_global_concurrency: 96,
       embedding_per_ticket_concurrency: 8,
       embedding_per_validator_concurrency: 24,
       embedding_global_concurrency: 32,

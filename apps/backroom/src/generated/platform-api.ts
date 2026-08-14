@@ -9223,22 +9223,35 @@ export interface components {
          * InferenceConcurrencySettings
          * @description The whole hosted-inference admission policy, stored as one object.
          *
-         *     The three embedding limits are a strict hierarchy: one ticket may not exceed
-         *     its validator's allowance, and no validator may exceed the fleet's. The
-         *     validator enforces the same hierarchy from below, so under normal operation
-         *     the platform numbers are headroom rather than the operative valve.
+         *     Chat and embedding each have a strict hierarchy: one ticket may not exceed
+         *     its validator's allowance, and no validator may exceed the fleet's.
          *
          *     ``chat_request_budget`` and ``chat_token_budget`` stand apart from the
-         *     three. Neither is a rate and neither is enforced fleet-wide at admission --
-         *     each is *stamped onto a grant when the grant is minted* and thereafter read
-         *     from the grant's own row. That is deliberate, and it is what makes both
-         *     fields safe to sit on a live board: a revision changes what the **next**
-         *     lease is issued, never what a running lease is already spending against. An
-         *     operator cannot exhaust a run in flight by lowering either number, which is
-         *     exactly the hazard that forced the embedding limits to grow a
+         *     concurrency controls. Neither is a rate and neither is enforced fleet-wide
+         *     at admission -- each is *stamped onto a grant when the grant is minted* and
+         *     thereafter read from the grant's own row. That is deliberate, and it is
+         *     what makes both fields safe to sit on a live board: a revision changes what
+         *     the **next** lease is issued, never what a running lease is already spending
+         *     against. An operator cannot exhaust a run in flight by lowering either
+         *     number, which is exactly the hazard that forced the embedding limits to grow a
          *     capacity-decline path.
          */
         InferenceConcurrencySettings: {
+            /**
+             * Chat Global Concurrency
+             * @default 96
+             */
+            chat_global_concurrency: number;
+            /**
+             * Chat Per Ticket Concurrency
+             * @default 16
+             */
+            chat_per_ticket_concurrency: number;
+            /**
+             * Chat Per Validator Concurrency
+             * @default 48
+             */
+            chat_per_validator_concurrency: number;
             /**
              * Chat Request Budget
              * @default 8192

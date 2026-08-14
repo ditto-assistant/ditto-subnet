@@ -66,6 +66,9 @@ class TestParseApiServerConfigFromEnv:
         assert config.validator_compatibility.heartbeat_max_age_seconds == 300
         assert config.inference_proxy.routing_mode == "aggregate_throughput"
         assert config.inference_proxy.route_min_calibration_samples == 60
+        assert config.inference_proxy.per_ticket_concurrency == 16
+        assert config.inference_proxy.per_validator_concurrency == 48
+        assert config.inference_proxy.global_concurrency == 96
 
     def test_free_taostats_key_config_is_optional(
         self, monkeypatch: pytest.MonkeyPatch
@@ -80,6 +83,30 @@ class TestParseApiServerConfigFromEnv:
         assert config.validator_names.url == url
         assert config.validator_names.api_key == "free-api-key"
         assert config.validator_names.enabled is True
+
+    def test_backroom_policy_is_not_environment_driven(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_INFERENCE_REQUEST_BUDGET", "1")
+        monkeypatch.setenv("DITTO_INFERENCE_TOKEN_BUDGET", "1")
+        monkeypatch.setenv("DITTO_INFERENCE_TICKET_CONCURRENCY", "1")
+        monkeypatch.setenv("DITTO_INFERENCE_VALIDATOR_CONCURRENCY", "1")
+        monkeypatch.setenv("DITTO_INFERENCE_GLOBAL_CONCURRENCY", "1")
+        monkeypatch.setenv("DITTO_EMBEDDING_TICKET_CONCURRENCY", "1")
+        monkeypatch.setenv("DITTO_EMBEDDING_VALIDATOR_CONCURRENCY", "1")
+        monkeypatch.setenv("DITTO_EMBEDDING_GLOBAL_CONCURRENCY", "1")
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert config.inference_proxy.request_budget == 8192
+        assert config.inference_proxy.token_budget == 25_000_000
+        assert config.inference_proxy.per_ticket_concurrency == 16
+        assert config.inference_proxy.per_validator_concurrency == 48
+        assert config.inference_proxy.global_concurrency == 96
+        assert config.inference_proxy.embedding_per_ticket_concurrency == 12
+        assert config.inference_proxy.embedding_per_validator_concurrency == 48
+        assert config.inference_proxy.embedding_global_concurrency == 96
 
     def test_overrides_picked_up(self, monkeypatch: pytest.MonkeyPatch):
         _set_minimum_env(monkeypatch)

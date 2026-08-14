@@ -67,11 +67,11 @@ def settings_from_row(
 def apply_settings(
     config: InferenceProxyConfig, settings: InferenceConcurrencySettings
 ) -> InferenceProxyConfig:
-    """Overlay the resolved embedding limits onto a boot-time proxy config.
+    """Overlay the resolved hosted-inference policy onto a proxy config.
 
     Returns a new frozen config so the admission query keeps its existing
-    signature and every field this board does not own -- the chat concurrency and
-    rate limits, the embedding token budget, the upstream URLs, the routing
+    signature and every field this board does not own -- the chat rate limits,
+    the embedding token budget, the upstream URLs, the routing
     weights -- is carried through untouched by construction rather than by
     remembering to copy it.
 
@@ -86,6 +86,9 @@ def apply_settings(
         config,
         request_budget=settings.chat_request_budget,
         token_budget=settings.chat_token_budget,
+        per_ticket_concurrency=settings.chat_per_ticket_concurrency,
+        per_validator_concurrency=settings.chat_per_validator_concurrency,
+        global_concurrency=settings.chat_global_concurrency,
         embedding_per_ticket_concurrency=settings.embedding_per_ticket_concurrency,
         embedding_per_validator_concurrency=(
             settings.embedding_per_validator_concurrency
@@ -159,10 +162,9 @@ async def resolved_proxy_config(
     """``config`` with the operator's live policy overlaid, given an app state.
 
     With no resolver bound (unit tests, or a deployment predating the board) the
-    boot-time config is returned untouched, so ``DITTO_INFERENCE_*`` env
-    overrides keep their meaning as the seed. The board's shipped defaults are
-    the same numbers ``config.py`` seeds, so an empty settings table and an
-    absent resolver produce identical behaviour.
+    config fallback is returned untouched. The board's shipped defaults are the
+    same numbers ``config.py`` seeds, so an empty settings table and an absent
+    resolver produce identical behaviour.
 
     **Call this before opening the caller's transaction, never inside it.** The
     resolver reads on its own session; doing that while the caller holds a grant

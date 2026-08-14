@@ -53,6 +53,9 @@ def _settings(**overrides: object) -> dict[str, object]:
     settings: dict[str, object] = {
         "chat_request_budget": 8192,
         "chat_token_budget": 25_000_000,
+        "chat_per_ticket_concurrency": 16,
+        "chat_per_validator_concurrency": 48,
+        "chat_global_concurrency": 96,
         "embedding_per_ticket_concurrency": 12,
         "embedding_per_validator_concurrency": 48,
         "embedding_global_concurrency": 96,
@@ -119,6 +122,9 @@ class TestRead:
         assert body["effective"]["settings"] == {
             "chat_request_budget": 8192,
             "chat_token_budget": 25_000_000,
+            "chat_per_ticket_concurrency": 16,
+            "chat_per_validator_concurrency": 48,
+            "chat_global_concurrency": 96,
             "embedding_per_ticket_concurrency": 12,
             "embedding_per_validator_concurrency": 48,
             "embedding_global_concurrency": 96,

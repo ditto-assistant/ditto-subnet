@@ -175,11 +175,6 @@ platform_inference_route_exploration_tickets: 3
 platform_inference_route_max_error_rate: 0.25
 platform_inference_route_max_timeout_rate: 0.15
 platform_inference_route_cooldown_seconds: 30
-platform_inference_request_budget: 1024
-platform_inference_token_budget: 4000000
-platform_inference_ticket_concurrency: 8
-platform_inference_validator_concurrency: 24
-platform_inference_global_concurrency: 72
 platform_inference_ticket_rpm: 240
 platform_inference_validator_rpm: 960
 platform_inference_global_rpm: 2880

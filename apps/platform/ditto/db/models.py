@@ -4020,12 +4020,11 @@ class QueuePolicySettingsRevision(Base):
 
 
 class InferenceConcurrencySettingsRevision(Base):
-    """Append-only operator policy for the hosted v7 embedding lane.
+    """Append-only operator policy for hosted inference admission.
 
-    Governs how many hosted embedding requests may be in flight per ticket, per
-    validator, and fleet-wide. Scoped tightly on purpose: the chat lane keeps its
-    boot-time configuration, and the local-Ollama lane used by bench_version 2-6
-    is not reachable from this table at all.
+    Governs chat budgets plus how many hosted chat and embedding requests may be
+    in flight per ticket, per validator, and fleet-wide. The local-Ollama lane
+    used by bench_version 2-6 is not reachable from this table.
 
     Each revision stores the WHOLE policy rather than a diff, so any historical
     revision is reconstructable on its own and a read never merges partials. See
