@@ -85,6 +85,12 @@ resource "google_service_account_iam_member" "subnet_build_wif" {
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/ditto-subnet:environment:${var.platform_deploy_environment}"
 }
 
+resource "google_service_account_iam_member" "subnet_build_depot_wif" {
+  service_account_id = google_service_account.subnet_build.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = local.depot_deploy_principal
+}
+
 resource "google_artifact_registry_repository_iam_member" "subnet_build_public_builders_writer" {
   project    = var.project
   location   = var.region
@@ -128,6 +134,12 @@ resource "google_service_account_iam_member" "dittobench_deploy_wif" {
   service_account_id = google_service_account.dittobench_deploy.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/ditto-subnet:environment:${var.platform_deploy_environment}"
+}
+
+resource "google_service_account_iam_member" "dittobench_deploy_depot_wif" {
+  service_account_id = google_service_account.dittobench_deploy.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = local.depot_deploy_principal
 }
 
 resource "google_artifact_registry_repository_iam_member" "dittobench_deploy_writer" {

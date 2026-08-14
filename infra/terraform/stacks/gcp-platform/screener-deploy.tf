@@ -34,6 +34,12 @@ resource "google_service_account_iam_member" "screener_deploy_wif" {
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/ditto-subnet:environment:${var.platform_deploy_environment}"
 }
 
+resource "google_service_account_iam_member" "screener_deploy_depot_wif" {
+  service_account_id = google_service_account.screener_deploy.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = local.depot_deploy_principal
+}
+
 # `gcloud compute ssh` checks actAs for the identity attached to the target.
 # Pet and MIG workers share the provider-secret-free screener_worker identity.
 resource "google_service_account_iam_member" "screener_deploy_actas_worker" {

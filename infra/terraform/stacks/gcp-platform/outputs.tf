@@ -67,6 +67,11 @@ output "wif_provider" {
   description = "Full `github` WIF provider resource name — set as the ditto-subnet repo secret GCP_WIF_PROVIDER."
   value       = "projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/providers/${var.wif_provider_id}"
 }
+
+output "depot_wif_provider" {
+  description = "Full Depot CI WIF provider resource name. After applying this stack, store it as GCP_WIF_PROVIDER in Depot with main/release-workflow availability restrictions."
+  value       = google_iam_workload_identity_pool_provider.depot.name
+}
 output "datagen_release_sa_email" {
   description = "Set as ditto-subnet's GCP_DATAGEN_RELEASE_SA prod-environment secret."
   value       = google_service_account.datagen_release.email

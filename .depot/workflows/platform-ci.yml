@@ -25,6 +25,32 @@ defaults:
   run:
     working-directory: apps/platform
 jobs:
+  python-image:
+    runs-on: depot-ubuntu-24.04
+    snapshot:
+      image-name: ditto-platform-ci
+      version: v1
+      with:
+        # Rebuild regularly for base-image security updates. The consumer also
+        # runs `uv sync --locked`, so a lockfile change is correct immediately
+        # instead of waiting for this snapshot to age out.
+        max-age: 3d
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Preinstall Python dependencies
+        run: uv sync --locked --group dev
+      - name: Preload service images
+        working-directory: .
+        run: |
+          docker pull postgres:16-alpine
+          docker pull minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          docker pull minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
   copy-lint:
     runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
     steps:
@@ -65,7 +91,13 @@ jobs:
         working-directory: apps/platform/dashboard
         run: npm run build
   lint-and-test:
-    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    needs: python-image
+    # The suite uses pytest-xdist with `-n auto`. The default two-CPU sandbox
+    # created only two workers and spent 5m29s inside pytest; eight CPUs turn
+    # the existing test parallelism into wall-clock savings.
+    runs-on:
+      size: 8x32
+      image: ditto-platform-ci
     strategy:
       fail-fast: false
       matrix:
@@ -91,6 +123,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          clean: false
           fetch-depth: 0
       - name: Install Gitleaks
         env:
@@ -112,13 +145,7 @@ jobs:
         # Platform so fixtures imported by sibling components do not leak into
         # this component's policy while still scanning all Platform history.
         run: gitleaks git . --log-opts="--all -- apps/platform" --no-banner --redact=100
-      - name: Install uv
-        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
-        with:
-          enable-cache: true
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
-      - name: Install dependencies
+      - name: Verify locked dependencies
         run: uv sync --locked --group dev
       - name: ruff format check
         run: uv run ruff format --check .
