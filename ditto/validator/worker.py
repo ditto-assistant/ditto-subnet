@@ -2327,12 +2327,17 @@ class ValidatorWorker:
         ordered = sorted(reports, key=lambda report: (report.composite, report.seed))
         representative = ordered[len(ordered) // 2]
         pairs = sorted((report.seed, report.composite) for report in reports)
+        pooled_stderr = _pooled_confirmation_stderr(
+            [value for _, value in pairs], representative.composite_stderr
+        )
         return representative.model_copy(
             update={
                 "confirmation_seeds": [seed for seed, _ in pairs],
                 "confirmation_composites": [value for _, value in pairs],
-                "composite_stderr": _pooled_confirmation_stderr(
-                    [value for _, value in pairs], representative.composite_stderr
+                "composite_stderr": (
+                    representative.composite_stderr
+                    if pooled_stderr is None
+                    else pooled_stderr
                 ),
             }
         )

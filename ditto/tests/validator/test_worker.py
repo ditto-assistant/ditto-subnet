@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import re
 import time
 from datetime import UTC, datetime, timedelta
@@ -35,7 +36,9 @@ from ditto.api_models.validator import (
     LedgerEntry,
     LedgerResponse,
     ScoreReport,
+    SubmitScoreRequest,
     SubmitScoreResponse,
+    V9BaseEvidence,
     ValidatorHeartbeatResponse,
 )
 from ditto.api_models.validator_capabilities import (
@@ -75,6 +78,10 @@ from ditto.validator.worker import ValidatorWorker
 _VALIDATOR_HOTKEY = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
 _BURN_HOTKEY = "5Burn" + "x" * 43
 _T0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+_V9_CONTRACT_VECTOR = (
+    Path(__file__).resolve().parents[3]
+    / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+)
 
 
 def _compose_default_benchmark_capacity() -> int:
@@ -694,6 +701,32 @@ def _report(run_id: str, composite: float) -> ScoreReport:
     )
 
 
+def _v9_report() -> ScoreReport:
+    vector = json.loads(_V9_CONTRACT_VECTOR.read_text())["vectors"][0]
+    evidence = V9BaseEvidence.model_validate(vector["details"])
+    return ScoreReport(
+        run_id=evidence.run_id,
+        bench_version=9,
+        base_evidence_sha256=evidence.digest_hex(),
+        seed=42,
+        composite=evidence.effective_composite_micros / 1_000_000,
+        tool_mean=0.9,
+        memory_mean=0.75,
+        median_ms=800,
+        n=12,
+        composite_stderr=evidence.effective_stderr_micros / 1_000_000,
+        generated_at=datetime.now(UTC),
+        per_case=[],
+        structural_fingerprint=None,
+        details={
+            "bench_version": 9,
+            "dataset_sha256": evidence.dataset_sha256,
+            "transcript_sha256": evidence.transcript_sha256,
+            "v9_base": evidence.model_dump(mode="json"),
+        },
+    )
+
+
 def _confirmation_pins(
     agent_id: UUID, *, bench_version: int = 8, count: int = 3
 ) -> list[ConfirmationDatasetPin]:
@@ -785,6 +818,43 @@ def _platform_with_ledger(
 
 
 class TestTop5ConfirmationLane:
+    async def test_single_seed_v9_preserves_stderr_for_submission(self) -> None:
+        report = _v9_report()
+        assert report.details is not None
+        evidence = V9BaseEvidence.model_validate(report.details["v9_base"])
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._evaluate = AsyncMock(return_value=report)  # type: ignore[method-assign]
+
+        folded = await worker._evaluate_confirmation_report(
+            uuid4(),
+            "ab" * 32,
+            datasets=[
+                ConfirmationDatasetPin(
+                    seed=report.seed,
+                    dataset_sha256=evidence.dataset_sha256,
+                    run_size="full",
+                )
+            ],
+            bench_version=9,
+        )
+
+        assert folded is not None
+        assert folded.confirmation_seeds == [report.seed]
+        assert folded.confirmation_composites == [report.composite]
+        assert folded.composite_stderr == report.composite_stderr
+        payload = SubmitScoreRequest(
+            validator_hotkey=_VALIDATOR_HOTKEY,
+            signature="ab" * 64,
+            report=folded,
+        )
+        assert payload.report.composite_stderr == report.composite_stderr
+
     async def test_cold_start_plans_v9_from_platform_ledger_authority(self) -> None:
         entry = _entry("5MinerV9" + "x" * 39, 0.9).model_copy(
             update={"bench_version": 9}
