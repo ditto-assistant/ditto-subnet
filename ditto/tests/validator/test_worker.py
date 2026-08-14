@@ -891,6 +891,92 @@ class TestTop5ConfirmationLane:
         assert platform.submit_top5_confirmation_score.await_count == len(entries)
         assert all(slot.active_agent_id is None for slot in worker._slots.values())
 
+    async def test_extended_cohort_waits_for_priority_claims_not_runs(self) -> None:
+        """Spare ranks retry after top-five admission without waiting 90 minutes.
+
+        Platform serializes the fairness decision. If all ranks are offered at
+        once, an extended request can arrive before the top-five ticket writes
+        commit, receive a priority 409, and remain idle until an accepted run
+        completes. The worker must stage claims at that transaction boundary
+        while still executing every accepted job concurrently.
+        """
+        entries = [
+            _entry(f"5Miner{index}" + "x" * 40, 0.90 - index * 0.01).model_copy(
+                update={"bench_version": 8}
+            )
+            for index in range(6)
+        ]
+        platform = _platform_with_ledger(jobs=[], ledger=entries)
+        platform.get_ledger.return_value = platform.get_ledger.return_value.model_copy(
+            update={"continual_retest_cohort_size": 6}
+        )
+        priority_ids = {entry.agent_id for entry in entries[:5]}
+        priority_started = 0
+        priority_resolved = 0
+        release_priority = asyncio.Event()
+
+        async def request_job(
+            *, champion_agent_id: UUID, member_agent_id: UUID
+        ) -> JobResponse:
+            nonlocal priority_started, priority_resolved
+            assert champion_agent_id == entries[0].agent_id
+            if member_agent_id in priority_ids:
+                priority_started += 1
+                if priority_started == len(priority_ids):
+                    release_priority.set()
+                await release_priority.wait()
+                priority_resolved += 1
+            elif priority_resolved != len(priority_ids):
+                raise PlatformError("emission members still need coverage")
+            index = next(
+                idx
+                for idx, entry in enumerate(entries)
+                if entry.agent_id == member_agent_id
+            )
+            return _job(
+                entries[index].miner_hotkey, slot_id=f"slot-{index}"
+            ).model_copy(
+                update={
+                    "agent_id": member_agent_id,
+                    "bench_version": 8,
+                    "confirmation_datasets": _confirmation_pins(member_agent_id),
+                    "deadline": datetime.now(UTC) + timedelta(hours=3),
+                }
+            )
+
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=request_job)
+        config = _config()
+        config.benchmark_capacity = len(entries)
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        all_running = asyncio.Event()
+        active = 0
+
+        async def evaluate(
+            _agent_id: UUID, _sha256: str, *, seed: int, **_: object
+        ) -> ScoreReport:
+            nonlocal active
+            active += 1
+            if active == len(entries):
+                all_running.set()
+            await asyncio.wait_for(all_running.wait(), timeout=1)
+            return _report(str(seed), 0.8).model_copy(
+                update={"seed": seed, "bench_version": 8}
+            )
+
+        worker._evaluate = AsyncMock(side_effect=evaluate)  # type: ignore[method-assign]
+
+        await worker._run_top5_confirmation_lane()
+
+        assert priority_resolved == len(priority_ids)
+        assert platform.request_top5_confirmation_job.await_count == len(entries)
+        assert platform.submit_top5_confirmation_score.await_count == len(entries)
+
     async def test_appends_multi_seed_receipt_without_replacing_score(self) -> None:
         entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
             update={"bench_version": 8}

@@ -105,6 +105,7 @@ from ditto.validator.update_control import write_update_state
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
     Top5ConfirmationPlan,
+    Top5Member,
     _entry_has_seeds,
     agents_needing_rescore,
     apply_miner_emission_cap,
@@ -1928,6 +1929,7 @@ class ValidatorWorker:
         drain_requested: asyncio.Event | None = None,
         _member_agent_id: UUID | None = None,
         _plan: Top5ConfirmationPlan | None = None,
+        _claim_resolved: asyncio.Event | None = None,
     ) -> None:
         """Claim and execute bounded append-only work for the current top five.
 
@@ -1977,32 +1979,75 @@ class ValidatorWorker:
             # validators can -- and do -- take distinct missing seeds for that
             # agent, giving a five-validator fleet five-way per-agent catch-up
             # while up to five cohort members run on each host.
-            await asyncio.gather(
-                *(
-                    self._run_top5_confirmation_lane(
-                        stop_requested=stop_requested,
-                        drain_requested=drain_requested,
-                        _member_agent_id=member.entry.agent_id,
-                        _plan=plan,
-                    )
-                    for member in plan.members
-                )
+            priority = tuple(
+                member
+                for member in plan.members
+                if member.entry.agent_id in plan.emission_member_ids
             )
+            extended = tuple(
+                member
+                for member in plan.members
+                if member.entry.agent_id not in plan.emission_member_ids
+            )
+
+            async def start_claims(
+                members: Sequence[Top5Member],
+            ) -> list[asyncio.Task[None]]:
+                tasks: list[asyncio.Task[None]] = []
+                resolved: list[asyncio.Event] = []
+                for member in members:
+                    claim_resolved = asyncio.Event()
+                    resolved.append(claim_resolved)
+                    tasks.append(
+                        asyncio.create_task(
+                            self._run_top5_confirmation_lane(
+                                stop_requested=stop_requested,
+                                drain_requested=drain_requested,
+                                _member_agent_id=member.entry.agent_id,
+                                _plan=plan,
+                                _claim_resolved=claim_resolved,
+                            )
+                        )
+                    )
+                if resolved:
+                    await asyncio.gather(*(event.wait() for event in resolved))
+                return tasks
+
+            # Platform admits the emission set before extended cohort members.
+            # Resolve those HTTP claims first, but do not wait for their long
+            # benchmark executions: once their transactions have committed,
+            # lower-priority claims can see them as covered and immediately use
+            # the remaining healthy slots. Launching every rank together made
+            # early extended requests lose this race and then wait for the one
+            # accepted run to finish before the next dispatch pass.
+            tasks = await start_claims(priority)
+            tasks.extend(await start_claims(extended))
+            if tasks:
+                await asyncio.gather(*tasks)
             return
         for member in plan.members:
             if member.entry.agent_id != _member_agent_id:
                 continue
             if self._new_work_blocked(stop_requested, drain_requested):
+                if _claim_resolved is not None:
+                    _claim_resolved.set()
                 return
             entry = member.entry
             job = None
             slot_token = None
             ticket_claimed = False
             try:
-                job = await self._platform.request_top5_confirmation_job(
-                    champion_agent_id=plan.champion.agent_id,
-                    member_agent_id=entry.agent_id,
-                )
+                try:
+                    job = await self._platform.request_top5_confirmation_job(
+                        champion_agent_id=plan.champion.agent_id,
+                        member_agent_id=entry.agent_id,
+                    )
+                finally:
+                    # The HTTP response is observed only after Platform's lease
+                    # transaction resolves. Wake the next admission tier here;
+                    # execution may keep this task busy for the full lease.
+                    if _claim_resolved is not None:
+                        _claim_resolved.set()
                 # Mirrors the canonical path's slot-mismatch guard: binding an
                 # unserved slot below would raise KeyError out of the lane and
                 # take the rest of the sweep's confirmations with it.
@@ -2170,6 +2215,10 @@ class ValidatorWorker:
                         job, "scoring_error", failure_detail(exc)
                     )
             finally:
+                if _claim_resolved is not None:
+                    # Also cover early exits and unexpected exceptions before
+                    # the request boundary above.
+                    _claim_resolved.set()
                 # Release whatever this iteration actually claimed. Matching on
                 # ``entry.agent_id`` instead would leak the slot for the rest of
                 # the lease if a lease ever came back for a different agent than
@@ -2182,6 +2231,9 @@ class ValidatorWorker:
                     await self._report_heartbeat("polling")
                 if slot_token is not None:
                     _CURRENT_SLOT.reset(slot_token)
+        if _claim_resolved is not None:
+            # Defensive for a caller that supplies an id absent from the plan.
+            _claim_resolved.set()
 
     async def _evaluate_confirmation_report(
         self,

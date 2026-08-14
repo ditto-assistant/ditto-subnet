@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 from ditto.validator.config import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
@@ -712,6 +713,13 @@ class Top5ConfirmationPlan:
     champion: LedgerEntry
     anchor_seeds: tuple[int, ...]
     members: tuple[Top5Member, ...]
+    emission_member_ids: frozenset[UUID]
+    """Emission members whose claims settle before spare-capacity work.
+
+    ``members`` omits entries that already cover the current target seed set,
+    so the validator cannot recover this boundary by slicing planned work.
+    Keep the authoritative emission membership alongside the plan instead.
+    """
 
 
 def _elastic_confirmation_seed_ceiling(
@@ -865,7 +873,10 @@ def top5_confirmation_set(
     if not planned:
         return None
     return Top5ConfirmationPlan(
-        champion=champion, anchor_seeds=anchor, members=tuple(planned)
+        champion=champion,
+        anchor_seeds=anchor,
+        members=tuple(planned),
+        emission_member_ids=frozenset(member.agent_id for member in emission_members),
     )
 
 
