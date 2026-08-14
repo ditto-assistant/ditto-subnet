@@ -209,6 +209,18 @@
         "format": "uuid",
         "type": "string"
       },
+      "container_log_tail": {
+        "anyOf": [
+          {
+            "maxLength": 2048,
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "failure_detail": {
         "anyOf": [
           {

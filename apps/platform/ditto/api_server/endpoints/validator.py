@@ -5334,6 +5334,10 @@ async def fail_job(
             ticket.deadline = now
             ticket.failure_reason = payload.reason
             ticket.failure_detail = payload.failure_detail
+            # Written and cleared with failure_reason, exactly as failure_detail
+            # is, so the three are always read as one report. A validator that
+            # predates the field sends None and this stays NULL.
+            ticket.container_log_tail = payload.container_log_tail
             ticket.failed_at = now
             if payload.reason == "infrastructure" or platform_revoked:
                 # Not the agent's fault: bump the (bounded) infra grant that

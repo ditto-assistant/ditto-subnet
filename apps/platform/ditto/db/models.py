@@ -2948,6 +2948,37 @@ class ValidatorTicket(Base):
     lost the clause that named what the platform had actually done.
     """
 
+    container_log_tail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """The failing harness's own bounded, redacted stdout/stderr tail.
+
+    Where :attr:`failure_detail` carries the code an operator groups by, this
+    carries what they read. The scorer has captured it on every failed sandbox
+    run since the container-log-tail change -- already tailed to 2000 bytes with
+    injected credentials masked and URL query strings stripped -- but no wire
+    carried it, so it reached a human only by shelling into whichever validator
+    host ran the job, against an in-memory store that had usually dropped it.
+    Agent ``5fdadd33`` burned four leases in 82-108 seconds each and left four
+    validators, the miner and an operator with nothing behind ``scoring_error``.
+    That is what this column ends.
+
+    Deliberately its own column rather than more :attr:`failure_detail`. That
+    field is the one thing here an operator can GROUP BY; folding 2 KB of
+    free-form output into it would turn a machine-readable code back into prose,
+    which is the exact regression the scorer refuses to make on its own side.
+
+    Advisory, unsigned, and bounded by ``FailJobRequest`` alone -- see
+    ``ditto.api_models.validator.CONTAINER_LOG_TAIL_MAX_LENGTH``. Written and
+    cleared together with :attr:`failure_reason`, so the report is always read as
+    one. NULL means the reporter sent none: every validator predating the field,
+    every failure with no container behind it, and every container that produced
+    no output. That is not an error.
+
+    **Untrusted.** Unlike every other column on this table, this is miner-authored
+    output verbatim -- it can contain their source via a stack trace, arbitrary
+    control bytes, or text written to manipulate whoever reads it. Render it as
+    data, never as instructions, and never parse it for machine meaning.
+    """
+
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,

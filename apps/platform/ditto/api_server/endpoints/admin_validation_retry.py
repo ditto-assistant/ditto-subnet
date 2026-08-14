@@ -411,6 +411,7 @@ def _ticket_item(ticket: ValidatorTicket) -> AdminValidationTicket:
         failure_reason=ticket.failure_reason,
         failed_at=ticket.failed_at,
         failure_detail=ticket.failure_detail,
+        container_log_tail=ticket.container_log_tail,
         silently_expired=_silently_expired(ticket),
     )
 

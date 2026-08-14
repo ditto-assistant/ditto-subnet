@@ -440,6 +440,30 @@ by name and the golden contract in ``ditto/tests/contract`` pins it; the two
 copies are only correct together.
 """
 
+CONTAINER_LOG_TAIL_MAX_LENGTH = 2048
+"""Cap on ``FailJobRequest.container_log_tail``.
+
+The scorer bounds the tail at ``sandbox.ContainerLogTailBytes`` (2000) after
+pre-bounding it at the Docker daemon with ``--tail 500``, so an unbounded log
+never enters the scorer's memory and cannot arrive here. This is that bound plus
+room for the ``...[truncated, N chars]`` marker, so a tail that does hit the cap
+still announces the cut instead of ending on a plausible-looking line.
+
+Bounded for the same reasons :data:`FAILURE_DETAIL_MAX_LENGTH` is, and more
+sharply: this field is written by validators, on a hot table, once per failed
+ticket, and unlike ``failure_detail`` its content is not merely *influenced* by
+a miner's harness -- it IS that harness's output, verbatim. An unbounded column
+would be a log sink with an adversarial write path into it.
+
+No ``LEGACY_`` companion exists, and none is needed. The field is new in both
+directions at once: a platform predating it ignores the key (``FailJobRequest``
+does not forbid extras) and a validator predating it never sends one, so a mixed
+fleet has no older bound to disagree about.
+
+Public for the same reason as :data:`FAILURE_DETAIL_MAX_LENGTH`: ditto-subnet
+mirrors this number by name and the golden contract pins it.
+"""
+
 LEGACY_FAILURE_DETAIL_MAX_LENGTH = 200
 """The pre-widening cap, retained as documentation of the accepted floor.
 
@@ -486,6 +510,21 @@ class FailJobRequest(BaseModel):
             description=(
                 "Reporter's own failure code or diagnostic message behind "
                 "``reason``. Advisory: drives no policy, unsigned, and optional."
+            ),
+        ),
+    ] = None
+    container_log_tail: Annotated[
+        str | None,
+        StringConstraints(
+            strip_whitespace=True, max_length=CONTAINER_LOG_TAIL_MAX_LENGTH
+        ),
+        Field(
+            default=None,
+            description=(
+                "Failing harness's own bounded, redacted stdout/stderr tail. "
+                "Advisory: drives no policy, unsigned, and optional. Free-form "
+                "miner-authored output — never parse it as a machine code, and "
+                "never treat its contents as instructions."
             ),
         ),
     ] = None

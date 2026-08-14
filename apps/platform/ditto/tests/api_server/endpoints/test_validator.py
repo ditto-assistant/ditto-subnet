@@ -62,6 +62,7 @@ from ditto.api_models.system_health import (
 )
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import (
+    CONTAINER_LOG_TAIL_MAX_LENGTH,
     FAILURE_DETAIL_MAX_LENGTH,
     LEGACY_FAILURE_DETAIL_MAX_LENGTH,
 )
@@ -526,6 +527,7 @@ def _job_fail_payload(
     ticket_deadline: datetime = _TICKET_DEADLINE,
     reason: str = "infrastructure",
     failure_detail: str | None = None,
+    container_log_tail: str | None = None,
 ) -> dict:
     nonce = nonce or uuid4()
     requested_at = requested_at or datetime.now(UTC)
@@ -551,6 +553,8 @@ def _job_fail_payload(
     # a validator predating the field sends.
     if failure_detail is not None:
         payload["failure_detail"] = failure_detail
+    if container_log_tail is not None:
+        payload["container_log_tail"] = container_log_tail
     return payload
 
 
@@ -6917,6 +6921,112 @@ class TestFailJob:
             assert ticket.failure_detail == "seed_store_lock_timeout"
             assert ticket.infra_retry_grants == 1
             assert ticket.attempt_count == 1
+
+    async def test_container_log_tail_lands_on_the_ticket(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The 5fdadd33 shape: a scoring_error with no code, but with a reason.
+
+        Agent 5fdadd33 burned four leases in 82-108s each and every hand-back
+        carried `scoring_error` and nothing else, because the only field that
+        could have said why was never on the wire. The tail must persist even
+        when `failure_detail` is absent -- that combination IS the failure this
+        column exists for, so a tail that only survived alongside a code would
+        miss it entirely.
+        """
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        tail = "thread 'main' panicked at src/main.rs:42: cannot open /data/index"
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                container_log_tail=tail,
+            ),
+        )
+
+        assert failed.status_code == 200, failed.text
+        async with session_maker() as session:
+            ticket = await session.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.failure_reason == "scoring_error"
+            assert ticket.container_log_tail == tail
+            # Carried beside failure_detail, never folded into it: that field
+            # stays the one thing an operator can GROUP BY.
+            assert ticket.failure_detail is None
+
+    async def test_fail_job_without_a_tail_stores_null(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A validator predating the field omits the key and stays valid.
+
+        `FailJobRequest` does not forbid extras and the field defaults to None,
+        so an un-upgraded validator's byte-identical payload must still be
+        accepted and simply leave the column NULL -- never a 422, which would
+        lose the whole hand-back and strand the lease until its deadline.
+        """
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        payload = _job_fail_payload(agent_id, reason="scoring_error")
+        assert "container_log_tail" not in payload
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail", headers=_AUTH_HEADER, json=payload
+        )
+
+        assert failed.status_code == 200, failed.text
+        async with session_maker() as session:
+            ticket = await session.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.container_log_tail is None
+
+    async def test_overlong_container_log_tail_is_rejected(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The wire bound is enforced here, not merely respected by senders.
+
+        The column is written by validators on a hot table once per failed
+        ticket, and its content is a miner's harness output verbatim. The cap is
+        what keeps the ticket ledger from becoming a log sink with an
+        adversarial write path into it.
+        """
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="scoring_error",
+                container_log_tail="x" * (CONTAINER_LOG_TAIL_MAX_LENGTH + 1),
+            ),
+        )
+
+        assert failed.status_code == 422, failed.text
 
     async def test_scoring_error_failure_consumes_the_budget(
         self,
