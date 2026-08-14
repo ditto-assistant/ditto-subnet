@@ -64,6 +64,10 @@ from ditto.api_server.endpoints.validator import (
     _screened_image_key,
 )
 from ditto.api_server.storage import S3StorageClient
+from ditto.api_server.validator_slot_settings import (
+    resolve_slot_settings,
+    validator_issuance_paused,
+)
 from ditto.chain import ChainClient
 from ditto.db.models import (
     Agent,
@@ -428,6 +432,7 @@ async def request_v9_confirmation_job(
         revision=payload.profile_revision,
         checksum=payload.profile_checksum,
     )
+    slot_settings = await resolve_slot_settings(request.app.state)
     try:
         async with session.begin():
             try:
@@ -498,6 +503,15 @@ async def request_v9_confirmation_job(
                     proxy_base_url=request.app.state.config.inference_proxy.public_base_url,
                     now=now,
                 )
+
+            # A validator pause stops only fresh issuance. The live-ticket
+            # branch above remains resumable so an operator can drain a node
+            # without abandoning already-reserved evidence or spend.
+            if validator_issuance_paused(
+                slot_settings, validator_hotkey=payload.validator_hotkey
+            ):
+                response.status_code = 204
+                return response
 
             # New spend is governed by the latest effective global policy, not
             # merely the frozen policy attached to an older pending bundle.

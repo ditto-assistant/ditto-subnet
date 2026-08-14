@@ -146,6 +146,18 @@ def blocked_resources(
     )
 
 
+def validator_issuance_paused(
+    settings: ValidatorSlotSettings, *, validator_hotkey: str
+) -> bool:
+    """Whether ``validator_hotkey`` may receive a new lease.
+
+    Heartbeat admission and software compatibility remain separate facts. This
+    is the exact, reversible operator decision stored in the append-only slot
+    policy. Callers must still let an already-live lease resume and report.
+    """
+    return validator_hotkey in settings.paused_validator_hotkeys
+
+
 def allowed_slot_count(
     settings: ValidatorSlotSettings,
     *,

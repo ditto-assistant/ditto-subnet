@@ -175,6 +175,7 @@ from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
     resolve_slot_settings,
+    validator_issuance_paused,
 )
 from ditto.chain import ChainError
 from ditto.db.models import (
@@ -2770,6 +2771,23 @@ async def request_job(
             and heartbeat_supports_version(heartbeat, now=now, version=target_version)
         )
         slot_id = payload.slot_id or "slot-0"
+        issuance_paused = validator_issuance_paused(
+            slot_settings, validator_hotkey=payload.validator_hotkey
+        )
+        if issuance_paused and slot_id not in await _held_lease_slots(
+            session,
+            validator_hotkey=payload.validator_hotkey,
+            now=now,
+        ):
+            # Pause is issuance-only. An existing ticket on this slot continues
+            # through the ordinary resume path and may still submit its result;
+            # an actually idle slot receives nothing from any lane below.
+            _record_dispatch_decline(
+                "validator_paused",
+                validator_hotkey=payload.validator_hotkey,
+                slot_id=slot_id,
+            )
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
         slot_running_benchmark = validator_state == "running_benchmark"
         if heartbeat is not None and heartbeat.protocol_version >= 10:
             if payload.slot_id is None:
@@ -4083,6 +4101,7 @@ async def _canonical_tail_is_draining(
     "/top5-confirmation-job",
     response_model=JobResponse,
     responses={
+        204: {"description": "Validator issuance is paused."},
         401: {"description": "Missing/invalid validator auth."},
         409: {"description": "Stale/replayed claim, closed round, or non-member."},
         426: {"description": "Validator software or protocol must be upgraded."},
@@ -4098,7 +4117,7 @@ async def request_top5_confirmation_job(
     session: SessionDep,
     generator: GeneratorDep,
     x_validator_hotkey: Annotated[str | None, Header()] = None,
-) -> JobResponse:
+) -> JobResponse | Response:
     """Lease one current emission-set member for append-only shared-seed work."""
     response.headers["Cache-Control"] = "no-store"
     if x_validator_hotkey != payload.validator_hotkey:
@@ -4148,6 +4167,7 @@ async def request_top5_confirmation_job(
     inference_config = await resolved_proxy_config(
         request.app.state, config.inference_proxy
     )
+    slot_settings = await _validator_slot_settings(request)
 
     async with session.begin():
         await _assert_validator_compatible(
@@ -4170,6 +4190,33 @@ async def request_top5_confirmation_job(
                 detail="top-5 confirmation claim nonce has already been used",
             ) from exc
         canonical_version = await active_bench_version(session)
+        live_retest: ValidatorTicket | None = None
+        if validator_issuance_paused(
+            slot_settings, validator_hotkey=payload.validator_hotkey
+        ):
+            # Do not strand a continual lease that was issued before the
+            # operator pause. The exact validator/member lease may still be
+            # resumed and reported; any new member assignment is withheld.
+            live_retest = await session.scalar(
+                select(ValidatorTicket)
+                .where(
+                    ValidatorTicket.agent_id == payload.member_agent_id,
+                    ValidatorTicket.validator_hotkey == payload.validator_hotkey,
+                    ValidatorTicket.bench_version == canonical_version,
+                    ValidatorTicket.status == TicketStatus.ISSUED,
+                    ValidatorTicket.deadline > now,
+                    ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST,
+                )
+                .limit(1)
+            )
+            if live_retest is None:
+                logger.info(
+                    "declined continual retest reason=validator_paused "
+                    "validator=%s member=%s",
+                    payload.validator_hotkey,
+                    payload.member_agent_id,
+                )
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
         if heartbeat is None or heartbeat.protocol_version < 13:
             raise HTTPException(
@@ -4416,12 +4463,16 @@ async def request_top5_confirmation_job(
         # leases has the operator allowed it to hold at once. Neither was asked
         # before: the ticket took the ``slot-0`` column default and the lane was
         # invisible to the operator cap.
-        retest_slot = await _idle_retest_slot(
-            session,
-            heartbeat=heartbeat,
-            slot_settings=await _validator_slot_settings(request),
-            validator_hotkey=payload.validator_hotkey,
-            now=now,
+        retest_slot = (
+            live_retest.slot_id
+            if live_retest is not None
+            else await _idle_retest_slot(
+                session,
+                heartbeat=heartbeat,
+                slot_settings=slot_settings,
+                validator_hotkey=payload.validator_hotkey,
+                now=now,
+            )
         )
         if retest_slot is None:
             raise HTTPException(

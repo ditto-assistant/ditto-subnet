@@ -42,8 +42,10 @@ import {
   queuePolicySettingsWriteSchema,
   setQueuePolicySettingsInputSchema,
   validatorSlotConfirmation,
+  validatorIssuanceConfirmation,
   validatorSlotSettingsControlSchema,
   validatorSlotSettingsSchema,
+  setValidatorIssuancePauseInputSchema,
   setValidatorSlotSettingsInputSchema,
   EVICT_VALIDATION_CONFIRMATION,
   REINSTATE_VALIDATION_CONFIRMATION,
@@ -2037,12 +2039,13 @@ describe('queue policy settings schemas', () => {
 
 describe('validator slot settings schemas', () => {
   const settings = {
-      max_concurrent_slots: 2,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    }
+    max_concurrent_slots: 2,
+    disk_percent_ceiling: 90,
+    memory_percent_ceiling: 90,
+    cpu_percent_ceiling: 0,
+    resource_block_percent_ceiling: 95,
+    paused_validator_hotkeys: [],
+  }
 
   function input(overrides: Record<string, unknown> = {}) {
     const { settings: settingsOverride, ...rest } = overrides
@@ -2087,12 +2090,10 @@ describe('validator slot settings schemas', () => {
       parent_revision: 0,
       scope: '*',
       settings: {
-      max_concurrent_slots: 3,
-      disk_percent_ceiling: 85,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    },
+        ...settings,
+        max_concurrent_slots: 3,
+        disk_percent_ceiling: 85,
+      },
       reason: 'ramp the fleet to three slots now that dispatch is stable',
       actor: 'peyton@omniaura.ai',
       created_at: '2026-07-25T12:00:00Z',
@@ -2262,6 +2263,56 @@ describe('validator slot settings schemas', () => {
     // the operator did not choose the way a defaulted knob can.
     const { scope: _omitted, ...withoutScope } = input()
     expect(setValidatorSlotSettingsInputSchema.parse(withoutScope).scope).toBe('*')
+  })
+
+  it('requires canonical paused hotkeys and the exact per-validator confirmation', () => {
+    const hotkey = `5${'A'.repeat(47)}`
+    const other = `5${'B'.repeat(47)}`
+    expect(
+      validatorSlotSettingsSchema.parse({
+        ...settings,
+        paused_validator_hotkeys: [hotkey, other],
+      }).paused_validator_hotkeys,
+    ).toEqual([hotkey, other])
+    expect(() =>
+      validatorSlotSettingsSchema.parse({
+        ...settings,
+        paused_validator_hotkeys: [other, hotkey],
+      }),
+    ).toThrow(/sorted and duplicate-free/)
+    expect(() =>
+      validatorSlotSettingsSchema.parse({
+        ...settings,
+        paused_validator_hotkeys: [hotkey, hotkey],
+      }),
+    ).toThrow(/sorted and duplicate-free/)
+    expect(() =>
+      validatorSlotSettingsSchema.parse({
+        ...settings,
+        paused_validator_hotkeys: ['5short'],
+      }),
+    ).toThrow()
+
+    const confirmation = validatorIssuanceConfirmation(hotkey, true)
+    expect(confirmation).toBe(`PAUSE VALIDATOR ${hotkey}`)
+    expect(
+      setValidatorIssuancePauseInputSchema.parse({
+        validatorHotkey: hotkey,
+        paused: true,
+        expectedRevision: 4,
+        reason: 'drain the validator after repeated stalls',
+        confirmation,
+      }),
+    ).toMatchObject({ validatorHotkey: hotkey, paused: true, expectedRevision: 4 })
+    expect(() =>
+      setValidatorIssuancePauseInputSchema.parse({
+        validatorHotkey: hotkey,
+        paused: true,
+        expectedRevision: 4,
+        reason: 'drain the validator after repeated stalls',
+        confirmation: `RESUME VALIDATOR ${hotkey}`,
+      }),
+    ).toThrow(/PAUSE VALIDATOR/)
   })
 })
 

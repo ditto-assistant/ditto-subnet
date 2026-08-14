@@ -46,6 +46,7 @@ import {
   setQueuePolicySettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
+  setValidatorIssuancePauseInputSchema,
   inferenceRouteCalibrationInputSchema,
   inferenceRoutingPolicyInputSchema,
   setConfirmationBundleSettingsInputSchema,
@@ -121,6 +122,7 @@ import {
   fetchValidatorFleet,
   setInferenceConcurrencySettings as setInferenceConcurrencySettingsService,
   setValidatorSlotSettings as setValidatorSlotSettingsService,
+  setValidatorIssuancePause as setValidatorIssuancePauseService,
   fetchConfirmationBundleSettings,
   setConfirmationBundleSettings as setConfirmationBundleSettingsService,
   fetchConfirmationBundles,
@@ -390,6 +392,15 @@ export const updateValidatorSlotSettings = createServerFn({ method: 'POST' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return setValidatorSlotSettingsService(data, context.session.email)
+  })
+
+export const updateValidatorIssuancePause = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(setValidatorIssuancePauseInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return setValidatorIssuancePauseService(data, context.session.email)
   })
 
 export const getInferenceConcurrencySettings = createServerFn({ method: 'GET' })

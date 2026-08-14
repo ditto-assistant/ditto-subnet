@@ -5,6 +5,8 @@ import {
   CheckCircle2,
   HardDrive,
   Layers,
+  PauseCircle,
+  PlayCircle,
   RefreshCw,
 } from 'lucide-react'
 import {
@@ -12,6 +14,7 @@ import {
   DISK_PERCENT_QUANTUM,
   MIN_ENABLED_CEILING,
   VALIDATOR_HARD_SLOT_CEILING,
+  validatorIssuanceConfirmation,
   validatorSlotConfirmation,
   validatorSlotSettingsSchema,
   type ValidatorFleet,
@@ -20,6 +23,7 @@ import {
 import {
   getValidatorFleet,
   getValidatorSlotSettings,
+  updateValidatorIssuancePause,
   updateValidatorSlotSettings,
 } from '../server/admin.functions'
 
@@ -60,6 +64,7 @@ export function ValidatorSlotControlPanel({
   const refreshSettings = useServerFn(getValidatorSlotSettings)
   const refreshFleet = useServerFn(getValidatorFleet)
   const applySettings = useServerFn(updateValidatorSlotSettings)
+  const applyIssuancePause = useServerFn(updateValidatorIssuancePause)
 
   const [state, setState] = useState(initialState)
   const [fleet, setFleet] = useState(initialFleet)
@@ -81,6 +86,12 @@ export function ValidatorSlotControlPanel({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [pauseTarget, setPauseTarget] = useState<{
+    hotkey: string
+    paused: boolean
+  } | null>(null)
+  const [pauseReason, setPauseReason] = useState('')
+  const [pauseConfirmation, setPauseConfirmation] = useState('')
 
   const effective = state.effective
   const inForce = effective.settings
@@ -97,6 +108,7 @@ export function ValidatorSlotControlPanel({
     memory_percent_ceiling: toWholeNumber(memoryCeiling),
     cpu_percent_ceiling: toWholeNumber(cpuCeiling),
     resource_block_percent_ceiling: toWholeNumber(blockCeiling),
+    paused_validator_hotkeys: inForce.paused_validator_hotkeys,
   }
   // The same schema the MCP tool validates against, so the console cannot send a
   // policy the platform would reject and cannot invent a bound of its own.
@@ -194,6 +206,52 @@ export function ValidatorSlotControlPanel({
       void refreshFleet().then(setFleet).catch(() => {})
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to apply the slot policy')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function submitIssuancePause() {
+    if (
+      readOnly ||
+      loading ||
+      pauseTarget === null ||
+      pauseReason.trim().length < 8
+    ) {
+      return
+    }
+    const expected = validatorIssuanceConfirmation(
+      pauseTarget.hotkey,
+      pauseTarget.paused,
+    )
+    if (pauseConfirmation !== expected) {
+      setSuccess('')
+      setError(`Nothing was sent. The confirmation must be exactly ${expected}.`)
+      return
+    }
+    setLoading(true)
+    setError('')
+    setSuccess('')
+    try {
+      const next = await applyIssuancePause({
+        data: {
+          validatorHotkey: pauseTarget.hotkey,
+          paused: pauseTarget.paused,
+          expectedRevision: effective.revision,
+          reason: pauseReason,
+          confirmation: pauseConfirmation,
+        },
+      })
+      setState(next)
+      setPauseTarget(null)
+      setPauseReason('')
+      setPauseConfirmation('')
+      setSuccess(
+        `${pauseTarget.paused ? 'Paused' : 'Resumed'} new issuance for ${shortHotkey(pauseTarget.hotkey)} at revision ${next.effective.revision}. Live leases were not revoked.`,
+      )
+      void refreshFleet().then(setFleet).catch(() => {})
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to change validator issuance')
     } finally {
       setLoading(false)
     }
@@ -312,7 +370,83 @@ export function ValidatorSlotControlPanel({
         pendingCap={pendingCap}
         restrictedSlots={effective.disk_restricted_slots}
         ticketedSlots={ticketedSlots}
+        pausedHotkeys={new Set(inForce.paused_validator_hotkeys)}
+        readOnly={readOnly}
+        loading={loading}
+        onToggleIssuance={(hotkey, paused) => {
+          setPauseTarget({ hotkey, paused })
+          setPauseReason('')
+          setPauseConfirmation('')
+          setError('')
+          setSuccess('')
+        }}
       />
+
+      {pauseTarget !== null ? (
+        <section className="overflow-hidden rounded-xl border border-[var(--amber)]/40 bg-[var(--panel)]">
+          <div className="border-b border-[var(--line)] bg-[var(--panel-raised)] px-4 py-3">
+            <h2 className="text-sm font-semibold">
+              {pauseTarget.paused ? 'Pause' : 'Resume'} validator issuance
+            </h2>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
+              This changes new lease issuance only. Any live benchmark, continual retest, or
+              LongMem confirmation lease keeps running and may report normally.
+            </p>
+          </div>
+          <div className="p-4 sm:p-5">
+            <p className="break-all font-mono text-xs text-[var(--muted-strong)]">
+              {pauseTarget.hotkey}
+            </p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2">
+              <label className="text-xs font-medium text-[var(--muted-strong)]">
+                Operator reason (at least 8 characters)
+                <input
+                  type="text"
+                  value={pauseReason}
+                  disabled={readOnly || loading}
+                  onChange={(event) => setPauseReason(event.target.value)}
+                  placeholder="Why this validator should drain"
+                  className="mt-2 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45"
+                />
+              </label>
+              <label className="text-xs font-medium text-[var(--muted-strong)]">
+                Type to confirm
+                <code className="ml-2 break-all text-[11px] text-[var(--cyan)]">
+                  {validatorIssuanceConfirmation(pauseTarget.hotkey, pauseTarget.paused)}
+                </code>
+                <input
+                  type="text"
+                  value={pauseConfirmation}
+                  disabled={readOnly || loading}
+                  onChange={(event) => setPauseConfirmation(event.target.value)}
+                  placeholder="Type the exact validator action"
+                  className="mt-2 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 font-mono text-xs outline-none focus:border-[var(--cyan)] disabled:opacity-45"
+                />
+              </label>
+            </div>
+            <div className="mt-5 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <button
+                type="button"
+                disabled={loading}
+                onClick={() => setPauseTarget(null)}
+                className="min-h-11 rounded-lg border border-[var(--line)] px-4 text-xs font-medium text-[var(--muted-strong)] disabled:opacity-40"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={readOnly || loading || pauseReason.trim().length < 8}
+                onClick={() => void submitIssuancePause()}
+                className="min-h-11 rounded-lg bg-[var(--amber)] px-4 text-xs font-semibold text-black disabled:opacity-35"
+              >
+                {loading
+                  ? 'Applying…'
+                  : `${pauseTarget.paused ? 'Pause' : 'Resume'} new issuance`}
+              </button>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
         <div className="border-b border-[var(--line)] bg-[var(--panel-raised)] px-4 py-3">
@@ -470,6 +604,10 @@ function FleetContext({
   pendingCap,
   restrictedSlots,
   ticketedSlots,
+  pausedHotkeys,
+  readOnly,
+  loading,
+  onToggleIssuance,
 }: {
   fleet: ValidatorFleet | null
   ceiling: number
@@ -478,6 +616,10 @@ function FleetContext({
   pendingCap: number
   restrictedSlots: number
   ticketedSlots: (advertised: number, disk: number | null, capValue: number) => number
+  pausedHotkeys: Set<string>
+  readOnly: boolean
+  loading: boolean
+  onToggleIssuance: (hotkey: string, paused: boolean) => void
 }) {
   return (
     <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
@@ -516,6 +658,7 @@ function FleetContext({
                 <th scope="col" className="px-4 py-2 font-medium">In flight</th>
                 <th scope="col" className="px-4 py-2 font-medium">Disk</th>
                 <th scope="col" className="px-4 py-2 font-medium">Slots filled</th>
+                <th scope="col" className="px-4 py-2 font-medium">Issuance</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-[var(--line)]">
@@ -526,6 +669,7 @@ function FleetContext({
                 const next = ticketedSlots(validator.configured_slots, disk, pendingCap)
                 const notServing = validator.bench_serviceability !== 'serving'
                 const orphanedCount = validator.orphaned_slots.length
+                const issuancePaused = pausedHotkeys.has(validator.validator_hotkey)
                 return (
                   <tr key={validator.validator_hotkey}>
                     <td className="px-4 py-2.5">
@@ -578,10 +722,34 @@ function FleetContext({
                       ) : null}
                     </td>
                     <td className="px-4 py-2.5 font-medium">
-                      {now}
-                      {next !== now ? (
+                      {issuancePaused ? 0 : now}
+                      {!issuancePaused && next !== now ? (
                         <span className="ml-1 text-[var(--acid)]">→ {next}</span>
                       ) : null}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <button
+                        type="button"
+                        disabled={readOnly || loading}
+                        onClick={() =>
+                          onToggleIssuance(validator.validator_hotkey, !issuancePaused)
+                        }
+                        className={`inline-flex min-h-9 items-center gap-1.5 rounded-lg border px-2.5 text-[11px] font-medium disabled:opacity-40 ${
+                          issuancePaused
+                            ? 'border-[var(--acid)]/40 text-[var(--acid)]'
+                            : 'border-[var(--line)] text-[var(--muted-strong)]'
+                        }`}
+                      >
+                        {issuancePaused ? (
+                          <PlayCircle className="h-3.5 w-3.5" />
+                        ) : (
+                          <PauseCircle className="h-3.5 w-3.5" />
+                        )}
+                        {issuancePaused ? 'Resume' : 'Pause'}
+                      </button>
+                      <span className="mt-1 block text-[10px] text-[var(--muted)]">
+                        {issuancePaused ? 'new leases paused' : 'accepting policy permits'}
+                      </span>
                     </td>
                   </tr>
                 )

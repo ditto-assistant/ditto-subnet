@@ -65,6 +65,7 @@ from ditto.db.models import (
     ConfirmationDimensionEvidence,
     ConfirmationScore,
     Score,
+    ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
 from ditto.db.queries.confirmation_attempt_lock import lock_confirmation_attempt
@@ -228,6 +229,29 @@ async def _seed_bundle(
         settings_revision=revision_number,
         settings=frozen,
     )
+
+
+async def _pause_validator_issuance(
+    maker: async_sessionmaker[AsyncSession], *, parent_revision: int = 0
+) -> None:
+    async with maker() as session, session.begin():
+        session.add(
+            ValidatorSlotSettingsRevision(
+                parent_revision=parent_revision,
+                scope="*",
+                settings={
+                    "max_concurrent_slots": 2,
+                    "disk_percent_ceiling": 90,
+                    "memory_percent_ceiling": 90,
+                    "cpu_percent_ceiling": 0,
+                    "resource_block_percent_ceiling": 95,
+                    "paused_validator_hotkeys": [VALIDATOR_KEYPAIR.ss58_address],
+                },
+                checksum="f" * 64,
+                reason="drain confirmation issuance for this validator",
+                actor="pytest@example.com",
+            )
+        )
 
 
 async def _seed_pending_bundle_on_revision(
@@ -1106,6 +1130,58 @@ class TestV9ConfirmationClaimAdmission:
             0,
             0,
         )
+
+    async def test_paused_validator_receives_no_new_confirmation_bundle(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        seeded = await _seed_bundle(session_maker)
+        await _pause_validator_issuance(session_maker)
+        _install_transport(app, session_maker)
+        app.state.session_maker = session_maker
+        app.state.validator_slot_settings.invalidate()
+
+        response = await _claim(client)
+
+        assert response.status_code == 204, response.text
+        async with session_maker() as session:
+            bundle = await session.get(ConfirmationBundle, seeded.bundle_id)
+            assert bundle is not None
+            assert bundle.state == "pending"
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(ConfirmationBundleTicket)
+                )
+                == 0
+            )
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(ConfirmationBudgetReservation)
+                )
+                == 0
+            )
+
+    async def test_paused_validator_can_resume_live_confirmation_bundle(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        seeded = await _seed_bundle(session_maker)
+        _install_transport(app, session_maker)
+        app.state.session_maker = session_maker
+        first = await _claim(client)
+        assert first.status_code == 200, first.text
+        await _pause_validator_issuance(session_maker)
+        app.state.validator_slot_settings.invalidate()
+
+        resumed = await _claim(client)
+
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["bundle_id"] == str(seeded.bundle_id)
+        assert resumed.json()["ticket_id"] == first.json()["ticket_id"]
 
     async def test_claim_nonce_is_one_shot_even_when_first_claim_returns_204(
         self,

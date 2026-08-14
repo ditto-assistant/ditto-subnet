@@ -110,6 +110,7 @@ from ditto.db.models import (
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
     ValidatorRequestNonce,
+    ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
 from ditto.db.queries.artifact_fetch_audit import (
@@ -4093,6 +4094,108 @@ class TestRequestJob:
         """
         await _seed_activated_era(session_maker)
         await _install_ticket_inference(app, session_maker)
+
+    async def test_paused_validator_gets_no_new_lease_while_peer_keeps_working(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_capable_pool(session_maker, keypairs=_KEYPAIRS[:2])
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorSlotSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={
+                        "max_concurrent_slots": 2,
+                        "disk_percent_ceiling": 90,
+                        "memory_percent_ceiling": 90,
+                        "cpu_percent_ceiling": 0,
+                        "resource_block_percent_ceiling": 95,
+                        "paused_validator_hotkeys": [_VALIDATOR_HOTKEY],
+                    },
+                    checksum="d" * 64,
+                    reason="drain one unhealthy validator",
+                    actor="backroom:test",
+                )
+            )
+        app.state.validator_slot_settings.invalidate()
+        app.state.session_maker = session_maker
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        paused = await client.post(
+            "/api/v1/validator/job",
+            headers=_AUTH_HEADER,
+            json=_job_payload(slot_id=_SLOT_ID),
+        )
+        assert paused.status_code == 204, paused.text
+        async with session_maker() as session:
+            assert (
+                await session.get(
+                    ValidatorTicket,
+                    (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY),
+                )
+                is None
+            )
+
+        peer = _KEYPAIRS[1]
+        served = await client.post(
+            "/api/v1/validator/job",
+            headers={"X-Validator-Hotkey": peer.ss58_address},
+            json=_job_payload(peer, slot_id=_SLOT_ID),
+        )
+        assert served.status_code == 200, served.text
+        assert served.json()["agent_id"] == str(agent_id)
+
+    async def test_paused_validator_can_resume_its_live_lease(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(
+            session_maker,
+            agent_id,
+            deadline=datetime.now(UTC) + timedelta(minutes=30),
+            slot_id=_SLOT_ID,
+        )
+        await _seed_capable_pool(session_maker, keypairs=(_KEYPAIR,))
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorSlotSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={
+                        "max_concurrent_slots": 2,
+                        "disk_percent_ceiling": 90,
+                        "memory_percent_ceiling": 90,
+                        "cpu_percent_ceiling": 0,
+                        "resource_block_percent_ceiling": 95,
+                        "paused_validator_hotkeys": [_VALIDATOR_HOTKEY],
+                    },
+                    checksum="e" * 64,
+                    reason="drain after the current lease",
+                    actor="backroom:test",
+                )
+            )
+        app.state.validator_slot_settings.invalidate()
+        app.state.session_maker = session_maker
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        response = await client.post(
+            "/api/v1/validator/job",
+            headers=_AUTH_HEADER,
+            json=_job_payload(slot_id=_SLOT_ID),
+        )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["agent_id"] == str(agent_id)
+        assert response.json()["slot_id"] == _SLOT_ID
 
     async def test_busy_dispatch_fence_returns_immediately_and_retries_same_nonce(
         self,
@@ -9262,6 +9365,102 @@ class TestTop5ConfirmationLane:
         """
         _install_dataset_generator(app)
         await _install_ticket_inference(app, session_maker)
+
+    async def test_paused_validator_gets_no_new_continual_retest(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        champion, *_ = await _seed_top5_emission_set(session_maker)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorSlotSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={
+                        "max_concurrent_slots": 2,
+                        "disk_percent_ceiling": 90,
+                        "memory_percent_ceiling": 90,
+                        "cpu_percent_ceiling": 0,
+                        "resource_block_percent_ceiling": 95,
+                        "paused_validator_hotkeys": [_VALIDATOR_HOTKEY],
+                    },
+                    checksum="9" * 64,
+                    reason="drain continual retests for this validator",
+                    actor="backroom:test",
+                )
+            )
+        app.state.session_maker = session_maker
+        app.state.validator_slot_settings.invalidate()
+        _install_db(app, session_maker)
+        _install_chain_with_block(app, block_number=1)
+
+        response = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(champion, champion),
+        )
+
+        assert response.status_code == 204, response.text
+        async with session_maker() as session:
+            assert (
+                await session.scalar(
+                    select(func.count())
+                    .select_from(ValidatorTicket)
+                    .where(
+                        ValidatorTicket.validator_hotkey == _VALIDATOR_HOTKEY,
+                        ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST,
+                    )
+                )
+                == 0
+            )
+
+    async def test_paused_validator_can_resume_live_continual_retest(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        champion, *_ = await _seed_top5_emission_set(session_maker)
+        _install_db(app, session_maker)
+        _install_chain_with_block(app, block_number=1)
+        first = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(champion, champion),
+        )
+        assert first.status_code == 200, first.text
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorSlotSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={
+                        "max_concurrent_slots": 2,
+                        "disk_percent_ceiling": 90,
+                        "memory_percent_ceiling": 90,
+                        "cpu_percent_ceiling": 0,
+                        "resource_block_percent_ceiling": 95,
+                        "paused_validator_hotkeys": [_VALIDATOR_HOTKEY],
+                    },
+                    checksum="8" * 64,
+                    reason="drain only after the continual lease",
+                    actor="backroom:test",
+                )
+            )
+        app.state.session_maker = session_maker
+        app.state.validator_slot_settings.invalidate()
+
+        resumed = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(champion, champion),
+        )
+
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["agent_id"] == first.json()["agent_id"]
+        assert resumed.json()["deadline"] == first.json()["deadline"]
 
     async def test_emission_set_uses_completed_wave_mean_for_champion(
         self,

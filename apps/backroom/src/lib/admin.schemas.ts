@@ -2451,6 +2451,7 @@ export const DISK_PERCENT_QUANTUM = 5
 // this policy is held to it.
 export const CEILING_DISABLED = 0
 export const MIN_ENABLED_CEILING = 50
+const SS58_HOTKEY_PATTERN = /^[1-9A-HJ-NP-Za-km-z]{47,48}$/
 
 // A ceiling is either CEILING_DISABLED ("do not gate on this resource at all") or
 // a multiple of 5 in [MIN_ENABLED_CEILING, 100]. Below 50 a ceiling throttles a
@@ -2494,6 +2495,10 @@ export const validatorSlotSettingsSchema = z
     // what keeps a pinned CPU — the ordinary state of a working benchmark host —
     // from blocking anything by default.
     resource_block_percent_ceiling: z.number().int().min(CEILING_DISABLED).max(100),
+    // Exact-validator issuance brakes. Required on every whole-policy write so
+    // an older or partial client cannot resume a paused validator while
+    // changing an unrelated capacity knob.
+    paused_validator_hotkeys: z.array(z.string().regex(SS58_HOTKEY_PATTERN)).max(256),
   })
   .superRefine((value, context) => {
     refineCeiling(value.disk_percent_ceiling, 'disk_percent_ceiling', context)
@@ -2517,6 +2522,18 @@ export const validatorSlotSettingsSchema = z
         code: 'custom',
         message: `resource_block_percent_ceiling must be at or above every enabled per-resource ceiling (${highestThrottle}); a hard stop below the throttle makes the throttle unreachable`,
         path: ['resource_block_percent_ceiling'],
+      })
+    }
+    if (
+      value.paused_validator_hotkeys.some(
+        (hotkey, index) =>
+          index > 0 && hotkey <= value.paused_validator_hotkeys[index - 1],
+      )
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'paused_validator_hotkeys must be sorted and duplicate-free',
+        path: ['paused_validator_hotkeys'],
       })
     }
   })
@@ -2565,6 +2582,29 @@ export function validatorSlotConfirmation(maxConcurrentSlots: number) {
   return `APPLY VALIDATOR SLOT CAP ${maxConcurrentSlots}`
 }
 
+export function validatorIssuanceConfirmation(validatorHotkey: string, paused: boolean) {
+  return `${paused ? 'PAUSE' : 'RESUME'} VALIDATOR ${validatorHotkey}`
+}
+
+export const setValidatorIssuancePauseInputSchema = z
+  .object({
+    validatorHotkey: z.string().regex(SS58_HOTKEY_PATTERN),
+    paused: z.boolean(),
+    expectedRevision: z.number().int().nonnegative(),
+    reason: auditReasonSchema(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = validatorIssuanceConfirmation(input.validatorHotkey, input.paused)
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        message: `confirmation must be exactly ${expected}`,
+        path: ['confirmation'],
+      })
+    }
+  })
+
 export const setValidatorSlotSettingsInputSchema = z
   .object({
     scope: z
@@ -2595,6 +2635,9 @@ export type ValidatorSlotSettingsControl = z.infer<
 >
 export type ValidatorSlotSettingsRevision = z.infer<
   typeof validatorSlotSettingsRevisionSchema
+>
+export type SetValidatorIssuancePauseInput = z.infer<
+  typeof setValidatorIssuancePauseInputSchema
 >
 
 // What the operator screen needs from the fleet to choose a cap, read from the

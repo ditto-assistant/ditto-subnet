@@ -24,7 +24,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from ditto.api_models.upload import _SS58_PATTERN
 
 HARD_SLOT_CEILING = 8
 """The protocol's own maximum advertised slots (``^slot-[0-7]$``, see
@@ -143,6 +145,31 @@ class ValidatorSlotSettings(BaseModel):
     what keeps a pinned CPU -- the normal state of a working benchmark host --
     from blocking anything by default. :data:`CEILING_DISABLED` disables the
     hard stop entirely and leaves only the throttle."""
+
+    paused_validator_hotkeys: Annotated[
+        list[Annotated[str, Field(pattern=_SS58_PATTERN)]], Field(max_length=256)
+    ] = Field(default_factory=list)
+    """Validators that may finish live leases but receive no new work.
+
+    This is an operator brake, not a software floor. It names an exact hotkey so
+    one unhealthy or suspect validator can drain without excluding healthy
+    source builds or every validator on the same release. The list is canonical
+    so a semantically identical revision has one checksum and confirmation
+    boundary.
+
+    Keeping the field in the existing append-only slot policy also keeps the
+    dispatch read on its bounded short-TTL cache. No validator credential or
+    host mutation is involved; Platform simply declines new leases.
+    """
+
+    @field_validator("paused_validator_hotkeys")
+    @classmethod
+    def canonical_paused_hotkeys(cls, value: list[str]) -> list[str]:
+        if value != sorted(set(value)):
+            raise ValueError(
+                "paused_validator_hotkeys must be sorted and duplicate-free"
+            )
+        return value
 
     @model_validator(mode="after")
     def validate_envelope(self) -> ValidatorSlotSettings:

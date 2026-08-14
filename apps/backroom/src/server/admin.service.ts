@@ -123,7 +123,10 @@ import {
   queuePolicySettingsControlSchema,
   setInferenceConcurrencySettingsInputSchema,
   setQueuePolicySettingsInputSchema,
+  VALIDATOR_SLOT_SETTINGS_SCOPE,
   validatorSlotSettingsControlSchema,
+  validatorIssuanceConfirmation,
+  setValidatorIssuancePauseInputSchema,
   setValidatorSlotSettingsInputSchema,
   validatorFleetSchema,
   artifactReleaseControlSchema,
@@ -793,6 +796,53 @@ export async function setValidatorSlotSettings(rawInput: unknown, actor: string)
   // Re-read rather than returning the POST's revision row: the operator wants
   // the `effective` block, which is where hard_slot_ceiling, disk_restricted_slots
   // and the TTL live, and which is what the dispatch path will resolve.
+  return fetchValidatorSlotSettings()
+}
+
+/** Pause or resume exactly one validator while preserving the complete policy.
+ *
+ * This intentionally re-reads the authority immediately before writing. The
+ * caller's revision is still required and compared locally before Platform's
+ * own optimistic-concurrency check, so a stale screen cannot overwrite a
+ * newer pause, capacity edit, or resource threshold.
+ */
+export async function setValidatorIssuancePause(rawInput: unknown, actor: string) {
+  const input = setValidatorIssuancePauseInputSchema.parse(rawInput)
+  const current = await fetchValidatorSlotSettings()
+  if (current.effective.revision !== input.expectedRevision) {
+    throw new Error(
+      `Validator slot settings changed; refresh before applying (expected ${input.expectedRevision}, current ${current.effective.revision}). Nothing was applied.`,
+    )
+  }
+  const paused = new Set(current.effective.settings.paused_validator_hotkeys)
+  if (input.paused) paused.add(input.validatorHotkey)
+  else paused.delete(input.validatorHotkey)
+  const nextHotkeys = [...paused].sort()
+  const alreadyApplied =
+    nextHotkeys.length === current.effective.settings.paused_validator_hotkeys.length &&
+    nextHotkeys.every(
+      (hotkey, index) => hotkey === current.effective.settings.paused_validator_hotkeys[index],
+    )
+  if (alreadyApplied) return current
+  try {
+    await platformAdminRequest(VALIDATOR_SLOT_SETTINGS_PATH, {
+      method: 'POST',
+      actor,
+      body: {
+        scope: VALIDATOR_SLOT_SETTINGS_SCOPE,
+        expected_revision: input.expectedRevision,
+        settings: {
+          ...current.effective.settings,
+          paused_validator_hotkeys: nextHotkeys,
+        },
+        reason: input.reason,
+        actor,
+        confirmation: validatorIssuanceConfirmation(input.validatorHotkey, input.paused),
+      },
+    })
+  } catch (cause) {
+    throw validatorSlotRefusal(cause) ?? cause
+  }
   return fetchValidatorSlotSettings()
 }
 

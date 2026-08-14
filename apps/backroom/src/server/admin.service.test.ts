@@ -49,6 +49,7 @@ import {
   setQueuePolicySettings,
   fetchValidatorSlotSettings,
   setValidatorSlotSettings,
+  setValidatorIssuancePause,
   fetchValidatorFleet,
   fetchAgentScores,
   fetchAgentScoreHistory,
@@ -3433,12 +3434,13 @@ describe('production score reads', () => {
 
 describe('validator slot administration', () => {
   const settings = {
-      max_concurrent_slots: 2,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    }
+    max_concurrent_slots: 2,
+    disk_percent_ceiling: 90,
+    memory_percent_ceiling: 90,
+    cpu_percent_ceiling: 0,
+    resource_block_percent_ceiling: 95,
+    paused_validator_hotkeys: [],
+  }
   // The exact payload production answers today, before any operator revision.
   const control = {
     current: [],
@@ -3464,6 +3466,7 @@ describe('validator slot administration', () => {
       memory_percent_ceiling: 90,
       cpu_percent_ceiling: 0,
       resource_block_percent_ceiling: 95,
+      paused_validator_hotkeys: [],
     }
     const applied = {
       ...control,
@@ -3532,12 +3535,9 @@ describe('validator slot administration', () => {
         {
           expectedRevision: 0,
           settings: {
-      max_concurrent_slots: 3,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    },
+            ...settings,
+            max_concurrent_slots: 3,
+          },
           reason: 'ramp the fleet to three slots now that dispatch is stable',
           confirmation: 'APPLY VALIDATOR SLOT CAP 3',
         },
@@ -3562,12 +3562,9 @@ describe('validator slot administration', () => {
         {
           expectedRevision: 0,
           settings: {
-      max_concurrent_slots: 3,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    },
+            ...settings,
+            max_concurrent_slots: 3,
+          },
           reason: 'ramp the fleet to three slots now that dispatch is stable',
           confirmation: 'APPLY VALIDATOR SLOT CAP 3',
         },
@@ -3608,12 +3605,9 @@ describe('validator slot administration', () => {
         {
           expectedRevision: 0,
           settings: {
-      max_concurrent_slots: 12,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    },
+            ...settings,
+            max_concurrent_slots: 12,
+          },
           reason: 'raise the cap past the advertised protocol ceiling',
           confirmation: 'APPLY VALIDATOR SLOT CAP 12',
         },
@@ -3636,12 +3630,9 @@ describe('validator slot administration', () => {
         {
           expectedRevision: 0,
           settings: {
-      max_concurrent_slots: 3,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    },
+            ...settings,
+            max_concurrent_slots: 3,
+          },
           reason: 'ramp the fleet to three slots now that dispatch is stable',
           confirmation: 'APPLY VALIDATOR SLOT CAP 2',
         },
@@ -3649,6 +3640,82 @@ describe('validator slot administration', () => {
       ),
     ).rejects.toThrow()
     expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('pauses exactly one validator while preserving every other policy field', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const hotkey = `5${'A'.repeat(47)}`
+    const pausedSettings = { ...settings, paused_validator_hotkeys: [hotkey] }
+    const pausedControl = {
+      ...control,
+      effective: {
+        ...control.effective,
+        revision: 1,
+        settings: pausedSettings,
+        checksum: 'ab'.repeat(32),
+        source: 'revision',
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(control))
+      .mockResolvedValueOnce(Response.json({ revision: 1 }))
+      .mockResolvedValueOnce(Response.json(pausedControl))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setValidatorIssuancePause(
+        {
+          validatorHotkey: hotkey,
+          paused: true,
+          expectedRevision: 0,
+          reason: 'drain this validator after repeated benchmark stalls',
+          confirmation: `PAUSE VALIDATOR ${hotkey}`,
+        },
+        'operator@omniaura.ai',
+      ),
+    ).resolves.toEqual(pausedControl)
+
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-slot-settings',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          scope: '*',
+          expected_revision: 0,
+          settings: pausedSettings,
+          reason: 'drain this validator after repeated benchmark stalls',
+          actor: 'operator@omniaura.ai',
+          confirmation: `PAUSE VALIDATOR ${hotkey}`,
+        }),
+      }),
+    )
+  })
+
+  it('refuses a stale pause before any write and preserves the newer authority', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const hotkey = `5${'A'.repeat(47)}`
+    const current = {
+      ...control,
+      effective: { ...control.effective, revision: 2 },
+    }
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(current))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      setValidatorIssuancePause(
+        {
+          validatorHotkey: hotkey,
+          paused: true,
+          expectedRevision: 1,
+          reason: 'drain this validator after repeated benchmark stalls',
+          confirmation: `PAUSE VALIDATOR ${hotkey}`,
+        },
+        'operator@omniaura.ai',
+      ),
+    ).rejects.toThrow(/expected 1, current 2/)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 })
 

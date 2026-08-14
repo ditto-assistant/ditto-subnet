@@ -41,6 +41,8 @@ from ditto.tests.pgharness import Dsn
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
 _ADMIN_HEADERS = {"Authorization": f"Bearer {_ADMIN_TOKEN}"}
 _URL = "/api/v1/admin/validator-slot-settings"
+_ALICE = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+_BOB = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
 
 
 def _closed_port() -> int:
@@ -93,6 +95,7 @@ def _settings(**overrides: Any) -> dict[str, Any]:
         "memory_percent_ceiling": 90,
         "cpu_percent_ceiling": CEILING_DISABLED,
         "resource_block_percent_ceiling": 95,
+        "paused_validator_hotkeys": [],
     }
     base.update(overrides)
     return base
@@ -166,6 +169,7 @@ class TestDefaultsAndRoundTrip:
             "memory_percent_ceiling": 90,
             "cpu_percent_ceiling": 0,
             "resource_block_percent_ceiling": 95,
+            "paused_validator_hotkeys": [],
         }
         assert body["effective"]["source"] == "default"
         assert body["effective"]["revision"] == 0
@@ -222,6 +226,7 @@ class TestDefaultsAndRoundTrip:
             "memory_percent_ceiling": 85,
             "cpu_percent_ceiling": 95,
             "resource_block_percent_ceiling": 100,
+            "paused_validator_hotkeys": [],
         }
 
     async def test_an_omitted_ceiling_falls_back_to_its_shipped_default(
@@ -260,6 +265,7 @@ class TestDefaultsAndRoundTrip:
             "memory_percent_ceiling": 90,
             "cpu_percent_ceiling": 0,
             "resource_block_percent_ceiling": 95,
+            "paused_validator_hotkeys": [],
         }
 
     async def test_kill_switch_to_one_slot(
@@ -277,6 +283,113 @@ class TestDefaultsAndRoundTrip:
 
 
 class TestConfirmationAndConcurrency:
+    async def test_pause_and_resume_one_exact_validator(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        paused = await client.post(
+            _URL,
+            headers=_ADMIN_HEADERS,
+            json=_payload(
+                max_concurrent_slots=2,
+                paused_validator_hotkeys=[_ALICE],
+                confirmation=f"PAUSE VALIDATOR {_ALICE}",
+            ),
+        )
+        assert paused.status_code == 200, paused.text
+        assert paused.json()["settings"]["paused_validator_hotkeys"] == [_ALICE]
+
+        resumed = await client.post(
+            _URL,
+            headers=_ADMIN_HEADERS,
+            json=_payload(
+                expected=1,
+                max_concurrent_slots=2,
+                paused_validator_hotkeys=[],
+                confirmation=f"RESUME VALIDATOR {_ALICE}",
+            ),
+        )
+        assert resumed.status_code == 200, resumed.text
+        assert resumed.json()["settings"]["paused_validator_hotkeys"] == []
+
+    @pytest.mark.parametrize(
+        ("hotkeys", "confirmation"),
+        [
+            ([_ALICE], f"PAUSE VALIDATOR {_BOB}"),
+            (sorted([_ALICE, _BOB]), f"PAUSE VALIDATOR {_ALICE}"),
+        ],
+    )
+    async def test_pause_confirmation_and_single_action_are_fail_closed(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+        hotkeys: list[str],
+        confirmation: str,
+    ) -> None:
+        _install(app, settings_maker)
+        response = await client.post(
+            _URL,
+            headers=_ADMIN_HEADERS,
+            json=_payload(
+                max_concurrent_slots=2,
+                paused_validator_hotkeys=hotkeys,
+                confirmation=confirmation,
+            ),
+        )
+        assert response.status_code == 409, response.text
+        async with settings_maker() as session:
+            rows = (await session.scalars(select(ValidatorSlotSettingsRevision))).all()
+        assert rows == []
+
+    async def test_pause_cannot_be_mixed_with_capacity_change(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        response = await client.post(
+            _URL,
+            headers=_ADMIN_HEADERS,
+            json=_payload(
+                max_concurrent_slots=7,
+                paused_validator_hotkeys=[_ALICE],
+                confirmation=f"PAUSE VALIDATOR {_ALICE}",
+            ),
+        )
+        assert response.status_code == 409, response.text
+
+    async def test_legacy_writer_cannot_drop_an_active_pause(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        assert (
+            await client.post(
+                _URL,
+                headers=_ADMIN_HEADERS,
+                json=_payload(
+                    max_concurrent_slots=2,
+                    paused_validator_hotkeys=[_ALICE],
+                    confirmation=f"PAUSE VALIDATOR {_ALICE}",
+                ),
+            )
+        ).status_code == 200
+        legacy = _payload(expected=1, max_concurrent_slots=5)
+        legacy["settings"].pop("paused_validator_hotkeys")
+        response = await client.post(_URL, headers=_ADMIN_HEADERS, json=legacy)
+        assert response.status_code == 409, response.text
+        assert "paused_validator_hotkeys" in response.json()["message"]
+        assert (
+            await app.state.validator_slot_settings.resolve(settings_maker)
+        ).paused_validator_hotkeys == [_ALICE]
+
     async def test_wrong_confirmation_is_409(
         self,
         app: FastAPI,
@@ -450,6 +563,29 @@ class TestValidation:
         payload["reason"] = "nope"
         resp = await client.post(_URL, headers=_ADMIN_HEADERS, json=payload)
         assert resp.status_code == 422
+
+    @pytest.mark.parametrize(
+        "hotkeys",
+        [
+            [_ALICE, _BOB],
+            [_ALICE, _ALICE],
+            ["not-an-ss58-hotkey"],
+        ],
+    )
+    async def test_paused_hotkeys_must_be_canonical_ss58_values(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+        hotkeys: list[str],
+    ) -> None:
+        _install(app, settings_maker)
+        response = await client.post(
+            _URL,
+            headers=_ADMIN_HEADERS,
+            json=_payload(paused_validator_hotkeys=hotkeys),
+        )
+        assert response.status_code == 422, response.text
 
 
 class TestCeilingsCanBeDisabled:

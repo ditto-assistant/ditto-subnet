@@ -46,12 +46,36 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 AdminDep = Annotated[None, Depends(require_admin)]
 
 
-def confirmation_for(settings: ValidatorSlotSettings) -> str:
-    """The exact string an operator must type to apply ``settings``.
+def confirmation_for(
+    settings: ValidatorSlotSettings, *, current: ValidatorSlotSettings
+) -> str:
+    """The exact string an operator must type for one atomic policy action.
 
-    It names the resulting cap, so the number is stated twice in one request and
-    a mistyped ramp cannot land silently.
+    A capacity edit names the resulting cap. A validator pause/resume names the
+    exact hotkey. Mixing the two actions, swapping validators, or changing more
+    than one paused validator in one revision is refused: one audit row should
+    explain one operational decision.
     """
+    current_paused = set(current.paused_validator_hotkeys)
+    proposed_paused = set(settings.paused_validator_hotkeys)
+    added = proposed_paused - current_paused
+    removed = current_paused - proposed_paused
+    pause_changed = bool(added or removed)
+    capacity_changed = settings.model_dump(
+        exclude={"paused_validator_hotkeys"}
+    ) != current.model_dump(exclude={"paused_validator_hotkeys"})
+    if pause_changed:
+        if capacity_changed or len(added) + len(removed) != 1:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "apply exactly one validator pause or resume per revision, "
+                    "without changing the slot or resource policy"
+                ),
+            )
+        if added:
+            return f"PAUSE VALIDATOR {next(iter(added))}"
+        return f"RESUME VALIDATOR {next(iter(removed))}"
     return f"APPLY VALIDATOR SLOT CAP {settings.max_concurrent_slots}"
 
 
@@ -117,12 +141,6 @@ async def create_settings_revision(
             status_code=422,
             detail="validator slot policy is subnet-global; scope must be '*'",
         )
-    expected_confirmation = confirmation_for(payload.settings)
-    if payload.confirmation != expected_confirmation:
-        raise HTTPException(
-            status_code=409,
-            detail=f"confirmation must be exactly {expected_confirmation}",
-        )
     latest = await latest_validator_slot_settings_revision(session, scope=payload.scope)
     actual_revision = latest.revision if latest is not None else 0
     if payload.expected_revision != actual_revision:
@@ -132,6 +150,32 @@ async def create_settings_revision(
                 "validator slot settings changed; refresh before applying "
                 f"(expected {payload.expected_revision}, current {actual_revision})"
             ),
+        )
+    current_settings = (
+        ValidatorSlotSettings.model_validate(latest.settings)
+        if latest is not None
+        else DEFAULT_SETTINGS
+    )
+    # A Backroom predating this field strips it from every write. That is safe
+    # only while no validator is paused; otherwise an unrelated cap edit would
+    # silently resume the entire paused set. Fail closed until that client has
+    # refreshed onto the complete contract.
+    if (
+        "paused_validator_hotkeys" not in payload.settings.model_fields_set
+        and current_settings.paused_validator_hotkeys
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "paused_validator_hotkeys is required while validator issuance "
+                "pauses are active; refresh before applying"
+            ),
+        )
+    expected_confirmation = confirmation_for(payload.settings, current=current_settings)
+    if payload.confirmation != expected_confirmation:
+        raise HTTPException(
+            status_code=409,
+            detail=f"confirmation must be exactly {expected_confirmation}",
         )
     try:
         row = await insert_validator_slot_settings_revision(

@@ -16755,6 +16755,8 @@ export interface components {
              * @default 90
              */
             memory_percent_ceiling: number;
+            /** Paused Validator Hotkeys */
+            paused_validator_hotkeys?: string[];
             /**
              * Resource Block Percent Ceiling
              * @default 95
@@ -22930,6 +22932,13 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["JobResponse"];
                 };
+            };
+            /** @description Validator issuance is paused. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Missing/invalid validator auth. */
             401: {

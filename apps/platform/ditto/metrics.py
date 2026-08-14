@@ -34,6 +34,7 @@ DispatchDeclineReason = Literal[
     "slot_ceiling",
     "disk_breaker",
     "slot_cap",
+    "validator_paused",
     "inference_slot_cap",
     "slot_occupied",
     "no_candidate",

@@ -11,12 +11,16 @@ import { ValidatorSlotControlPanel } from './ValidatorSlotControlPanel'
 const getValidatorSlotSettings = vi.fn()
 const getValidatorFleet = vi.fn()
 const updateValidatorSlotSettings = vi.fn()
+const updateValidatorIssuancePause = vi.fn()
+const primaryHotkey = `5${'A'.repeat(47)}`
+const secondaryHotkey = `5${'B'.repeat(47)}`
 
 vi.mock('@tanstack/react-start', () => ({ useServerFn: (value: unknown) => value }))
 vi.mock('../server/admin.functions', () => ({
   getValidatorSlotSettings: () => getValidatorSlotSettings(),
   getValidatorFleet: () => getValidatorFleet(),
   updateValidatorSlotSettings: (input: unknown) => updateValidatorSlotSettings(input),
+  updateValidatorIssuancePause: (input: unknown) => updateValidatorIssuancePause(input),
 }))
 
 // The live shape on 2026-07-25: revision 1 raised the cap from the shipped
@@ -34,6 +38,7 @@ function control(
       memory_percent_ceiling: 90,
       cpu_percent_ceiling: 0,
       resource_block_percent_ceiling: 95,
+      paused_validator_hotkeys: [],
     },
     reason: 'ramp the fleet to three slots now that dispatch is stable',
     actor: 'peyton@omniaura.ai',
@@ -49,17 +54,12 @@ function control(
       memory_percent_ceiling: 90,
       cpu_percent_ceiling: 0,
       resource_block_percent_ceiling: 95,
+      paused_validator_hotkeys: [],
     },
     effective: {
       revision: 1,
       scope: '*',
-      settings: {
-      max_concurrent_slots: 3,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    },
+      settings: revision.settings,
       checksum: 'f'.repeat(64),
       source: 'revision',
       hard_slot_ceiling: 8,
@@ -76,7 +76,7 @@ function fleet(): ValidatorFleet {
     active_bench_version: 7,
     validators: [
       {
-        validator_hotkey: '5CqJAjSjabcdefghijklmnop',
+        validator_hotkey: primaryHotkey,
         configured_slots: 4,
         healthy_slot_count: 4,
         admission: 'accepting',
@@ -87,7 +87,7 @@ function fleet(): ValidatorFleet {
         orphaned_slots: [],
       },
       {
-        validator_hotkey: '5HKpbkeLqrstuvwxyz012345',
+        validator_hotkey: secondaryHotkey,
         configured_slots: 1,
         healthy_slot_count: 1,
         admission: 'accepting',
@@ -120,6 +120,7 @@ describe('ValidatorSlotControlPanel', () => {
     getValidatorSlotSettings.mockReset().mockResolvedValue(control())
     getValidatorFleet.mockReset().mockResolvedValue(fleet())
     updateValidatorSlotSettings.mockReset().mockResolvedValue(control())
+    updateValidatorIssuancePause.mockReset().mockResolvedValue(control())
   })
 
   it('separates an operator revision from a setting nobody ever chose', () => {
@@ -141,12 +142,9 @@ describe('ValidatorSlotControlPanel', () => {
             source: 'default',
             checksum: '',
             settings: {
-      max_concurrent_slots: 2,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    },
+              ...control().default,
+              max_concurrent_slots: 2,
+            },
           },
         }}
         initialFleet={null}
@@ -242,12 +240,13 @@ describe('ValidatorSlotControlPanel', () => {
       data: {
         expectedRevision: 1,
         settings: {
-      max_concurrent_slots: 4,
-      disk_percent_ceiling: 90,
-      memory_percent_ceiling: 90,
-      cpu_percent_ceiling: 0,
-      resource_block_percent_ceiling: 95,
-    },
+          max_concurrent_slots: 4,
+          disk_percent_ceiling: 90,
+          memory_percent_ceiling: 90,
+          cpu_percent_ceiling: 0,
+          resource_block_percent_ceiling: 95,
+          paused_validator_hotkeys: [],
+        },
         reason: 'ramp to four now that three has been stable for a day',
         confirmation: 'APPLY VALIDATOR SLOT CAP 4',
       },
@@ -306,6 +305,59 @@ describe('ValidatorSlotControlPanel', () => {
     expect(
       (screen.getByRole('button', { name: 'Apply slot policy' }) as HTMLButtonElement).disabled,
     ).toBe(true)
+    for (const button of screen.getAllByRole('button', { name: 'Pause' })) {
+      expect((button as HTMLButtonElement).disabled).toBe(true)
+    }
+  })
+
+  it('pauses one exact validator without changing the fleet-wide slot policy', async () => {
+    const paused = control({
+      revision: 2,
+      settings: { ...control().effective.settings, paused_validator_hotkeys: [primaryHotkey] },
+    })
+    updateValidatorIssuancePause.mockResolvedValueOnce(paused)
+    render(
+      <ValidatorSlotControlPanel initialState={control()} initialFleet={fleet()} readOnly={false} />,
+    )
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Pause' })[0])
+    fireEvent.change(screen.getAllByLabelText(/Operator reason/)[0], {
+      target: { value: 'drain this validator after repeated benchmark stalls' },
+    })
+    fireEvent.change(screen.getAllByLabelText(/Type to confirm/)[0], {
+      target: { value: `PAUSE VALIDATOR ${primaryHotkey}` },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Pause new issuance' }))
+
+    await waitFor(() => expect(updateValidatorIssuancePause).toHaveBeenCalledTimes(1))
+    expect(updateValidatorIssuancePause).toHaveBeenCalledWith({
+      data: {
+        validatorHotkey: primaryHotkey,
+        paused: true,
+        expectedRevision: 1,
+        reason: 'drain this validator after repeated benchmark stalls',
+        confirmation: `PAUSE VALIDATOR ${primaryHotkey}`,
+      },
+    })
+    expect(updateValidatorSlotSettings).not.toHaveBeenCalled()
+  })
+
+  it('renders a paused validator as drained and offers an exact resume', () => {
+    render(
+      <ValidatorSlotControlPanel
+        initialState={control({
+          settings: {
+            ...control().effective.settings,
+            paused_validator_hotkeys: [primaryHotkey],
+          },
+        })}
+        initialFleet={fleet()}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Resume' })).toBeTruthy()
+    expect(screen.getByText('new leases paused')).toBeTruthy()
   })
 
   it('labels the fleet with the benchmark version being scored', () => {
