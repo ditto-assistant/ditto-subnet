@@ -78,6 +78,24 @@ def _snapshot(row: SimpleNamespace, settings: ValidatorSlotSettings):
 
 
 class TestAuthorizedSlotReporting:
+    def test_an_issuance_pause_is_visible_and_funds_no_new_slots(self) -> None:
+        """The Backroom brake must be visible in the same snapshot it controls."""
+        snapshot = _snapshot(
+            _row(configured_slots=8),
+            ValidatorSlotSettings(
+                max_concurrent_slots=8,
+                disk_percent_ceiling=90,
+                paused_validator_hotkeys=[_VALIDATOR],
+            ),
+        )
+
+        entry = snapshot.validators[0]
+        assert entry.online is True
+        assert entry.availability == "available"
+        assert entry.issuance_paused is True
+        assert entry.configured_slots == 8
+        assert entry.allowed_slots == 0
+
     def test_the_cap_narrows_what_the_validator_advertises(self) -> None:
         """Eight advertised under a cap of six is six -- the fleet's own case."""
         snapshot = _snapshot(

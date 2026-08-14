@@ -13596,7 +13596,7 @@ export interface components {
             admission: "accepting" | "draining" | "paused" | "resource_constrained";
             /**
              * Allowed Slots
-             * @description How many of the advertised slots dispatch will actually fund right now: the operator cap narrowing `configured_slots`, clamped to one while this validator's disk ceiling is tripped. Advertised capacity above this never receives a ticket.
+             * @description How many of the advertised slots dispatch will actually fund right now: zero while exact-validator issuance is paused, the operator cap narrowing `configured_slots`, or one while this validator's resource ceiling is tripped. Advertised capacity above this never receives a ticket.
              * @default 1
              */
             allowed_slots: number;
@@ -13642,6 +13642,12 @@ export interface components {
             health_reasons?: string[];
             /** Healthy Slots */
             healthy_slots?: string[];
+            /**
+             * Issuance Paused
+             * @description Whether Backroom's exact-validator brake currently refuses new canonical, continual-retest, and confirmation leases for this hotkey. Already-issued leases may still finish and report.
+             * @default false
+             */
+            issuance_paused: boolean;
             /** Online */
             online: boolean;
             /**

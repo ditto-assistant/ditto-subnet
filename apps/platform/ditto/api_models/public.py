@@ -3346,12 +3346,24 @@ class PublicValidatorHeartbeat(BaseModel):
             le=8,
             description=(
                 "How many of the advertised slots dispatch will actually fund "
-                "right now: the operator cap narrowing `configured_slots`, "
-                "clamped to one while this validator's disk ceiling is tripped. "
-                "Advertised capacity above this never receives a ticket."
+                "right now: zero while exact-validator issuance is paused, the "
+                "operator cap narrowing `configured_slots`, or one while this "
+                "validator's resource ceiling is tripped. Advertised capacity "
+                "above this never receives a ticket."
             ),
         ),
     ] = 1
+    issuance_paused: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether Backroom's exact-validator brake currently refuses new "
+                "canonical, continual-retest, and confirmation leases for this "
+                "hotkey. Already-issued leases may still finish and report."
+            ),
+        ),
+    ]
     healthy_slots: list[str] = Field(default_factory=lambda: ["slot-0"])
     admission: BenchmarkAdmission = "accepting"
     active_benchmarks: list[PublicBenchmarkProgress] = Field(default_factory=list)

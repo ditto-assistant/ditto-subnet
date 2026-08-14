@@ -162,6 +162,74 @@ describe("accessible fleet status (row 15)", () => {
     );
   });
 
+  it("renders an operator-paused validator as paused while live work drains", async () => {
+    const hotkey = "5PausedValidatorHotkey000000000000000000000000000";
+    const paused = {
+      ...operations,
+      validators: {
+        ...operations.validators,
+        reported_count: 1,
+        online_count: 1,
+        validators: [
+          {
+            validator_hotkey: hotkey,
+            availability: "available",
+            issuance_paused: true,
+            health: "critical",
+            state: "running_benchmark",
+            assignment_state: "synchronized",
+            configured_slots: 2,
+            allowed_slots: 0,
+            healthy_slots: ["slot-0", "slot-1"],
+            admission: "accepting",
+            protocol_version: 18,
+            software_version: "0.63.2",
+            reported_at: "2026-07-31T13:55:00Z",
+            seen_at: "2026-07-31T13:55:00Z",
+            active_benchmarks: [
+              {
+                slot_id: "slot-0",
+                stage: "running_benchmark",
+                percent: 47,
+                completed_checks: 132,
+                total_checks: 281,
+                bench_version: 7,
+                started_at: "2026-07-31T13:00:00Z",
+                agent_id: "agent-draining",
+                agent_name: "Draining",
+              },
+            ],
+          },
+        ],
+      },
+    };
+    restoreFetch?.();
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/public/operations")) {
+        return Promise.resolve(new Response(JSON.stringify(paused), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ validators: [] }), { status: 200 }));
+    }) as typeof fetch;
+
+    render(() => <OperationsPage />);
+    await waitFor(() =>
+      expect(document.querySelector(`#fleet-rows tr[data-entity-id="${hotkey}"]`)).toBeTruthy(),
+    );
+
+    const row = document.querySelector(`#fleet-rows tr[data-entity-id="${hotkey}"]`);
+    const status = row?.querySelector("td:nth-child(2) .stage");
+    expect(status?.textContent).toBe("Paused");
+    expect(status?.classList.contains("paused")).toBe(true);
+    expect(text("fleet-count-paused")).toBe("1");
+    expect(text("fleet-count-critical")).toBe("0");
+    expect(row?.querySelector("td:nth-child(6) .fleet-protocol")?.textContent).toContain(
+      "0 of 2 slots",
+    );
+    expect(row?.querySelector(".benchmark-progress")?.textContent).toContain("Benchmark 47%");
+    expect(row?.querySelector(".stage.capped")?.textContent).toBe("Capped");
+  });
+
   it("never leaks the removed privacy note / allowlist / threshold copy", async () => {
     await renderPage();
     const body = document.body.textContent ?? "";

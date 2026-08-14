@@ -213,6 +213,7 @@ from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
     resolve_slot_settings,
+    validator_issuance_paused,
 )
 from ditto.chain import ChainError
 from ditto.db.models import (
@@ -3351,6 +3352,9 @@ def _validator_heartbeats_response(
         online, availability, health = _fleet_classification(
             state=row.state, seen_at=seen_at, now=now, metrics=metrics
         )
+        issuance_paused = validator_issuance_paused(
+            slot_settings, validator_hotkey=row.validator_hotkey
+        )
         validator_assignments = assignments_by_hotkey.get(row.validator_hotkey, [])
         synchronized_works = active_by_hotkey.get(row.validator_hotkey, [])
         capacity = None
@@ -3489,22 +3493,30 @@ def _validator_heartbeats_response(
                 ),
                 active_benchmark=active_benchmark,
                 configured_slots=(capacity.configured_slots if capacity else 1),
+                # Keep the operator brake separate from heartbeat availability:
+                # an offline paused validator remains honestly offline while
+                # the dashboard can still show why it receives no new work.
+                issuance_paused=issuance_paused,
                 # Resolved with the very function ticket issue calls, so the
                 # fleet view cannot drift from dispatch as the policy changes.
-                allowed_slots=allowed_slot_count(
-                    slot_settings,
-                    advertised_slots=(capacity.configured_slots if capacity else 1),
-                    sample=HostResourceSample(
-                        cpu_percent=(
-                            metrics.cpu_percent if metrics is not None else None
+                allowed_slots=(
+                    0
+                    if issuance_paused
+                    else allowed_slot_count(
+                        slot_settings,
+                        advertised_slots=(capacity.configured_slots if capacity else 1),
+                        sample=HostResourceSample(
+                            cpu_percent=(
+                                metrics.cpu_percent if metrics is not None else None
+                            ),
+                            memory_percent=(
+                                metrics.memory_percent if metrics is not None else None
+                            ),
+                            disk_percent=(
+                                metrics.disk_percent if metrics is not None else None
+                            ),
                         ),
-                        memory_percent=(
-                            metrics.memory_percent if metrics is not None else None
-                        ),
-                        disk_percent=(
-                            metrics.disk_percent if metrics is not None else None
-                        ),
-                    ),
+                    )
                 ),
                 healthy_slots=(capacity.healthy_slots if capacity else ["slot-0"]),
                 admission=(capacity.admission if capacity else "accepting"),

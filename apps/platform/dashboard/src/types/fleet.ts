@@ -116,6 +116,8 @@ export interface FleetEntry {
   assigned_benchmarks?: BenchmarkProgress[];
   healthy_slots?: string[];
   configured_slots?: number | null;
+  /** Backroom refuses new work for this exact validator; live leases may drain. */
+  issuance_paused?: boolean;
   /** "accepting" or a warn label. */
   admission?: string | null;
   capabilities?: ValidatorCapabilities | null;

@@ -163,9 +163,10 @@ describe("inoperative fold rule and status precedence (#511/#514)", () => {
 });
 
 describe("fleet ledger", () => {
-  it("counts critical before availability so a broken scorer never hides as stale", () => {
+  it("keeps an explicit pause visible, then counts faults before liveness", () => {
     const counts = fleetLedgerCounts([
       { health: "critical", availability: "stale" },
+      { health: "critical", availability: "available", issuance_paused: true },
       { availability: "offline" },
       { health: "healthy" },
       { assignment_state: "assignment_mismatch", health: "healthy" },
@@ -177,9 +178,15 @@ describe("fleet ledger", () => {
       warning: 1,
       stale: 0,
       offline: 1,
-      paused: 0,
+      paused: 1,
       unknown: 1,
     });
+  });
+
+  it("shows paused as the fleet verdict even when health also needs attention", () => {
+    expect(
+      fleetStatusFor({ availability: "available", health: "critical", issuance_paused: true }, 7),
+    ).toEqual(["Paused", "paused"]);
   });
 });
 

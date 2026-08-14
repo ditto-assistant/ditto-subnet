@@ -135,10 +135,10 @@ export const FLEET_LEDGER_KEYS = [
 
 export type FleetLedgerKey = (typeof FLEET_LEDGER_KEYS)[number];
 
-/** Ledger buckets (updateFleetLedger 8845–8859). Critical is counted before
- * availability: a validator whose scorer is not serving is broken whether or
- * not it is also quiet, and burying it under "stale" is how it stayed
- * invisible. */
+/** Ledger buckets (updateFleetLedger 8845–8859). An explicit operator pause is
+ * counted first because it is the authoritative dispatch state. Otherwise,
+ * critical is counted before liveness: a validator whose scorer is not serving
+ * is broken whether or not it is also quiet. */
 export function fleetLedgerCounts(entries: FleetEntryExt[]): Record<FleetLedgerKey, number> {
   const counts: Record<FleetLedgerKey, number> = {
     healthy: 0,
@@ -150,11 +150,11 @@ export function fleetLedgerCounts(entries: FleetEntryExt[]): Record<FleetLedgerK
     unknown: 0,
   };
   entries.forEach((entry) => {
-    if (entry.health === "critical") counts.critical++;
+    if (entry.issuance_paused || entry.availability === "paused") counts.paused++;
+    else if (entry.health === "critical") counts.critical++;
     else if (entry.assignment_state === "assignment_mismatch") counts.warning++;
     else if (entry.availability === "stale") counts.stale++;
     else if (entry.availability === "offline") counts.offline++;
-    else if (entry.availability === "paused") counts.paused++;
     else if (entry.health === "warning") counts.warning++;
     else if (entry.health === "healthy") counts.healthy++;
     else counts.unknown++;

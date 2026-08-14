@@ -96,6 +96,7 @@ interface FleetStatusFields {
   bench_serviceability?: string | null;
   scorer_liveness?: string | null;
   allowed_slots?: number | null;
+  issuance_paused?: boolean;
   /** Set by preserveTransientValidatorTelemetry when a slot's signed progress
    * was carried through the grace window (see fleet.ts). */
   _telemetry_grace?: boolean;
@@ -107,6 +108,11 @@ type ValidatorEntry = FleetEntry & FleetStatusFields;
 // instead of growing a second copy.
 
 export function fleetStatus(entry: ValidatorEntry): [string, string] {
+  // An operator pause is the fleet's current dispatch state and must remain
+  // visible even when the validator also reports a fault. The detail view
+  // preserves scorer, stack and host health separately; the fleet verdict
+  // answers the first routing question: can this validator receive new work?
+  if (entry.issuance_paused || entry.availability === "paused") return ["Paused", "paused"];
   // Software that cannot describe the benchmark being scored comes first;
   // then the scorer that is down (the cause) before the bench gate (the
   // consequence). All three mean no lease completes.
@@ -124,7 +130,6 @@ export function fleetStatus(entry: ValidatorEntry): [string, string] {
   if (entry.assignment_state === "heartbeat_stale") return ["Heartbeat stale", "warn"];
   if (entry.availability === "stale") return ["Stale", "warn"];
   if (entry.availability === "offline") return ["Offline", "bad"];
-  if (entry.availability === "paused") return ["Paused", "paused"];
   if (entry.health === "warning") return ["Warning", "warn"];
   if (entry.health === "healthy") return ["Healthy", "good"];
   return ["Not reported", "unknown"];
