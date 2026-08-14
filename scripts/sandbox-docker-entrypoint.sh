@@ -209,4 +209,7 @@ prune_sandbox_docker &
 # Docker 29 defaults new installations to the containerd image store. Keep the
 # classic store so `docker image save` emits the portable archive contract that
 # older validator daemons load with the exact signed config digest.
-exec dockerd-entrypoint.sh --feature containerd-snapshotter=false "$@"
+exec dockerd-entrypoint.sh \
+  --feature containerd-snapshotter=false \
+  --label io.heyditto.dittobench.isolated=true \
+  "$@"

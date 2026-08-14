@@ -49,6 +49,16 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
       -X 'github.com/ditto-assistant/dittobench-api/internal/release.softwareVersion=${DITTOBENCH_SOFTWARE_VERSION}'" \
     -o /out/dittobench-api ./cmd/dittobench-api
 
+# ---- immutable public confirmation assets ----
+# The cleaned LongMemEval-S dataset is public benchmark input pinned to an
+# immutable upstream revision and full content digest. It is not a credential.
+# A clean BuildKit builder re-downloads and verifies these exact bytes.
+FROM alpine:3.22 AS confirmation-assets
+ADD --checksum=sha256:d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442 \
+    https://huggingface.co/datasets/xiaowu0162/longmemeval-cleaned/resolve/98d7416c24c778c2fee6e6f3006e7a073259d48f/longmemeval_s_cleaned.json \
+    /longmemeval_s_cleaned.json
+RUN chmod 0444 /longmemeval_s_cleaned.json
+
 # ---- validator sandbox runtime ----
 # This opt-in target runs the API beside a host Docker daemon. The binary shells
 # out to both git and docker when it materializes and runs miner submissions.
@@ -58,6 +68,14 @@ ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 RUN apk add --no-cache git
 COPY --from=build /out/dittobench-api /dittobench-api
+COPY --chown=65532:65532 \
+    packages/ditto-screening-protocol/ditto_screening_protocol/data/ \
+    /opt/ditto/confirmation/
+RUN chmod 0555 /opt/ditto/confirmation && \
+    find /opt/ditto/confirmation -type f -exec chmod 0444 {} +
+COPY --from=confirmation-assets --chown=65532:65532 --chmod=0444 \
+    /longmemeval_s_cleaned.json \
+    /opt/ditto/confirmation/longmemeval_s_cleaned.json
 ENV HOME=/tmp
 # Legacy fallback only; the binary above already carries these values.
 ENV DITTOBENCH_SOFTWARE_VERSION=${DITTOBENCH_SOFTWARE_VERSION}

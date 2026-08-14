@@ -153,6 +153,7 @@ def test_screening_contract_change_propagates_to_every_consumer(
         "packages/ditto-screening-protocol/ditto_screening_protocol/models.py",
     ) == {
         "screening_protocol",
+        "dittobench_api",
         "miner_cli",
         "validator",
         "validator_stack",

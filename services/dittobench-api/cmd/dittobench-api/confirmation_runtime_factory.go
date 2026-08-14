@@ -43,8 +43,8 @@ const (
 type confirmationActivationFile struct {
 	SchemaVersion                    int             `json:"schema_version"`
 	ExecutionProfile                 json.RawMessage `json:"execution_profile"`
-	CalibrationManifestSHA256        string          `json:"calibration_manifest_sha256"`
-	CalibrationManifestPath          string          `json:"calibration_manifest_path"`
+	LaunchManifestSHA256             string          `json:"launch_manifest_sha256"`
+	LaunchManifestPath               string          `json:"launch_manifest_path"`
 	LongMemDatasetPath               string          `json:"longmem_dataset_path"`
 	AblationDatasetPath              string          `json:"ablation_dataset_path"`
 	SandboxHealthTimeoutMilliseconds int64           `json:"sandbox_health_timeout_ms"`
@@ -99,11 +99,11 @@ func confirmationExecutorFromEnvironment(
 	if err != nil {
 		return nil, fmt.Errorf("confirmation installation profile: %w", err)
 	}
-	calibrationFile, _, err := verifyImmutableConfirmationFile(
-		installation.CalibrationManifestPath, maximumConfirmationInstallationBytes,
+	launchFile, _, err := verifyImmutableConfirmationFile(
+		installation.LaunchManifestPath, maximumConfirmationInstallationBytes,
 	)
-	if err != nil || calibrationFile.sha256 != installation.CalibrationManifestSHA256 {
-		return nil, errors.New("confirmation calibration manifest does not match launch approval")
+	if err != nil || launchFile.sha256 != installation.LaunchManifestSHA256 {
+		return nil, errors.New("confirmation manifest does not match launch approval")
 	}
 	if installation.SandboxHealthTimeoutMilliseconds <= 0 ||
 		installation.SandboxHealthTimeoutMilliseconds > int64((10*time.Minute)/time.Millisecond) {
@@ -111,18 +111,18 @@ func confirmationExecutorFromEnvironment(
 	}
 	factory, err := newScreenedConfirmationRuntimeFactory(screenedConfirmationRuntimeFactoryConfig{
 		Profile: profile, Sandbox: sandboxRuntime, Broker: broker,
-		CalibrationManifestPath:   installation.CalibrationManifestPath,
-		CalibrationManifestSHA256: installation.CalibrationManifestSHA256,
-		LongMemDatasetPath:        installation.LongMemDatasetPath,
-		AblationDatasetPath:       installation.AblationDatasetPath,
-		SandboxHealthTimeout:      time.Duration(installation.SandboxHealthTimeoutMilliseconds) * time.Millisecond,
+		LaunchManifestPath:   installation.LaunchManifestPath,
+		LaunchManifestSHA256: installation.LaunchManifestSHA256,
+		LongMemDatasetPath:   installation.LongMemDatasetPath,
+		AblationDatasetPath:  installation.AblationDatasetPath,
+		SandboxHealthTimeout: time.Duration(installation.SandboxHealthTimeoutMilliseconds) * time.Millisecond,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return newTrustedConfirmationExecutor(confirmationProfileInstallation{
-		ExecutionProfile:          installation.ExecutionProfile,
-		CalibrationManifestSHA256: installation.CalibrationManifestSHA256,
+		ExecutionProfile:     installation.ExecutionProfile,
+		LaunchManifestSHA256: installation.LaunchManifestSHA256,
 	}, factory)
 }
 
@@ -130,25 +130,25 @@ func confirmationExecutorFromEnvironment(
 // configuration. Provider credentials are deliberately absent: they arrive
 // only as ticket-scoped Platform grants.
 type screenedConfirmationRuntimeFactoryConfig struct {
-	Profile                   confirmationExecutionProfileWire
-	Sandbox                   sandbox.Sandbox
-	Broker                    *inferenceBroker
-	CalibrationManifestPath   string
-	CalibrationManifestSHA256 string
-	LongMemDatasetPath        string
-	AblationDatasetPath       string
-	SandboxHealthTimeout      time.Duration
+	Profile              confirmationExecutionProfileWire
+	Sandbox              sandbox.Sandbox
+	Broker               *inferenceBroker
+	LaunchManifestPath   string
+	LaunchManifestSHA256 string
+	LongMemDatasetPath   string
+	AblationDatasetPath  string
+	SandboxHealthTimeout time.Duration
 }
 
 type screenedConfirmationRuntimeFactory struct {
-	profile             confirmationExecutionProfileWire
-	sandbox             sandbox.Sandbox
-	broker              *inferenceBroker
-	calibrationManifest verifiedConfirmationFile
-	longMemDataset      verifiedConfirmationFile
-	ablationFile        verifiedConfirmationFile
-	ablationDataset     confirmationAblationDataset
-	healthTimeout       time.Duration
+	profile         confirmationExecutionProfileWire
+	sandbox         sandbox.Sandbox
+	broker          *inferenceBroker
+	launchManifest  verifiedConfirmationFile
+	longMemDataset  verifiedConfirmationFile
+	ablationFile    verifiedConfirmationFile
+	ablationDataset confirmationAblationDataset
+	healthTimeout   time.Duration
 }
 
 type verifiedConfirmationFile struct {
@@ -332,16 +332,21 @@ func newScreenedConfirmationRuntimeFactory(config screenedConfirmationRuntimeFac
 		return nil, errors.New("confirmation sandbox and broker are required")
 	}
 	localDocker, concrete := config.Sandbox.(*sandbox.LocalDocker)
-	if !concrete || localDocker == nil || !localDocker.Harden || !localDocker.RequireRootless ||
-		!validConfirmationNetworkName(localDocker.EgressNetwork) || !validConfirmationEgressProxy(localDocker.EgressProxy) {
+	rootlessBoundary := concrete && localDocker != nil && localDocker.RequireRootless &&
+		validConfirmationEgressProxy(localDocker.EgressProxy)
+	managedDindBoundary := concrete && localDocker != nil && localDocker.RequireIsolatedDaemon &&
+		localDocker.EgressNetwork == "ditto-sandbox" && localDocker.EgressProxy == ""
+	if !concrete || localDocker == nil || !localDocker.Harden ||
+		!validConfirmationNetworkName(localDocker.EgressNetwork) ||
+		(!rootlessBoundary && !managedDindBoundary) {
 		return nil, errors.New("confirmation sandbox lacks production isolation")
 	}
 	if config.SandboxHealthTimeout <= 0 {
 		return nil, errors.New("confirmation sandbox health timeout must be positive")
 	}
-	calibrationFile, _, err := verifyImmutableConfirmationFile(config.CalibrationManifestPath, maximumConfirmationInstallationBytes)
-	if err != nil || calibrationFile.sha256 != config.CalibrationManifestSHA256 {
-		return nil, errors.New("confirmation calibration manifest does not match launch approval")
+	launchFile, _, err := verifyImmutableConfirmationFile(config.LaunchManifestPath, maximumConfirmationInstallationBytes)
+	if err != nil || launchFile.sha256 != config.LaunchManifestSHA256 {
+		return nil, errors.New("confirmation manifest does not match launch approval")
 	}
 	longMemFile, _, err := verifyConfirmationFile(config.LongMemDatasetPath, 384<<20)
 	if err != nil {
@@ -357,9 +362,9 @@ func newScreenedConfirmationRuntimeFactory(config screenedConfirmationRuntimeFac
 	}
 	factory := &screenedConfirmationRuntimeFactory{
 		profile: config.Profile, sandbox: config.Sandbox, broker: config.Broker,
-		calibrationManifest: calibrationFile,
-		longMemDataset:      longMemFile,
-		ablationFile:        ablationFile, ablationDataset: dataset,
+		launchManifest: launchFile,
+		longMemDataset: longMemFile,
+		ablationFile:   ablationFile, ablationDataset: dataset,
 		healthTimeout: config.SandboxHealthTimeout,
 	}
 	if err := factory.ValidateInstallation(config.Profile); err != nil {
@@ -382,9 +387,9 @@ func (factory *screenedConfirmationRuntimeFactory) ValidateInstallation(profile 
 	if factory == nil || nilInterface(factory.sandbox) || factory.broker == nil || factory.healthTimeout <= 0 {
 		return errors.New("confirmation runtime factory is incomplete")
 	}
-	if file, _, fileErr := verifyImmutableConfirmationFile(factory.calibrationManifest.path, maximumConfirmationInstallationBytes); fileErr != nil ||
-		file.sha256 != factory.calibrationManifest.sha256 {
-		return errors.New("confirmation calibration manifest drift")
+	if file, _, fileErr := verifyImmutableConfirmationFile(factory.launchManifest.path, maximumConfirmationInstallationBytes); fileErr != nil ||
+		file.sha256 != factory.launchManifest.sha256 {
+		return errors.New("confirmation launch manifest drift")
 	}
 	if !reflect.DeepEqual(profile, factory.profile) {
 		return errors.New("confirmation runtime profile drift")

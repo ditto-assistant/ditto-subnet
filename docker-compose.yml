@@ -130,6 +130,9 @@ services:
       DOCKER_HOST: tcp://127.0.0.1:2375
       DITTOBENCH_SANDBOX_HARDEN: "1"
       DITTOBENCH_SANDBOX_EGRESS_NETWORK: ditto-sandbox
+      # Require runtime proof that DOCKER_HOST is the release-owned,
+      # credential-empty DinD service rather than an operator host daemon.
+      DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON: "true"
       # Production opt-in for platform-verified screened archives. Keep the
       # broader private-harness URL bypass disabled.
       DITTOBENCH_ALLOW_SCREENED_IMAGES: "1"
@@ -151,6 +154,11 @@ services:
       # LongMemEval runs in a disjoint pool. It defaults to half the ordinary
       # capacity and never consumes the canonical full-run semaphore.
       DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS: ${VALIDATOR_LONGMEM_CAPACITY:-4}
+      # Public release assets opt the scorer into the bounded shadow executor.
+      # These are immutable files inside the image, not host mounts, cloud
+      # identities, Secret Manager references, or provider credentials.
+      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_FILE: /opt/ditto/confirmation/confirmation_installation_v9_shadow.json
+      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: 9c7ffa352e37b758b8d2ceae08cafd6e311cb874b20d96eb658fb27f344076ac
       # Hosted v7 parallelism. Both default inside the scorer image to the
       # values dittobench-api#104 ships (4 cases, 8 concurrent embeddings per
       # run); these anchors exist so a host with unusual headroom, or one being

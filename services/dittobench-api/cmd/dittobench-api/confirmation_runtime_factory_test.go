@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -322,7 +323,7 @@ func TestConfirmationActivationIsExplicitAndContentAddressed(t *testing.T) {
 	}
 	directory := t.TempDir()
 	path := filepath.Join(directory, "confirmation.json")
-	raw := []byte(`{"schema_version":1,"execution_profile":{},"calibration_manifest_sha256":"` + strings.Repeat("a", 64) + `","calibration_manifest_path":"/calibration.json","longmem_dataset_path":"/dataset","ablation_dataset_path":"/ablation","sandbox_health_timeout_ms":1000}`)
+	raw := []byte(`{"schema_version":1,"execution_profile":{},"launch_manifest_sha256":"` + strings.Repeat("a", 64) + `","launch_manifest_path":"/launch.json","longmem_dataset_path":"/dataset","ablation_dataset_path":"/ablation","sandbox_health_timeout_ms":1000}`)
 	if err := os.WriteFile(path, raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -350,6 +351,72 @@ func TestConfirmationActivationIsExplicitAndContentAddressed(t *testing.T) {
 	}
 	if _, err := readConfirmationActivationFile(path, digestBytes(hostile)); err == nil {
 		t.Fatal("duplicate installation identity accepted")
+	}
+}
+
+func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *testing.T) {
+	t.Helper()
+	_, source, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("could not locate confirmation test source")
+	}
+	repository := filepath.Clean(filepath.Join(filepath.Dir(source), "../../../.."))
+	data := filepath.Join(
+		repository,
+		"packages/ditto-screening-protocol/ditto_screening_protocol/data",
+	)
+	installationPath := filepath.Join(data, "confirmation_installation_v9_shadow.json")
+	installationRaw, err := os.ReadFile(installationPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const installationSHA = "9c7ffa352e37b758b8d2ceae08cafd6e311cb874b20d96eb658fb27f344076ac"
+	if digestBytes(installationRaw) != installationSHA {
+		t.Fatalf("installation digest = %s", digestBytes(installationRaw))
+	}
+	installation, err := readConfirmationActivationFile(installationPath, installationSHA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, _, err := decodeAndValidateConfirmationProfile(installation.ExecutionProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-13" ||
+		profile.LongMemCasesPerCapability != 2 || profile.AblationCoordinatorPolicy.SampleSize != 4 ||
+		profile.Composite.BaseWeightBPS != 7000 || profile.Composite.LongMemWeightBPS != 3000 {
+		t.Fatalf("unexpected bounded profile: %+v", profile)
+	}
+	if len(profile.ProviderLanes) != 2 || profile.ProviderLanes[0].Model != "openai/gpt-4o-2024-08-06" ||
+		profile.ProviderLanes[1].Model != "openai/gpt-oss-20b" {
+		t.Fatalf("unexpected provider lanes: %+v", profile.ProviderLanes)
+	}
+	if profile.EmbeddingLane.Provider != "perplexity" ||
+		profile.EmbeddingLane.Model != "perplexity/pplx-embed-v1-0.6b" ||
+		profile.EmbeddingLane.Dimensions != 768 || profile.EmbeddingLane.MaxRequests != 5000 {
+		t.Fatalf("unexpected embedding lane: %+v", profile.EmbeddingLane)
+	}
+	if installation.LaunchManifestPath != "/opt/ditto/confirmation/confirmation_launch_manifest_v9_shadow.json" ||
+		installation.LongMemDatasetPath != "/opt/ditto/confirmation/longmemeval_s_cleaned.json" ||
+		installation.AblationDatasetPath != "/opt/ditto/confirmation/confirmation_ablation_v9_shadow.json" {
+		t.Fatalf("unexpected installed paths: %+v", installation)
+	}
+	launchRaw, err := os.ReadFile(filepath.Join(data, "confirmation_launch_manifest_v9_shadow.json"))
+	if err != nil || digestBytes(launchRaw) != installation.LaunchManifestSHA256 {
+		t.Fatalf("launch manifest identity = %s, %v", digestBytes(launchRaw), err)
+	}
+	ablationRaw, err := os.ReadFile(filepath.Join(data, "confirmation_ablation_v9_shadow.json"))
+	if err != nil || digestBytes(ablationRaw) != profile.AblationDatasetSHA256 {
+		t.Fatalf("ablation dataset identity = %s, %v", digestBytes(ablationRaw), err)
+	}
+	for _, forbidden := range []string{
+		`"api_key"`, `"credential_path"`, `"credential_ref"`, `"gcp"`, `"gcloud"`,
+		`"google_application_credentials"`, `"secret_manager"`, `"service_account"`, `"sm://"`,
+	} {
+		if bytes.Contains(bytes.ToLower(installationRaw), []byte(forbidden)) ||
+			bytes.Contains(bytes.ToLower(launchRaw), []byte(forbidden)) {
+			t.Fatalf("production installation contains forbidden authority field %s", forbidden)
+		}
 	}
 }
 
@@ -388,7 +455,7 @@ func TestVerifyImmutableConfirmationFileRejectsUnsafeIdentityAndDrift(t *testing
 		t.Fatal(err)
 	}
 	if changed.sha256 == verified.sha256 {
-		t.Fatal("post-start calibration drift was not observable")
+		t.Fatal("post-start launch manifest drift was not observable")
 	}
 }
 
@@ -403,15 +470,15 @@ func (noOpConfirmationAuthorizer) Authorize(
 }
 
 type confirmationFactoryFixture struct {
-	factory         *screenedConfirmationRuntimeFactory
-	sandbox         *fakeConfirmationSandbox
-	identity        confirmationRuntimeIdentity
-	longMemPath     string
-	ablationPath    string
-	calibrationPath string
-	harness         *httptest.Server
-	embedding       *httptest.Server
-	provider        *httptest.Server
+	factory      *screenedConfirmationRuntimeFactory
+	sandbox      *fakeConfirmationSandbox
+	identity     confirmationRuntimeIdentity
+	longMemPath  string
+	ablationPath string
+	launchPath   string
+	harness      *httptest.Server
+	embedding    *httptest.Server
+	provider     *httptest.Server
 }
 
 func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFactoryFixture {
@@ -448,9 +515,9 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	if err := os.WriteFile(ablationPath, ablationRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	calibrationRaw := []byte(`{"approved":true}`)
-	calibrationPath := filepath.Join(directory, "calibration.json")
-	if err := os.WriteFile(calibrationPath, calibrationRaw, 0o600); err != nil {
+	launchRaw := []byte(`{"mode":"shadow"}`)
+	launchPath := filepath.Join(directory, "launch.json")
+	if err := os.WriteFile(launchPath, launchRaw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	longMemKey := bytes.Repeat([]byte{0x43}, 32)
@@ -542,7 +609,7 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	if err != nil {
 		t.Fatal(err)
 	}
-	calibrationFile, _, err := verifyImmutableConfirmationFile(calibrationPath, 1024)
+	launchFile, _, err := verifyImmutableConfirmationFile(launchPath, 1024)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -551,7 +618,7 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 		t.Fatal(err)
 	}
 	factory := &screenedConfirmationRuntimeFactory{
-		profile: profile, sandbox: sandboxBackend, broker: broker, calibrationManifest: calibrationFile,
+		profile: profile, sandbox: sandboxBackend, broker: broker, launchManifest: launchFile,
 		longMemDataset: longMemFile, ablationFile: ablationFile, ablationDataset: dataset,
 		healthTimeout: 5 * time.Millisecond,
 	}
@@ -568,7 +635,7 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	return confirmationFactoryFixture{
 		factory: factory, sandbox: sandboxBackend,
 		identity:    identity,
-		longMemPath: longMemPath, ablationPath: ablationPath, calibrationPath: calibrationPath,
+		longMemPath: longMemPath, ablationPath: ablationPath, launchPath: launchPath,
 		harness: harness, embedding: embedding, provider: provider,
 	}
 }
@@ -681,9 +748,9 @@ func TestConfirmationFactoryRejectsFileAndProviderDriftBeforeSecrets(t *testing.
 				t.Fatal(err)
 			}
 		},
-		"calibration manifest": func(t *testing.T, fixture *confirmationFactoryFixture) {
+		"launch manifest": func(t *testing.T, fixture *confirmationFactoryFixture) {
 			t.Helper()
-			if err := os.WriteFile(fixture.calibrationPath, []byte(`{"approved":false}`), 0o600); err != nil {
+			if err := os.WriteFile(fixture.launchPath, []byte(`{"mode":"enforce"}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		},
@@ -725,6 +792,17 @@ func TestProductionFactoryRejectsNonProductionIsolationBeforeDataset(t *testing.
 			}
 		})
 	}
+	t.Run("managed isolated daemon", func(t *testing.T) {
+		runtime := sandbox.NewLocalDocker()
+		runtime.Harden = true
+		runtime.RequireIsolatedDaemon = true
+		runtime.EgressNetwork = "ditto-sandbox"
+		if factory, err := newScreenedConfirmationRuntimeFactory(screenedConfirmationRuntimeFactoryConfig{
+			Sandbox: runtime, Broker: newInferenceBroker(1), SandboxHealthTimeout: time.Second,
+		}); err == nil || factory != nil || !strings.Contains(err.Error(), "manifest") {
+			t.Fatalf("managed isolated daemon was not accepted through the isolation boundary: %v", err)
+		}
+	})
 }
 
 var _ sandbox.Sandbox = (*fakeConfirmationSandbox)(nil)

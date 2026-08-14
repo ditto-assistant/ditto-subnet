@@ -5,6 +5,8 @@ on:
     paths:
       - services/dittobench-api/**
       - research/dittobench-datagen/**
+      - packages/ditto-screening-protocol/ditto_screening_protocol/data/**
+      - scripts/generate_confirmation_installation.py
       - docker-compose.yml
       - Dockerfile.sandbox-docker
       - scripts/sandbox-docker-entrypoint.sh
@@ -15,6 +17,8 @@ on:
     paths:
       - services/dittobench-api/**
       - research/dittobench-datagen/**
+      - packages/ditto-screening-protocol/ditto_screening_protocol/data/**
+      - scripts/generate_confirmation_installation.py
       - docker-compose.yml
       - Dockerfile.sandbox-docker
       - scripts/sandbox-docker-entrypoint.sh

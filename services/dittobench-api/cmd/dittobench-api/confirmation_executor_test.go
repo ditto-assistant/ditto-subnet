@@ -18,7 +18,7 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-const testCalibrationManifestSHA256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+const testLaunchManifestSHA256 = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 
 var (
 	testAblationSelectionKey  = bytes.Repeat([]byte{0x41}, 32)
@@ -118,12 +118,12 @@ func validInstalledConfirmationProfile(t *testing.T) (confirmationExecutionProfi
 			RequestTimeoutMilliseconds: 50, TotalTimeoutMilliseconds: 100,
 		},
 		InferenceAblation: confirmationAblationProfile{
-			Intervention: string(ablation.InterventionInference), ContractVersion: ablation.ContractVersion,
+			Intervention: string(ablation.InterventionInference), ContractVersion: ablation.ProfileContractVersion,
 			ThresholdMicros: 200_000,
 			Budget:          confirmationAblationBudget{MaxChatRequests: 10, MaxChatInputBytes: 10_000},
 		},
 		EmbeddingAblation: confirmationAblationProfile{
-			Intervention: string(ablation.InterventionEmbedding), ContractVersion: ablation.ContractVersion,
+			Intervention: string(ablation.InterventionEmbedding), ContractVersion: ablation.ProfileContractVersion,
 			ThresholdMicros: 200_000,
 			Budget: confirmationAblationBudget{
 				MaxEmbeddingRequests: 10, MaxEmbeddingInputs: 10, MaxEmbeddingInputBytes: 10_000,
@@ -135,7 +135,7 @@ func validInstalledConfirmationProfile(t *testing.T) (confirmationExecutionProfi
 		},
 	}
 	refreshConfirmationProfileChecksums(t, &profile)
-	if profile.Checksum != "38d9334acd0f17e257d151d66e3feb6d5c0a200f0c5091f8bd29f90e387fd3f1" {
+	if profile.Checksum != "3de4aed6dd7011e86dfb28cec11c043f2b9a0328a498613c94e04524e563f75a" {
 		t.Fatalf("cross-language outer profile checksum = %s", profile.Checksum)
 	}
 	raw, err := json.Marshal(profile)
@@ -243,7 +243,7 @@ func installTrustedExecutor(
 ) *trustedConfirmationExecutor {
 	t.Helper()
 	executor, err := newTrustedConfirmationExecutor(confirmationProfileInstallation{
-		ExecutionProfile: raw, CalibrationManifestSHA256: testCalibrationManifestSHA256,
+		ExecutionProfile: raw, LaunchManifestSHA256: testLaunchManifestSHA256,
 	}, factory)
 	if err != nil {
 		t.Fatal(err)
@@ -263,11 +263,11 @@ func TestTrustedConfirmationConstructorFailsClosed(t *testing.T) {
 		factory      confirmationRuntimeFactory
 		want         string
 	}{
-		{"nil runtime factory", confirmationProfileInstallation{ExecutionProfile: raw, CalibrationManifestSHA256: testCalibrationManifestSHA256}, nil, "runtime factory"},
-		{"missing calibration approval", confirmationProfileInstallation{ExecutionProfile: raw}, validFactory, "calibrated launch approval"},
-		{"invalid calibration approval", confirmationProfileInstallation{ExecutionProfile: raw, CalibrationManifestSHA256: "not-a-digest"}, validFactory, "calibrated launch approval"},
-		{"missing profile", confirmationProfileInstallation{CalibrationManifestSHA256: testCalibrationManifestSHA256}, validFactory, "decode confirmation"},
-		{"unvalidated runtime dependencies", confirmationProfileInstallation{ExecutionProfile: raw, CalibrationManifestSHA256: testCalibrationManifestSHA256}, rejectedConfirmationRuntimeFactory{err: errors.New("judge is nil")}, "installation is not ready"},
+		{"nil runtime factory", confirmationProfileInstallation{ExecutionProfile: raw, LaunchManifestSHA256: testLaunchManifestSHA256}, nil, "runtime factory"},
+		{"missing launch approval", confirmationProfileInstallation{ExecutionProfile: raw}, validFactory, "exact launch approval"},
+		{"invalid launch approval", confirmationProfileInstallation{ExecutionProfile: raw, LaunchManifestSHA256: "not-a-digest"}, validFactory, "exact launch approval"},
+		{"missing profile", confirmationProfileInstallation{LaunchManifestSHA256: testLaunchManifestSHA256}, validFactory, "decode confirmation"},
+		{"unvalidated runtime dependencies", confirmationProfileInstallation{ExecutionProfile: raw, LaunchManifestSHA256: testLaunchManifestSHA256}, rejectedConfirmationRuntimeFactory{err: errors.New("judge is nil")}, "installation is not ready"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -358,7 +358,7 @@ func TestTrustedConfirmationProfileStrictAndChecksumBound(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := newTrustedConfirmationExecutor(confirmationProfileInstallation{
-				ExecutionProfile: test.raw(), CalibrationManifestSHA256: testCalibrationManifestSHA256,
+				ExecutionProfile: test.raw(), LaunchManifestSHA256: testLaunchManifestSHA256,
 			}, factory)
 			if err == nil || !strings.Contains(err.Error(), test.needle) {
 				t.Fatalf("error = %v, want substring %q", err, test.needle)

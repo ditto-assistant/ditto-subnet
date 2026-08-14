@@ -22,6 +22,7 @@ ignored_paths = [
   "infra/**",
   "scripts/check_netns_incompatible.py",
   "scripts/gen_validator_contract.py",
+  "scripts/generate_confirmation_installation.py",
   "scripts/run-validator.sh",
   "services/dittobench-api/docs/**",
   "services/dittobench-api/*.md",
@@ -93,7 +94,7 @@ paths = [
 
 [components.dittobench_api]
 description = "DittoBench scorer and hosted API"
-depends_on = ["dittobench_datagen"]
+depends_on = ["dittobench_datagen", "screening_protocol"]
 paths = [
   "services/dittobench-api/Dockerfile*",
   "services/dittobench-api/calibration/**",

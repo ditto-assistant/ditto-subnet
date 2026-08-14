@@ -326,6 +326,7 @@ class TestSettingsWrites:
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         install(app, settings_maker)
+        app.state.confirmation_verification_profiles = {}
         reconcile = AsyncMock()
         monkeypatch.setattr(
             admin_confirmation_bundles,

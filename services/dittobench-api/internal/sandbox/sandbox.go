@@ -15,9 +15,10 @@
 // plus opt-in hardening for untrusted (on-chain) submissions — `--cap-drop ALL`
 // (Harden) and an egress allowlist via a restricted network + forward proxy
 // (EgressNetwork/EgressProxy; see the Sandbox egress section in
-// docs/model-lock.md). Production also requires an operator-owned rootless
-// endpoint; a rootful Docker socket remains explicitly incompatible with the
-// hardened boundary.
+// docs/model-lock.md). Production requires either an operator-owned rootless
+// endpoint or the release-owned, credential-empty nested daemon used by the
+// managed stack; a host rootful Docker socket remains explicitly incompatible
+// with the hardened boundary.
 package sandbox
 
 import (
@@ -25,12 +26,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +50,7 @@ const (
 	// key ever enters the sandbox.
 	OpenRouterShimCABundlePath = "/run/dittobench/openrouter-shim-ca.pem"
 	openRouterShimHost         = "openrouter.ai"
+	isolatedDaemonLabel        = "io.heyditto.dittobench.isolated=true"
 )
 
 // Sandbox builds a submission into a runnable image and runs it as an
@@ -215,6 +219,12 @@ type LocalDocker struct {
 	// advertises rootless mode. Operators can provision the endpoint first, then
 	// enable DITTOBENCH_REQUIRE_ROOTLESS_DOCKER without changing scoring.
 	RequireRootless bool
+	// RequireIsolatedDaemon fails availability checks unless the selected Docker
+	// daemon advertises the release-owned isolated-daemon label. The managed
+	// validator stack uses this for its credential-empty privileged DinD service;
+	// untrusted containers remain confined by the DinD-local egress firewall and
+	// never receive a host Docker socket.
+	RequireIsolatedDaemon bool
 	// HostGatewayIP is the trusted scorer/broker address visible from containers
 	// owned by a nested rootless daemon. Rootless Docker cannot use the rootful
 	// host-gateway magic to reach its outer network namespace, so production
@@ -262,9 +272,12 @@ func NewLocalDocker() *LocalDocker {
 		SeccompProfile:  strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_SECCOMP_PROFILE")),
 		AppArmorProfile: strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_APPARMOR_PROFILE")),
 		RequireRootless: envBool("DITTOBENCH_REQUIRE_ROOTLESS_DOCKER"),
-		HostGatewayIP:   strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_HOST_GATEWAY_IP")),
-		EgressNetwork:   strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_EGRESS_NETWORK")),
-		EgressProxy:     strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_EGRESS_PROXY")),
+		RequireIsolatedDaemon: envBool(
+			"DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON",
+		),
+		HostGatewayIP: strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_HOST_GATEWAY_IP")),
+		EgressNetwork: strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_EGRESS_NETWORK")),
+		EgressProxy:   strings.TrimSpace(os.Getenv("DITTOBENCH_SANDBOX_EGRESS_PROXY")),
 		OpenRouterShimCABundleHostPath: strings.TrimSpace(
 			os.Getenv("DITTOBENCH_OPENROUTER_SHIM_CA_BUNDLE_PATH"),
 		),
@@ -341,6 +354,19 @@ func (d *LocalDocker) Available(ctx context.Context) error {
 		}
 		if _, err := d.sandboxHostGateway(); err != nil {
 			return fmt.Errorf("docker daemon unavailable: %w", err)
+		}
+	}
+	if d.RequireIsolatedDaemon {
+		out, err := d.dockerOutput(ctx, "info", "--format", "{{json .Labels}}")
+		if err != nil {
+			return fmt.Errorf("docker daemon unavailable: %s: %w", strings.TrimSpace(string(out)), err)
+		}
+		var labels []string
+		if err := json.Unmarshal(out, &labels); err != nil {
+			return fmt.Errorf("docker daemon unavailable: invalid daemon labels: %w", err)
+		}
+		if !slices.Contains(labels, isolatedDaemonLabel) {
+			return errors.New("docker daemon unavailable: configured endpoint is not the isolated validator daemon")
 		}
 	}
 	return nil

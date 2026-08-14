@@ -1,0 +1,105 @@
+{
+  "ablation_dataset_path": "/opt/ditto/confirmation/confirmation_ablation_v9_shadow.json",
+  "execution_profile": {
+    "ablation_coordinator_policy": {
+      "max_attempts": 2,
+      "max_requests": 12,
+      "request_timeout_milliseconds": 90000,
+      "sample_size": 4,
+      "total_timeout_milliseconds": 1200000
+    },
+    "ablation_dataset_sha256": "8f6d94e18e25ceb6cd65d38ab62bd7815b234b0d0a442cca4f42a87a21904f8e",
+    "ablation_profile_checksum": "c90417ffa09658fdf38275134beffaefef39a4ee620bd04234b50bb378a82448",
+    "ablation_profile_revision": "dittobench-v9-ablation-shadow-4-v1",
+    "ablation_projection_key_sha256": "8a00a865d6d36f3e92f39a138ac6eabc627d4d9915440e589805a3d2677b668f",
+    "ablation_selection_key_sha256": "2744541342deb53d3504556838313ba27d3bfca625db939054043f5e495b3831",
+    "ablation_threshold_manifest_sha256": "6ec695b93cd953909fd583158cf9577425aa1830e3b93a79162ce9fb9fa0e9d5",
+    "checksum": "640d450bb4ac0a17eb6d837c3de9f4a43c03ce7d8a6e8d66fc0c05de61844d4b",
+    "composite": {
+      "base_weight_bps": 7000,
+      "checksum": "1ce77c31a1b6f146c4eb79c2422f066441c0eaff6cf3ca67fa13989a87c8101f",
+      "formula_revision": "weighted-quality-gates-v1",
+      "longmem_weight_bps": 3000,
+      "revision": "v9-confirmation-composite-shadow-70-30-v1",
+      "schema_version": 1
+    },
+    "embedding_ablation": {
+      "budget": {
+        "max_chat_input_bytes": 0,
+        "max_chat_requests": 0,
+        "max_embedding_input_bytes": 33554432,
+        "max_embedding_inputs": 512,
+        "max_embedding_requests": 128
+      },
+      "contract_version": "dittobench-v9-ablation-profile-v1",
+      "intervention": "embedding",
+      "threshold_micros": 200000
+    },
+    "embedding_lane": {
+      "dimensions": 768,
+      "lane": "embedding",
+      "max_cost_usd_micros": 1000000,
+      "max_input_tokens": 5000000,
+      "max_requests": 5000,
+      "model": "perplexity/pplx-embed-v1-0.6b",
+      "profile_revision": "dittobench-v9-pplx-embed-v1-0.6b-768-v1",
+      "provider": "perplexity"
+    },
+    "inference_ablation": {
+      "budget": {
+        "max_chat_input_bytes": 33554432,
+        "max_chat_requests": 32,
+        "max_embedding_input_bytes": 0,
+        "max_embedding_inputs": 0,
+        "max_embedding_requests": 0
+      },
+      "contract_version": "dittobench-v9-ablation-profile-v1",
+      "intervention": "inference",
+      "threshold_micros": 200000
+    },
+    "longmem_cases_per_capability": 2,
+    "longmem_dataset_revision": "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc",
+    "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+    "longmem_profile_checksum": "f6bcee564dfece9027440f82be05fe6b9c6aeddec5bab96cbc0f082108a8561d",
+    "longmem_profile_revision": "longmemeval-s-v9-shadow-12-v1",
+    "longmem_projection_key_sha256": "8b228aa55a4d37004649554158309f3526b8a0c4454d96cd49ed1b5cc2fec09b",
+    "longmem_seed_batch_pairs": 32,
+    "longmem_selection_seed": 17,
+    "longmem_selector_revision": "longmemeval-s-stratified-sha256-v1",
+    "provider_lanes": [
+      {
+        "lane": "judge",
+        "max_completion_tokens": 6000,
+        "max_cost_usd_micros": 1000000,
+        "max_prompt_tokens": 20000,
+        "max_requests": 12,
+        "max_total_tokens": 26000,
+        "model": "openai/gpt-4o-2024-08-06",
+        "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
+        "provider": "openrouter",
+        "receipt_provider": "OpenAI",
+        "route_provider": "openai"
+      },
+      {
+        "lane": "reader",
+        "max_completion_tokens": 96000,
+        "max_cost_usd_micros": 1500000,
+        "max_prompt_tokens": 600000,
+        "max_requests": 48,
+        "max_total_tokens": 696000,
+        "model": "openai/gpt-oss-20b",
+        "profile_revision": "longmemeval-openrouter-gpt-oss-20b-no-fallback-shadow-v1",
+        "provider": "openrouter",
+        "receipt_provider": "OpenAI",
+        "route_provider": "openai"
+      }
+    ],
+    "revision": "v9-confirmation-shadow-bounded-2026-08-13",
+    "schema_version": 1
+  },
+  "launch_manifest_path": "/opt/ditto/confirmation/confirmation_launch_manifest_v9_shadow.json",
+  "launch_manifest_sha256": "9a38e4eb65714efb4d069d7f36049510375647cc8a7d3ca75c065de7a9aa8652",
+  "longmem_dataset_path": "/opt/ditto/confirmation/longmemeval_s_cleaned.json",
+  "sandbox_health_timeout_ms": 180000,
+  "schema_version": 1
+}

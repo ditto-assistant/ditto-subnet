@@ -11,6 +11,9 @@ COMPOSE_PATH = Path(__file__).parents[2] / "docker-compose.yml"
 COMPOSE_WRAPPER_PATH = Path(__file__).parents[2] / "scripts/validator-compose.sh"
 SANDBOX_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile.sandbox-docker"
 DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
+SCORER_DOCKERFILE_PATH = (
+    Path(__file__).parents[2] / "services/dittobench-api/Dockerfile"
+)
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 SANDBOX_ENTRYPOINT_PATH = (
     Path(__file__).parents[2] / "scripts/sandbox-docker-entrypoint.sh"
@@ -166,6 +169,37 @@ def test_scorer_allows_only_verified_screened_image_downloads() -> None:
     assert "DITTOBENCH_ALLOW_PRIVATE_HARNESS" not in environment
 
 
+def test_confirmation_runtime_uses_only_exact_public_release_assets() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    environment = compose["services"]["dittobench-api"]["environment"]
+
+    assert environment["DITTOBENCH_V9_CONFIRMATION_INSTALLATION_FILE"] == (
+        "/opt/ditto/confirmation/confirmation_installation_v9_shadow.json"
+    )
+    assert environment["DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256"] == (
+        "9c7ffa352e37b758b8d2ceae08cafd6e311cb874b20d96eb658fb27f344076ac"
+    )
+    assert environment["DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON"] == "true"
+    serialized = yaml.safe_dump(environment).lower()
+    for forbidden in (
+        "google_application_credentials",
+        "secret_manager",
+        "service_account",
+        "credential_ref",
+        "credential_path",
+        "sm://",
+    ):
+        assert forbidden not in serialized
+
+    dockerfile = SCORER_DOCKERFILE_PATH.read_text()
+    assert (
+        "ADD --checksum=sha256:"
+        "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442" in dockerfile
+    )
+    assert "RUN chmod 0555 /opt/ditto/confirmation" in dockerfile
+    assert "find /opt/ditto/confirmation -type f -exec chmod 0444 {} +" in dockerfile
+
+
 def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     sandbox = compose["services"]["sandbox-docker"]
@@ -189,7 +223,8 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     assert "docker builder prune --all --force" in entrypoint
     assert "docker volume prune --all --force" in entrypoint
     assert "sleep 21600" in entrypoint
-    assert "dockerd-entrypoint.sh --feature containerd-snapshotter=false" in entrypoint
+    assert "--feature containerd-snapshotter=false" in entrypoint
+    assert "--label io.heyditto.dittobench.isolated=true" in entrypoint
     assert entrypoint.index("ensure_sandbox_network") < entrypoint.index(
         "docker container prune --force"
     )
@@ -218,6 +253,7 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "DITTOBENCH_REQUIRE_SCREENED_IMAGE" not in env
     assert env["DITTOBENCH_SANDBOX_HARDEN"] == "1"
     assert env["DITTOBENCH_SANDBOX_EGRESS_NETWORK"] == "ditto-sandbox"
+    assert env["DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON"] == "true"
     # The API and daemon share one outer namespace. The rootful compatibility
     # daemon resolves the broker through the namespace-local host gateway.
     assert "extra_hosts" not in service

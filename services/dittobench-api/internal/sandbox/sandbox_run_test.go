@@ -69,6 +69,39 @@ func TestAvailableRequiresRootlessWhenConfigured(t *testing.T) {
 	}
 }
 
+func TestAvailableRequiresIsolatedDaemonLabelWhenConfigured(t *testing.T) {
+	d := NewLocalDocker()
+	d.RequireIsolatedDaemon = true
+	d.dockerCommand = func(_ context.Context, args ...string) ([]byte, error) {
+		switch args[len(args)-1] {
+		case "{{json .SecurityOptions}}":
+			return []byte(`["name=seccomp,profile=builtin","name=cgroupns"]`), nil
+		case "{{json .Labels}}":
+			return []byte(`["unrelated=value"]`), nil
+		default:
+			t.Fatalf("unexpected Docker probe: %v", args)
+			return nil, nil
+		}
+	}
+	if err := d.Available(context.Background()); err == nil || !strings.Contains(err.Error(), "not the isolated validator daemon") {
+		t.Fatalf("unlabelled daemon passed required-isolated policy: %v", err)
+	}
+	d.dockerCommand = func(_ context.Context, args ...string) ([]byte, error) {
+		switch args[len(args)-1] {
+		case "{{json .SecurityOptions}}":
+			return []byte(`["name=seccomp,profile=builtin","name=cgroupns"]`), nil
+		case "{{json .Labels}}":
+			return []byte(`["io.heyditto.dittobench.isolated=true"]`), nil
+		default:
+			t.Fatalf("unexpected Docker probe: %v", args)
+			return nil, nil
+		}
+	}
+	if err := d.Available(context.Background()); err != nil {
+		t.Fatalf("labelled isolated daemon rejected: %v", err)
+	}
+}
+
 func TestV8IsolationReadyAcceptsAvailableCompatibilityExecutor(t *testing.T) {
 	d := NewLocalDocker()
 	d.HostGatewayIP = "192.0.2.10"

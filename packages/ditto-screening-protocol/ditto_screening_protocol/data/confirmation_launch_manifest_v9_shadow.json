@@ -1,0 +1,27 @@
+{
+  "ablation_dataset_sha256": "8f6d94e18e25ceb6cd65d38ab62bd7815b234b0d0a442cca4f42a87a21904f8e",
+  "ablation_threshold_manifest_sha256": "6ec695b93cd953909fd583158cf9577425aa1830e3b93a79162ce9fb9fa0e9d5",
+  "eligibility": {
+    "minimum_base_score_micros": 950000,
+    "mode": "score_threshold"
+  },
+  "execution_profile_checksum": "640d450bb4ac0a17eb6d837c3de9f4a43c03ce7d8a6e8d66fc0c05de61844d4b",
+  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-13",
+  "guarantees": {
+    "changes_canonical_scores": false,
+    "changes_rewards": false,
+    "provider_authority": "platform_ticket_scoped_capabilities",
+    "validator_cloud_credentials": false,
+    "validator_provider_credentials": false
+  },
+  "issuance_caps": {
+    "daily_bundles": 1,
+    "daily_cost_microusd": 5000000,
+    "requests_per_bundle": 5200,
+    "tokens_per_bundle": 5800000
+  },
+  "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
+  "mode": "shadow",
+  "revision": "v9-confirmation-shadow-launch-2026-08-13",
+  "schema_version": 1
+}

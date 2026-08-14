@@ -24,6 +24,9 @@ from ditto.api_server.config import (
     ApiServerConfig,
     parse_api_server_config_from_env,
 )
+from ditto.api_server.confirmation_profile_installation import (
+    installed_confirmation_verification_profiles,
+)
 from ditto.api_server.continual_retest_settings import ContinualRetestSettingsResolver
 from ditto.api_server.datapipeline import create_generator
 from ditto.api_server.efficiency_settings import (
@@ -302,6 +305,12 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.state.continual_retest_settings = ContinualRetestSettingsResolver()
     app.state.queue_policy_settings = QueuePolicySettingsResolver()
     app.state.inference_concurrency_settings = InferenceConcurrencySettingsResolver()
+    # Exact public verification profiles are release assets. Provider
+    # credentials never enter this registry; claim-time grants remain the only
+    # authority to use Platform's reader, judge, and embedding lanes.
+    app.state.confirmation_verification_profiles = (
+        installed_confirmation_verification_profiles()
+    )
     # Operator cap on concurrent benchmark slots per validator. Read at ticket
     # issue time; falls back to its conservative module default (cap 2) whenever
     # a revision cannot be read, so no failure path uncaps the fleet.

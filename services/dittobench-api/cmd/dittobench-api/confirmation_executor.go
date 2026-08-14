@@ -23,12 +23,12 @@ import (
 const confirmationProfileSchemaVersion = 1
 
 // confirmationProfileInstallation is deliberately not populated from
-// environment variables. A future activation change must install one exact,
-// calibrated profile and the digest of the calibration manifest that approved
-// it. main leaves the registry absent, so production remains fail-closed.
+// environment variables. Activation must install one exact shadow profile and
+// the digest of the public launch manifest that approved it. Provider authority
+// remains ticket-scoped on Platform; this installation contains no credential.
 type confirmationProfileInstallation struct {
-	ExecutionProfile          json.RawMessage
-	CalibrationManifestSHA256 string
+	ExecutionProfile     json.RawMessage
+	LaunchManifestSHA256 string
 }
 
 type confirmationProviderLaneProfile struct {
@@ -326,8 +326,8 @@ func newTrustedConfirmationExecutor(
 	if nilInterface(runtimeFactory) {
 		return nil, errors.New("confirmation runtime factory is required")
 	}
-	if !canonicalConfirmationSHA256(installation.CalibrationManifestSHA256) {
-		return nil, errors.New("confirmation profile lacks a calibrated launch approval")
+	if !canonicalConfirmationSHA256(installation.LaunchManifestSHA256) {
+		return nil, errors.New("confirmation profile lacks an exact launch approval")
 	}
 	profile, raw, err := decodeAndValidateConfirmationProfile(installation.ExecutionProfile)
 	if err != nil {
@@ -702,8 +702,8 @@ func (p confirmationExecutionProfileWire) validate() error {
 	}
 	if p.InferenceAblation.Intervention != string(ablation.InterventionInference) ||
 		p.EmbeddingAblation.Intervention != string(ablation.InterventionEmbedding) ||
-		p.InferenceAblation.ContractVersion != ablation.ContractVersion ||
-		p.EmbeddingAblation.ContractVersion != ablation.ContractVersion {
+		p.InferenceAblation.ContractVersion != ablation.ProfileContractVersion ||
+		p.EmbeddingAblation.ContractVersion != ablation.ProfileContractVersion {
 		return errors.New("confirmation ablation lane contracts are invalid")
 	}
 	ablationChecksum, err := ablation.FrozenProfileSHA256(p.ablationProfile())
