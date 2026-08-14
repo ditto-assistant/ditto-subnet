@@ -26,6 +26,7 @@ from ditto.db.queries.scores import (
     list_provisional_ledger,
     list_scores_for_agent,
     quorum_composites,
+    quorum_ledger_proof_rows,
     upsert_score,
 )
 
@@ -149,6 +150,35 @@ class TestUpsertScore:
     async def test_list_empty_when_unscored(self, session: AsyncSession) -> None:
         agent = await _seed_agent(session)
         assert await list_scores_for_agent(session, agent_id=agent.agent_id) == []
+
+
+class TestQuorumLedgerProofRows:
+    async def test_projects_only_wire_evidence_from_details(
+        self, session: AsyncSession
+    ) -> None:
+        agent = await _seed_agent(session)
+        evidence = {
+            "ticket_deadline": "2026-08-14T18:00:00+00:00",
+            "transcript_sha256": "cd" * 32,
+            "base_evidence_sha256": "ef" * 32,
+            "v9_base": {"run_id": "run_1"},
+        }
+        await _upsert(
+            session,
+            agent.agent_id,
+            details={**evidence, "per_case": [{"large": "payload"}]},
+        )
+
+        rows = await quorum_ledger_proof_rows(
+            session,
+            [agent.agent_id],
+            bench_versions={agent.agent_id: _BENCH_VERSION},
+        )
+
+        assert rows[agent.agent_id][0].details == evidence
+
+    async def test_empty_agent_set_skips_query(self, session: AsyncSession) -> None:
+        assert await quorum_ledger_proof_rows(session, [], bench_versions={}) == {}
 
 
 async def _seed_scored(

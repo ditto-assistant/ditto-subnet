@@ -183,6 +183,26 @@ class LedgerFamilyMember:
 
 
 @dataclass(frozen=True)
+class LedgerScoreProofRow:
+    """Narrow score projection used to build validator ledger receipts.
+
+    A full :class:`Score` carries the per-case audit blob in ``details``.  The
+    validator ledger needs only four small evidence keys from that blob, so
+    selecting whole ORM rows for every quorum shipped the entire score corpus
+    to the API process on every validator poll.
+    """
+
+    agent_id: UUID
+    validator_hotkey: str
+    run_id: str
+    composite: float
+    seed: int
+    bench_version: int
+    signature: str | None
+    details: dict | None
+
+
+@dataclass(frozen=True)
 class LedgerRow:
     """One entry of the best-eligible-score-per-payment-coldkey ledger.
 
@@ -2499,6 +2519,67 @@ async def quorum_score_rows(
     for score in result.scalars():
         if bench_versions.get(score.agent_id) == score.bench_version:
             out.setdefault(score.agent_id, []).append(score)
+    return out
+
+
+async def quorum_ledger_proof_rows(
+    session: AsyncSession,
+    agent_ids: Sequence[UUID],
+    *,
+    bench_versions: dict[UUID, int],
+) -> dict[UUID, list[LedgerScoreProofRow]]:
+    """Return the bounded score evidence backing authoritative ledger rows.
+
+    Unlike :func:`quorum_score_rows`, this authority-path projection never
+    loads the large per-case telemetry document.  Keep its JSON keys aligned
+    with ``endpoints.scoring._score_proof``: they are the only non-scalar score
+    evidence emitted on the validator ledger wire.
+    """
+    if not agent_ids:
+        return {}
+    details_keys = (
+        "ticket_deadline",
+        "transcript_sha256",
+        "base_evidence_sha256",
+        "v9_base",
+    )
+    pairs: list[ColumnElement[Any]] = []
+    for key in details_keys:
+        pairs.extend((literal(key), Score.details[key]))
+    projected_details = func.jsonb_build_object(*pairs).label("details")
+    result = await session.execute(
+        select(
+            Score.agent_id,
+            Score.validator_hotkey,
+            Score.run_id,
+            Score.composite,
+            Score.seed,
+            Score.bench_version,
+            Score.signature,
+            projected_details,
+        )
+        .where(
+            Score.agent_id.in_(agent_ids),
+            Score.bench_version.in_(set(bench_versions.values())),
+        )
+        .order_by(Score.agent_id, Score.composite, Score.validator_hotkey)
+    )
+    out: dict[UUID, list[LedgerScoreProofRow]] = {}
+    for row in result:
+        if bench_versions.get(row.agent_id) != row.bench_version:
+            continue
+        out.setdefault(row.agent_id, []).append(
+            LedgerScoreProofRow(
+                agent_id=row.agent_id,
+                validator_hotkey=row.validator_hotkey,
+                run_id=row.run_id,
+                composite=row.composite,
+                seed=row.seed,
+                bench_version=row.bench_version,
+                signature=row.signature,
+                details=row.details,
+            )
+        )
     return out
 
 

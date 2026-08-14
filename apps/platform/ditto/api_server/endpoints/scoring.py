@@ -66,9 +66,10 @@ from ditto.db.queries.score_ranking import (
     resolve_efficiency_adjustments,
 )
 from ditto.db.queries.scores import (
+    LedgerScoreProofRow,
     list_eligible_ledger,
     quorum_composites,
-    quorum_score_rows,
+    quorum_ledger_proof_rows,
     v9_confirmation_enforcement_active,
 )
 from ditto.db.queries.validator_auth import (
@@ -148,7 +149,7 @@ def _composite_stderr(details: dict | None) -> float | None:
     return None
 
 
-def _score_proof(score: Score) -> LedgerScoreProof:
+def _score_proof(score: Score | LedgerScoreProofRow) -> LedgerScoreProof:
     details = score.details
     details = details if isinstance(details, dict) else {}
     deadline = details.get("ticket_deadline")
@@ -350,7 +351,14 @@ async def scores(
         if efficiency_config.enabled:
             await ensure_efficiency_state(session, efficiency_config, now=auth_now)
         rows = await list_eligible_ledger(
-            session, include_fingerprints=False, dedupe_owners=False
+            session,
+            include_fingerprints=False,
+            details_keys=(
+                "composite_stderr",
+                "confirmation_composites",
+                "confirmation_seeds",
+            ),
+            dedupe_owners=False,
         )
         v9_confirmation_mode: Literal["enforce"] | None = (
             "enforce" if await v9_confirmation_enforcement_active(session) else None
@@ -373,7 +381,7 @@ async def scores(
             agent_ids=[r.agent_id for r in rows],
             bench_version=canonical_version,
         )
-        proof_rows = await quorum_score_rows(
+        proof_rows = await quorum_ledger_proof_rows(
             session,
             [r.agent_id for r in rows],
             bench_versions={r.agent_id: r.bench_version for r in rows},
