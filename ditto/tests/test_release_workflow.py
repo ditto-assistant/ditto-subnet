@@ -61,6 +61,8 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     image_jobs = (
         "build-validator",
         "build-sandbox-docker",
+        "build-dittobench-amd64",
+        "build-dittobench-arm64",
         "build-dittobench",
         "assemble-stack",
         "smoke-validator-arm64",
@@ -147,6 +149,9 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "build-validator",
         "build-sandbox-docker",
         "build-pylon",
+        "prepare-dittobench",
+        "build-dittobench-amd64",
+        "build-dittobench-arm64",
         "build-dittobench",
         "publish-datagen",
         "deploy-dittobench",
@@ -175,6 +180,13 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         assert "needs.release.outputs.released == 'true'" in condition
 
     dependency_results = {
+        "build-dittobench-amd64": ("prepare-dittobench",),
+        "build-dittobench-arm64": ("prepare-dittobench",),
+        "build-dittobench": (
+            "prepare-dittobench",
+            "build-dittobench-amd64",
+            "build-dittobench-arm64",
+        ),
         "deploy-dittobench": ("build-dittobench",),
         "assemble-stack": (
             "verify-source",
@@ -472,8 +484,11 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
     assert len(relay_revision) == 40
     assert all(character in "0123456789abcdef" for character in relay_revision)
 
+    prepare = workflow["jobs"]["prepare-dittobench"]
     build = workflow["jobs"]["build-dittobench"]
-    source = _step(build["steps"], "Materialize the retired relay compatibility source")
+    source = _step(
+        prepare["steps"], "Materialize the retired relay compatibility source"
+    )
     relay = _step(
         build["steps"], "Build and publish the retired relay compatibility index"
     )
@@ -485,11 +500,11 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
     assert relay["with"]["file"] == ("${{ env.MODEL_RELAY_COMPAT_DIR }}/Dockerfile")
     assert (
         "org.opencontainers.image.revision="
-        "${{ steps.dittobench-source.outputs.revision }}" in relay["with"]["labels"]
+        "${{ needs.prepare-dittobench.outputs.revision }}" in relay["with"]["labels"]
     )
     assert (
         "io.heyditto.validator.compat-source-revision="
-        "${{ steps.relay-source.outputs.relay_compat_revision }}"
+        "${{ needs.prepare-dittobench.outputs.relay_compat_revision }}"
         in relay["with"]["labels"]
     )
     assert (
@@ -517,7 +532,13 @@ def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
     build = jobs["build-dittobench"]
-    scorer = _step(build["steps"], "Build and publish the scorer index")
+    scorers = [
+        _step(
+            jobs[f"build-dittobench-{architecture}"]["steps"],
+            f"Build and publish the native {architecture} scorer manifest",
+        )
+        for architecture in ("amd64", "arm64")
+    ]
     relay = _step(
         build["steps"], "Build and publish the retired relay compatibility index"
     )
@@ -534,15 +555,17 @@ def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None
     # while the relay retains its standalone compatibility identity. The
     # released updater accepts both scorer identities, allowing a subsequent
     # release to switch compat-2 back for v0.44 hosts.
-    assert (
-        "org.opencontainers.image.source="
-        "https://github.com/ditto-assistant/ditto-subnet" in scorer["with"]["labels"]
-    )
+    for scorer in scorers:
+        assert (
+            "org.opencontainers.image.source="
+            "https://github.com/ditto-assistant/ditto-subnet"
+            in scorer["with"]["labels"]
+        )
     assert (
         "org.opencontainers.image.source="
         "https://github.com/ditto-assistant/dittobench-api" in relay["with"]["labels"]
     )
-    for image in (scorer, relay):
+    for image in (*scorers, relay):
         labels = image["with"]["labels"]
         assert "org.opencontainers.image.version=" in labels
         assert "org.opencontainers.image.revision=" in labels
@@ -674,18 +697,52 @@ def test_validator_release_smokes_each_architecture_before_promotion() -> None:
     ]
 
 
-def test_release_uses_the_bounded_larger_runner_only_for_dittobench_build() -> None:
+def test_release_builds_dittobench_on_native_bounded_larger_runners() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
-    larger_runner = {
+    amd64_runner = {
         "group": "release-larger-runners",
         "labels": "ubuntu-24.04-release-8core",
     }
+    arm64_runner = {
+        "group": "release-larger-runners",
+        "labels": "ubuntu-24.04-release-arm64-8core",
+    }
 
-    assert jobs["build-dittobench"]["runs-on"] == larger_runner
+    assert jobs["build-dittobench-amd64"]["runs-on"] == amd64_runner
+    assert jobs["build-dittobench-arm64"]["runs-on"] == arm64_runner
     for job_name, job in jobs.items():
-        if job_name != "build-dittobench":
-            assert job.get("runs-on") != larger_runner
+        if job_name != "build-dittobench-amd64":
+            assert job.get("runs-on") != amd64_runner
+        if job_name != "build-dittobench-arm64":
+            assert job.get("runs-on") != arm64_runner
+
+    for architecture in ("amd64", "arm64"):
+        job = jobs[f"build-dittobench-{architecture}"]
+        build = _step(
+            job["steps"],
+            f"Build and publish the native {architecture} scorer manifest",
+        )
+        assert build["with"]["platforms"] == f"linux/{architecture}"
+        assert "push-by-digest=true" in build["with"]["outputs"]
+        assert all(
+            "setup-qemu-action@" not in (step.get("uses") or "")
+            for step in job["steps"]
+        )
+
+    merge = _step(
+        jobs["build-dittobench"]["steps"],
+        "Assemble the scorer multi-platform index",
+    )
+    assert (
+        merge["env"]["AMD64_DIGEST"]
+        == "${{ needs.build-dittobench-amd64.outputs.digest }}"
+    )
+    assert (
+        merge["env"]["ARM64_DIGEST"]
+        == "${{ needs.build-dittobench-arm64.outputs.digest }}"
+    )
+    assert "docker buildx imagetools create" in merge["run"]
 
 
 def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
@@ -759,7 +816,8 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
 
-    scopes: dict[str, list[str]] = {}
+    reader_scopes: dict[str, list[list[str]]] = {}
+    writer_scopes: dict[str, list[str]] = {}
     for job_name, job in jobs.items():
         for step in job.get("steps") or []:
             if "docker/build-push-action@" not in (step.get("uses") or ""):
@@ -767,20 +825,39 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
             values = step.get("with") or {}
             cache_from = values.get("cache-from")
             cache_to = values.get("cache-to")
-            assert cache_from and cache_from.startswith("type=gha,scope=")
+            assert cache_from
             assert cache_to and cache_to.startswith("type=gha,mode=max,scope=")
-            assert cache_from.removeprefix("type=gha,scope=") == cache_to.removeprefix(
-                "type=gha,mode=max,scope="
+            readers = [
+                line.removeprefix("type=gha,scope=")
+                for line in cache_from.splitlines()
+                if line
+            ]
+            assert all(
+                line.startswith("type=gha,scope=")
+                for line in cache_from.splitlines()
+                if line
             )
-            scopes.setdefault(job_name, []).append(
-                cache_from.removeprefix("type=gha,scope=")
-            )
+            writer = cache_to.removeprefix("type=gha,mode=max,scope=")
+            assert writer in readers
+            reader_scopes.setdefault(job_name, []).append(readers)
+            writer_scopes.setdefault(job_name, []).append(writer)
 
-    assert scopes == {
+    assert writer_scopes == {
         "build-validator": ["validator"],
         "build-sandbox-docker": ["sandbox-docker"],
         "build-pylon": ["pylon"],
-        "build-dittobench": ["dittobench-api", "model-relay-compat"],
+        "build-dittobench-amd64": ["dittobench-api-amd64"],
+        "build-dittobench-arm64": ["dittobench-api-arm64"],
+        "build-dittobench": ["model-relay-compat"],
         "assemble-stack": ["stack-release"],
     }
-    assert len({scope for job_scopes in scopes.values() for scope in job_scopes}) == 6
+    assert reader_scopes["build-dittobench-amd64"] == [
+        ["dittobench-api-amd64", "dittobench-api"]
+    ]
+    assert reader_scopes["build-dittobench-arm64"] == [
+        ["dittobench-api-arm64", "dittobench-api"]
+    ]
+    assert (
+        len({scope for job_scopes in writer_scopes.values() for scope in job_scopes})
+        == 7
+    )

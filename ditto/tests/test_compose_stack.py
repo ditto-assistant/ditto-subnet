@@ -422,19 +422,19 @@ def test_scorer_identity_is_stamped_into_the_image_it_is_built_from() -> None:
     # Published release images must be stamped too. A managed stack pulls them
     # by digest and never builds, so if the release build skipped the arguments
     # the whole managed fleet would report environment-asserted provenance.
-    workflow = RELEASE_WORKFLOW_PATH.read_text()
-    assert (
-        workflow.count(
-            "DITTOBENCH_SOURCE_SHA=${{ steps.dittobench-source.outputs.revision }}"
+    release = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    for architecture in ("amd64", "arm64"):
+        steps = release["jobs"][f"build-dittobench-{architecture}"]["steps"]
+        publish = next(step for step in steps if step.get("id") == "dittobench-api")
+        build_args = publish["with"]["build-args"]
+        assert (
+            "DITTOBENCH_SOURCE_SHA="
+            "${{ needs.prepare-dittobench.outputs.revision }}" in build_args
         )
-        == 1
-    )
-    assert (
-        workflow.count(
-            "DITTOBENCH_SOFTWARE_VERSION=${{ needs.release.outputs.version }}"
+        assert (
+            "DITTOBENCH_SOFTWARE_VERSION="
+            "${{ needs.release.outputs.version }}" in build_args
         )
-        == 1
-    )
 
 
 def test_stack_update_rebuilds_the_scorer_only_when_the_pin_moves() -> None:
@@ -608,9 +608,9 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     # stay pinned to an immutable commit rather than a floating tag. The exact
     # commit is Dependabot's to move, so assert the pinning discipline only.
     assert re.search(r"docker/setup-qemu-action@[0-9a-f]{40}\b", workflow)
-    # Validator, sandbox daemon, scorer, patched Pylon, the frozen-updater relay
-    # shim, and the final signed stack descriptor are independently built and
-    # published from the exact release.
+    # Validator, sandbox daemon, both native scorer children, patched Pylon, the
+    # frozen-updater relay shim, and the final signed stack descriptor are
+    # independently built and published from the exact release.
     build_action_count = sum(
         workflow.count(action)
         for action in (
@@ -618,7 +618,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 6
+    assert build_action_count == 7
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",

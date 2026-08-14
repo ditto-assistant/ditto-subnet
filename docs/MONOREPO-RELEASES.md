@@ -65,13 +65,20 @@ standard public-repository runners. Release planning selects the backend and
 dashboard surfaces separately, so neither surface reruns for an unrelated
 Platform component.
 
-The later multi-platform DittoBench build uses the organization-configured
-GitHub-hosted `ubuntu-24.04-release-8core` runner in the
-`release-larger-runners` group. The pool is limited to this repository and
-`release.yml` on `main`, and its maximum concurrency is one. Do not move short
-planning, tagging, verification, deployment, smoke, or promotion jobs to the
-billed pool without measured job-level evidence. If the larger runner or group
-is removed, restore `build-dittobench` to `ubuntu-24.04` in the same change so
+The later DittoBench scorer build publishes one native child on each of the
+organization-configured GitHub-hosted `ubuntu-24.04-release-8core` and
+`ubuntu-24.04-release-arm64-8core` runners. Both are in the
+`release-larger-runners` group, which is limited to this repository and
+`release.yml` on `main`; each architecture is capped at one concurrent runner.
+The fan-in job combines those immutable digests into the canonical
+multi-platform index. This avoids running the cgo/tree-sitter arm64 compile
+through QEMU: it took 2m38s under emulation in v0.62.2 versus 19.4s in a
+cacheless native arm64 validation.
+
+Do not move short planning, tagging, verification, deployment, smoke, or
+promotion jobs to the billed pools without measured job-level evidence. If
+either larger runner or the group is removed, restore its native build job to
+the matching standard GitHub-hosted architecture in the same change so
 releases cannot queue indefinitely on a missing label.
 
 Semantic release writes the monorepo version into datagen's Go provenance,
