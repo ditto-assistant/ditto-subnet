@@ -275,6 +275,10 @@ def test_non_runtime_changes_do_not_release(
     ("path", "expected"),
     [
         ("ditto/system_health.py", {"validator", "validator_stack"}),
+        (
+            "ditto/api_models/confirmation_progress.py",
+            {"validator", "validator_stack"},
+        ),
         ("Dockerfile.pylon", {"validator_stack"}),
         (".dockerignore", {"validator_stack"}),
     ],
