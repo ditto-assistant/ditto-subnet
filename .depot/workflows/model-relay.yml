@@ -1,0 +1,143 @@
+# Depot CI Migration
+# Source: .github/workflows/model-relay.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Model Relay
+on:
+  pull_request:
+    paths:
+      - services/model-relay/**
+      - .depot/workflows/model-relay.yml
+      # The relay's db/schema.sql is a generated mirror of the Alembic chain;
+      # a migration must re-run the drift guard below.
+      - apps/platform/alembic/**
+  push:
+    branches: [main]
+    paths:
+      - services/model-relay/**
+      - .depot/workflows/model-relay.yml
+      - apps/platform/alembic/**
+concurrency:
+  group: model-relay-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  SERVICE_DIR: services/model-relay
+jobs:
+  test:
+    name: build · vet · gofmt · test
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    # The *_pg_test.go suites carry the money-critical DB semantics (lock
+    # order, FOR UPDATE budget serialization, nonce replay, settle accounting
+    # against real DDL). CI provisions the database and REQUIRES it —
+    # TEST_POSTGRES_REQUIRED turns the local-convenience skip into a failure
+    # here, so the suite can never silently vanish from a green run.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ditto_test
+          POSTGRES_PASSWORD: ditto_test
+          POSTGRES_DB: postgres
+        ports:
+          - 15433:5432
+        options: >-
+          --health-cmd "pg_isready -U ditto_test" --health-interval 5s --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: services/model-relay/go.sum
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "gofmt required on:" >&2
+            echo "$unformatted" >&2
+            exit 1
+          fi
+        working-directory: ${{ env.SERVICE_DIR }}
+      - run: go build ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+      - run: go vet ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+      - run: go test ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+        env:
+          TEST_POSTGRES_URI: postgres://ditto_test:ditto_test@localhost:15433/postgres?sslmode=disable
+          TEST_POSTGRES_REQUIRED: "1"
+  schema-sync:
+    # db/schema.sql (and the sqlc output compiled from it) is a generated
+    # mirror of the apps/platform Alembic chain. Nothing else re-checks that
+    # mirror when a migration lands, and release.yml rolls the relay from
+    # whatever schema.sql is checked in — so drift here would only surface as
+    # fleet-wide admission 500s in production. This job regenerates from the
+    # real migration chain and fails on any diff.
+    name: schema.sql mirrors the Alembic chain
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: services/model-relay/go.sum
+      - name: Regenerate db/schema.sql from the real Alembic chain
+        run: services/model-relay/scripts/gen-schema.sh
+      - name: schema.sql must be current
+        run: |
+          git diff --exit-code -- services/model-relay/db/schema.sql || {
+            echo "ERROR: services/model-relay/db/schema.sql is stale." >&2
+            echo "A migration under apps/platform/alembic changed the schema;" >&2
+            echo "re-run services/model-relay/scripts/gen-schema.sh, then" >&2
+            echo "'go tool sqlc generate -f internal/postgres/sqlc.yaml' and" >&2
+            echo "commit the result." >&2
+            exit 1
+          }
+      - name: sqlc output must be current and the module must still build
+        working-directory: ${{ env.SERVICE_DIR }}
+        run: |
+          go tool sqlc generate -f internal/postgres/sqlc.yaml
+          git diff --exit-code -- internal/postgres
+          go build ./...
+  static-release-build:
+    name: static linux/amd64 release build links
+    if: github.event_name == 'pull_request'
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: services/model-relay/go.sum
+      # Mirrors build-relay-release.sh's artifact build and --version smoke
+      # so a PR cannot merge a module the release job cannot ship.
+      - name: Build and smoke the release binary
+        run: |
+          sha="${{ github.sha }}"
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
+            -trimpath -buildvcs=false \
+            -ldflags "-X main.buildCommit=$sha" \
+            -o model-relay-ci ./cmd/model-relay
+          out="$(./model-relay-ci --version)"
+          case "$out" in
+            *"$sha"*) echo "version smoke ok: $out" ;;
+            *) echo "ERROR: --version did not report $sha: $out" >&2; exit 1 ;;
+          esac
+        working-directory: ${{ env.SERVICE_DIR }}

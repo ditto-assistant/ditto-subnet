@@ -1,0 +1,76 @@
+# Depot CI Migration
+# Source: .github/workflows/screener-ci.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Screener CI
+on:
+  pull_request:
+    paths:
+      - workers/screener/**
+      - packages/ditto-screening-protocol/**
+      - .depot/workflows/screener-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - workers/screener/**
+      - packages/ditto-screening-protocol/**
+      - .depot/workflows/screener-ci.yml
+permissions:
+  contents: read
+defaults:
+  run:
+    working-directory: workers/screener
+jobs:
+  protocol-minimum-pydantic:
+    name: Protocol / Pydantic ${{ matrix.pydantic-version }}
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    strategy:
+      fail-fast: false
+      matrix:
+        pydantic-version: ["2.12.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9
+        with:
+          enable-cache: true
+      - run: uv python install 3.11
+      - name: Exercise protocol at the declared Pydantic floor
+        working-directory: .
+        env:
+          PYDANTIC_VERSION: ${{ matrix.pydantic-version }}
+        run: |
+          uv run --isolated --python 3.11 \
+            --project packages/ditto-screening-protocol \
+            --with "pydantic==$PYDANTIC_VERSION" --with "pytest>=8" \
+            python -c 'import os, pydantic; assert pydantic.__version__ == os.environ["PYDANTIC_VERSION"]'
+          uv run --isolated --python 3.11 \
+            --project packages/ditto-screening-protocol \
+            --with "pydantic==$PYDANTIC_VERSION" --with "pytest>=8" \
+            python -m pytest packages/ditto-screening-protocol/tests -q
+  lint-and-test:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9
+        with:
+          enable-cache: true
+      - run: uv python install ${{ matrix.python-version }}
+      - run: uv sync --locked --group dev
+      - run: uv run ruff format --check .
+      - run: uv run ruff check .
+      - name: Type-check the minimum supported Python version
+        run: uv run mypy ditto_screener
+      - run: uv run pytest -m "not integration"
+      - run: docker build -f workers/screener/Dockerfile -t ditto-screener:${{ github.sha }} .
+        working-directory: .

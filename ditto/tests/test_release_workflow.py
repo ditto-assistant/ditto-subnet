@@ -6,7 +6,7 @@ import yaml
 from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
-CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
+CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".depot/workflows/ci.yml"
 PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
 ROOT_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
 

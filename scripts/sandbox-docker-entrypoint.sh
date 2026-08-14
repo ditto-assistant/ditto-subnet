@@ -117,8 +117,14 @@ ensure_sandbox_network() {
   # TLS shim, which still sees the original sandbox source IP and therefore
   # enters the same source-bound ticket session as the documented broker URL.
   iptables -A DITTO-SANDBOX-EGRESS -m addrtype --dst-type LOCAL -p tcp --dport "$openrouter_shim_port" -j ACCEPT
-  iptables -A DITTO-SANDBOX-EGRESS -m limit --limit 12/min --limit-burst 20 \
-    -j LOG --log-prefix 'ditto-sandbox-deny ' --log-level warning
+  # Some otherwise-capable nested-Docker kernels omit the optional LOG target
+  # or rate-limit match. Keep denial logging best-effort so their absence can
+  # never abort setup before the mandatory REJECT rules and INPUT/FORWARD hooks.
+  if ! iptables -A DITTO-SANDBOX-EGRESS \
+    -m limit --limit 12/min --limit-burst 20 \
+    -j LOG --log-prefix 'ditto-sandbox-deny ' --log-level warning; then
+    printf 'warning: sandbox denial logging unavailable; enforcement remains active\n' >&2
+  fi
   # Deny loudly, not silently. A silent DROP costs a denied TCP connect a full
   # SYN timeout (~26.5 s per resolved address), so a harness still pointed at a
   # non-allowlisted model host spends the whole ticket blackholed instead of

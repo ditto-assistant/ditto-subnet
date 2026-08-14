@@ -13,7 +13,7 @@ def test_starter_kit_is_a_first_class_monorepo_component() -> None:
     assert not (KIT / ".github" / "workflows" / "ci.yml").exists()
 
     workflow = yaml.safe_load(
-        (ROOT / ".github" / "workflows" / "starter-kit-ci.yml").read_text()
+        (ROOT / ".depot" / "workflows" / "starter-kit-ci.yml").read_text()
     )
     assert workflow["defaults"]["run"]["working-directory"] == (
         "miners/dittobench-starter-kit"

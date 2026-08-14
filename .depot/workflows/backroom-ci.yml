@@ -1,0 +1,66 @@
+# Depot CI Migration
+# Source: .github/workflows/backroom-ci.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Backroom CI
+on:
+  pull_request:
+    paths:
+      - apps/backroom/**
+      - apps/platform/ditto/api_models/**
+      - apps/platform/ditto/api_server/endpoints/**
+      - apps/platform/ditto/api_server/factory.py
+      - apps/platform/pyproject.toml
+      - apps/platform/uv.lock
+      - packages/ditto-screening-protocol/**
+      - .depot/workflows/backroom-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/backroom/**
+      - apps/platform/ditto/api_models/**
+      - apps/platform/ditto/api_server/endpoints/**
+      - apps/platform/ditto/api_server/factory.py
+      - apps/platform/pyproject.toml
+      - apps/platform/uv.lock
+      - packages/ditto-screening-protocol/**
+      - .depot/workflows/backroom-ci.yml
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    defaults:
+      run:
+        working-directory: apps/backroom
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - name: Install Platform contract dependencies
+        working-directory: apps/platform
+        run: uv sync --frozen --group dev
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.34.5
+          run_install: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/backroom/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: Verify generated Platform client
+        run: |
+          ./scripts/platform-contract/generate.sh
+          git diff --exit-code -- src/generated/platform-api.ts src/generated/platform-api.meta.json
+      - run: pnpm generate-routes
+      - run: pnpm check
+      - run: pnpm test
+      - run: pnpm build
