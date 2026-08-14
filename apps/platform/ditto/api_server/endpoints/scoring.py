@@ -34,12 +34,15 @@ from fastapi import APIRouter, Header, HTTPException, Request, Response
 from sqlalchemy.exc import SQLAlchemyError
 
 from ditto.api_models import ConfirmationScoreRecord, LedgerEntry, LedgerResponse
+from ditto.api_models.burn_settings import BurnSettings
+from ditto.api_models.continual_retest_settings import ContinualRetestSettings
 from ditto.api_models.upload import _SS58_PATTERN
 from ditto.api_models.validator import (
     LedgerScoreProof,
     V9BaseEvidence,
     V9ConfirmationReceipt,
 )
+from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     tie_weighting_is_active,
@@ -92,6 +95,13 @@ router = APIRouter(prefix="/scoring", tags=["scoring"])
 # far better than zeroing every miner on a transient DB blip. Beyond this the
 # snapshot could hide a genuine change, so we stop vouching for it.
 _MAX_STALE_SECONDS = 300
+# Validators sweep every 30 seconds and make several sequential reads while
+# planning weights, stale-version work, and continual confirmations. Reusing
+# one successful materialization for that bounded window turns those reads into
+# cheap authenticated replays instead of rebuilding the full score/quorum/
+# confirmation ledger each time. Dynamic operator policy is compared separately
+# on every request, so this does not extend the settings resolvers' 5s TTL.
+_FRESH_SNAPSHOT_SECONDS = 30
 _LEDGER_REQUEST_MAX_AGE = timedelta(minutes=2)
 _CONTINUAL_MEAN_PROTOCOL = 14
 _TIE_WEIGHTING_PROTOCOL = 20
@@ -138,6 +148,27 @@ class _LedgerSnapshot:
     tie_weighting_mode: Literal["pool"] | None = None
     continual_retest_cohort_size: int = 5
     requesting_validator_hotkey: str | None = None
+    context: _LedgerContext | None = None
+
+
+@dataclass(frozen=True)
+class _LedgerPolicy:
+    """Dynamic policy whose wire effects must invalidate a fresh snapshot."""
+
+    efficiency: EfficiencyBonusConfig
+    continual_retest: ContinualRetestSettings
+    burn: BurnSettings
+
+
+@dataclass(frozen=True)
+class _LedgerContext:
+    """All cheap live state that can change the materialized wire response."""
+
+    policy: _LedgerPolicy
+    active_bench_version: int
+    continual_fleet_ready: bool
+    tie_weighting_fleet_ready: bool
+    factor_fleet_ready: bool
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -266,6 +297,67 @@ def _store_snapshot(request: Request, snapshot: _LedgerSnapshot) -> None:
     request.app.state.ledger_snapshot = snapshot
 
 
+async def _resolve_ledger_policy(request: Request) -> _LedgerPolicy:
+    """Resolve the short-TTL operator policy before considering snapshot reuse."""
+    session_maker = getattr(request.app.state, "session_maker", None)
+    efficiency = await request.app.state.efficiency_settings.resolve(session_maker)
+    continual_retest = await request.app.state.continual_retest_settings.resolve(
+        session_maker
+    )
+    burn = await request.app.state.burn_settings.resolve(session_maker)
+    return _LedgerPolicy(
+        efficiency=efficiency,
+        continual_retest=continual_retest,
+        burn=burn,
+    )
+
+
+async def _resolve_ledger_context(
+    request: Request,
+    session: SessionDep,
+    *,
+    now: datetime,
+) -> _LedgerContext:
+    """Read the small policy/fleet keys that guard bounded snapshot reuse."""
+    policy = await _resolve_ledger_policy(request)
+    bench_version = await active_bench_version(session)
+    continual_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_CONTINUAL_MEAN_PROTOCOL,
+        bench_version=bench_version,
+        now=now,
+    )
+    tie_weighting_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_TIE_WEIGHTING_PROTOCOL,
+        bench_version=bench_version,
+        now=now,
+    )
+    factor_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+        bench_version=9,
+        now=now,
+    )
+    return _LedgerContext(
+        policy=policy,
+        active_bench_version=bench_version,
+        continual_fleet_ready=continual_fleet_ready,
+        tie_weighting_fleet_ready=tie_weighting_fleet_ready,
+        factor_fleet_ready=factor_fleet_ready,
+    )
+
+
+def _snapshot_is_fresh(
+    snapshot: _LedgerSnapshot,
+    *,
+    context: _LedgerContext,
+    now: datetime,
+) -> bool:
+    age = (now - snapshot.generated_at).total_seconds()
+    return snapshot.context == context and 0.0 <= age <= float(_FRESH_SNAPSHOT_SECONDS)
+
+
 async def _snapshot_can_be_shared(
     request: Request,
     snapshot: _LedgerSnapshot,
@@ -328,13 +420,13 @@ async def _join_ledger_materialization(
     request: Request,
     validator_hotkey: str,
     *,
-    now: datetime,
-) -> tuple[_LedgerSnapshot | None, asyncio.Event]:
-    """Join a concurrent ledger read, or claim the next materialization.
+    context: _LedgerContext,
+) -> tuple[_LedgerSnapshot | None, asyncio.Event | None]:
+    """Reuse a fresh ledger, join a concurrent read, or claim materialization.
 
-    This is deliberately a single-flight, not a TTL cache: sequential scoring
-    reads still materialize current policy and score state. Only requests that
-    overlap one already-running read reuse its successful snapshot.
+    Authentication and nonce consumption happen before this function. Snapshot
+    reuse is bounded to one validator sweep and requires current dynamic policy
+    equality plus the requester's factor-protocol safety check.
     """
     state = request.app.state
     while True:
@@ -343,6 +435,21 @@ async def _join_ledger_materialization(
             state, "ledger_materialization_inflight", None
         )
         if inflight is None:
+            share_now = datetime.now(UTC)
+            if (
+                snapshot_before is not None
+                and _snapshot_is_fresh(snapshot_before, context=context, now=share_now)
+                and await _snapshot_can_be_shared(
+                    request, snapshot_before, validator_hotkey, now=share_now
+                )
+            ):
+                return snapshot_before, None
+
+            # The requester-readiness check above may yield. Recheck ownership
+            # before claiming so two factor-gated callers cannot both become
+            # materializers after observing the slot as empty.
+            if getattr(state, "ledger_materialization_inflight", None) is not None:
+                continue
             owned = asyncio.Event()
             state.ledger_materialization_inflight = owned
             task = asyncio.current_task()
@@ -354,11 +461,13 @@ async def _join_ledger_materialization(
 
         await inflight.wait()
         snapshot_after = _cached_snapshot(request)
+        share_now = datetime.now(UTC)
         if (
             snapshot_after is not None
             and snapshot_after is not snapshot_before
+            and _snapshot_is_fresh(snapshot_after, context=context, now=share_now)
             and await _snapshot_can_be_shared(
-                request, snapshot_after, validator_hotkey, now=now
+                request, snapshot_after, validator_hotkey, now=share_now
             )
         ):
             return snapshot_after, inflight
@@ -457,16 +566,27 @@ async def scores(
                 status_code=503,
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
+    try:
+        ledger_context = await _resolve_ledger_context(request, session, now=auth_now)
+    except SQLAlchemyError as exc:
+        return _serve_last_known(request, x_validator_hotkey, exc)
     joined_snapshot, materialization = await _join_ledger_materialization(
-        request, x_validator_hotkey, now=auth_now
+        request, x_validator_hotkey, context=ledger_context
     )
     if joined_snapshot is not None:
         logger.info(
-            "validator=%s joined in-flight scoring ledger: %d miner(s)",
+            "validator=%s reused fresh scoring ledger: %d miner(s)",
             x_validator_hotkey,
             len(joined_snapshot.entries),
         )
         return _fresh_response_from_snapshot(joined_snapshot)
+    assert materialization is not None
+    # The cheap context reads above autobegin a read transaction on lightweight
+    # test apps (and any deployment without app.state.session_maker). End it
+    # before ensure_efficiency_state opens its explicit materialization
+    # transaction. The nonce transaction has already committed independently.
+    if session.in_transaction():
+        await session.rollback()
     try:
         # The validator ledger is an authority path, not a dependent of the
         # public leaderboard. Materialize this epoch before reading either the
@@ -474,9 +594,7 @@ async def scores(
         # validator folding an old/missing efficiency epoch. The resolver uses
         # its independent session and the nonce transaction above is complete,
         # leaving this session clean for ensure_efficiency_state's transaction.
-        efficiency_config = await request.app.state.efficiency_settings.resolve(
-            getattr(request.app.state, "session_maker", None)
-        )
+        efficiency_config = ledger_context.policy.efficiency
         if efficiency_config.enabled:
             await ensure_efficiency_state(session, efficiency_config, now=auth_now)
         rows = await list_eligible_ledger(
@@ -499,7 +617,7 @@ async def scores(
             [r.agent_id for r in rows],
             bench_versions={r.agent_id: r.bench_version for r in rows},
         )
-        canonical_version = await active_bench_version(session)
+        canonical_version = ledger_context.active_bench_version
         history = await confirmation_history_by_agent(
             session,
             agent_ids=[r.agent_id for r in rows],
@@ -515,27 +633,13 @@ async def scores(
             [r.agent_id for r in rows],
             bench_versions={r.agent_id: r.bench_version for r in rows},
         )
-        fleet_protocol_ready = await live_validator_fleet_supports_protocol(
-            session,
-            minimum_protocol=_CONTINUAL_MEAN_PROTOCOL,
-            bench_version=canonical_version,
-            now=auth_now,
-        )
-        continual_settings = await request.app.state.continual_retest_settings.resolve(
-            getattr(request.app.state, "session_maker", None)
-        )
-        burn_settings = await request.app.state.burn_settings.resolve(
-            getattr(request.app.state, "session_maker", None)
-        )
+        fleet_protocol_ready = ledger_context.continual_fleet_ready
+        continual_settings = ledger_context.policy.continual_retest
+        burn_settings = ledger_context.policy.burn
         continual_mean_active = aggregate_is_active(
             continual_settings, fleet_protocol_ready=fleet_protocol_ready
         )
-        tie_weighting_fleet_ready = await live_validator_fleet_supports_protocol(
-            session,
-            minimum_protocol=_TIE_WEIGHTING_PROTOCOL,
-            bench_version=canonical_version,
-            now=auth_now,
-        )
+        tie_weighting_fleet_ready = ledger_context.tie_weighting_fleet_ready
         tie_weighting_active = tie_weighting_is_active(
             continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
         )
@@ -553,6 +657,7 @@ async def scores(
             efficiency_config=efficiency_config,
             now=auth_now,
             requesting_validator_hotkey=x_validator_hotkey,
+            factor_fleet_ready=ledger_context.factor_fleet_ready,
         )
         ranking_scores = official_composites(
             rows,
@@ -664,6 +769,7 @@ async def scores(
             tie_weighting_mode="pool" if tie_weighting_active else None,
             continual_retest_cohort_size=continual_settings.retest_cohort_size,
             requesting_validator_hotkey=x_validator_hotkey,
+            context=ledger_context,
         ),
     )
     logger.info(

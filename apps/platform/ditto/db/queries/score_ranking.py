@@ -493,6 +493,7 @@ async def resolve_efficiency_adjustments(
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
     requesting_validator_hotkey: str | None = None,
+    factor_fleet_ready: bool | None = None,
 ) -> tuple[dict[UUID, float], dict[UUID, float]]:
     """Resolve the fleet-safe adjustments shared by every official fold.
 
@@ -564,17 +565,15 @@ async def resolve_efficiency_adjustments(
         requester_protocol_ready = (
             requester.protocol_version >= BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
         )
-    if (
-        factor_candidates
-        and requester_protocol_ready
-        and await live_validator_fleet_supports_protocol(
+    if factor_candidates and requester_protocol_ready and factor_fleet_ready is None:
+        factor_fleet_ready = await live_validator_fleet_supports_protocol(
             session,
             minimum_protocol=BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
             bench_version=9,
             now=resolved_now,
             freshness=VALIDATOR_STALE_WINDOW,
         )
-    ):
+    if factor_candidates and requester_protocol_ready and factor_fleet_ready:
         factors = factor_candidates
     return bonuses, factors
 

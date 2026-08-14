@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
@@ -704,7 +705,7 @@ class TestScoringLiveness:
         resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert resp.status_code == 503
 
-    async def test_concurrent_reads_share_only_the_inflight_materialization(
+    async def test_reads_share_one_bounded_fresh_materialization(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -746,12 +747,57 @@ class TestScoringLiveness:
         assert calls == 1
         assert second_response.json() == first_response.json()
 
-        # The single-flight is not a TTL cache. A later, non-overlapping poll
-        # rematerializes current scores and policy.
+        # A later non-overlapping read in the same validator sweep reuses the
+        # successful snapshot instead of rebuilding the full ledger.
         third_response = await client.get(
             "/api/v1/scoring/scores", headers=_ledger_headers()
         )
         assert third_response.status_code == 200
+        assert third_response.json() == first_response.json()
+        assert calls == 1
+
+        # The cache is bounded. Once the materialization ages past one sweep,
+        # the next authenticated request owns a new live read.
+        app.state.ledger_snapshot.generated_at -= timedelta(
+            seconds=scoring_mod._FRESH_SNAPSHOT_SECONDS + 1
+        )
+        fourth_response = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert fourth_response.status_code == 200
+        assert calls == 2
+
+    async def test_dynamic_policy_change_invalidates_fresh_snapshot(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        real_list = scoring_mod.list_eligible_ledger
+        calls = 0
+
+        async def _counted_list(*args: Any, **kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            return await real_list(*args, **kwargs)
+
+        initial = app.state.config.efficiency_bonus
+        resolve = AsyncMock(return_value=initial)
+        monkeypatch.setattr(app.state.efficiency_settings, "resolve", resolve)
+        monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _counted_list)
+
+        first = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert first.status_code == 200
+        assert calls == 1
+
+        resolve.return_value = replace(initial, cap=initial.cap + 0.01)
+        second = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        assert second.status_code == 200
         assert calls == 2
 
     async def test_factor_ready_validators_share_inflight_materialization(
@@ -900,6 +946,9 @@ class TestScoringLiveness:
         assert ok.json()["stale"] is False
 
         # A later read fails: the cached ledger is served, flagged stale.
+        app.state.ledger_snapshot.generated_at -= timedelta(
+            seconds=scoring_mod._FRESH_SNAPSHOT_SECONDS + 1
+        )
         self._break_db(monkeypatch)
         stale = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert stale.status_code == 200
@@ -1188,6 +1237,10 @@ class TestLedgerBurnShare:
         ok = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert ok.status_code == 200
         assert ok.json()["burn_share"] == 0.5
+
+        app.state.ledger_snapshot.generated_at -= timedelta(
+            seconds=scoring_mod._FRESH_SNAPSHOT_SECONDS + 1
+        )
 
         async def _boom(_session: object, **_kwargs: object) -> list:
             raise OperationalError("SELECT ...", {}, Exception("db down"))
