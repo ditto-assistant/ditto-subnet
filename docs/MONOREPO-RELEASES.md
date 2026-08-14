@@ -75,6 +75,14 @@ multi-platform index. This avoids running the cgo/tree-sitter arm64 compile
 through QEMU: it took 2m38s under emulation in v0.62.2 versus 19.4s in a
 cacheless native arm64 validation.
 
+The scorer's checksum-pinned LongMemEval input downloads in a deterministic
+Docker `RUN` layer. A clean builder still fetches the immutable upstream URL
+and fails unless its full SHA-256 matches, while subsequent release builds
+restore the already-verified bytes from each architecture's BuildKit cache.
+Do not switch this back to remote `ADD`: BuildKit revalidates that URL on every
+build, which put 110 seconds of avoidable network work on the v0.63.4 arm64
+critical path.
+
 The validator image follows the same immutable native-child pattern, but uses
 the standard `ubuntu-24.04` and `ubuntu-24.04-arm` runners. Standard-runner use
 is free for this public repository, and keeping the validator off the bounded

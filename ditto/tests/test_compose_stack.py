@@ -192,10 +192,12 @@ def test_confirmation_runtime_uses_only_exact_public_release_assets() -> None:
         assert forbidden not in serialized
 
     dockerfile = SCORER_DOCKERFILE_PATH.read_text()
+    assert "ADD --checksum" not in dockerfile
     assert (
-        "ADD --checksum=sha256:"
-        "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442" in dockerfile
+        "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442  "
+        "/longmemeval_s_cleaned.json" in dockerfile
     )
+    assert "sha256sum -c -" in dockerfile
     assert "RUN chmod 0555 /opt/ditto/confirmation" in dockerfile
     assert "find /opt/ditto/confirmation -type f -exec chmod 0444 {} +" in dockerfile
 
