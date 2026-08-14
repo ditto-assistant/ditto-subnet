@@ -110,6 +110,22 @@ class SweepStats:
     sweep_duration_s: float
     queue_depth: int
     failed_count: int
+    failures_with_log_tail: int = 0
+    """How many of failed_count handed back the harness's own output.
+
+    Aggregate and bounded to a count -- deliberately NOT the output itself. This
+    module publishes to a public project so miners and researchers can audit the
+    subnet's scoring, under a transparency policy that excludes miner tarballs
+    and anything key-shaped; a harness's stdout is one miner's private material
+    (it can carry their source through a stack trace) and does not belong here.
+    The durable copy lives on the ticket, readable by that miner with a signed
+    request and by operators holding backroom:artifact:read.
+
+    A count still answers the question W&B is actually asked after an incident:
+    whether a wave of failures is one broken harness or a broken fleet.
+    failed_count high with this at zero means the scorer captured nothing
+    from any of them -- an infrastructure signature, not a miner one.
+    """
     scored: list[ScoredAgentStat] = field(default_factory=list)
     # (miner, composite), highest first
     leaderboard: list[tuple[str, float]] = field(default_factory=list)
@@ -271,6 +287,7 @@ class ValidatorTelemetry:
                     "sweep/queue_depth": stats.queue_depth,
                     "sweep/scored_count": len(stats.scored),
                     "sweep/failed_count": stats.failed_count,
+                    "sweep/failures_with_log_tail": stats.failures_with_log_tail,
                 }
             )
 

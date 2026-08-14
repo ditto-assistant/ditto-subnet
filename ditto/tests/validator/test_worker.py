@@ -1270,7 +1270,7 @@ class TestTop5ConfirmationLane:
         await worker._run_top5_confirmation_lane()
 
         platform.report_ticket_failed.assert_awaited_once_with(
-            job, "infrastructure", "model_relay_unavailable"
+            job, "infrastructure", "model_relay_unavailable", container_log_tail=None
         )
         assert "slot-1" not in worker._healthy_slots
         platform.submit_top5_confirmation_score.assert_not_awaited()
@@ -1310,6 +1310,7 @@ class TestTop5ConfirmationLane:
             job,
             "scoring_error",
             "DittobenchError: harness returned invalid evidence",
+            container_log_tail=None,
         )
         platform.submit_top5_confirmation_score.assert_not_awaited()
 
@@ -2649,7 +2650,7 @@ class TestRunOnce:
 
         assert outcome.queue_depth == 1
         platform.report_ticket_failed.assert_awaited_once_with(
-            job, "infrastructure", "seed_store_lock_timeout"
+            job, "infrastructure", "seed_store_lock_timeout", container_log_tail=None
         )
         assert worker._healthy_slots == set()
 
@@ -2737,7 +2738,7 @@ class TestRunOnce:
         assert outcome.queue_depth == 1
         assert platform.request_job.await_count == 2  # failed job + empty queue
         platform.report_ticket_failed.assert_awaited_once_with(
-            job, "scoring_error", "model_inference_required"
+            job, "scoring_error", "model_inference_required", container_log_tail=None
         )
         platform.submit_score.assert_not_awaited()
 
@@ -2763,7 +2764,10 @@ class TestRunOnce:
         assert outcome.queue_depth == 2
         assert platform.request_job.await_count == 3
         platform.report_ticket_failed.assert_awaited_once_with(
-            jobs[0], "sandbox_oom", "SandboxOomError: memory allowance"
+            jobs[0],
+            "sandbox_oom",
+            "SandboxOomError: memory allowance",
+            container_log_tail=None,
         )
         assert "slot-0" in worker._healthy_slots
         assert "slot-0" not in worker._resource_blocked_until

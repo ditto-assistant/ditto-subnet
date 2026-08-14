@@ -22,11 +22,28 @@ class DittobenchError(ValidatorError):
     read twelve dead ``mnemo*`` leases off the ticket ledger and still could not
     name what killed them at ~60 minutes, for that reason alone. Now it rides the
     wire in ``FailJobRequest.failure_detail`` and lands on the ticket.
+
+    ``container_log_tail`` is the failing harness's own bounded, redacted stdout
+    and stderr, lifted off the scorer's failure envelope. It answers the question
+    ``code`` cannot: *why* the harness died, in the harness's own words. The
+    scorer has captured it since the sandbox log-tail change but nothing read it,
+    so it reached an operator only by shelling into whichever validator host ran
+    the job -- against an in-memory job store, so in practice not at all. Agent
+    ``5fdadd33`` burned four leases in 82-108s each with nothing readable behind
+    ``scoring_error``, which is this field's reason for existing. Kept separate
+    from ``code`` and from the message so neither becomes prose: ``code`` is what
+    an operator groups by, this is what they read.
     """
 
-    def __init__(self, *args: object, code: str | None = None) -> None:
+    def __init__(
+        self,
+        *args: object,
+        code: str | None = None,
+        container_log_tail: str | None = None,
+    ) -> None:
         super().__init__(*args)
         self.code = code
+        self.container_log_tail = container_log_tail
 
 
 class ValidatorInfrastructureError(DittobenchError):
@@ -164,6 +181,39 @@ def failure_detail(error: BaseException) -> str:
     message = str(error).strip()
     detail = f"{type(error).__name__}: {message}" if message else type(error).__name__
     return truncate_failure_detail(detail)
+
+
+CONTAINER_LOG_TAIL_MAX_LENGTH = 2048
+"""Mirrors ``ditto.api_models.validator.CONTAINER_LOG_TAIL_MAX_LENGTH``.
+
+The scorer already bounds the tail at ``sandbox.ContainerLogTailBytes`` (2000)
+after pre-bounding it at the Docker daemon with ``--tail 500``. This is the same
+bound plus headroom for the truncation marker, enforced again here for the same
+reason :func:`failure_detail` enforces its own: an overlong field is rejected 422
+and loses the whole hand-back, turning a diagnosis into a silent expiry.
+
+Duplicated rather than imported to keep this module dependency-free, exactly as
+:data:`FAILURE_DETAIL_MAX_LENGTH` is. The wire model is the enforcing side.
+"""
+
+
+def container_log_tail(error: BaseException) -> str | None:
+    """The failing harness's own output, bounded for the wire.
+
+    Returns ``None`` when the error carries no tail -- a scorer that predates the
+    field, a failure raised before any container existed, or a container that
+    produced nothing. ``None`` and ``""`` are deliberately not merged: the scorer
+    returns ``""`` for "the runtime could not be queried", and a field that is
+    absent says that more honestly than an empty string that reads as "the
+    harness printed nothing".
+    """
+    tail = getattr(error, "container_log_tail", None)
+    if not isinstance(tail, str):
+        return None
+    tail = tail.strip()
+    if not tail:
+        return None
+    return truncate_failure_detail(tail, CONTAINER_LOG_TAIL_MAX_LENGTH)
 
 
 class WeightSubmissionError(ValidatorError):

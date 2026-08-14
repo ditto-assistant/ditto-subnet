@@ -387,6 +387,31 @@ def _sandbox_infrastructure_failure_detail(
     return f"{code}:{cause}"
 
 
+def _container_log_tail(payload: dict[str, object]) -> str | None:
+    """Lift the harness's own bounded, redacted output off the failure envelope.
+
+    The scorer attaches this to EVERY failed sandbox run -- pre-health exits,
+    mid-run crashes, and classified platform faults alike -- already tailed to
+    ``sandbox.ContainerLogTailBytes`` with injected credentials masked and URL
+    query strings stripped. Nothing here re-bounds or re-redacts it: doing so
+    would silently diverge from the scorer's rules. The wire bound is applied
+    once, on the way out, by :func:`errors.container_log_tail`.
+
+    Unlike :func:`_sandbox_infrastructure_failure_detail` there is no allowlist,
+    because there is nothing to allowlist against: the value is free-form miner
+    output by definition. That is exactly why it travels in its own field and
+    never in ``failure_detail``, which stays machine-groupable.
+    """
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        return None
+    diagnostics = failure.get("diagnostics")
+    if not isinstance(diagnostics, dict):
+        return None
+    tail = diagnostics.get("container_log_tail")
+    return tail if isinstance(tail, str) and tail.strip() else None
+
+
 @dataclass(frozen=True)
 class DittobenchProgressSnapshot:
     """Allowlisted progress extracted from an otherwise private scorer job."""
@@ -1458,6 +1483,11 @@ class DittobenchClient:
                     error = str(data.get("error", "unknown"))
                     agent_failure_code = _agent_attributable_failure_code(data)
                     infrastructure_code = _sandbox_infrastructure_failure_code(data)
+                    # Read once and attach to every raise below. The scorer puts
+                    # it on every failed sandbox run regardless of class, so
+                    # binding it to one branch would lose it on exactly the
+                    # failures that are hardest to read from the outside.
+                    log_tail = _container_log_tail(data)
                     if agent_failure_code is not None:
                         message = (
                             f"run {run_id} made no authoritative model call"
@@ -1467,6 +1497,7 @@ class DittobenchClient:
                         raise DittobenchError(
                             message,
                             code=agent_failure_code,
+                            container_log_tail=log_tail,
                         )
                     # `code=` is what stops the scorer's own classifier from
                     # dying here. All five infrastructure codes collapse into
@@ -1479,6 +1510,7 @@ class DittobenchClient:
                         raise SandboxOomError(
                             f"run {run_id} exhausted the sandbox memory allowance",
                             code=infrastructure_code,
+                            container_log_tail=log_tail,
                         )
                     if infrastructure_code is not None:
                         infrastructure_detail = _sandbox_infrastructure_failure_detail(
@@ -1488,6 +1520,7 @@ class DittobenchClient:
                             f"run {run_id} reported validator infrastructure "
                             f"failure: {infrastructure_code}",
                             code=infrastructure_detail,
+                            container_log_tail=log_tail,
                         )
                     if _platform_route_proof_gap(data):
                         # Not the agent's: the platform never finished proving
@@ -1498,8 +1531,16 @@ class DittobenchClient:
                             f"run {run_id} could not prove its model route "
                             "disposition; the platform challenge was unfinished",
                             code=_ROUTE_PROOF_UNAVAILABLE,
+                            container_log_tail=log_tail,
                         )
-                    raise DittobenchError(f"run {run_id} failed: {error}")
+                    # The unclassified branch, and the one agent 5fdadd33 landed
+                    # in: no agent code, no infrastructure code, just the
+                    # scorer's message. Before the tail rode along, this was the
+                    # hand-back that reached an operator as bare `scoring_error`.
+                    raise DittobenchError(
+                        f"run {run_id} failed: {error}",
+                        container_log_tail=log_tail,
+                    )
                 observed_at = time.monotonic()
                 if snapshot is not None:
                     observed_stage = _PROGRESS_STAGE_ORDER[snapshot.stage]

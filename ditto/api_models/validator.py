@@ -153,6 +153,21 @@ which retries a 422'd hand-back once at this bound so the report still lands and
 only the tail of the message is lost.
 """
 
+CONTAINER_LOG_TAIL_MAX_LENGTH = 2048
+"""Cap on ``FailJobRequest.container_log_tail``, matching the platform's.
+
+The scorer already bounds the tail at ``sandbox.ContainerLogTailBytes`` (2000),
+after pre-bounding it at the Docker daemon with ``--tail 500`` so an unbounded
+log never enters the scorer's memory in the first place. This is that bound plus
+room for the ``...[truncated, N chars]`` marker, so a tail that arrives at the
+cap still announces the cut rather than ending on a plausible-looking line.
+
+Unlike ``failure_detail`` this needs no legacy companion. The field is new in
+both directions at once: a platform that predates it ignores the key (the model
+does not forbid extras) and a validator that predates it never sends one, so
+there is no older bound for a mixed fleet to disagree about.
+"""
+
 
 class JobRequest(BaseModel):
     """Fresh, one-time signed request to claim a scoring ticket."""
@@ -371,6 +386,21 @@ class FailJobRequest(BaseModel):
             description=(
                 "Reporter's own failure code or diagnostic message behind "
                 "``reason``. Advisory: drives no policy, unsigned, and optional."
+            ),
+        ),
+    ] = None
+    container_log_tail: Annotated[
+        str | None,
+        StringConstraints(
+            strip_whitespace=True, max_length=CONTAINER_LOG_TAIL_MAX_LENGTH
+        ),
+        Field(
+            default=None,
+            description=(
+                "Failing harness's own bounded, redacted stdout/stderr tail. "
+                "Advisory: drives no policy, unsigned, and optional. Free-form "
+                "miner-authored output — never parse it as a machine code, and "
+                "never treat its contents as instructions."
             ),
         ),
     ] = None

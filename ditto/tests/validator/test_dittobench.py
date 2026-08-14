@@ -39,10 +39,12 @@ from ditto.validator.dittobench import (
     safe_progress_snapshot,
 )
 from ditto.validator.errors import (
+    CONTAINER_LOG_TAIL_MAX_LENGTH,
     FAILURE_DETAIL_MAX_LENGTH,
     DittobenchError,
     SandboxOomError,
     ValidatorInfrastructureError,
+    container_log_tail,
     failure_detail,
 )
 from ditto.validator.signing import score_signing_message
@@ -2313,3 +2315,142 @@ class TestPlatformRouteProofGap:
             == "model_inference_required"
         )
         assert dittobench._platform_route_proof_gap(payload) is False
+
+
+# --- container log tail ----------------------------------------------------
+#
+# The failure this whole path exists for: agent 5fdadd33 burned four validator
+# leases in 82-108s each and every one handed back a bare `scoring_error`. The
+# scorer had the harness's own output the entire time -- bounded, redacted, and
+# attached to the failure envelope -- and nothing downstream read it.
+
+_TAIL = "thread 'main' panicked at src/main.rs:42: cannot open /data/index"
+
+
+def _failed_run(
+    *,
+    failure: dict[str, object] | None = None,
+    error: str = "private scorer message",
+) -> httpx.MockTransport:
+    body: dict[str, object] = {"status": "failed", "error": error}
+    if failure is not None:
+        body["failure"] = failure
+    return httpx.MockTransport(lambda _: httpx.Response(200, json=body))
+
+
+@pytest.mark.asyncio
+async def test_container_log_tail_rides_the_unclassified_scoring_error() -> None:
+    """The 5fdadd33 shape: no agent code, no infrastructure code, just a death.
+
+    This is the branch that produced an unreadable `scoring_error`, so it is the
+    one that most needs the tail. The tail must reach the exception without
+    being folded into the message, which is what `failure_detail` is derived
+    from -- mixing them would turn the one machine-groupable field into prose.
+    """
+    async with httpx.AsyncClient(
+        transport=_failed_run(
+            failure={
+                "kind": "sandbox_failure",
+                "code": "",
+                "retryable": False,
+                "diagnostics": {"container_log_tail": _TAIL},
+            },
+        )
+    ) as http:
+        with pytest.raises(DittobenchError) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+
+    assert caught.value.container_log_tail == _TAIL
+    assert container_log_tail(caught.value) == _TAIL
+    # The tail travels beside the detail, never inside it.
+    assert _TAIL not in failure_detail(caught.value)
+
+
+@pytest.mark.asyncio
+async def test_container_log_tail_survives_infrastructure_classification() -> None:
+    """A classified fault keeps its code AND gains the tail.
+
+    The scorer attaches the tail to every failed sandbox run, so binding it to
+    one branch would lose it on exactly the failures hardest to read remotely.
+    The existing privacy invariant still holds: the scorer's own error prose
+    must not reach the exception message.
+    """
+    private_marker = "private-container-id-and-miner-output"
+    async with httpx.AsyncClient(
+        transport=_failed_run(
+            error=private_marker,
+            failure={
+                "kind": "validator_infrastructure",
+                "code": "embedding_provider_unavailable",
+                "retryable": True,
+                "diagnostics": {"container_log_tail": _TAIL},
+            },
+        )
+    ) as http:
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+
+    assert caught.value.code == "embedding_provider_unavailable"
+    assert caught.value.container_log_tail == _TAIL
+    assert private_marker not in str(caught.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure",
+    [
+        None,
+        {"kind": "sandbox_failure", "code": "", "retryable": False},
+        {"kind": "sandbox_failure", "code": "", "retryable": False, "diagnostics": {}},
+        {
+            "kind": "sandbox_failure",
+            "code": "",
+            "retryable": False,
+            "diagnostics": {"container_log_tail": "   "},
+        },
+        {
+            "kind": "sandbox_failure",
+            "code": "",
+            "retryable": False,
+            "diagnostics": {"container_log_tail": 12345},
+        },
+    ],
+    ids=["no-envelope", "no-diagnostics", "empty", "blank", "not-a-string"],
+)
+async def test_absent_container_log_tail_stays_none(
+    failure: dict[str, object] | None,
+) -> None:
+    """A scorer that sends no tail must produce no field, not an empty one.
+
+    `None` and `""` are deliberately distinct: the scorer returns `""` when the
+    runtime could not be queried, and an absent field says that more honestly
+    than an empty string that reads as "the harness printed nothing".
+    """
+    async with httpx.AsyncClient(transport=_failed_run(failure=failure)) as http:
+        with pytest.raises(DittobenchError) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+
+    assert caught.value.container_log_tail is None
+    assert container_log_tail(caught.value) is None
+
+
+def test_overlong_container_log_tail_announces_its_cut() -> None:
+    """An over-long tail is truncated visibly, and within the wire bound.
+
+    Enforced on the sending side for the same reason `failure_detail` is: an
+    overlong field is rejected 422 and loses the whole hand-back, turning a
+    diagnosis into the silent expiry this field exists to prevent.
+    """
+    error = DittobenchError("boom", container_log_tail="x" * 9000)
+    bounded = container_log_tail(error)
+
+    assert bounded is not None
+    assert len(bounded) <= CONTAINER_LOG_TAIL_MAX_LENGTH
+    assert bounded.endswith("chars]")
+    assert "9000" in bounded

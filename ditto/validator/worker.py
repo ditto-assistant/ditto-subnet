@@ -69,6 +69,7 @@ from ditto.validator.errors import (
     SandboxOomError,
     ValidatorInfrastructureError,
     WeightSubmissionError,
+    container_log_tail,
     failure_detail,
 )
 from ditto.validator.lease_roster import (
@@ -551,6 +552,10 @@ class ValidatorWorker:
         )
         self._confirmation_progress: dict[str, ConfirmationProgress] = {}
         self._healthy_slots = set(self._slots)
+        # Re-zeroed at the top of every sweep; seeded here so a hand-back from
+        # outside a sweep (a drain, or a test driving the method directly)
+        # cannot raise AttributeError on a pure telemetry counter.
+        self._sweep_failures_with_log_tail = 0
         self._resource_blocked_until: dict[str, float] = {}
         self._admission: BenchmarkAdmission = "accepting"
         # Host-resource self-gate. A ``MagicMock`` config (the unit-test double)
@@ -738,6 +743,11 @@ class ValidatorWorker:
         cadence.
         """
         started = time.monotonic()
+        # Per-sweep, so it is reset here rather than in __init__: the telemetry
+        # it feeds is published once per sweep alongside failed_count, and a
+        # counter that accumulated across sweeps would report every failure the
+        # process had ever seen against this sweep's failure total.
+        self._sweep_failures_with_log_tail = 0
         self._admission = (
             "draining"
             if drain_requested is not None and drain_requested.is_set()
@@ -935,7 +945,10 @@ class ValidatorWorker:
                                 error,
                             )
                             await self._report_ticket_failed(
-                                job, "scoring_error", failure_detail(error)
+                                job,
+                                "scoring_error",
+                                failure_detail(error),
+                                container_log_tail(error),
                             )
                             slot_failed += 1
                         except SandboxOomError as error:
@@ -947,7 +960,10 @@ class ValidatorWorker:
                                 error,
                             )
                             await self._report_ticket_failed(
-                                job, "sandbox_oom", failure_detail(error)
+                                job,
+                                "sandbox_oom",
+                                failure_detail(error),
+                                container_log_tail(error),
                             )
                             slot_failed += 1
                         except (
@@ -962,7 +978,10 @@ class ValidatorWorker:
                                 error,
                             )
                             await self._report_ticket_failed(
-                                job, "infrastructure", failure_detail(error)
+                                job,
+                                "infrastructure",
+                                failure_detail(error),
+                                container_log_tail(error),
                             )
                             self._healthy_slots.discard(slot_id)
                             if any(
@@ -982,7 +1001,10 @@ class ValidatorWorker:
                                 error,
                             )
                             await self._report_ticket_failed(
-                                job, "scoring_error", failure_detail(error)
+                                job,
+                                "scoring_error",
+                                failure_detail(error),
+                                container_log_tail(error),
                             )
                             slot_failed += 1
                         finally:
@@ -1035,6 +1057,7 @@ class ValidatorWorker:
                 sweep_duration_s=time.monotonic() - started,
                 queue_depth=queue_depth,
                 failed_count=failed,
+                failures_with_log_tail=self._sweep_failures_with_log_tail,
                 scored=scored,
                 leaderboard=outcome.leaderboard,
                 weights=outcome.weights,
@@ -2297,7 +2320,10 @@ class ValidatorWorker:
                 # Same attribution rule as the canonical lane: running out
                 # of lease is not this host's infrastructure failing.
                 await self._report_ticket_failed(
-                    job, "scoring_error", failure_detail(exc)
+                    job,
+                    "scoring_error",
+                    failure_detail(exc),
+                    container_log_tail(exc),
                 )
         except SandboxOomError as exc:
             logger.warning(
@@ -2307,7 +2333,10 @@ class ValidatorWorker:
             )
             if job is not None:
                 await self._report_ticket_failed(
-                    job, "sandbox_oom", failure_detail(exc)
+                    job,
+                    "sandbox_oom",
+                    failure_detail(exc),
+                    container_log_tail(exc),
                 )
         except (
             ValidatorInfrastructureError,
@@ -2320,7 +2349,10 @@ class ValidatorWorker:
             )
             if job is not None:
                 await self._report_ticket_failed(
-                    job, "infrastructure", failure_detail(exc)
+                    job,
+                    "infrastructure",
+                    failure_detail(exc),
+                    container_log_tail(exc),
                 )
                 self._healthy_slots.discard(job.slot_id)
         except (PlatformError, DittobenchError) as exc:
@@ -2332,7 +2364,10 @@ class ValidatorWorker:
             )
             if job is not None:
                 await self._report_ticket_failed(
-                    job, "scoring_error", failure_detail(exc)
+                    job,
+                    "scoring_error",
+                    failure_detail(exc),
+                    container_log_tail(exc),
                 )
         finally:
             if _claim_resolved is not None:
@@ -2847,6 +2882,7 @@ class ValidatorWorker:
         job: JobResponse,
         reason: FailJobReason,
         detail: str | None = None,
+        log_tail: str | None = None,
     ) -> None:
         """Best-effort hand-back of a failed ticket for immediate reissue.
 
@@ -2857,6 +2893,13 @@ class ValidatorWorker:
         ditto-subnet#279 classified twelve dead ``mnemo*`` leases off it and
         still could not name the fault. Optional on both sides of the wire, so
         omitting it is always safe.
+
+        ``log_tail`` is the failing harness's own output, from
+        :func:`~ditto.validator.errors.container_log_tail`. Where ``detail``
+        carries the code an operator groups by, this carries what they read.
+        Also optional on both sides, and travelling separately for that reason:
+        folding free-form miner output into ``detail`` would turn the one
+        machine-groupable field back into prose.
 
         Closing the live lease lets the next :meth:`request_job` mint a fresh
         ticket instead of resuming the failed attempt. Strictly best-effort: an
@@ -2870,9 +2913,18 @@ class ValidatorWorker:
         accepts the connection and then stalls would otherwise spend the margin
         here and produce the silent expiry the abort exists to prevent.
         """
+        # Counted here rather than at the eight call sites because every
+        # hand-back funnels through this method, so one increment cannot drift
+        # out of step with one of them. Counted BEFORE the send: the question
+        # this answers is whether the scorer captured anything, which is already
+        # settled by now and stays true whether or not the report lands.
+        if log_tail is not None:
+            self._sweep_failures_with_log_tail += 1
         try:
             await asyncio.wait_for(
-                self._platform.report_ticket_failed(job, reason, detail),
+                self._platform.report_ticket_failed(
+                    job, reason, detail, container_log_tail=log_tail
+                ),
                 timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
             )
             self._resolve_ticket_deadline(job.agent_id, job.deadline)

@@ -564,6 +564,7 @@ class PlatformClient:
         job: JobResponse,
         reason: FailJobReason,
         failure_detail: str | None = None,
+        container_log_tail: str | None = None,
     ) -> FailJobResponse:
         """Hand a failed ticket back so the platform reissues a fresh lease.
 
@@ -581,6 +582,21 @@ class PlatformClient:
         predating the field ignores it and a validator predating it simply omits
         it. Bounded by the wire model, and truncated before it gets here.
 
+        ``container_log_tail`` is the failing harness's own bounded, redacted
+        output (see :func:`ditto.validator.errors.container_log_tail`), carried
+        beside ``failure_detail`` rather than inside it so the latter stays the
+        one field an operator can group by. Optional and unsigned on the same
+        terms.
+
+        It needs no skew handling, unlike the widening below. ``FailJobRequest``
+        does not set ``extra="forbid"``, so a platform predating the field
+        ignores the key rather than rejecting the report; and ``exclude_none`` in
+        :meth:`_post_job_fail` drops it entirely when absent, keeping a
+        tail-free hand-back byte-identical to the previous wire format. The
+        sending-side cap in
+        :data:`~ditto.validator.errors.CONTAINER_LOG_TAIL_MAX_LENGTH` means a
+        new platform's own bound can never be the thing that 422s.
+
         The bound moved 200 -> 4096, and the fleet does not upgrade atomically,
         so this method now also handles the one skew that widening creates: a
         detail this validator considers legal that the platform on the other end
@@ -594,6 +610,7 @@ class PlatformClient:
             ticket_deadline=job.deadline,
             reason=reason,
             failure_detail=failure_detail,
+            container_log_tail=container_log_tail,
             nonce=nonce,
             requested_at=requested_at,
             signature=sign_job_fail_request(
