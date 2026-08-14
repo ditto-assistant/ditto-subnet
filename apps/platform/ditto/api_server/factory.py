@@ -80,6 +80,7 @@ from ditto.api_server.endpoints import (
     metrics_router,
     miner_auth_router,
     miner_avatars_router,
+    miner_logs_router,
     miner_mcp_router,
     miner_me_router,
     name_claims_router,
@@ -387,6 +388,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(miner_mcp_router)
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
+    app.include_router(miner_logs_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_confirmation_router, prefix="/api/v1")
     app.include_router(inference_router, prefix="/api/v1")

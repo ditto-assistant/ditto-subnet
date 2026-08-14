@@ -13,6 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.requests import Request
 
 from ditto.api_server.endpoints.inference import InferenceDeclinedError
+from ditto.api_server.endpoints.miner_logs import HarnessLogsDeniedError
 from ditto.api_server.endpoints.retrieval import (
     AgentNotFoundError,
     HotkeyAgentNotFoundError,
@@ -57,6 +58,7 @@ logger = logging.getLogger(__name__)
 # codes so callers can branch on the specific failure mode.
 ERROR_CODE_AGENT_NOT_FOUND = 1200
 ERROR_CODE_HOTKEY_AGENT_NOT_FOUND = 1201
+ERROR_CODE_HARNESS_LOGS_DENIED = 1202
 ERROR_CODE_SUBMISSION_COOLDOWN = 1105
 
 # Platform error codes (3xxx range per CODE-REVIEW-CHECKLIST).
@@ -434,6 +436,19 @@ def register_exception_handlers(app: FastAPI) -> None:
     ) -> JSONResponse:
         logger.info(f"agent not found: {exc}")
         return _envelope_response(404, ERROR_CODE_AGENT_NOT_FOUND, "agent not found")
+
+    @app.exception_handler(HarnessLogsDeniedError)
+    async def _harness_logs_denied_handler(
+        _request: Request, exc: HarnessLogsDeniedError
+    ) -> JSONResponse:
+        # 404 with one message for every denial. The reason is logged here and
+        # never returned: telling a caller "the signature was fine but this
+        # agent is not yours" turns the route into a membership oracle over
+        # other miners' agent ids.
+        logger.info(f"harness logs denied: {exc}")
+        return _envelope_response(
+            404, ERROR_CODE_HARNESS_LOGS_DENIED, "no such agent for this hotkey"
+        )
 
     @app.exception_handler(HotkeyAgentNotFoundError)
     async def _hotkey_agent_not_found_handler(
