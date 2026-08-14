@@ -53,6 +53,7 @@ paths = [
   "ditto/api_models/attestation.py",
   "ditto/api_models/health.py",
   "ditto/api_models/miner_avatar.py",
+  "ditto/api_models/miner_logs.py",
   "ditto/api_models/miner_session.py",
   "ditto/api_models/name_claim.py",
   "ditto/api_models/retrieval.py",

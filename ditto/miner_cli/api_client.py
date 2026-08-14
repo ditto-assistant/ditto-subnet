@@ -324,7 +324,6 @@ class ApiClient:
             raise AttestationRejectedError(_format_error(response, prefix="owner-link"))
         return OwnerLinkResponse.model_validate(response.json())
 
-<<<<<<< HEAD
     # ---- /name-claims ---------------------------------------------------
 
     def list_name_claims(self) -> NameClaimListResponse:
