@@ -50,12 +50,13 @@ constants. For each new `(bench_version=9, run_size=full, epoch)` snapshot:
    an explicitly invalid protocol-19 retest fails the whole aggregate closed.
    The legacy `platform_model_use_reconciliation` annotation is never scoring
    authority.
-3. Use the independently verified full-confirmed v9 composite as quality,
-   apply the existing quality/memory floors, collapse duplicate owners and
-   lineages, and keep the top `cohort_size` qualified entries. These floors
-   select the reference cohort and gate factor upside; every row with valid
-   cost evidence still receives bounded downside, so sandbagging below a floor
-   cannot escape a penalty.
+3. Use the board's authoritative v9 composite as quality: canonical / continual
+   quality under the normal finalized-v9 policy, or independently verified full
+   quality while confirmation enforcement is active. Apply the existing
+   quality/memory floors, collapse duplicate owners and lineages, and keep the
+   top `cohort_size` qualified entries. These floors select the reference cohort
+   and gate factor upside; every row with valid cost evidence still receives
+   bounded downside, so sandbagging below a floor cannot escape a penalty.
 4. `Reference Cost` is the **nearest-rank P25** of those per-agent costs:
    sort ascending and select rank `ceil(0.25 × N)`. At `N=8` it is the second
    observed cost; at `N=25` it is the seventh. It is never the cheapest single
@@ -275,13 +276,17 @@ Public (`GET /api/v1/public/leaderboard`):
   v3 `factor_alpha` / `minimum_factor` / `maximum_factor`,
   `reference_p25_tokens`, and `reference_median_tokens`. Before cohort
   activation the API reports `active: false`; while disabled it reports an
-  explicitly non-persistent preview rather than an awarded adjustment.
+  explicitly non-persistent preview rather than an awarded adjustment. Preview
+  status also exposes candidate, valid-cost, quality-qualified, owner-deduped,
+  and lineage-deduped counts so a zero cohort identifies the failing stage.
 * `GET /api/v1/public/efficiency/snapshots/{snapshot_id}`: the full immutable
   audit record. Lineage digests are moderation-adjacent and never exposed —
   members carry opaque `lineage_group` ordinals plus `collapsed_agent_ids`.
-* Leaderboard ranking always follows `official_composite`. For a full-confirmed
-  v9 entry, the pre-efficiency value is the verified
-  `full_effective_micros / 1_000_000`; curve v3 then computes
+* Leaderboard ranking always follows `official_composite`. For a normal
+  finalized-v9 entry, the pre-efficiency value is its canonical / continual
+  quality. While confirmation enforcement is active, only full-confirmed rows
+  rank and the pre-efficiency value is the verified
+  `full_effective_micros / 1_000_000`. Curve v3 then computes
   a downside multiplication or an upside remaining-headroom adjustment. Curves
   v1/v2 retain their historical
   `pre_efficiency_composite * (1 + efficiency_bonus)` fold. The separate fields
@@ -294,7 +299,7 @@ additive-optional `efficiency_factor` alongside legacy `efficiency_bonus` and
 new fields are absent/null and validators retain their pre-adjustment behavior.
 The validator independently derives the fold, preferring `efficiency_factor`
 when present and applying the same curve-v3 downside/headroom transform after
-authoritative v9 full quality. A validator
+authoritative v9 quality. A validator
 must never fold these fields unless the Platform operator activates the fold
 globally. The Platform and root validator contract goldens must be regenerated
 and byte-identical whenever this wire shape changes.
@@ -387,17 +392,18 @@ revision with `enabled: true, fold_enabled: true`.
    separately.
 4. **Fleet-ready, then fold.** Deploy heartbeat-protocol-19 validators across
    the participating fleet and verify that they prefer `efficiency_factor`,
-   apply the downside/headroom transform after full-confirmed v9 quality, ignore
+   apply the downside/headroom transform after authoritative v9 quality, ignore
    legacy bonus for that v9 path, and treat absent/malformed factors neutrally.
    Only then flip
    `fold_enabled: true` (or seed
    `DITTO_EFFICIENCY_BONUS_FOLD_ENABLED=true`) so the validator ledger carries
    the adjustment. Platform also fails closed at read time: it suppresses all
    v3 factors from both the validator ledger and public official/KOTH
-   projections until every recently-live weight-setting validator reports
-   protocol 19 or newer, regardless of scorer capability. This protocol gate
-   applies only to bounded factors; historical curve-v1/v2 bonus exposure is
-   unchanged.
+   projections until every recently-live validator capable of serving Bench v9
+   reports protocol 19 or newer. A fresh pre-19 requester receives a neutral
+   factor projection, while a validator that cannot serve Bench v9 does not
+   indefinitely veto the capable fleet. This protocol gate applies only to
+   bounded factors; historical curve-v1/v2 bonus exposure is unchanged.
 
 Each of these transitions can be a live backroom settings change (no restart);
 the env vars remain the seed default for a fresh deployment.

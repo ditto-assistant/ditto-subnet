@@ -17,8 +17,10 @@ validator-side spec (ditto-subnet ``docs/relative-efficiency-bonus-spec.md``):
 * Historical curves v1/v2 are strictly-upside bonuses. New Bench-v9 snapshots
   use curve v3: ``clamp((P25 / agent_cost) ** alpha, min, max)``. P25 is
   neutral, cheaper qualified agents receive a bounded bonus, and more expensive
-  qualified agents receive a bounded penalty. The independently verified full
-  v9 quality score is adjusted only after all signed quality gates apply.
+  qualified agents receive a bounded penalty. The board's authoritative v9
+  quality is adjusted only after all signed quality gates apply: canonical /
+  continual quality normally, or full-confirmed quality while confirmation
+  enforcement is active.
   Downside multiplies quality; upside closes only a bounded fraction of its
   remaining headroom, so imperfect quality never saturates at 1.0.
 * **Frozen cohorts**: the snapshot (membership, floors, reference values) is
@@ -827,6 +829,16 @@ class EfficiencyBoardView:
     """Per-agent bonus fractions a preview computed, keyed by agent."""
     preview_factors: dict[UUID, float] | None = None
     """Per-agent bounded factors a curve-v3 preview computed, keyed by agent."""
+    preview_candidate_count: int | None = None
+    """Finalized ranked rows considered by a non-persisting preview."""
+    preview_cost_evidence_count: int | None = None
+    """Preview candidates with complete audited cost evidence."""
+    preview_quality_qualified_count: int | None = None
+    """Costed preview candidates that also clear the frozen quality floors."""
+    preview_owner_deduped_count: int | None = None
+    """Quality-qualified preview candidates after payment-owner dedupe."""
+    preview_lineage_deduped_count: int | None = None
+    """Quality-qualified preview candidates after owner and lineage dedupe."""
 
 
 def _candidates_from_rows(
@@ -838,17 +850,21 @@ def _candidates_from_rows(
     def quality_composite(row: LedgerRow) -> float | None:
         if curve_version != CURVE_VERSION_BOUNDED_FACTOR:
             return row.composite
-        confirmation = row.v9_confirmation
-        if row.bench_version == BOUNDED_FACTOR_BENCH_VERSION and isinstance(
-            confirmation, Mapping
+        # ``list_eligible_ledger`` already resolves this contract boundary in
+        # one place. With confirmation enforcement off, ``official_composite``
+        # is the canonical/continual v9 score. With enforcement on, the ledger
+        # admits only full-confirmed rows and this is their verified full score.
+        # Requiring ``row.v9_confirmation`` here as well made an active,
+        # finalized base-only v9 board produce a zero-member efficiency cohort.
+        quality = getattr(row, "official_composite", row.composite)
+        if (
+            row.bench_version == BOUNDED_FACTOR_BENCH_VERSION
+            and isinstance(quality, (int, float))
+            and not isinstance(quality, bool)
+            and isfinite(quality)
+            and 0.0 <= quality <= 1.0
         ):
-            micros = confirmation.get("full_effective_micros")
-            if (
-                isinstance(micros, int)
-                and not isinstance(micros, bool)
-                and 0 <= micros <= 1_000_000
-            ):
-                return micros / 1_000_000
+            return float(quality)
         return None
 
     candidates: list[EfficiencyCandidate] = []
@@ -1373,6 +1389,22 @@ async def preview_efficiency_board(
             else None
         ),
     )
+    cost_evidence = [
+        candidate for candidate in candidates if candidate.token_total is not None
+    ]
+    quality_qualified = [
+        candidate
+        for candidate in cost_evidence
+        if qualifies(
+            candidate.composite,
+            candidate.memory_mean,
+            candidate.token_total,
+            quality_floor=quality_floor,
+            memory_floor=memory_floor,
+        )
+    ]
+    owner_deduped = dedupe_owners(quality_qualified)
+    lineage_deduped = dedupe_lineages(owner_deduped)
     return EfficiencyBoardView(
         snapshot=None,
         bonuses={},
@@ -1408,4 +1440,9 @@ async def preview_efficiency_board(
             if curve_version == CURVE_VERSION_BOUNDED_FACTOR
             else None
         ),
+        preview_candidate_count=len(candidates),
+        preview_cost_evidence_count=len(cost_evidence),
+        preview_quality_qualified_count=len(quality_qualified),
+        preview_owner_deduped_count=len(owner_deduped),
+        preview_lineage_deduped_count=len(lineage_deduped),
     )

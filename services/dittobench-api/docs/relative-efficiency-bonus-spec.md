@@ -91,11 +91,13 @@ costs.
 
 ### Dynamic reference and quality
 
-Use the independently verified full-confirmed v9
-`full_effective_micros / 1_000_000` as `Authoritative Quality Score`. Apply the
-configured/ratcheted quality and memory floors, collapse duplicate lineages,
-and retain the top `cohort_size` qualified entries. If fewer than `N_min`
-remain, freeze an inactive observation and assign no factor.
+Use the board's authoritative v9 composite as `Authoritative Quality Score`:
+canonical / continual quality under the normal finalized-v9 policy, or the
+independently verified `full_effective_micros / 1_000_000` while confirmation
+enforcement is active. Apply the configured/ratcheted quality and memory
+floors, collapse duplicate lineages, and retain the top `cohort_size` qualified
+entries. If fewer than `N_min` remain, freeze an inactive observation and
+assign no factor.
 
 For an active cohort, sort the per-agent token costs ascending and select the
 nearest-rank 25th percentile:
@@ -219,10 +221,10 @@ For each cohort `(bench_version, run_size, epoch)`:
    snapshots use v3; legacy snapshots continue replaying v1/v2.
 4. Enable validator-ledger fold exposure only after all participating
    validators report protocol 19+, prefer `efficiency_factor`, apply it after
-   authoritative full-v9 quality with the same downside/headroom transform, and
+   authoritative v9 quality with the same downside/headroom transform, and
    treat absent/malformed factors neutrally.
-   Platform independently fails closed: a mixed or empty recently-live
-   weight-setting fleet receives no v3 factors even when the fold flag is set,
-   regardless of scorer capability, so old validators cannot split KOTH/weight
-   projections. This new readiness gate does not alter historical curve-v1/v2
-   bonus exposure.
+   Platform independently fails closed when the recently-live Bench-v9-capable
+   fleet is mixed or empty, even when the fold flag is set. A fresh pre-19
+   requester receives no v3 factors, while a validator that cannot serve Bench
+   v9 does not indefinitely veto the capable fleet. This new readiness gate
+   does not alter historical curve-v1/v2 bonus exposure.

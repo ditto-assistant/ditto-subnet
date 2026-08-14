@@ -11625,10 +11625,20 @@ export interface components {
              */
             bonus_cap: number;
             /**
+             * Candidate Count
+             * @description Finalized ranked rows considered by a live preview; null for a frozen snapshot.
+             */
+            candidate_count?: number | null;
+            /**
              * Cohort Size
              * @description Deduped qualified cohort members at freeze time.
              */
             cohort_size: number;
+            /**
+             * Cost Evidence Count
+             * @description Preview candidates with complete audited cost evidence; null for a frozen snapshot.
+             */
+            cost_evidence_count?: number | null;
             /**
              * Curve Version
              * @description Frozen bonus-curve policy: 1 = single-tier (cap at/below P25), 2 = two-tier (cap ramps to deep_bonus_cap between P25 and the deep frontier, then saturates flat), 3 = bounded power factor around the P25 reference (Bench v9 only).
@@ -11656,6 +11666,11 @@ export interface components {
              */
             factor_alpha?: number | null;
             /**
+             * Lineage Deduped Count
+             * @description Quality-qualified preview candidates after owner and lineage dedupe; null for a frozen snapshot.
+             */
+            lineage_deduped_count?: number | null;
+            /**
              * Maximum Factor
              * @description Frozen upper multiplier clamp for curve v3.
              */
@@ -11671,11 +11686,21 @@ export interface components {
              */
             n_min: number;
             /**
+             * Owner Deduped Count
+             * @description Quality-qualified preview candidates after payment-owner dedupe; null for a frozen snapshot.
+             */
+            owner_deduped_count?: number | null;
+            /**
              * Preview
              * @description True when this block was computed at read time and nothing was persisted or applied. Always accompanied by active=false.
              * @default false
              */
             preview: boolean;
+            /**
+             * Quality Qualified Count
+             * @description Costed preview candidates clearing the quality floors; null for a frozen snapshot.
+             */
+            quality_qualified_count?: number | null;
             /**
              * Reference Median Tokens
              * @description Cohort median of audited chat token totals: usage at or above it earns zero bonus (linear in between). Null while inactive.

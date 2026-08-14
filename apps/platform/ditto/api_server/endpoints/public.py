@@ -275,7 +275,6 @@ from ditto.db.queries.heartbeats import (
     list_screener_heartbeats,
     list_validator_heartbeats,
     live_validator_fleet_supports_protocol,
-    live_weight_setter_fleet_supports_protocol,
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
@@ -2360,7 +2359,6 @@ def _displayed_efficiency_factors(
         if assignment.factor is not None
         and agent_id in finalized_by_id
         and finalized_by_id[agent_id].bench_version == 9
-        and finalized_by_id[agent_id].v9_confirmation is not None
     }
 
 
@@ -2602,17 +2600,17 @@ async def leaderboard(
     )
     # A curve-v3 factor may reduce an agent's score.  Suppress it from both the
     # public official projection and the validator-equivalent KOTH projection
-    # until every recently-live weight setter advertises protocol 19, the first
-    # fold that consumes this additive field.  This population is deliberately
-    # independent of ``active_version``: during a v8 -> v9 rollout the official
-    # ledger can switch atomically to v9 before rollout activation, and an
-    # explicitly pinned v9 view still represents the v9 contract. Historical
-    # v1/v2 bonuses above deliberately do not inherit this new gate.
+    # until every recently-live validator capable of serving Bench v9 advertises
+    # protocol 19, the first fold that consumes this additive field. Validators
+    # that cannot serve v9 are not part of this scoring contract and must not
+    # indefinitely veto activation. Historical v1/v2 bonuses above deliberately
+    # do not inherit this new gate.
     factor_fleet_ready = False
     if displayed_efficiency_factors and efficiency_fold_active:
-        factor_fleet_ready = await live_weight_setter_fleet_supports_protocol(
+        factor_fleet_ready = await live_validator_fleet_supports_protocol(
             session,
             minimum_protocol=_BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+            bench_version=9,
             now=now,
             freshness=_VALIDATOR_STALE_WINDOW,
         )
@@ -3033,6 +3031,11 @@ def _efficiency_status(
             epoch_index=reference.epoch_index,
             snapshot_id=None,
             cohort_size=len(reference.members),
+            candidate_count=view.preview_candidate_count,
+            cost_evidence_count=view.preview_cost_evidence_count,
+            quality_qualified_count=view.preview_quality_qualified_count,
+            owner_deduped_count=view.preview_owner_deduped_count,
+            lineage_deduped_count=view.preview_lineage_deduped_count,
             n_min=reference.n_min,
             bonus_cap=reference.bonus_cap,
             curve_version=reference.curve_version,

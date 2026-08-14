@@ -1345,6 +1345,61 @@ class PublicEfficiencyStatus(BaseModel):
         int,
         Field(ge=0, description="Deduped qualified cohort members at freeze time."),
     ]
+    candidate_count: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Finalized ranked rows considered by a live preview; null for "
+                "a frozen snapshot."
+            ),
+        ),
+    ] = None
+    cost_evidence_count: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Preview candidates with complete audited cost evidence; null "
+                "for a frozen snapshot."
+            ),
+        ),
+    ] = None
+    quality_qualified_count: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Costed preview candidates clearing the quality floors; null "
+                "for a frozen snapshot."
+            ),
+        ),
+    ] = None
+    owner_deduped_count: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Quality-qualified preview candidates after payment-owner "
+                "dedupe; null for a frozen snapshot."
+            ),
+        ),
+    ] = None
+    lineage_deduped_count: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Quality-qualified preview candidates after owner and lineage "
+                "dedupe; null for a frozen snapshot."
+            ),
+        ),
+    ] = None
     n_min: Annotated[
         int, Field(ge=2, description="Activation gate on the deduped cohort size.")
     ]

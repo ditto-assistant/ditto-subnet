@@ -802,6 +802,7 @@ class TestBoundedFactorMaterialization:
         quality: float = 0.8,
         memory_mean: float = 0.8,
         cost: int = 10_000,
+        confirmed: bool = True,
     ) -> None:
         rows = [
             SimpleNamespace(
@@ -813,7 +814,12 @@ class TestBoundedFactorMaterialization:
                 memory_mean=memory_mean,
                 first_seen=now,
                 bench_version=9,
-                v9_confirmation={"full_effective_micros": int(quality * 1_000_000)},
+                official_composite=quality,
+                v9_confirmation=(
+                    {"full_effective_micros": int(quality * 1_000_000)}
+                    if confirmed
+                    else None
+                ),
             )
             for index, agent in enumerate(agents)
         ]
@@ -885,7 +891,7 @@ class TestBoundedFactorMaterialization:
         assert snapshot.quality_floor == 0.5
         assert snapshot.memory_floor == 0.4
 
-    async def test_preview_v3_transition_uses_configured_floors(
+    async def test_preview_v3_admits_finalized_base_only_quality(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         now = datetime(2026, 8, 13, 12, 0, tzinfo=UTC)
@@ -895,7 +901,7 @@ class TestBoundedFactorMaterialization:
             await _insert_historical_snapshot(
                 session, self._legacy_v2_reference(epoch=epoch - 1)
             )
-        self._patch_v9_board(monkeypatch, agents, now=now)
+        self._patch_v9_board(monkeypatch, agents, now=now, confirmed=False)
 
         view = await preview_efficiency_board(
             session,
@@ -912,6 +918,11 @@ class TestBoundedFactorMaterialization:
         assert view.preview_reference.active is True
         assert view.preview_reference.quality_floor == 0.5
         assert view.preview_reference.memory_floor == 0.4
+        assert view.preview_candidate_count == 5
+        assert view.preview_cost_evidence_count == 5
+        assert view.preview_quality_qualified_count == 5
+        assert view.preview_owner_deduped_count == 5
+        assert view.preview_lineage_deduped_count == 5
 
     async def test_v9_freezes_dynamic_p25_and_factor_rows(
         self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch

@@ -501,6 +501,11 @@ class TestLeaderboardBonusExposure:
         assert efficiency["active"] is False
         assert efficiency["snapshot_id"] is None
         assert efficiency["reference_p25_tokens"] is not None
+        assert efficiency["candidate_count"] == 3
+        assert efficiency["cost_evidence_count"] == 3
+        assert efficiency["quality_qualified_count"] == 3
+        assert efficiency["owner_deduped_count"] == 3
+        assert efficiency["lineage_deduped_count"] == 3
 
         lean = _entry(payload, agents["lean"])
         # The "would be" number is real arithmetic on a separate field...

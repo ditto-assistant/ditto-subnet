@@ -615,6 +615,11 @@ def test_v9_factor_stays_visible_as_audit_evidence_before_authority(
 ) -> None:
     """Observe mode and a not-yet-ready fleet expose arithmetic, not rank it."""
     agent_id = UUID(int=90)
+    vector_path = (
+        Path(__file__).resolve().parents[6]
+        / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+    )
+    details = json.loads(vector_path.read_text())["vectors"][0]["details"]
     row = LedgerRow(
         miner_hotkey=_MINER_A,
         agent_id=agent_id,
@@ -632,7 +637,8 @@ def test_v9_factor_stays_visible_as_audit_evidence_before_authority(
         bench_version=9,
         n=280,
         eligible=True,
-        v9_confirmation={"full_effective_micros": 800_000},
+        details={"v9_base": details},
+        v9_confirmation=None,
     )
     view = cast(
         public_endpoint.EfficiencyBoardView,
@@ -660,11 +666,7 @@ def test_v9_factor_stays_visible_as_audit_evidence_before_authority(
         pre_efficiency_composite=0.8,
         efficiency_factor=displayed[agent_id],
         efficiency_fold_applied=agent_id in official,
-        v9_confirmation=V9ConfirmationPublicProjection(
-            result_status="full_confirmed",
-            full_confirmed_composite=0.8,
-            evidence_sha256="ab" * 32,
-        ),
+        v9_confirmation=V9ConfirmationPublicProjection(result_status="base_only"),
     )
 
     assert displayed == {agent_id: 1.0}

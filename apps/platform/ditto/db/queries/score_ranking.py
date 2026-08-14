@@ -208,8 +208,10 @@ def official_composites(
 
     With the continual mean inactive this is the stored quorum median except
     for full-confirmed Bench-v9 rows, whose verified full composite remains
-    authoritative. Curve-v3 factors are accepted only for those v9 rows and
-    only while the coordinated efficiency fold is active.
+    authoritative. Curve-v3 factors are accepted for authoritative v9 rows
+    only while the coordinated efficiency fold is active. That authority is
+    canonical / continual quality normally and full-confirmed quality while
+    confirmation enforcement is active.
     """
     from ditto.api_server.koth import KothEntry, effective_composite
 
@@ -262,9 +264,7 @@ def official_composites(
                 ),
                 efficiency_factor=(
                     factors.get(row.agent_id)
-                    if efficiency_fold_active
-                    and row.bench_version == 9
-                    and getattr(row, "v9_confirmation", None) is not None
+                    if efficiency_fold_active and row.bench_version == 9
                     else None
                 ),
             )
@@ -403,8 +403,8 @@ async def resolve_efficiency_adjustments(
 
     The scoring ledger, queue floors, and Platform KOTH scheduler must not each
     interpret assignment rows independently. This keeps the policy, epoch,
-    v9/full-confirmation eligibility, and protocol-19 gate identical across
-    those authority paths.
+    authoritative-v9 eligibility, and protocol-19 gate identical across those
+    authority paths.
 
     App callers pass the resolver's effective config so an env-seeded rollout
     is honored. Bare DB callers read the latest persisted revision; with no
@@ -418,7 +418,7 @@ async def resolve_efficiency_adjustments(
     from ditto.db.queries.efficiency_settings import (
         latest_efficiency_settings_revision,
     )
-    from ditto.db.queries.heartbeats import live_weight_setter_fleet_supports_protocol
+    from ditto.db.queries.heartbeats import live_validator_fleet_supports_protocol
 
     if not rows:
         return {}, {}
@@ -448,9 +448,9 @@ async def resolve_efficiency_adjustments(
         if assignment.factor is not None
         and agent_id in by_id
         and by_id[agent_id].bench_version == 9
-        and getattr(by_id[agent_id], "v9_confirmation", None) is not None
     }
     factors: dict[UUID, float] = {}
+    requester_protocol_ready = True
     if factor_candidates and requesting_validator_hotkey is not None:
         requester = await session.get(ValidatorHeartbeat, requesting_validator_hotkey)
         if (
@@ -466,11 +466,19 @@ async def resolve_efficiency_adjustments(
                 "a fresh validator heartbeat is required before serving "
                 "bounded efficiency factors"
             )
-    if factor_candidates and await live_weight_setter_fleet_supports_protocol(
-        session,
-        minimum_protocol=BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
-        now=resolved_now,
-        freshness=VALIDATOR_STALE_WINDOW,
+        requester_protocol_ready = (
+            requester.protocol_version >= BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
+        )
+    if (
+        factor_candidates
+        and requester_protocol_ready
+        and await live_validator_fleet_supports_protocol(
+            session,
+            minimum_protocol=BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+            bench_version=9,
+            now=resolved_now,
+            freshness=VALIDATOR_STALE_WINDOW,
+        )
     ):
         factors = factor_candidates
     return bonuses, factors

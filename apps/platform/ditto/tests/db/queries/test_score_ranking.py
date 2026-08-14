@@ -263,6 +263,27 @@ class TestComparator:
         # are ignored, then curve v3 applies exactly once.
         assert scores[row.agent_id] == pytest.approx(0.75 * 0.85)
 
+    def test_v9_factor_applies_to_authoritative_base_only_quality(self) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation=None,
+        )
+
+        scores = official_composites(
+            [row],
+            quorum={row.agent_id: [0.7, 0.8, 0.9]},
+            completed_waves={row.agent_id: {10: 0.6, 20: 0.9}},
+            continual_mean_active=True,
+            efficiency_factors={row.agent_id: 0.85},
+            efficiency_fold_active=True,
+        )
+
+        assert scores[row.agent_id] == pytest.approx(0.78 * 0.85)
+
     def test_equal_v9_quality_lower_cost_factor_beats_submission_time(self) -> None:
         earlier = _FinalRow(
             _uuid("1"),
@@ -363,7 +384,7 @@ class TestEfficiencyAdjustedFloors:
         ("fleet_ready", "expected"),
         [(True, 0.82), (False, 0.80)],
     )
-    async def test_resolver_uses_threaded_policy_and_the_weight_setter_gate(
+    async def test_resolver_uses_threaded_policy_and_the_v9_capable_fleet_gate(
         self,
         monkeypatch: pytest.MonkeyPatch,
         fleet_ready: bool,
@@ -388,12 +409,13 @@ class TestEfficiencyAdjustedFloors:
 
         async def fleet_supports(*_args: object, **kwargs: object) -> bool:
             assert kwargs["minimum_protocol"] == 19
+            assert kwargs["bench_version"] == 9
             assert kwargs["now"] == _BASE
             return fleet_ready
 
         monkeypatch.setattr("ditto.db.queries.efficiency.get_bonus_rows", bonus_rows)
         monkeypatch.setattr(
-            "ditto.db.queries.heartbeats.live_weight_setter_fleet_supports_protocol",
+            "ditto.db.queries.heartbeats.live_validator_fleet_supports_protocol",
             fleet_supports,
         )
         scores = await resolve_official_composites(
@@ -441,7 +463,7 @@ class TestEfficiencyAdjustedFloors:
         )
         fleet_gate = AsyncMock(return_value=True)
         monkeypatch.setattr(
-            "ditto.db.queries.heartbeats.live_weight_setter_fleet_supports_protocol",
+            "ditto.db.queries.heartbeats.live_validator_fleet_supports_protocol",
             fleet_gate,
         )
 
@@ -459,7 +481,7 @@ class TestEfficiencyAdjustedFloors:
 
         fleet_gate.assert_not_awaited()
 
-    async def test_fresh_pre_v19_requester_neutralizes_factor_via_global_gate(
+    async def test_fresh_pre_v19_requester_receives_neutral_factor_projection(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         row = _FinalRow(
@@ -482,9 +504,9 @@ class TestEfficiencyAdjustedFloors:
                 return_value={row.agent_id: SimpleNamespace(factor=1.10, bonus=0.0)}
             ),
         )
-        fleet_gate = AsyncMock(return_value=False)
+        fleet_gate = AsyncMock(return_value=True)
         monkeypatch.setattr(
-            "ditto.db.queries.heartbeats.live_weight_setter_fleet_supports_protocol",
+            "ditto.db.queries.heartbeats.live_validator_fleet_supports_protocol",
             fleet_gate,
         )
 
@@ -498,7 +520,7 @@ class TestEfficiencyAdjustedFloors:
 
         assert bonuses == {}
         assert factors == {}
-        fleet_gate.assert_awaited_once()
+        fleet_gate.assert_not_awaited()
 
     async def test_fifth_and_tenth_floors_use_factor_adjusted_order(
         self, monkeypatch: pytest.MonkeyPatch
