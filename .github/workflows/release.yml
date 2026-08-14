@@ -1471,6 +1471,11 @@ jobs:
           done
 
       - name: Boot the exact release runtime dependencies
+        env:
+          # Public SS58 fixture required to render the targeted bootstrap policy.
+          # Keep it different from the WSL allowlisted hotkey so this dependency
+          # smoke cannot exercise the exceptional host-updater replacement.
+          VALIDATOR_HOTKEY: 5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp
         run: |
           scripts/test-validator-stack-release-runtime.sh \
             build/stack-release-amd64/compose.yml

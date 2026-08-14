@@ -572,6 +572,9 @@ def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> 
         "scripts/test-validator-stack-release-runtime.sh" in steps[smoke_index]["run"]
     )
     assert "build/stack-release-amd64/compose.yml" in steps[smoke_index]["run"]
+    smoke_hotkey = steps[smoke_index]["env"]["VALIDATOR_HOTKEY"]
+    assert smoke_hotkey == "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
+    assert smoke_hotkey != ("5Cg3DiRfrgzB1XzN7VuqQNchTgZ8PzPbphMKmVvHobWSL118")
 
 
 def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
