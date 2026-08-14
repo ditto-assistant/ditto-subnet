@@ -164,6 +164,32 @@ func TestCheckValidationRejectsPartialPaymentProof(t *testing.T) {
 	}
 }
 
+func TestEvalPricingWireShape(t *testing.T) {
+	pool := testutil.NewTestPGPool(t)
+	d := uploadDeps(pool, "", time.Time{})
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/upload/eval-pricing", nil)
+	w := httptest.NewRecorder()
+	d.handleEvalPricing(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(w.Body.Bytes(), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if len(fields) != 2 {
+		t.Fatalf("fields=%v", fields)
+	}
+	var amount int64
+	if err := json.Unmarshal(fields["amount_rao"], &amount); err != nil || amount != defaultFeeAmountRao {
+		t.Fatalf("amount_rao=%d err=%v", amount, err)
+	}
+	var address string
+	if err := json.Unmarshal(fields["send_address"], &address); err != nil || address != fixtureAddress {
+		t.Fatalf("send_address=%q err=%v", address, err)
+	}
+}
+
 func TestCheckAggregatesCheapFailuresAgainstRealSchema(t *testing.T) {
 	pool := testutil.NewTestPGPool(t)
 	d := &Deps{

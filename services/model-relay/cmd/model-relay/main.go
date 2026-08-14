@@ -36,6 +36,8 @@ import (
 // (the deploy scripts export both from the same source-commit marker).
 var buildCommit string
 
+const legacyRecoveryResponseHeaderTimeout = 30 * time.Second
+
 // cliOptions is the parsed command line. The relay accepts exactly the flags
 // the deploy tooling uses: `--version` (build smoke) and `--port N`
 // (ecosystem.config.js slots and the deploy canary), with API_PORT as the
@@ -72,6 +74,14 @@ func versionLine() string {
 		commit = "unknown"
 	}
 	return "model-relay " + commit
+}
+
+func newLegacyUploadProxy(target *url.URL) *httputil.ReverseProxy {
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ResponseHeaderTimeout = legacyRecoveryResponseHeaderTimeout
+	proxy.Transport = transport
+	return proxy
 }
 
 func main() {
@@ -158,7 +168,7 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("parse upload legacy base URL: %w", err)
 	}
-	legacy := httputil.NewSingleHostReverseProxy(legacyURL)
+	legacy := newLegacyUploadProxy(legacyURL)
 	legacy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, proxyErr error) {
 		logger.Warn("upload recovery proxy failed", slog.String("error", proxyErr.Error()))
 		relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "upload payment recovery unavailable; retry shortly", nil)

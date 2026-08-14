@@ -1,10 +1,30 @@
 package main
 
 import (
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
 )
+
+func TestLegacyUploadProxyBoundsResponseHeaderWait(t *testing.T) {
+	target, err := url.Parse("http://127.0.0.1:8000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := newLegacyUploadProxy(target)
+	transport, ok := proxy.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("transport type=%T", proxy.Transport)
+	}
+	if transport.ResponseHeaderTimeout != legacyRecoveryResponseHeaderTimeout {
+		t.Fatalf("response header timeout=%s, want %s", transport.ResponseHeaderTimeout, legacyRecoveryResponseHeaderTimeout)
+	}
+	if transport == http.DefaultTransport {
+		t.Fatal("legacy proxy mutated the shared default transport")
+	}
+}
 
 // The deploy tooling contract (build-relay-release.sh smoke check,
 // ecosystem.config.js slot args, deploy-relay-release.sh canary):
