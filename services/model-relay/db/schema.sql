@@ -2123,6 +2123,7 @@ CREATE TABLE public.validator_heartbeats (
     stack_health jsonb,
     benchmark_capacity jsonb,
     claimed_slots jsonb,
+    confirmation_progress jsonb,
     CONSTRAINT validator_heartbeats_code_digest_length_check CHECK ((length(code_digest) = 64)),
     CONSTRAINT validator_heartbeats_protocol_version_check CHECK ((protocol_version > 0)),
     CONSTRAINT validator_heartbeats_signature_length_check CHECK ((length(signature) = 128)),
