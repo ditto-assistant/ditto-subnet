@@ -174,31 +174,37 @@ def _source_review() -> dict[str, Any]:
 
 
 def test_source_review_runs_as_one_shot_pinned_rental(monkeypatch) -> None:
+    sleeps: list[float] = []
     monkeypatch.setattr(
         "screener_capacity.builder.GCPBootstrapTokenMinter.mint",
         lambda _self: "bootstrap-" + "x" * 120,
     )
+    monkeypatch.setattr("screener_capacity.builder.time.sleep", sleeps.append)
     control = _SourceControl(_source_review())
     targon = _Targon()
 
     assert run_one_source_review(_settings(), targon, control)
 
-    assert targon.created == {
-        "name": "ditto-source-550e8400e29b41d4",
-        "image": _source_review()["image_reference"],
-        "resource_name": "cpu-small",
-        "commands": ["uv", "run", "--no-sync", "python", "-m"],
-        "args": ["ditto_screener.source_review_job"],
-    }
-    assert targon.updated[0][0] == "wrk-build-1"
-    envs = targon.updated[0][1]["envs"]
+    assert targon.created is not None
+    assert targon.created["name"] == "ditto-source-550e8400e29b41d4"
+    assert targon.created["image"] == _source_review()["image_reference"]
+    assert targon.created["resource_name"] == "cpu-small"
+    assert targon.created["commands"] == [
+        "/app/workers/screener/.venv/bin/python",
+        "-m",
+    ]
+    assert targon.created["args"] == ["ditto_screener.source_review_job"]
+    envs = targon.created["envs"]
     assert {row["name"] for row in envs} >= {
+        "DITTO_SOURCE_REVIEW_JOB",
         "DITTO_SOURCE_REVIEW_JOB_TOKEN",
         "SCREENER_GCP_BOOTSTRAP_ACCESS_TOKEN",
         "SCREENER_SOURCE_REVIEW_SECRET_RESOURCE",
     }
     assert targon.deployed == ["wrk-build-1"]
     assert targon.deleted == ["wrk-build-1"]
+    assert targon.updated == []
+    assert sleeps == [5]
 
 
 def test_source_review_capacity_miss_falls_back_without_rental() -> None:

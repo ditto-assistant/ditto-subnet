@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import io
 import json
 import os
 import secrets
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
 import urllib.request
 from dataclasses import asdict
+from uuid import uuid4
 
 from screener_capacity.targon import TargonAPIError, TargonClient, workload_summary
 
@@ -534,22 +539,25 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
             )
         )
         client.deploy(runtime_uid)
-        runtime_state = _wait_until_ready(
-            client,
-            runtime_uid,
-            args.provision_timeout_seconds,
-        )
-        time.sleep(10)
-        runtime_output = client.exec(runtime_uid, ["cat", "/probe.txt"])
-        runtime_logs = client.logs(runtime_uid, tail=80)
-        available = "targon-kaniko-ok" in runtime_output
+        runtime_deadline = time.monotonic() + args.provision_timeout_seconds
+        runtime_state: dict[str, object] = {}
+        runtime_logs = ""
+        while time.monotonic() < runtime_deadline:
+            runtime_state = _safe_state(client, runtime_uid)
+            runtime_logs = _safe_logs(client, runtime_uid, tail=80)
+            if (
+                "targon-kaniko-ok" in runtime_logs
+                or runtime_state.get("status") == "error"
+            ):
+                break
+            time.sleep(5)
+        available = "targon-kaniko-ok" in runtime_logs
         print(
             json.dumps(
                 {
                     "phase": "runtime-executed",
                     **runtime_state,
                     "capability": "AVAILABLE" if available else "INCONCLUSIVE",
-                    "output": _safe_probe_output(runtime_output),
                     "runtime_logs": _safe_probe_output(runtime_logs),
                 },
                 sort_keys=True,
@@ -695,6 +703,296 @@ def command_runtime_probe(args: argparse.Namespace) -> int:
     finally:
         if uid is not None and not args.keep:
             print(json.dumps(_cleanup_probe_workload(client, uid), sort_keys=True))
+
+
+def _source_review_probe_archive() -> bytes:
+    """Build a tiny benign source archive without writing it to disk."""
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        content = (
+            b"def answer(message: str) -> str:\n    return f'You said: {message}'\n"
+        )
+        member = tarfile.TarInfo("agent.py")
+        member.size = len(content)
+        member.mode = 0o644
+        archive.addfile(member, io.BytesIO(content))
+    return buffer.getvalue()
+
+
+def _source_review_mock_script(
+    *, review_id: str, job_token: str, artifact: bytes
+) -> str:
+    """Return a deterministic HTTPS-proxied Platform/OpenRouter mock."""
+    values = {
+        "artifact_b64": base64.b64encode(artifact).decode(),
+        "artifact_sha256": hashlib.sha256(artifact).hexdigest(),
+        "job_token": job_token,
+        "review_id": review_id,
+    }
+    encoded_values = base64.b64encode(json.dumps(values).encode()).decode()
+    return f"""
+import base64
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+VALUES = json.loads(base64.b64decode({encoded_values!r}))
+ARTIFACT = base64.b64decode(VALUES["artifact_b64"])
+BASE = "/api/v1/screener/submission-source-reviews/" + VALUES["review_id"]
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, _format, *_args):
+        return
+
+    def send_json(self, status, body):
+        payload = json.dumps(body, separators=(",", ":")).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def authorized(self):
+        return self.headers.get("Authorization") == "Bearer " + VALUES["job_token"]
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_json(200, {{"ok": True}})
+            return
+        if self.path == "/artifact":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Length", str(len(ARTIFACT)))
+            self.end_headers()
+            self.wfile.write(ARTIFACT)
+            return
+        if self.path == BASE + "/source" and self.authorized():
+            source_url = "https://" + self.headers["Host"] + "/artifact"
+            self.send_json(200, {{
+                "artifact_sha256": VALUES["artifact_sha256"],
+                "source_url_b64": base64.b64encode(source_url.encode()).decode(),
+            }})
+            return
+        self.send_json(404, {{"error": "not-found"}})
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length) or b"{{}}")
+        if self.path == "/chat/completions":
+            delivered = sum(
+                1 for message in body.get("messages", [])
+                if message.get("role") == "tool"
+            )
+            if delivered == 0:
+                name, arguments = "list_files", {{"prefix": ""}}
+            elif delivered == 1:
+                name, arguments = "read_file", {{
+                    "path": "agent.py", "start_line": 1, "end_line": 20
+                }}
+            else:
+                name, arguments = "submit_review", {{
+                    "risk_level": "low",
+                    "confidence": 0.99,
+                    "categories": ["none"],
+                    "evidence": [],
+                    "summary": "The bounded benign handler echoes its visible input.",
+                }}
+            self.send_json(200, {{"choices": [{{"message": {{
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{{
+                    "id": "probe-" + str(delivered),
+                    "type": "function",
+                    "function": {{
+                        "name": name,
+                        "arguments": json.dumps(arguments, separators=(",", ":")),
+                    }},
+                }}],
+            }}}}]}})
+            return
+        if self.path == BASE + "/complete" and self.authorized():
+            observation = body.get("observation", {{}})
+            safe = {{
+                "ok": observation.get("ok"),
+                "risk_level": observation.get("risk_level"),
+                "categories": observation.get("categories"),
+                "clearance_certified": observation.get("clearance_certified"),
+            }}
+            expected = {{
+                "ok": True,
+                "risk_level": "low",
+                "categories": ["none"],
+                "clearance_certified": True,
+            }}
+            if safe != expected:
+                self.send_json(422, {{"error": "unexpected-observation"}})
+                return
+            self.send_json(200, {{"verified": True}})
+            print(
+                "SOURCE_REVIEW_COMPLETE=" + json.dumps(safe, sort_keys=True),
+                flush=True,
+            )
+            return
+        self.send_json(404, {{"error": "not-found"}})
+
+ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+""".strip()
+
+
+def command_source_review_probe(args: argparse.Namespace) -> int:
+    """Run the exact one-shot source-review code against deterministic mocks."""
+    client = _client(args, authenticated=True)
+    inventory = {row.get("name"): row for row in client.inventory()}
+    selected = inventory.get(args.resource)
+    if not isinstance(selected, dict) or int(selected.get("available", 0)) < 2:
+        raise RuntimeError(f"{args.resource} needs two currently available slots")
+
+    review_id = str(uuid4())
+    attempt_id = str(uuid4())
+    job_token = secrets.token_urlsafe(48)
+    artifact = _source_review_probe_archive()
+    artifact_sha256 = hashlib.sha256(artifact).hexdigest()
+    mock_uid: str | None = None
+    review_uid: str | None = None
+    try:
+        mock = client.create_rental(
+            name=f"ditto-source-mock-{secrets.token_hex(3)}",
+            image="python:3.12-alpine",
+            resource_name=args.resource,
+            commands=["python", "-c"],
+            args=[
+                _source_review_mock_script(
+                    review_id=review_id,
+                    job_token=job_token,
+                    artifact=artifact,
+                )
+            ],
+            ports=[{"port": 8080, "protocol": "TCP", "routing": "PROXIED"}],
+        )
+        mock_uid = str(mock["uid"])
+        print(json.dumps({"phase": "mock-registered", "uid": mock_uid}))
+        client.deploy(mock_uid)
+
+        platform_url: str | None = None
+        deadline = time.monotonic() + args.provision_timeout_seconds
+        while time.monotonic() < deadline:
+            state = client.state(mock_uid)
+            urls = state.get("urls")
+            if isinstance(urls, list):
+                for row in urls:
+                    if isinstance(row, dict) and row.get("port") == 8080:
+                        candidate = str(row.get("url", "")).rstrip("/")
+                        if candidate.startswith("https://"):
+                            try:
+                                with urllib.request.urlopen(
+                                    f"{candidate}/health", timeout=5
+                                ) as response:
+                                    if response.status == 200:
+                                        platform_url = candidate
+                                        break
+                            except (OSError, urllib.error.URLError):
+                                pass
+            if platform_url is not None:
+                break
+            if state.get("status") == "error":
+                break
+            time.sleep(5)
+        if platform_url is None:
+            print(json.dumps({"phase": "source-review", "capability": "UNAVAILABLE"}))
+            return 6
+
+        review_env = [
+            {"name": "DITTO_PLATFORM_URL", "value": platform_url},
+            {"name": "DITTO_SOURCE_REVIEW_ID", "value": review_id},
+            {"name": "DITTO_SOURCE_REVIEW_ATTEMPT_ID", "value": attempt_id},
+            {"name": "DITTO_SOURCE_REVIEW_JOB", "value": "1"},
+            {
+                "name": "DITTO_SOURCE_REVIEW_ARTIFACT_SHA256",
+                "value": artifact_sha256,
+            },
+            {"name": "DITTO_SOURCE_REVIEW_JOB_TOKEN", "value": job_token},
+            {
+                "name": "SCREENER_NODE_CREDENTIAL_FILE",
+                "value": "/tmp/ditto-source-review/node.json",
+            },
+            {
+                "name": "SCREENER_SOURCE_REVIEW_API_KEY",
+                "value": "probe-openrouter-key-not-a-secret",
+            },
+            {"name": "SCREENER_SOURCE_REVIEW_BASE_URL", "value": platform_url},
+            {"name": "SCREENER_SOURCE_REVIEW_MODEL", "value": "probe-model"},
+            {"name": "SCREENER_SOURCE_REVIEW_MAX_STEPS", "value": "4"},
+            {
+                "name": "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS",
+                "value": str(args.review_timeout_seconds),
+            },
+            {"name": "SCREENER_STATIC_PREFLIGHT_V2_MODE", "value": "off"},
+        ]
+        review = client.create_rental(
+            name=f"ditto-source-probe-{secrets.token_hex(3)}",
+            image=args.image,
+            resource_name=args.resource,
+            envs=review_env,
+            commands=["/app/workers/screener/.venv/bin/python", "-m"],
+            args=["ditto_screener.source_review_job"],
+        )
+        review_uid = str(review["uid"])
+        print(json.dumps({"phase": "review-registered", "uid": review_uid}))
+        client.deploy(review_uid)
+
+        deadline = time.monotonic() + args.provision_timeout_seconds
+        while time.monotonic() < deadline:
+            mock_logs = _safe_logs(client, mock_uid, tail=80)
+            marker = next(
+                (
+                    line.removeprefix("SOURCE_REVIEW_COMPLETE=")
+                    for line in mock_logs.splitlines()
+                    if line.startswith("SOURCE_REVIEW_COMPLETE=")
+                ),
+                None,
+            )
+            if marker is not None:
+                # Match the controller's post-completion grace so the worker
+                # receives the HTTP response and reaches its persistent hold
+                # before the DELETE-first cleanup.
+                time.sleep(5)
+                print(
+                    json.dumps(
+                        {
+                            "phase": "source-review",
+                            "capability": "AVAILABLE",
+                            "observation": json.loads(marker),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 0
+            review_state = _safe_state(client, review_uid)
+            if review_state.get("status") == "error":
+                print(
+                    json.dumps(
+                        {
+                            "phase": "source-review",
+                            "capability": "UNAVAILABLE",
+                            "review_logs": _safe_probe_output(
+                                _safe_logs(client, review_uid, tail=120)
+                            ),
+                        },
+                        sort_keys=True,
+                    )
+                )
+                return 7
+            time.sleep(5)
+        print(json.dumps({"phase": "source-review", "capability": "UNAVAILABLE"}))
+        return 8
+    finally:
+        if not args.keep:
+            for cleanup_uid in (review_uid, mock_uid):
+                if cleanup_uid is not None:
+                    print(
+                        json.dumps(
+                            _cleanup_probe_workload(client, cleanup_uid), sort_keys=True
+                        )
+                    )
 
 
 def command_vm_probe(args: argparse.Namespace) -> int:
@@ -908,6 +1206,13 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--provision-timeout-seconds", type=float, default=600)
     runtime.add_argument("--keep", action="store_true")
     runtime.set_defaults(handler=command_runtime_probe)
+    source_review = subparsers.add_parser("source-review-probe")
+    source_review.add_argument("--resource", default="cpu-small")
+    source_review.add_argument("--image", required=True)
+    source_review.add_argument("--provision-timeout-seconds", type=float, default=600)
+    source_review.add_argument("--review-timeout-seconds", type=float, default=90)
+    source_review.add_argument("--keep", action="store_true")
+    source_review.set_defaults(handler=command_source_review_probe)
     vm = subparsers.add_parser("vm-probe")
     vm.add_argument("--resource", default="rtx6000b-small")
     vm.add_argument("--image", default="ubuntu-24-04-lts-595")

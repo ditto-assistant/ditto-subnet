@@ -37,7 +37,9 @@ uv sync --group dev
 uv run pytest
 scripts/targon-smoke.sh inventory
 scripts/targon-smoke.sh list
+scripts/targon-smoke.sh kaniko-probe --resource cpu-small --roundtrip
 scripts/targon-smoke.sh runtime-probe
+scripts/targon-smoke.sh source-review-probe --image registry.example/screener@sha256:DIGEST
 ```
 
 Authenticated workload operations use Targon's organization-scoped v3 API.
@@ -81,3 +83,10 @@ attempt-bound Platform capability, and a short-lived bootstrap token for the
 single model-key Secret Manager resource. Only a certified low-risk L1 result
 may be reused. Suspicious, elevated, inconclusive, invalid, or unavailable
 results always run through the existing local L2/L3 reviewer.
+
+The repeatable `source-review-probe` launches a deterministic HTTPS-proxied
+Platform/model mock and the exact reviewed screener digest as two disposable
+Rentals. It verifies archive download and hashing, bounded read-only tools, the
+typed low-risk completion contract, and DELETE-first cleanup without using a
+real model-provider key. It may not make an elevated source verdict or replace
+the GCE-owned isolated fake-gateway health/oracle gate, signing, and upload.

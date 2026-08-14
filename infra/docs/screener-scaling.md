@@ -114,6 +114,13 @@ which streams the secret directly from Secret Manager to the client process.
 The provider client uses Targon's organization-scoped v3 workload API and pins
 the non-secret production organization slug to `ditto`.
 
+The three one-shot lanes have separate disposable smoke commands: a Kaniko
+`--roundtrip` build, a direct-image `runtime-probe`, and a
+`source-review-probe` against an exact reviewed screener digest. The source
+probe supplies a deterministic Platform/model mock and a fake probe-only model
+key; production Secret Manager bootstrap remains covered by the controller and
+worker contract tests.
+
 ## Stand-up order
 
 No repository merge deploys or mutates production. After the destination and

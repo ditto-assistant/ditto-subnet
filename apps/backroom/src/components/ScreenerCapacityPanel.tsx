@@ -27,9 +27,14 @@ function formatWhen(value: string | null) {
   if (!value) return 'Never'
   const parsed = new Date(value)
   if (Number.isNaN(parsed.getTime())) return value
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+  return new Intl.DateTimeFormat('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'UTC',
+    timeZoneName: 'short',
   }).format(parsed)
 }
 
@@ -47,6 +52,19 @@ function buildTone(status: TrustedImageBuild['status']) {
   if (status === 'succeeded') return 'bg-[var(--acid-dim)] text-[var(--acid)]'
   if (status === 'failed' || status === 'canceled') return 'bg-[var(--red-dim)] text-[var(--red)]'
   if (status === 'fallback_required') return 'bg-[var(--amber-dim)] text-[var(--amber)]'
+  return 'bg-[var(--cyan-dim)] text-[var(--cyan)]'
+}
+
+function providerJobTone(status: string) {
+  if (status === 'succeeded' || status === 'consumed') {
+    return 'bg-[var(--acid-dim)] text-[var(--acid)]'
+  }
+  if (status === 'fallback_required' || status === 'cleanup_required') {
+    return 'bg-[var(--amber-dim)] text-[var(--amber)]'
+  }
+  if (status === 'failed' || status === 'canceled' || status === 'error') {
+    return 'bg-[var(--red-dim)] text-[var(--red)]'
+  }
   return 'bg-[var(--cyan-dim)] text-[var(--cyan)]'
 }
 
@@ -403,8 +421,9 @@ export function ScreenerCapacityPanel({
               <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted-strong)]">
                 {cleanupEvents.length} cleanup-required {cleanupEvents.length === 1 ? 'event' : 'events'}
                 {' '}appear in the latest {state.events.length}-event audit window. The affected
-                submission-build rentals were suspended at zero replicas, but provider deletion
-                still needs retry. Latest event {formatWhen(latestCleanup.created_at)}.
+                one-shot Targon rentals were suspended at zero replicas, but provider deletion
+                still needs retry. This may affect build, runtime, or source-review jobs. Latest
+                event {formatWhen(latestCleanup.created_at)}.
               </p>
             </div>
           </div>
@@ -440,7 +459,7 @@ export function ScreenerCapacityPanel({
                       {job.lane.replaceAll('_', ' ')}
                     </td>
                     <td className="px-4 py-3.5">
-                      <span className="rounded-full bg-[var(--cyan-dim)] px-2 py-1 text-[var(--cyan)]">
+                      <span className={`rounded-full px-2 py-1 ${providerJobTone(job.status)}`}>
                         {job.status.replaceAll('_', ' ')}
                       </span>
                       {job.error_code ? <p className="mt-1 break-all text-[10px] text-[var(--muted)]">{job.error_code}</p> : null}

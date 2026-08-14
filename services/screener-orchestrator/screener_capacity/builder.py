@@ -42,6 +42,7 @@ _SUBMISSION_STAGE_BY_EXIT_CODE = {
 _SUBMISSION_BUILDER_REPOSITORY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/submission-builder"
 )
+_SOURCE_REVIEW_CLEANUP_GRACE_SECONDS = 5
 
 
 def _request(
@@ -731,14 +732,6 @@ def run_one_source_review(
         job_token = str(review["job_token"])
         if len(job_token) < 43:
             raise ValueError("source-review token is invalid")
-        created = client.create_rental(
-            name=name,
-            image=image_reference,
-            resource_name=settings.targon_resource,
-            commands=["uv", "run", "--no-sync", "python", "-m"],
-            args=["ditto_screener.source_review_job"],
-        )
-        uid = str(created["uid"])
         bootstrap_token = GCPBootstrapTokenMinter(
             target=settings.gcp_bootstrap_service_account,
             delegate=settings.gcp_bootstrap_delegate_service_account,
@@ -749,6 +742,7 @@ def run_one_source_review(
             "DITTO_SOURCE_REVIEW_ATTEMPT_ID": str(review["attempt_id"]),
             "DITTO_SOURCE_REVIEW_ARTIFACT_SHA256": str(review["artifact_sha256"]),
             "DITTO_SOURCE_REVIEW_JOB_TOKEN": job_token,
+            "DITTO_SOURCE_REVIEW_JOB": "1",
             "SCREENER_NODE_CREDENTIAL_FILE": "/tmp/ditto-source-review/node.json",
             "SCREENER_GCP_BOOTSTRAP_ACCESS_TOKEN": bootstrap_token,
             "SCREENER_SOURCE_REVIEW_SECRET_RESOURCE": (
@@ -759,10 +753,15 @@ def run_one_source_review(
             ),
             "SCREENER_STATIC_PREFLIGHT_V2_MODE": "off",
         }
-        client.update(
-            uid,
+        created = client.create_rental(
+            name=name,
+            image=image_reference,
+            resource_name=settings.targon_resource,
             envs=[{"name": key, "value": value} for key, value in sorted(env.items())],
+            commands=["/app/workers/screener/.venv/bin/python", "-m"],
+            args=["ditto_screener.source_review_job"],
         )
+        uid = str(created["uid"])
         control.update(review_id, status="running", provider_resource_id=uid)
         client.deploy(uid)
         deadline = (
@@ -773,6 +772,11 @@ def run_one_source_review(
         while time.monotonic() < deadline:
             status = control.status(review_id)
             if status in {"succeeded", "fallback_required", "canceled", "consumed"}:
+                # Platform commits completion just before the job receives the
+                # HTTP response and enters its hold. Give that process a small
+                # bounded window before DELETE so Targon does not turn the
+                # termination into an exit-143 provider error.
+                time.sleep(_SOURCE_REVIEW_CLEANUP_GRACE_SECONDS)
                 return True
             state = client.state(uid)
             if str(state.get("status", "")).casefold() == "error":

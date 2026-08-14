@@ -88,6 +88,12 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.getByText(/5 CPU rentals advertised; full workers require a GO capability/)).toBeTruthy()
   })
 
+  it('renders operator timestamps in an explicit server-safe timezone', () => {
+    render(<ScreenerCapacityPanel initialState={capacity()} readOnly />)
+
+    expect(screen.getByText(/heartbeat Aug 13, 2099, 9:40 PM UTC/)).toBeTruthy()
+  })
+
   it('surfaces cleanup-required events above the event stream', () => {
     const cleanupEvent = {
       event_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -109,6 +115,41 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.getByText('Targon provider cleanup is incomplete')).toBeTruthy()
     expect(screen.getByText(/2 cleanup-required events/)).toBeTruthy()
     expect(screen.getByText(/suspended at zero replicas/)).toBeTruthy()
+    expect(screen.getByText(/build, runtime, or source-review jobs/)).toBeTruthy()
+  })
+
+  it('uses outcome-specific tones for one-shot provider jobs', () => {
+    const providerJob = {
+      job_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      lane: 'source_review' as const,
+      status: 'succeeded',
+      provider: 'targon' as const,
+      provider_resource_id: 'wrk-source-review',
+      image_reference: 'sha256:source-review',
+      error_code: null,
+      created_at: '2026-08-14T13:49:00Z',
+      updated_at: '2026-08-14T13:50:00Z',
+    }
+
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({
+          provider_jobs: [
+            providerJob,
+            {
+              ...providerJob,
+              job_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+              lane: 'runtime',
+              status: 'fallback_required',
+            },
+          ],
+        })}
+        readOnly
+      />,
+    )
+
+    expect(screen.getByText('succeeded').className).toContain('text-[var(--acid)]')
+    expect(screen.getByText('fallback required').className).toContain('text-[var(--amber)]')
   })
 
   it('does not show the blocked-worker banner for a GO capability', () => {

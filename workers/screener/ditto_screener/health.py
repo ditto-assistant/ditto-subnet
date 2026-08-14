@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 
 import httpx
 
@@ -12,6 +13,11 @@ from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 
 async def _check() -> None:
+    # This trusted image also serves a one-shot source-review command. Its
+    # success boundary is the attempt-bound completion POST, so the long-lived
+    # worker preflight does not apply to that explicitly selected mode.
+    if os.environ.get("DITTO_SOURCE_REVIEW_JOB") == "1":
+        return
     config = parse_screener_config_from_env()
     async with httpx.AsyncClient(timeout=config.http_timeout_seconds) as http:
         required = await PlatformClient(config, http).get_required_policy_version()
