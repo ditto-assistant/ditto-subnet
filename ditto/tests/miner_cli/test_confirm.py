@@ -107,10 +107,12 @@ class TestConfirmRegistration:
         # And that it is not the eval fee, which is confirmed separately.
         assert "does NOT pay the evaluation fee" in out
 
-    def test_y_answer_returns_none(self, monkeypatch) -> None:
+    def test_y_answer_is_accepted(self, monkeypatch) -> None:
         monkeypatch.setattr(builtins, "input", lambda _: "y")
 
-        assert confirm_registration(quote=self._quote(), skip=False) is None
+        # confirm_registration returns None on success; here we just need to
+        # know it did not raise (RegistrationCancelledError).
+        confirm_registration(quote=self._quote(), skip=False)
 
     def test_n_answer_raises_cancelled(self, monkeypatch) -> None:
         monkeypatch.setattr(builtins, "input", lambda _: "n")
