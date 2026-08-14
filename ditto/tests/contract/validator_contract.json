@@ -5330,6 +5330,184 @@
           "components"
         ],
         "type": "object"
+      },
+      "ValidatorUpdaterStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_descriptor": {
+            "anyOf": [
+              {
+                "pattern": "^ghcr\\.io/ditto-assistant/ditto-subnet-stack@sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "candidate_version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "const": "compat-2",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "current_descriptor": {
+            "anyOf": [
+              {
+                "pattern": "^ghcr\\.io/ditto-assistant/ditto-subnet-stack@sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "current_version": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "failed_candidate_count": {
+            "default": 0,
+            "maximum": 100,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "last_failure_at": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "last_failure_reason": {
+            "anyOf": [
+              {
+                "enum": [
+                  "candidate_deploy_failed",
+                  "candidate_readiness_failed",
+                  "transaction_interrupted",
+                  "unknown"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "last_success_at": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "observed_at": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "retry_after": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "state": {
+            "enum": [
+              "not_managed",
+              "disabled",
+              "unavailable",
+              "idle",
+              "prefetched",
+              "draining",
+              "replacing",
+              "verifying",
+              "rollback",
+              "backoff",
+              "retry_ready",
+              "suppressed"
+            ],
+            "type": "string"
+          },
+          "suppressed": {
+            "default": false,
+            "type": "boolean"
+          },
+          "transaction_phase": {
+            "anyOf": [
+              {
+                "enum": [
+                  "prepared",
+                  "drained",
+                  "old_stopped",
+                  "candidate_started",
+                  "committed",
+                  "rollback_pending",
+                  "rollback_ready"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "enabled",
+          "state",
+          "observed_at"
+        ],
+        "type": "object"
       }
     },
     "additionalProperties": false,
@@ -5458,6 +5636,17 @@
       "timestamp": {
         "minimum": 0,
         "type": "integer"
+      },
+      "updater_status": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ValidatorUpdaterStatus"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
       },
       "validator_hotkey": {
         "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",

@@ -48,6 +48,10 @@ from ditto.api_models.validator_capabilities import (
     ValidatorStackIdentity,
     validator_identity_signing_token,
 )
+from ditto.api_models.validator_updater import (
+    ValidatorUpdaterStatus,
+    validator_updater_status_signing_token,
+)
 from ditto.validator.errors import ValidatorConfigError
 from ditto_screening_protocol.confirmation import canonical_json
 from ditto_screening_protocol.confirmation_wire import (
@@ -1035,6 +1039,7 @@ def heartbeat_signing_message(
     stack_health: ValidatorStackHealth | None = None,
     benchmark_capacity: BenchmarkCapacity | None = None,
     confirmation_progress: list[ConfirmationProgress] | None = None,
+    updater_status: ValidatorUpdaterStatus | None = None,
     timestamp: int,
 ) -> bytes:
     """Build the canonical versioned software and runtime heartbeat payload."""
@@ -1044,6 +1049,8 @@ def heartbeat_signing_message(
         raise ValueError("benchmark capacity requires heartbeat protocol v10+")
     if confirmation_progress is not None and protocol_version < 22:
         raise ValueError("confirmation progress requires heartbeat protocol v22")
+    if updater_status is not None and protocol_version < 23:
+        raise ValueError("updater status requires heartbeat protocol v23")
     if protocol_version >= 10:
         if capabilities is None or stack is None or stack_health is None:
             raise ValueError(
@@ -1053,11 +1060,25 @@ def heartbeat_signing_message(
             raise ValueError("heartbeat protocol v10+ requires scorer capabilities")
         if benchmark_capacity is None:
             raise ValueError("heartbeat protocol v10+ requires benchmark capacity")
+        if protocol_version >= 22 and confirmation_progress is None:
+            raise ValueError("heartbeat protocol v22 requires confirmation progress")
+        if protocol_version >= 23:
+            if updater_status is None:
+                raise ValueError("heartbeat protocol v23 requires updater status")
+            return (
+                "ditto-validator-heartbeat:v23:"
+                f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                f"{code_digest}:{state}:{active_agent_id or ''}:"
+                f"{system_metrics_signing_token(system_metrics)}:"
+                f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                f"{validator_identity_signing_token(capabilities, stack)}:"
+                f"{validator_stack_health_signing_token(stack_health)}:"
+                f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                f"{validator_updater_status_signing_token(updater_status)}:"
+                f"{timestamp}"
+            ).encode()
         if protocol_version >= 22:
-            if confirmation_progress is None:
-                raise ValueError(
-                    "heartbeat protocol v22 requires confirmation progress"
-                )
             return (
                 "ditto-validator-heartbeat:v22:"
                 f"{validator_hotkey}:{software_version}:{protocol_version}:"
@@ -1079,7 +1100,8 @@ def heartbeat_signing_message(
             f"{benchmark_progress_signing_token(benchmark_progress)}:"
             f"{validator_identity_signing_token(capabilities, stack)}:"
             f"{validator_stack_health_signing_token(stack_health)}:"
-            f"{benchmark_capacity_signing_token(benchmark_capacity)}:{timestamp}"
+            f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+            f"{timestamp}"
         ).encode()
     if protocol_version >= 9:
         if capabilities is None or stack is None:
@@ -1170,6 +1192,7 @@ def sign_heartbeat(
     stack_health: ValidatorStackHealth | None = None,
     benchmark_capacity: BenchmarkCapacity | None = None,
     confirmation_progress: list[ConfirmationProgress] | None = None,
+    updater_status: ValidatorUpdaterStatus | None = None,
     timestamp: int,
 ) -> str:
     """Return the hex sr25519 signature over a software heartbeat."""
@@ -1187,6 +1210,7 @@ def sign_heartbeat(
         stack_health=stack_health,
         benchmark_capacity=benchmark_capacity,
         confirmation_progress=confirmation_progress,
+        updater_status=updater_status,
         timestamp=timestamp,
     )
     signature: bytes = keypair.sign(message)

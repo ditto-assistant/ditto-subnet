@@ -73,6 +73,10 @@ from ditto.api_models.validator_capabilities import (
     ValidatorStackIdentity,
     validator_identity_signing_token,
 )
+from ditto.api_models.validator_updater import (
+    ValidatorUpdaterStatus,
+    validator_updater_status_signing_token,
+)
 from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.dependencies import (
     get_chain_client,
@@ -586,6 +590,7 @@ def _heartbeat_payload(
     stack_health: dict[str, object] | None = None,
     benchmark_capacity: dict[str, object] | None = None,
     confirmation_progress: list[dict[str, object]] | None = None,
+    updater_status: dict[str, object] | None = None,
 ) -> dict[str, object]:
     ts = timestamp if timestamp is not None else int(datetime.now(UTC).timestamp())
     hotkey = keypair.ss58_address
@@ -619,16 +624,35 @@ def _heartbeat_payload(
                     ConfirmationProgress.model_validate(item)
                     for item in (confirmation_progress or [])
                 ]
-                message = (
-                    f"ditto-validator-heartbeat:v22:{hotkey}:0.1.0:{protocol_version}:"
-                    f"{code_digest}:{state}:{active_agent_id or ''}:"
-                    f"{system_metrics_signing_token(metrics)}:"
-                    f"{benchmark_progress_signing_token(progress)}:"
-                    f"{identity_token}:"
-                    f"{validator_stack_health_signing_token(typed_health)}:"
-                    f"{benchmark_capacity_signing_token(typed_capacity)}:"
-                    f"{confirmation_progress_signing_token(typed_confirmation)}:{ts}"
-                )
+                if protocol_version >= 23:
+                    typed_updater = ValidatorUpdaterStatus.model_validate(
+                        updater_status
+                    )
+                    message = (
+                        f"ditto-validator-heartbeat:v23:{hotkey}:0.1.0:"
+                        f"{protocol_version}:{code_digest}:{state}:"
+                        f"{active_agent_id or ''}:"
+                        f"{system_metrics_signing_token(metrics)}:"
+                        f"{benchmark_progress_signing_token(progress)}:"
+                        f"{identity_token}:"
+                        f"{validator_stack_health_signing_token(typed_health)}:"
+                        f"{benchmark_capacity_signing_token(typed_capacity)}:"
+                        f"{confirmation_progress_signing_token(typed_confirmation)}:"
+                        f"{validator_updater_status_signing_token(typed_updater)}:{ts}"
+                    )
+                else:
+                    message = (
+                        f"ditto-validator-heartbeat:v22:{hotkey}:0.1.0:"
+                        f"{protocol_version}:{code_digest}:{state}:"
+                        f"{active_agent_id or ''}:"
+                        f"{system_metrics_signing_token(metrics)}:"
+                        f"{benchmark_progress_signing_token(progress)}:"
+                        f"{identity_token}:"
+                        f"{validator_stack_health_signing_token(typed_health)}:"
+                        f"{benchmark_capacity_signing_token(typed_capacity)}:"
+                        f"{confirmation_progress_signing_token(typed_confirmation)}:"
+                        f"{ts}"
+                    )
             else:
                 domain = "v11" if protocol_version >= 11 else "v10"
                 message = (
@@ -725,6 +749,8 @@ def _heartbeat_payload(
         payload["benchmark_capacity"] = benchmark_capacity
     if confirmation_progress is not None:
         payload["confirmation_progress"] = confirmation_progress
+    if updater_status is not None:
+        payload["updater_status"] = updater_status
     return payload
 
 
@@ -1788,6 +1814,96 @@ class TestHeartbeat:
                 "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=tampered
             )
         ).status_code == 401
+
+    async def test_v23_persists_and_publicly_projects_only_closed_updater_state(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        timestamp = int(datetime.now(UTC).timestamp())
+        current = "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "a" * 64
+        candidate = "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "b" * 64
+        updater = {
+            "enabled": True,
+            "channel": "compat-2",
+            "state": "backoff",
+            "current_descriptor": current,
+            "current_version": "0.63.1",
+            "candidate_descriptor": candidate,
+            "candidate_version": "0.64.0",
+            "failed_candidate_count": 2,
+            "retry_after": timestamp + 900,
+            "suppressed": False,
+            "last_failure_at": timestamp - 30,
+            "last_failure_reason": "candidate_readiness_failed",
+            "observed_at": timestamp,
+        }
+        payload = _heartbeat_payload(
+            timestamp=timestamp,
+            protocol_version=23,
+            capabilities=_quorum_capabilities(),
+            stack=_V7_STACK,
+            stack_health=_V9_STACK_HEALTH,
+            benchmark_capacity=_IDLE_CAPACITY,
+            confirmation_progress=[],
+            updater_status=updater,
+        )
+
+        response = await client.post(
+            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=payload
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert row is not None
+            assert row.updater_status == updater
+
+        fleet = (await client.get("/api/v1/public/validators")).json()
+        member = next(
+            item
+            for item in fleet["validators"]
+            if item["validator_hotkey"] == _VALIDATOR_HOTKEY
+        )
+        assert member["updater_status"] == {
+            **updater,
+            "transaction_phase": None,
+            "last_success_at": None,
+        }
+        assert "error" not in json.dumps(member["updater_status"])
+
+        malformed = dict(payload)
+        malformed["updater_status"] = {**updater, "journal": "secret host log"}
+        assert (
+            await client.post(
+                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=malformed
+            )
+        ).status_code == 422
+
+    async def test_pre_v23_heartbeat_remains_valid_without_updater_state(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        _install_chain(app)
+        payload = _heartbeat_payload(
+            protocol_version=22,
+            capabilities=_quorum_capabilities(),
+            stack=_V7_STACK,
+            stack_health=_V9_STACK_HEALTH,
+            benchmark_capacity=_IDLE_CAPACITY,
+            confirmation_progress=[],
+        )
+
+        assert (
+            await client.post(
+                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=payload
+            )
+        ).status_code == 200
 
     async def test_v10_persists_and_publishes_every_active_slot(
         self,

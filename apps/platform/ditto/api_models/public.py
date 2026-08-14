@@ -30,6 +30,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
 )
+from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
@@ -3473,6 +3474,16 @@ class PublicValidatorHeartbeat(BaseModel):
     capabilities: ValidatorCapabilities | None = None
     stack: ValidatorStackIdentity | None = None
     stack_health: ValidatorStackHealth | None = None
+    updater_status: Annotated[
+        ValidatorUpdaterStatus | None,
+        Field(
+            default=None,
+            description=(
+                "Signed sanitized managed-updater state. Null for validators "
+                "older than heartbeat protocol v23."
+            ),
+        ),
+    ] = None
 
 
 class PublicValidatorHeartbeatsResponse(BaseModel):

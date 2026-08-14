@@ -477,6 +477,22 @@ digest, phase, and coarse health; the platform uses it to route compatible
 work. It does not send secrets, prompts, expected answers, model output, or
 host identity.
 
+Heartbeat protocol 23 adds managed-updater state to that signed report. Managed
+releases mount the updater's state directory read-only into the trusted
+validator, which parses only a closed set of tiny state files and publishes the
+channel, bounded transaction state, immutable current/candidate descriptor and
+version when known, failure count, retry/suppression timing, and allowlisted
+success/failure reason codes. Source/self-managed validators report
+`not_managed`; older validators omit the field; malformed or unreadable state
+reports `unavailable`. The payload never includes host paths, logs, environment
+values, credentials, container ids, or arbitrary error strings.
+
+Systemd timer/service state is intentionally absent. The validator has no host
+service-manager or Docker control access, and telemetry does not weaken that
+isolation. A host whose validator process is offline still requires host-level
+diagnosis; signed heartbeat telemetry can only describe state while that process
+is running.
+
 Heartbeat protocol 10 adds authoritative bounded capacity: configured and
 healthy slot ids, admission state, and privacy-safe progress for every active
 benchmark. Active heartbeats refresh every 30 seconds, with changed aggregate

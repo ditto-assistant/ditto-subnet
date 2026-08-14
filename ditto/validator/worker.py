@@ -107,6 +107,7 @@ from ditto.validator.transform_audit import (
     pool_audit_pairs,
 )
 from ditto.validator.update_control import write_update_state
+from ditto.validator.updater_status import collect_updater_status
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
     Top5ConfirmationPlan,
@@ -1207,6 +1208,7 @@ class ValidatorWorker:
                     )
             if stack_health is None:
                 stack_health = fallback_stack_health()
+            updater_status = collect_updater_status(observed_at=timestamp)
             signature = sign_heartbeat(
                 self._keypair,
                 validator_hotkey=self._config.validator_hotkey,
@@ -1222,6 +1224,7 @@ class ValidatorWorker:
                 stack_health=stack_health,
                 benchmark_capacity=capacity,
                 confirmation_progress=self._confirmation_progress_snapshot(),
+                updater_status=updater_status,
                 timestamp=timestamp,
             )
             request = ValidatorHeartbeatRequest(
@@ -1238,6 +1241,7 @@ class ValidatorWorker:
                 stack_health=stack_health,
                 benchmark_capacity=capacity,
                 confirmation_progress=self._confirmation_progress_snapshot(),
+                updater_status=updater_status,
                 timestamp=timestamp,
                 signature=signature,
             )

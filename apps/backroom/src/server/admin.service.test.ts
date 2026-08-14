@@ -4013,6 +4013,7 @@ describe('validator fleet context', () => {
       disk_percent: 85,
       bench_serviceability: 'serving',
       orphaned_slots: [],
+      updater_status: null,
     })
   })
 

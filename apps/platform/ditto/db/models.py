@@ -1727,6 +1727,7 @@ class ValidatorHeartbeat(Base):
     capabilities: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     stack: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     stack_health: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
+    updater_status: Mapped[dict | None] = mapped_column(_JSON_VARIANT, nullable=True)
     benchmark_capacity: Mapped[dict | None] = mapped_column(
         _JSON_VARIANT, nullable=True
     )

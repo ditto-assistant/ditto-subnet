@@ -61,6 +61,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
 )
+from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto_screening_protocol.bench_v9 import (
     V9AuthoritativeToolGate as V9AuthoritativeToolGate,
 )
@@ -597,6 +598,13 @@ class ValidatorHeartbeatRequest(BaseModel):
             ),
         ),
     ] = None
+    updater_status: Annotated[
+        ValidatorUpdaterStatus | None,
+        Field(
+            default=None,
+            description="Signed sanitized managed-updater state under protocol v23.",
+        ),
+    ] = None
     timestamp: Annotated[
         int, Field(ge=0, description="Validator-reported Unix timestamp (UTC).")
     ]
@@ -713,6 +721,10 @@ class ValidatorHeartbeatRequest(BaseModel):
             and self.capabilities.scorer_benchmarks.probe is not None
         ):
             raise ValueError("scorer liveness probe requires heartbeat protocol v15")
+        if self.protocol_version >= 23 and self.updater_status is None:
+            raise ValueError("heartbeat protocol v23 requires updater status")
+        if self.updater_status is not None and self.protocol_version < 23:
+            raise ValueError("updater status requires heartbeat protocol v23")
         return self
 
 

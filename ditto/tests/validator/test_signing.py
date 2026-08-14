@@ -30,6 +30,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
 )
+from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto.validator.signing import (
     artifact_signing_message,
     heartbeat_signing_message,
@@ -1190,6 +1191,77 @@ def test_protocol_v22_requires_progress_and_v21_rejects_the_extension() -> None:
     assert heartbeat_signing_message(**(shared | {"protocol_version": 21})).startswith(
         b"ditto-validator-heartbeat:v11:"
     )
+
+
+def test_protocol_v23_heartbeat_binds_sanitized_updater_status() -> None:
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    request["protocol_version"] = 23
+    capacity = BenchmarkCapacity(configured_slots=2, healthy_slots=["slot-0", "slot-1"])
+    updater = ValidatorUpdaterStatus(
+        enabled=True,
+        channel="compat-2",
+        state="backoff",
+        current_descriptor=(
+            "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "a" * 64
+        ),
+        candidate_descriptor=(
+            "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "b" * 64
+        ),
+        failed_candidate_count=2,
+        retry_after=1_784_021_000,
+        last_failure_at=1_784_020_700,
+        last_failure_reason="candidate_readiness_failed",
+        observed_at=1_784_020_800,
+    )
+
+    message = heartbeat_signing_message(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+        confirmation_progress=[],
+        updater_status=updater,
+    )
+
+    assert message.startswith(b"ditto-validator-heartbeat:v23:")
+    tampered = updater.model_copy(update={"failed_candidate_count": 3})
+    assert message != heartbeat_signing_message(
+        **request,
+        capabilities=capabilities,
+        stack=stack,
+        stack_health=stack_health,
+        benchmark_capacity=capacity,
+        confirmation_progress=[],
+        updater_status=tampered,
+    )
+
+
+def test_protocol_v23_requires_updater_and_v22_rejects_the_extension() -> None:
+    vectors = json.loads(_V9_VECTOR.read_text())
+    request, capabilities, stack, stack_health = _v9_request(vectors["managed"])
+    shared = {
+        **request,
+        "capabilities": capabilities,
+        "stack": stack,
+        "stack_health": stack_health,
+        "benchmark_capacity": BenchmarkCapacity(),
+        "confirmation_progress": [],
+    }
+
+    with pytest.raises(ValueError, match="v23 requires updater status"):
+        heartbeat_signing_message(**(shared | {"protocol_version": 23}))
+    with pytest.raises(ValueError, match="requires heartbeat protocol v23"):
+        heartbeat_signing_message(
+            **(shared | {"protocol_version": 22}),
+            updater_status=ValidatorUpdaterStatus(
+                enabled=False,
+                channel=None,
+                state="not_managed",
+                observed_at=1_784_020_800,
+            ),
+        )
 
 
 def _signed_ledger_entry(

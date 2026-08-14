@@ -144,6 +144,20 @@ def main() -> None:
             "VALIDATOR_STACK_COMPONENT_PYLON": images["PYLON_IMAGE"],
         }
     )
+    validator = services["ditto-subnet"]
+    # The worker needs no Docker socket or host service manager to report why a
+    # managed update is waiting. Expose only the updater-owned state directory,
+    # read-only, and let the in-container collector parse a closed allowlist of
+    # tiny state files. Source/self-managed Compose is intentionally unchanged.
+    validator.setdefault("volumes", []).append(
+        {
+            "type": "bind",
+            "source": "./.validator-stack-update",
+            "target": "/var/lib/ditto-validator-updater",
+            "read_only": True,
+            "bind": {"create_host_path": False},
+        }
+    )
 
     scorer_environment = services["dittobench-api"].get("environment")
     if not isinstance(scorer_environment, dict):

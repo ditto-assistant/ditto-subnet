@@ -171,6 +171,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
+from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.bench import CURRENT_BENCH_VERSION, is_bench_version_retired
 from ditto.api_server.benchmark_rollout import rolling_qualification_blockers
@@ -3462,6 +3463,14 @@ def _validator_heartbeats_response(
                     reported_confirmation[
                         (progress.bundle_id, progress.ticket_id, progress.slot_id)
                     ] = progress
+        updater_status = None
+        if row.protocol_version >= 23:
+            # Persisted JSON remains untrusted. Only the closed, revalidated
+            # model reaches public/operator consumers; malformed data is omitted.
+            with contextlib.suppress(ValidationError):
+                updater_status = ValidatorUpdaterStatus.model_validate(
+                    row.updater_status
+                )
         assignment_state: ValidatorAssignmentState
         if assignment is None:
             # No live lease. Reporting an agent with no assignment is a genuine
@@ -3641,6 +3650,7 @@ def _validator_heartbeats_response(
                 capabilities=capabilities,
                 stack=stack,
                 stack_health=stack_health,
+                updater_status=updater_status,
             )
         )
     return PublicValidatorHeartbeatsResponse(

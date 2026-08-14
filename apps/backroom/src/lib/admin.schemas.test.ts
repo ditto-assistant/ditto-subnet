@@ -2390,6 +2390,7 @@ describe('validator fleet schema', () => {
       // value on an advisory page must never blank the cap control.
       bench_serviceability: 'serving',
       orphaned_slots: [],
+      updater_status: null,
     })
   })
 

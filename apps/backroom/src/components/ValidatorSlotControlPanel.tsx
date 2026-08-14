@@ -36,6 +36,38 @@ function formatWhen(value: string) {
   }).format(parsed)
 }
 
+function formatEpoch(value: number | null | undefined) {
+  return value == null ? null : formatWhen(new Date(value * 1000).toISOString())
+}
+
+function updaterLabel(updater: ValidatorFleet['validators'][number]['updater_status']) {
+  if (updater === null) return 'unreported'
+  if (updater.state === 'not_managed') return 'self-managed'
+  if (updater.state === 'disabled') return 'disabled'
+  if (updater.state === 'unavailable') return 'unavailable'
+  const version = updater.candidate_version ?? updater.current_version
+  return `${updater.state}${version ? ` · v${version}` : ''}`
+}
+
+function updaterDetail(updater: ValidatorFleet['validators'][number]['updater_status']) {
+  if (updater === null) return 'Requires heartbeat protocol v23 or newer.'
+  const details = [
+    `state: ${updater.state}`,
+    updater.transaction_phase ? `phase: ${updater.transaction_phase}` : null,
+    updater.current_version ? `current version: ${updater.current_version}` : null,
+    updater.current_descriptor ? `current descriptor: ${updater.current_descriptor}` : null,
+    updater.candidate_version ? `candidate version: ${updater.candidate_version}` : null,
+    updater.candidate_descriptor ? `candidate descriptor: ${updater.candidate_descriptor}` : null,
+    updater.failed_candidate_count > 0
+      ? `failures: ${updater.failed_candidate_count}`
+      : null,
+    updater.last_failure_reason ? `last failure: ${updater.last_failure_reason}` : null,
+    updater.retry_after ? `retry after: ${formatEpoch(updater.retry_after)}` : null,
+    updater.last_success_at ? `last success: ${formatEpoch(updater.last_success_at)}` : null,
+  ]
+  return details.filter(Boolean).join('\n')
+}
+
 function shortHotkey(hotkey: string) {
   return hotkey.length > 14 ? `${hotkey.slice(0, 8)}…${hotkey.slice(-4)}` : hotkey
 }
@@ -650,13 +682,14 @@ function FleetContext({
         </p>
       ) : (
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[36rem] text-left text-xs">
+          <table className="w-full min-w-[44rem] text-left text-xs">
             <thead className="text-[var(--muted)]">
               <tr className="border-b border-[var(--line)]">
                 <th scope="col" className="px-4 py-2 font-medium">Validator</th>
                 <th scope="col" className="px-4 py-2 font-medium">Advertised</th>
                 <th scope="col" className="px-4 py-2 font-medium">In flight</th>
                 <th scope="col" className="px-4 py-2 font-medium">Disk</th>
+                <th scope="col" className="px-4 py-2 font-medium">Updater</th>
                 <th scope="col" className="px-4 py-2 font-medium">Slots filled</th>
                 <th scope="col" className="px-4 py-2 font-medium">Issuance</th>
               </tr>
@@ -718,6 +751,27 @@ function FleetContext({
                       {restricted ? (
                         <span className="mt-0.5 block text-[10px]">
                           at or above the {ceiling}% ceiling, held to {restrictedSlots}
+                        </span>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-2.5">
+                      <span
+                        className={`font-medium ${
+                          validator.updater_status?.state === 'suppressed' ||
+                          validator.updater_status?.state === 'rollback'
+                            ? 'text-[var(--red)]'
+                            : validator.updater_status?.state === 'backoff' ||
+                                validator.updater_status?.state === 'unavailable'
+                              ? 'text-[var(--amber)]'
+                              : ''
+                        }`}
+                        title={updaterDetail(validator.updater_status)}
+                      >
+                        {updaterLabel(validator.updater_status)}
+                      </span>
+                      {validator.updater_status?.retry_after ? (
+                        <span className="mt-0.5 block text-[10px] text-[var(--muted)]">
+                          retry {formatEpoch(validator.updater_status.retry_after)}
                         </span>
                       ) : null}
                     </td>

@@ -13808,6 +13808,8 @@ export interface components {
              */
             state: "polling" | "running_benchmark" | "updating_weights" | "idle" | "error" | "paused";
             system_metrics?: components["schemas"]["PublicSystemMetrics"] | null;
+            /** @description Signed sanitized managed-updater state. Null for validators older than heartbeat protocol v23. */
+            updater_status?: components["schemas"]["ValidatorUpdaterStatus"] | null;
             /**
              * Validator Hotkey
              * @description Validator's public hotkey.
@@ -16848,6 +16850,8 @@ export interface components {
              * @description Validator-reported Unix timestamp (UTC).
              */
             timestamp: number;
+            /** @description Signed sanitized managed-updater state under protocol v23. */
+            updater_status?: components["schemas"]["ValidatorUpdaterStatus"] | null;
             /**
              * Validator Hotkey
              * @description Reporting validator hotkey.
@@ -17005,6 +17009,51 @@ export interface components {
             mode: "source" | "managed";
             /** Release Descriptor Digest */
             release_descriptor_digest?: string | null;
+        };
+        /**
+         * ValidatorUpdaterStatus
+         * @description Bounded updater state; never contains paths, logs, env, or errors.
+         */
+        ValidatorUpdaterStatus: {
+            /** Candidate Descriptor */
+            candidate_descriptor?: string | null;
+            /** Candidate Version */
+            candidate_version?: string | null;
+            /** Channel */
+            channel?: "compat-2" | null;
+            /** Current Descriptor */
+            current_descriptor?: string | null;
+            /** Current Version */
+            current_version?: string | null;
+            /** Enabled */
+            enabled: boolean;
+            /**
+             * Failed Candidate Count
+             * @default 0
+             */
+            failed_candidate_count: number;
+            /** Last Failure At */
+            last_failure_at?: number | null;
+            /** Last Failure Reason */
+            last_failure_reason?: ("candidate_deploy_failed" | "candidate_readiness_failed" | "transaction_interrupted" | "unknown") | null;
+            /** Last Success At */
+            last_success_at?: number | null;
+            /** Observed At */
+            observed_at: number;
+            /** Retry After */
+            retry_after?: number | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "not_managed" | "disabled" | "unavailable" | "idle" | "prefetched" | "draining" | "replacing" | "verifying" | "rollback" | "backoff" | "retry_ready" | "suppressed";
+            /**
+             * Suppressed
+             * @default false
+             */
+            suppressed: boolean;
+            /** Transaction Phase */
+            transaction_phase?: ("prepared" | "drained" | "old_stopped" | "candidate_started" | "committed" | "rollback_pending" | "rollback_ready") | null;
         };
     };
     responses: never;

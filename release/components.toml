@@ -78,6 +78,7 @@ paths = [
   "ditto/api_models/validator.py",
   "ditto/api_models/validator_capabilities.py",
   "ditto/api_models/validator_confirmation.py",
+  "ditto/api_models/validator_updater.py",
   "scripts/install-validator-stack-auto-update.sh",
   "scripts/test-validator-stack-auto-update-e2e.sh",
   "scripts/test-validator-stack-release-runtime.sh",

@@ -60,7 +60,8 @@ failed_candidate_value() {
 }
 
 record_failed_candidate() {
-  local candidate="$1" previous_candidate="" failures=0 retry_after now
+  local candidate="$1" reason="${2:-unknown}" previous_candidate="" failures=0 retry_after now suppressed=false temporary
+  case "$reason" in candidate_deploy_failed|candidate_readiness_failed|transaction_interrupted|unknown) ;; *) reason=unknown;; esac
   if [ -f "$FAILED_CANDIDATE_FILE" ]; then
     previous_candidate="$(failed_candidate_value CANDIDATE || true)"
     # The pre-v0.58 updater wrote the raw candidate digest. Treat it as one
@@ -77,8 +78,12 @@ record_failed_candidate() {
   failures=$((failures + 1))
   now="$(date +%s)"
   retry_after=$((now + failure_backoff_seconds))
-  printf 'CANDIDATE=%s\nFAILURES=%s\nRETRY_AFTER=%s\n' \
-    "$candidate" "$failures" "$retry_after" >"$FAILED_CANDIDATE_FILE"
+  [ "$failures" -lt "$failure_max_attempts" ] || suppressed=true
+  temporary="$FAILED_CANDIDATE_FILE.tmp"
+  umask 077
+  printf 'CANDIDATE=%s\nFAILURES=%s\nRETRY_AFTER=%s\nFAILED_AT=%s\nREASON=%s\nSUPPRESSED=%s\n' \
+    "$candidate" "$failures" "$retry_after" "$now" "$reason" "$suppressed" >"$temporary"
+  mv "$temporary" "$FAILED_CANDIDATE_FILE"
 }
 
 failed_candidate_is_suppressed() {
@@ -593,7 +598,7 @@ recover_transaction() {
       ;;
     old_stopped|candidate_started|rollback_pending|rollback_ready)
       rollback_to_previous "$previous" || die "could not recover the previous complete stack"
-      record_failed_candidate "$candidate"
+      record_failed_candidate "$candidate" transaction_interrupted
       ;;
     committed)
       container="$(service_container "$CURRENT_DIR" ditto-subnet)"; state="$(runtime_state "$container")"
@@ -606,7 +611,7 @@ recover_transaction() {
         [ "$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)" != true ] || state_drained "$state" "$container" || die "committed validator state is ambiguous; refusing an unsafe rollback"
         record_transaction rollback_pending "$previous" "$candidate"
         rollback_to_previous "$previous" || die "committed stack failed recovery and full rollback failed"
-        record_failed_candidate "$candidate"
+        record_failed_candidate "$candidate" transaction_interrupted
       fi
       ;;
     *) die "unknown transaction phase $phase";;
@@ -642,14 +647,14 @@ perform_update() {
   old_container="$(service_container "$CURRENT_DIR" ditto-subnet)"
   docker stop --time 30 "$old_container" >/dev/null || die "could not stop drained validator"
   DRAINED_CONTAINER=''; DRAINED_RELEASE_DIR=''; record_transaction old_stopped "$previous_ref" "$candidate_ref"
-  if ! deploy_release "$STAGED_DIR"; then record_transaction rollback_pending "$previous_ref" "$candidate_ref"; rollback_to_previous "$previous_ref" || die "candidate deploy and full rollback both failed"; record_failed_candidate "$candidate_ref"; rm -f "$TRANSACTION_FILE"; die "candidate deploy failed; previous stack restored"; fi
+  if ! deploy_release "$STAGED_DIR"; then record_transaction rollback_pending "$previous_ref" "$candidate_ref"; rollback_to_previous "$previous_ref" || die "candidate deploy and full rollback both failed"; record_failed_candidate "$candidate_ref" candidate_deploy_failed; rm -f "$TRANSACTION_FILE"; die "candidate deploy failed; previous stack restored"; fi
   record_transaction candidate_started "$previous_ref" "$candidate_ref"
-  if ! wait_stack_quiescent "$STAGED_DIR" "$ready_timeout" "$check_seconds"; then record_transaction rollback_pending "$previous_ref" "$candidate_ref"; rollback_to_previous "$previous_ref" || die "candidate readiness and full rollback both failed"; record_failed_candidate "$candidate_ref"; rm -f "$TRANSACTION_FILE"; die "candidate readiness failed; previous stack restored"; fi
+  if ! wait_stack_quiescent "$STAGED_DIR" "$ready_timeout" "$check_seconds"; then record_transaction rollback_pending "$previous_ref" "$candidate_ref"; rollback_to_previous "$previous_ref" || die "candidate readiness and full rollback both failed"; record_failed_candidate "$candidate_ref" candidate_readiness_failed; rm -f "$TRANSACTION_FILE"; die "candidate readiness failed; previous stack restored"; fi
   install_staged_as_current
   record_transaction committed "$previous_ref" "$candidate_ref"
   resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "candidate may be working; committed journal retained"
   record_managed "$candidate_ref"
-  printf 'PREVIOUS_RELEASE=%s\nCURRENT_RELEASE=%s\nCURRENT_VERSION=%s\n' "$previous_ref" "$candidate_ref" "$candidate_version" >"$LAST_UPDATE_FILE"
+  printf 'PREVIOUS_RELEASE=%s\nCURRENT_RELEASE=%s\nCURRENT_VERSION=%s\nUPDATED_AT=%s\n' "$previous_ref" "$candidate_ref" "$candidate_version" "$(date +%s)" >"$LAST_UPDATE_FILE"
   rm -f "$FAILED_CANDIDATE_FILE" "$PREFETCHED_FILE" "$TRANSACTION_FILE"
   log "updated complete validator stack $current_version -> $candidate_version"
 }
@@ -672,7 +677,7 @@ cleanup() {
     previous="$(transaction_value PREVIOUS_RELEASE 2>/dev/null || true)"
     if is_descriptor_digest "$previous" && rollback_to_previous "$previous"; then
       candidate="$(transaction_value CANDIDATE_RELEASE 2>/dev/null || true)"
-      is_descriptor_digest "$candidate" && record_failed_candidate "$candidate"
+      is_descriptor_digest "$candidate" && record_failed_candidate "$candidate" transaction_interrupted
       rm -f "$TRANSACTION_FILE"
       log "interrupted replacement rolled back the complete previous stack"
     else

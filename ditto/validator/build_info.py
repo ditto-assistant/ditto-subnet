@@ -69,7 +69,13 @@ from ditto import __version__
 # Platform must understand v22 before validators emit it because the request
 # model forbids unknown fields. The new v22 signing domain binds the complete
 # privacy-safe list; v1-v21 signing bytes remain unchanged.
-HEARTBEAT_PROTOCOL_VERSION = 22
+#
+# v23 adds a signed, privacy-safe managed-updater status object. The validator
+# reads only a read-only updater state mount; it never receives Docker/systemd
+# access, W&B credentials, host paths, logs, environment values, or arbitrary
+# error strings. The signing domain advances to v23 because the request gains a
+# new signed token. Platform must ship the matching parser before validators.
+HEARTBEAT_PROTOCOL_VERSION = 23
 
 
 @dataclass(frozen=True)

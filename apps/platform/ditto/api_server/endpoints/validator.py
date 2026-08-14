@@ -111,6 +111,10 @@ from ditto.api_models.validator_slot_settings import (
     HARD_SLOT_CEILING,
     ValidatorSlotSettings,
 )
+from ditto.api_models.validator_updater import (
+    ValidatorUpdaterStatus,
+    validator_updater_status_signing_token,
+)
 from ditto.api_server.anti_copy_comparison import ANTI_COPY_ALGORITHM_VERSION
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.attestation import expected_netuid
@@ -2002,6 +2006,7 @@ def _heartbeat_signing_message(
     stack_health: ValidatorStackHealth | None = None,
     benchmark_capacity: BenchmarkCapacity | None = None,
     confirmation_progress: list[ConfirmationProgress] | None = None,
+    updater_status: ValidatorUpdaterStatus | None = None,
 ) -> bytes:
     """Canonical heartbeat payload, mirrored by ``ditto-subnet``."""
     if stack_health is not None and protocol_version < 9:
@@ -2010,6 +2015,8 @@ def _heartbeat_signing_message(
         raise ValueError("benchmark capacity requires heartbeat protocol v10")
     if confirmation_progress is not None and protocol_version < 22:
         raise ValueError("confirmation progress requires heartbeat protocol v22")
+    if updater_status is not None and protocol_version < 23:
+        raise ValueError("updater status requires heartbeat protocol v23")
     if protocol_version >= 10:
         if capabilities is None or stack is None or stack_health is None:
             raise ValueError(
@@ -2017,11 +2024,26 @@ def _heartbeat_signing_message(
             )
         if benchmark_capacity is None:
             raise ValueError("heartbeat protocol v10 requires benchmark capacity")
+        if protocol_version >= 22 and confirmation_progress is None:
+            raise ValueError("heartbeat protocol v22 requires confirmation progress")
+        if protocol_version >= 23:
+            if updater_status is None:
+                raise ValueError("heartbeat protocol v23 requires updater status")
+            active = str(active_agent_id) if active_agent_id is not None else ""
+            return (
+                "ditto-validator-heartbeat:v23:"
+                f"{validator_hotkey}:{software_version}:{protocol_version}:"
+                f"{code_digest}:{state}:{active}:"
+                f"{system_metrics_signing_token(system_metrics)}:"
+                f"{benchmark_progress_signing_token(benchmark_progress)}:"
+                f"{validator_identity_signing_token(capabilities, stack)}:"
+                f"{validator_stack_health_signing_token(stack_health)}:"
+                f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+                f"{confirmation_progress_signing_token(confirmation_progress)}:"
+                f"{validator_updater_status_signing_token(updater_status)}:"
+                f"{timestamp}"
+            ).encode()
         if protocol_version >= 22:
-            if confirmation_progress is None:
-                raise ValueError(
-                    "heartbeat protocol v22 requires confirmation progress"
-                )
             active = str(active_agent_id) if active_agent_id is not None else ""
             return (
                 "ditto-validator-heartbeat:v22:"
@@ -2045,7 +2067,8 @@ def _heartbeat_signing_message(
             f"{benchmark_progress_signing_token(benchmark_progress)}:"
             f"{validator_identity_signing_token(capabilities, stack)}:"
             f"{validator_stack_health_signing_token(stack_health)}:"
-            f"{benchmark_capacity_signing_token(benchmark_capacity)}:{timestamp}"
+            f"{benchmark_capacity_signing_token(benchmark_capacity)}:"
+            f"{timestamp}"
         ).encode()
     if protocol_version >= 9:
         if capabilities is None or stack is None:
@@ -2526,6 +2549,14 @@ async def heartbeat(
             "system metrics timestamp is outside the heartbeat window"
         )
     if (
+        request_body.updater_status is not None
+        and abs(request_body.timestamp - request_body.updater_status.observed_at)
+        > _HEARTBEAT_MAX_SKEW_SECONDS
+    ):
+        raise ValidatorAuthError(
+            "updater status timestamp is outside the heartbeat window"
+        )
+    if (
         request_body.active_agent_id is not None
         and request_body.state != "running_benchmark"
     ):
@@ -2569,6 +2600,7 @@ async def heartbeat(
         stack_health=request_body.stack_health,
         benchmark_capacity=request_body.benchmark_capacity,
         confirmation_progress=request_body.confirmation_progress,
+        updater_status=request_body.updater_status,
     )
     if not _verify_signature(validator_hotkey, payload, request_body.signature):
         raise ValidatorAuthError("heartbeat signature verification failed")
@@ -2647,6 +2679,11 @@ async def heartbeat(
             stack_health=(
                 request_body.stack_health.model_dump(mode="json", exclude_none=True)
                 if request_body.stack_health is not None
+                else None
+            ),
+            updater_status=(
+                request_body.updater_status.model_dump(mode="json", exclude_none=True)
+                if request_body.updater_status is not None
                 else None
             ),
             benchmark_capacity=(

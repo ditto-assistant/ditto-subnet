@@ -169,6 +169,13 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         "VALIDATOR_STACK_COMPONENT_OLLAMA": manifest["OLLAMA_IMAGE"],
         "VALIDATOR_STACK_COMPONENT_PYLON": manifest["PYLON_IMAGE"],
     }
+    assert {
+        "type": "bind",
+        "source": "./.validator-stack-update",
+        "target": "/var/lib/ditto-validator-updater",
+        "read_only": True,
+        "bind": {"create_host_path": False},
+    } in compose["services"]["ditto-subnet"]["volumes"]
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
     assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == "0.10.0"
     assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == REVISION

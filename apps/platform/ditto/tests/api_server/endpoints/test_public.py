@@ -4400,6 +4400,40 @@ class TestScorerLivenessSurfacing:
         assert entry.health_reasons == []
         assert entry.health == "healthy"
 
+    def test_malformed_stored_updater_json_is_omitted_not_echoed(self) -> None:
+        now = datetime(2026, 7, 25, 3, 0, tzinfo=UTC)
+        row = _liveness_row(
+            now,
+            protocol_version=23,
+            scorer={
+                "status": "fresh_verified",
+                "supported_bench_versions": [2, 3],
+                "probe": {"outcome": "served", "observed_at": int(now.timestamp())},
+            },
+        )
+        row.updater_status = {
+            "enabled": True,
+            "channel": "compat-2",
+            "state": "idle",
+            "failed_candidate_count": 0,
+            "suppressed": False,
+            "observed_at": int(now.timestamp()),
+            "journal": "secret arbitrary host log",
+        }
+
+        response = public_endpoint._validator_heartbeats_response(
+            rows=[row],
+            assignments=[],
+            active_work=[],
+            confirmation_work=[],
+            orphaned_leases=[],
+            now=now,
+            active_bench_version=LEGACY_BENCH_VERSION,
+            slot_settings=SLOT_SETTINGS_DEFAULT,
+        )
+
+        assert response.validators[0].updater_status is None
+
     def test_a_validator_below_protocol_15_reads_unreported_not_broken(self) -> None:
         """Forward compatibility: the fleet must not go red during the roll-out."""
         now = datetime(2026, 7, 25, 3, 0, tzinfo=UTC)

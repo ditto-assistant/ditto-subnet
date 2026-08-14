@@ -85,6 +85,23 @@ function fleet(): ValidatorFleet {
         disk_percent: 85,
         bench_serviceability: 'serving',
         orphaned_slots: [],
+        updater_status: {
+          enabled: true,
+          channel: 'compat-2',
+          state: 'backoff',
+          transaction_phase: null,
+          current_descriptor: `ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:${'a'.repeat(64)}`,
+          current_version: '0.63.1',
+          candidate_descriptor: `ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:${'b'.repeat(64)}`,
+          candidate_version: '0.64.0',
+          failed_candidate_count: 2,
+          retry_after: 1_784_021_000,
+          suppressed: false,
+          last_success_at: 1_784_000_000,
+          last_failure_at: 1_784_020_700,
+          last_failure_reason: 'candidate_readiness_failed',
+          observed_at: 1_784_020_800,
+        },
       },
       {
         validator_hotkey: secondaryHotkey,
@@ -96,6 +113,7 @@ function fleet(): ValidatorFleet {
         disk_percent: 5,
         bench_serviceability: 'serving',
         orphaned_slots: [],
+        updater_status: null,
       },
     ],
   }
@@ -121,6 +139,15 @@ describe('ValidatorSlotControlPanel', () => {
     getValidatorFleet.mockReset().mockResolvedValue(fleet())
     updateValidatorSlotSettings.mockReset().mockResolvedValue(control())
     updateValidatorIssuancePause.mockReset().mockResolvedValue(control())
+  })
+
+  it('shows signed updater state and an old-validator compatibility fallback', () => {
+    render(
+      <ValidatorSlotControlPanel initialState={control()} initialFleet={fleet()} readOnly={false} />,
+    )
+
+    expect(screen.getByText('backoff · v0.64.0')).toBeTruthy()
+    expect(screen.getByText('unreported')).toBeTruthy()
   })
 
   it('separates an operator revision from a setting nobody ever chose', () => {

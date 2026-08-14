@@ -17,6 +17,7 @@ type GeneratedConfirmationBundleList =
 type GeneratedSourceReviewCausalEvidence =
   PlatformComponents['schemas']['SourceReviewCausalEvidence']
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
+type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
 
 export const auditReasonSchema = (minimum: 3 | 8) =>
   z.string().trim().min(minimum)
@@ -2721,6 +2722,59 @@ export const validatorFleetMemberSchema = z
     // container may still be executing. Empty in the ordinary case; a slot here
     // is NOT free capacity.
     orphaned_slots: z.array(publicOrphanedSlotSchema).catch([]),
+    updater_status: z
+      .object({
+        candidate_descriptor: z.string().nullable().optional(),
+        candidate_version: z.string().nullable().optional(),
+        channel: z.literal('compat-2').nullable().optional(),
+        current_descriptor: z.string().nullable().optional(),
+        current_version: z.string().nullable().optional(),
+        enabled: z.boolean(),
+        failed_candidate_count: z.number().int().min(0).max(100),
+        last_failure_at: z.number().int().nonnegative().nullable().optional(),
+        last_failure_reason: z
+          .enum([
+            'candidate_deploy_failed',
+            'candidate_readiness_failed',
+            'transaction_interrupted',
+            'unknown',
+          ])
+          .nullable()
+          .optional(),
+        last_success_at: z.number().int().nonnegative().nullable().optional(),
+        observed_at: z.number().int().nonnegative(),
+        retry_after: z.number().int().nonnegative().nullable().optional(),
+        state: z.enum([
+          'not_managed',
+          'disabled',
+          'unavailable',
+          'idle',
+          'prefetched',
+          'draining',
+          'replacing',
+          'verifying',
+          'rollback',
+          'backoff',
+          'retry_ready',
+          'suppressed',
+        ]),
+        suppressed: z.boolean(),
+        transaction_phase: z
+          .enum([
+            'prepared',
+            'drained',
+            'old_stopped',
+            'candidate_started',
+            'committed',
+            'rollback_pending',
+            'rollback_ready',
+          ])
+          .nullable()
+          .optional(),
+      } satisfies PlatformResponseShape<GeneratedValidatorUpdaterStatus>)
+      .nullable()
+      .optional()
+      .catch(null),
   })
   .transform((member) => ({
     validator_hotkey: member.validator_hotkey,
@@ -2734,6 +2788,7 @@ export const validatorFleetMemberSchema = z
     disk_percent: member.system_metrics?.disk_percent ?? null,
     bench_serviceability: member.bench_serviceability,
     orphaned_slots: member.orphaned_slots,
+    updater_status: member.updater_status ?? null,
   }))
 
 export const validatorFleetSchema = z.object({
