@@ -173,6 +173,11 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert "cargo build --locked --verbose" in starter_verification["run"]
     assert "cargo test --locked --verbose" in starter_verification["run"]
 
+    model_relay_steps = jobs["verify-model-relay"]["steps"]
+    model_relay_uv = _step(model_relay_steps, "Install uv")
+    assert str(model_relay_uv["uses"]).startswith("astral-sh/setup-uv@")
+    assert model_relay_uv["with"]["enable-cache"] is True
+
     datagen_verification = _step(
         jobs["verify-dittobench-datagen"]["steps"],
         "Gate DittoBench datagen release on exact merge source",

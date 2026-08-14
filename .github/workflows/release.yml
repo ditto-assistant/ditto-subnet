@@ -389,6 +389,11 @@ jobs:
           ref: ${{ github.sha }}
           persist-credentials: false
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
       - name: Install Go for model-relay verification
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
