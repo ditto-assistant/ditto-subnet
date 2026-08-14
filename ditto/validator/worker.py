@@ -2130,9 +2130,25 @@ class ValidatorWorker:
                     await self._report_ticket_failed(
                         job, "scoring_error", failure_detail(exc)
                     )
-            except (PlatformError, DittobenchError) as exc:
+            except SandboxOomError as exc:
                 logger.warning(
-                    "top-five confirmation failed champion=%s member=%s: %s",
+                    "top-five confirmation sandbox ran out of memory "
+                    "champion=%s member=%s: %s",
+                    plan.champion.agent_id,
+                    entry.agent_id,
+                    exc,
+                )
+                if job is not None:
+                    await self._report_ticket_failed(
+                        job, "sandbox_oom", failure_detail(exc)
+                    )
+            except (
+                ValidatorInfrastructureError,
+                PlatformInfrastructureError,
+            ) as exc:
+                logger.warning(
+                    "top-five confirmation infrastructure failed "
+                    "champion=%s member=%s: %s",
                     plan.champion.agent_id,
                     entry.agent_id,
                     exc,
@@ -2140,6 +2156,18 @@ class ValidatorWorker:
                 if job is not None:
                     await self._report_ticket_failed(
                         job, "infrastructure", failure_detail(exc)
+                    )
+                    self._healthy_slots.discard(job.slot_id)
+            except (PlatformError, DittobenchError) as exc:
+                logger.warning(
+                    "top-five confirmation scoring failed champion=%s member=%s: %s",
+                    plan.champion.agent_id,
+                    entry.agent_id,
+                    exc,
+                )
+                if job is not None:
+                    await self._report_ticket_failed(
+                        job, "scoring_error", failure_detail(exc)
                     )
             finally:
                 # Release whatever this iteration actually claimed. Matching on
@@ -2174,6 +2202,7 @@ class ValidatorWorker:
         consume the budget the remaining seeds -- and the hand-back -- need.
         """
         reports: list[ScoreReport] = []
+        failures: list[PlatformError | DittobenchError] = []
         for dataset in datasets:
             if (
                 ticket_deadline is not None
@@ -2204,6 +2233,7 @@ class ValidatorWorker:
                     )
                 )
             except (PlatformError, DittobenchError) as exc:
+                failures.append(exc)
                 logger.warning(
                     "top-five confirmation seed failed agent=%s seed=%s: %s",
                     agent_id,
@@ -2211,6 +2241,28 @@ class ValidatorWorker:
                     exc,
                 )
         if not reports:
+            if failures:
+                # The continual lane currently receives one pinned seed, but
+                # keep the legacy multi-seed contract defensible: if every
+                # seed failed and any failure was validator-owned, preserve
+                # that typed failure instead of charging the miner for an
+                # arbitrary sibling error. Successful partial bundles remain
+                # valid and are folded below exactly as before.
+                infrastructure = next(
+                    (
+                        error
+                        for error in failures
+                        if isinstance(
+                            error,
+                            (
+                                ValidatorInfrastructureError,
+                                PlatformInfrastructureError,
+                            ),
+                        )
+                    ),
+                    None,
+                )
+                raise infrastructure or failures[0]
             return None
         ordered = sorted(reports, key=lambda report: (report.composite, report.seed))
         representative = ordered[len(ordered) // 2]

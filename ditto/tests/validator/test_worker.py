@@ -1039,6 +1039,88 @@ class TestTop5ConfirmationLane:
         assert (handed_job, reason) == (job, "infrastructure")
         platform.submit_top5_confirmation_score.assert_not_awaited()
 
+    async def test_infrastructure_seed_failure_preserves_code_and_retires_slot(
+        self,
+    ) -> None:
+        entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+            update={"bench_version": 9}
+        )
+        job = _job(entry.miner_hotkey, slot_id="slot-1").model_copy(
+            update={
+                "agent_id": entry.agent_id,
+                "bench_version": 9,
+                "confirmation_datasets": _confirmation_pins(
+                    entry.agent_id, bench_version=9, count=1
+                ),
+                "deadline": datetime.now(UTC) + timedelta(hours=3),
+            }
+        )
+        platform = _platform_with_ledger(
+            jobs=[], ledger=[entry], active_bench_version=9
+        )
+        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        config = _config()
+        config.benchmark_capacity = 2
+        worker = ValidatorWorker(
+            config=config,
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._evaluate = AsyncMock(  # type: ignore[method-assign]
+            side_effect=ValidatorInfrastructureError(
+                "relay failed after a healthy provider probe",
+                code="model_relay_unavailable",
+            )
+        )
+
+        await worker._run_top5_confirmation_lane()
+
+        platform.report_ticket_failed.assert_awaited_once_with(
+            job, "infrastructure", "model_relay_unavailable"
+        )
+        assert "slot-1" not in worker._healthy_slots
+        platform.submit_top5_confirmation_score.assert_not_awaited()
+
+    async def test_agent_seed_failure_remains_a_scoring_error(self) -> None:
+        entry = _entry("5MinerA" + "x" * 41, 0.9).model_copy(
+            update={"bench_version": 9}
+        )
+        job = _job(entry.miner_hotkey).model_copy(
+            update={
+                "agent_id": entry.agent_id,
+                "bench_version": 9,
+                "confirmation_datasets": _confirmation_pins(
+                    entry.agent_id, bench_version=9, count=1
+                ),
+                "deadline": datetime.now(UTC) + timedelta(hours=3),
+            }
+        )
+        platform = _platform_with_ledger(
+            jobs=[], ledger=[entry], active_bench_version=9
+        )
+        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
+        )
+        worker._evaluate = AsyncMock(  # type: ignore[method-assign]
+            side_effect=DittobenchError("harness returned invalid evidence")
+        )
+
+        await worker._run_top5_confirmation_lane()
+
+        platform.report_ticket_failed.assert_awaited_once_with(
+            job,
+            "scoring_error",
+            "DittobenchError: harness returned invalid evidence",
+        )
+        platform.submit_top5_confirmation_score.assert_not_awaited()
+
 
 class TestTop5ConfirmationLaneSlotBinding:
     """The retest must report against the slot the platform actually leased.

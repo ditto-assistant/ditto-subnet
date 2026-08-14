@@ -4681,15 +4681,16 @@ async def fail_job(
     session: SessionDep,
     x_validator_hotkey: Annotated[str | None, Header()] = None,
 ) -> FailJobResponse:
-    """Hand a failed but still-leased ticket back for immediate reissue.
+    """Resolve a failed but still-leased ticket with reason-specific retry policy.
 
     A validator whose scoring attempt failed calls this so the platform closes
-    the live ticket now (status ``expired``, ``deadline`` now, ``retry_after``
-    now) instead of leaving the lease idle until its own deadline. The next
-    ``request_job`` then mints a **fresh** ticket (new deadline) rather than
-    resuming the failed lease. Additive and best-effort: an old validator that
-    never calls this behaves exactly as today (the ticket expires on its own via
-    the overdue sweep).
+    the live ticket now instead of leaving the lease idle until its own deadline.
+    Canonical scoring errors are immediately eligible for another bounded
+    attempt; infrastructure, sandbox OOM, and continual-retest failures apply
+    their dedicated cooldowns. Any later issue mints a **fresh** lease rather
+    than resuming the failed one. Additive and best-effort: an old validator
+    that never calls this behaves exactly as today (the ticket expires on its
+    own via the overdue sweep).
 
     Auth mirrors the job claim: the header must match the signed hotkey, the
     signature proves possession, ``requested_at`` is freshness-bounded, the
@@ -4841,6 +4842,15 @@ async def fail_job(
                 # exhausted its memory allowance. Preserve the failed attempt
                 # and defer this artifact so the validator immediately advances
                 # to another eligible harness instead of reclaiming it.
+                ticket.retry_after = now + RETRY_COOLDOWN
+            elif ticket.purpose == TicketPurpose.CONTINUAL_RETEST:
+                # Canonical scoring errors are bounded by the validator's
+                # attempt budget, so another validator may retry immediately.
+                # Continual retests deliberately reuse the same mutable ticket
+                # beyond that budget; treating their scoring errors the same
+                # way creates an unbounded hot loop for one validator/agent
+                # pair. Cool only this pair down. Other validators remain free
+                # to produce the shared confirmation seed.
                 ticket.retry_after = now + RETRY_COOLDOWN
             else:
                 # A scoring_error is the agent's own failure: consume the budget

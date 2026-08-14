@@ -139,6 +139,7 @@ from ditto.db.queries.retry_budget import (
     MAX_INFRA_RETRY_GRANTS,
 )
 from ditto.db.queries.rollout_dispatch import ROLLOUT_DISPATCH_LOCK_KEY
+from ditto.db.queries.tickets import issue_confirmation_ticket
 from ditto.tests.legacy_era import retired_era_writes_allowed
 
 # Real dev keypairs: sign for real so _verify_signature runs end to end. The k=3
@@ -6332,6 +6333,69 @@ class TestFailJob:
             json=_job_payload(slot_id=_SLOT_ID),
         )
         assert reissued.status_code == 204, reissued.text
+
+    async def test_continual_retest_scoring_error_cools_the_validator_pair(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.SCORED)
+        await _seed_ticket(
+            session_maker,
+            agent_id,
+            purpose=TicketPurpose.CONTINUAL_RETEST,
+            seed=12345,
+            dataset_sha256="cd" * 32,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(agent_id, reason="scoring_error"),
+        )
+        assert failed.status_code == 200, failed.text
+
+        async with session_maker() as s:
+            ticket = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.failure_reason == "scoring_error"
+            assert ticket.retry_after is not None
+            retry_after = ticket.retry_after
+            if retry_after.tzinfo is None:
+                retry_after = retry_after.replace(tzinfo=UTC)
+            assert retry_after - datetime.now(UTC) > timedelta(hours=5)
+
+        # The continual allocator honors the same ticket cooldown. This exact
+        # validator/agent pair cannot spin, while another validator can still
+        # contribute the shared confirmation seed.
+        async with session_maker() as s, s.begin():
+            ticket = await issue_confirmation_ticket(
+                s,
+                agent_id=agent_id,
+                validator_hotkey=_VALIDATOR_HOTKEY,
+                now=datetime.now(UTC),
+                ttl=timedelta(minutes=90),
+                bench_version=_BENCH_VERSION,
+                seed=12345,
+                dataset_sha256="cd" * 32,
+            )
+            assert ticket is None
+            peer_ticket = await issue_confirmation_ticket(
+                s,
+                agent_id=agent_id,
+                validator_hotkey=_KEYPAIRS[1].ss58_address,
+                now=datetime.now(UTC),
+                ttl=timedelta(minutes=90),
+                bench_version=_BENCH_VERSION,
+                seed=12345,
+                dataset_sha256="cd" * 32,
+            )
+            assert peer_ticket is not None
 
     async def test_infrastructure_failure_backs_off_before_reissue(
         self,
