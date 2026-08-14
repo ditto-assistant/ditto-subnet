@@ -65,7 +65,8 @@ describe("explainer covers scoring, emissions and KOTH (row 37)", () => {
     }
     expect(explainer).toContain("0.5 × tool mean + 0.5 × memory mean");
     expect(explainer).toContain("Bench v6 and older retain their signed legacy token penalty");
-    expect(explainer).toContain("How the current token-efficiency bonus works.");
+    expect(explainer).toContain("Where token efficiency stands.");
+    expect(explainer).toContain("no token-efficiency adjustment is applied today");
     // The 50% pillar tags explain both halves of the composite.
     const tips = Array.from(
       document.querySelectorAll(".about .pillar .tag.tip"),
