@@ -25,14 +25,10 @@ def _write_module(
     (module / "cmd" / "model-relay").mkdir(parents=True)
     go_mod = "module github.com/ditto-assistant/model-relay\n\ngo 1.24\n"
     if replace_directive:
-        go_mod += (
-            "\nreplace github.com/ditto-assistant/other => ../../packages/other\n"
-        )
+        go_mod += "\nreplace github.com/ditto-assistant/other => ../../packages/other\n"
     (module / "go.mod").write_text(go_mod)
     if with_go_sum:
-        (module / "go.sum").write_text(
-            "github.com/jackc/pgx/v5 v5.7.0 h1:abcdef\n"
-        )
+        (module / "go.sum").write_text("github.com/jackc/pgx/v5 v5.7.0 h1:abcdef\n")
     (module / "cmd" / "model-relay" / "main.go").write_text("package main\n")
     return module
 

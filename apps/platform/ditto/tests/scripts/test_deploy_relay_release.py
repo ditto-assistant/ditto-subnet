@@ -219,9 +219,7 @@ def test_release_rejects_a_missing_checksum_manifest_before_install(
 
 
 def test_release_rejects_a_tampered_binary_before_install(tmp_path: Path) -> None:
-    result, commands, state, _ = _run_release(
-        tmp_path, corrupt_binary_after_sums=True
-    )
+    result, commands, state, _ = _run_release(tmp_path, corrupt_binary_after_sums=True)
 
     assert result.returncode != 0
     assert "SHA256SUMS verification failed" in result.stderr
