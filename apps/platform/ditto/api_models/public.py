@@ -533,6 +533,18 @@ class PublicLeaderboardFamilyMember(BaseModel):
             ),
         ),
     ] = None
+    confirmation_seed_depth: Annotated[
+        int,
+        Field(
+            default=0,
+            ge=0,
+            exclude_if=lambda value: value == 0,
+            description=(
+                "Raw count of distinct continual-retest seeds accepted for this "
+                "submission. Omitted at zero to keep compact family rows lean."
+            ),
+        ),
+    ] = 0
 
 
 class PublicLeaderboardFamily(BaseModel):

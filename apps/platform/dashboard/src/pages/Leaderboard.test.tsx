@@ -468,6 +468,52 @@ describe("board filter (row 4)", () => {
 
 // ── Row 1 (page slice): sort, tabs, pager, and rank vocabulary ──
 describe("board view controls (row 1 slice)", () => {
+  it("keeps an accepted retest seed visible on the exact hidden family submission", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  submission_family: {
+                    members: [
+                      {
+                        agent_id: "11111111-1111-4111-8111-111111111111",
+                        agent_name: "prior-version",
+                        agent_version: 4,
+                        canonical_composite: 0.91,
+                        confirmation_seed_depth: 1,
+                      },
+                    ],
+                  },
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+
+    const toggle = await waitFor(() => {
+      const value = document.querySelector<HTMLButtonElement>("[data-family-toggle]");
+      expect(value).toBeTruthy();
+      return value as HTMLButtonElement;
+    });
+    fireEvent.click(toggle);
+
+    const chip = await waitFor(() => {
+      const value = document.querySelector(".family-child:not([hidden]) .retest-seed-chip");
+      expect(value?.textContent).toBe("1 retest seed");
+      return value;
+    });
+    expect(chip).toHaveClass("settled");
+    expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("this exact submission"));
+  });
+
   it("labels all v9 confirmation states and suppresses pending rows in enforce mode", async () => {
     renderPage({
       patch: (name, body) => {

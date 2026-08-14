@@ -12470,6 +12470,12 @@ export interface components {
             /** Canonical Composite */
             canonical_composite: number;
             /**
+             * Confirmation Seed Depth
+             * @description Raw count of distinct continual-retest seeds accepted for this submission. Omitted at zero to keep compact family rows lean.
+             * @default 0
+             */
+            confirmation_seed_depth: number;
+            /**
              * Miner Hotkey
              * @description This generation's own hotkey, which need not be the winner's. Owner families are resolved across attested payment roots, so crown seniority can be inherited from a sibling on a different hotkey. That is legitimate and previously invisible.
              */

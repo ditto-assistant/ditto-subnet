@@ -692,6 +692,10 @@ tr.family-child td {
   color: var(--text);
 }
 .family-member-state {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
   color: var(--text-dim);
   font-size: 11.5px;
 }
@@ -701,6 +705,7 @@ tr.family-child td {
   }
   .family-member-state {
     grid-column: 1 / -1;
+    justify-content: flex-start;
   }
 }
 .winner-miner {

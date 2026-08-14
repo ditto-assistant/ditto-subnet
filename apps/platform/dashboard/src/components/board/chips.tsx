@@ -89,32 +89,34 @@ export function ChipTip(props: ChipTipProps): JSX.Element {
  * on, so the chip carries it and the mean's full composition lives in the
  * tooltip; per-score values remain in row detail.
  */
+export function RetestSeedChip(props: { count: number }): JSX.Element {
+  const count = (): number => Math.max(0, Number(props.count) || 0);
+  return (
+    <Show when={count()}>
+      {(value) => (
+        <ChipTip
+          class="rollout-chip settled retest-seed-chip tip"
+          tabindex={0}
+          text={
+            "Recorded " +
+            value() +
+            " accepted continual-retest " +
+            (value() === 1 ? "seed" : "seeds") +
+            " for this exact submission. Accepted evidence stays attached to this submission even when another submission from the same owner represents the leaderboard slot."
+          }
+        >
+          {value() + (value() === 1 ? " retest seed" : " retest seeds")}
+        </ChipTip>
+      )}
+    </Show>
+  );
+}
+
 export function ContinualScoreChip(props: { entry: BoardEntry }): JSX.Element {
   return (
     <Show
       when={props.entry.aggregate_method === "continual_mean"}
-      fallback={
-        <Show when={Number(props.entry.confirmation_seed_depth) || 0}>
-          {(pending) => (
-            <ChipTip
-              class="rollout-chip tip"
-              tabindex={0}
-              text={
-                "Recorded " +
-                pending() +
-                " continual-retest " +
-                (pending() === 1 ? "seed" : "seeds") +
-                " for this agent. The initial three-score median stays authoritative until " +
-                "continual aggregation activates."
-              }
-            >
-              {pending() +
-                (pending() === 1 ? " retained sample" : " retained samples") +
-                " · activation pending"}
-            </ChipTip>
-          )}
-        </Show>
-      }
+      fallback={<RetestSeedChip count={Number(props.entry.confirmation_seed_depth) || 0} />}
     >
       {(() => {
         const waves = (): number => continualWaves(props.entry);

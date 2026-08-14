@@ -115,6 +115,8 @@ export interface LeaderboardFamilyMember {
    * supplies the fold anchor. May sit on a different hotkey than the winner. */
   submitted_at?: string | null;
   miner_hotkey?: string | null;
+  /** Accepted continual-retest seeds belonging to this exact submission. */
+  confirmation_seed_depth?: number;
 }
 
 export interface LeaderboardFamily {

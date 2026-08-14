@@ -2050,8 +2050,10 @@ def _public_leaderboard_family(
     members: tuple[Any, ...],
     *,
     representative_agent_id: UUID,
+    confirmation_depth: dict[UUID, int] | None = None,
 ) -> PublicLeaderboardFamily | None:
     """Project only the grouped children the leaderboard actually renders."""
+    depths = confirmation_depth or {}
     children = [
         PublicLeaderboardFamilyMember(
             agent_id=member.agent_id,
@@ -2060,6 +2062,7 @@ def _public_leaderboard_family(
             canonical_composite=member.canonical_composite,
             submitted_at=member.submitted_at,
             miner_hotkey=member.miner_hotkey,
+            confirmation_seed_depth=depths.get(member.agent_id, 0),
         )
         for member in members
         if member.agent_id != representative_agent_id
@@ -2702,6 +2705,24 @@ async def leaderboard(
             )
             for row in finalized_rows
         ]
+        if bench_version is None:
+            # A payment-owner family can replace its ranked representative while
+            # an older submission retains accepted retest evidence. Query the
+            # compact children too so the leaderboard does not make that
+            # append-only evidence disappear when the representative changes.
+            family_agent_ids = [
+                member.agent_id
+                for row in finalized_rows
+                for member in row.family_members
+                if member.agent_id != row.agent_id
+            ]
+            confirmation_depth.update(
+                await confirmation_depths(
+                    session,
+                    agent_ids=family_agent_ids,
+                    bench_version=active_version,
+                )
+            )
     # Match the validator's weight-authoritative population exactly: first keep
     # one representative per payment-time owner, then apply current registration
     # eligibility. Projecting emissions from the pre-deduplicated rows can crown
@@ -2933,6 +2954,7 @@ async def leaderboard(
                 submission_family=_public_leaderboard_family(
                     row.family_members,
                     representative_agent_id=row.agent_id,
+                    confirmation_depth=confirmation_depth,
                 ),
                 official_composite=board_official_composites.get(
                     row.agent_id, row.composite

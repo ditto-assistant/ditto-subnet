@@ -3327,6 +3327,27 @@ class TestPublicLeaderboard:
             # deduplicated population as the validator ledger instead.
             created_at=datetime(2026, 6, 8, 12, 0, tzinfo=UTC),
         )
+        from ditto.db.queries.confirmation_scores import (
+            ConfirmationSeedScore,
+            append_confirmation_scores,
+        )
+
+        async with session_maker() as s, s.begin():
+            await append_confirmation_scores(
+                s,
+                rows=[
+                    ConfirmationSeedScore(
+                        UUID(hidden_generation),
+                        _VALIDATOR_C,
+                        123456789,
+                        0.958,
+                        f"family-retest-{hidden_generation}",
+                        None,
+                    )
+                ],
+                bench_version=_ERA,
+                created_at=datetime.now(UTC),
+            )
         await _seed_payment(
             session_maker,
             agent_id=representative,
@@ -3361,6 +3382,7 @@ class TestPublicLeaderboard:
                     # the winner's crown_first_seen, and on whose hotkey.
                     "submitted_at": ANY,
                     "miner_hotkey": ANY,
+                    "confirmation_seed_depth": 1,
                 }
             ]
         }

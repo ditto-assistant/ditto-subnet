@@ -59,6 +59,7 @@ import {
   EfficiencyBonusChip,
   QualityGateChip,
   RankMove,
+  RetestSeedChip,
   RolloutChip,
   TokenPenaltyChip,
   V9ConfirmationChip,
@@ -658,7 +659,8 @@ function BoardRow(props: {
                   {fx(member.canonical_composite)}
                 </span>
                 <span class="family-member-state">
-                  Scored · not independently ranked · represented by {displayName()}
+                  <RetestSeedChip count={Number(member.confirmation_seed_depth) || 0} />
+                  <span>Scored · not independently ranked · represented by {displayName()}</span>
                 </span>
               </div>
             </td>
