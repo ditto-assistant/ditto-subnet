@@ -48,7 +48,7 @@ from ditto.db.queries.confirmation_bundles import (
     latest_confirmation_bundle_settings_revision,
     record_base_only_subject,
 )
-from ditto.db.queries.confirmation_policy_lock import lock_confirmation_policy
+from ditto.db.queries.confirmation_policy_lock import try_lock_confirmation_policy
 from ditto.db.queries.scores import (
     MIN_ELIGIBLE_CASES,
     SCORING_QUORUM,
@@ -186,8 +186,18 @@ async def reconcile_v9_confirmation_candidates(
 
     # Settings appends, candidate reconciliation, and claims share one policy
     # lock, so a bundle can never be created against a revision that ceased to
-    # be latest while selection was running.
-    await lock_confirmation_policy(session)
+    # be latest while selection was running. Background reconciliation must
+    # never queue on that lock, however: score finalization and confirmation
+    # submission already own agent/ticket/bundle rows, while an operator write
+    # owns the policy lock before reconciling those same rows. Waiting here
+    # would invert that order and can put the audited policy write behind an
+    # unbounded FIFO of score transactions. A caller that already owns the
+    # lock (settings write or fresh claim) reacquires the transaction-scoped
+    # advisory lock successfully. Every other caller preserves any just-recorded
+    # base proof and defers cohort convergence to the next claim, score,
+    # completion, or settings write.
+    if not await try_lock_confirmation_policy(session):
+        return ConfirmationReconciliation(base_subjects=len(recorded_agent_ids))
 
     settings_row = await latest_confirmation_bundle_settings_revision(session)
     settings = (

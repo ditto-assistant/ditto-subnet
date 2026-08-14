@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import hashlib
 import json
@@ -11,7 +12,7 @@ from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.confirmation_bundles import (
@@ -22,6 +23,7 @@ from ditto.api_models.confirmation_bundles import (
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.validator import V9BaseEvidence
 from ditto.api_server.confirmation_candidate_reconciliation import (
+    ConfirmationReconciliation,
     lower_median_v9_base_proof,
     reconcile_v9_confirmation_candidates,
 )
@@ -41,6 +43,7 @@ from ditto.db.queries.confirmation_bundles import (
     reserve_confirmation_bundle_budget,
     settle_confirmation_bundle_budget,
 )
+from ditto.db.queries.confirmation_policy_lock import lock_confirmation_policy
 from ditto.tests.confirmation_evidence_fixtures import (
     VALIDATOR_KEYPAIR,
     active_settings,
@@ -195,6 +198,57 @@ async def test_no_settings_persists_physical_lower_median_base_proof_only(
         select(func.count()).select_from(ConfirmationBundle)
     )
     assert bundle_count == 0
+
+
+async def test_background_reconciliation_yields_to_contended_policy_write(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_maker() as session, session.begin():
+        await _settings(session)
+        agent, _scores = await _agent_with_quorum(
+            session,
+            index=0,
+            composites=(700_000, 800_000, 900_000),
+        )
+        agent_id = agent.agent_id
+
+    async def reconcile() -> ConfirmationReconciliation:
+        async with session_maker() as worker, worker.begin():
+            finalized_agent = await worker.get(Agent, agent_id)
+            assert finalized_agent is not None
+            finalized_scores = list(
+                await worker.scalars(
+                    select(Score)
+                    .where(Score.agent_id == agent_id, Score.bench_version == 9)
+                    .order_by(Score.validator_hotkey)
+                )
+            )
+            return await reconcile_v9_confirmation_candidates(
+                worker,
+                verification_profiles=_registry(),
+                finalized_agent=finalized_agent,
+                finalized_scores=finalized_scores,
+            )
+
+    # This is the exact transaction-scoped advisory lock an audited settings
+    # write owns. Score finalization must preserve its base proof and return,
+    # not wait behind the operator or join a FIFO of background reconcilers.
+    async with session_maker() as holder, holder.begin():
+        await lock_confirmation_policy(holder)
+        result = await asyncio.wait_for(reconcile(), timeout=2)
+
+    assert result.base_subjects == 1
+    assert result.selected_subjects == 0
+    assert result.resolved_bundles == 0
+    async with session_maker() as session:
+        subject = await session.get(ConfirmationBundleSubject, (agent_id, 9))
+        assert subject is not None
+        assert subject.result_status == ConfirmationResultStatus.BASE_ONLY.value
+        assert subject.bundle_id is None
+        assert (
+            await session.scalar(select(func.count()).select_from(ConfirmationBundle))
+            == 0
+        )
 
 
 @pytest.mark.parametrize("future_version", [10, 11, 100])
