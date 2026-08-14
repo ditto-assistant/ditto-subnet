@@ -49,6 +49,10 @@ from ditto.api_models import (
     UploadCheckRequest,
     UploadCheckResponse,
 )
+from ditto.api_models.miner_logs import (
+    MinerHarnessLogsRequest,
+    MinerHarnessLogsResponse,
+)
 from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
@@ -320,6 +324,7 @@ class ApiClient:
             raise AttestationRejectedError(_format_error(response, prefix="owner-link"))
         return OwnerLinkResponse.model_validate(response.json())
 
+<<<<<<< HEAD
     # ---- /name-claims ---------------------------------------------------
 
     def list_name_claims(self) -> NameClaimListResponse:
@@ -437,6 +442,44 @@ class ApiClient:
         if response.status_code not in (200, 201):
             raise AvatarRejectedError(_format_error(response, prefix="avatar-clear"))
         return MinerAvatarResponse.model_validate(response.json())
+
+    def post_harness_logs(
+        self, body: MinerHarnessLogsRequest
+    ) -> MinerHarnessLogsResponse:
+        """Fetch this miner's own harness diagnostics for one of their agents.
+
+        POST rather than GET because the signature and timestamp travel in the
+        body: a query string would land in access logs, proxy caches, and
+        browser history.
+
+        Args:
+            body: Request signed by the hotkey that owns ``agent_id``; see
+                :func:`ditto.miner_cli.signing.sign_harness_logs_request`.
+
+        Returns:
+            Parsed :class:`MinerHarnessLogsResponse`, attempts newest first.
+
+        Raises:
+            AgentNotFoundError: On 404. The platform returns one response for
+                every denial -- bad signature, stale timestamp, unknown agent,
+                or an agent owned by another hotkey -- so that it cannot be used
+                to probe which agent ids exist. Do not report a cause here that
+                the server deliberately withheld.
+            ApiResponseError: On any other non-200.
+        """
+        response = self._request(
+            "POST",
+            "/api/v1/miner/harness-logs",
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code == 404:
+            raise AgentNotFoundError(
+                f"no agent {body.agent_id} for hotkey {body.miner_hotkey} "
+                "(or the signature did not verify)"
+            )
+        if response.status_code != 200:
+            raise ApiResponseError(_format_error(response, prefix="harness-logs"))
+        return MinerHarnessLogsResponse.model_validate(response.json())
 
     # ---- /retrieval/agent/{id}/status -----------------------------------
 
