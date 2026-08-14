@@ -1011,6 +1011,62 @@ class TestCrownFirstSeen:
         assert row.crown_first_seen == improved_from
         assert row.fold_first_seen == improved_from
 
+    async def test_a_tied_resubmission_represents_the_owner_and_keeps_its_anchor(
+        self, session: AsyncSession
+    ) -> None:
+        """Both halves of the miner-facing promise, in one place.
+
+        Bench v9 saturated, so a miner's real improvements land on the *same*
+        composite and the tie decides who is on the board. Earliest-wins left
+        the owner represented by a generation it had already moved past, with no
+        way to be seen — while the seniority that tie-break was protecting is
+        not in the tie at all, it is in ``crown_first_seen``.
+        """
+        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        resubmitted = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        for created_at in (first, resubmitted):
+            await _seed_scored(
+                session,
+                miner=_MINER,
+                composite=_WINNER_COMPOSITE,
+                created_at=created_at,
+                n=MIN_ELIGIBLE_CASES,
+            )
+
+        (row,) = await list_eligible_ledger(session)
+
+        # The newer generation is the one on the board ...
+        assert row.first_seen == resubmitted
+        # ... standing on the reign the lineage already earned.
+        assert row.crown_first_seen == first
+        assert row.fold_first_seen == first
+
+    async def test_a_worse_resubmission_never_takes_the_owners_place(
+        self, session: AsyncSession
+    ) -> None:
+        """Newest wins a tie, not an argument. Experimenting stays free."""
+        strong = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        weak_and_newer = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=strong,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_BEHIND_A_RIVAL,
+            created_at=weak_and_newer,
+            n=MIN_ELIGIBLE_CASES,
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.first_seen == strong
+        assert row.composite == pytest.approx(_WINNER_COMPOSITE)
+
     async def test_a_plateau_resubmission_keeps_its_anchor(
         self, session: AsyncSession
     ) -> None:

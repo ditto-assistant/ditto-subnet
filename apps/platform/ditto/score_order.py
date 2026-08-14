@@ -8,6 +8,11 @@ the ledger read produces the same order in SQL through
 that exist, they live next to each other here, and
 ``ditto/tests/db/queries/test_score_ranking.py`` asserts they agree row for row.
 
+:func:`owner_family_order_terms` is the one deliberate variation, and it is not
+a third copy of the rule: it orders one owner's own generations against each
+other during the ledger read, which happens only in SQL, and it differs from the
+canonical comparator in exactly one term.
+
 It carries no ditto imports on purpose. :mod:`ditto.api_server.koth` mirrors the
 subnet's frozen consensus fold and must be able to read the comparator without
 pulling the database layer in behind it; :mod:`ditto.db.queries.score_ranking`
@@ -103,6 +108,32 @@ def score_order_terms(
     two forms sit next to each other and a test can assert they agree.
     """
     return (eligible.desc(), composite.desc(), first_seen.asc(), agent_id.asc())
+
+
+def owner_family_order_terms(
+    *,
+    eligible: ColumnElement[Any],
+    composite: ColumnElement[Any],
+    first_seen: ColumnElement[Any],
+    agent_id: ColumnElement[Any],
+) -> tuple[ColumnElement[Any], ...]:
+    """:func:`score_order_terms`, but newest-first on an exact score tie.
+
+    Used only to choose which of ONE owner's generations represents it. Between
+    owners, the earliest arrival still wins a tie (:func:`score_order_terms`) --
+    that is the seniority rule the whole fold rests on, and flipping it there
+    would reorder the board for every miner sitting at the same score.
+
+    Inside a family there is no seniority to protect, because
+    ``LedgerRow.crown_first_seen`` already carries the lineage's arrival time
+    across whichever generation is chosen. So the tie can be spent on something
+    useful instead: a saturated benchmark reports a miner's improvements as
+    *equal* composites, and picking the earliest one left the owner represented
+    by an older agent it had already moved past, with no way to be seen. Newest
+    wins the tie; a strictly better score still wins outright, so submitting
+    something worse can never cost an owner its standing.
+    """
+    return (eligible.desc(), composite.desc(), first_seen.desc(), agent_id.asc())
 
 
 def rank_submissions(

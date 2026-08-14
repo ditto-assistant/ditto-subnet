@@ -53,7 +53,11 @@ from ditto.db.models import (
 )
 from ditto.db.queries.agents import get_agent_by_id
 from ditto.db.queries.inference import LeaseModelUsage
-from ditto.score_order import score_order_key, score_order_terms
+from ditto.score_order import (
+    owner_family_order_terms,
+    score_order_key,
+    score_order_terms,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
@@ -1642,6 +1646,14 @@ async def list_eligible_ledger(
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
 
+    "Best" breaks an exact tie toward the *newest* generation
+    (:func:`~ditto.score_order.owner_family_order_terms`), because a saturated
+    benchmark reports a miner's real improvements as equal composites and the
+    owner would otherwise stay represented by an agent it had already moved
+    past. A strictly better score still wins outright, so a worse submission
+    never costs an owner its standing, and the lineage's arrival time survives
+    the swap in :attr:`LedgerRow.crown_first_seen`.
+
     ``owner_score="official"`` (the default) chooses each owner's representative
     with the same continual score used for current ranks and validator weights.
     ``"canonical"`` is reserved for historical snapshots, where the original
@@ -2188,7 +2200,7 @@ async def list_eligible_ledger(
         )
         .cte("rooted_candidates")
     )
-    owner_order = score_order_terms(
+    owner_order = owner_family_order_terms(
         eligible=rooted.c.eligible,
         composite=rooted.c.official_score,
         first_seen=rooted.c.first_seen,
