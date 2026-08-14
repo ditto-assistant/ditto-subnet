@@ -174,7 +174,7 @@ def test_sandbox_daemon_prunes_old_unused_build_data() -> None:
     ).read_text()
 
     assert set(sandbox["volumes"]) == {
-        "sandbox-docker-rootful-data:/var/lib/docker",
+        "sandbox-docker-rootful-data-v2:/var/lib/docker",
         "openrouter-shim-ca:/var/lib/dittobench-openrouter-shim",
         "dittobench-private-artifacts:/var/lib/dittobench-private-artifacts",
     }

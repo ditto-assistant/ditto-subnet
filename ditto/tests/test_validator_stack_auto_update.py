@@ -1201,7 +1201,10 @@ def test_unhealthy_candidate_sidecar_rolls_back_every_service_and_is_suppressed(
     assert (state_dir / "managed-release.env").read_text() == (
         f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
     )
-    assert (state_dir / "failed-candidate").read_text().strip() == STACK_DIGEST
+    failed = _manifest(state_dir / "failed-candidate")
+    assert failed["CANDIDATE"] == STACK_DIGEST
+    assert failed["FAILURES"] == "1"
+    assert int(failed["RETRY_AFTER"]) > 0
     assert not (state_dir / "transaction.env").exists()
 
     final["calls"] = []
@@ -1210,10 +1213,69 @@ def test_unhealthy_candidate_sidecar_rolls_back_every_service_and_is_suppressed(
     state_path.write_text(json.dumps(final))
     retry = _run_updater(env, "run")
     assert retry.returncode == 0, retry.stderr
-    assert "candidate suppressed" in retry.stderr
+    assert "candidate retry deferred" in retry.stderr
     suppressed = json.loads(state_path.read_text())
     assert not any(call[0] in {"kill", "stop"} for call in suppressed["calls"])
     assert not any("up" in call for call in suppressed["compose_calls"])
+
+
+def test_rolled_back_candidate_retries_after_bounded_backoff(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["fail_health_service"] = "sandbox-docker"
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    failed = _run_updater(env, "run")
+    assert failed.returncode != 0
+    marker = _manifest(state_dir / "failed-candidate")
+    assert marker["FAILURES"] == "1"
+
+    # Advance only the persisted retry boundary, then remove the transient
+    # service fault. The exact same descriptor must receive a fresh attempt.
+    (state_dir / "failed-candidate").write_text(
+        f"CANDIDATE={STACK_DIGEST}\nFAILURES=1\nRETRY_AFTER=1\n"
+    )
+    state = json.loads(state_path.read_text())
+    state["fail_health_service"] = None
+    state["calls"] = []
+    state["compose_calls"] = []
+    state_path.write_text(json.dumps(state))
+
+    retried = _run_updater(env, "run")
+
+    assert retried.returncode == 0, retried.stderr
+    assert _manifest(state_dir / "current/manifest.env")["STACK_VERSION"] == "0.10.1"
+    assert not (state_dir / "failed-candidate").exists()
+    final = json.loads(state_path.read_text())
+    assert any("up" in call for call in final["compose_calls"])
+
+
+def test_candidate_is_suppressed_after_bounded_failure_budget(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+    state_dir.mkdir()
+    (state_dir / "failed-candidate").write_text(
+        f"CANDIDATE={STACK_DIGEST}\nFAILURES=3\nRETRY_AFTER=1\n"
+    )
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["compose_calls"] = []
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert "suppressed after 3 failed full-stack rollbacks" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+    assert not any("up" in call for call in final["compose_calls"])
 
 
 def test_transient_dependency_health_failure_is_retried_without_recreating(
@@ -1270,7 +1332,9 @@ def test_candidate_validator_rejection_rolls_back_complete_stack(
     )
     assert final["runtime_state"]["platform_accepted"] is True
     assert final["runtime_state"]["state"] == "working"
-    assert (state_dir / "failed-candidate").read_text().strip() == STACK_DIGEST
+    failed = _manifest(state_dir / "failed-candidate")
+    assert failed["CANDIDATE"] == STACK_DIGEST
+    assert failed["FAILURES"] == "1"
 
 
 def test_same_release_digest_is_a_safe_noop(
@@ -1407,7 +1471,9 @@ def test_recover_restores_the_complete_previous_stack_after_crash_phase(
 
     assert result.returncode == 0, result.stderr
     assert not (state_dir / "transaction.env").exists()
-    assert (state_dir / "failed-candidate").read_text().strip() == STACK_DIGEST
+    failed = _manifest(state_dir / "failed-candidate")
+    assert failed["CANDIDATE"] == STACK_DIGEST
+    assert failed["FAILURES"] == "1"
     final = json.loads(state_path.read_text())
     assert all(container["running"] for container in final["containers"].values())
     assert final["runtime_state"]["state"] == "working"

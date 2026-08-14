@@ -88,7 +88,10 @@ services:
     extra_hosts:
       - host.docker.internal:127.0.0.1
     volumes:
-      - sandbox-docker-rootful-data:/var/lib/docker
+      # Generation-scoped nested-Docker state. A release candidate must not
+      # inherit a corrupt or pathologically slow daemon database from the
+      # previous release; rollback still uses the previous release's volume.
+      - sandbox-docker-rootful-data-v2:/var/lib/docker
       # Shared only with dittobench-api. The scorer writes a public CA bundle;
       # the nested daemon mounts it read-only into miner containers. No private
       # key is written to this volume.
@@ -378,5 +381,5 @@ volumes:
   pylon-data:
   openrouter-shim-ca:
   dittobench-private-artifacts:
-  sandbox-docker-rootful-data:
+  sandbox-docker-rootful-data-v2:
   validator-update-bootstrap:

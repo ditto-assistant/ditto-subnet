@@ -50,6 +50,62 @@ require_positive_integer() { [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "$1 must be a po
 is_descriptor_digest() { [[ "$1" =~ ^ghcr\.io/ditto-assistant/ditto-subnet-stack@sha256:[0-9a-f]{64}$ ]]; }
 is_image_digest() { [[ "$1" =~ ^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]; }
 
+failed_candidate_value() {
+  local key="$1" line=""
+  [ -f "$FAILED_CANDIDATE_FILE" ] || return 1
+  line="$(awk -F= -v key="$key" '$1==key {print substr($0,index($0,"=")+1); exit}' "$FAILED_CANDIDATE_FILE")"
+  printf '%s' "$line"
+}
+
+record_failed_candidate() {
+  local candidate="$1" previous_candidate="" failures=0 retry_after now
+  if [ -f "$FAILED_CANDIDATE_FILE" ]; then
+    previous_candidate="$(failed_candidate_value CANDIDATE || true)"
+    # The pre-v0.58 updater wrote the raw candidate digest. Treat it as one
+    # prior failure so an operator-updated script can recover after backoff.
+    if [ -z "$previous_candidate" ] && [ "$(cat "$FAILED_CANDIDATE_FILE")" = "$candidate" ]; then
+      previous_candidate="$candidate"
+      failures=1
+    elif [ "$previous_candidate" = "$candidate" ]; then
+      failures="$(failed_candidate_value FAILURES || true)"
+      [[ "$failures" =~ ^[0-9]+$ ]] || failures=0
+    fi
+  fi
+  [ "$previous_candidate" = "$candidate" ] || failures=0
+  failures=$((failures + 1))
+  now="$(date +%s)"
+  retry_after=$((now + failure_backoff_seconds))
+  printf 'CANDIDATE=%s\nFAILURES=%s\nRETRY_AFTER=%s\n' \
+    "$candidate" "$failures" "$retry_after" >"$FAILED_CANDIDATE_FILE"
+}
+
+failed_candidate_is_suppressed() {
+  local candidate="$1" recorded="" failures=0 retry_after=0 now
+  [ -f "$FAILED_CANDIDATE_FILE" ] || return 1
+  recorded="$(failed_candidate_value CANDIDATE || true)"
+  if [ -z "$recorded" ]; then
+    # Legacy markers are retried once under the bounded v2 policy instead of
+    # suppressing an otherwise healthy release forever.
+    [ "$(cat "$FAILED_CANDIDATE_FILE")" = "$candidate" ] || return 1
+    return 1
+  fi
+  [ "$recorded" = "$candidate" ] || return 1
+  failures="$(failed_candidate_value FAILURES || true)"
+  retry_after="$(failed_candidate_value RETRY_AFTER || true)"
+  [[ "$failures" =~ ^[0-9]+$ ]] || return 1
+  [[ "$retry_after" =~ ^[0-9]+$ ]] || return 1
+  if [ "$failures" -ge "$failure_max_attempts" ]; then
+    log "candidate suppressed after $failures failed full-stack rollbacks"
+    return 0
+  fi
+  now="$(date +%s)"
+  if [ "$now" -lt "$retry_after" ]; then
+    log "candidate retry deferred until $retry_after after failure $failures/$failure_max_attempts"
+    return 0
+  fi
+  return 1
+}
+
 validate_image_repository() {
   case "$1" in
     VALIDATOR_IMAGE) [[ "$2" =~ ^ghcr\.io/ditto-assistant/ditto-subnet-validator@sha256:[0-9a-f]{64}$ ]] ;;
@@ -506,7 +562,7 @@ recover_transaction() {
       ;;
     old_stopped|candidate_started|rollback_pending|rollback_ready)
       rollback_to_previous "$previous" || die "could not recover the previous complete stack"
-      printf '%s\n' "$candidate" >"$FAILED_CANDIDATE_FILE"
+      record_failed_candidate "$candidate"
       ;;
     committed)
       container="$(service_container "$CURRENT_DIR" ditto-subnet)"; state="$(runtime_state "$container")"
@@ -519,7 +575,7 @@ recover_transaction() {
         [ "$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)" != true ] || state_drained "$state" "$container" || die "committed validator state is ambiguous; refusing an unsafe rollback"
         record_transaction rollback_pending "$previous" "$candidate"
         rollback_to_previous "$previous" || die "committed stack failed recovery and full rollback failed"
-        printf '%s\n' "$candidate" >"$FAILED_CANDIDATE_FILE"
+        record_failed_candidate "$candidate"
       fi
       ;;
     *) die "unknown transaction phase $phase";;
@@ -555,9 +611,9 @@ perform_update() {
   old_container="$(service_container "$CURRENT_DIR" ditto-subnet)"
   docker stop --time 30 "$old_container" >/dev/null || die "could not stop drained validator"
   DRAINED_CONTAINER=''; DRAINED_RELEASE_DIR=''; record_transaction old_stopped "$previous_ref" "$candidate_ref"
-  if ! deploy_release "$STAGED_DIR"; then record_transaction rollback_pending "$previous_ref" "$candidate_ref"; rollback_to_previous "$previous_ref" || die "candidate deploy and full rollback both failed"; printf '%s\n' "$candidate_ref" >"$FAILED_CANDIDATE_FILE"; rm -f "$TRANSACTION_FILE"; die "candidate deploy failed; previous stack restored"; fi
+  if ! deploy_release "$STAGED_DIR"; then record_transaction rollback_pending "$previous_ref" "$candidate_ref"; rollback_to_previous "$previous_ref" || die "candidate deploy and full rollback both failed"; record_failed_candidate "$candidate_ref"; rm -f "$TRANSACTION_FILE"; die "candidate deploy failed; previous stack restored"; fi
   record_transaction candidate_started "$previous_ref" "$candidate_ref"
-  if ! wait_stack_quiescent "$STAGED_DIR" "$ready_timeout" "$check_seconds"; then record_transaction rollback_pending "$previous_ref" "$candidate_ref"; rollback_to_previous "$previous_ref" || die "candidate readiness and full rollback both failed"; printf '%s\n' "$candidate_ref" >"$FAILED_CANDIDATE_FILE"; rm -f "$TRANSACTION_FILE"; die "candidate readiness failed; previous stack restored"; fi
+  if ! wait_stack_quiescent "$STAGED_DIR" "$ready_timeout" "$check_seconds"; then record_transaction rollback_pending "$previous_ref" "$candidate_ref"; rollback_to_previous "$previous_ref" || die "candidate readiness and full rollback both failed"; record_failed_candidate "$candidate_ref"; rm -f "$TRANSACTION_FILE"; die "candidate readiness failed; previous stack restored"; fi
   install_staged_as_current
   record_transaction committed "$previous_ref" "$candidate_ref"
   resume_and_verify "$CURRENT_DIR" "$ready_timeout" "$check_seconds" || die "candidate may be working; committed journal retained"
@@ -585,7 +641,7 @@ cleanup() {
     previous="$(transaction_value PREVIOUS_RELEASE 2>/dev/null || true)"
     if is_descriptor_digest "$previous" && rollback_to_previous "$previous"; then
       candidate="$(transaction_value CANDIDATE_RELEASE 2>/dev/null || true)"
-      is_descriptor_digest "$candidate" && printf '%s\n' "$candidate" >"$FAILED_CANDIDATE_FILE"
+      is_descriptor_digest "$candidate" && record_failed_candidate "$candidate"
       rm -f "$TRANSACTION_FILE"
       log "interrupted replacement rolled back the complete previous stack"
     else
@@ -625,7 +681,9 @@ case "$STATE_DIR" in /*) ;; *) die "stack update state directory must be absolut
 [ ! -L "$STATE_DIR" ] || die "stack update state directory must not be a symbolic link"
 mkdir -p "$STATE_DIR"; chmod 0700 "$STATE_DIR"; exec 9>>"$LOCK_FILE"; flock -n 9 || die "another stack update is running"; LOCK_HELD=true
 drain_timeout="$(setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 4800)"; ready_timeout="$(setting VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS 300)"; check_seconds="$(setting VALIDATOR_AUTO_UPDATE_CHECK_SECONDS 5)"
+failure_backoff_seconds="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_BACKOFF_SECONDS 900)"; failure_max_attempts="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_MAX_ATTEMPTS 3)"
 require_positive_integer drain_timeout "$drain_timeout"; require_positive_integer ready_timeout "$ready_timeout"; require_positive_integer check_seconds "$check_seconds"
+require_positive_integer failure_backoff_seconds "$failure_backoff_seconds"; require_positive_integer failure_max_attempts "$failure_max_attempts"
 trap 'cleanup $?' EXIT; trap 'exit 143' INT TERM
 recover_transaction
 if [ "$mode" = recover ]; then log "recovery complete"; exit 0; fi
@@ -680,5 +738,5 @@ fi
 if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)"; then log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt in)"; exit 0; fi
 candidate="$(resolve_channel_digest "$CANDIDATE_CHANNEL")"
 verify_descriptor_signature "$candidate" || die "candidate descriptor publisher identity is invalid"
-if [ -f "$FAILED_CANDIDATE_FILE" ] && [ "$(cat "$FAILED_CANDIDATE_FILE")" = "$candidate" ]; then log "candidate suppressed after failed full-stack rollback"; exit 0; fi
+if failed_candidate_is_suppressed "$candidate"; then exit 0; fi
 perform_update "$candidate" false

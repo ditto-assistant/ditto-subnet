@@ -30,11 +30,11 @@ uv run pytest \
   ditto/tests/test_validator_stack_auto_update.py \
   -k 'success_replaces_and_commits_the_complete_stack or waits_for_busy_validator_before_replacing_stack'
 
-# CI deliberately uses a four-vCPU daemon. The candidate must be creatable on
-# that documented minimum, while the production default remains uncapped.
+# The live managed fleet includes a two-vCPU validator. The candidate must be
+# creatable with that limit, while the production default remains uncapped.
 daemon_cpus="$(docker info --format '{{.NCPU}}')"
-if [ -n "${CI:-}" ] && [ "$daemon_cpus" -ne 4 ]; then
-  echo "expected the CI Docker daemon to expose exactly 4 CPUs; found $daemon_cpus" >&2
+if [ -n "${CI:-}" ] && [ "$daemon_cpus" -lt 2 ]; then
+  echo "expected the CI Docker daemon to expose at least 2 CPUs; found $daemon_cpus" >&2
   exit 1
 fi
 
@@ -45,6 +45,8 @@ compose=(docker compose --project-name "$PROJECT_NAME" --env-file "$ENV_FILE" \
 container_id="$("${compose[@]}" ps --all -q sandbox-docker)"
 test -n "$container_id"
 test "$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$container_id")" = "0"
+docker update --cpus 2 "$container_id" >/dev/null
+test "$(docker inspect --format '{{.HostConfig.NanoCpus}}' "$container_id")" = "2000000000"
 "${compose[@]}" start sandbox-docker
 test "$(docker inspect --format '{{.State.Running}}' "$container_id")" = "true"
 
