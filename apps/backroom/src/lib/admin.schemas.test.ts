@@ -35,6 +35,8 @@ import {
   inferenceRouteConfirmation,
   inferenceRoutingPolicyInputSchema,
   inferencePolicyConfirmation,
+  inferenceConcurrencySettingsSchema,
+  MAX_CHAT_TOKEN_BUDGET,
   QUEUE_POLICY_CONFIRMATION,
   effectiveQueuePolicySettingsSchema,
   queuePolicySettingsControlSchema,
@@ -87,6 +89,22 @@ type GeneratedConfirmationBundleList =
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 
 describe('admin API schemas', () => {
+  it('mirrors the Platform 100M hosted chat-token hard ceiling', () => {
+    const settings = {
+      chat_request_budget: 8192,
+      chat_token_budget: MAX_CHAT_TOKEN_BUDGET,
+      embedding_per_ticket_concurrency: 8,
+      embedding_per_validator_concurrency: 24,
+      embedding_global_concurrency: 32,
+    }
+    expect(MAX_CHAT_TOKEN_BUDGET).toBe(100_000_000)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(() => inferenceConcurrencySettingsSchema.parse({
+      ...settings,
+      chat_token_budget: MAX_CHAT_TOKEN_BUDGET + 1,
+    })).toThrow(/100000000/)
+  })
+
   it('requires exact confirmation for v9 contract retests only', () => {
     const base = {
       validatorHotkey: '5Validator',

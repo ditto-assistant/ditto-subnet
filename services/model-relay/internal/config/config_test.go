@@ -73,6 +73,23 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	}
 }
 
+func TestInferenceTokenBudgetHardCeiling(t *testing.T) {
+	env := minimalEnv()
+	env["DITTO_INFERENCE_TOKEN_BUDGET"] = "100000000"
+	cfg, err := Load(MapLookup(env))
+	if err != nil {
+		t.Fatalf("100M hard ceiling must boot: %v", err)
+	}
+	if cfg.Inference.TokenBudget != 100_000_000 {
+		t.Fatalf("token budget = %d, want 100000000", cfg.Inference.TokenBudget)
+	}
+
+	env["DITTO_INFERENCE_TOKEN_BUDGET"] = "100000001"
+	if _, err := Load(MapLookup(env)); err == nil || !strings.Contains(err.Error(), "DITTO_INFERENCE_TOKEN_BUDGET") {
+		t.Fatalf("over-ceiling token budget must fail with its variable named, got: %v", err)
+	}
+}
+
 func TestUploadConfigValidation(t *testing.T) {
 	env := minimalEnv()
 	delete(env, "DITTO_UPLOAD_PAYMENT_ADDRESS")

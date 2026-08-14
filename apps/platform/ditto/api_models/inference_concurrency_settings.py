@@ -170,10 +170,14 @@ MAX_CHAT_REQUEST_BUDGET = 16384
 # the request budget was decoration.
 DEFAULT_CHAT_TOKEN_BUDGET = 25_000_000
 
-# 2x the default, matching the request budget's idiom. This is also the bound
+# Production runs have exhausted 25M grants after more than an hour, and the
+# fastest observed legitimate strategy projects to about 46.6M over a full
+# 90-minute lease. Keep enough distance above that measured tail for a 75M
+# operating cap while retaining the request budget, lease deadline, and this
+# finite hard stop as independent runaway guards. This is also the bound
 # ``check_config`` enforces at boot -- imported there rather than repeated, so a
 # revision this board accepts can never be a value the next restart rejects.
-MAX_CHAT_TOKEN_BUDGET = 50_000_000
+MAX_CHAT_TOKEN_BUDGET = 100_000_000
 
 
 class InferenceConcurrencySettings(BaseModel):

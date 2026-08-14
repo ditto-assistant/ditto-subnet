@@ -19,6 +19,7 @@ from ditto.api_models.inference_concurrency_settings import (
     DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY,
     DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY,
     DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
+    MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
     MAX_EMBEDDING_PER_TICKET_CONCURRENCY,
     MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
@@ -69,6 +70,18 @@ class TestDefaults:
         the next restart and then refuses to boot.
         """
         assert MAX_EMBEDDING_GLOBAL_CONCURRENCY == 128
+
+    def test_chat_token_ceiling_has_room_for_the_measured_tail(self) -> None:
+        assert DEFAULT_CHAT_TOKEN_BUDGET == 25_000_000
+        assert MAX_CHAT_TOKEN_BUDGET == 100_000_000
+        assert (
+            InferenceConcurrencySettings(
+                chat_token_budget=MAX_CHAT_TOKEN_BUDGET
+            ).chat_token_budget
+            == MAX_CHAT_TOKEN_BUDGET
+        )
+        with pytest.raises(ValidationError, match="less than or equal"):
+            InferenceConcurrencySettings(chat_token_budget=MAX_CHAT_TOKEN_BUDGET + 1)
 
 
 class TestHierarchy:

@@ -9,6 +9,7 @@ import pytest
 from ditto.api_models.inference_concurrency_settings import (
     DEFAULT_CHAT_REQUEST_BUDGET,
     MAX_CHAT_REQUEST_BUDGET,
+    MAX_CHAT_TOKEN_BUDGET,
 )
 from ditto.api_server.config import check_config, parse_api_server_config_from_env
 from ditto.api_server.errors import ApiServerConfigError
@@ -472,6 +473,15 @@ class TestInferenceRequestBudgetBound:
         at_bound = replace(
             config.inference_proxy, request_budget=MAX_CHAT_REQUEST_BUDGET
         )
+        check_config(replace(config, inference_proxy=at_bound))
+
+    def test_token_budget_boot_bound_matches_the_operator_board(self):
+        config = make_api_server_config()
+        over = replace(config.inference_proxy, token_budget=MAX_CHAT_TOKEN_BUDGET + 1)
+        with pytest.raises(ApiServerConfigError, match="safety bound"):
+            check_config(replace(config, inference_proxy=over))
+
+        at_bound = replace(config.inference_proxy, token_budget=MAX_CHAT_TOKEN_BUDGET)
         check_config(replace(config, inference_proxy=at_bound))
 
     def test_the_default_is_an_actual_raise_over_the_number_it_replaced(self):

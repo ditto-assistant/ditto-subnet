@@ -149,7 +149,7 @@ type InferenceProxyConfig struct {
 	RoutingMode   string   // DITTO_INFERENCE_ROUTING_MODE
 
 	RequestBudget int   // DITTO_INFERENCE_REQUEST_BUDGET, default 8192, max 16384
-	TokenBudget   int64 // DITTO_INFERENCE_TOKEN_BUDGET, default 25_000_000, max 50_000_000
+	TokenBudget   int64 // DITTO_INFERENCE_TOKEN_BUDGET, default 25_000_000, max 100_000_000
 
 	TicketConcurrency    int // DITTO_INFERENCE_TICKET_CONCURRENCY, default 8
 	ValidatorConcurrency int // DITTO_INFERENCE_VALIDATOR_CONCURRENCY, default 24
@@ -463,7 +463,7 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 		}
 	}
 	pos("DITTO_INFERENCE_REQUEST_BUDGET", int64(ip.RequestBudget), 16384)
-	pos("DITTO_INFERENCE_TOKEN_BUDGET", ip.TokenBudget, 50_000_000)
+	pos("DITTO_INFERENCE_TOKEN_BUDGET", ip.TokenBudget, 100_000_000)
 	pos("DITTO_INFERENCE_REQUEST_BODY_BYTES", ip.RequestBodyBytes, 1*1024*1024)
 	pos("DITTO_INFERENCE_RESPONSE_BODY_BYTES", ip.ResponseBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", int64(ip.MaxOutputTokens), 32768)
