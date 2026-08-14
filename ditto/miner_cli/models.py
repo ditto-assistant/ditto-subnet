@@ -115,6 +115,47 @@ class PaymentReceipt:
 
 
 @dataclass(frozen=True)
+class RegistrationQuote:
+    """Live cost of registering one hotkey on one subnet, read from chain.
+
+    Every field is read at quote time; nothing here is a constant. The
+    recycle amount is a chain value that moves with registration demand
+    (``burn_increase`` on each registration, decaying by ``burn_half_life``
+    toward ``min_burn``), so a quote is only good for the moment it was
+    taken -- :func:`ditto.miner_cli.registration.submit_registration`
+    re-reads it and refuses to exceed the amount that was confirmed.
+    """
+
+    netuid: int
+    """Subnet the registration would be recycled into."""
+
+    hotkey_ss58: str
+    """Hotkey being registered."""
+
+    coldkey_name: str
+    """Wallet coldkey name (display only; the coldkey signs and pays)."""
+
+    coldkey_ss58: str
+    """SS58 of the coldkey whose free balance covers the recycle amount."""
+
+    recycle_rao: int
+    """Current registration cost in rao, read from ``Subtensor.recycle``."""
+
+    balance_rao: int
+    """Coldkey free balance in rao at quote time."""
+
+    @property
+    def affordable(self) -> bool:
+        """``True`` when the free balance covers the recycle amount.
+
+        Does not account for the transaction fee, which is why a ``True``
+        here is necessary but not sufficient -- the chain remains the
+        authority and can still reject for insufficient funds.
+        """
+        return self.balance_rao >= self.recycle_rao
+
+
+@dataclass(frozen=True)
 class PendingUploadPayment:
     """Locally saved, unconsumed payment with non-secret upload metadata."""
 

@@ -720,9 +720,12 @@ produces a container serving that protocol on :8080.
 > Benchmark v8 is the only active scoring contract. It uses locked
 > `openai/gpt-oss-20b` inference and validator-observed tool execution.
 
-1. Registration. You need a hotkey registered on subnet netuid 118
-(`btcli subnet register --netuid 118`) and TAO for the registration cost plus
-per-submission eval fees.
+1. Registration. You need a hotkey registered on subnet netuid 118 and TAO for
+the registration cost plus per-submission eval fees. `ditto upload` offers to
+register for you when its pre-check finds the hotkey unregistered, showing the
+live cost before it recycles anything; to do it separately, run
+`btcli subnets register --netuid 118`. See the
+[miner guide](../../docs/MINER.md#prepare-for-mainnet).
 
 2. Submission + fee. This kit's `submit` only packages the tarball. The
 on-chain upload happens through `ditto upload` (the miner CLI from the

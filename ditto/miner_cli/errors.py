@@ -170,6 +170,42 @@ class PaymentFinalizationTimeoutError(MinerCliError):
     pass
 
 
+class RegistrationSubmissionError(MinerCliError):
+    """Raised when the ``burned_register`` extrinsic cannot be completed.
+
+    This can happen when:
+    - The subnet does not exist on the selected chain, or the recycle cost
+      and coldkey balance could not be read (the quote fails closed rather
+      than burning TAO against an unknown price).
+    - The coldkey lacks enough free TAO to cover the current recycle amount.
+    - Registration is closed, the per-interval registration slots for the
+      subnet are exhausted, or the node otherwise rejects the extrinsic.
+    - The recycle cost rose above the amount the miner confirmed between
+      the quote and submission.
+
+    Raised only for failures that leave the hotkey unregistered.
+    """
+
+    pass
+
+
+class RegistrationNotNeededError(MinerCliError):
+    """Raised when the chain says the hotkey is already registered on the netuid.
+
+    This can happen when:
+    - The hotkey was registered from another terminal, or by a previous run,
+      between the pre-check and the registration offer.
+    - The CLI's netuid does not match the netuid the API server is bound to,
+      so a 1101 rejection refers to a different subnet than the one the CLI
+      would register on.
+
+    Either way the correct move is to stop rather than recycle TAO for a
+    registration that buys nothing.
+    """
+
+    pass
+
+
 # --- API errors ---
 
 
@@ -325,6 +361,21 @@ class AttestationCancelledError(MinerCliError):
 
     Both halves were signed locally but nothing was sent, so re-running the
     command mints a fresh nonce and starts over.
+    """
+
+    pass
+
+
+class RegistrationCancelledError(MinerCliError):
+    """Raised when the miner declines the interactive registration confirmation.
+
+    This can happen when:
+    - The interactive ``Register this hotkey now? [y/N]`` prompt receives
+      anything other than ``y`` (including empty input).
+    - The user sends EOF / Ctrl-D at the prompt.
+
+    No extrinsic was built and no TAO was recycled, so the upload simply
+    stops at the same 1101 pre-check rejection it would have hit anyway.
     """
 
     pass

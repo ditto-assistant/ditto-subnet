@@ -84,6 +84,45 @@ To submit, you need:
 - enough TAO for the platform-controlled evaluation fee (currently 0.04 TAO,
   or 40,000,000 rao)
 
+If the hotkey is not registered yet, you do not have to leave the CLI to fix
+it. `ditto upload` runs its pre-check before any TAO moves, and when the only
+rejection is code 1101 (`hotkey is not registered on netuid 118`) it reads the
+live registration cost from chain, shows it next to your coldkey balance, and
+offers to register:
+
+```
+  pre-check rejection 1101: hotkey is not registered on netuid 118
+
+Registration preview
+  Netuid:   118
+  Hotkey:   5FHn...k2Qd
+  Coldkey:  miner (5Grw...GKutQY)
+  Cost:     0.0005 TAO  (500000 rao)
+  Balance:  12.4021 TAO
+
+Register this hotkey now? [y/N]:
+```
+
+Answering `y` recycles that amount, re-runs the pre-check, and continues into
+the ordinary payment confirmation. The registration cost is never cached or
+assumed: it is read at the prompt and read again immediately before the
+extrinsic, and the CLI aborts rather than paying more if it rose in between.
+
+`--yes` does **not** cover this prompt. It authorizes the platform-quoted
+evaluation fee only, whereas the recycle amount is a separate chain-quoted cost
+with no ceiling. For scripted use, pre-authorize it explicitly with
+`--register`; use `--no-register` to keep the old behavior of failing the
+pre-check. Registration is also still available on its own:
+
+```sh
+btcli subnets register --netuid 118 \
+  --wallet-name <coldkey> --hotkey <hotkey> --network finney
+```
+
+Registering recycles TAO — it is burned, not transferred, and is not refunded
+if the agent is never submitted or scores 0. It is also separate from, and
+usually larger than, the evaluation fee.
+
 The coldkey pays the fee. The hotkey signs the artifact and receives incentive.
 The fee is configured in TAO through Backroom. TAO/USD pricing is recorded only
 for internal revenue reporting; it neither determines the amount due nor takes

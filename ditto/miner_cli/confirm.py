@@ -6,13 +6,16 @@ default cadence (interactive prompt by default, ``-y`` / ``--yes`` /
 ``--no-prompt`` to skip), see ``/root/btcli/bittensor_cli/cli.py:287``
 for the prior art we're matching.
 
-Two actions prompt: paying the evaluation fee (:func:`confirm_payment`)
-and publishing an owner-link attestation (:func:`confirm_attestation`).
+Three actions prompt: paying the evaluation fee (:func:`confirm_payment`),
+registering a hotkey on the subnet (:func:`confirm_registration`), and
+publishing an owner-link attestation (:func:`confirm_attestation`).
 The attestation preview restates the link's scope in full, because the
 one thing a miner must not be able to misread is what the link does and
 does not grant. It also says outright that signing moves no TAO, since a
 half may be proved with the coldkey and that is the key which normally
-does move funds.
+does move funds. The registration preview is the inverse case: it leads
+with the fact that the TAO is burned outright, because the two costs in
+one upload run are easy to conflate and only one of them buys a run.
 """
 
 from __future__ import annotations
@@ -21,9 +24,16 @@ import logging
 import sys
 from decimal import Decimal
 
-from ditto.miner_cli.errors import AttestationCancelledError, PaymentCancelledError
+from ditto.miner_cli.errors import (
+    AttestationCancelledError,
+    PaymentCancelledError,
+    RegistrationCancelledError,
+)
+from ditto.miner_cli.models import RegistrationQuote
 
 logger = logging.getLogger(__name__)
+
+_RAO_PER_TAO = Decimal(1_000_000_000)
 
 
 def confirm_payment(
@@ -49,7 +59,7 @@ def confirm_payment(
         PaymentCancelledError: When the user does not answer ``y`` (any
             other input including blank + EOF declines).
     """
-    tao = Decimal(amount_rao) / Decimal(1_000_000_000)
+    tao = Decimal(amount_rao) / _RAO_PER_TAO
     print()
     print("Payment preview")
     print(f"  Amount:  {tao} TAO  ({amount_rao} rao)")
@@ -71,6 +81,64 @@ def confirm_payment(
         raise PaymentCancelledError(f"payment cancelled (response={response!r})")
 
     print("payment confirmed", file=sys.stderr)
+
+
+def confirm_registration(*, quote: RegistrationQuote, skip: bool) -> None:
+    """Show the registration cost + prompt for confirmation.
+
+    The recycle amount on the quote was read from chain moments earlier;
+    it is shown in TAO and in rao, alongside the balance it comes out of,
+    because recycled TAO is burned rather than transferred and there is no
+    counterparty to recover it from.
+
+    Args:
+        quote: Live :class:`RegistrationQuote` from
+            :func:`ditto.miner_cli.registration.quote_registration`.
+        skip: When ``True`` the prompt is bypassed. Set only by the
+            explicit ``--register`` authorization, never by ``--yes``
+            alone: ``--yes`` covers the platform-quoted eval fee, and the
+            recycle amount is a separate, chain-quoted, unbounded cost.
+
+    Raises:
+        RegistrationCancelledError: When the user does not answer ``y``
+            (any other input including blank + EOF declines).
+    """
+    recycle_tao = Decimal(quote.recycle_rao) / _RAO_PER_TAO
+    balance_tao = Decimal(quote.balance_rao) / _RAO_PER_TAO
+    print()
+    print("Registration preview")
+    print(f"  Netuid:   {quote.netuid}")
+    print(f"  Hotkey:   {quote.hotkey_ss58}")
+    print(f"  Coldkey:  {quote.coldkey_name} ({quote.coldkey_ss58})")
+    print(f"  Cost:     {recycle_tao} TAO  ({quote.recycle_rao} rao)")
+    print(f"  Balance:  {balance_tao} TAO")
+    print()
+    print("Registering recycles the cost above out of the coldkey balance.")
+    print("Recycled TAO is burned, not transferred: it cannot be refunded or")
+    print("recovered, including if the agent is never submitted or scores 0.")
+    print("The cost is read live and rises with registration demand; this")
+    print("preview is the amount that will be recycled, and the CLI aborts")
+    print("rather than paying more if it rises before submission.")
+    print()
+    print("This does NOT pay the evaluation fee. That is a separate, smaller")
+    print("charge you will confirm next.")
+    print()
+
+    if skip:
+        logger.debug("registration confirmation bypassed via --register")
+        return
+
+    try:
+        response = input("Register this hotkey now? [y/N]: ").strip().lower()
+    except EOFError as e:
+        raise RegistrationCancelledError("registration cancelled: EOF on stdin") from e
+
+    if response != "y":
+        raise RegistrationCancelledError(
+            f"registration cancelled (response={response!r})"
+        )
+
+    print("registration confirmed", file=sys.stderr)
 
 
 def confirm_attestation(
