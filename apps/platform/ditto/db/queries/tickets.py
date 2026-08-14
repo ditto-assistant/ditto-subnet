@@ -162,6 +162,7 @@ async def get_score_priority_floor_rows(
     bench_version: int | None = None,
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
+    active_version: int | None = None,
 ) -> tuple[ScoreFloor | None, ScoreFloor | None]:
     """Return the fifth- and tenth-place floors with the rows that hold them.
 
@@ -198,7 +199,13 @@ async def get_score_priority_floor_rows(
             include_fingerprints=False,
             include_details=False,
             bench_version=bench_version,
+            # The caller resolves the official score once below.  This bulk
+            # read keeps every owner candidate, so asking the ledger to resolve
+            # the same continual fold first only repeats settings and fleet
+            # reads without changing the population.
+            owner_score="canonical",
             dedupe_owners=False,
+            active_version=active_version,
         )
         if row.eligible
     ]
@@ -212,6 +219,7 @@ async def get_score_priority_floor_rows(
         bench_version=bench_version,
         efficiency_config=efficiency_config,
         now=now,
+        active_version=active_version,
     )
     ranked = dedupe_owner_rows(eligible, scores=official)
 
@@ -230,6 +238,7 @@ async def get_score_priority_floors(
     bench_version: int | None = None,
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
+    active_version: int | None = None,
 ) -> tuple[float | None, float | None]:
     """Return finalized fifth-place and tenth-place floors for one benchmark era.
 
@@ -241,6 +250,7 @@ async def get_score_priority_floors(
         bench_version=bench_version,
         efficiency_config=efficiency_config,
         now=now,
+        active_version=active_version,
     )
     return (
         continuation.score if continuation is not None else None,

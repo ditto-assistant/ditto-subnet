@@ -483,6 +483,7 @@ async def resolve_ranking_scores(
     bench_version: int | None,
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
+    active_version: int | None = None,
 ) -> dict[UUID, float]:
     """The canonical score for every row, settings and all, from a bare session.
 
@@ -503,7 +504,8 @@ async def resolve_ranking_scores(
     settings = settings_from_row(
         await latest_continual_retest_settings_revision(session)
     )
-    active_version = await active_bench_version(session)
+    if active_version is None:
+        active_version = await active_bench_version(session)
     active = await continual_mean_is_active(
         session,
         bench_version=bench_version,

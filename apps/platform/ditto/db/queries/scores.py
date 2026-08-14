@@ -1483,6 +1483,7 @@ async def list_eligible_ledger(
     owner_score: Literal["official", "canonical"] = "official",
     apply_v9_confirmation_policy: bool = True,
     dedupe_owners: bool = True,
+    active_version: int | None = None,
 ) -> list[LedgerRow]:
     """Return the best eligible score per payment-time coldkey.
 
@@ -1575,7 +1576,11 @@ async def list_eligible_ledger(
         rollout_cohort_score_complete,
     )
 
-    canonical_version = await active_bench_version(session)
+    canonical_version = (
+        active_version
+        if active_version is not None
+        else await active_bench_version(session)
+    )
     rollout = None if bench_version is not None else await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else None
     candidate_versions = (

@@ -176,6 +176,7 @@ class InferenceActivationRequirements:
 _INFERENCE_ACTIVATION_REQUIREMENTS_SESSION_KEY = (
     "ditto_inference_activation_requirements"
 )
+_UNRESOLVED_ROLLOUT = object()
 
 
 def bind_inference_activation_requirements(
@@ -327,7 +328,11 @@ async def inference_activation_ready(
     return False
 
 
-async def rolling_top_five(session: AsyncSession) -> list[RolloutSnapshotMember]:
+async def rolling_top_five(
+    session: AsyncSession,
+    *,
+    rollout: BenchmarkRollout | None | object = _UNRESOLVED_ROLLOUT,
+) -> list[RolloutSnapshotMember]:
     """Return the hybrid top five for the durable rollout transition.
 
     While a rollout is open, an agent remains ranked by the rollout's source
@@ -336,7 +341,9 @@ async def rolling_top_five(session: AsyncSession) -> list[RolloutSnapshotMember]
     rollout, only the active version is authoritative. No compiled "canary"
     constant is allowed to select or open a benchmark transition.
     """
-    rollout = await open_rollout(session)
+    if rollout is _UNRESOLVED_ROLLOUT:
+        rollout = await open_rollout(session)
+    assert rollout is None or isinstance(rollout, BenchmarkRollout)
     source_version = rollout.from_version if rollout is not None else None
     if source_version is None:
         source_version = await active_bench_version(session)
@@ -639,8 +646,21 @@ async def append_rollout_member(
     return True
 
 
-async def active_bench_version(session: AsyncSession) -> int:
-    open_transition = await open_rollout(session)
+async def active_bench_version(
+    session: AsyncSession,
+    *,
+    open_transition: BenchmarkRollout | None | object = _UNRESOLVED_ROLLOUT,
+) -> int:
+    """Resolve benchmark authority, optionally reusing an already-read rollout.
+
+    Read-only dashboard requests resolve the rollout once and thread it through
+    every derived projection.  The explicit argument avoids re-reading the
+    same transition several times while preserving the default for allocator
+    and mutation paths that need a fresh database view.
+    """
+    if open_transition is _UNRESOLVED_ROLLOUT:
+        open_transition = await open_rollout(session)
+    assert open_transition is None or isinstance(open_transition, BenchmarkRollout)
     if open_transition is not None:
         from ditto.db.queries.scores import count_ranked_quorum_agents
 
@@ -2036,6 +2056,7 @@ async def rollout_state(
     *,
     now: datetime | None = None,
     capability_version: int | None = None,
+    heartbeats: Sequence[ValidatorHeartbeat] | None = None,
 ) -> dict[str, Any]:
     now = now or datetime.now(UTC)
     rollout = await session.scalar(
@@ -2050,11 +2071,20 @@ async def rollout_state(
     # (the flip predicates are equivalent when MIN_DESIRED_AUTHORITY_AGENTS ==
     # PRIORITY_COHORT_SIZE); it only reconciles the terminal/edge cases where the
     # most-recent row and the latest activated row differ.
-    active_version = await active_bench_version(session)
+    open_transition = (
+        rollout
+        if rollout is not None
+        and rollout.status in ("collecting", "blocked_ineligible")
+        else None
+    )
+    active_version = await active_bench_version(
+        session, open_transition=open_transition
+    )
     version = capability_version or (
         rollout.desired_version if rollout is not None else active_version
     )
-    heartbeats = (await session.execute(select(ValidatorHeartbeat))).scalars().all()
+    if heartbeats is None:
+        heartbeats = (await session.execute(select(ValidatorHeartbeat))).scalars().all()
     capable_count = sum(
         heartbeat_supports_version(heartbeat, now=now, version=version)
         for heartbeat in heartbeats
@@ -2127,7 +2157,7 @@ async def rollout_state(
         .scalars()
         .all()
     )
-    current_top = await rolling_top_five(session)
+    current_top = await rolling_top_five(session, rollout=open_transition)
     current_top_ids = {member.agent_id for member in current_top}
     qualified_ids = {member.agent_id for member in members}
     # This rollout's frozen activation gate width.

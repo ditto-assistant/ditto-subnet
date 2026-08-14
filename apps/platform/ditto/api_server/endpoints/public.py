@@ -246,7 +246,6 @@ from ditto.db.queries.artifact_release_settings import (
 )
 from ditto.db.queries.audit import GENESIS_HASH, list_audit_entries
 from ditto.db.queries.benchmark_admission import (
-    activated_rollout_for_version,
     agent_is_admitted,
 )
 from ditto.db.queries.benchmark_rollout import (
@@ -3917,6 +3916,7 @@ async def queue_preview_for_rows(
     now: datetime,
     score_continuation_floor: float | None,
     provisional_contender_floor: float | None,
+    rollout: BenchmarkRollout | None,
     waiting_agent_ids: list[UUID] | None = None,
 ) -> dict[UUID, QueuePreviewEntry]:
     """Rank the waiting population with the allocator's own ordering.
@@ -3940,11 +3940,12 @@ async def queue_preview_for_rows(
         agent_ids=waiting,
         score_continuation_floor=score_continuation_floor,
         provisional_contender_floor=provisional_contender_floor,
-        rollout=await activated_rollout_for_version(
-            session, bench_version=bench_version
-        ),
+        rollout=rollout,
         previous_generation_agent_ids=await prev_generation_agent_ids(
-            session, bench_version=bench_version, agent_ids=waiting
+            session,
+            bench_version=bench_version,
+            agent_ids=waiting,
+            rollout=rollout,
         ),
     )
 
@@ -4400,6 +4401,8 @@ async def _ath_review_public_snapshot(
     active_agent_ids = {
         review.agent_id for review in reviews if review.status == "pending"
     }
+    if not active_agent_ids:
+        return snapshots, {}
     composites: dict[UUID, list[float]] = {}
     for agent_id, composite in (
         await session.execute(
@@ -4455,7 +4458,10 @@ async def activity(
     active_version = await active_bench_version(session)
     assignments = await list_active_validator_assignments(session, now=now)
     active_work = await list_active_validator_work(
-        session, now=now, cutoff=now - _VALIDATOR_ONLINE_WINDOW
+        session,
+        now=now,
+        cutoff=now - _VALIDATOR_ONLINE_WINDOW,
+        assignments=assignments,
     )
     (
         score_continuation_floor,
@@ -4465,6 +4471,7 @@ async def activity(
         bench_version=active_version,
         efficiency_config=efficiency_config,
         now=now,
+        active_version=active_version,
     )
     active_assignment_agent_ids = {
         assignment.agent.agent_id
@@ -4514,6 +4521,7 @@ async def activity(
         now=now,
         score_continuation_floor=score_continuation_floor,
         provisional_contender_floor=provisional_contender_floor,
+        rollout=activity_page.activated_rollout,
         waiting_agent_ids=activity_page.waiting_agent_ids,
     )
     return _public_activity_response(
@@ -4531,7 +4539,10 @@ async def activity(
         queue_preview=queue_preview,
         active_bench_version=active_version,
         retry_states=await classify_agent_retry_states(
-            session, agents=[row.agent for row in rows], now=now
+            session,
+            agents=[row.agent for row in rows],
+            now=now,
+            canonical_version=active_version,
         ),
         duplicate_metadata=await _duplicate_submission_metadata(session, rows),
         ath_reviews=ath_reviews,
@@ -4675,12 +4686,16 @@ async def operations(
     )
     if efficiency_config.enabled:
         await ensure_efficiency_state(session, efficiency_config, now=now)
-    benchmark_rollout = await rollout_state(session, now=now)
-    active_version = cast(int, benchmark_rollout["active_version"])
     heartbeat_rows = await list_validator_heartbeats(session)
+    benchmark_rollout = await rollout_state(session, now=now, heartbeats=heartbeat_rows)
+    active_version = cast(int, benchmark_rollout["active_version"])
     assignments = await list_active_validator_assignments(session, now=now)
     active_work = await list_active_validator_work(
-        session, now=now, cutoff=now - _VALIDATOR_ONLINE_WINDOW
+        session,
+        now=now,
+        cutoff=now - _VALIDATOR_ONLINE_WINDOW,
+        heartbeat_rows=heartbeat_rows,
+        assignments=assignments,
     )
     (
         score_continuation_floor,
@@ -4690,6 +4705,7 @@ async def operations(
         bench_version=active_version,
         efficiency_config=efficiency_config,
         now=now,
+        active_version=active_version,
     )
     active_assignment_agent_ids = {
         assignment.agent.agent_id
@@ -4728,7 +4744,10 @@ async def operations(
         row.agent.agent_id: cast(str, row.public_status) for row in activity_rows
     }
     retry_states = await classify_agent_retry_states(
-        session, agents=[row.agent for row in activity_rows], now=now
+        session,
+        agents=[row.agent for row in activity_rows],
+        now=now,
+        canonical_version=active_version,
     )
     artifact_releases = await _artifact_release_snapshot(
         session,
@@ -4763,6 +4782,7 @@ async def operations(
             now=now,
             score_continuation_floor=score_continuation_floor,
             provisional_contender_floor=provisional_contender_floor,
+            rollout=activity_page.activated_rollout,
             waiting_agent_ids=activity_page.waiting_agent_ids,
         ),
         active_bench_version=active_version,

@@ -21,6 +21,7 @@ from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
+    BenchmarkRollout,
     EvaluationPayment,
     Score,
     ScreeningAttempt,
@@ -338,6 +339,7 @@ class PublicActivityPage:
     status_counts: dict[str, int]
     downloadable_count: int
     waiting_agent_ids: list[UUID]
+    activated_rollout: BenchmarkRollout | None
 
 
 async def query_public_activity_page(
@@ -654,6 +656,7 @@ async def query_public_activity_page(
         status_counts=status_counts,
         downloadable_count=int(downloadable_count),
         waiting_agent_ids=waiting_agent_ids,
+        activated_rollout=rollout,
     )
 
 

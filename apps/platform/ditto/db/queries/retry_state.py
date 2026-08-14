@@ -21,6 +21,7 @@ from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.db.models import (
     Agent,
+    BenchmarkRollout,
     BenchmarkRolloutMember,
     Score,
     SubmissionRetirement,
@@ -34,6 +35,7 @@ from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import ticket_attempt_cap
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
+_UNRESOLVED_ROLLOUT = object()
 
 
 async def work_available_validator_hotkeys(
@@ -385,6 +387,8 @@ async def classify_agent_retry_states(
     agents: list[Agent],
     now: datetime,
     require_work_available_validator: bool = False,
+    rollout: BenchmarkRollout | None | object = _UNRESOLVED_ROLLOUT,
+    canonical_version: int | None = None,
 ) -> dict[UUID, AgentRetryState]:
     """Classify a batch of agents' retry state with bounded bulk reads.
 
@@ -394,14 +398,21 @@ async def classify_agent_retry_states(
     below quorum and consumes the same bounded retry budget.
     """
     input_by_id = {agent.agent_id: agent for agent in agents}
-    rollout = await open_rollout(session)
+    settled_candidates = {
+        agent_id: agent
+        for agent_id, agent in input_by_id.items()
+        if agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+    }
+    if rollout is _UNRESOLVED_ROLLOUT:
+        rollout = await open_rollout(session) if settled_candidates else None
+    assert rollout is None or isinstance(rollout, BenchmarkRollout)
     rollout_member_ids: set[UUID] = set()
-    if rollout is not None and input_by_id:
+    if rollout is not None and settled_candidates:
         rollout_member_ids = set(
             await session.scalars(
                 select(BenchmarkRolloutMember.agent_id).where(
                     BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
-                    BenchmarkRolloutMember.agent_id.in_(list(input_by_id)),
+                    BenchmarkRolloutMember.agent_id.in_(list(settled_candidates)),
                 )
             )
         )
@@ -463,7 +474,8 @@ async def classify_agent_retry_states(
             )
         ).all()
     )
-    canonical_version = await active_bench_version(session)
+    if canonical_version is None:
+        canonical_version = await active_bench_version(session)
     available_hotkeys = (
         await work_available_validator_hotkeys(session, now=now)
         if require_work_available_validator

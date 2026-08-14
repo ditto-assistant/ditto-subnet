@@ -24,8 +24,9 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
-from sqlalchemy import func, select
+from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
     AsyncSession,
     async_sessionmaker,
 )
@@ -4958,6 +4959,7 @@ class TestPublicActivity:
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
+        engine: AsyncEngine,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         """A settled agent remains visible while the next benchmark collects."""
@@ -4996,9 +4998,29 @@ class TestPublicActivity:
             session.add(_dataset_pin(UUID(member_id), bench_version=_NEXT_ERA))
         _install_db(app, session_maker)
 
-        response = await client.get("/api/v1/public/operations")
+        statements: list[str] = []
+
+        def record_statement(
+            _connection: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            statements.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_statement)
+        try:
+            response = await client.get("/api/v1/public/operations")
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", record_statement)
 
         assert response.status_code == 200
+        # Budget the complete handler, not just its five-query page helper.
+        # This fixture exercises an open rollout, validator assignments, retry
+        # classification, fleet/orphan snapshots, and build telemetry.
+        assert len(statements) <= 33
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA
@@ -7500,12 +7522,32 @@ class TestPublicActivity:
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
+        engine: AsyncEngine,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         await _seed_agent(session_maker, miner=_MINER_A)
         await _seed_agent(session_maker, miner=_MINER_B)
         _install_db(app, session_maker)
-        body = (await client.get("/api/v1/public/activity?limit=1")).json()
+        statements: list[str] = []
+
+        def record_statement(
+            _connection: object,
+            _cursor: object,
+            statement: str,
+            _parameters: object,
+            _context: object,
+            _executemany: bool,
+        ) -> None:
+            statements.append(statement)
+
+        event.listen(engine.sync_engine, "before_cursor_execute", record_statement)
+        try:
+            body = (await client.get("/api/v1/public/activity?limit=1")).json()
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", record_statement)
+        # Includes authority, assignments, queue floors, release state, queue
+        # preview, retry state and ATH metadata around the page query itself.
+        assert len(statements) <= 17
         assert body["count"] == 1
         assert body["total"] == 2
         assert body["total_pages"] == 2

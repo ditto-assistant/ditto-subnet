@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
@@ -503,6 +504,8 @@ async def list_active_validator_work(
     now: datetime,
     cutoff: datetime,
     agent_id: UUID | None = None,
+    heartbeat_rows: Sequence[ValidatorHeartbeat] | None = None,
+    assignments: Sequence[ActiveValidatorAssignment] | None = None,
 ) -> list[ActiveValidatorWork]:
     """Return every fresh heartbeat slot still bound to a live ticket.
 
@@ -513,36 +516,65 @@ async def list_active_validator_work(
     ticket identity here. Legacy v2-v9 rows retain their deadline-bound scalar
     progress validation so a stale heartbeat cannot revive after a requeue.
     """
-    heartbeat_rows = list(
-        await session.scalars(
-            select(ValidatorHeartbeat)
-            .where(
-                ValidatorHeartbeat.state == "running_benchmark",
-                ValidatorHeartbeat.seen_at >= cutoff,
+    if heartbeat_rows is None:
+        heartbeat_rows = list(
+            await session.scalars(
+                select(ValidatorHeartbeat)
+                .where(
+                    ValidatorHeartbeat.state == "running_benchmark",
+                    ValidatorHeartbeat.seen_at >= cutoff,
+                )
+                .order_by(ValidatorHeartbeat.validator_hotkey)
             )
-            .order_by(ValidatorHeartbeat.validator_hotkey)
         )
-    )
+    else:
+        heartbeat_rows = sorted(
+            (
+                heartbeat
+                for heartbeat in heartbeat_rows
+                if heartbeat.state == "running_benchmark"
+                and _aware(heartbeat.seen_at) >= cutoff
+            ),
+            key=lambda heartbeat: heartbeat.validator_hotkey,
+        )
     if not heartbeat_rows:
         return []
 
     hotkeys = [heartbeat.validator_hotkey for heartbeat in heartbeat_rows]
-    assignment_statement = (
-        select(ValidatorTicket, Agent)
-        .join(Agent, Agent.agent_id == ValidatorTicket.agent_id)
-        .where(
-            ValidatorTicket.validator_hotkey.in_(hotkeys),
-            ValidatorTicket.status == TicketStatus.ISSUED,
-            ValidatorTicket.deadline > now,
-            Agent.status.in_(SCOREABLE_AGENT_STATUSES),
+    assignment_rows: list[tuple[ValidatorTicket, Agent]]
+    if assignments is None:
+        assignment_statement = (
+            select(ValidatorTicket, Agent)
+            .join(Agent, Agent.agent_id == ValidatorTicket.agent_id)
+            .where(
+                ValidatorTicket.validator_hotkey.in_(hotkeys),
+                ValidatorTicket.status == TicketStatus.ISSUED,
+                ValidatorTicket.deadline > now,
+                Agent.status.in_(SCOREABLE_AGENT_STATUSES),
+            )
         )
-    )
-    if agent_id is not None:
-        assignment_statement = assignment_statement.where(Agent.agent_id == agent_id)
-    assignments = (await session.execute(assignment_statement)).all()
+        if agent_id is not None:
+            assignment_statement = assignment_statement.where(
+                Agent.agent_id == agent_id
+            )
+        assignment_rows = [
+            (ticket, agent)
+            for ticket, agent in (await session.execute(assignment_statement)).all()
+        ]
+    else:
+        hotkey_set = set(hotkeys)
+        assignment_rows = [
+            (assignment.ticket, assignment.agent)
+            for assignment in assignments
+            if assignment.ticket.validator_hotkey in hotkey_set
+            and assignment.ticket.status == TicketStatus.ISSUED
+            and _aware(assignment.ticket.deadline) > now
+            and assignment.agent.status in SCOREABLE_AGENT_STATUSES
+            and (agent_id is None or assignment.agent.agent_id == agent_id)
+        ]
     assignments_by_identity = {
         (ticket.validator_hotkey, ticket.slot_id, ticket.agent_id): (ticket, agent)
-        for ticket, agent in assignments
+        for ticket, agent in assignment_rows
     }
 
     active: list[ActiveValidatorWork] = []

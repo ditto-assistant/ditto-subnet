@@ -45,7 +45,7 @@ either. A backlog that no validator can act on does not hold the gate shut.
 from __future__ import annotations
 
 from collections.abc import Collection
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 from uuid import UUID
 
 from sqlalchemy import and_, func, or_, select
@@ -75,11 +75,15 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
+_UNRESOLVED_ROLLOUT = object()
+
+
 async def prev_generation_agent_ids(
     session: AsyncSession,
     *,
     bench_version: int,
     agent_ids: Collection[UUID],
+    rollout: BenchmarkRollout | None | object = _UNRESOLVED_ROLLOUT,
 ) -> set[UUID]:
     """Which of ``agent_ids`` can only be served by a previous-generation lane.
 
@@ -102,9 +106,13 @@ async def prev_generation_agent_ids(
     requested = set(agent_ids)
     if not requested:
         return set()
-    rollout = await activated_rollout_for_version(session, bench_version=bench_version)
-    if rollout is None:
-        rollout = await session.scalar(
+    if rollout is _UNRESOLVED_ROLLOUT:
+        rollout = await activated_rollout_for_version(
+            session, bench_version=bench_version
+        )
+    resolved_rollout: Any = cast(Any, rollout)
+    if resolved_rollout is None:
+        resolved_rollout = await session.scalar(
             select(BenchmarkRollout)
             .where(
                 BenchmarkRollout.desired_version == bench_version,
@@ -113,12 +121,12 @@ async def prev_generation_agent_ids(
             .order_by(BenchmarkRollout.created_at.desc())
             .limit(1)
         )
-    if rollout is None:
+    if resolved_rollout is None:
         return set()
     cohort = set(
         await session.scalars(
             select(BenchmarkRolloutMember.agent_id).where(
-                BenchmarkRolloutMember.rollout_id == rollout.rollout_id
+                BenchmarkRolloutMember.rollout_id == resolved_rollout.rollout_id
             )
         )
     )
@@ -126,7 +134,7 @@ async def prev_generation_agent_ids(
         await session.scalars(
             select(Agent.agent_id).where(
                 Agent.agent_id.in_(requested - cohort),
-                Agent.created_at < rollout.created_at,
+                Agent.created_at < resolved_rollout.created_at,
             )
         )
     )
