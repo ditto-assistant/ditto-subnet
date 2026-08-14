@@ -1,0 +1,101 @@
+name: Platform Dashboard CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - apps/platform/dashboard/**
+      - apps/platform/faircopy.config.mjs
+      - apps/platform/package.json
+      - apps/platform/package-lock.json
+      - packages/ditto-screening-protocol/**
+      - .github/workflows/platform-dashboard-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/platform/dashboard/**
+      - apps/platform/faircopy.config.mjs
+      - apps/platform/package.json
+      - apps/platform/package-lock.json
+      - packages/ditto-screening-protocol/**
+      - .github/workflows/platform-dashboard-ci.yml
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: apps/platform
+
+jobs:
+  copy-lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Enforce workflow security policy
+        working-directory: .
+        run: python3 .github/scripts/check_workflow_security.py
+
+      - name: Install Gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_LINUX_X64_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --silent --show-error --location \
+            --output "$RUNNER_TEMP/$asset" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$asset"
+          echo "$GITLEAKS_LINUX_X64_SHA256  $RUNNER_TEMP/$asset" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/$asset" --directory "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+
+      - name: Scan working tree for secrets
+        run: gitleaks dir . --no-banner --redact=100
+
+      - name: Scan reachable Git history for secrets
+        run: gitleaks git . --log-opts="--all -- apps/platform" --no-banner --redact=100
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/platform/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: faircopy
+        run: npm run lint:copy -- --format github
+
+  dashboard:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/platform/dashboard/package-lock.json
+
+      - name: Install dependencies
+        working-directory: apps/platform/dashboard
+        run: npm ci
+
+      - name: Check
+        working-directory: apps/platform/dashboard
+        run: npm run check
+
+      - name: Test
+        working-directory: apps/platform/dashboard
+        run: npm test
+
+      - name: Build
+        working-directory: apps/platform/dashboard
+        run: npm run build

@@ -5,12 +5,20 @@ on:
   pull_request:
     paths:
       - apps/platform/**
+      - "!apps/platform/dashboard/**"
+      - "!apps/platform/faircopy.config.mjs"
+      - "!apps/platform/package.json"
+      - "!apps/platform/package-lock.json"
       - packages/ditto-screening-protocol/**
       - .github/workflows/platform-ci.yml
   push:
     branches: [main]
     paths:
       - apps/platform/**
+      - "!apps/platform/dashboard/**"
+      - "!apps/platform/faircopy.config.mjs"
+      - "!apps/platform/package.json"
+      - "!apps/platform/package-lock.json"
       - packages/ditto-screening-protocol/**
       - .github/workflows/platform-ci.yml
 
@@ -22,88 +30,17 @@ defaults:
     working-directory: apps/platform
 
 jobs:
-  copy-lint:
+  static:
     runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Enforce workflow security policy
-        working-directory: .
-        run: python3 .github/scripts/check_workflow_security.py
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: apps/platform/package-lock.json
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: faircopy
-        run: npm run lint:copy -- --format github
-
-  dashboard:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: apps/platform/dashboard/package-lock.json
-
-      - name: Install dependencies
-        working-directory: apps/platform/dashboard
-        run: npm ci
-
-      - name: Check
-        working-directory: apps/platform/dashboard
-        run: npm run check
-
-      - name: Test
-        working-directory: apps/platform/dashboard
-        run: npm test
-
-      - name: Build
-        working-directory: apps/platform/dashboard
-        run: npm run build
-
-  lint-and-test:
-    runs-on: ubuntu-24.04
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.12"]
-    services:
-      # The whole suite runs against a real Postgres. SQLite emitted no
-      # FOR UPDATE, had no pg_advisory_xact_lock, and had no concurrent
-      # writers, so it could not fail on the bug class that reaches
-      # production -- see ditto-platform#438.
-      postgres:
-        image: postgres:16-alpine
-        env:
-          POSTGRES_USER: ditto_test
-          POSTGRES_PASSWORD: ditto_test
-          POSTGRES_DB: postgres
-        ports:
-          - 5432:5432
-        # Durability off: this database is rebuilt from migrations on
-        # demand, so losing it to a crash costs nothing and the write path
-        # gets materially faster.
-        options: >-
-          --health-cmd "pg_isready -U ditto_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-          --tmpfs /var/lib/postgresql/data
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
+
+      - name: Enforce workflow security policy
+        working-directory: .
+        run: python3 .github/scripts/check_workflow_security.py
 
       - name: Install Gitleaks
         env:
@@ -133,8 +70,8 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Set up Python ${{ matrix.python-version }}
-        run: uv python install ${{ matrix.python-version }}
+      - name: Set up Python 3.12
+        run: uv python install 3.12
 
       - name: Install dependencies
         run: uv sync --locked --group dev
@@ -148,14 +85,116 @@ jobs:
       - name: mypy
         run: uv run mypy ditto/
 
-      # Object storage for the `integration` tests that exercise the real
-      # upload path end to end. Same images and same credentials as the
-      # `minio` + `minio-create-bucket` pair in docker-compose.yml, so a
-      # developer running `make stack-up` gets the environment CI has.
-      # A `run:` step rather than a `services:` entry because the minio
-      # server image needs a command argument (`server /data`) and GitHub
-      # service containers cannot override CMD.
+  test:
+    name: pytest (${{ matrix.suite }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: public-validator-endpoints
+            pytest_args: >-
+              ditto/tests/api_server/endpoints/test_public.py
+              ditto/tests/api_server/endpoints/test_validator.py
+            object_storage: false
+          - suite: other-endpoints
+            pytest_args: >-
+              ditto/tests/api_server/endpoints
+              --ignore=ditto/tests/api_server/endpoints/test_public.py
+              --ignore=ditto/tests/api_server/endpoints/test_validator.py
+            object_storage: false
+          - suite: api-server
+            pytest_args: ditto/tests/api_server --ignore=ditto/tests/api_server/endpoints
+            object_storage: false
+          - suite: data-contract-integration
+            pytest_args: --ignore=ditto/tests/api_server
+            object_storage: true
+    services:
+      # Every shard gets its own real Postgres. SQLite emitted no FOR UPDATE,
+      # had no pg_advisory_xact_lock, and had no concurrent writers, so it
+      # could not fail on the bug class that reaches production -- see
+      # ditto-platform#438.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ditto_test
+          POSTGRES_PASSWORD: ditto_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ditto_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+          --tmpfs /var/lib/postgresql/data
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Tune disposable Postgres
+        # Match the local test harness: these databases are rebuilt from the
+        # migration template and never hold durable data. tmpfs alone still
+        # makes Postgres spend CPU on WAL and checkpoints.
+        env:
+          DITTO_TEST_POSTGRES_URI: postgres://ditto_test:ditto_test@localhost:5432/postgres
+        run: |
+          uv run python - <<'PY'
+          import asyncio
+          import os
+
+          import asyncpg
+
+
+          async def main() -> None:
+              dsn = os.environ["DITTO_TEST_POSTGRES_URI"]
+              conn = await asyncpg.connect(dsn)
+              try:
+                  for setting in ("fsync", "synchronous_commit", "full_page_writes"):
+                      await conn.execute(f"ALTER SYSTEM SET {setting} = 'off'")
+                  if not await conn.fetchval("SELECT pg_reload_conf()"):
+                      raise RuntimeError("Postgres refused to reload test settings")
+              finally:
+                  await conn.close()
+
+              conn = await asyncpg.connect(dsn)
+              try:
+                  rows = await conn.fetch(
+                      "SELECT name, setting FROM pg_settings "
+                      "WHERE name = ANY($1::text[])",
+                      ["fsync", "synchronous_commit", "full_page_writes"],
+                  )
+                  actual = {row["name"]: row["setting"] for row in rows}
+                  if actual != {
+                      "fsync": "off",
+                      "synchronous_commit": "off",
+                      "full_page_writes": "off",
+                  }:
+                      raise RuntimeError(f"unexpected Postgres test settings: {actual}")
+              finally:
+                  await conn.close()
+
+
+          asyncio.run(main())
+          PY
+
+      # Only integration tests request the object_storage fixture. Keeping
+      # MinIO out of the other two shards avoids two image pulls and startup
+      # loops without weakening the hard requirement in the shard that uses it.
       - name: Start MinIO
+        if: matrix.object_storage
         run: |
           docker run -d --name minio -p 9000:9000 \
             -e MINIO_ROOT_USER=minio \
@@ -175,35 +214,14 @@ jobs:
 
       - name: pytest
         env:
-          # Admin DSN of the service container above. The harness still
-          # creates its own template and per-worker databases from it, so
-          # this role must be able to CREATE DATABASE.
+          # The harness creates a migrated template and one database per
+          # xdist worker, so this role must be able to CREATE DATABASE.
           DITTO_TEST_POSTGRES_URI: postgres://ditto_test:ditto_test@localhost:5432/postgres
-          # Any provisioning failure is a hard error, never a skip. Without
-          # this a broken container turns the entire database suite green --
-          # the exact green-on-broken mode this migration exists to delete.
           DITTO_REQUIRE_POSTGRES: "1"
-          # Same rule for the object store: never skip the upload tests
-          # because the bucket was unreachable. Inert while
-          # STORAGE_ENDPOINT_URL is set explicitly below (that short-circuits
-          # minioharness), and the safety net if it ever stops being.
+          # The integration shard must fail rather than skip if MinIO is down.
+          # The other shards never request the fixture, so this remains inert.
           DITTO_REQUIRE_OBJECT_STORAGE: "1"
-          # Every variable below now has a test-only default in
-          # ditto/tests/env_defaults.py, so CI would be green without this
-          # block. It is kept because CI should pin what it runs against
-          # rather than inherit a fixture, and because an explicitly-set
-          # value always wins over a default -- which is itself worth
-          # exercising on every PR. None of these are secrets: the payment
-          # address is the well-known //Alice dev key and is never spent
-          # (PaymentVerifier is stubbed in those tests), and the MinIO
-          # credentials belong to the throwaway container above.
           DITTO_UPLOAD_PAYMENT_ADDRESS: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
-          # ChainConfig refuses to construct without credentials, so these are
-          # needed to *build* the app even though nothing here reaches Pylon:
-          # the only two tests that talk to a chain are `needs_chain`-marked
-          # and deselected. The URL points at a port with nothing on it on
-          # purpose -- if a test ever starts making real chain calls it will
-          # fail loudly here rather than depend on an external network.
           PYLON_URL: http://127.0.0.1:1
           PYLON_OPEN_ACCESS_TOKEN: ci-no-chain
           STORAGE_ENDPOINT_URL: http://localhost:9000
@@ -212,4 +230,4 @@ jobs:
           STORAGE_BUCKET: ditto-agents
           STORAGE_REGION: us-east-1
           STORAGE_USE_TLS: "false"
-        run: uv run pytest
+        run: uv run pytest ${{ matrix.pytest_args }}
