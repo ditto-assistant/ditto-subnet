@@ -5,7 +5,9 @@ import yaml
 ROOT = Path(__file__).parents[2]
 BACKEND_WORKFLOW = ROOT / ".github/workflows/platform-ci.yml"
 DASHBOARD_WORKFLOW = ROOT / ".github/workflows/platform-dashboard-ci.yml"
+SHARED_WORKFLOW = ROOT / ".github/workflows/platform-verify.yml"
 RELEASE_WORKFLOW = ROOT / ".github/workflows/release.yml"
+SHARED_WORKFLOW_USE = "./.github/workflows/platform-verify.yml"
 
 
 def _load(path: Path) -> dict:
@@ -14,7 +16,9 @@ def _load(path: Path) -> dict:
 
 def _triggers(workflow: dict) -> dict:
     # PyYAML 1.1 parses the unquoted YAML key `on` as boolean true.
-    return workflow[True]
+    triggers = workflow.get("on", workflow.get(True))
+    assert isinstance(triggers, dict)
+    return triggers
 
 
 def _step(job: dict, name: str) -> dict:
@@ -40,14 +44,33 @@ def test_backend_and_dashboard_workflows_own_disjoint_platform_paths() -> None:
         "apps/platform/package.json",
         "apps/platform/package-lock.json",
     } <= set(dashboard_paths)
-    assert "packages/ditto-screening-protocol/**" in backend_paths
-    assert "packages/ditto-screening-protocol/**" in dashboard_paths
+    for paths in (backend_paths, dashboard_paths):
+        assert "packages/ditto-screening-protocol/**" in paths
+        assert ".github/workflows/platform-verify.yml" in paths
     assert backend_triggers["push"]["paths"] == backend_paths
     assert dashboard_triggers["push"]["paths"] == dashboard_paths
 
 
-def test_backend_ci_shards_the_complete_platform_suite_without_deselection() -> None:
-    workflow = _load(BACKEND_WORKFLOW)
+def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
+    backend = _load(BACKEND_WORKFLOW)["jobs"]["verify"]
+    dashboard = _load(DASHBOARD_WORKFLOW)["jobs"]["verify"]
+
+    assert backend["uses"] == SHARED_WORKFLOW_USE
+    assert backend["with"] == {
+        "ref": "${{ github.sha }}",
+        "security": True,
+        "backend": True,
+    }
+    assert dashboard["uses"] == SHARED_WORKFLOW_USE
+    assert dashboard["with"] == {
+        "ref": "${{ github.sha }}",
+        "security": True,
+        "dashboard": True,
+    }
+
+
+def test_shared_verification_shards_the_complete_suite_without_deselection() -> None:
+    workflow = _load(SHARED_WORKFLOW)
     test_job = workflow["jobs"]["test"]
     shards = {
         entry["suite"]: (entry["pytest_args"], entry["object_storage"])
@@ -79,15 +102,18 @@ def test_backend_ci_shards_the_complete_platform_suite_without_deselection() -> 
     assert _step(test_job, "Start MinIO")["if"] == "matrix.object_storage"
 
 
-def test_backend_ci_keeps_static_and_database_safety_gates() -> None:
-    workflow = _load(BACKEND_WORKFLOW)
-    static = workflow["jobs"]["static"]
-    test_job = workflow["jobs"]["test"]
+def test_shared_verification_keeps_static_database_and_security_gates() -> None:
+    workflow = _load(SHARED_WORKFLOW)
+    jobs = workflow["jobs"]
+    static = jobs["static"]
+    test_job = jobs["test"]
 
+    assert static["if"] == "inputs.backend"
     assert _step(static, "ruff format check")["run"] == "uv run ruff format --check ."
     assert _step(static, "ruff check")["run"] == "uv run ruff check ."
     assert _step(static, "mypy")["run"] == "uv run mypy ditto/"
-    assert _step(static, "Scan reachable Git history for secrets")
+    assert jobs["security"]["if"] == "inputs.security"
+    assert _step(jobs["security"], "Scan reachable Git history for secrets")
     assert test_job["services"]["postgres"]["image"] == "postgres:16-alpine"
     tune = _step(test_job, "Tune disposable Postgres")["run"]
     for setting in ("fsync", "synchronous_commit", "full_page_writes"):
@@ -95,15 +121,13 @@ def test_backend_ci_keeps_static_and_database_safety_gates() -> None:
     assert "pg_reload_conf" in tune
 
 
-def test_dashboard_ci_preserves_copy_check_test_and_build() -> None:
-    workflow = _load(DASHBOARD_WORKFLOW)
-    jobs = workflow["jobs"]
+def test_shared_dashboard_preserves_copy_check_test_and_build() -> None:
+    dashboard = _load(SHARED_WORKFLOW)["jobs"]["dashboard"]
 
-    assert _step(jobs["copy-lint"], "faircopy")["run"] == (
+    assert dashboard["if"] == "inputs.dashboard"
+    assert _step(dashboard, "faircopy")["run"] == (
         "npm run lint:copy -- --format github"
     )
-    assert _step(jobs["copy-lint"], "Scan reachable Git history for secrets")
-    dashboard = jobs["dashboard"]
     assert [_step(dashboard, name)["run"] for name in ("Check", "Test", "Build")] == [
         "npm run check",
         "npm test",
@@ -111,10 +135,22 @@ def test_dashboard_ci_preserves_copy_check_test_and_build() -> None:
     ]
 
 
-def test_release_still_runs_the_unsharded_full_platform_gate() -> None:
+def test_release_reuses_shared_exact_source_component_gates() -> None:
     workflow = _load(RELEASE_WORKFLOW)
+    plan = workflow["jobs"]["plan"]
     verify = workflow["jobs"]["verify-platform"]
-    gate = _step(verify, "Gate Platform release on exact merge source")
 
+    assert plan["outputs"]["platform_api"] == (
+        "${{ steps.components.outputs.platform_api }}"
+    )
+    assert plan["outputs"]["platform_dashboard"] == (
+        "${{ steps.components.outputs.platform_dashboard }}"
+    )
     assert "needs.plan.outputs.platform == 'true'" in verify["if"]
-    assert "uv run pytest" in gate["run"].splitlines()
+    assert verify["uses"] == SHARED_WORKFLOW_USE
+    assert verify["with"] == {
+        "ref": "${{ github.sha }}",
+        "backend": "${{ needs.plan.outputs.platform_api == 'true' }}",
+        "dashboard": "${{ needs.plan.outputs.platform_dashboard == 'true' }}",
+    }
+    assert "steps" not in verify

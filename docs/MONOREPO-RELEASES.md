@@ -58,19 +58,21 @@ remaining race window.
 
 ## Release runner capacity
 
-The CPU-bound Platform verification job and the later multi-platform
-DittoBench build use the organization-configured GitHub-hosted
-`ubuntu-24.04-release-8core` runner in the `release-larger-runners` group. The
-pool is limited to this repository and `release.yml` on `main`, and its maximum
-concurrency is one. Those jobs cannot overlap because semantic release sits
-between source verification and image publication, so increasing that limit
-would add cost without shortening the release critical path.
+Platform pull-request CI and exact-source release verification both call
+`.github/workflows/platform-verify.yml`. The reusable workflow runs static and
+dashboard gates independently and splits the complete backend suite across four
+standard public-repository runners. Release planning selects the backend and
+dashboard surfaces separately, so neither surface reruns for an unrelated
+Platform component.
 
-The remaining jobs stay on standard public-repository runners. Do not move
-short planning, tagging, deployment, smoke, or promotion jobs to the billed
-pool without measured job-level evidence. If the larger runner or group is
-removed, restore those two jobs to `ubuntu-24.04` in the same change so releases
-cannot queue indefinitely on a missing label.
+The later multi-platform DittoBench build uses the organization-configured
+GitHub-hosted `ubuntu-24.04-release-8core` runner in the
+`release-larger-runners` group. The pool is limited to this repository and
+`release.yml` on `main`, and its maximum concurrency is one. Do not move short
+planning, tagging, verification, deployment, smoke, or promotion jobs to the
+billed pool without measured job-level evidence. If the larger runner or group
+is removed, restore `build-dittobench` to `ubuntu-24.04` in the same change so
+releases cannot queue indefinitely on a missing label.
 
 Semantic release writes the monorepo version into datagen's Go provenance,
 publishes the source-SHA tag once, and attaches that same monorepo release tag

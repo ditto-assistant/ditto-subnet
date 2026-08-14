@@ -137,9 +137,6 @@ paths = [
   "apps/platform/UPSTREAM.md",
   "apps/platform/alembic.ini",
   "apps/platform/docker-compose.yml",
-  "apps/platform/faircopy.config.mjs",
-  "apps/platform/package-lock.json",
-  "apps/platform/package.json",
   "apps/platform/pyproject.toml",
   "apps/platform/skills-lock.json",
   "apps/platform/uv.lock",
@@ -151,8 +148,12 @@ paths = [
 
 [components.platform_dashboard]
 description = "Public Platform dashboard UI"
+depends_on = ["screening_protocol"]
 paths = [
   "apps/platform/dashboard/**",
+  "apps/platform/faircopy.config.mjs",
+  "apps/platform/package-lock.json",
+  "apps/platform/package.json",
 ]
 
 [components.platform]

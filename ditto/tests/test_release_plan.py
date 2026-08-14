@@ -123,6 +123,23 @@ def test_platform_dashboard_change_does_not_redeploy_backroom(
     ) == {"platform_dashboard", "platform"}
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "apps/platform/faircopy.config.mjs",
+        "apps/platform/package.json",
+        "apps/platform/package-lock.json",
+    ],
+)
+def test_platform_dashboard_tooling_does_not_select_api_or_backroom(
+    components, ignored_paths, path
+) -> None:
+    assert selected(components, ignored_paths, path) == {
+        "platform_dashboard",
+        "platform",
+    }
+
+
 def test_screener_change_does_not_release_validator_stack(
     components, ignored_paths
 ) -> None:
@@ -158,6 +175,7 @@ def test_screening_contract_change_propagates_to_every_consumer(
         "validator",
         "validator_stack",
         "platform_api",
+        "platform_dashboard",
         "platform",
         "backroom",
         "screener",

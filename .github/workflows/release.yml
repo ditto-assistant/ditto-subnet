@@ -54,6 +54,8 @@ jobs:
       validator_stack: ${{ steps.components.outputs.validator_stack }}
       dittobench_api: ${{ steps.components.outputs.dittobench_api }}
       dittobench_datagen: ${{ steps.components.outputs.dittobench_datagen }}
+      platform_api: ${{ steps.components.outputs.platform_api }}
+      platform_dashboard: ${{ steps.components.outputs.platform_dashboard }}
       platform: ${{ steps.components.outputs.platform }}
       deploy_relay: ${{ steps.relay.outputs.deploy_relay }}
       backroom: ${{ steps.components.outputs.backroom }}
@@ -330,49 +332,16 @@ jobs:
     if: >-
       needs.admit-current.outputs.current == 'true' &&
       needs.plan.outputs.platform == 'true'
-    # Platform's 4k-test suite uses pytest-xdist with one worker per core. Keep
-    # this CPU-bound critical-path gate on the bounded release-only 8-core pool.
-    runs-on:
-      group: release-larger-runners
-      labels: ubuntu-24.04-release-8core
+    # Use the same exact-source gates and complete pytest shards as pull-request
+    # CI. Component inputs keep API-only releases out of dashboard checks and
+    # dashboard-only releases out of the 4k-test backend suite.
+    uses: ./.github/workflows/platform-verify.yml
     permissions:
       contents: read
-    defaults:
-      run:
-        working-directory: apps/platform
-    steps:
-      - name: Check out the exact merge commit before release
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
-        with:
-          fetch-depth: 1
-          ref: ${{ github.sha }}
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
-        with:
-          enable-cache: true
-
-      - name: Set up Python 3.12
-        run: uv python install 3.12
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 24
-
-      - name: Gate Platform release on exact merge source
-        run: |
-          uv sync --locked --group dev --python 3.12
-          uv run ruff format --check .
-          uv run ruff check .
-          uv run mypy ditto/
-          uv run pytest
-          npm ci
-          npm run lint:copy
-          npm --prefix dashboard ci
-          npm --prefix dashboard run check
-          npm --prefix dashboard test
-          npm --prefix dashboard run build
+    with:
+      ref: ${{ github.sha }}
+      backend: ${{ needs.plan.outputs.platform_api == 'true' }}
+      dashboard: ${{ needs.plan.outputs.platform_dashboard == 'true' }}
 
   verify-model-relay:
     needs: [plan, admit-current]

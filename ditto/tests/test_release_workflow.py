@@ -151,13 +151,15 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
         verify_steps, "Check out the exact merge commit before release"
     )
     assert verify_checkout["with"]["fetch-depth"] == 1
-    platform_steps = jobs["verify-platform"]["steps"]
-    node_setup = next(
-        step
-        for step in platform_steps
-        if str(step.get("uses", "")).startswith("actions/setup-node@")
+    platform_verify = jobs["verify-platform"]
+    assert platform_verify["uses"] == "./.github/workflows/platform-verify.yml"
+    assert platform_verify["with"]["ref"] == "${{ github.sha }}"
+    assert platform_verify["with"]["backend"] == (
+        "${{ needs.plan.outputs.platform_api == 'true' }}"
     )
-    assert node_setup["with"]["node-version"] == 24
+    assert platform_verify["with"]["dashboard"] == (
+        "${{ needs.plan.outputs.platform_dashboard == 'true' }}"
+    )
     verification = _step(verify_steps, "Gate the release on exact merge source")
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
     assert workflow["jobs"]["release"]["needs"] == ["plan", "verify-source"]
@@ -192,10 +194,6 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert "go test ./..." in datagen_verification["run"]
 
     component_gates = {
-        "verify-platform": (
-            "Gate Platform release on exact merge source",
-            "needs.plan.outputs.platform == 'true'",
-        ),
         "verify-backroom": (
             "Gate Backroom release on exact merge source",
             "needs.plan.outputs.backroom == 'true'",
@@ -216,6 +214,8 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     for job_name, (step_name, condition) in component_gates.items():
         assert condition in jobs[job_name]["if"]
         _step(jobs[job_name]["steps"], step_name)
+
+    assert "needs.plan.outputs.platform == 'true'" in platform_verify["if"]
 
     aggregate = jobs["verify-source"]
     assert aggregate["if"] == "always()"
@@ -605,7 +605,7 @@ def test_validator_release_smokes_each_architecture_before_promotion() -> None:
     ]
 
 
-def test_release_uses_the_bounded_larger_runner_only_on_cpu_bound_bottlenecks() -> None:
+def test_release_uses_the_bounded_larger_runner_only_for_dittobench_build() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
     larger_runner = {
@@ -613,10 +613,9 @@ def test_release_uses_the_bounded_larger_runner_only_on_cpu_bound_bottlenecks() 
         "labels": "ubuntu-24.04-release-8core",
     }
 
-    assert jobs["verify-platform"]["runs-on"] == larger_runner
     assert jobs["build-dittobench"]["runs-on"] == larger_runner
     for job_name, job in jobs.items():
-        if job_name not in {"verify-platform", "build-dittobench"}:
+        if job_name != "build-dittobench":
             assert job.get("runs-on") != larger_runner
 
 
