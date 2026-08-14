@@ -1341,9 +1341,10 @@ export async function fetchStuckSubmissions(rawInput: unknown) {
   for (const state of input.state ?? []) {
     query.append('state', state)
   }
-  const suffix = query.toString() ? `?${query}` : ''
+  query.set('limit', String(input.limit))
+  query.set('offset', String(input.offset))
   const payload = await platformAdminRequest(
-    `/api/v1/admin/validation-retries${suffix}`,
+    `/api/v1/admin/validation-retries?${query}`,
   )
   return stuckSubmissionsListSchema.parse(payload)
 }

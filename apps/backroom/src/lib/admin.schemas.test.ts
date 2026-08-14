@@ -61,6 +61,7 @@ import {
   artifactReleaseRevisionSchema,
   artifactReleaseConfirmation,
   updateArtifactReleaseSettingsInputSchema,
+  listStuckSubmissionsInputSchema,
   stuckSubmissionSchema,
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
@@ -3231,17 +3232,28 @@ describe('why a validator ticket ended', () => {
       attempts_used: 9,
       exhausted_validator_count: 0,
       snapshot: 'ab'.repeat(32),
-      tickets: [],
+      ticket_states: {},
     }
 
-    // silent_expiry_count is a submission field, not a ticket field, so it
-    // reaches an operator through detail=summary, where the per-ticket history
-    // has been replaced by status counts. A count that climbs while score_count
+    // silent_expiry_count is a submission field, not ticket history, so it
+    // reaches an operator through the compact list. A count that climbs while score_count
     // stays at zero is a submission that is hanging, not merely slow.
     expect(
       stuckSubmissionSchema.parse({ ...submission, silent_expiry_count: 9 }),
     ).toMatchObject({ silent_expiry_count: 9, score_count: 0 })
     expect(stuckSubmissionSchema.parse(submission).silent_expiry_count).toBeNull()
+  })
+
+  it('defaults stuck-submission triage to a small server page', () => {
+    expect(listStuckSubmissionsInputSchema.parse({})).toEqual({
+      limit: 10,
+      offset: 0,
+    })
+    expect(
+      listStuckSubmissionsInputSchema.parse({ limit: 200, offset: 10 }),
+    ).toMatchObject({ limit: 200, offset: 10 })
+    expect(() => listStuckSubmissionsInputSchema.parse({ limit: 201 })).toThrow()
+    expect(() => listStuckSubmissionsInputSchema.parse({ offset: -1 })).toThrow()
   })
 })
 

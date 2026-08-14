@@ -60,6 +60,11 @@ function stuckSubmissionsPayload(count: number) {
     generated_at: CREATED_AT,
     quorum: 3,
     counts: { exhausted: count },
+    count,
+    returned: count,
+    limit: Math.max(1, count),
+    offset: 0,
+    has_more: false,
     submissions: Array.from({ length: count }, (_, index) => ({
       agent_id: agentId(index),
       miner_hotkey: HOTKEYS[index % HOTKEYS.length],
@@ -76,20 +81,7 @@ function stuckSubmissionsPayload(count: number) {
       attempts_used: 3,
       exhausted_validator_count: 3,
       snapshot: index.toString(16).padStart(2, '0').repeat(32),
-      tickets: HOTKEYS.map((hotkey, slot) => ({
-        validator_hotkey: hotkey,
-        status: 'expired' as const,
-        // Real tickets are issued minutes apart, so the history genuinely
-        // differs per submission even when the triage verdict does not.
-        issued_at: `2026-07-25T15:${String((index + slot) % 60).padStart(2, '0')}:00Z`,
-        deadline: `2026-07-25T17:${String((index + slot) % 60).padStart(2, '0')}:00Z`,
-        bench_version: 7,
-        attempt_count: 3,
-        manual_retry_grants: 0,
-        infra_retry_grants: 0,
-        retry_after: null,
-        retry_budget_exhausted: true,
-      })),
+      ticket_states: { expired: 3 },
     })),
   })
 }
@@ -339,9 +331,9 @@ describe('compactBatchRetryResponse', () => {
 })
 
 describe('compactStuckSubmissions', () => {
-  it('summarises tickets by status without dropping a submission', () => {
+  it('keeps the server summary without dropping a submission', () => {
     const payload = stuckSubmissionsPayload(40)
-    const compact = compactStuckSubmissions(payload, 'summary') as {
+    const compact = compactStuckSubmissions(payload) as {
       submissions: Array<Record<string, unknown>>
       submissions_shared: Record<string, unknown>
     }
@@ -351,35 +343,26 @@ describe('compactStuckSubmissions', () => {
       snapshot: '00'.repeat(32),
     })
     expect(compact.submissions[0]).not.toHaveProperty('tickets')
-    // Every stuck submission here holds the same three expired tickets, so the
-    // per-status counts are invariant and stated once rather than 40 times.
+    // Every row carries only compact server-produced counts, which are hoisted
+    // when invariant across the returned page.
     expect(compact.submissions_shared.ticket_states).toEqual({ expired: 3 })
     // The snapshot a retry needs survives summarisation.
     expect(compact.submissions.every((row) => 'snapshot' in row)).toBe(true)
   })
 
-  it('keeps the full ticket history when asked for it', () => {
-    const payload = stuckSubmissionsPayload(3)
-    const compact = compactStuckSubmissions(payload, 'full') as {
+  it('states quorum once, in the envelope, not on every row', () => {
+    const compact = compactStuckSubmissions(stuckSubmissionsPayload(40)) as {
+      quorum: number
       submissions: Array<Record<string, unknown>>
     }
-    expect(compact.submissions[0].tickets).toHaveLength(3)
-  })
-
-  it('states quorum once, in the envelope, not on every row', () => {
-    const compact = compactStuckSubmissions(
-      stuckSubmissionsPayload(40),
-      'summary',
-    ) as { quorum: number; submissions: Array<Record<string, unknown>> }
     expect(compact.quorum).toBe(3)
     expect(compact.submissions.some((row) => 'quorum' in row)).toBe(false)
   })
 
   it('hoists the fields shared by every stuck submission', () => {
-    const compact = compactStuckSubmissions(
-      stuckSubmissionsPayload(40),
-      'summary',
-    ) as { submissions_shared: Record<string, unknown> }
+    const compact = compactStuckSubmissions(stuckSubmissionsPayload(40)) as {
+      submissions_shared: Record<string, unknown>
+    }
     expect(compact.submissions_shared).toMatchObject({
       bench_version: 7,
       retry_state: 'exhausted',
@@ -391,10 +374,13 @@ describe('compactStuckSubmissions', () => {
   it('is a fraction of the platform payload for a fleet-wide read', () => {
     const payload = stuckSubmissionsPayload(40)
     const before = bytes(payload)
-    const summary = bytes(compactStuckSubmissions(payload, 'summary'))
-    const full = bytes(compactStuckSubmissions(payload, 'full'))
-    expect(summary).toBeLessThan(before * 0.25)
-    // `full` keeps the ticket history and still wins on the shared fields.
-    expect(full).toBeLessThan(before)
+    const summary = bytes(compactStuckSubmissions(payload))
+    expect(summary).toBeLessThan(before * 0.5)
+  })
+
+  it('keeps a default ten-row triage page under four kilobytes', () => {
+    expect(bytes(compactStuckSubmissions(stuckSubmissionsPayload(10)))).toBeLessThan(
+      4_000,
+    )
   })
 })

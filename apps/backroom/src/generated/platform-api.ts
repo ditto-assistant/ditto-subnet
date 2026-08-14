@@ -1433,7 +1433,9 @@ export interface paths {
          *     The single-agent detail route answers "why is *this* one stuck?"; this
          *     answers "which ones need me?" without a per-agent sweep. Filter with one or
          *     more ``state`` query params (e.g. ``?state=exhausted``); ``counts`` always
-         *     reflects the whole fleet so a filtered view still shows the totals.
+         *     reflects the whole fleet so a filtered view still shows the totals. The
+         *     list is paginated after the stable triage sort, and complete ticket history
+         *     stays on the single-agent detail route.
          */
         get: operations["list_validation_retries_api_v1_admin_validation_retries_get"];
         put?: never;
@@ -6401,11 +6403,15 @@ export interface components {
             silent_expiry_count: number;
             /** Snapshot */
             snapshot: string;
-            /** Tickets */
-            tickets: components["schemas"]["AdminValidationTicket"][];
+            /** Ticket States */
+            ticket_states: {
+                [key: string]: number;
+            };
         };
         /** AdminStuckSubmissionsResponse */
         AdminStuckSubmissionsResponse: {
+            /** Count */
+            count: number;
             /** Counts */
             counts: {
                 [key: string]: number;
@@ -6415,8 +6421,16 @@ export interface components {
              * Format: date-time
              */
             generated_at: string;
+            /** Has More */
+            has_more: boolean;
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
             /** Quorum */
             quorum: number;
+            /** Returned */
+            returned: number;
             /** Submissions */
             submissions: components["schemas"]["AdminStuckSubmission"][];
         };
@@ -19625,6 +19639,8 @@ export interface operations {
         parameters: {
             query?: {
                 state?: string[] | null;
+                limit?: number;
+                offset?: number;
             };
             header?: {
                 authorization?: string | null;

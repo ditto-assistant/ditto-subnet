@@ -198,13 +198,24 @@ class AdminStuckSubmission(BaseModel):
     :attr:`AdminValidationTicket.silently_expired`). A submission whose count
     climbs while its score count stays at zero is hanging, not merely slow."""
     snapshot: str
-    tickets: list[AdminValidationTicket]
+    ticket_states: dict[Literal["issued", "scored", "expired"], int]
+    """Per-state ticket counts for fleet triage.
+
+    Complete validator ticket history belongs to
+    :class:`AdminValidationRetryDetail`; returning it for every row turns a
+    bounded operator list into an incident dump.
+    """
 
 
 class AdminStuckSubmissionsResponse(BaseModel):
     generated_at: datetime
     quorum: int
     counts: dict[RetryState, int]
+    count: int
+    returned: int
+    limit: int
+    offset: int
+    has_more: bool
     submissions: list[AdminStuckSubmission]
 
 

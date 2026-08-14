@@ -34,7 +34,9 @@ export function StuckSubmissionFleetPanel({
     setBusy(true)
     setError(null)
     try {
-      const next = await listFn({ data: { state: ['exhausted'], detail: 'summary' } })
+      const next = await listFn({
+        data: { state: ['exhausted'], limit: 200, offset: 0 },
+      })
       setData(next)
       setSelected((current) => new Set(next.submissions
         .filter((item) => item.recovery_allowed && current.has(item.agent_id))

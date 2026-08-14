@@ -3507,15 +3507,10 @@ export const stuckSubmissionStateSchema = z.enum([
   'queued',
 ])
 
-// `detail` governs the response only; the platform request is unchanged. The
-// full per-validator ticket history is what an operator needs to diagnose one
-// stuck submission and what makes a fleet-wide read too large to return, so it
-// is available on request rather than on every call.
-export const stuckSubmissionDetailSchema = z.enum(['summary', 'full'])
-
 export const listStuckSubmissionsInputSchema = z.object({
   state: z.array(stuckSubmissionStateSchema).nonempty().optional(),
-  detail: stuckSubmissionDetailSchema.default('summary'),
+  limit: z.number().int().min(1).max(200).default(10),
+  offset: z.number().int().min(0).default(0),
 })
 
 export const stuckSubmissionSchema = z.object({
@@ -3536,13 +3531,16 @@ export const stuckSubmissionSchema = z.object({
   // Tickets that ran their whole lease and reported nothing (the per-ticket
   // `silently_expired`). A submission whose count climbs while `score_count`
   // stays at zero is hanging, not merely slow — the distinction the fleet
-  // triage feed could not make on 2026-07-27. Survives detail=summary because
-  // it is a submission field, not a ticket field. Nullish while
+  // triage feed could not make on 2026-07-27. Survives the compact list because
+  // it is a submission field, not a ticket-history field. Nullish while
   // ditto-platform #515 is unmerged: `null` is "this deployment cannot tell
   // you", not "zero silent expiries".
   silent_expiry_count: z.number().int().nonnegative().nullish().default(null),
   snapshot: z.string().regex(/^[0-9a-f]{64}$/),
-  tickets: z.array(validationRetryTicketSchema),
+  ticket_states: z.partialRecord(
+    z.enum(['issued', 'scored', 'expired']),
+    z.number().int().nonnegative(),
+  ),
 })
 
 export const stuckSubmissionsListSchema = z.object({
@@ -3551,6 +3549,11 @@ export const stuckSubmissionsListSchema = z.object({
   // Keyed by retry state; the platform may omit states with a zero count, so
   // the key type stays a plain string rather than an exhaustive enum record.
   counts: z.record(z.string(), z.number().int().nonnegative()),
+  count: z.number().int().nonnegative(),
+  returned: z.number().int().nonnegative(),
+  limit: z.number().int().min(1).max(200),
+  offset: z.number().int().nonnegative(),
+  has_more: z.boolean(),
   submissions: z.array(stuckSubmissionSchema),
 })
 

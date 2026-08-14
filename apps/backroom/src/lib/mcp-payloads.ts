@@ -172,37 +172,15 @@ export function compactBatchRetryResponse(response: BatchRetryResponse) {
   return { counts, results }
 }
 
-function ticketStateCounts(tickets: ReadonlyArray<{ status: string }>) {
-  const counts: Record<string, number> = {}
-  for (const ticket of tickets) {
-    counts[ticket.status] = (counts[ticket.status] ?? 0) + 1
-  }
-  return counts
-}
-
 /**
  * Compact one fleet-wide stuck-submission list.
  *
- * `summary` (the default) keeps every field an operator needs to triage and to
- * act — including the concurrency snapshot a retry requires — but replaces the
- * complete per-validator ticket history with its per-status counts. `full`
- * keeps the ticket arrays, for diagnosing one submission rather than surveying
- * the fleet.
- *
- * `quorum` is dropped from the rows in both modes: the envelope already
+ * The platform list is summary-only and server-paginated. `quorum` is dropped
+ * from the rows because the envelope already
  * carries it, and the platform repeats the same number on every row.
  */
-export function compactStuckSubmissions(
-  response: StuckSubmissionsList,
-  detail: 'summary' | 'full',
-) {
-  const submissions = response.submissions.map((submission) => {
-    if (detail === 'full') return submission as unknown as ResponseRow
-    const { tickets, ...rest } = submission
-    return { ...rest, ticket_states: ticketStateCounts(tickets) } as ResponseRow
-  })
-
-  return compactListField({ ...response, detail, submissions }, 'submissions', {
+export function compactStuckSubmissions(response: StuckSubmissionsList) {
+  return compactListField(response, 'submissions', {
     pin: ['agent_id'],
     omit: ['quorum'],
   })

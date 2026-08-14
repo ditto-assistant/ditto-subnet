@@ -2942,6 +2942,42 @@ async def test_list_state_filter_keeps_fleetwide_counts(
     assert body["counts"] == {"exhausted": 1, "queued": 1}
 
 
+async def test_list_pages_after_stable_triage_sort(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    for index in range(4):
+        await _seed_states(retry_maker, name=f"queued-agent-{index}", tickets=[])
+    _install(app, retry_maker)
+
+    complete = await client.get(
+        "/api/v1/admin/validation-retries",
+        params={"limit": 200},
+        headers=_HEADERS,
+    )
+    page = await client.get(
+        "/api/v1/admin/validation-retries",
+        params={"limit": 2, "offset": 1},
+        headers=_HEADERS,
+    )
+
+    assert complete.status_code == 200, complete.text
+    assert page.status_code == 200, page.text
+    complete_body = complete.json()
+    page_body = page.json()
+    assert page_body["counts"] == complete_body["counts"]
+    assert page_body["quorum"] == complete_body["quorum"]
+    assert page_body["count"] == 4
+    assert page_body["returned"] == 2
+    assert page_body["limit"] == 2
+    assert page_body["offset"] == 1
+    assert page_body["has_more"] is True
+    assert page_body["submissions"] == complete_body["submissions"][1:3]
+    assert all("tickets" not in item for item in page_body["submissions"])
+    assert all(item["ticket_states"] == {} for item in page_body["submissions"])
+
+
 async def test_list_rejects_unknown_state(
     app: FastAPI,
     client: httpx.AsyncClient,
@@ -2983,6 +3019,9 @@ async def test_list_snapshot_matches_single_agent_detail(
     item = listing.json()["submissions"][0]
     assert item["snapshot"] == detail.json()["snapshot"]
     assert item["recovery_allowed"] is True
+    assert "tickets" not in item
+    assert item["ticket_states"] == {"expired": 3}
+    assert len(detail.json()["tickets"]) == 3
 
     accepted = await client.post(
         f"/api/v1/admin/validation-retries/{agent_id}/retry",
@@ -3229,8 +3268,14 @@ async def test_infra_grant_lifts_a_would_be_exhausted_ticket(
         if entry["agent_id"] == str(agent_id)
     )
     assert item["retry_state"] == "retry_available"
-    assert item["tickets"][0]["infra_retry_grants"] == 1
-    assert item["tickets"][0]["retry_budget_exhausted"] is False
+    assert item["ticket_states"] == {"expired": 1}
+
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["tickets"][0]["infra_retry_grants"] == 1
+    assert detail.json()["tickets"][0]["retry_budget_exhausted"] is False
 
 
 # --- batch retry-grant ----------------------------------------------------

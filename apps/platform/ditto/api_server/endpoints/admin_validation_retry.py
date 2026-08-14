@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 import statistics
+from collections import Counter
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import UUID
@@ -511,13 +512,17 @@ async def list_validation_retries(
     _admin: AdminDep,
     session: SessionDep,
     state: Annotated[list[str] | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> AdminStuckSubmissionsResponse:
     """Fleet-wide triage of every below-quorum submission and why it is stuck.
 
     The single-agent detail route answers "why is *this* one stuck?"; this
     answers "which ones need me?" without a per-agent sweep. Filter with one or
     more ``state`` query params (e.g. ``?state=exhausted``); ``counts`` always
-    reflects the whole fleet so a filtered view still shows the totals.
+    reflects the whole fleet so a filtered view still shows the totals. The
+    list is paginated after the stable triage sort, and complete ticket history
+    stays on the single-agent detail route.
     """
     now = datetime.now(UTC)
     requested_states = set(state or [])
@@ -591,7 +596,7 @@ async def list_validation_retries(
                 snapshot=_snapshot(
                     agent=agent, scores=retry.scores, tickets=retry.tickets
                 ),
-                tickets=[_ticket_item(t) for t in retry.tickets],
+                ticket_states=dict(Counter(t.status.value for t in retry.tickets)),
             )
         )
 
@@ -602,11 +607,18 @@ async def list_validation_retries(
             item.agent_id,
         )
     )
+    count = len(submissions)
+    page = submissions[offset : offset + limit]
     return AdminStuckSubmissionsResponse(
         generated_at=now,
         quorum=SCORING_QUORUM,
         counts=counts,
-        submissions=submissions,
+        count=count,
+        returned=len(page),
+        limit=limit,
+        offset=offset,
+        has_more=offset + len(page) < count,
+        submissions=page,
     )
 
 

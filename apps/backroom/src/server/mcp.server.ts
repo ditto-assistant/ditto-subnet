@@ -400,7 +400,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   list_lease_revocations:
     'Page newest-first through platform-ended validator leases. evidence is WHOLE AND UNTYPED validator_lease_audit context; response can include operator_evicted rows and preserve exact verdict strings. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE. Use filters to narrow the audit.',
   list_stuck_submissions:
-    'Page the platform triage order for stuck submissions. detail=summary returns ticket-state counts including silent_expiry_count and infra_retry_grants; detail=full returns ticket history. This urgency queue is intentionally not newest-first.',
+    'Page the compact platform triage order for stuck submissions. Returns ticket-state counts and silent_expiry_count; use get_validation_retry for one submission\'s complete ticket history, including infra_retry_grants. This urgency queue is intentionally not newest-first.',
   get_queue_policy_settings:
     'Read effective queue policy, rollout-locked fields, defaults, and optionally paged newest-first revision history. Open-rollout targets are snapshots: settings do not resize an in-flight rollout. historyLimit defaults to 0.',
   get_continual_retest_settings:
@@ -1002,31 +1002,15 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List stuck SN118 submissions',
       description:
-        'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. Returns count (the full filtered total), returned (rows in this response), limit, offset, has_more, per-state counts across the full filtered platform response, and one page of submissions with accepted-score count, retry state, cooldown/budget flags, blocking reason, exhausted-validator count, and the opaque concurrency snapshot a retry needs. detail=summary (the default) reports the tickets of each returned submission as per-status counts; detail=full returns its complete per-validator ticket history — including failure_reason and failure_detail on expired tickets. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
+        'Paginated fleet triage view of SN118 submissions whose validator tickets may be stuck: which submissions need an operator right now. Returns count (the full filtered total), returned (rows in this response), limit, offset, has_more, per-state counts across the whole fleet, and one compact page with accepted-score count, retry state, cooldown/budget flags, blocking reason, exhausted-validator count, per-state ticket counts, and the opaque concurrency snapshot a retry needs. Complete ticket history is deliberately excluded; use get_validation_retry for one agent. Optionally filter by one or more retry states (running, retry_available, cooling_down, exhausted, queued); omit to page through every submission. ' +
         'Rows stay in platform triage priority order (retry state, earliest retry time, then agent ID), not newest-first. Each row is already scoped by the platform to that submission\'s current applicable work era: live or expired ticket version first, then latest score version, then the active benchmark fallback. A global active-bench filter would hide valid desired-version rollout work. ' +
-        'Read silent_expiry_count first: it counts tickets that ran their whole lease and reported nothing about that attempt. A submission whose silent_expiry_count climbs while score_count stays at zero is hanging, not merely slow — and because a reported failure and a silent expiry both land as an expired ticket with a rewritten deadline, that count is the only thing in this feed that tells them apart. In detail=full, each ticket carries silently_expired, failure_reason, failed_at, slot_id, and infra_retry_grants. infra_retry_grants above zero means the platform has been minting no-fault grants for this ticket and re-leasing it: a validator reporting fail_job(reason="infrastructure") every attempt raises the cap forever, which looks identical to a validator that has gone silent unless you read this field. ' +
-        'silent_expiry_count and silently_expired read null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "zero". Requires backroom:read and exposes no miner source.',
-      inputSchema: {
-        ...listStuckSubmissionsInputSchema.shape,
-        ...MCP_PAGINATION_INPUT,
-      },
+        'Read silent_expiry_count first: it counts tickets that ran their whole lease and reported nothing about that attempt. A submission whose silent_expiry_count climbs while score_count stays at zero is hanging, not merely slow — and because a reported failure and a silent expiry both land as an expired ticket with a rewritten deadline, that count is the only thing in this feed that tells them apart. Use get_validation_retry(agentId) for complete per-validator ticket history, including silently_expired, failure_reason, failure_detail, failed_at, slot_id, and infra_retry_grants. ' +
+        'silent_expiry_count reads null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "zero". Requires backroom:read and exposes no miner source.',
+      inputSchema: listStuckSubmissionsInputSchema,
       annotations: toolAnnotations('read'),
     },
-    async ({ limit, offset, ...input }) => {
-      const detail = listStuckSubmissionsInputSchema.parse(input).detail
-      const response = await fetchStuckSubmissions(input)
-      return result(
-        compactStuckSubmissions(
-          paginateLocalCollection(
-            response,
-            'submissions',
-            limit,
-            offset,
-          ),
-          detail,
-        ),
-      )
-    },
+    async (input) =>
+      result(compactStuckSubmissions(await fetchStuckSubmissions(input))),
   )
 
   registerTool(

@@ -627,7 +627,7 @@ describe('Backroom MCP tools', () => {
       list_screening_source_files: { maxLimit: 512, maxDefault: 512 },
       list_screening_submissions: { maxLimit: 200, maxDefault: 50 },
       search_screening_source: { maxLimit: 200, maxDefault: 50 },
-      list_stuck_submissions: { maxLimit: 200, maxDefault: 50 },
+      list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
     }
@@ -4356,6 +4356,11 @@ describe('Backroom MCP tools', () => {
       generated_at: '2026-07-21T00:00:00Z',
       quorum: 3,
       counts: { exhausted: 1, cooling_down: 0 },
+      count: 1,
+      returned: 1,
+      limit: 10,
+      offset: 0,
+      has_more: false,
       submissions: [
         {
           agent_id: agentId,
@@ -4373,20 +4378,7 @@ describe('Backroom MCP tools', () => {
           attempts_used: 5,
           exhausted_validator_count: 1,
           snapshot,
-          tickets: [
-            {
-              validator_hotkey: '5Validator',
-              status: 'expired',
-              issued_at: '2026-07-20T00:00:00Z',
-              deadline: '2026-07-20T04:00:00Z',
-              bench_version: 4,
-              attempt_count: 5,
-              manual_retry_grants: 0,
-              infra_retry_grants: 0,
-              retry_after: null,
-              retry_budget_exhausted: true,
-            },
-          ],
+          ticket_states: { expired: 1 },
         },
       ],
     }
@@ -4406,7 +4398,7 @@ describe('Backroom MCP tools', () => {
       submissions: [{ agent_id: agentId, retry_state: 'exhausted' }],
     })
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?state=exhausted&state=cooling_down',
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?state=exhausted&state=cooling_down&limit=10&offset=0',
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer platform-admin-token',
@@ -4425,6 +4417,11 @@ describe('Backroom MCP tools', () => {
         generated_at: '2026-07-21T00:00:00Z',
         quorum: 3,
         counts: {},
+        count: 0,
+        returned: 0,
+        limit: 10,
+        offset: 0,
+        has_more: false,
         submissions: [],
       }),
     )
@@ -4438,7 +4435,7 @@ describe('Backroom MCP tools', () => {
 
     expect(response.isError).not.toBe(true)
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries',
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?limit=10&offset=0',
       expect.anything(),
     )
 
@@ -4446,26 +4443,13 @@ describe('Backroom MCP tools', () => {
     await server.close()
   })
 
-  it('summarises stuck submissions by default and keeps tickets on request', async () => {
+  it('requests one compact page from the platform', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
-    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
     const otherAgentId = '11111111-1111-4111-8111-111111111111'
-    const ticket = (validatorHotkey: string, issuedAt: string) => ({
-      validator_hotkey: validatorHotkey,
-      status: 'expired',
-      issued_at: issuedAt,
-      deadline: '2026-07-25T17:00:00Z',
-      bench_version: 7,
-      attempt_count: 3,
-      manual_retry_grants: 0,
-      infra_retry_grants: 0,
-      retry_after: null,
-      retry_budget_exhausted: true,
-    })
-    const submission = (id: string, snapshot: string, issuedAt: string) => ({
-      agent_id: id,
+    const submission = {
+      agent_id: otherAgentId,
       miner_hotkey: '5Miner',
-      agent_name: `agent-${id.slice(0, 4)}`,
+      agent_name: 'agent-1111',
       agent_version: 3,
       bench_version: 7,
       score_count: 1,
@@ -4477,20 +4461,21 @@ describe('Backroom MCP tools', () => {
       earliest_retry_after: null,
       attempts_used: 3,
       exhausted_validator_count: 3,
-      snapshot,
-      tickets: [ticket('5ValidatorA', issuedAt), ticket('5ValidatorB', issuedAt)],
-    })
+      snapshot: 'cd'.repeat(32),
+      ticket_states: { expired: 2 },
+    }
     const payload = {
       generated_at: '2026-07-25T18:00:00Z',
       quorum: 3,
       counts: { exhausted: 2 },
-      submissions: [
-        submission(agentId, 'ab'.repeat(32), '2026-07-25T15:00:00Z'),
-        submission(otherAgentId, 'cd'.repeat(32), '2026-07-25T15:30:00Z'),
-      ],
+      count: 2,
+      returned: 1,
+      limit: 1,
+      offset: 1,
+      has_more: false,
+      submissions: [submission],
     }
-    // A fresh Response per call: this tool is read twice in one test.
-    const fetchMock = vi.fn().mockImplementation(() => Response.json(payload))
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
     vi.stubGlobal('fetch', fetchMock)
     const { client, server } = await connect([BACKROOM_READ_SCOPE])
 
@@ -4507,7 +4492,7 @@ describe('Backroom MCP tools', () => {
       offset: number
     }
     // The selected row survives with the snapshot a retry needs, while count
-    // still reports the total matching fleet before local MCP paging.
+    // still reports the total matching fleet before server-side paging.
     expect(summarised.submissions).toEqual([
       {
         agent_id: otherAgentId,
@@ -4530,19 +4515,8 @@ describe('Backroom MCP tools', () => {
     ])
     expect(summarised).toMatchObject({ count: 2, limit: 1, offset: 1 })
     expect(summarised).not.toHaveProperty('submissions_shared')
-
-    const full = await client.callTool({
-      name: 'list_stuck_submissions',
-      arguments: { detail: 'full', limit: 1, offset: 0 },
-    })
-    expect(full.isError).not.toBe(true)
-    const detailed = readJsonResult(full) as {
-      submissions: Array<{ tickets: Array<unknown> }>
-    }
-    expect(detailed.submissions[0].tickets).toHaveLength(2)
-    // The detail flag shapes the response only; the platform request is the same.
     expect(fetchMock).toHaveBeenLastCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries',
+      'https://platform-api.heyditto.ai/api/v1/admin/validation-retries?limit=1&offset=1',
       expect.anything(),
     )
 
