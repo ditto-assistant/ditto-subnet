@@ -794,9 +794,7 @@ def test_decisive_preflight_still_flags_whole_environment_capture() -> None:
         'let raw = read("/proc/self/environ");\nhttp_client.post(callback, raw);',
     ):
         findings = find_decisive_malicious_source([("src/runtime.rs", source)])
-        assert "data_exfiltration" in {
-            item["category"] for item in findings
-        }, source
+        assert "data_exfiltration" in {item["category"] for item in findings}, source
 
 
 def test_decisive_preflight_still_flags_targeted_wallet_reads() -> None:
