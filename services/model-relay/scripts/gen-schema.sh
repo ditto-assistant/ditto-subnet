@@ -106,10 +106,14 @@ mkdir -p "$(dirname "${OUT_FILE}")"
 HEADER
   # Strip psql meta-commands (\restrict / \unrestrict, emitted by patched
   # pg_dump 16.x): they are psql directives, not SQL, and sqlc's parser
-  # rejects them. This is a purely mechanical line filter.
+  # rejects them. Also strip the "Dumped from/by ... version" comments: they
+  # vary with the point release of the Postgres container (16.14 vs 16.15)
+  # and would make the CI drift check fail on environment, not schema.
+  # Both are purely mechanical line filters.
   docker exec "${CONTAINER_NAME}" pg_dump \
     --schema-only --no-owner --no-privileges \
-    -U "${ADMIN_USER}" "${SCRATCH_DB}" | grep -v '^\\'
+    -U "${ADMIN_USER}" "${SCRATCH_DB}" \
+    | grep -v '^\\' | grep -v '^-- Dumped \(from database\|by pg_dump\) version'
 } > "${OUT_FILE}"
 
 log "done: $(wc -l < "${OUT_FILE}") lines"
