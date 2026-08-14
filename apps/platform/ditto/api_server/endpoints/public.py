@@ -2491,17 +2491,6 @@ async def leaderboard(
         for row in ledger_rows
         if score_counts.get(row.agent_id, 0) >= SCORING_QUORUM
     ]
-    # Match the validator's weight-authoritative fold: durable scores remain on
-    # the board after deregistration, but a hotkey without a current neuron
-    # cannot be the KOTH champion or occupy a participation-tail slot. When the
-    # chain snapshot is unavailable, keep the deterministic score-only
-    # projection visible with unknown eligibility; validators likewise preserve
-    # their last accepted weights until registration can be read again.
-    emission_rows = (
-        finalized_rows
-        if registered_uids is None
-        else [row for row in finalized_rows if row.miner_hotkey in registered_uids]
-    )
     finalized_ids = [row.agent_id for row in finalized_rows]
     fleet_protocol_ready = await live_validator_fleet_supports_protocol(
         session,
@@ -2667,6 +2656,23 @@ async def leaderboard(
             )
             for row in finalized_rows
         ]
+    # Match the validator's weight-authoritative population exactly: first keep
+    # one representative per payment-time owner, then apply current registration
+    # eligibility. Projecting emissions from the pre-deduplicated rows can crown
+    # a generation that the public board has grouped under its representative,
+    # leaving the visible leaderboard with no champion row at all.
+    #
+    # Durable scores still remain on the board after deregistration, but a
+    # hotkey without a current neuron cannot be the KOTH champion or occupy a
+    # participation-tail slot. When the chain snapshot is unavailable, keep the
+    # deterministic score-only projection visible with unknown eligibility;
+    # validators likewise preserve their last accepted weights until
+    # registration can be read again.
+    emission_rows = (
+        finalized_rows
+        if registered_uids is None
+        else [row for row in finalized_rows if row.miner_hotkey in registered_uids]
+    )
     # The factor-adjusted finalized board is now one row per owner, so the
     # provisional overlay suppresses and dedupes on that same owner graph.
     provisional_candidates = (

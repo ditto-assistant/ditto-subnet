@@ -3312,13 +3312,17 @@ class TestPublicLeaderboard:
             session_maker,
             miner="5" + "T" * 47,
             composites=[0.95, 0.96, 0.97],
-            created_at=datetime(2026, 6, 8, 12, 0, tzinfo=UTC),
+            created_at=datetime(2026, 6, 8, 13, 0, tzinfo=UTC),
         )
         hidden_generation = await _seed_k3(
             session_maker,
             miner="5" + "U" * 47,
-            composites=[0.90, 0.91, 0.92],
-            created_at=datetime(2026, 6, 8, 13, 0, tzinfo=UTC),
+            composites=[0.958, 0.958, 0.958],
+            # Older than the representative so the pre-deduplication KOTH fold
+            # would crown this hidden child and leave the rendered board with no
+            # champion. The public projection must consume the same owner-
+            # deduplicated population as the validator ledger instead.
+            created_at=datetime(2026, 6, 8, 12, 0, tzinfo=UTC),
         )
         await _seed_payment(
             session_maker,
@@ -3349,7 +3353,7 @@ class TestPublicLeaderboard:
                     "agent_id": str(hidden_generation),
                     "agent_name": "agent",
                     "agent_version": None,
-                    "canonical_composite": pytest.approx(0.91),
+                    "canonical_composite": pytest.approx(0.958),
                 }
             ]
         }
@@ -3369,6 +3373,20 @@ class TestPublicLeaderboard:
         ]
 
         assert pipeline["submission_family"] == family
+        visible_ids = {listed["agent_id"] for listed in board["entries"]}
+        recipients = board["emissions"]["recipients"]
+        assert board["emissions"]["champion_agent_id"] == representative
+        assert {recipient["agent_id"] for recipient in recipients} <= visible_ids
+        assert recipients == [
+            {
+                "role": "champion",
+                "agent_id": representative,
+                "miner_hotkey": "5" + "T" * 47,
+                "raw_rank": 1,
+                "share_of_miner_pool": 1.0,
+                "shared_seed_confirmations": 0,
+            }
+        ]
 
     async def test_agent_detail_family_uses_current_factor_adjusted_representative(
         self,
