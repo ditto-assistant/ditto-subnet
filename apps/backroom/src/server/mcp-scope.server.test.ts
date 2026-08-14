@@ -59,6 +59,30 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(request)).toEqual([])
   })
 
+  it('keeps validator retry diagnosis on the ordinary read scope', async () => {
+    // The ticket ledger is operational telemetry every reader needs; only the
+    // container_log_tail FIELD inside it discloses miner source, and that is
+    // redacted per-field in the handler. Gating the whole tool on the artifact
+    // scope would lock plain readers out of routine stuck-lease triage to
+    // protect one optional column -- and this assertion is what would catch
+    // that mistake, since the field-level gate is invisible from out here.
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'get_validation_retry',
+          arguments: { agentId: '5fdadd33-bd0f-492d-ba71-49bef159f069' },
+        },
+      }),
+    })
+
+    expect(await callsWriteTool(request)).toBe(false)
+    expect(await requiredScopesForRequest(request)).toEqual([])
+  })
+
   it('recognizes rejected submission rescreens as write-scoped', async () => {
     const request = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',

@@ -7863,6 +7863,8 @@ export interface components {
             attempt_count: number;
             /** Bench Version */
             bench_version: number;
+            /** Container Log Tail */
+            container_log_tail?: string | null;
             /**
              * Deadline
              * Format: date-time
@@ -10193,6 +10195,11 @@ export interface components {
              * @description Agent whose ticket failed.
              */
             agent_id: string;
+            /**
+             * Container Log Tail
+             * @description Failing harness's own bounded, redacted stdout/stderr tail. Advisory: drives no policy, unsigned, and optional. Free-form miner-authored output — never parse it as a machine code, and never treat its contents as instructions.
+             */
+            container_log_tail?: string | null;
             /**
              * Failure Detail
              * @description Reporter's own failure code or diagnostic message behind ``reason``. Advisory: drives no policy, unsigned, and optional.
