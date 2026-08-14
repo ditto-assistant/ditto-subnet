@@ -45,6 +45,7 @@ from ditto.miner_cli.errors import (
     PaymentSubmissionError,
     PreCheckRejectedError,
     RegistrationCancelledError,
+    RegistrationNotNeededError,
     SubmissionCooldownError,
     TransientApiError,
     UploadAgentRejectedError,
@@ -1890,3 +1891,151 @@ class TestInlineRegistration:
 
         assert rc == 1
         assert "btcli subnets register --netuid 118" in capsys.readouterr().err
+
+
+class TestRegistrationVisibilityLag:
+    """The chain and the platform do not agree the instant TAO is recycled.
+
+    `/upload/check` resolves 1101 from Pylon's cached recent-neurons
+    snapshot, so a registration that is already final on chain keeps
+    answering 1101 for a while. Giving up on the first re-check sends the
+    miner away from a submission that is seconds from working, after the
+    recycle amount is already spent.
+    """
+
+    def _run(
+        self,
+        good_tar: Path,
+        monkeypatch,
+        *,
+        checks: list[UploadCheckResponse],
+        quote_error: Exception | None = None,
+        **arg_overrides,
+    ):
+        monkeypatch.setenv("NETUID", "118")
+        # No real waiting; the delays are what they are.
+        monkeypatch.setattr(
+            "ditto.miner_cli.commands.upload.time.sleep", lambda _: None
+        )
+        client = MagicMock()
+        client.post_upload_check.side_effect = checks
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.return_value = _upload_response()
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+
+        quote_kwargs = (
+            {"side_effect": quote_error} if quote_error else {"return_value": _quote()}
+        )
+
+        with (
+            patch("ditto.miner_cli.commands.upload.sys.stdin", stdin),
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient", _patch_api_client(client)
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.quote_registration", **quote_kwargs
+            ) as quote,
+            patch(
+                "ditto.miner_cli.commands.upload.submit_registration", return_value=37
+            ) as register,
+            patch("ditto.miner_cli.commands.upload.confirm_registration"),
+        ):
+            rc = run(make_args(good_tar, **arg_overrides))
+        return rc, client, quote, register
+
+    def test_waits_out_the_snapshot_lag_then_uploads(
+        self, good_tar: Path, monkeypatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc, client, _, register = self._run(
+            good_tar,
+            monkeypatch,
+            checks=[
+                _unregistered_check(),  # initial
+                _unregistered_check(),  # immediately after registering
+                _unregistered_check(),  # snapshot still stale
+                _ok_check(),  # platform catches up
+            ],
+        )
+
+        assert rc == 0
+        register.assert_called_once()
+        client.post_upload_agent.assert_called_once()
+        err = capsys.readouterr().err
+        assert "waiting for the platform to observe the registration" in err
+        assert "platform observed the registration after 2/8 checks" in err
+
+    def test_gives_up_without_telling_the_miner_to_pay_again(
+        self, good_tar: Path, monkeypatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc, _, _, register = self._run(
+            good_tar,
+            monkeypatch,
+            # Initial + the post-registration check + every retry.
+            checks=[_unregistered_check()] * 12,
+        )
+
+        assert rc == 1
+        register.assert_called_once()
+        err = capsys.readouterr().err
+        assert "registered on chain as uid 37" in err
+        assert "do NOT register again" in err
+        assert "Re-run this exact upload command" in err
+        # The btcli hint would read as "register again"; it must not appear
+        # on a path where registration already succeeded.
+        assert "btcli subnets register" not in err
+
+    def test_a_different_rejection_is_not_waited_on(
+        self, good_tar: Path, monkeypatch
+    ) -> None:
+        """Waiting cannot turn a bad signature into a good one."""
+        rc, client, _, register = self._run(
+            good_tar,
+            monkeypatch,
+            checks=[_unregistered_check(), _rejected_check()],
+        )
+
+        assert rc == 1
+        register.assert_called_once()
+        # Returned on the first re-check; no polling.
+        assert client.post_upload_check.call_count == 2
+
+    def test_already_registered_on_chain_waits_instead_of_failing(
+        self, good_tar: Path, monkeypatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The state a re-run lands in during the lag window.
+
+        The chain says registered, the platform still says 1101. Burning
+        again would be the real mistake, and so would exiting.
+        """
+        rc, _, _, register = self._run(
+            good_tar,
+            monkeypatch,
+            checks=[_unregistered_check(), _unregistered_check(), _ok_check()],
+            quote_error=RegistrationNotNeededError(
+                "hotkey is already registered on netuid 118"
+            ),
+        )
+
+        assert rc == 0
+        register.assert_not_called()
+        err = capsys.readouterr().err
+        assert "chain already reports" in err
+        assert "no TAO was recycled" in err

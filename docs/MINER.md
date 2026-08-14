@@ -108,6 +108,25 @@ the ordinary payment confirmation. The registration cost is never cached or
 assumed: it is read at the prompt and read again immediately before the
 extrinsic, and the CLI aborts rather than paying more if it rose in between.
 
+The platform resolves registration from a cached metagraph snapshot rather
+than from the chain directly, so a registration that is already final on chain
+is not visible to `/upload/check` immediately. The CLI waits it out, re-checking
+for about four minutes:
+
+```
+registered on netuid 118: uid 37
+continuing upload...
+waiting for the platform to observe the registration (it reads a cached
+metagraph snapshot, so this lags the chain)...
+  still not visible; re-checking (1/8)
+platform observed the registration after 2/8 checks
+```
+
+If the wait runs out, the registration still succeeded and the TAO is already
+spent — **do not register again**. Re-run the same upload command a few minutes
+later; it detects the on-chain registration, recycles nothing, and waits for
+the platform again.
+
 `--yes` does **not** cover this prompt. It authorizes the platform-quoted
 evaluation fee only, whereas the recycle amount is a separate chain-quoted cost
 with no ceiling. For scripted use, pre-authorize it explicitly with

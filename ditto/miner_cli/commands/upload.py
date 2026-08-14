@@ -30,6 +30,7 @@ import os
 import re
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID
@@ -91,6 +92,14 @@ logger = logging.getLogger(__name__)
 
 _BLOCK_HASH_RE = re.compile(r"^0x[0-9a-fA-F]{64}$")
 _UPLOAD_RETRY_DELAYS_S = (2.0, 4.0, 8.0, 16.0, 30.0, 30.0)
+
+# How long to keep re-checking after a finalized registration. The platform
+# answers 1101 from a cached metagraph snapshot rather than from the chain
+# (ditto.chain.client.ChainClient.get_recent_neurons), so a registration that
+# is already final on chain stays invisible to /upload/check for a while. That
+# snapshot's refresh period is not a contract the CLI can read, so this polls
+# rather than sleeping a fixed guess. ~4 minutes total.
+_REGISTRATION_VISIBILITY_DELAYS_S = (5.0, 10.0, 15.0, 20.0, 30.0, 30.0, 30.0, 30.0)
 
 # Mirrors ditto.api_server.endpoints.upload.ERROR_CODE_HOTKEY_NOT_REGISTERED.
 # The only pre-check rejection the CLI can resolve on the miner's behalf.
@@ -397,17 +406,21 @@ def _run_upload(
         if not check_response.ok:
             _print_rejections(check_response)
             if _registration_would_unblock(args, check_response.error_codes):
-                _register_hotkey(
+                registered_uid = _register_hotkey(
                     args=args,
                     handle=handle,
                     live_wallet=live_wallet,
                     subtensor_network=subtensor_network,
                     chain_endpoint=chain_endpoint,
                 )
-                # Re-run the same check against the same reservation inputs.
-                # Registration resolved the only rejection, so a still-failing
-                # check is a real one and falls through to the raise below.
-                check_response = _check(receipt)
+                # The platform resolves registration from a cached metagraph
+                # snapshot, not from the chain directly, so a finalized
+                # registration is not visible to /upload/check immediately.
+                check_response = _await_platform_registration(
+                    check=lambda: _check(receipt),
+                    hotkey_ss58=handle.hotkey_ss58,
+                    registered_uid=registered_uid,
+                )
                 if not check_response.ok:
                     _print_rejections(check_response)
             if not check_response.ok:
@@ -656,6 +669,77 @@ def _print_rejections(check_response: UploadCheckResponse) -> None:
         print(f"  pre-check rejection {code}: {msg}", file=sys.stderr)
 
 
+def _await_platform_registration(
+    *,
+    check: Callable[[], UploadCheckResponse],
+    hotkey_ss58: str,
+    registered_uid: int | None,
+) -> UploadCheckResponse:
+    """Re-check until the platform observes an on-chain registration.
+
+    The chain and the platform do not agree instantly. ``/upload/check``
+    resolves registration from Pylon's cached recent-neurons snapshot, so a
+    registration that has already finalized on chain still answers 1101 for
+    some time afterward. Checking once and giving up sends the miner away
+    from a submission that is seconds from working, having already spent the
+    recycle amount.
+
+    Only 1101 is waited on. Any other rejection is returned immediately --
+    those do not become true by waiting.
+
+    Args:
+        check: Zero-arg callable re-running the same ``/upload/check``.
+        hotkey_ss58: Hotkey being waited on, for the messages.
+        registered_uid: uid from this run's registration, when known.
+
+    Returns:
+        The first passing response, or the last non-1101 rejection.
+
+    Raises:
+        PreCheckRejectedError: The platform never observed the registration
+            within the budget. The message states that registration DID
+            succeed so the miner does not pay to register a second time.
+    """
+    response = check()
+    if response.ok or list(response.error_codes) != [_ERROR_CODE_HOTKEY_NOT_REGISTERED]:
+        return response
+
+    print(
+        "waiting for the platform to observe the registration "
+        "(it reads a cached metagraph snapshot, so this lags the chain)...",
+        file=sys.stderr,
+    )
+    for attempt, delay in enumerate(_REGISTRATION_VISIBILITY_DELAYS_S, start=1):
+        time.sleep(delay)
+        response = check()
+        if response.ok:
+            print(
+                f"platform observed the registration after "
+                f"{attempt}/{len(_REGISTRATION_VISIBILITY_DELAYS_S)} checks",
+                file=sys.stderr,
+            )
+            return response
+        if list(response.error_codes) != [_ERROR_CODE_HOTKEY_NOT_REGISTERED]:
+            return response
+        print(
+            f"  still not visible; re-checking "
+            f"({attempt}/{len(_REGISTRATION_VISIBILITY_DELAYS_S)})",
+            file=sys.stderr,
+        )
+
+    uid_note = f" as uid {registered_uid}" if registered_uid is not None else ""
+    raise PreCheckRejectedError(
+        f"hotkey {hotkey_ss58} is registered on chain{uid_note}, but the "
+        f"platform still reports it as unregistered after "
+        f"{int(sum(_REGISTRATION_VISIBILITY_DELAYS_S))}s.\n"
+        "The registration succeeded and the recycled TAO is already spent -- "
+        "do NOT register again. Re-run this exact upload command in a few "
+        "minutes; it will skip registration and go straight to payment.\n"
+        "If it persists, the platform may be bound to a different netuid "
+        "than the CLI (env NETUID) or a different network (--network)."
+    )
+
+
 def _resolve_netuid() -> int:
     """Netuid the CLI registers against, matching ``ditto attest``."""
     from ditto.miner_cli.commands.attest import DEFAULT_NETUID
@@ -699,17 +783,19 @@ def _register_hotkey(
     live_wallet: bittensor.Wallet,
     subtensor_network: str,
     chain_endpoint: str | None,
-) -> None:
+) -> int | None:
     """Quote, confirm, and submit a burned registration, then continue.
 
     Every failure mode ends by printing the equivalent btcli command, so a
     miner the CLI cannot register is never left without the next step.
 
+    Returns:
+        The uid assigned by this run's registration, or ``None`` when the
+        hotkey was already registered on chain or the uid could not be read.
+
     Raises:
         RegistrationCancelledError: The miner declined the prompt.
         RegistrationSubmissionError: Quoting or submission failed.
-        RegistrationNotNeededError: The chain already has this hotkey
-            registered on the netuid the CLI resolved.
     """
     netuid = _resolve_netuid()
     btcli_hint = _btcli_register_hint(args, subtensor_network)
@@ -723,7 +809,18 @@ def _register_hotkey(
             subtensor_network=subtensor_network,
             chain_endpoint=chain_endpoint,
         )
-    except (RegistrationSubmissionError, RegistrationNotNeededError) as e:
+    except RegistrationNotNeededError:
+        # Not an error here. The platform said 1101 and the chain says
+        # registered, which is the ordinary state right after registering:
+        # the platform's cached snapshot has not caught up yet. Burning again
+        # would be the actual mistake. Let the caller wait it out.
+        print(
+            f"chain already reports {handle.hotkey_ss58} registered on netuid "
+            f"{netuid}; no TAO was recycled.",
+            file=sys.stderr,
+        )
+        return None
+    except RegistrationSubmissionError as e:
         print(f"\n{e}\nTo register manually:\n{btcli_hint}", file=sys.stderr)
         raise
 
@@ -770,6 +867,7 @@ def _register_hotkey(
         + "\ncontinuing upload...",
         file=sys.stderr,
     )
+    return uid
 
 
 def _offer_owner_link(
