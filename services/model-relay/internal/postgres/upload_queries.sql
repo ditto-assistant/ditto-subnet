@@ -30,7 +30,7 @@ JOIN evaluation_payments AS p ON p.agent_id = a.agent_id
 WHERE p.miner_coldkey = $1;
 
 -- name: LockUploadAdmissionColdkey :exec
-SELECT pg_advisory_xact_lock(hashtextextended($1, 0));
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(miner_coldkey), 0));
 
 -- name: GetUploadAdmissionForColdkey :one
 SELECT miner_coldkey, token, miner_hotkey, sha256, settings_revision,

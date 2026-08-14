@@ -220,7 +220,6 @@ func uuidString(value pgtype.UUID) string {
 type admission struct {
 	token       string
 	expiresAt   time.Time
-	cooldown    int32
 	feeAmount   int64
 	sendAddress string
 }
@@ -289,7 +288,7 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 			if err := tx.Commit(ctx); err != nil {
 				return nil, current, err
 			}
-			return &admission{token: uuidString(existing.Token), expiresAt: existing.ExpiresAt.Time, cooldown: existing.CooldownSeconds, feeAmount: existing.FeeAmountRao, sendAddress: address}, current, nil
+			return &admission{token: uuidString(existing.Token), expiresAt: existing.ExpiresAt.Time, feeAmount: existing.FeeAmountRao, sendAddress: address}, current, nil
 		}
 		blockedUntil := minTime(existing.ExpiresAt.Time.UTC(), existing.CreatedAt.Time.UTC().Add(admissionBlockTTL))
 		if blockedUntil.After(now) {
@@ -320,7 +319,7 @@ func (d *Deps) reserve(ctx context.Context, coldkey, hotkey, sha string, now tim
 	if err := tx.Commit(ctx); err != nil {
 		return nil, current, err
 	}
-	return &admission{token: uuidString(row.Token), expiresAt: row.ExpiresAt.Time, cooldown: row.CooldownSeconds, feeAmount: row.FeeAmountRao, sendAddress: row.PaymentSendAddress.String}, current, nil
+	return &admission{token: uuidString(row.Token), expiresAt: row.ExpiresAt.Time, feeAmount: row.FeeAmountRao, sendAddress: row.PaymentSendAddress.String}, current, nil
 }
 
 func appendFailure(codes *[]int, messages *[]string, code int, message string) {
@@ -420,9 +419,10 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 	if len(codes) == 0 && payload.ReserveSubmissionSlot {
 		var boundSettings settings
 		reserved, boundSettings, err = d.reserve(r.Context(), ownerColdkey, *payload.Hotkey, *payload.SHA256, now)
-		if boundSettings.cooldownSeconds != 0 {
-			current = boundSettings
-		}
+		// reserve resolves settings before every response-producing path. On an
+		// earlier infrastructure error the handler returns below, so assignment is
+		// unconditional and does not encode that invariant as a magic sentinel.
+		current = boundSettings
 		if err != nil {
 			var cooldown *cooldownError
 			if errors.As(err, &cooldown) {
@@ -448,7 +448,6 @@ func (d *Deps) handleCheck(w http.ResponseWriter, r *http.Request) {
 		response.AdmissionExpiresAt = &expires
 		response.PaymentAmountRao = &reserved.feeAmount
 		response.PaymentSendAddress = &reserved.sendAddress
-		response.CooldownSeconds = &reserved.cooldown
 	}
 	writeJSON(w, http.StatusOK, response)
 }

@@ -221,7 +221,7 @@ const lockUploadAdmissionColdkey = `-- name: LockUploadAdmissionColdkey :exec
 SELECT pg_advisory_xact_lock(hashtextextended($1, 0))
 `
 
-func (q *Queries) LockUploadAdmissionColdkey(ctx context.Context, hashtextextended string) error {
-	_, err := q.db.Exec(ctx, lockUploadAdmissionColdkey, hashtextextended)
+func (q *Queries) LockUploadAdmissionColdkey(ctx context.Context, minerColdkey string) error {
+	_, err := q.db.Exec(ctx, lockUploadAdmissionColdkey, minerColdkey)
 	return err
 }
