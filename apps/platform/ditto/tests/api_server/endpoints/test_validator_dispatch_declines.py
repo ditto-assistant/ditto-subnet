@@ -24,15 +24,25 @@ from __future__ import annotations
 
 import ast
 import logging
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, get_args
+from types import SimpleNamespace
+from typing import Any, Literal, cast, get_args
+from uuid import UUID
 
 import pytest
 from prometheus_client import REGISTRY
 
 import ditto.api_server.endpoints.validator as validator_endpoint
+from ditto.api_models.benchmark_capacity import ActiveBenchmarkSlot, BenchmarkCapacity
+from ditto.api_models.benchmark_progress import (
+    BenchmarkProgress,
+    BenchmarkProgressStage,
+)
 from ditto.api_models.validator_slot_settings import ValidatorSlotSettings
 from ditto.api_server.endpoints.validator import (
+    _inference_stage_cap_declines,
+    _inference_stage_slot_cap,
     _record_dispatch_decline,
     _slot_cap_decline_reason,
     _slot_cap_declines,
@@ -57,6 +67,7 @@ class TestReasonVocabulary:
             "disk_breaker",
             "not_accepting",
             "slot_not_healthy",
+            "inference_slot_cap",
             "no_candidate",
         } <= set(get_args(DispatchDeclineReason))
 
@@ -75,6 +86,140 @@ class TestReasonVocabulary:
         }
 
         assert produced <= set(get_args(DispatchDeclineReason))
+
+
+class TestInferenceStageSlotCap:
+    """Hosted embedding capacity bounds new post-v7 leases."""
+
+    @staticmethod
+    def _config(*, per_ticket: int, per_validator: int) -> Any:
+        return cast(
+            Any,
+            SimpleNamespace(
+                embedding_per_ticket_concurrency=per_ticket,
+                embedding_per_validator_concurrency=per_validator,
+            ),
+        )
+
+    def test_one_lane_cannot_be_stampeded_by_eight_leases(self) -> None:
+        assert (
+            _inference_stage_slot_cap(self._config(per_ticket=1, per_validator=1)) == 1
+        )
+
+    def test_validator_capacity_is_divided_by_each_ticket_allowance(self) -> None:
+        assert (
+            _inference_stage_slot_cap(self._config(per_ticket=2, per_validator=8)) == 4
+        )
+
+    def test_cap_never_exceeds_the_slot_wire_contract(self) -> None:
+        assert (
+            _inference_stage_slot_cap(self._config(per_ticket=1, per_validator=1_000))
+            == 8
+        )
+
+    def test_invalid_zero_configuration_still_fails_bounded(self) -> None:
+        assert (
+            _inference_stage_slot_cap(self._config(per_ticket=0, per_validator=0)) == 1
+        )
+
+    @staticmethod
+    def _active(
+        slot_id: str, *, stage: str | None, bench_version: int = 9
+    ) -> ActiveBenchmarkSlot:
+        return ActiveBenchmarkSlot(
+            slot_id=slot_id,
+            agent_id=UUID("00000000-0000-0000-0000-000000000001"),
+            bench_version=bench_version,
+            progress=(
+                None
+                if stage is None
+                else BenchmarkProgress(
+                    stage=cast(BenchmarkProgressStage, stage),
+                    completed=1 if stage == "running_benchmark" else None,
+                    total=10 if stage == "running_benchmark" else None,
+                    ticket_deadline=datetime(2026, 8, 14, 7, tzinfo=UTC),
+                )
+            ),
+        )
+
+    def test_startup_work_consumes_the_stage_cap(self) -> None:
+        capacity = BenchmarkCapacity(
+            configured_slots=4,
+            healthy_slots=["slot-0", "slot-1", "slot-2", "slot-3"],
+            active=[
+                self._active("slot-0", stage="generating_dataset"),
+                self._active("slot-1", stage="starting_harness"),
+            ],
+        )
+
+        assert _inference_stage_cap_declines(
+            slot_id="slot-2",
+            slot_running_benchmark=False,
+            allowed_slots=2,
+            capacity=capacity,
+        )
+
+    def test_grading_work_does_not_waste_startup_capacity(self) -> None:
+        capacity = BenchmarkCapacity(
+            configured_slots=4,
+            healthy_slots=["slot-0", "slot-1", "slot-2", "slot-3"],
+            active=[
+                self._active("slot-0", stage="running_benchmark"),
+                self._active("slot-1", stage="running_benchmark"),
+            ],
+        )
+
+        assert not _inference_stage_cap_declines(
+            slot_id="slot-2",
+            slot_running_benchmark=False,
+            allowed_slots=1,
+            capacity=capacity,
+        )
+
+    def test_unreported_active_progress_is_conservatively_startup(self) -> None:
+        capacity = BenchmarkCapacity(
+            configured_slots=2,
+            healthy_slots=["slot-0", "slot-1"],
+            active=[self._active("slot-0", stage=None)],
+        )
+
+        assert _inference_stage_cap_declines(
+            slot_id="slot-1",
+            slot_running_benchmark=False,
+            allowed_slots=1,
+            capacity=capacity,
+        )
+
+    def test_pre_v7_work_does_not_consume_hosted_embedding_capacity(self) -> None:
+        capacity = BenchmarkCapacity(
+            configured_slots=2,
+            healthy_slots=["slot-0", "slot-1"],
+            active=[self._active("slot-0", stage=None, bench_version=6)],
+        )
+
+        assert not _inference_stage_cap_declines(
+            slot_id="slot-1",
+            slot_running_benchmark=False,
+            allowed_slots=1,
+            capacity=capacity,
+        )
+
+    def test_resume_is_never_stranded_by_a_lower_live_cap(self) -> None:
+        capacity = BenchmarkCapacity(
+            configured_slots=2,
+            healthy_slots=["slot-0", "slot-1"],
+            active=[
+                self._active("slot-0", stage="starting_harness"),
+                self._active("slot-1", stage="starting_harness"),
+            ],
+        )
+
+        assert not _inference_stage_cap_declines(
+            slot_id="slot-1",
+            slot_running_benchmark=True,
+            allowed_slots=1,
+            capacity=capacity,
+        )
 
 
 class TestSlotCapDeclineReason:

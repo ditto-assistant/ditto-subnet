@@ -741,22 +741,34 @@ async def begin_inference_request(
     if await session.get(InferenceRequest, (grant.grant_id, nonce)) is not None:
         return InferenceDecline.NONCE_REPLAYED
 
-    active_column = (
-        InferenceGrant.active_requests
-        if request_kind == "chat"
-        else InferenceGrant.embedding_active_requests
+    # Aggregate the authoritative request rows, not the denormalized grant
+    # counters.  A validator ticket can expire before its scorer gets a chance
+    # to finish the request, and older cleanup paths left the corresponding
+    # ``*_active_requests`` value behind on an otherwise-active grant.  One
+    # such ghost permanently consumed a fleet concurrency slot even though no
+    # provider request was still running.  The per-grant counter above remains
+    # the exact, row-locked ticket rail; the cross-grant rails deliberately use
+    # fresh ``started`` requests so expired counters cannot starve unrelated
+    # leases.  Requests older than the same recovery window used above are no
+    # longer provider work and are excluded even if their owning grant has not
+    # yet been revisited for cleanup.
+    active_request_count_query = (
+        select(func.count())
+        .select_from(InferenceRequest)
+        .join(InferenceGrant, InferenceGrant.grant_id == InferenceRequest.grant_id)
+        .where(
+            InferenceGrant.status == "active",
+            InferenceRequest.status == "started",
+            InferenceRequest.request_kind == request_kind,
+            InferenceRequest.started_at >= stale_cutoff,
+        )
     )
     validator_active = await session.scalar(
-        select(func.coalesce(func.sum(active_column), 0)).where(
-            InferenceGrant.validator_hotkey == grant.validator_hotkey,
-            InferenceGrant.status == "active",
+        active_request_count_query.where(
+            InferenceGrant.validator_hotkey == grant.validator_hotkey
         )
     )
-    global_active = await session.scalar(
-        select(func.coalesce(func.sum(active_column), 0)).where(
-            InferenceGrant.status == "active"
-        )
-    )
+    global_active = await session.scalar(active_request_count_query)
     minute_start = now - timedelta(minutes=1)
     validator_recent = await session.scalar(
         select(func.count())

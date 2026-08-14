@@ -1514,6 +1514,50 @@ async def test_global_ceiling_is_reported_as_global_not_as_per_ticket(
 
 
 @pytest.mark.asyncio
+async def test_stale_grant_counter_cannot_consume_global_embedding_capacity(
+    session: AsyncSession,
+) -> None:
+    """An expired lease's denormalized counter is not provider work.
+
+    Production had two expired grants stuck at one active embedding each.  A
+    global limit of three therefore admitted only one real request forever,
+    even though neither grant had a started request.  Cross-grant admission is
+    derived from fresh request rows now, so the ghost counters cannot starve a
+    new lease.
+    """
+    config = replace(
+        _config(),
+        embedding_per_ticket_concurrency=1,
+        embedding_per_validator_concurrency=1,
+        embedding_global_concurrency=1,
+    )
+    async with session.begin():
+        ghost_ticket, ghost_grant, _ghost_bearer, now = await _live_grant(
+            session, config, validator_hotkey="ghost-validator"
+        )
+        ghost_ticket.status = TicketStatus.EXPIRED
+        ghost_grant.embedding_active_requests = 1
+        await session.flush()
+
+        _ticket, grant, bearer, _ = await _live_grant(
+            session, config, validator_hotkey="current-validator"
+        )
+        admitted = await begin_inference_request(
+            session,
+            grant_id=grant.grant_id,
+            nonce=uuid4(),
+            bearer=bearer,
+            model=config.embedding_model,
+            token_reservation=10,
+            now=now,
+            config=config,
+            request_kind="embedding",
+        )
+
+    assert isinstance(admitted, tuple)
+
+
+@pytest.mark.asyncio
 async def test_lease_model_usage_reads_the_grant_bound_to_that_exact_lease(
     session: AsyncSession,
 ) -> None:

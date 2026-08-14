@@ -888,6 +888,61 @@ async def _held_lease_slots(
     )
 
 
+def _inference_stage_slot_cap(config: InferenceProxyConfig) -> int:
+    """Maximum concurrent post-v7 leases one validator may seed safely.
+
+    Every live benchmark can occupy one per-ticket embedding lane.  Leasing
+    more benchmarks than the validator-wide lane can admit turns ordinary
+    backpressure into synchronized multi-minute startup failures.  Keep one
+    slot available even under a malformed/disabled emergency setting; the
+    inference readiness gates still decide whether that slot is leaseable.
+    """
+    per_ticket = max(1, config.embedding_per_ticket_concurrency)
+    return max(
+        1,
+        min(
+            HARD_SLOT_CEILING,
+            config.embedding_per_validator_concurrency // per_ticket,
+        ),
+    )
+
+
+_INFERENCE_STARTUP_STAGES = {
+    "preparing",
+    "building_harness",
+    "generating_dataset",
+    "starting_harness",
+    "waiting_for_relay",
+}
+
+
+def _inference_stage_cap_declines(
+    *,
+    slot_id: str,
+    slot_running_benchmark: bool,
+    allowed_slots: int,
+    capacity: BenchmarkCapacity,
+) -> bool:
+    """Whether another post-v7 startup would overfill hosted embeddings.
+
+    Only startup stages occupy the embedding rail heavily.  A benchmark that
+    has reached ``running_benchmark`` should not cost the validator a startup
+    slot for the rest of its run; doing so would turn a safety rail into idle
+    capacity.  Protocol-16 active slots with no progress are conservatively
+    startup work because they are pulling, rendering, or seeding.
+    """
+    if slot_running_benchmark:
+        return False
+    active_startups = sum(
+        1
+        for slot in capacity.active
+        if slot.slot_id != slot_id
+        and slot.bench_version >= 7
+        and (slot.progress is None or slot.progress.stage in _INFERENCE_STARTUP_STAGES)
+    )
+    return active_startups >= allowed_slots
+
+
 def _slot_cap_declines(
     *,
     slot_id: str,
@@ -2791,6 +2846,18 @@ async def request_job(
                         advertised_slots=capacity.configured_slots,
                         sample=resource_sample,
                     ),
+                    validator_hotkey=payload.validator_hotkey,
+                    slot_id=slot_id,
+                )
+                return Response(status_code=204)
+            if target_version >= 7 and _inference_stage_cap_declines(
+                slot_id=slot_id,
+                slot_running_benchmark=slot_running_benchmark,
+                allowed_slots=_inference_stage_slot_cap(inference_config),
+                capacity=capacity,
+            ):
+                _record_dispatch_decline(
+                    "inference_slot_cap",
                     validator_hotkey=payload.validator_hotkey,
                     slot_id=slot_id,
                 )
