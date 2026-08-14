@@ -186,6 +186,16 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     ] == ("research/dittobench-datagen")
     assert "go test ./..." in datagen_verification["run"]
 
+    relay_steps = jobs["verify-model-relay"]["steps"]
+    relay_uv = _step(relay_steps, "Install uv")
+    relay_python = _step(relay_steps, "Set up Python 3.12")
+    relay_gate = _step(relay_steps, "Gate model-relay release on exact merge source")
+    assert str(relay_uv["uses"]).startswith("astral-sh/setup-uv@")
+    assert relay_python["run"] == "uv python install 3.12"
+    assert relay_steps.index(relay_uv) < relay_steps.index(relay_gate)
+    assert relay_steps.index(relay_python) < relay_steps.index(relay_gate)
+    assert "scripts/gen-schema.sh" in relay_gate["run"]
+
     component_gates = {
         "verify-platform": (
             "Gate Platform release on exact merge source",
