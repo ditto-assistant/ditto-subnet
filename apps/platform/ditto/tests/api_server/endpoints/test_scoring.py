@@ -8,10 +8,11 @@ wire shape.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
@@ -694,6 +695,56 @@ class TestScoringLiveness:
         self._break_db(monkeypatch)
         resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
         assert resp.status_code == 503
+
+    async def test_concurrent_reads_share_only_the_inflight_materialization(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        await _seed_scored(session_maker, miner=_MINER, composite=0.7)
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        real_list = scoring_mod.list_eligible_ledger
+        first_read_started = asyncio.Event()
+        release_first_read = asyncio.Event()
+        calls = 0
+
+        async def _gated_list(*args: Any, **kwargs: Any) -> Any:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                first_read_started.set()
+                await release_first_read.wait()
+            return await real_list(*args, **kwargs)
+
+        monkeypatch.setattr(scoring_mod, "list_eligible_ledger", _gated_list)
+        first = asyncio.create_task(
+            client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        )
+        await asyncio.wait_for(first_read_started.wait(), timeout=2)
+        second = asyncio.create_task(
+            client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+        )
+        await asyncio.sleep(0.05)
+        assert calls == 1
+
+        release_first_read.set()
+        first_response, second_response = await asyncio.gather(first, second)
+        assert first_response.status_code == 200
+        assert second_response.status_code == 200
+        assert calls == 1
+        assert second_response.json() == first_response.json()
+
+        # The single-flight is not a TTL cache. A later, non-overlapping poll
+        # rematerializes current scores and policy.
+        third_response = await client.get(
+            "/api/v1/scoring/scores", headers=_ledger_headers()
+        )
+        assert third_response.status_code == 200
+        assert calls == 2
 
     async def test_nonce_db_failure_returns_503_without_serving_cache(
         self,

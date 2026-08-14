@@ -20,11 +20,13 @@ proof that the caller controls it.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -133,6 +135,8 @@ class _LedgerSnapshot:
     emissions because of a database problem."""
     v9_confirmation_mode: Literal["enforce"] | None = None
     tie_weighting_mode: Literal["pool"] | None = None
+    continual_retest_cohort_size: int = 5
+    requesting_validator_hotkey: str | None = None
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -261,6 +265,87 @@ def _store_snapshot(request: Request, snapshot: _LedgerSnapshot) -> None:
     request.app.state.ledger_snapshot = snapshot
 
 
+def _snapshot_can_be_shared(snapshot: _LedgerSnapshot, validator_hotkey: str) -> bool:
+    """Whether one successful materialization is safe for this requester.
+
+    Curve-v3 efficiency factors can depend on the requesting validator's
+    protocol readiness. Until a snapshot contains those factors, the ledger is
+    fleet-wide and concurrent validators may share it. Once factors are
+    present, only requests from the same validator may reuse the result.
+    """
+    return snapshot.requesting_validator_hotkey == validator_hotkey or not any(
+        entry.efficiency_factor is not None for entry in snapshot.entries
+    )
+
+
+def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
+    """Rebuild a successful response joined through the in-flight read."""
+    return LedgerResponse(
+        entries=snapshot.entries,
+        active_bench_version=snapshot.active_bench_version,
+        v9_confirmation_mode=snapshot.v9_confirmation_mode,
+        tie_weighting_mode=snapshot.tie_weighting_mode,
+        count=len(snapshot.entries),
+        generated_at=snapshot.generated_at,
+        stale=False,
+        age_seconds=max(
+            0, int((datetime.now(UTC) - snapshot.generated_at).total_seconds())
+        ),
+        continual_retest_cohort_size=snapshot.continual_retest_cohort_size,
+        burn_share=snapshot.burn_share,
+    )
+
+
+async def _join_ledger_materialization(
+    request: Request, validator_hotkey: str
+) -> tuple[_LedgerSnapshot | None, asyncio.Event]:
+    """Join a concurrent ledger read, or claim the next materialization.
+
+    This is deliberately a single-flight, not a TTL cache: sequential scoring
+    reads still materialize current policy and score state. Only requests that
+    overlap one already-running read reuse its successful snapshot.
+    """
+    state = request.app.state
+    while True:
+        snapshot_before = _cached_snapshot(request)
+        inflight: asyncio.Event | None = getattr(
+            state, "ledger_materialization_inflight", None
+        )
+        if inflight is None:
+            owned = asyncio.Event()
+            state.ledger_materialization_inflight = owned
+            task = asyncio.current_task()
+            if task is not None:
+                task.add_done_callback(
+                    partial(_finish_ledger_materialization_when_done, request, owned)
+                )
+            return None, owned
+
+        await inflight.wait()
+        snapshot_after = _cached_snapshot(request)
+        if (
+            snapshot_after is not None
+            and snapshot_after is not snapshot_before
+            and _snapshot_can_be_shared(snapshot_after, validator_hotkey)
+        ):
+            return snapshot_after, inflight
+
+
+def _finish_ledger_materialization(request: Request, owned: asyncio.Event) -> None:
+    """Release this process's single-flight slot and wake its waiters."""
+    state = request.app.state
+    if getattr(state, "ledger_materialization_inflight", None) is owned:
+        state.ledger_materialization_inflight = None
+    owned.set()
+
+
+def _finish_ledger_materialization_when_done(
+    request: Request, owned: asyncio.Event, _task: asyncio.Task[object]
+) -> None:
+    """Fail-safe release if materialization exits through an unexpected error."""
+    _finish_ledger_materialization(request, owned)
+
+
 @router.get(
     "/scores",
     response_model=LedgerResponse,
@@ -339,6 +424,16 @@ async def scores(
                 status_code=503,
                 detail="scoring ledger authorization temporarily unavailable",
             ) from exc
+    joined_snapshot, materialization = await _join_ledger_materialization(
+        request, x_validator_hotkey
+    )
+    if joined_snapshot is not None:
+        logger.info(
+            "validator=%s joined in-flight scoring ledger: %d miner(s)",
+            x_validator_hotkey,
+            len(joined_snapshot.entries),
+        )
+        return _fresh_response_from_snapshot(joined_snapshot)
     try:
         # The validator ledger is an authority path, not a dependent of the
         # public leaderboard. Materialize this epoch before reading either the
@@ -446,8 +541,10 @@ async def scores(
             secondary_scores=efficiency_tiebreaks,
         )
     except EfficiencyFactorRequesterNotReady as exc:
+        _finish_ledger_materialization(request, materialization)
         raise HTTPException(status_code=428, detail=str(exc)) from exc
     except SQLAlchemyError as e:
+        _finish_ledger_materialization(request, materialization)
         return _serve_last_known(request, x_validator_hotkey, e)
 
     generated_at = datetime.now(UTC)
@@ -532,6 +629,8 @@ async def scores(
             burn_share=burn_settings.burn_share,
             v9_confirmation_mode=v9_confirmation_mode,
             tie_weighting_mode="pool" if tie_weighting_active else None,
+            continual_retest_cohort_size=continual_settings.retest_cohort_size,
+            requesting_validator_hotkey=x_validator_hotkey,
         ),
     )
     logger.info(
@@ -539,7 +638,7 @@ async def scores(
         x_validator_hotkey,
         len(entries),
     )
-    return LedgerResponse(
+    ledger_response = LedgerResponse(
         entries=entries,
         active_bench_version=canonical_version,
         v9_confirmation_mode=v9_confirmation_mode,
@@ -558,6 +657,8 @@ async def scores(
         # decided scalar instead of evaluating a schedule against its own clock.
         burn_share=burn_settings.burn_share,
     )
+    _finish_ledger_materialization(request, materialization)
+    return ledger_response
 
 
 def _serve_last_known(
