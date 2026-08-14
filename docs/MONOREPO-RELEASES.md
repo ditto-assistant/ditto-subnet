@@ -75,6 +75,13 @@ multi-platform index. This avoids running the cgo/tree-sitter arm64 compile
 through QEMU: it took 2m38s under emulation in v0.62.2 versus 19.4s in a
 cacheless native arm64 validation.
 
+The validator image follows the same immutable native-child pattern, but uses
+the standard `ubuntu-24.04` and `ubuntu-24.04-arm` runners. Standard-runner use
+is free for this public repository, and keeping the validator off the bounded
+larger-runner group lets its two builds run concurrently with the scorer builds.
+The v0.63.2 release's emulated multi-platform validator job took 3m53s,
+including 3m24s in the build-and-publish step.
+
 Do not move short planning, tagging, verification, deployment, smoke, or
 promotion jobs to the billed pools without measured job-level evidence. If
 either larger runner or the group is removed, restore its native build job to

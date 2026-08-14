@@ -59,6 +59,8 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert jobs["verify-source"]["if"] == "always()"
 
     image_jobs = (
+        "build-validator-amd64",
+        "build-validator-arm64",
         "build-validator",
         "build-sandbox-docker",
         "build-dittobench-amd64",
@@ -146,6 +148,8 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "build-submission-builder",
         "deploy-screener-controller",
         "build-screener",
+        "build-validator-amd64",
+        "build-validator-arm64",
         "build-validator",
         "build-sandbox-docker",
         "build-pylon",
@@ -180,6 +184,10 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         assert "needs.release.outputs.released == 'true'" in condition
 
     dependency_results = {
+        "build-validator": (
+            "build-validator-amd64",
+            "build-validator-arm64",
+        ),
         "build-dittobench-amd64": ("prepare-dittobench",),
         "build-dittobench-arm64": ("prepare-dittobench",),
         "build-dittobench": (
@@ -745,6 +753,45 @@ def test_release_builds_dittobench_on_native_bounded_larger_runners() -> None:
     assert "docker buildx imagetools create" in merge["run"]
 
 
+def test_release_builds_validator_on_native_standard_runners() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+
+    assert jobs["build-validator-amd64"]["runs-on"] == "ubuntu-24.04"
+    assert jobs["build-validator-arm64"]["runs-on"] == "ubuntu-24.04-arm"
+
+    for architecture in ("amd64", "arm64"):
+        job = jobs[f"build-validator-{architecture}"]
+        build = _step(
+            job["steps"],
+            f"Build and publish the native {architecture} validator manifest",
+        )
+        assert build["with"]["platforms"] == f"linux/{architecture}"
+        assert "push-by-digest=true" in build["with"]["outputs"]
+        assert all(
+            "setup-qemu-action@" not in (step.get("uses") or "")
+            for step in job["steps"]
+        )
+
+    fan_in = jobs["build-validator"]
+    assert set(fan_in["needs"]) == {
+        "plan",
+        "release",
+        "build-validator-amd64",
+        "build-validator-arm64",
+    }
+    merge = _step(fan_in["steps"], "Assemble the validator multi-platform index")
+    assert (
+        merge["env"]["AMD64_DIGEST"]
+        == "${{ needs.build-validator-amd64.outputs.digest }}"
+    )
+    assert (
+        merge["env"]["ARM64_DIGEST"]
+        == "${{ needs.build-validator-arm64.outputs.digest }}"
+    )
+    assert "docker buildx imagetools create" in merge["run"]
+
+
 def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     revision = workflow["env"]["PYLON_TURBOBT_REVISION"]
@@ -843,7 +890,8 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
             writer_scopes.setdefault(job_name, []).append(writer)
 
     assert writer_scopes == {
-        "build-validator": ["validator"],
+        "build-validator-amd64": ["validator-amd64"],
+        "build-validator-arm64": ["validator-arm64"],
         "build-sandbox-docker": ["sandbox-docker"],
         "build-pylon": ["pylon"],
         "build-dittobench-amd64": ["dittobench-api-amd64"],
@@ -857,7 +905,9 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
     assert reader_scopes["build-dittobench-arm64"] == [
         ["dittobench-api-arm64", "dittobench-api"]
     ]
+    assert reader_scopes["build-validator-amd64"] == [["validator-amd64", "validator"]]
+    assert reader_scopes["build-validator-arm64"] == [["validator-arm64", "validator"]]
     assert (
         len({scope for job_scopes in writer_scopes.values() for scope in job_scopes})
-        == 7
+        == 8
     )

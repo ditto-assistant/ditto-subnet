@@ -608,9 +608,9 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
     # stay pinned to an immutable commit rather than a floating tag. The exact
     # commit is Dependabot's to move, so assert the pinning discipline only.
     assert re.search(r"docker/setup-qemu-action@[0-9a-f]{40}\b", workflow)
-    # Validator, sandbox daemon, both native scorer children, patched Pylon, the
-    # frozen-updater relay shim, and the final signed stack descriptor are
-    # independently built and published from the exact release.
+    # Both native validator children, the sandbox daemon, both native scorer
+    # children, patched Pylon, the frozen-updater relay shim, and the final
+    # signed stack descriptor are independently built and published.
     build_action_count = sum(
         workflow.count(action)
         for action in (
@@ -618,7 +618,7 @@ def test_validator_image_and_release_channel_share_compatibility_metadata() -> N
             "useblacksmith/build-push-action@",
         )
     )
-    assert build_action_count == 7
+    assert build_action_count == 8
     for repository in (
         "ghcr.io/ditto-assistant/ditto-subnet-validator",
         "ghcr.io/ditto-assistant/ditto-subnet-sandbox-docker",
