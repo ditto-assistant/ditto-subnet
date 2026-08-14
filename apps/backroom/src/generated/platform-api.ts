@@ -9659,7 +9659,7 @@ export interface components {
             continual_aggregate_method?: "mean_after_quorum" | null;
             /**
              * Effective Composite
-             * @description Platform-projected ranking score with the frozen efficiency adjustment applied; curve-v3 upside scales remaining headroom. Validators independently derive it from the authoritative quality evidence and efficiency_factor (or legacy efficiency_bonus); signed evidence is never modified.
+             * @description Platform-projected efficiency tiebreak with the frozen adjustment applied; curve-v3 upside scales remaining headroom. It is considered only after exact authoritative-quality equality. Validators independently derive it from the authoritative quality evidence and efficiency_factor (or legacy efficiency_bonus); signed evidence is never modified.
              */
             effective_composite?: number | null;
             /**
@@ -9669,7 +9669,7 @@ export interface components {
             efficiency_bonus?: number | null;
             /**
              * Efficiency Factor
-             * @description Frozen platform-side bounded efficiency factor for this entry. Curve v3 applies a penalty or bonus in [0.85, 1.10] after the authoritative Bench-v9 full quality score. Downside multiplies quality; upside closes part of its remaining headroom. Populated only while the coordinated efficiency fold is active and every recently-live weight-setting validator reports heartbeat protocol 19+, regardless of scorer capability; when present it supersedes efficiency_bonus.
+             * @description Frozen platform-side bounded efficiency factor for this entry. Protocol 21 keeps authoritative Bench-v9 quality as the primary order and uses curve-v3's adjusted projection only to break exact-quality ties. Populated only while the coordinated efficiency fold is active and every recently-live weight-setting validator reports heartbeat protocol 21+, regardless of scorer capability; when present it supersedes efficiency_bonus.
              */
             efficiency_factor?: number | null;
             /**
@@ -12132,7 +12132,7 @@ export interface components {
             dataset_sha256?: string | null;
             /**
              * Effective Composite
-             * @description Frozen-adjustment projection. Curve v3 multiplies downside or applies upside to pre_efficiency_composite's remaining headroom; legacy curves multiply by one plus their bonus. It equals official_composite while the coordinated fold is active; with the fold off it is audit-only and does not rank the board. Null whenever both adjustment fields are null. Signed quality evidence is never modified.
+             * @description Frozen-adjustment projection. Curve v3 multiplies downside or applies upside to pre_efficiency_composite's remaining headroom; legacy curves multiply by one plus their bonus. With curve-v3 active it is the secondary key only after exact official_composite equality; with the fold off it is audit-only. Null whenever both adjustment fields are null. Signed quality evidence is never modified.
              */
             effective_composite?: number | null;
             /**
@@ -12157,7 +12157,7 @@ export interface components {
             efficiency_factor_preview?: number | null;
             /**
              * Efficiency Fold Applied
-             * @description Whether the surfaced efficiency adjustment is currently part of official_composite, ranking, KOTH, and emissions. False means effective_composite is an audit-only projection.
+             * @description Whether the surfaced efficiency adjustment is currently part of ranking, KOTH, and emissions. Curve-v3 does not modify official_composite; it breaks exact-quality ties. False means effective_composite is an audit-only projection.
              * @default false
              */
             efficiency_fold_applied: boolean;
@@ -12235,7 +12235,7 @@ export interface components {
             n?: number | null;
             /**
              * Official Composite
-             * @description Composite used for the current leaderboard and weight fold. Legacy eras use the canonical median or activated continual mean; full-confirmed Bench v9 uses its verified full quality. An activated frozen efficiency bonus or v9 factor is applied after that authoritative quality scalar; curve-v3 downside multiplies quality and upside scales its remaining headroom.
+             * @description Authoritative quality used as the primary key for the current leaderboard and weight fold. Legacy eras use the canonical median or activated continual mean; full-confirmed Bench v9 uses its verified full quality. Historical bonuses remain in this scalar. A v9 curve-v3 factor does not modify it; its adjusted projection is only an exact-quality secondary key.
              */
             official_composite: number;
             /**
@@ -12250,7 +12250,7 @@ export interface components {
             pre_efficiency_composite?: number | null;
             /**
              * Rank
-             * @description 1-based rank by ``official_composite`` -- NOT by ``composite``. Sorting this board by ``composite`` reproduces ``rank`` only while every entry is still on the canonical median (``aggregate_method == 'canonical_median'``); once any agent has completed continual cohort waves the two orderings differ, and ``official_composite`` is the one that ranks the board and drives the weight fold. Ties break on ``first_seen`` then ``agent_id``. Provisional (pre-quorum) rows are ranked among themselves and always trail the finalized board. Bench v9 base/provisional rows in confirmation enforce mode are null: only full-confirmed rows rank.
+             * @description 1-based rank by ``official_composite`` -- NOT by ``composite``. Sorting this board by ``composite`` reproduces ``rank`` only while every entry is still on the canonical median (``aggregate_method == 'canonical_median'``); once any agent has completed continual cohort waves the two orderings differ, and ``official_composite`` is the authoritative quality that ranks the board and drives the weight fold. Bench-v9 curve-v3 efficiency breaks only exact official-quality ties; lower quality never crosses higher quality. Remaining ties break on ``first_seen`` then ``agent_id``. Provisional rows are ranked among themselves and always trail the finalized board. Bench v9 base/provisional rows in confirmation enforce mode are null: only full-confirmed rows rank.
              */
             rank?: number | null;
             /**
