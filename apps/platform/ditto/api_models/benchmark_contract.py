@@ -51,6 +51,12 @@ _CONTRACTS = {
     # completes the existing rollout and activation workflow. Like v8, it uses
     # operational route health and efficiency rather than v7 calibration.
     9: BenchmarkContract(9, 9, True, False),
+    # v10 replaces the closed generator surface with seed-scoped schemas,
+    # state-dependent tool routing, computed memory, and linked metamorphic
+    # programs. It retains policy-9 screened-image and post-v7 route
+    # prerequisites. Shipping this contract exposes a guarded rollout target;
+    # it does not open a rollout or change active benchmark authority.
+    10: BenchmarkContract(10, 9, True, False),
 }
 
 

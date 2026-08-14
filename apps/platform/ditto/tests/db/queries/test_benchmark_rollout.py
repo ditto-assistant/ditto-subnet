@@ -107,12 +107,12 @@ pytestmark = pytest.mark.asyncio
 _Seeded = TypeVar("_Seeded")
 
 
-async def test_v9_contract_is_a_target_not_an_activation() -> None:
-    contract = benchmark_contract(9)
+async def test_v10_contract_is_a_target_not_an_activation() -> None:
+    contract = benchmark_contract(10)
     assert contract.minimum_screening_policy_version == 9
     assert contract.requires_screened_image is True
     assert latest_benchmark_contract() == contract
-    assert CANARY_BENCH_VERSION == 9
+    assert CANARY_BENCH_VERSION == 10
     assert DEFAULT_BENCH_VERSION == 2
     assert LEGACY_BENCH_VERSION == 2
 
@@ -151,12 +151,12 @@ async def test_admin_status_read_does_not_start_rollout(
 
         control = await get_rollout_control(None, session, None)  # type: ignore[arg-type]
         # A target must be both above the active version and at or above the
-        # floor. Shipping v8 and v9 makes both discoverable as targets but does
-        # not create or activate a rollout.
-        assert control["available_target_versions"] == [8, 9]
+        # floor. Shipping v8 through v10 makes each discoverable as a target but
+        # does not create or activate a rollout.
+        assert control["available_target_versions"] == [8, 9, 10]
         contracts = control["contracts"]
         assert isinstance(contracts, list)
-        assert [item["version"] for item in contracts] == [2, 3, 4, 5, 6, 7, 8, 9]
+        assert [item["version"] for item in contracts] == [2, 3, 4, 5, 6, 7, 8, 9, 10]
         assert control["status"] == "inactive"
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
         assert count == 0
@@ -176,10 +176,10 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
         "executor_isolation": "rootless_dind",
         "scorer_benchmarks": {
             "status": "fresh_verified",
-            # V8 uses the same hosted-inference identity as v7. A scorer that
-            # advertises v8 therefore continues to advertise the v7 contract
-            # whose calibration identity is carried below.
-            "supported_bench_versions": sorted({2, 7, CANARY_BENCH_VERSION}),
+            # Model a current scorer that retains every shipped rollout
+            # contract. Individual tests narrow this list when they need to
+            # exercise a missing-version boundary.
+            "supported_bench_versions": [2, 7, 8, 9, 10],
             "observed_at": int(now.timestamp()),
             "software_version": "1.3.0",
             "source_revision": revision,
@@ -278,7 +278,9 @@ def _activation_requirements() -> InferenceActivationRequirements:
     )
 
 
-async def _seed_rollout(session, now: datetime) -> tuple[list[UUID], BenchmarkRollout]:
+async def _seed_rollout(
+    session, now: datetime, *, desired_version: int = CANARY_BENCH_VERSION
+) -> tuple[list[UUID], BenchmarkRollout]:
     bind_inference_activation_requirements(session, _activation_requirements())
     # The activation that makes the inherited v2 era the one in force. Without
     # it ``active_bench_version`` has no durable decision to read and answers
@@ -352,6 +354,7 @@ async def _seed_rollout(session, now: datetime) -> tuple[list[UUID], BenchmarkRo
         datasets=pins,
         now=now,
         from_version=DEFAULT_BENCH_VERSION,
+        desired_version=desired_version,
     )
     capabilities, stack = _capabilities(now)
     for hotkey in ("validator-a", "validator-b", "validator-c"):
@@ -2494,15 +2497,15 @@ async def test_v7_rollout_start_requires_route_and_manifest_intersection(
         assert "exact route and manifest match" in str(exc_info.value.detail)
 
 
-def _v9_only_capabilities(now: datetime) -> tuple[dict, dict]:
+def _post_v7_capabilities(now: datetime) -> tuple[dict, dict]:
     capabilities, stack = _capabilities(now)
     scorer = capabilities["scorer_benchmarks"]
-    scorer["supported_bench_versions"] = [8, 9]
+    scorer["supported_bench_versions"] = [8, 9, 10]
     scorer.pop("v7_calibration")
     return capabilities, stack
 
 
-@pytest.mark.parametrize("bench_version", [8, 9])
+@pytest.mark.parametrize("bench_version", [8, 9, 10])
 async def test_post_v7_rollout_uses_exact_route_without_retired_calibration(
     session_maker: async_sessionmaker[AsyncSession],
     bench_version: int,
@@ -2510,7 +2513,7 @@ async def test_post_v7_rollout_uses_exact_route_without_retired_calibration(
     now = datetime.now(UTC).replace(microsecond=0)
     model = benchmark_model(bench_version)
     profile_revision = aggregate_profile_revision(model, bench_version=bench_version)
-    capabilities, stack = _v9_only_capabilities(now)
+    capabilities, stack = _post_v7_capabilities(now)
     requirements = InferenceActivationRequirements(
         enabled=True,
         provider_key_configured=True,
@@ -2567,7 +2570,7 @@ async def test_v9_rollout_rejects_the_fixed_medium_v8_route(
 ) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     model = benchmark_model(9)
-    capabilities, stack = _v9_only_capabilities(now)
+    capabilities, stack = _post_v7_capabilities(now)
     async with session_maker() as session, session.begin():
         session.add(
             ValidatorHeartbeat(
@@ -3200,7 +3203,7 @@ async def test_admin_start_route_is_parameterised_by_version(
 
         # An unshipped version fails closed rather than opening a bad rollout.
         with pytest.raises(HTTPException) as exc_info:
-            await get_rollout(None, session, "10")
+            await get_rollout(None, session, "11")
         assert exc_info.value.status_code == 409
         with pytest.raises(HTTPException) as not_found:
             await get_rollout(None, session, "banana")
@@ -3211,6 +3214,7 @@ async def _seed_desired_quorum_cohort(
     session,
     now: datetime,
     *,
+    desired_version: int = CANARY_BENCH_VERSION,
     smoke_indices: tuple[int, ...] = (),
     held_indices: tuple[int, ...] = (),
 ) -> tuple[list[UUID], BenchmarkRollout]:
@@ -3220,14 +3224,16 @@ async def _seed_desired_quorum_cohort(
     profile) runs — a quorum by row count that can never rank. ``held_indices``
     moves members out of the eligible pool.
     """
-    agent_ids, rollout = await _seed_rollout(session, now)
+    agent_ids, rollout = await _seed_rollout(
+        session, now, desired_version=desired_version
+    )
     for position, agent_id in enumerate(agent_ids, start=1):
         smoke = (position - 1) in smoke_indices
         for validator in range(3):
             session.add(
                 Score(
                     agent_id=agent_id,
-                    bench_version=CANARY_BENCH_VERSION,
+                    bench_version=desired_version,
                     validator_hotkey=f"validator-{validator}",
                     run_id=f"v4-{position}-{validator}",
                     signature="bb",
@@ -3238,7 +3244,7 @@ async def _seed_desired_quorum_cohort(
                     median_ms=1,
                     n=50 if smoke else 114,
                     details={
-                        "bench_version": CANARY_BENCH_VERSION,
+                        "bench_version": desired_version,
                         "v9_base": {"semantic_gate_factor_bps": 10_000},
                     },
                     generated_at=now,
@@ -3648,14 +3654,15 @@ async def test_v9_activation_uses_median_semantic_evidence(
 ) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     async with _seeded_session(
-        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+        session_maker,
+        lambda s: _seed_desired_quorum_cohort(s, now, desired_version=9),
     ) as (session, (agent_ids, rollout)):
         failed_agent_id = agent_ids[0]
         failed_rows = sorted(
             await session.scalars(
                 select(Score).where(
                     Score.agent_id == failed_agent_id,
-                    Score.bench_version == CANARY_BENCH_VERSION,
+                    Score.bench_version == 9,
                 )
             ),
             key=lambda score: score.composite,
@@ -3669,9 +3676,7 @@ async def test_v9_activation_uses_median_semantic_evidence(
         await session.flush()
 
         assert (
-            await count_ranked_quorum_agents(
-                session, bench_version=CANARY_BENCH_VERSION
-            )
+            await count_ranked_quorum_agents(session, bench_version=9)
             == MIN_DESIRED_AUTHORITY_AGENTS
         )
         activated = await maybe_activate_rollout(
@@ -3682,9 +3687,7 @@ async def test_v9_activation_uses_median_semantic_evidence(
         )
         assert activated is expected_activation
         assert rollout.status == ("activated" if expected_activation else "collecting")
-        assert await active_bench_version(session) == (
-            CANARY_BENCH_VERSION if expected_activation else 2
-        )
+        assert await active_bench_version(session) == (9 if expected_activation else 2)
 
 
 async def test_v9_activation_rejects_missing_semantic_evidence(
@@ -3692,18 +3695,19 @@ async def test_v9_activation_rejects_missing_semantic_evidence(
 ) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     async with _seeded_session(
-        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+        session_maker,
+        lambda s: _seed_desired_quorum_cohort(s, now, desired_version=9),
     ) as (session, (agent_ids, rollout)):
         median_score = sorted(
             await session.scalars(
                 select(Score).where(
                     Score.agent_id == agent_ids[0],
-                    Score.bench_version == CANARY_BENCH_VERSION,
+                    Score.bench_version == 9,
                 )
             ),
             key=lambda score: score.composite,
         )[1]
-        median_score.details = {"bench_version": CANARY_BENCH_VERSION}
+        median_score.details = {"bench_version": 9}
         await session.flush()
 
         assert not await maybe_activate_rollout(
@@ -3721,14 +3725,15 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
     """A completed v9 rejection cannot veto a five-agent valid emission set."""
     now = datetime.now(UTC).replace(microsecond=0)
     async with _seeded_session(
-        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+        session_maker,
+        lambda s: _seed_desired_quorum_cohort(s, now, desired_version=9),
     ) as (session, (agent_ids, rollout)):
         failed_id = agent_ids[0]
         failed_rows = list(
             await session.scalars(
                 select(Score).where(
                     Score.agent_id == failed_id,
-                    Score.bench_version == CANARY_BENCH_VERSION,
+                    Score.bench_version == 9,
                 )
             )
         )
@@ -3796,7 +3801,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
             session.add(
                 Score(
                     agent_id=tail_id,
-                    bench_version=CANARY_BENCH_VERSION,
+                    bench_version=9,
                     validator_hotkey=f"validator-{validator}",
                     run_id=f"v4-tail-{validator}",
                     signature="bb",
@@ -3807,7 +3812,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
                     median_ms=1,
                     n=114,
                     details={
-                        "bench_version": CANARY_BENCH_VERSION,
+                        "bench_version": 9,
                         "v9_base": {"semantic_gate_factor_bps": 10_000},
                     },
                     generated_at=now,
@@ -3818,7 +3823,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
         assert (
             await count_ranked_quorum_agents(
                 session,
-                bench_version=CANARY_BENCH_VERSION,
+                bench_version=9,
                 agent_ids={*agent_ids, tail_id},
                 require_v9_semantic_pass=True,
             )
@@ -3828,12 +3833,10 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
         # emission set exists, so authority flips without waiting for the
         # wider background-rescore cohort. The rollout remains open until that
         # tail finishes; no member is deleted or silently treated as complete.
-        assert await active_bench_version(session) == CANARY_BENCH_VERSION
+        assert await active_bench_version(session) == 9
         collecting_ledger = await list_eligible_ledger(session)
         assert collecting_ledger
-        assert {row.bench_version for row in collecting_ledger} == {
-            CANARY_BENCH_VERSION
-        }
+        assert {row.bench_version for row in collecting_ledger} == {9}
         assert unfinished_id not in {row.agent_id for row in collecting_ledger}
         assert not await maybe_activate_rollout(
             session,
@@ -3848,7 +3851,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
             session.add(
                 Score(
                     agent_id=unfinished_id,
-                    bench_version=CANARY_BENCH_VERSION,
+                    bench_version=9,
                     validator_hotkey=f"validator-{validator}",
                     run_id=f"v4-unfinished-{validator}",
                     signature="cc",
@@ -3859,7 +3862,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
                     median_ms=1,
                     n=114,
                     details={
-                        "bench_version": CANARY_BENCH_VERSION,
+                        "bench_version": 9,
                         "v9_base": {"semantic_gate_factor_bps": 0},
                     },
                     generated_at=now,
@@ -3867,7 +3870,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
             )
         await session.flush()
 
-        assert await active_bench_version(session) == CANARY_BENCH_VERSION
+        assert await active_bench_version(session) == 9
 
         ledger = await list_eligible_ledger(session)
         assert {row.agent_id for row in ledger} == {
@@ -3875,7 +3878,7 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
             tail_id,
             unfinished_id,
         }
-        assert {row.bench_version for row in ledger} == {CANARY_BENCH_VERSION}
+        assert {row.bench_version for row in ledger} == {9}
         by_agent = {row.agent_id: row for row in ledger}
         assert not by_agent[failed_id].eligible
         assert not by_agent[unfinished_id].eligible

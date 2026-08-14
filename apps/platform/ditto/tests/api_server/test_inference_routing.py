@@ -79,8 +79,9 @@ def test_route_calibration_contract_is_explicit_and_future_safe() -> None:
     assert benchmark_contract(7).requires_inference_route_calibration is True
     assert benchmark_contract(8).requires_inference_route_calibration is False
     assert benchmark_contract(9).requires_inference_route_calibration is False
-    with pytest.raises(ValueError, match="unsupported benchmark version: 10"):
-        benchmark_contract(10)
+    assert benchmark_contract(10).requires_inference_route_calibration is False
+    with pytest.raises(ValueError, match="unsupported benchmark version: 11"):
+        benchmark_contract(11)
 
 
 def test_route_ranking_explores_an_eligible_unmeasured_provider() -> None:
@@ -208,8 +209,8 @@ async def test_aggregate_selection_uses_only_reviewed_logical_route(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [8, 9])
-async def test_v8_v9_aggregate_selection_ignores_legacy_calibration(
+@pytest.mark.parametrize("bench_version", [8, 9, 10])
+async def test_post_v7_aggregate_selection_ignores_legacy_calibration(
     session_maker: async_sessionmaker[AsyncSession],
     bench_version: int,
 ) -> None:
@@ -221,6 +222,8 @@ async def test_v8_v9_aggregate_selection_ignores_legacy_calibration(
     assert v7_profile == "openrouter-route-a471cd87ae7df5b9-v1"
     assert v9_profile == "openrouter-route-6a097486af3c178d-v1"
     assert v9_profile != v7_profile
+    if bench_version == 10:
+        assert target_profile == v9_profile
 
     async with session_maker() as session, session.begin():
         session.add(

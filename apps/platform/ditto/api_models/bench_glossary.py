@@ -827,6 +827,24 @@ BENCH_VERSIONS: list[dict] = [
             "V8 remains the active weight contract until activation",
         ],
     },
+    {
+        "version": 10,
+        "epoch": "2027-02-01",
+        "title": "Generator-as-spec difficulty contract",
+        "summary": (
+            "Replaces reusable answer surfaces with seed-scoped schemas, "
+            "state-dependent tool routing, computed memory answers, and linked "
+            "metamorphic and causal cases. Runtime capability and Platform "
+            "activation remain separate."
+        ),
+        "highlights": [
+            "Per-run ontology and schema induction from ordinary evidence",
+            "State-dependent tool routing instead of prompt-family lookup",
+            "Computed answers bound to reviewer-only evidence provenance",
+            "Renderer invariance and causal counterfactual case groups",
+            "V9-compatible public harness wire and reasoning route",
+        ],
+    },
 ]
 
 

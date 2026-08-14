@@ -1466,13 +1466,12 @@ class TestPublicBenchmarkTimeline:
     ) -> None:
         """The chart is release history, so it has to render retired eras.
 
-        Every shipped contract is on this timeline, v2 included: the endpoint
-        dates a release from the rollout that activated it and falls back to the
-        changelog epoch. That history is exactly what the bench-version floor
-        refuses to write, and exactly what production still holds -- the v2/v3
-        rows predate the constraint and are grandfathered by it. Reproducing
+        The bounded newest-contract window dates a release from the rollout that
+        activated it and falls back to the changelog epoch. Historical score rows
+        may predate the bench-version floor and are grandfathered by it. Reproducing
         that state is the only way to assert the fallback and the rollout-dated
-        release in the same read.
+        release in the same read, even after a new contract pushes v2 out of the
+        release window.
         """
         async with (
             session_maker() as floor_session,
@@ -1482,15 +1481,15 @@ class TestPublicBenchmarkTimeline:
                 session_maker,
                 miner=_MINER_A,
                 composites=[0.41, 0.42, 0.43],
-                details={"bench_version": 2},
-                base_time=datetime(2026, 7, 8, tzinfo=UTC),
+                details={"bench_version": 3},
+                base_time=datetime(2026, 7, 18, 17, 0, tzinfo=UTC),
             )
             second_id = await _seed_k3(
                 session_maker,
                 miner=_MINER_B,
                 composites=[0.71, 0.72, 0.73],
-                details={"bench_version": 2},
-                base_time=datetime(2026, 7, 9, tzinfo=UTC),
+                details={"bench_version": 3},
+                base_time=datetime(2026, 7, 19, tzinfo=UTC),
             )
             async with session_maker() as session, session.begin():
                 session.add(
@@ -1516,8 +1515,8 @@ class TestPublicBenchmarkTimeline:
                     )
                 )
                 for agent_id, recorded_at in (
-                    (UUID(first_id), datetime(2026, 7, 8, tzinfo=UTC)),
-                    (UUID(second_id), datetime(2026, 7, 9, tzinfo=UTC)),
+                    (UUID(first_id), datetime(2026, 7, 18, 17, 0, tzinfo=UTC)),
+                    (UUID(second_id), datetime(2026, 7, 19, tzinfo=UTC)),
                 ):
                     scores = list(
                         await session.scalars(
@@ -1531,7 +1530,7 @@ class TestPublicBenchmarkTimeline:
                 session_maker,
                 miner="5" + "A" * 47,
                 composites=[0.51, 0.52],
-                details={"bench_version": 3},
+                details={"bench_version": 4},
                 base_time=datetime(2026, 7, 19, tzinfo=UTC),
             )
         _install_db(app, session_maker)
@@ -1565,15 +1564,18 @@ class TestPublicBenchmarkTimeline:
             release["bench_version"] for release in body["releases"]
         ] == expected_versions
         assert len(expected_versions) == public_endpoint._TIMELINE_MAX_RELEASES
-        assert body["releases"][0]["released_at"] == "2026-07-07T00:00:00Z"
-        assert body["releases"][1]["released_at"] == "2026-07-18T14:30:00Z"
-        assert body["releases"][1]["activated_at"] == "2026-07-18T16:00:00Z"
         release_by_version = {
             release["bench_version"]: release for release in body["releases"]
         }
-        assert {8, 9}.issubset(release_by_version)
+        assert {3, 4, 8, 9, 10}.issubset(release_by_version)
+        assert release_by_version[3]["released_at"] == "2026-07-18T14:30:00Z"
+        assert release_by_version[3]["activated_at"] == "2026-07-18T16:00:00Z"
+        assert release_by_version[4]["released_at"] == "2026-07-19T00:00:00Z"
+        assert release_by_version[4]["activated_at"] is None
         assert release_by_version[9]["released_at"] == "2026-08-11T15:30:00Z"
         assert release_by_version[9]["activated_at"] is None
+        assert release_by_version[10]["released_at"] == "2027-02-01T00:00:00Z"
+        assert release_by_version[10]["activated_at"] is None
         assert [point["agent_id"] for point in body["points"]] == [
             first_id,
             second_id,
@@ -10297,7 +10299,7 @@ def test_bench_glossary_explains_every_v5_category_and_metric() -> None:
     metrics = {m["key"] for m in bg.metric_entries()}
     # bench_version changelog is present, newest first, complete per version.
     versions = bg.version_entries()
-    assert [v["version"] for v in versions] == [9, 8, 7, 6, 5, 4, 3, 2]
+    assert [v["version"] for v in versions] == [10, 9, 8, 7, 6, 5, 4, 3, 2]
     for v in versions:
         assert v["title"] and v["summary"] and v["epoch"]
 

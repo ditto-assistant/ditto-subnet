@@ -52,11 +52,12 @@ def benchmark_reasoning(model: str) -> dict[str, Any] | None:
 def aggregate_profile_revision(model: str, *, bench_version: int = 7) -> str:
     """Return the immutable identity for the calibrated aggregate route."""
     # Reasoning is part of benchmark semantics and therefore part of the route
-    # identity. V7/V8 pin medium. V9 lets the agent select low/medium/high with
-    # a medium default, which is a distinct provider-capability and calibration
-    # contract even though model and privacy posture are unchanged.
+    # identity. V7/V8 pin medium. V9 and later let the agent select
+    # low/medium/high with a medium default, which is a distinct
+    # provider-capability and calibration contract even though model and
+    # privacy posture are unchanged.
     if model == V7_MODEL:
-        if bench_version == 9:
+        if bench_version >= 9:
             return V9_AGGREGATE_PROFILE_REVISION
         return V7_AGGREGATE_PROFILE_REVISION
     # Exact upstream membership was already dynamic in aggregate mode: the
