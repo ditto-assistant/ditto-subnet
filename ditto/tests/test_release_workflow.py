@@ -47,6 +47,9 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         for step in plan["steps"]
     )
     assert jobs["release"]["needs"] == ["plan", "verify-source"]
+    assert "always()" in jobs["release"]["if"]
+    assert "needs.plan.result == 'success'" in jobs["release"]["if"]
+    assert "needs.verify-source.result == 'success'" in jobs["release"]["if"]
     assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
     assert jobs["admit-current"]["needs"] == "plan"
     assert (

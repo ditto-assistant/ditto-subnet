@@ -164,15 +164,20 @@ jobs:
   release:
     needs: [plan, verify-source]
     if: >-
-      needs.plan.outputs.miner_cli == 'true' ||
-      needs.plan.outputs.miner_starter_kit == 'true' ||
-      needs.plan.outputs.validator_stack == 'true' ||
-      needs.plan.outputs.dittobench_api == 'true' ||
-      needs.plan.outputs.dittobench_datagen == 'true' ||
-      needs.plan.outputs.platform == 'true' ||
-      needs.plan.outputs.backroom == 'true' ||
-      needs.plan.outputs.screener == 'true' ||
-      needs.plan.outputs.screener_orchestrator == 'true'
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.verify-source.result == 'success' &&
+      (
+        needs.plan.outputs.miner_cli == 'true' ||
+        needs.plan.outputs.miner_starter_kit == 'true' ||
+        needs.plan.outputs.validator_stack == 'true' ||
+        needs.plan.outputs.dittobench_api == 'true' ||
+        needs.plan.outputs.dittobench_datagen == 'true' ||
+        needs.plan.outputs.platform == 'true' ||
+        needs.plan.outputs.backroom == 'true' ||
+        needs.plan.outputs.screener == 'true' ||
+        needs.plan.outputs.screener_orchestrator == 'true'
+      )
     runs-on: ubuntu-24.04
     permissions:
       contents: write
