@@ -172,6 +172,26 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
     assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == "0.10.0"
     assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == REVISION
+    assert scorer_environment["DITTOBENCH_BOOTSTRAP_VALIDATOR_STACK_UPDATER"] == "true"
+    assert (
+        scorer_environment["DITTOBENCH_BOOTSTRAP_VALIDATOR_STACK_UPDATER_TARGET_HOTKEY"]
+        == "5Cg3DiRfrgzB1XzN7VuqQNchTgZ8PzPbphMKmVvHobWSL118"
+    )
+    assert scorer_environment["DITTOBENCH_BOOTSTRAP_VALIDATOR_HOTKEY"] == (
+        "${VALIDATOR_HOTKEY:?validator hotkey required}"
+    )
+    scorer = compose["services"]["dittobench-api"]
+    assert scorer["user"] == "0:0"
+    assert scorer["entrypoint"] == ["/updater-bootstrap"]
+    assert scorer["cap_drop"] == ["ALL"]
+    assert scorer["cap_add"] == ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
+    assert {
+        "type": "bind",
+        "source": "./scripts",
+        "target": "/opt/ditto/host-validator-scripts",
+        "read_only": False,
+        "bind": {"create_host_path": False},
+    } in scorer["volumes"]
     assert scorer_environment["DITTOBENCH_PRIVATE_ARTIFACT_DIR"] == (
         "/var/lib/dittobench-private-artifacts"
     )

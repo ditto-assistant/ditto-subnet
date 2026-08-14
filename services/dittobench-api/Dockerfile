@@ -47,7 +47,9 @@ RUN CGO_ENABLED=1 GOOS=linux go build \
     -ldflags="-s -w -extldflags '-static' \
       -X 'github.com/ditto-assistant/dittobench-api/internal/release.sourceRevision=${DITTOBENCH_SOURCE_SHA}' \
       -X 'github.com/ditto-assistant/dittobench-api/internal/release.softwareVersion=${DITTOBENCH_SOFTWARE_VERSION}'" \
-    -o /out/dittobench-api ./cmd/dittobench-api
+    -o /out/dittobench-api ./cmd/dittobench-api && \
+    CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" \
+      -o /out/updater-bootstrap ./cmd/updater-bootstrap
 
 # ---- immutable public confirmation assets ----
 # The cleaned LongMemEval-S dataset is public benchmark input pinned to an
@@ -68,6 +70,9 @@ ARG DITTOBENCH_SOFTWARE_VERSION
 ARG DITTOBENCH_SOURCE_SHA
 RUN apk add --no-cache git
 COPY --from=build /out/dittobench-api /dittobench-api
+COPY --from=build /out/updater-bootstrap /updater-bootstrap
+COPY --chmod=0555 scripts/validator-stack-auto-update.sh \
+    /opt/ditto/validator-stack-auto-update.sh
 COPY --chown=65532:65532 \
     packages/ditto-screening-protocol/ditto_screening_protocol/data/ \
     /opt/ditto/confirmation/
@@ -82,7 +87,7 @@ ENV DITTOBENCH_SOFTWARE_VERSION=${DITTOBENCH_SOFTWARE_VERSION}
 ENV DITTOBENCH_SOURCE_SHA=${DITTOBENCH_SOURCE_SHA}
 USER 65532:65532
 EXPOSE 8000
-ENTRYPOINT ["/dittobench-api", "-port", "8000"]
+ENTRYPOINT ["/updater-bootstrap"]
 
 # ---- runtime stage ----
 FROM gcr.io/distroless/static-debian12:nonroot AS runtime
