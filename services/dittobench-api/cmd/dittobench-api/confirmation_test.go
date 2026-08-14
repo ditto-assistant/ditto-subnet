@@ -682,7 +682,7 @@ func TestConfirmationExecuteHonorsRequestCancellation(t *testing.T) {
 		ctx,
 		confirmationRequestBody(t, validConfirmationRequest()),
 	)
-	assertConfirmationError(t, recorder, http.StatusUnprocessableEntity, "confirmation execution failed")
+	assertConfirmationError(t, recorder, http.StatusUnprocessableEntity, "confirmation execution failed at execution")
 	if got := <-observed; !errors.Is(got, context.Canceled) {
 		t.Fatalf("executor context error = %v, want context.Canceled", got)
 	}
@@ -704,7 +704,7 @@ func TestConfirmationExecuteEnforcesTicketDeadlineDuringExecution(t *testing.T) 
 		nil,
 		confirmationRequestBody(t, request),
 	)
-	assertConfirmationError(t, recorder, http.StatusUnprocessableEntity, "confirmation execution failed")
+	assertConfirmationError(t, recorder, http.StatusUnprocessableEntity, "confirmation execution failed at execution")
 	if got := <-observed; !errors.Is(got, context.DeadlineExceeded) {
 		t.Fatalf("executor context error = %v, want context.DeadlineExceeded", got)
 	}
@@ -721,9 +721,36 @@ func TestConfirmationExecuteMasksExecutorErrors(t *testing.T) {
 		nil,
 		confirmationRequestBody(t, validConfirmationRequest()),
 	)
-	assertConfirmationError(t, recorder, http.StatusUnprocessableEntity, "confirmation execution failed")
+	assertConfirmationError(t, recorder, http.StatusUnprocessableEntity, "confirmation execution failed at execution")
 	if strings.Contains(recorder.Body.String(), "credential material") {
 		t.Fatalf("executor error leaked through response: %s", recorder.Body.String())
+	}
+}
+
+func TestConfirmationExecutePublishesOnlyReviewedFailureStage(t *testing.T) {
+	executor := readyConfirmationExecutor()
+	executor.execute = func(context.Context, confirmationExecutionRequest) (confirmationExecutionResult, error) {
+		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure(
+			"screened_image",
+			errors.New("https://signed.example/private?token=credential-material"),
+		)
+	}
+	recorder := executeConfirmationRequest(
+		t,
+		&server{confirmation: executor},
+		nil,
+		confirmationRequestBody(t, validConfirmationRequest()),
+	)
+	assertConfirmationError(
+		t,
+		recorder,
+		http.StatusUnprocessableEntity,
+		"confirmation execution failed at screened_image",
+	)
+	for _, forbidden := range []string{"signed.example", "token", "credential-material"} {
+		if strings.Contains(recorder.Body.String(), forbidden) {
+			t.Fatalf("executor cause leaked %q through response: %s", forbidden, recorder.Body.String())
+		}
 	}
 }
 

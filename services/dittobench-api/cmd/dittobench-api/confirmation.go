@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -213,7 +214,15 @@ func (s *server) handleConfirmationExecute(w http.ResponseWriter, r *http.Reques
 	defer cancel()
 	result, err := s.confirmation.Execute(ctx, request)
 	if err != nil {
-		writeError(w, http.StatusUnprocessableEntity, "confirmation execution failed")
+		stage := confirmationExecutionStage(err)
+		log.Printf(
+			"confirmation execution failed: stage=%s bundle_id=%s agent_id=%s slot_id=%s",
+			stage,
+			request.BundleID,
+			request.AgentID,
+			request.SlotID,
+		)
+		writeError(w, http.StatusUnprocessableEntity, "confirmation execution failed at "+stage)
 		return
 	}
 	if err := result.validate(); err != nil {

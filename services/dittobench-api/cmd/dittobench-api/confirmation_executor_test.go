@@ -279,6 +279,25 @@ func TestTrustedConfirmationConstructorFailsClosed(t *testing.T) {
 	}
 }
 
+func TestConfirmationExecutionFailurePreservesFirstReviewedStageAndCause(t *testing.T) {
+	t.Parallel()
+	cause := errors.New("private provider response")
+	inner := wrapConfirmationExecutionFailure("provider_session", cause)
+	outer := wrapConfirmationExecutionFailure("runtime_acquire", inner)
+	if outer != inner {
+		t.Fatal("outer stage replaced the more specific inner stage")
+	}
+	if got := confirmationExecutionStage(outer); got != "provider_session" {
+		t.Fatalf("stage = %q, want provider_session", got)
+	}
+	if !errors.Is(outer, cause) {
+		t.Fatal("wrapped failure no longer exposes its cause to local cleanup/tests")
+	}
+	if strings.Contains(outer.Error(), cause.Error()) {
+		t.Fatalf("public error leaked cause: %q", outer.Error())
+	}
+}
+
 func TestTrustedConfirmationProfileStrictAndChecksumBound(t *testing.T) {
 	t.Parallel()
 	profile, raw := validInstalledConfirmationProfile(t)
@@ -441,7 +460,8 @@ func TestTrustedConfirmationExecuteTreatsCleanupFailureAsBundleFailure(t *testin
 	request := validTrustedConfirmationRequest(t, raw, profile)
 	runtime := validConfirmationRuntime()
 	closeCalls := 0
-	runtime.Close = func() error { closeCalls++; return errors.New("release screened image") }
+	closeFailure := errors.New("release screened image")
+	runtime.Close = func() error { closeCalls++; return closeFailure }
 	executor := installTrustedExecutor(t, raw, confirmationRuntimeFactoryFunc(func(context.Context, confirmationRuntimeIdentity) (*confirmationRuntime, error) {
 		return runtime, nil
 	}))
@@ -461,7 +481,8 @@ func TestTrustedConfirmationExecuteTreatsCleanupFailureAsBundleFailure(t *testin
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), request.Deadline)
 	defer cancel()
-	if _, err := executor.Execute(ctx, request); err == nil || !strings.Contains(err.Error(), "close confirmation runtime") {
+	if _, err := executor.Execute(ctx, request); err == nil || confirmationExecutionStage(err) != "runtime_close" ||
+		!errors.Is(err, closeFailure) {
 		t.Fatalf("cleanup error = %v", err)
 	}
 	if closeCalls != 1 {

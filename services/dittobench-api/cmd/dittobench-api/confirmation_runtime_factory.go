@@ -510,7 +510,7 @@ func (factory *screenedConfirmationRuntimeFactory) Acquire(
 		return nil, errors.New("confirmation runtime context is required")
 	}
 	if err := factory.ValidateInstallation(factory.profile); err != nil {
-		return nil, err
+		return nil, wrapConfirmationExecutionFailure("installation_validation", err)
 	}
 	return factory.acquireAfterInstallationValidation(ctx, identity)
 }
@@ -526,30 +526,36 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 		return nil, errors.New("confirmation runtime context is required")
 	}
 	if err := validateScreenedConfirmationSource(identity); err != nil {
-		return nil, err
+		return nil, wrapConfirmationExecutionFailure("source_validation", err)
 	}
 	if err := factory.sandbox.Available(ctx); err != nil {
-		return nil, errors.New("confirmation sandbox is unavailable")
+		return nil, wrapConfirmationExecutionFailure(
+			"sandbox_availability", errors.New("confirmation sandbox is unavailable"),
+		)
 	}
 	longMemSource, err := factory.longMemDataset.openVerified(384 << 20)
 	if err != nil {
-		return nil, err
+		return nil, wrapConfirmationExecutionFailure("longmem_dataset", err)
 	}
 	_, ablationRaw, err := verifyConfirmationFile(factory.ablationFile.path, maximumConfirmationAblationDatasetBytes)
 	if err != nil || digestBytes(ablationRaw) != factory.profile.AblationDatasetSHA256 {
 		_ = longMemSource.Close()
-		return nil, errors.New("confirmation ablation dataset changed after installation")
+		return nil, wrapConfirmationExecutionFailure(
+			"ablation_dataset", errors.New("confirmation ablation dataset changed after installation"),
+		)
 	}
 	ablationDataset, err := decodeConfirmationAblationDataset(ablationRaw)
 	if err != nil || ablationDataset.Revision != factory.ablationDataset.Revision {
 		_ = longMemSource.Close()
-		return nil, errors.New("confirmation ablation dataset identity drift")
+		return nil, wrapConfirmationExecutionFailure(
+			"ablation_dataset", errors.New("confirmation ablation dataset identity drift"),
+		)
 	}
 	longMemProjectionKey, ablationSelectionKey, ablationProjectionKey, err :=
 		deriveConfirmationRuntimeMaterial(factory.profile, identity)
 	if err != nil {
 		_ = longMemSource.Close()
-		return nil, err
+		return nil, wrapConfirmationExecutionFailure("runtime_material", err)
 	}
 	zeroKeys := true
 	defer func() {
@@ -565,18 +571,24 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 	)
 	if err != nil {
 		_ = longMemSource.Close()
-		return nil, errors.New("confirmation platform capabilities are unavailable")
+		return nil, wrapConfirmationExecutionFailure(
+			"provider_capabilities", errors.New("confirmation platform capabilities are unavailable"),
+		)
 	}
 	provider, err := longmemeval.NewProviderSession(ctx, factory.profile.longMemProfile(), providerRuntime)
 	if err != nil {
 		_ = longMemSource.Close()
-		return nil, errors.New("confirmation provider session is unavailable")
+		return nil, wrapConfirmationExecutionFailure(
+			"provider_session", errors.New("confirmation provider session is unavailable"),
+		)
 	}
 	image, _, _, err := factory.sandbox.Build(ctx, identity.Source)
 	if err != nil || strings.TrimSpace(image) == "" {
 		_ = provider.Close()
 		_ = longMemSource.Close()
-		return nil, errors.New("confirmation screened image is unavailable")
+		return nil, wrapConfirmationExecutionFailure(
+			"screened_image", errors.New("confirmation screened image is unavailable"),
+		)
 	}
 	cleanupImage := true
 	defer func() {
@@ -590,7 +602,7 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 	if err != nil {
 		_ = provider.Close()
 		_ = longMemSource.Close()
-		return nil, err
+		return nil, wrapConfirmationExecutionFailure("broker_session", err)
 	}
 	cleanupSession := true
 	defer func() {
@@ -606,16 +618,22 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 		if handle != nil {
 			factory.stopHandle(handle)
 		}
-		return nil, errors.New("confirmation LongMemEval sandbox could not start")
+		return nil, wrapConfirmationExecutionFailure(
+			"sandbox_start", errors.New("confirmation LongMemEval sandbox could not start"),
+		)
 	}
 	if !factory.broker.bindSource(sessionID, runID, handle.SourceIP) || !factory.broker.beginEmbeddingPhase(sessionID, runID) {
 		factory.stopHandle(handle)
-		return nil, errors.New("confirmation sandbox source binding failed")
+		return nil, wrapConfirmationExecutionFailure(
+			"source_binding", errors.New("confirmation sandbox source binding failed"),
+		)
 	}
 	healthCtx := runner.TrustSandbox(ctx)
 	if err := runner.WaitHealthy(healthCtx, handle.BaseURL, factory.healthTimeout); err != nil {
 		factory.stopHandle(handle)
-		return nil, errors.New("confirmation LongMemEval harness did not become healthy")
+		return nil, wrapConfirmationExecutionFailure(
+			"harness_health", errors.New("confirmation LongMemEval harness did not become healthy"),
+		)
 	}
 	harnessClient := &http.Client{
 		Transport:     http.DefaultTransport,
@@ -624,7 +642,7 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 	harness, err := longmemeval.NewHTTPHarness(handle.BaseURL, harnessClient)
 	if err != nil {
 		factory.stopHandle(handle)
-		return nil, err
+		return nil, wrapConfirmationExecutionFailure("harness_client", err)
 	}
 	caseRunner := &screenedAblationCaseRunner{
 		sandbox: factory.sandbox, broker: factory.broker, image: image, sessionID: sessionID, runID: runID,

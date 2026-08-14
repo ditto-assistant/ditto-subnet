@@ -682,16 +682,32 @@ func TestConfirmationFactoryAcquireAndCloseOwnEveryResource(t *testing.T) {
 }
 
 func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *testing.T) {
-	for name, configure := range map[string]func(*confirmationFactoryFixture){
-		"sandbox unavailable": func(fixture *confirmationFactoryFixture) { fixture.sandbox.availableErr = fmt.Errorf("unavailable") },
-		"build failure":       func(fixture *confirmationFactoryFixture) { fixture.sandbox.buildErr = fmt.Errorf("build") },
-		"run failure":         func(fixture *confirmationFactoryFixture) { fixture.sandbox.runErr = fmt.Errorf("run") },
+	for name, test := range map[string]struct {
+		configure func(*confirmationFactoryFixture)
+		stage     string
+	}{
+		"sandbox unavailable": {
+			configure: func(fixture *confirmationFactoryFixture) { fixture.sandbox.availableErr = fmt.Errorf("unavailable") },
+			stage:     "sandbox_availability",
+		},
+		"build failure": {
+			configure: func(fixture *confirmationFactoryFixture) { fixture.sandbox.buildErr = fmt.Errorf("build") },
+			stage:     "screened_image",
+		},
+		"run failure": {
+			configure: func(fixture *confirmationFactoryFixture) { fixture.sandbox.runErr = fmt.Errorf("run") },
+			stage:     "sandbox_start",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newConfirmationFactoryFixture(t, true)
-			configure(&fixture)
-			if runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity); err == nil || runtime != nil {
+			test.configure(&fixture)
+			runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity)
+			if err == nil || runtime != nil {
 				t.Fatal("partial lifecycle succeeded")
+			}
+			if got := confirmationExecutionStage(err); got != test.stage {
+				t.Fatalf("failure stage = %q, want %q; err=%v", got, test.stage, err)
 			}
 			wantSessions := 1
 			if name == "run failure" {
@@ -716,8 +732,12 @@ func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *te
 			clear(fixture.factory.broker.sessions)
 			fixture.factory.broker.mu.Unlock()
 		}
-		if runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity); err == nil || runtime != nil {
+		runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity)
+		if err == nil || runtime != nil {
 			t.Fatal("missing broker binding accepted")
+		}
+		if got := confirmationExecutionStage(err); got != "source_binding" {
+			t.Fatalf("failure stage = %q, want source_binding; err=%v", got, err)
 		}
 		if fixture.sandbox.stops != 1 || fixture.sandbox.released != 1 {
 			t.Fatal("bind failure cleanup incomplete")
@@ -725,8 +745,12 @@ func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *te
 	})
 	t.Run("health failure", func(t *testing.T) {
 		fixture := newConfirmationFactoryFixture(t, false)
-		if runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity); err == nil || runtime != nil {
+		runtime, err := fixture.factory.acquireAfterInstallationValidation(context.Background(), fixture.identity)
+		if err == nil || runtime != nil {
 			t.Fatal("unhealthy harness accepted")
+		}
+		if got := confirmationExecutionStage(err); got != "harness_health" {
+			t.Fatalf("failure stage = %q, want harness_health; err=%v", got, err)
 		}
 		if fixture.sandbox.stops != 1 || fixture.sandbox.released != 1 || len(fixture.factory.broker.sessions) != 0 {
 			t.Fatal("health failure cleanup incomplete")

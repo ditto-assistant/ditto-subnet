@@ -269,6 +269,40 @@ type confirmationRuntimeFactory interface {
 	Acquire(context.Context, confirmationRuntimeIdentity) (*confirmationRuntime, error)
 }
 
+// confirmationExecutionFailure carries only a reviewed, low-cardinality stage
+// across the HTTP boundary. The wrapped cause remains available to local tests
+// and cleanup logic, but must never be serialized or logged: provider URLs,
+// response bodies, and capability material all live below this boundary.
+type confirmationExecutionFailure struct {
+	stage string
+	cause error
+}
+
+func (failure *confirmationExecutionFailure) Error() string {
+	return "confirmation execution failed at " + failure.stage
+}
+
+func (failure *confirmationExecutionFailure) Unwrap() error { return failure.cause }
+
+func wrapConfirmationExecutionFailure(stage string, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	var existing *confirmationExecutionFailure
+	if errors.As(cause, &existing) {
+		return cause
+	}
+	return &confirmationExecutionFailure{stage: stage, cause: cause}
+}
+
+func confirmationExecutionStage(err error) string {
+	var failure *confirmationExecutionFailure
+	if errors.As(err, &failure) && failure.stage != "" {
+		return failure.stage
+	}
+	return "execution"
+}
+
 // confirmationRuntime contains no provider endpoints or credentials. Real
 // Judge, ProviderMeter, CaseRunner, dataset, and artifact lifecycle adapters
 // remain required injected bindings and are intentionally not implemented here.
@@ -398,10 +432,12 @@ func (executor *trustedConfirmationExecutor) Execute(
 	}
 	runtime, err := executor.runtimeFactory.Acquire(ctx, identity)
 	if err != nil {
-		return confirmationExecutionResult{}, fmt.Errorf("acquire confirmation runtime: %w", err)
+		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure("runtime_acquire", err)
 	}
 	if runtime == nil {
-		return confirmationExecutionResult{}, errors.New("confirmation runtime factory returned nil")
+		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure(
+			"runtime_acquire", errors.New("confirmation runtime factory returned nil"),
+		)
 	}
 	closed := false
 	if runtime.Close != nil {
@@ -412,16 +448,16 @@ func (executor *trustedConfirmationExecutor) Execute(
 		}()
 	}
 	if err := runtime.validate(executor.profile); err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure("runtime_validation", err)
 	}
 	result, err := executor.coordinate(ctx, request, executor.profile, runtime)
 	if err != nil {
-		return confirmationExecutionResult{}, err
+		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure("dimension_execution", err)
 	}
 	closeErr := runtime.Close()
 	closed = true
 	if closeErr != nil {
-		return confirmationExecutionResult{}, fmt.Errorf("close confirmation runtime: %w", closeErr)
+		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure("runtime_close", closeErr)
 	}
 	return result, nil
 }
