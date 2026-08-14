@@ -58,6 +58,14 @@ remaining race window.
 
 ## Release runner capacity
 
+Root exact-source verification keeps formatting, lint, typing, and integration
+checks in one lane while three standard-runner matrix shards split the ordinary
+pytest node IDs deterministically in collection order. A stable fan-in job
+fails closed unless the static lane and every shard succeed. The v0.63.6
+release spent 125 seconds running 1,553 ordinary tests serially, so the split
+removes roughly one minute from the pre-release critical path without using
+billed runners or running any test concurrently inside one checkout.
+
 Platform pull-request CI and exact-source release verification both call
 `.github/workflows/platform-verify.yml`. The reusable workflow runs static and
 dashboard gates independently and splits the complete backend suite across four

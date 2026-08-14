@@ -231,11 +231,14 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     # publication cannot race ahead of the exact merged source gate.
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
-    verify_steps = jobs["verify-root"]["steps"]
-    verify_checkout = _step(
-        verify_steps, "Check out the exact merge commit before release"
-    )
-    assert verify_checkout["with"]["fetch-depth"] == 1
+    root_static = jobs["verify-root-static"]
+    root_tests = jobs["verify-root-tests"]
+    for root_job in (root_static, root_tests):
+        verify_checkout = _step(
+            root_job["steps"], "Check out the exact merge commit before release"
+        )
+        assert verify_checkout["with"]["fetch-depth"] == 1
+        assert verify_checkout["with"]["ref"] == "${{ github.sha }}"
     platform_verify = jobs["verify-platform"]
     assert platform_verify["uses"] == "./.github/workflows/platform-verify.yml"
     assert platform_verify["with"]["ref"] == "${{ github.sha }}"
@@ -245,8 +248,38 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert platform_verify["with"]["dashboard"] == (
         "${{ needs.plan.outputs.platform_dashboard == 'true' }}"
     )
-    verification = _step(verify_steps, "Gate the release on exact merge source")
+    verification = _step(
+        root_static["steps"],
+        "Gate root static and integration checks on exact merge source",
+    )
     assert "uv sync --locked --group dev" in verification["run"].splitlines()
+    assert "uv run ruff format --check ." in verification["run"]
+    assert "uv run ruff check ." in verification["run"]
+    assert "uv run mypy ditto/" in verification["run"]
+    assert "uv run pytest -m integration" in verification["run"]
+
+    assert root_tests["strategy"] == {
+        "fail-fast": False,
+        "matrix": {"shard": [0, 1, 2]},
+    }
+    shard = _step(root_tests["steps"], "Gate root test shard on exact merge source")
+    assert shard["env"] == {"SHARD": "${{ matrix.shard }}", "SHARD_COUNT": 3}
+    assert "uv run pytest --collect-only -q --color=no" in shard["run"]
+    assert 'ditto/tests/*::*) test_nodeids+=("$test_nodeid")' in shard["run"]
+    assert "index % SHARD_COUNT == SHARD" in shard["run"]
+    assert 'uv run pytest "${shard_nodeids[@]}"' in shard["run"]
+
+    root_aggregate = jobs["verify-root"]
+    assert root_aggregate["if"] == "always()"
+    assert set(root_aggregate["needs"]) == {
+        "plan",
+        "admit-current",
+        "verify-root-static",
+        "verify-root-tests",
+    }
+    root_gate = _step(root_aggregate["steps"], "Require every root exact-source lane")
+    assert 'test "$STATIC_RESULT" = success' in root_gate["run"]
+    assert 'test "$TESTS_RESULT" = success' in root_gate["run"]
     assert workflow["jobs"]["release"]["needs"] == [
         "plan",
         "admit-current",
@@ -343,7 +376,8 @@ def test_superseded_candidate_skips_expensive_source_verification_early() -> Non
     )
 
     for job_name in (
-        "verify-root",
+        "verify-root-static",
+        "verify-root-tests",
         "verify-starter-kit",
         "verify-platform",
         "verify-model-relay",
@@ -356,6 +390,10 @@ def test_superseded_candidate_skips_expensive_source_verification_early() -> Non
         job = jobs[job_name]
         assert "admit-current" in job["needs"]
         assert "needs.admit-current.outputs.current == 'true'" in job["if"]
+
+    root_aggregate = jobs["verify-root"]
+    assert "admit-current" in root_aggregate["needs"]
+    assert root_aggregate["if"] == "always()"
 
 
 def test_superseded_verified_source_skips_release_mutations() -> None:
@@ -393,11 +431,14 @@ def test_release_uses_the_root_projects_minimum_python() -> None:
     assert project["requires-python"] == ">=3.12,<3.14"
 
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    verify_setup = _step(workflow["jobs"]["verify-root"]["steps"], "Set up Python 3.12")
+    verify_setups = [
+        _step(workflow["jobs"][job_name]["steps"], "Set up Python 3.12")
+        for job_name in ("verify-root-static", "verify-root-tests")
+    ]
     assemble_setup = _step(
         workflow["jobs"]["assemble-stack"]["steps"], "Set up Python 3.12"
     )
-    assert verify_setup["run"] == "uv python install 3.12"
+    assert all(setup["run"] == "uv python install 3.12" for setup in verify_setups)
     assert assemble_setup["run"] == "uv python install 3.12"
 
     dockerfile = ROOT_DOCKERFILE_PATH.read_text().splitlines()
