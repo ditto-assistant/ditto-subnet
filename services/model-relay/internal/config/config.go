@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -26,6 +27,8 @@ import (
 // Role values accepted by the relay binary. The Python api_server accepts
 // "platform" too; this binary IS the relay, so "platform" is a deploy error.
 const RoleRelay = "relay"
+
+var ss58Pattern = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{47,48}$`)
 
 // Embedding identity is pinned: the v7 contract froze the embedding space,
 // and the Python check_config fails boot on any deviation. Mirrored here.
@@ -72,6 +75,16 @@ type Config struct {
 	Postgres  PostgresConfig
 	Chain     ChainConfig
 	Inference InferenceProxyConfig
+	Upload    UploadConfig
+}
+
+// UploadConfig is the narrow upload-admission surface served by the relay.
+// Finalized-payment recovery is forwarded to the Python platform until the
+// historical Substrate verifier is ported; ordinary checks stay in Go.
+type UploadConfig struct {
+	PaymentAddress      string
+	MaxTarballSizeBytes int64
+	LegacyBaseURL       string
 }
 
 // PostgresConfig mirrors ditto/db/config.py::parse_postgres_config_from_env.
@@ -324,6 +337,21 @@ func Load(lookup Lookup) (*Config, error) {
 	hasIdentityPair := cfg.Chain.IdentityName != "" && cfg.Chain.IdentityToken != ""
 	if cfg.Chain.OpenAccessToken == "" && !hasIdentityPair {
 		r.fail("Pylon auth is required: set PYLON_OPEN_ACCESS_TOKEN or both PYLON_IDENTITY_NAME and PYLON_IDENTITY_TOKEN")
+	}
+
+	cfg.Upload = UploadConfig{
+		PaymentAddress:      r.required("DITTO_UPLOAD_PAYMENT_ADDRESS"),
+		MaxTarballSizeBytes: r.int64val("DITTO_MAX_TARBALL_SIZE_BYTES", 20*1024*1024),
+		LegacyBaseURL:       strings.TrimRight(r.str("DITTO_UPLOAD_LEGACY_BASE_URL", "http://127.0.0.1:8000"), "/"),
+	}
+	if cfg.Upload.PaymentAddress != "" && !ss58Pattern.MatchString(cfg.Upload.PaymentAddress) {
+		r.fail("DITTO_UPLOAD_PAYMENT_ADDRESS does not look like an SS58 address")
+	}
+	if cfg.Upload.MaxTarballSizeBytes < 1 {
+		r.fail("DITTO_MAX_TARBALL_SIZE_BYTES must be positive, got %d", cfg.Upload.MaxTarballSizeBytes)
+	}
+	if u, err := url.Parse(cfg.Upload.LegacyBaseURL); err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		r.fail("DITTO_UPLOAD_LEGACY_BASE_URL must be an absolute http/https URL, got %q", cfg.Upload.LegacyBaseURL)
 	}
 
 	cfg.Inference = loadInferenceProxy(r)

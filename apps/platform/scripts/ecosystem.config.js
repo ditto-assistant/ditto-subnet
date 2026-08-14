@@ -65,8 +65,9 @@ const RELAY_PORTS = [8010, 8011];
 // max_connections goes up -- that is a postmaster setting and needs a full
 // database RESTART, so it is a separate, quieter change.
 const relayApp = (port, index) => ({
-  // The Go model-relay binary serving the relay plane: /health, /metrics and
-  // /api/v1/inference/* only (the Python ditto-api keeps everything else).
+  // The Go model-relay binary serving /health, /metrics,
+  // /api/v1/inference/*, and the narrow upload pricing/admission slice. The
+  // Python ditto-api keeps multipart /upload/agent and every other route.
   // Caddy load-balances /api/v1/inference/* across the two slots, so the
   // proxy hot path never shares an event loop with validator heartbeat ingest
   // -- which is what lets the platform force-expire live leases and destroy

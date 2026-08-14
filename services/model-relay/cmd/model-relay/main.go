@@ -1,6 +1,6 @@
 // Command model-relay is the Go replacement for the Python platform's
-// DITTO_ROLE=relay process: the SN118 inference plane (health + metrics +
-// /api/v1/inference/*). It reads the exact environment the Python relay
+// DITTO_ROLE=relay process: the SN118 inference plane plus narrow upload
+// pricing/admission routes. It reads the exact environment the Python relay
 // reads (apps/platform .env + .env.deploy on the host), so a host cutover
 // needs no env changes; platform-only variables are tolerated and ignored.
 //
@@ -13,6 +13,9 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -22,7 +25,9 @@ import (
 	"github.com/ditto-assistant/model-relay/internal/config"
 	"github.com/ditto-assistant/model-relay/internal/inference"
 	"github.com/ditto-assistant/model-relay/internal/postgres"
+	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/server"
+	"github.com/ditto-assistant/model-relay/internal/upload"
 )
 
 // buildCommit is stamped by the release build via
@@ -149,7 +154,21 @@ func run() error {
 		Upstream: inference.NewUpstreamClient(cfg.Inference),
 		Settings: inference.NewSettingsResolver(queries, logger),
 	})
+	legacyURL, err := url.Parse(cfg.Upload.LegacyBaseURL)
+	if err != nil {
+		return fmt.Errorf("parse upload legacy base URL: %w", err)
+	}
+	legacy := httputil.NewSingleHostReverseProxy(legacyURL)
+	legacy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, proxyErr error) {
+		logger.Warn("upload recovery proxy failed", slog.String("error", proxyErr.Error()))
+		relayhttp.WriteHTTPError(w, r, http.StatusServiceUnavailable, "upload payment recovery unavailable; retry shortly", nil)
+	}
+	uploadHandlers := upload.NewHandlers(&upload.Deps{
+		Cfg: cfg, Logger: logger, Pool: pool, Queries: queries,
+		Registration: prober, Legacy: legacy,
+	})
 
-	srv := server.New(cfg, logger, pool, prober, commit, server.WithInferenceHandlers(handlers))
+	srv := server.New(cfg, logger, pool, prober, commit,
+		server.WithInferenceHandlers(handlers), server.WithUploadHandlers(uploadHandlers))
 	return srv.Run(ctx)
 }

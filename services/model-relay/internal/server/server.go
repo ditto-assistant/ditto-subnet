@@ -1,6 +1,5 @@
-// Package server wires the relay's HTTP surface: GET /health, GET /metrics,
-// and the /api/v1/inference/* registration point. The mounted surface (and
-// nothing else) mirrors the Python api_server factory under DITTO_ROLE=relay.
+// Package server wires the Go request plane: health, metrics, inference, and
+// the narrow upload pricing/admission slice.
 package server
 
 import (
@@ -44,6 +43,13 @@ type InferenceHandlers struct {
 	ConfirmationEmbeddings      http.Handler
 }
 
+// UploadHandlers is the narrow upload-admission registration point. The
+// multipart archive endpoint is intentionally absent from this first slice.
+type UploadHandlers struct {
+	EvalPricing http.Handler
+	Check       http.Handler
+}
+
 // Server owns the relay HTTP surface and its dependencies.
 type Server struct {
 	cfg       *config.Config
@@ -53,6 +59,7 @@ type Server struct {
 	commit    string
 	revisions *revisionCache
 	inference *InferenceHandlers
+	upload    *UploadHandlers
 }
 
 // Option customizes a Server.
@@ -62,6 +69,11 @@ type Option func(*Server)
 // proxy change and by tests).
 func WithInferenceHandlers(h *InferenceHandlers) Option {
 	return func(s *Server) { s.inference = h }
+}
+
+// WithUploadHandlers mounts the Go upload pricing and admission paths.
+func WithUploadHandlers(h *UploadHandlers) Option {
+	return func(s *Server) { s.upload = h }
 }
 
 // WithCheckedOutResolver overrides how the on-disk revision is re-read
@@ -111,6 +123,7 @@ func (s *Server) Handler() http.Handler {
 	register(http.MethodGet, "/health", http.HandlerFunc(s.handleHealth))
 	register(http.MethodGet, "/metrics", promhttp.HandlerFor(prometheus.DefaultGatherer, promhttp.HandlerOpts{}))
 	s.registerInferenceRoutes(register)
+	s.registerUploadRoutes(register)
 	mux.Handle("/", envelopeFallback(methodByPath))
 
 	var h http.Handler = mux
@@ -119,6 +132,18 @@ func (s *Server) Handler() http.Handler {
 	h = relayhttp.AuthPassThroughMiddleware(h)
 	h = relayhttp.RequestIDMiddleware(s.logger, h)
 	return h
+}
+
+func (s *Server) registerUploadRoutes(register func(method, path string, h http.Handler)) {
+	if s.upload == nil {
+		return
+	}
+	if s.upload.EvalPricing != nil {
+		register(http.MethodGet, "/api/v1/upload/eval-pricing", s.upload.EvalPricing)
+	}
+	if s.upload.Check != nil {
+		register(http.MethodPost, "/api/v1/upload/check", s.upload.Check)
+	}
 }
 
 // registerInferenceRoutes mounts the inference plane when handlers were

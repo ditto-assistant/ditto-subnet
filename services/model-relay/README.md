@@ -1,14 +1,16 @@
 # model-relay
 
-Go replacement for the Python platform's `DITTO_ROLE=relay` process: the
-SN118 inference plane (`/health`, `/metrics`, `/api/v1/inference/*`). The
-platform role (`apps/platform`, Python) is untouched; this binary replaces
-only the relay process on the relay hosts.
+Go request plane that began as the replacement for the Python platform's
+`DITTO_ROLE=relay` process. It serves the SN118 inference plane plus the first
+upload strangler slice: `GET /api/v1/upload/eval-pricing` and ordinary
+`POST /api/v1/upload/check`. Finalized-payment recovery is forwarded to the
+Python platform, and multipart `/api/v1/upload/agent` remains Python until its
+chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
 
 ## Contract anchors
 
-- **Env compatibility**: reads the exact variable names the Python relay
-  reads (host `.env` + `.env.deploy`); platform-only variables are tolerated
+- **Env compatibility**: reads the exact variable names the Python processes
+  read (host `.env` + `.env.deploy`); unused platform variables are tolerated
   and ignored. Missing required values fail boot loudly
   (`internal/config`).
 - **Wire compatibility**: request-ID middleware, the
@@ -32,8 +34,8 @@ only the relay process on the relay hosts.
   `API_HOST:API_PORT`, graceful shutdown on SIGINT/SIGTERM).
 - `internal/config` — env parsing (fails boot on missing/invalid values).
 - `internal/relayhttp` — middleware + error envelope.
-- `internal/server` — `/health`, `/metrics`, and the inference handler
-  registration point (`server.InferenceHandlers`).
+- `internal/server` — `/health`, `/metrics`, inference, and upload-admission
+  handler registration points.
 - `internal/inference` — the inference plane: `POST /api/v1/inference/
   {exchange,chat/completions,embeddings,confirmation/chat/completions,
   confirmation/embeddings}` handlers, the admission
@@ -48,7 +50,10 @@ only the relay process on the relay hosts.
   accounting). No route streams: `stream: true` is refused legibly and
   upstream responses are fully buffered, sanitized, and re-serialized.
 - `internal/chain` — Pylon client: `/health` block probe and the
-  validator-permit check (`/block/recent/neurons`) used by `/exchange`.
+  validator-permit and registered-owner checks (`/block/recent/neurons`).
+- `internal/upload` — pricing and common pre-payment admission, including
+  sr25519 ownership, registration, ban, duplicate, cooldown, and atomic
+  reservation checks. Paid recovery remains a transparent Python fallback.
 - `internal/postgres` — sqlc layer: hand-written `*_queries.sql`, generated
   `*.sql.go`/`models.go`/`db.go`, hand-written `connection.go`.
 - `internal/testutil` — real-Postgres test harness (fresh database per test
@@ -70,3 +75,12 @@ TEST_POSTGRES_URI="postgres://ditto_test:ditto_test@localhost:15433/postgres?ssl
 
 After editing any `*_queries.sql`, add new files to the `queries:` list in
 `internal/postgres/sqlc.yaml` and run `make sqlc-generate`.
+
+## Upload activation and rollback
+
+The binary exposes the two upload-admission routes as soon as it starts, but
+Caddy keeps them on Python while
+`platform_upload_admission_relay_enabled: false`. Activate only after both
+relay slots report the intended release SHA from `/health`, then set the flag
+true and converge the `platform_app` role. Roll back only this slice by setting
+the flag false and reconverging; inference routing is unaffected.

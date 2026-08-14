@@ -70,7 +70,7 @@ platform_group: "{{ deploy_group | default('ditto') }}"
 # deploy verifier at the wrong process.
 platform_api_port: 8000
 
-# --- Inference relay pool (Caddy upstreams for /api/v1/inference/*) ----------
+# --- Go request-plane pool (inference plus narrow upload admission) ----------
 # Local ports of the DITTO_ROLE=relay pm2 processes created by
 # ditto-platform#444. Must mirror RELAY_PORTS in that repo's
 # scripts/ecosystem.config.js (and the DITTO_RELAY_PORTS default in its
@@ -79,9 +79,15 @@ platform_api_port: 8000
 # EMPTY LIST MEANS NO RELAY. The Caddyfile then renders a single bare
 # `reverse_proxy localhost:{{ platform_api_port }}`, byte-identical to the
 # pre-relay file. That is both the default for any host that has not stood the
-# relays up (dev runs single-process) and the durable rollback target: set this
-# back to [] and re-converge.
+# relays up (dev runs single-process) and the durable rollback target for both
+# inference and Go upload admission: set this back to [] and re-converge.
 platform_inference_relay_ports: []
+
+# Separate activation gate for the Go upload-admission slice. Keep false until
+# every configured relay slot reports the release SHA that contains the upload
+# handlers; then set true and converge. Turning only this flag back off rolls
+# uploads back to Python without disturbing the already-live inference plane.
+platform_upload_admission_relay_enabled: false
 
 # Additional public hostnames served by the same Caddy vhost. Keep aliases in
 # host_vars so each environment explicitly owns its certificate/SNI surface.

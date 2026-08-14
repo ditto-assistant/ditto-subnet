@@ -32,6 +32,7 @@ func testConfig(t *testing.T, extra map[string]string) *config.Config {
 		"POSTGRES_PASSWORD":             "p",
 		"POSTGRES_DB":                   "d",
 		"PYLON_OPEN_ACCESS_TOKEN":       "tok",
+		"DITTO_UPLOAD_PAYMENT_ADDRESS":  "5NotARea1SS58AddressTestFixtureDoNotSendTaoHere",
 		"DITTO_INFERENCE_PROXY_ENABLED": "1",
 		"OPENROUTER_API_KEY":            "test-openrouter-key",
 	}

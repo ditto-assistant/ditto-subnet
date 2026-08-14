@@ -59,3 +59,20 @@ func TestProbeLatestBlockUsesTheChainGlobalEndpoint(t *testing.T) {
 		})
 	}
 }
+
+func TestRegisteredColdkeyUsesRecentNeuronOwner(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"neurons":{"5Hotkey":{"coldkey":"5Coldkey","validator_permit":false}}}`))
+	}))
+	defer server.Close()
+	client := NewPylonClient(config.ChainConfig{PylonURL: server.URL, Netuid: 118, OpenAccessToken: "token"})
+	owner, err := client.RegisteredColdkey(context.Background(), "5Hotkey")
+	if err != nil || owner != "5Coldkey" {
+		t.Fatalf("RegisteredColdkey() owner=%q err=%v", owner, err)
+	}
+	missing, err := client.RegisteredColdkey(context.Background(), "5Missing")
+	if err != nil || missing != "" {
+		t.Fatalf("missing owner=%q err=%v", missing, err)
+	}
+}

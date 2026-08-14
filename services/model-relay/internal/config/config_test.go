@@ -6,13 +6,14 @@ import (
 )
 
 // minimalEnv is the smallest environment that boots: the required Postgres
-// triple plus Pylon auth.
+// triple, Pylon auth, and upload payment destination.
 func minimalEnv() map[string]string {
 	return map[string]string{
-		"POSTGRES_USER":           "ditto",
-		"POSTGRES_PASSWORD":       "secret",
-		"POSTGRES_DB":             "ditto_platform",
-		"PYLON_OPEN_ACCESS_TOKEN": "token",
+		"POSTGRES_USER":                "ditto",
+		"POSTGRES_PASSWORD":            "secret",
+		"POSTGRES_DB":                  "ditto_platform",
+		"PYLON_OPEN_ACCESS_TOKEN":      "token",
+		"DITTO_UPLOAD_PAYMENT_ADDRESS": "5NotARea1SS58AddressTestFixtureDoNotSendTaoHere",
 	}
 }
 
@@ -32,6 +33,9 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	}
 	if cfg.Chain.Netuid != 118 || cfg.Chain.Network != "finney" || cfg.Chain.PylonURL != "http://localhost:8001" {
 		t.Errorf("chain defaults wrong: %+v", cfg.Chain)
+	}
+	if cfg.Upload.MaxTarballSizeBytes != 20*1024*1024 || cfg.Upload.LegacyBaseURL != "http://127.0.0.1:8000" {
+		t.Errorf("upload defaults wrong: %+v", cfg.Upload)
 	}
 	ip := cfg.Inference
 	if ip.Enabled {
@@ -66,6 +70,29 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	}
 	if ip.RoutingMode != RoutingModeAggregateThroughput {
 		t.Errorf("routing mode default wrong: %s", ip.RoutingMode)
+	}
+}
+
+func TestUploadConfigValidation(t *testing.T) {
+	env := minimalEnv()
+	delete(env, "DITTO_UPLOAD_PAYMENT_ADDRESS")
+	if _, err := Load(MapLookup(env)); err == nil {
+		t.Fatal("missing upload payment address must fail boot")
+	}
+	env = minimalEnv()
+	env["DITTO_MAX_TARBALL_SIZE_BYTES"] = "0"
+	if _, err := Load(MapLookup(env)); err == nil {
+		t.Fatal("non-positive upload cap must fail boot")
+	}
+	env = minimalEnv()
+	env["DITTO_UPLOAD_LEGACY_BASE_URL"] = "localhost:8000"
+	if _, err := Load(MapLookup(env)); err == nil {
+		t.Fatal("relative legacy URL must fail boot")
+	}
+	env = minimalEnv()
+	env["DITTO_UPLOAD_PAYMENT_ADDRESS"] = "not-an-address"
+	if _, err := Load(MapLookup(env)); err == nil {
+		t.Fatal("invalid payment address must fail boot")
 	}
 }
 

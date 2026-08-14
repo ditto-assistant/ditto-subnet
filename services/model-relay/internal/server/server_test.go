@@ -17,10 +17,11 @@ import (
 
 func testConfig() *config.Config {
 	cfg, err := config.Load(config.MapLookup(map[string]string{
-		"POSTGRES_USER":           "x",
-		"POSTGRES_PASSWORD":       "x",
-		"POSTGRES_DB":             "x",
-		"PYLON_OPEN_ACCESS_TOKEN": "x",
+		"POSTGRES_USER":                "x",
+		"POSTGRES_PASSWORD":            "x",
+		"POSTGRES_DB":                  "x",
+		"PYLON_OPEN_ACCESS_TOKEN":      "x",
+		"DITTO_UPLOAD_PAYMENT_ADDRESS": "5NotARea1SS58AddressTestFixtureDoNotSendTaoHere",
 	}))
 	if err != nil {
 		panic(err)
@@ -183,5 +184,38 @@ func TestInferenceRoutesMountAtExactPaths(t *testing.T) {
 		if rec.Code == http.StatusTeapot {
 			t.Errorf("%s: GET must not reach the POST handler", path)
 		}
+	}
+}
+
+func TestUploadAdmissionRoutesMountAtExactPaths(t *testing.T) {
+	mounted := map[string]int{}
+	mark := func(name string) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			mounted[name]++
+			w.WriteHeader(http.StatusTeapot)
+		})
+	}
+	h := newTestServer(server.WithUploadHandlers(&server.UploadHandlers{
+		EvalPricing: mark("pricing"),
+		Check:       mark("check"),
+	}))
+	for _, test := range []struct {
+		method string
+		path   string
+		name   string
+	}{
+		{http.MethodGet, "/api/v1/upload/eval-pricing", "pricing"},
+		{http.MethodPost, "/api/v1/upload/check", "check"},
+	} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(test.method, test.path, nil))
+		if rec.Code != http.StatusTeapot || mounted[test.name] != 1 {
+			t.Fatalf("%s %s not mounted (status=%d count=%d)", test.method, test.path, rec.Code, mounted[test.name])
+		}
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/upload/agent", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("multipart upload must remain absent from Go, got %d", rec.Code)
 	}
 }

@@ -29,6 +29,12 @@ type PermitChecker interface {
 	ValidatorPermit(ctx context.Context, hotkey string) (bool, error)
 }
 
+// RegistrationChecker resolves the current coldkey owner for a registered
+// hotkey. An empty coldkey means the hotkey is not registered.
+type RegistrationChecker interface {
+	RegisteredColdkey(ctx context.Context, hotkey string) (string, error)
+}
+
 // PylonClient talks to the Pylon HTTP API. It mirrors the Python
 // pylon_client URL construction. Latest-block reads are chain-global, while
 // recent-neuron reads carry subnet and, in identity mode, identity context:
@@ -84,35 +90,53 @@ func (c *PylonClient) recentNeuronsURL() string {
 // permit and an unregistered hotkey both return (false, nil), matching
 // _assert_validator_permitted's ValidatorAuthError mapping.
 func (c *PylonClient) ValidatorPermit(ctx context.Context, hotkey string) (bool, error) {
+	neuron, registered, err := c.recentNeuron(ctx, hotkey)
+	if err != nil || !registered {
+		return false, err
+	}
+	return neuron.ValidatorPermit, nil
+}
+
+type recentNeuron struct {
+	ValidatorPermit bool   `json:"validator_permit"`
+	Coldkey         string `json:"coldkey"`
+}
+
+func (c *PylonClient) recentNeuron(ctx context.Context, hotkey string) (recentNeuron, bool, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.recentNeuronsURL(), nil)
 	if err != nil {
-		return false, fmt.Errorf("build pylon request: %w", err)
+		return recentNeuron{}, false, fmt.Errorf("build pylon request: %w", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+c.token)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return false, fmt.Errorf("pylon unreachable: %w", err)
+		return recentNeuron{}, false, fmt.Errorf("pylon unreachable: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
 		_, _ = io.CopyN(io.Discard, resp.Body, 1<<16)
-		return false, fmt.Errorf("pylon recent-neurons returned status %d", resp.StatusCode)
+		return recentNeuron{}, false, fmt.Errorf("pylon recent-neurons returned status %d", resp.StatusCode)
 	}
 	// GetNeuronsResponse: {"neurons": {"<hotkey>": {..., "validator_permit": bool}}}
 	var payload struct {
-		Neurons map[string]struct {
-			ValidatorPermit bool `json:"validator_permit"`
-		} `json:"neurons"`
+		Neurons map[string]recentNeuron `json:"neurons"`
 	}
 	// The metagraph payload for a large subnet runs to a few MB; bound it.
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<20)).Decode(&payload); err != nil {
-		return false, fmt.Errorf("pylon recent-neurons decode: %w", err)
+		return recentNeuron{}, false, fmt.Errorf("pylon recent-neurons decode: %w", err)
 	}
 	neuron, registered := payload.Neurons[hotkey]
-	if !registered {
-		return false, nil
+	return neuron, registered, nil
+}
+
+// RegisteredColdkey mirrors ChainClient.get_registered_coldkey against the
+// same recent-neurons snapshot used for validator permits.
+func (c *PylonClient) RegisteredColdkey(ctx context.Context, hotkey string) (string, error) {
+	neuron, registered, err := c.recentNeuron(ctx, hotkey)
+	if err != nil || !registered {
+		return "", err
 	}
-	return neuron.ValidatorPermit, nil
+	return neuron.Coldkey, nil
 }
 
 // ProbeLatestBlock performs the same dependency check the Python /health
