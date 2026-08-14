@@ -244,7 +244,7 @@ def test_git_changed_paths_includes_deleted_runtime_files() -> None:
         "docs/MINER.md",
         "services/dittobench-api/docs/BASELINES.md",
         "ditto/tests/miner_cli/test_api_client.py",
-        ".github/workflows/ci.yml",
+        ".depot/workflows/ci.yml",
     ],
 )
 def test_non_runtime_changes_do_not_release(

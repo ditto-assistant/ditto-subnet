@@ -6,7 +6,7 @@ ROOT = Path(__file__).parents[2]
 
 
 def test_datagen_ci_syntax_checks_the_release_verifier() -> None:
-    workflow = yaml.safe_load((ROOT / ".github/workflows/datagen-ci.yml").read_text())
+    workflow = yaml.safe_load((ROOT / ".depot/workflows/datagen-ci.yml").read_text())
     steps = workflow["jobs"]["build-test"]["steps"]
     syntax = next(
         step for step in steps if step.get("name") == "Validate release script syntax"

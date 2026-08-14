@@ -1,0 +1,64 @@
+# Depot CI Migration
+# Source: .github/workflows/infra-ci.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Infrastructure CI
+on:
+  pull_request:
+    paths:
+      - infra/**
+      - .depot/workflows/infra-ci.yml
+      - .depot/workflows/infra-plan-apply.yml
+  push:
+    branches: [main]
+    paths:
+      - infra/**
+      - .depot/workflows/infra-ci.yml
+      - .depot/workflows/infra-plan-apply.yml
+permissions:
+  contents: read
+jobs:
+  terraform:
+    name: Terraform / ${{ matrix.root }}
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    strategy:
+      fail-fast: false
+      matrix:
+        root:
+          - infra/terraform/stacks/gcp-platform
+          - infra/terraform/stacks/cloudflare-dittobench
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+      - uses: terraform-linters/setup-tflint@6e1e0642c0289bd619021bf6b34e3c08ed1e005a # v6.3.0
+      - name: Check formatting
+        run: terraform fmt -check -recursive infra/terraform
+      - name: Initialize without remote state
+        run: terraform -chdir=${{ matrix.root }} init -backend=false -input=false
+      - name: Validate
+        run: terraform -chdir=${{ matrix.root }} validate
+      - name: Lint
+        working-directory: ${{ matrix.root }}
+        run: tflint --init && tflint
+  ansible:
+    runs-on: depot-ubuntu-latest # was: ubuntu-latest. Mapped standard GitHub runner to Depot equivalent.
+    defaults:
+      run:
+        working-directory: infra/ansible
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Install pinned Ansible collections
+        run: uvx --from ansible-core==2.21.2 ansible-galaxy collection install -r requirements.yml
+      - name: Syntax-check subnet playbooks
+        run: |
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-validator.yml; do
+            uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
+          done

@@ -3,7 +3,7 @@ from pathlib import Path
 import yaml
 
 ROOT = Path(__file__).parents[2]
-CORE_E2E = ROOT / ".github/workflows/screener-core-e2e.yml"
+CORE_E2E = ROOT / ".depot/workflows/screener-core-e2e.yml"
 
 
 def test_core_e2e_uses_the_monorepo_starter_kit() -> None:

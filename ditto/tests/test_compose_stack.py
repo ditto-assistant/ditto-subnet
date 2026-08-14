@@ -307,6 +307,9 @@ def test_untrusted_runtime_fails_closed_and_uses_restricted_network() -> None:
     assert "--dport 11434 -j ACCEPT" not in entrypoint
     assert "--dport 11435 -j ACCEPT" not in entrypoint
     assert "ditto-sandbox-deny" in entrypoint
+    assert (
+        "sandbox denial logging unavailable; enforcement remains active" in entrypoint
+    )
     # Denied egress must fail fast: a silent DROP costs a full SYN timeout per
     # connect (~53 s of dead time per benchmark check), which burns the whole
     # ticket and starves the scoring slot. The allowlist is unchanged.

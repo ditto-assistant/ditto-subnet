@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/dittobench.yml"
+WORKFLOW_PATH = Path(__file__).parents[2] / ".depot/workflows/dittobench.yml"
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 
 

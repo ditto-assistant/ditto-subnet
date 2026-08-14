@@ -9,7 +9,12 @@ MONOREPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def workflow_text(name: str) -> str:
-    return (MONOREPO_ROOT / ".github" / "workflows" / name).read_text()
+    candidates = (
+        MONOREPO_ROOT / ".depot" / "workflows" / name,
+        MONOREPO_ROOT / ".github" / "workflows" / name,
+        MONOREPO_ROOT / ".github" / "workflows" / f"{name}.disabled",
+    )
+    return next(path.read_text() for path in candidates if path.exists())
 
 
 def test_embedded_protocol_version_matches_root_pin_and_lock() -> None:

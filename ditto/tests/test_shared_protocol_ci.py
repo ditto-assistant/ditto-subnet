@@ -24,7 +24,7 @@ def test_shared_protocol_changes_trigger_every_filtered_consumer_workflow(
     workflow_name: str, event: str
 ) -> None:
     workflow = yaml.load(
-        (ROOT / ".github/workflows" / workflow_name).read_text(),
+        (ROOT / ".depot/workflows" / workflow_name).read_text(),
         Loader=yaml.BaseLoader,
     )
 
@@ -36,7 +36,7 @@ def test_shared_protocol_changes_trigger_every_filtered_consumer_workflow(
 
 def test_root_validator_ci_is_unfiltered() -> None:
     workflow = yaml.load(
-        (ROOT / ".github/workflows/ci.yml").read_text(),
+        (ROOT / ".depot/workflows/ci.yml").read_text(),
         Loader=yaml.BaseLoader,
     )
 

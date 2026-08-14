@@ -120,6 +120,30 @@ variable "wif_provider_id" {
   default     = "github-actions"
 }
 
+variable "depot_wif_provider_id" {
+  description = "Dedicated Depot CI OIDC provider id under the existing workload identity pool. Kept separate from the GitHub provider so the two issuers can be cut over independently."
+  type        = string
+  default     = "depot-ditto-subnet"
+}
+
+variable "depot_org_id" {
+  description = "Depot organization whose CI jobs may exchange OIDC tokens for ditto-subnet deployment identities."
+  type        = string
+  default     = "4q2czr6whg"
+}
+
+variable "depot_deploy_repository" {
+  description = "Exact GitHub repository claim accepted from Depot CI for automatic deployments."
+  type        = string
+  default     = "ditto-assistant/ditto-subnet"
+}
+
+variable "depot_deploy_ref" {
+  description = "Exact Git ref accepted from Depot CI for automatic deployments. Depot does not enforce GitHub Environment branch protection, so this condition is the deployment branch gate."
+  type        = string
+  default     = "refs/heads/main"
+}
+
 variable "platform_deploy_environment" {
   description = "GitHub Actions environment the deploy workflows run in (their OIDC `sub` is `repo:<owner>/<repo>:environment:<name>`). The WIF binding is scoped to this environment so only prod-environment jobs — gated by that environment's deployment-branch protection (main only) — can impersonate the sudo-capable deploy SA, not every branch in the repo. Each repo MUST configure this environment with deployment-branch restrictions."
   type        = string

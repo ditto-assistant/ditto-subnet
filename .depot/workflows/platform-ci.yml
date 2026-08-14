@@ -1,0 +1,219 @@
+# Depot CI Migration
+# Source: .github/workflows/platform-ci.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Platform CI
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - apps/platform/**
+      - packages/ditto-screening-protocol/**
+      - .depot/workflows/platform-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/platform/**
+      - packages/ditto-screening-protocol/**
+      - .depot/workflows/platform-ci.yml
+permissions:
+  contents: read
+defaults:
+  run:
+    working-directory: apps/platform
+jobs:
+  python-image:
+    runs-on: depot-ubuntu-24.04
+    snapshot:
+      image-name: ditto-platform-ci
+      version: v1
+      with:
+        # Rebuild regularly for base-image security updates. The consumer also
+        # runs `uv sync --locked`, so a lockfile change is correct immediately
+        # instead of waiting for this snapshot to age out.
+        max-age: 3d
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install uv
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+      - name: Preinstall Python dependencies
+        run: uv sync --locked --group dev
+      - name: Preload service images
+        working-directory: .
+        run: |
+          docker pull postgres:16-alpine
+          docker pull minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e
+          docker pull minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727
+  copy-lint:
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Enforce workflow security policy
+        working-directory: .
+        run: python3 .github/scripts/check_workflow_security.py
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/platform/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: faircopy
+        run: npm run lint:copy -- --format github
+  dashboard:
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: apps/platform/dashboard/package-lock.json
+      - name: Install dependencies
+        working-directory: apps/platform/dashboard
+        run: npm ci
+      - name: Check
+        working-directory: apps/platform/dashboard
+        run: npm run check
+      - name: Test
+        working-directory: apps/platform/dashboard
+        run: npm test
+      - name: Build
+        working-directory: apps/platform/dashboard
+        run: npm run build
+  lint-and-test:
+    needs: python-image
+    # The suite uses pytest-xdist with `-n auto`. The default two-CPU sandbox
+    # created only two workers and spent 5m29s inside pytest; eight CPUs turn
+    # the existing test parallelism into wall-clock savings.
+    runs-on:
+      size: 8x32
+      image: ditto-platform-ci
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    services:
+      # The whole suite runs against a real Postgres. SQLite emitted no
+      # FOR UPDATE, had no pg_advisory_xact_lock, and had no concurrent
+      # writers, so it could not fail on the bug class that reaches
+      # production -- see ditto-platform#438.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ditto_test
+          POSTGRES_PASSWORD: ditto_test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        # Durability off: this database is rebuilt from migrations on
+        # demand, so losing it to a crash costs nothing and the write path
+        # gets materially faster.
+        options: >-
+          --health-cmd "pg_isready -U ditto_test" --health-interval 5s --health-timeout 5s --health-retries 10 --tmpfs /var/lib/postgresql/data
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          clean: false
+          fetch-depth: 0
+      - name: Install Gitleaks
+        env:
+          GITLEAKS_VERSION: 8.30.1
+          GITLEAKS_LINUX_X64_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+        run: |
+          asset="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --silent --show-error --location \
+            --output "$RUNNER_TEMP/$asset" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$asset"
+          echo "$GITLEAKS_LINUX_X64_SHA256  $RUNNER_TEMP/$asset" | sha256sum --check
+          tar --extract --gzip --file "$RUNNER_TEMP/$asset" --directory "$RUNNER_TEMP" gitleaks
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Scan working tree for secrets
+        run: gitleaks dir . --no-banner --redact=100
+      - name: Scan reachable Git history for secrets
+        # Gitleaks resolves Git history from the repository root even though
+        # this job's working directory is apps/platform. Restrict the log to
+        # Platform so fixtures imported by sibling components do not leak into
+        # this component's policy while still scanning all Platform history.
+        run: gitleaks git . --log-opts="--all -- apps/platform" --no-banner --redact=100
+      - name: Verify locked dependencies
+        run: uv sync --locked --group dev
+      - name: ruff format check
+        run: uv run ruff format --check .
+      - name: ruff check
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy ditto/
+      # Object storage for the `integration` tests that exercise the real
+      # upload path end to end. Same images and same credentials as the
+      # `minio` + `minio-create-bucket` pair in docker-compose.yml, so a
+      # developer running `make stack-up` gets the environment CI has.
+      # A `run:` step rather than a `services:` entry because the minio
+      # server image needs a command argument (`server /data`) and GitHub
+      # service containers cannot override CMD.
+      - name: Start MinIO
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minio \
+            -e MINIO_ROOT_PASSWORD=miniominio \
+            minio/minio@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl -sf http://localhost:9000/minio/health/live >/dev/null
+          docker run --rm --network host --entrypoint sh \
+            minio/mc@sha256:a7fe349ef4bd8521fb8497f55c6042871b2ae640607cf99d9bede5e9bdf11727 -c \
+            'mc alias set local http://localhost:9000 minio miniominio && \
+             mc mb --ignore-existing local/ditto-agents'
+      - name: pytest
+        env:
+          # Admin DSN of the service container above. The harness still
+          # creates its own template and per-worker databases from it, so
+          # this role must be able to CREATE DATABASE.
+          DITTO_TEST_POSTGRES_URI: postgres://ditto_test:ditto_test@localhost:5432/postgres
+          # Any provisioning failure is a hard error, never a skip. Without
+          # this a broken container turns the entire database suite green --
+          # the exact green-on-broken mode this migration exists to delete.
+          DITTO_REQUIRE_POSTGRES: "1"
+          # Same rule for the object store: never skip the upload tests
+          # because the bucket was unreachable. Inert while
+          # STORAGE_ENDPOINT_URL is set explicitly below (that short-circuits
+          # minioharness), and the safety net if it ever stops being.
+          DITTO_REQUIRE_OBJECT_STORAGE: "1"
+          # Every variable below now has a test-only default in
+          # ditto/tests/env_defaults.py, so CI would be green without this
+          # block. It is kept because CI should pin what it runs against
+          # rather than inherit a fixture, and because an explicitly-set
+          # value always wins over a default -- which is itself worth
+          # exercising on every PR. None of these are secrets: the payment
+          # address is the well-known //Alice dev key and is never spent
+          # (PaymentVerifier is stubbed in those tests), and the MinIO
+          # credentials belong to the throwaway container above.
+          DITTO_UPLOAD_PAYMENT_ADDRESS: 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+          # ChainConfig refuses to construct without credentials, so these are
+          # needed to *build* the app even though nothing here reaches Pylon:
+          # the only two tests that talk to a chain are `needs_chain`-marked
+          # and deselected. The URL points at a port with nothing on it on
+          # purpose -- if a test ever starts making real chain calls it will
+          # fail loudly here rather than depend on an external network.
+          PYLON_URL: http://127.0.0.1:1
+          PYLON_OPEN_ACCESS_TOKEN: ci-no-chain
+          STORAGE_ENDPOINT_URL: http://localhost:9000
+          STORAGE_ACCESS_KEY: minio
+          STORAGE_SECRET_KEY: miniominio
+          STORAGE_BUCKET: ditto-agents
+          STORAGE_REGION: us-east-1
+          STORAGE_USE_TLS: "false"
+        run: uv run pytest

@@ -1,0 +1,123 @@
+# Depot CI Migration
+# Source: .github/workflows/dittobench.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: DittoBench
+on:
+  pull_request:
+    paths:
+      - services/dittobench-api/**
+      - research/dittobench-datagen/**
+      - packages/ditto-screening-protocol/ditto_screening_protocol/data/**
+      - scripts/generate_confirmation_installation.py
+      - docker-compose.yml
+      - Dockerfile.sandbox-docker
+      - scripts/sandbox-docker-entrypoint.sh
+      - scripts/test-validator-embedding-gateway.sh
+      - .depot/workflows/dittobench.yml
+  push:
+    branches: [main]
+    paths:
+      - services/dittobench-api/**
+      - research/dittobench-datagen/**
+      - packages/ditto-screening-protocol/ditto_screening_protocol/data/**
+      - scripts/generate_confirmation_installation.py
+      - docker-compose.yml
+      - Dockerfile.sandbox-docker
+      - scripts/sandbox-docker-entrypoint.sh
+      - scripts/test-validator-embedding-gateway.sh
+      - .depot/workflows/dittobench.yml
+concurrency:
+  group: dittobench-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  IMAGE: us-central1-docker.pkg.dev/ditto-app-dev/cloud-run-source-deploy/dittobench-api
+  SERVICE_DIR: services/dittobench-api
+jobs:
+  validator-stack-gateway:
+    name: validator stack embedding gateway
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/test-validator-embedding-gateway.sh
+  test:
+    name: build · vet · test
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.23"
+          cache: true
+          cache-dependency-path: services/dittobench-api/go.sum
+      - run: go build ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+      - run: go vet ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+      - run: go test ./...
+        working-directory: ${{ env.SERVICE_DIR }}
+  docker-build:
+    name: docker image builds (${{ matrix.target }})
+    if: github.event_name == 'pull_request'
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    strategy:
+      matrix:
+        target: [runtime, sandbox]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build image without publishing
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: services/dittobench-api/Dockerfile
+          target: ${{ matrix.target }}
+          push: false
+          load: false
+  provenance:
+    name: image reports its monorepo revision
+    if: github.event_name == 'pull_request'
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build scorer with stamped identity
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: services/dittobench-api/Dockerfile
+          target: sandbox
+          push: false
+          load: true
+          tags: dittobench-api:provenance-ci
+          build-args: |
+            DITTOBENCH_SOURCE_SHA=${{ github.event.pull_request.head.sha }}
+            DITTOBENCH_SOFTWARE_VERSION=ci-${{ github.run_id }}
+      - name: Verify compiled provenance wins over environment claims
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          report="$(docker run --rm \
+            -e DITTOBENCH_SOURCE_SHA=0000000000000000000000000000000000000001 \
+            dittobench-api:provenance-ci version -json)"
+          test "$(jq -r .source_revision <<<"$report")" = "$EXPECTED_SHA"
+          test "$(jq -r .source_revision_origin <<<"$report")" = binary
+          test "$(jq -r .source_revision_mismatch <<<"$report")" = true
+          test "$(jq -r .software_version <<<"$report")" = "ci-${{ github.run_id }}"
+          clean="$(docker run --rm dittobench-api:provenance-ci version -json)"
+          test "$(jq -r .source_revision_mismatch <<<"$clean")" = false

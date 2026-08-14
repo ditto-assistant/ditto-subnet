@@ -13,6 +13,34 @@ data "google_project" "this" {
   project_id = var.project
 }
 
+# Depot CI is a separate OIDC issuer from GitHub Actions. Keep a dedicated
+# provider instead of widening or replacing the existing GitHub trust during
+# the cutover. Depot does not enforce GitHub Environment protection rules, so
+# the provider itself fails closed unless the token is for this exact Depot
+# organization, repository, and main-branch ref.
+resource "google_iam_workload_identity_pool_provider" "depot" {
+  project                            = var.project
+  workload_identity_pool_id          = var.wif_pool_id
+  workload_identity_pool_provider_id = var.depot_wif_provider_id
+  display_name                       = "Depot CI - ditto-subnet"
+
+  attribute_mapping = {
+    "google.subject"       = "assertion.repository_id"
+    "attribute.org_id"     = "assertion.org_id"
+    "attribute.repository" = "assertion.repository"
+    "attribute.ref"        = "assertion.ref"
+  }
+  attribute_condition = "assertion.org_id == '${var.depot_org_id}' && assertion.repository == '${var.depot_deploy_repository}' && assertion.ref == '${var.depot_deploy_ref}'"
+
+  oidc {
+    issuer_uri = "https://identity.depot.dev"
+  }
+}
+
+locals {
+  depot_deploy_principal = "principalSet://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/attribute.repository/${var.depot_deploy_repository}"
+}
+
 # Runtime SA the app VMs run as: reads its .env from Secret Manager and the
 # agent buckets via the GCS HMAC key. (Net-new; confirmed absent in the project.)
 resource "google_service_account" "ditto_platform" {
@@ -103,6 +131,12 @@ resource "google_service_account_iam_member" "platform_deploy_wif_dev" {
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/ditto-subnet:environment:dev"
 }
 
+resource "google_service_account_iam_member" "platform_deploy_depot_wif" {
+  service_account_id = google_service_account.platform_deploy.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = local.depot_deploy_principal
+}
+
 # Datagen releases publish one immutable generate-service image and deploy it to
 # only the ditto-datapipeline Cloud Run service. Keep that identity separate
 # from the broad platform deploy identity and scope federation to main through
@@ -117,6 +151,12 @@ resource "google_service_account_iam_member" "datagen_release_wif" {
   service_account_id = google_service_account.datagen_release.name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/ditto-subnet:environment:${var.platform_deploy_environment}"
+}
+
+resource "google_service_account_iam_member" "datagen_release_depot_wif" {
+  service_account_id = google_service_account.datagen_release.name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = local.depot_deploy_principal
 }
 
 # The pre-for_each address held the ditto-platform binding; keep its state entry.
@@ -164,4 +204,11 @@ resource "google_service_account_iam_member" "screener_bake_wif" {
   service_account_id = google_service_account.screener_bake[0].name
   role               = "roles/iam.workloadIdentityUser"
   member             = "principal://iam.googleapis.com/projects/${data.google_project.this.number}/locations/global/workloadIdentityPools/${var.wif_pool_id}/subject/repo:ditto-assistant/ditto-subnet:environment:${var.platform_deploy_environment}"
+}
+
+resource "google_service_account_iam_member" "screener_bake_depot_wif" {
+  count              = local.screener_fleet_secrets_count
+  service_account_id = google_service_account.screener_bake[0].name
+  role               = "roles/iam.workloadIdentityUser"
+  member             = local.depot_deploy_principal
 }

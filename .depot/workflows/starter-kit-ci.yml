@@ -1,0 +1,53 @@
+# Depot CI Migration
+# Source: .github/workflows/starter-kit-ci.yml
+#
+# Changes made:
+# - Rewrote .github/ path references to .depot/
+# - Changed GitHub runs-on labels to their Depot equivalents
+
+name: Starter kit CI
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - miners/dittobench-starter-kit/**
+      - .depot/workflows/starter-kit-ci.yml
+  push:
+    branches: [main]
+    paths:
+      - miners/dittobench-starter-kit/**
+      - .depot/workflows/starter-kit-ci.yml
+permissions:
+  contents: read
+defaults:
+  run:
+    working-directory: miners/dittobench-starter-kit
+jobs:
+  build-and-test:
+    runs-on: depot-ubuntu-24.04 # was: ubuntu-24.04. Mapped standard GitHub runner to Depot equivalent.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4
+        with:
+          toolchain: stable
+          components: rustfmt
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            miners/dittobench-starter-kit/target
+          key: ${{ runner.os }}-starter-kit-${{ hashFiles('miners/dittobench-starter-kit/Cargo.lock') }}
+      - name: Format check
+        run: cargo fmt --check
+      - name: Build locked crate
+        run: cargo build --locked --verbose
+      - name: Test locked crate
+        run: cargo test --locked --verbose
+      - name: Test submission labs
+        run: >-
+          python3 -m unittest scripts/test_local_rehearsal.py scripts/test_submission_lab.py scripts/test_submission_workbench.py
