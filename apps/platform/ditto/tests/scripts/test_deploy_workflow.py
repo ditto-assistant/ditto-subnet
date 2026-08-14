@@ -15,12 +15,30 @@ WORKFLOW_PATH = (
     else PLATFORM_ROOT / ".github" / "workflows" / "deploy.yml"
 )
 RELAY_PATH_FILTER = PLATFORM_ROOT / "scripts" / "relay-runtime-changed.sh"
+CADDYFILE_TEMPLATE = (
+    MONOREPO_ROOT
+    / "infra"
+    / "ansible"
+    / "roles"
+    / "platform_app"
+    / "templates"
+    / "Caddyfile.j2"
+)
 
 
 def _workflow() -> dict:
     if not WORKFLOW_PATH.is_file():
         pytest.skip("deploy workflow is ported by the runtime-deploy stack layer")
     return yaml.safe_load(WORKFLOW_PATH.read_text())
+
+
+def test_public_proxy_explicitly_denies_runtime_profiles() -> None:
+    template = CADDYFILE_TEMPLATE.read_text()
+
+    assert "@runtimeProfiles path /debug/pprof /debug/pprof/*" in template
+    assert "respond @runtimeProfiles 404" in template
+    for profiler_port in (11000, 11010, 11011, 14434):
+        assert str(profiler_port) not in template
 
 
 def test_api_and_relay_releases_have_independent_concurrency_lanes() -> None:

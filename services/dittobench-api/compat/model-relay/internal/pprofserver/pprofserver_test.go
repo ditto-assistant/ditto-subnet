@@ -10,3 +10,9 @@ func TestResolvePort(t *testing.T) {
 		t.Fatal("out-of-range derived port accepted")
 	}
 }
+
+func TestListenAddressCannotPublishProfiler(t *testing.T) {
+	if got := listenAddress(14434); got != "127.0.0.1:14434" {
+		t.Fatalf("listenAddress = %q; want loopback-only address", got)
+	}
+}

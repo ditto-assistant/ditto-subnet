@@ -10,7 +10,10 @@ does not establish production activation.
 Every long-lived Go HTTP process in `services/model-relay` and
 `services/dittobench-api` starts a best-effort `net/http/pprof` listener on
 `127.0.0.1` at `main port + 3000`. The listener is intentionally separate from
-the request server and is never routed by Caddy.
+the request server. Its host is not configurable, no profiler port is published
+by Docker or the cloud firewall, and public Caddy explicitly returns 404 for
+`/debug/pprof` and its descendants. Collection enters through IAP SSH and the
+checked-in operator tooling only.
 
 Known production mappings:
 

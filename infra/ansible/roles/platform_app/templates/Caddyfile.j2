@@ -7,6 +7,12 @@
 
 {{ ([platform_domain] + platform_alias_domains) | join(', ') }} {
     encode zstd gzip
+
+    # Runtime profiles contain process internals. They are collected over IAP
+    # SSH from loopback and must never enter the public request plane, even if
+    # an application accidentally grows a matching route in the future.
+    @runtimeProfiles path /debug/pprof /debug/pprof/*
+    respond @runtimeProfiles 404
 {% if platform_inference_relay_ports %}
     # --- Go request plane -> the relay pool (platform_inference_relay_ports) ---
     #

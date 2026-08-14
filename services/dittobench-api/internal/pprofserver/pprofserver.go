@@ -44,7 +44,7 @@ func Start(ctx context.Context, service string, mainPort int) {
 	mux.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 	mux.HandleFunc("/debug/pprof/trace", pprof.Trace)
 	server := &http.Server{
-		Addr:              net.JoinHostPort("127.0.0.1", strconv.Itoa(port)),
+		Addr:              listenAddress(port),
 		Handler:           mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
@@ -62,6 +62,12 @@ func Start(ctx context.Context, service string, mainPort int) {
 			log.Printf("pprof: listener failed service=%s addr=%s error=%v", service, server.Addr, serveErr)
 		}
 	}()
+}
+
+func listenAddress(port int) string {
+	// Keep this non-configurable: pprof can disclose runtime and application
+	// details, so operators must enter through the SSH collection tooling.
+	return net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
 }
 
 func resolvePort(mainPort int, override string) (int, error) {

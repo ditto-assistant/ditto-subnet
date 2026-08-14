@@ -75,3 +75,9 @@ func TestResolvePort(t *testing.T) {
 		}
 	}
 }
+
+func TestListenAddressCannotPublishProfiler(t *testing.T) {
+	if got := listenAddress(11010); got != "127.0.0.1:11010" {
+		t.Fatalf("listenAddress = %q; want loopback-only address", got)
+	}
+}
