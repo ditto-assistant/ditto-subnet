@@ -423,7 +423,7 @@ async def resolve_official_composites(
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
-) -> dict[UUID, float]:
+) -> RankingScores:
     """Read whatever the continual mean needs and return it per agent.
 
     The public board already holds the quorum pool and the confirmation history
@@ -436,7 +436,7 @@ async def resolve_official_composites(
     from ditto.db.queries.scores import quorum_composites
 
     if not rows:
-        return {}
+        return RankingScores({})
 
     bonuses, factors = await resolve_efficiency_adjustments(
         session,
@@ -587,7 +587,7 @@ async def resolve_ranking_scores(
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
     active_version: int | None = None,
-) -> dict[UUID, float]:
+) -> RankingScores:
     """The canonical score for every row, settings and all, from a bare session.
 
     The board resolves the continual-retest settings through the app's cached
