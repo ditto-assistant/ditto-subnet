@@ -894,6 +894,72 @@ describe("held-crown standing clarity", () => {
   });
 });
 
+describe("registration-aware crown clarity", () => {
+  it("crowns the registered successor and keeps the former champion visibly inactive", async () => {
+    const formerChampion = championEntry;
+    const successor = ranked[0] as LeaderboardEntry & { rank: number | null };
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        const remainingTail = (payload.emissions?.recipients ?? []).filter(
+          (recipient) =>
+            String(recipient.agent_id) !== String(formerChampion.agent_id) &&
+            String(recipient.agent_id) !== String(successor.agent_id),
+        );
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry) =>
+            String(entry.agent_id) === String(formerChampion.agent_id)
+              ? { ...entry, registered: false, emission_eligible: false, miner_uid: null }
+              : entry,
+          ),
+          emissions: {
+            ...payload.emissions,
+            champion_agent_id: successor.agent_id,
+            champion_miner_hotkey: successor.miner_hotkey,
+            raw_leader_agent_id: successor.agent_id,
+            raw_leader_miner_hotkey: successor.miner_hotkey,
+            raw_leader_decision: null,
+            recipients: [
+              {
+                role: "champion",
+                agent_id: successor.agent_id,
+                miner_hotkey: successor.miner_hotkey,
+                raw_rank: 1,
+                share_of_miner_pool: 0.65,
+                shared_seed_confirmations: 0,
+              },
+              ...remainingTail,
+            ],
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("emissions-title").textContent).toContain(successor.agent_name as string),
+    );
+
+    const rowFor = (name: string): HTMLElement | undefined =>
+      Array.from(document.querySelectorAll("#rows tr[data-i]")).find((row) =>
+        row.textContent?.includes(name),
+      ) as HTMLElement | undefined;
+
+    await waitFor(() =>
+      expect(rowFor(formerChampion.agent_name as string)?.textContent).toContain("not registered"),
+    );
+    const formerRow = rowFor(formerChampion.agent_name as string) as HTMLElement;
+    const successorRow = rowFor(successor.agent_name as string) as HTMLElement;
+    expect(formerRow.textContent).toContain("not registered");
+    expect(formerRow).not.toHaveClass("champion");
+    expect(formerRow.querySelector(".rank-crown")).toBeNull();
+    expect(successorRow).toHaveClass("champion");
+    expect(successorRow.querySelector(".rank-crown")?.textContent).toBe("♛");
+    expect(el("leaderboard-notice").textContent).toContain("cannot hold the KOTH crown");
+  });
+});
+
 // ── Row 1 (chip vocabulary slice): the composite cell chips ──
 describe("composite cell chips (row 1 slice)", () => {
   it("carries the continual seed-round chip (the dot plot stays retired)", async () => {

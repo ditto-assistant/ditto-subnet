@@ -3013,6 +3013,39 @@ class TestPublicLeaderboard:
         assert by_miner[_MINER_B]["registered"] is True
         assert by_miner[_MINER_B]["miner_uid"] == 42
         assert by_miner[_MINER_B]["emission_eligible"] is True
+        assert body["emissions"]["champion_miner_hotkey"] == _MINER_B
+        assert body["emissions"]["recipients"] == [
+            {
+                "role": "champion",
+                "agent_id": by_miner[_MINER_B]["agent_id"],
+                "miner_hotkey": _MINER_B,
+                "raw_rank": 1,
+                "share_of_miner_pool": 1.0,
+                "shared_seed_confirmations": 0,
+            }
+        ]
+
+    async def test_hides_crown_when_no_scored_hotkey_is_registered(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_k3(
+            session_maker,
+            miner=_MINER_A,
+            composites=[0.7, 0.8, 0.9],
+            details={"bench_version": _ERA},
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+        app.state.chain = SimpleNamespace(get_recent_neurons=AsyncMock(return_value=[]))
+
+        body = (await client.get("/api/v1/public/leaderboard")).json()
+
+        assert body["entries"][0]["registered"] is False
+        assert body["entries"][0]["emission_eligible"] is False
+        assert body["emissions"] is None
 
     async def test_chain_error_keeps_leaderboard_available_with_unknown_registration(
         self,

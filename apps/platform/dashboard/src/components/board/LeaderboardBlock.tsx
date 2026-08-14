@@ -937,7 +937,7 @@ function LeaderboardNotice(props: { store: LeaderboardStore }): JSX.Element {
           inactive.length +
           " scored hotkey" +
           (inactive.length === 1 ? " is" : "s are") +
-          " not currently registered on SN118. Their submissions and scores are retained, but they are excluded from active weights and emissions until the same hotkey registers again.",
+          " not currently registered on SN118. Their submissions and scores are retained, but they cannot hold the KOTH crown or receive active weights and emissions until the same hotkey registers again.",
       );
     if (registrationUnknown.length)
       notices.push(

@@ -2062,7 +2062,7 @@ def _public_koth_emissions(
     efficiency_factors: dict[UUID, float] | None = None,
     tie_weighting_active: bool = False,
 ) -> PublicKothEmissions | None:
-    """Project the finalized score pool through the validator's pure fold."""
+    """Project the caller's finalized, registration-eligible score pool."""
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
     factor_values = efficiency_factors or {}
@@ -2491,6 +2491,17 @@ async def leaderboard(
         for row in ledger_rows
         if score_counts.get(row.agent_id, 0) >= SCORING_QUORUM
     ]
+    # Match the validator's weight-authoritative fold: durable scores remain on
+    # the board after deregistration, but a hotkey without a current neuron
+    # cannot be the KOTH champion or occupy a participation-tail slot. When the
+    # chain snapshot is unavailable, keep the deterministic score-only
+    # projection visible with unknown eligibility; validators likewise preserve
+    # their last accepted weights until registration can be read again.
+    emission_rows = (
+        finalized_rows
+        if registered_uids is None
+        else [row for row in finalized_rows if row.miner_hotkey in registered_uids]
+    )
     finalized_ids = [row.agent_id for row in finalized_rows]
     fleet_protocol_ready = await live_validator_fleet_supports_protocol(
         session,
@@ -2961,7 +2972,7 @@ async def leaderboard(
             None
             if bench_version is not None
             else _public_koth_emissions(
-                finalized_rows,
+                emission_rows,
                 stderrs=fold_stderrs,
                 quorum_by_agent=quorum,
                 confirmation_by_seed=(

@@ -508,7 +508,7 @@ function BoardRow(props: {
                 <Show when={!registered() && e().registered === false}>
                   <ChipTip
                     class="prov tip-chip"
-                    text="This hotkey is not currently registered on SN118. Its score is retained, but it is excluded from active weights and emissions until the same hotkey registers again."
+                    text="This hotkey is not currently registered on SN118. Its score is retained, but it cannot hold the KOTH crown or receive active weights and emissions until the same hotkey registers again."
                   >
                     not registered
                   </ChipTip>
