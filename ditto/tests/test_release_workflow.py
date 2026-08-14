@@ -600,6 +600,21 @@ def test_validator_release_smokes_each_architecture_before_promotion() -> None:
     ]
 
 
+def test_release_uses_the_bounded_larger_runner_only_on_cpu_bound_bottlenecks() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+    larger_runner = {
+        "group": "release-larger-runners",
+        "labels": "ubuntu-24.04-release-8core",
+    }
+
+    assert jobs["verify-platform"]["runs-on"] == larger_runner
+    assert jobs["build-dittobench"]["runs-on"] == larger_runner
+    for job_name, job in jobs.items():
+        if job_name not in {"verify-platform", "build-dittobench"}:
+            assert job.get("runs-on") != larger_runner
+
+
 def test_release_builds_pylon_from_the_reviewed_turbobt_fix() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     revision = workflow["env"]["PYLON_TURBOBT_REVISION"]

@@ -330,7 +330,11 @@ jobs:
     if: >-
       needs.admit-current.outputs.current == 'true' &&
       needs.plan.outputs.platform == 'true'
-    runs-on: ubuntu-24.04
+    # Platform's 4k-test suite uses pytest-xdist with one worker per core. Keep
+    # this CPU-bound critical-path gate on the bounded release-only 8-core pool.
+    runs-on:
+      group: release-larger-runners
+      labels: ubuntu-24.04-release-8core
     permissions:
       contents: read
     defaults:
@@ -1062,7 +1066,11 @@ jobs:
   build-dittobench:
     needs: [plan, release]
     if: needs.release.outputs.released == 'true' && needs.plan.outputs.validator_stack == 'true'
-    runs-on: ubuntu-24.04
+    # This runs only after verification completes, so it safely reuses the
+    # same maximum-concurrency-1 pool for Go tests and multi-platform builds.
+    runs-on:
+      group: release-larger-runners
+      labels: ubuntu-24.04-release-8core
     permissions:
       contents: read
       packages: write
