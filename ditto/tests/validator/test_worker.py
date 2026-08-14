@@ -2163,6 +2163,82 @@ class TestRunOnce:
         await asyncio.wait_for(task, timeout=1)
         assert ("state", "ready") in events[events.index(("state", "drained")) + 1 :]
 
+    async def test_drain_ack_waits_for_active_retest_sweep(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=_platform_with_ledger(jobs=[], ledger=[]),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+        states: list[str] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **_kwargs: states.append(state),
+        )
+
+        # Top-five retests execute inside the scoring sweep. The updater must
+        # not accept a drain until that whole sweep has returned.
+        worker._scoring_active = True
+        task = asyncio.create_task(worker._acknowledge_drain(stop, drain))
+        await asyncio.sleep(0.01)
+        assert "drained" not in states
+
+        worker._scoring_active = False
+        for _ in range(100):
+            if "drained" in states:
+                break
+            await asyncio.sleep(0.001)
+        assert "drained" in states
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+    async def test_failed_ticket_handback_blocks_drain_until_resolved(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        job = _job("5MinerA" + "x" * 41)
+        platform = _platform_with_ledger(jobs=[], ledger=[])
+        platform.report_ticket_failed = AsyncMock(
+            side_effect=PlatformError("platform unavailable")
+        )
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=platform,
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        await worker._report_ticket_failed(job, "scoring_error", "no_report")
+        assert worker._unresolved_live_tickets()
+
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+        states: list[str] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **_kwargs: states.append(state),
+        )
+        task = asyncio.create_task(worker._acknowledge_drain(stop, drain))
+        await asyncio.sleep(0.01)
+        assert "drained" not in states
+
+        worker._resolve_ticket_deadline(job.agent_id, job.deadline)
+        for _ in range(100):
+            if "drained" in states:
+                break
+            await asyncio.sleep(0.001)
+        assert "drained" in states
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
     async def test_quiescent_bootstrap_authenticates_before_claiming_work(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

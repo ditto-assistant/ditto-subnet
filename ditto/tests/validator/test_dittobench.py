@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from dataclasses import asdict
@@ -921,6 +922,47 @@ async def test_submit_admission_failure_is_validator_infrastructure(
                     "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
                 ),
             )
+
+
+@pytest.mark.asyncio
+async def test_submit_retries_transient_scorer_capacity_inside_live_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statuses = iter((429, 503, 202))
+    sleeps: list[float] = []
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        status = next(statuses)
+        return (
+            httpx.Response(status, json={"run_id": "run-after-capacity"})
+            if status == 202
+            else httpx.Response(status, text="unavailable")
+        )
+
+    async def sleep(delay: float) -> None:
+        sleeps.append(delay)
+
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test", run_size="full"
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        run_id = await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
+            tarball_url="https://example.test/agent.tgz",
+            bench_version=8,
+            dataset_sha256="12" * 32,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="34" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "56" * 32,
+            screened_image_ref=(
+                "ditto-screen/550e8400-e29b-41d4-a716-446655440000:latest"
+            ),
+            ticket_deadline=datetime.now(UTC) + timedelta(minutes=90),
+        )
+
+    assert run_id == "run-after-capacity"
+    assert sleeps == [1.0, 2.0]
 
 
 @pytest.mark.parametrize(

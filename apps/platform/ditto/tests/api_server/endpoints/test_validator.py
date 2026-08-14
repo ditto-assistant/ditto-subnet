@@ -9801,6 +9801,71 @@ class TestTop5ConfirmationLane:
             # sends every progress report to a slot with no matching lease.
             assert ticket.slot_id == "slot-1"
 
+    async def test_duplicate_live_retest_cannot_rotate_its_grant(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A second task cannot replace an already-running retest lease."""
+        agent_ids = await _seed_top5_emission_set(session_maker)
+        champion, member = agent_ids[0], agent_ids[1]
+        await self._arm_idle_retest_lane(
+            app,
+            session_maker,
+            champion,
+            capacity={
+                "configured_slots": 2,
+                "healthy_slots": ["slot-0", "slot-1"],
+                "admission": "accepting",
+                "active": [],
+            },
+        )
+
+        first = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(champion, member),
+        )
+        assert first.status_code == 200, first.text
+        async with session_maker.begin() as session:
+            ticket = await session.get(
+                ValidatorTicket, (member, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            ticket.first_reported_at = datetime.now(UTC)
+        second = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(champion, member),
+        )
+
+        assert second.status_code == 409, second.text
+        assert first.json()["slot_id"] == "slot-0"
+        async with session_maker() as session:
+            ticket = await session.get(
+                ValidatorTicket, (member, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.attempt_count == 1
+            assert ticket.infra_retry_grants == 0
+            assert ticket.slot_id == "slot-0"
+            assert ticket.deadline == datetime.fromisoformat(
+                first.json()["deadline"].replace("Z", "+00:00")
+            )
+            grants = list(
+                (
+                    await session.scalars(
+                        select(InferenceGrant).where(
+                            InferenceGrant.agent_id == member,
+                            InferenceGrant.validator_hotkey == _VALIDATOR_HOTKEY,
+                        )
+                    )
+                ).all()
+            )
+        assert len(grants) == 1
+        assert grants[0].status == "pending"
+
     async def test_one_validator_fills_two_slots_with_distinct_members(
         self,
         app: FastAPI,

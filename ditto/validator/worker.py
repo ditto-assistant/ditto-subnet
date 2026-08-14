@@ -465,6 +465,13 @@ class ValidatorWorker:
         self._scoring_active = False
         self._weights_active = False
         self._longmem_active = False
+        # A failed ticket hand-back is an ambiguous lease transition: local
+        # execution is over, but Platform may still own the exact deadline.
+        # Keep that lease updater-visible until a later report resolves it or
+        # its deadline passes. Otherwise the worker can publish ``drained`` and
+        # be replaced while Platform still presents the same retest as live;
+        # the replacement then starts the stateless 351-case run from zero.
+        self._unresolved_ticket_deadlines: set[tuple[UUID, datetime]] = set()
         configured_slots = int(getattr(config, "benchmark_capacity", 1))
         self._slots = {
             f"slot-{index}": _SlotState(slot_id=f"slot-{index}")
@@ -2161,6 +2168,7 @@ class ValidatorWorker:
                     report=report,
                     ticket_deadline=job.deadline,
                 )
+                self._resolve_ticket_deadline(job.agent_id, job.deadline)
             except LeaseDeadlineError as exc:
                 logger.warning(
                     "top-five confirmation reached the lease deadline "
@@ -2760,13 +2768,26 @@ class ValidatorWorker:
                 self._platform.report_ticket_failed(job, reason, detail),
                 timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
             )
+            self._resolve_ticket_deadline(job.agent_id, job.deadline)
         except Exception as e:  # noqa: BLE001 - hand-back is best-effort telemetry
+            if job.deadline > datetime.now(UTC):
+                self._unresolved_ticket_deadlines.add((job.agent_id, job.deadline))
             logger.warning(
                 "handing back failed ticket for agent %s did not land "
                 "(ticket will expire on its own): %s",
                 job.agent_id,
                 e,
             )
+
+    def _resolve_ticket_deadline(self, agent_id: UUID, deadline: datetime) -> None:
+        self._unresolved_ticket_deadlines.discard((agent_id, deadline))
+
+    def _unresolved_live_tickets(self) -> bool:
+        now = datetime.now(UTC)
+        self._unresolved_ticket_deadlines = {
+            ticket for ticket in self._unresolved_ticket_deadlines if ticket[1] > now
+        }
+        return bool(self._unresolved_ticket_deadlines)
 
     async def _activate_ticket_inference(
         self, job: JobResponse
@@ -3174,6 +3195,8 @@ class ValidatorWorker:
             report=report,
             ticket_deadline=ticket_deadline,
         )
+        if ticket_deadline is not None:
+            self._resolve_ticket_deadline(agent_id, ticket_deadline)
         logger.info(
             "scored agent %s (miner=%s composite=%.3f seed=%d)",
             agent_id,
@@ -3656,7 +3679,12 @@ class ValidatorWorker:
         bootstrap_resume: Callable[[], bool] | None = None,
     ) -> None:
         """Publish drained only once scoring and weight work are quiescent."""
-        while (self._weights_active or self._longmem_active) and not stop.is_set():
+        while (
+            self._scoring_active
+            or self._weights_active
+            or self._longmem_active
+            or self._unresolved_live_tickets()
+        ) and not stop.is_set():
             await self._sleep_or_stop(stop, 0.05)
         if stop.is_set():
             return

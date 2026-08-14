@@ -925,7 +925,7 @@ async def issue_confirmation_ticket(
     dataset_sha256: str | None = None,
     slot_id: str = "slot-0",
 ) -> ValidatorTicket | None:
-    """Reissue this validator's existing quorum slot for top-five maintenance.
+    """Issue a fresh top-five maintenance lease for this validator and agent.
 
     The caller has already proven that ``agent_id`` is the one bounded KOTH
     confirmation target, and that ``slot_id`` is a healthy slot this validator
@@ -960,9 +960,13 @@ async def issue_confirmation_ticket(
         is not None
     ):
         return None
-    # Resume this exact retest wherever it already lives. Looked up before the
-    # slot rail so a lease that drifted slots (or predates slot-aware issuance)
-    # is handed back rather than being refused as an occupant of its own slot.
+    # Find this exact retest before the slot rail. A live ticket is already an
+    # execution claim, even when the validator's latest heartbeat temporarily
+    # omits its slot. Returning that ticket lets a second local task bind the
+    # same slot, rotate the active inference grant, and restart the stateless
+    # 351-case run from zero. Refuse every duplicate until the original lease
+    # is scored, handed back, or expires; the next claim then receives a fresh
+    # full lease through the ordinary reissue path below.
     existing_retest = await session.scalar(
         select(ValidatorTicket)
         .where(
@@ -976,17 +980,7 @@ async def issue_confirmation_ticket(
         .with_for_update()
     )
     if existing_retest is not None:
-        return (
-            existing_retest
-            if existing_retest.purpose == TicketPurpose.CONTINUAL_RETEST
-            and existing_retest.purpose_revision > 0
-            and (seed is None or existing_retest.seed == seed)
-            and (
-                dataset_sha256 is None
-                or existing_retest.dataset_sha256 == dataset_sha256
-            )
-            else None
-        )
+        return None
     # One live lease per execution slot, whatever lane issued it. A canonical
     # benchmark on this slot owns it until its deadline; a retest must take a
     # different slot or wait. This is the rail the fleet-wide check was reaching

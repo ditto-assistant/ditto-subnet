@@ -143,6 +143,17 @@ async def ensure_inference_grant(
     )
     grant = await session.scalar(lease)
     if grant is None:
+        # A validator process that reclaims a continual retest receives a fresh
+        # ticket deadline because Dittobench cannot checkpoint its 351-case
+        # run. Revoke the abandoned deadline-bound grant (and settle any
+        # in-flight reservations) before creating the replacement. Otherwise
+        # the old grant remains publicly active forever when the old process is
+        # gone, even though every exchange against it is already invalid.
+        await revoke_ticket_inference(
+            session,
+            ticket=ticket,
+            now=datetime.now(UTC),
+        )
         model = benchmark_model(ticket.bench_version)
         if model not in config.allowed_models:
             return None

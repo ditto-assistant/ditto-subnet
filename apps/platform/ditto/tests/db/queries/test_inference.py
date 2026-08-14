@@ -439,6 +439,31 @@ async def test_canceled_or_expired_ticket_revokes_capability(
 
 
 @pytest.mark.asyncio
+async def test_fresh_lease_revokes_abandoned_deadline_grant(
+    session: AsyncSession,
+) -> None:
+    """A reclaimed stateless run gets one grant for its new lease identity."""
+    async with session.begin():
+        ticket, old_grant, _bearer, now = await _live_grant(session)
+        old_deadline = ticket.deadline
+        ticket.issued_at = now + timedelta(minutes=5)
+        ticket.deadline = now + timedelta(minutes=95)
+        await session.flush()
+
+        new_grant = await ensure_inference_grant(
+            session,
+            ticket=ticket,
+            config=_config(),
+        )
+
+        assert new_grant is not None
+        assert new_grant.grant_id != old_grant.grant_id
+        assert new_grant.ticket_deadline == ticket.deadline
+        assert old_grant.ticket_deadline == old_deadline
+        assert old_grant.status == "revoked"
+
+
+@pytest.mark.asyncio
 async def test_revocation_cancels_inflight_and_missing_usage_charges_reservation(
     session: AsyncSession,
 ) -> None:
