@@ -11,10 +11,10 @@ The scorer's Go module replaces `dittobench-datagen` with the in-tree
 generator, scorer, and validator-stack components in one release plan.
 
 The `Release` workflow first rejects a merge that a newer queued `main` push
-already superseded. For the current merge, the root and every selected
-component verify the exact source in parallel before one aggregate gate permits
-the semantic monorepo release. Hosted deploys and image publication consume the
-resulting immutable release commit:
+already superseded. For the current merge, affected root surfaces and every
+selected component verify the exact source in parallel before one aggregate
+gate permits the semantic monorepo release. Hosted deploys and image publication
+consume the resulting immutable release commit:
 
 - the miner starter kit is released from `miners/dittobench-starter-kit`
   without rebuilding the validator stack;
@@ -58,13 +58,24 @@ remaining race window.
 
 ## Release runner capacity
 
-Root exact-source verification keeps formatting, lint, typing, and integration
-checks in one lane while three standard-runner matrix shards split the ordinary
-pytest node IDs deterministically in collection order. A stable fan-in job
-fails closed unless the static lane and every shard succeed. The v0.63.6
-release spent 125 seconds running 1,553 ordinary tests serially, so the split
-removes roughly one minute from the pre-release critical path without using
-billed runners or running any test concurrently inside one checkout.
+Root exact-source verification follows the affected source instead of running
+the complete Python project for every component. Validator, miner CLI, shared
+protocol, sandbox, and root dependency changes keep formatting, lint, typing,
+integration checks, and three deterministic ordinary-test shards. A direct
+validator-stack orchestration change runs the focused release-plan, workflow
+security, Compose, and updater contract instead. An isolated Platform,
+DittoBench, Backroom, screener, or starter-kit change relies on its owning
+exact-source gate and skips unrelated root work. Mixed changes select the
+strongest required mode, and an unknown mode or path fails closed.
+
+The stable root fan-in accepts only the planned combination of successful and
+skipped jobs before `verify-source` can permit semantic release. It never reuses
+pull-request artifacts or trusts a caller-supplied shortcut. The v0.67.1 release
+spent 100 seconds on the slowest root shard while its selected DittoBench gate
+finished in 30 seconds; the focused contract covers more than 100 release and
+stack assertions plus the updater integration cases, moving roughly 70 seconds
+off that release shape's critical path. Full root changes preserve the existing
+verification cost.
 
 The release job runs the repository's hash-locked Python Semantic Release CLI
 directly on the GitHub host after the final superseded-main check. Keep its

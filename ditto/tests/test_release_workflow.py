@@ -37,7 +37,11 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         "backroom",
         "screener",
         "screener_orchestrator",
+        "root_verification",
     } <= plan["outputs"].keys()
+    assert plan["outputs"]["root_verification"] == (
+        "${{ steps.components.outputs.root_verification }}"
+    )
     assert "scripts/release-plan.py" in resolver["run"]
     assert plan["outputs"]["release_base"] == "${{ steps.release-base.outputs.sha }}"
     release_base = _step(plan["steps"], "Resolve the last published release")
@@ -247,12 +251,16 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     jobs = workflow["jobs"]
     root_static = jobs["verify-root-static"]
     root_tests = jobs["verify-root-tests"]
-    for root_job in (root_static, root_tests):
+    root_contract = jobs["verify-root-contract"]
+    for root_job in (root_static, root_tests, root_contract):
         verify_checkout = _step(
             root_job["steps"], "Check out the exact merge commit before release"
         )
         assert verify_checkout["with"]["fetch-depth"] == 1
         assert verify_checkout["with"]["ref"] == "${{ github.sha }}"
+    for root_job in (root_static, root_tests):
+        assert "needs.plan.outputs.root_verification == 'full'" in root_job["if"]
+    assert "needs.plan.outputs.root_verification == 'contract'" in root_contract["if"]
     platform_verify = jobs["verify-platform"]
     assert platform_verify["uses"] == "./.github/workflows/platform-verify.yml"
     assert platform_verify["with"]["ref"] == "${{ github.sha }}"
@@ -283,6 +291,21 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert "index % SHARD_COUNT == SHARD" in shard["run"]
     assert 'uv run pytest "${shard_nodeids[@]}"' in shard["run"]
 
+    contract = _step(
+        root_contract["steps"],
+        "Gate the focused release contract on exact merge source",
+    )
+    for test_path in (
+        "ditto/tests/test_release_plan.py",
+        "ditto/tests/test_release_workflow.py",
+        "ditto/tests/test_workflow_security.py",
+        "ditto/tests/test_compose_stack.py",
+        "ditto/tests/test_validator_compose.py",
+        "ditto/tests/test_validator_stack_auto_update.py",
+    ):
+        assert test_path in contract["run"]
+    assert "uv run pytest -q -m integration" in contract["run"]
+
     root_aggregate = jobs["verify-root"]
     assert root_aggregate["if"] == "always()"
     assert set(root_aggregate["needs"]) == {
@@ -290,10 +313,17 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
         "admit-current",
         "verify-root-static",
         "verify-root-tests",
+        "verify-root-contract",
     }
     root_gate = _step(root_aggregate["steps"], "Require every root exact-source lane")
+    assert root_gate["env"]["ROOT_VERIFICATION"] == (
+        "${{ needs.plan.outputs.root_verification }}"
+    )
+    assert 'case "$ROOT_VERIFICATION" in' in root_gate["run"]
     assert 'test "$STATIC_RESULT" = success' in root_gate["run"]
     assert 'test "$TESTS_RESULT" = success' in root_gate["run"]
+    assert 'test "$CONTRACT_RESULT" = success' in root_gate["run"]
+    assert "invalid root verification mode" in root_gate["run"]
     assert workflow["jobs"]["release"]["needs"] == [
         "plan",
         "admit-current",
@@ -392,6 +422,7 @@ def test_superseded_candidate_skips_expensive_source_verification_early() -> Non
     for job_name in (
         "verify-root-static",
         "verify-root-tests",
+        "verify-root-contract",
         "verify-starter-kit",
         "verify-platform",
         "verify-model-relay",
@@ -487,7 +518,11 @@ def test_release_uses_the_root_projects_minimum_python() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     verify_setups = [
         _step(workflow["jobs"][job_name]["steps"], "Set up Python 3.12")
-        for job_name in ("verify-root-static", "verify-root-tests")
+        for job_name in (
+            "verify-root-static",
+            "verify-root-tests",
+            "verify-root-contract",
+        )
     ]
     assemble_setup = _step(
         workflow["jobs"]["assemble-stack"]["steps"], "Set up Python 3.12"

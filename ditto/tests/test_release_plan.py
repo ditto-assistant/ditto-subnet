@@ -34,6 +34,11 @@ def selected(components, ignored_paths, *paths: str) -> set[str]:
     return {name for name, enabled in plan.items() if enabled}
 
 
+def root_verification(components, ignored_paths, *paths: str) -> str:
+    plan = release_plan.select_components(components, paths, ignored_paths)
+    return release_plan.select_root_verification(components, plan, paths)
+
+
 def test_miner_only_change_does_not_release_validator_stack(
     components, ignored_paths
 ) -> None:
@@ -193,6 +198,86 @@ def test_shared_contract_change_releases_both_surfaces(
     }
 
 
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ("ditto/miner_cli/commands/upload.py",),
+        ("ditto/validator/worker.py",),
+        ("packages/ditto-screening-protocol/ditto_screening_protocol/models.py",),
+        ("scripts/sandbox-docker-entrypoint.sh",),
+        ("pyproject.toml",),
+        ("uv.lock",),
+    ],
+)
+def test_root_runtime_changes_keep_full_verification(
+    components, ignored_paths, paths: tuple[str, ...]
+) -> None:
+    assert root_verification(components, ignored_paths, *paths) == "full"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        ".github/workflows/release.yml",
+        "Dockerfile.pylon",
+        "Dockerfile.stack-release",
+        "docker-compose.yml",
+        "release/components.toml",
+        "scripts/build-stack-release.py",
+        "scripts/release-plan.py",
+    ],
+)
+def test_direct_stack_changes_use_focused_contract_verification(
+    components, ignored_paths, path: str
+) -> None:
+    assert root_verification(components, ignored_paths, path) == "contract"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "services/dittobench-api/cmd/dittobench-api/main.go",
+        "apps/platform/ditto/api_server/factory.py",
+        "apps/backroom/src/routes/index.tsx",
+        "workers/screener/ditto_screener/worker.py",
+        "miners/dittobench-starter-kit/src/baseline.rs",
+        "docs/MONOREPO-RELEASES.md",
+    ],
+)
+def test_isolated_components_skip_unrelated_root_verification(
+    components, ignored_paths, path: str
+) -> None:
+    assert root_verification(components, ignored_paths, path) == "none"
+
+
+def test_mixed_stack_and_root_changes_escalate_to_full_verification(
+    components, ignored_paths
+) -> None:
+    assert (
+        root_verification(
+            components,
+            ignored_paths,
+            ".github/workflows/release.yml",
+            "ditto/validator/worker.py",
+        )
+        == "full"
+    )
+
+
+def test_mixed_stack_and_isolated_component_uses_contract_verification(
+    components, ignored_paths
+) -> None:
+    assert (
+        root_verification(
+            components,
+            ignored_paths,
+            ".github/workflows/release.yml",
+            "services/dittobench-api/cmd/dittobench-api/main.go",
+        )
+        == "contract"
+    )
+
+
 def test_git_changed_paths_includes_deleted_runtime_files() -> None:
     with TemporaryDirectory() as directory:
         repository = Path(directory)
@@ -254,6 +339,28 @@ def test_git_changed_paths_includes_deleted_runtime_files() -> None:
     plan = json.loads(completed.stdout)
     assert plan["components"]["screener"] is True
     assert plan["components"]["screener_orchestrator"] is True
+    assert plan["root_verification"] == "none"
+
+
+def test_github_output_includes_root_verification_mode(tmp_path: Path) -> None:
+    output = tmp_path / "github-output"
+    release_plan.write_github_output(
+        output,
+        {"validator_stack": True, "platform": False},
+        "contract",
+    )
+
+    assert output.read_text().splitlines() == [
+        "platform=false",
+        "validator_stack=true",
+        "any=true",
+        "root_verification=contract",
+    ]
+
+
+def test_github_output_rejects_unknown_root_verification_mode(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="invalid root verification mode"):
+        release_plan.write_github_output(tmp_path / "output", {}, "fast")
 
 
 @pytest.mark.parametrize(

@@ -61,6 +61,7 @@ jobs:
       backroom: ${{ steps.components.outputs.backroom }}
       screener: ${{ steps.components.outputs.screener }}
       screener_orchestrator: ${{ steps.components.outputs.screener_orchestrator }}
+      root_verification: ${{ steps.components.outputs.root_verification }}
     steps:
       - name: Check out the merged commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -264,14 +265,18 @@ jobs:
         run: uv run --no-sync semantic-release -v version
 
   # ---------------------------------------------------------------------------
-  # Fan-out: root and selected-component verification run in parallel from the
-  # exact merge commit. After semantic release, the first-party image builds
-  # fan out independently from the immutable release commit.
+  # Fan-out: affected root and selected-component verification run in parallel
+  # from the exact merge commit. Root runtime changes keep the complete gate;
+  # direct stack-orchestration changes run the focused release contract; and
+  # isolated components rely on their owning exact-source gate. After semantic
+  # release, first-party image builds fan out from the immutable release commit.
   # ---------------------------------------------------------------------------
 
   verify-root-static:
     needs: [plan, admit-current]
-    if: needs.admit-current.outputs.current == 'true'
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.root_verification == 'full'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -303,7 +308,9 @@ jobs:
 
   verify-root-tests:
     needs: [plan, admit-current]
-    if: needs.admit-current.outputs.current == 'true'
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.root_verification == 'full'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -349,15 +356,51 @@ jobs:
           test "${#shard_nodeids[@]}" -gt 0
           uv run pytest "${shard_nodeids[@]}"
 
-  # Keep the stable root gate consumed by verify-source. Matrix jobs collapse
-  # to one result, and this fan-in fails closed if either the static lane or any
-  # test shard did not finish successfully.
+  verify-root-contract:
+    needs: [plan, admit-current]
+    if: >-
+      needs.admit-current.outputs.current == 'true' &&
+      needs.plan.outputs.root_verification == 'contract'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Check out the exact merge commit before release
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          fetch-depth: 1
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Python 3.12
+        run: uv python install 3.12
+
+      - name: Gate the focused release contract on exact merge source
+        run: |
+          uv sync --locked --group dev
+          uv run pytest -q \
+            ditto/tests/test_release_plan.py \
+            ditto/tests/test_release_workflow.py \
+            ditto/tests/test_workflow_security.py \
+            ditto/tests/test_compose_stack.py
+          uv run pytest -q -m integration \
+            ditto/tests/test_validator_compose.py \
+            ditto/tests/test_validator_stack_auto_update.py
+
+  # Keep the stable root gate consumed by verify-source. Exactly one verifier
+  # mode is accepted, and every unexpected result or mode fails closed.
   verify-root:
     needs:
       - plan
       - admit-current
       - verify-root-static
       - verify-root-tests
+      - verify-root-contract
     if: always()
     runs-on: ubuntu-24.04
     permissions:
@@ -366,16 +409,37 @@ jobs:
       - name: Require every root exact-source lane
         env:
           CURRENT: ${{ needs.admit-current.outputs.current }}
+          ROOT_VERIFICATION: ${{ needs.plan.outputs.root_verification }}
           STATIC_RESULT: ${{ needs.verify-root-static.result }}
           TESTS_RESULT: ${{ needs.verify-root-tests.result }}
+          CONTRACT_RESULT: ${{ needs.verify-root-contract.result }}
         run: |
           set -euo pipefail
           if [ "$CURRENT" != true ]; then
             echo "Candidate is no longer current; root gates were skipped."
             exit 0
           fi
-          test "$STATIC_RESULT" = success
-          test "$TESTS_RESULT" = success
+          case "$ROOT_VERIFICATION" in
+            full)
+              test "$STATIC_RESULT" = success
+              test "$TESTS_RESULT" = success
+              test "$CONTRACT_RESULT" = skipped
+              ;;
+            contract)
+              test "$STATIC_RESULT" = skipped
+              test "$TESTS_RESULT" = skipped
+              test "$CONTRACT_RESULT" = success
+              ;;
+            none)
+              test "$STATIC_RESULT" = skipped
+              test "$TESTS_RESULT" = skipped
+              test "$CONTRACT_RESULT" = skipped
+              ;;
+            *)
+              echo "invalid root verification mode: $ROOT_VERIFICATION" >&2
+              exit 1
+              ;;
+          esac
 
   verify-starter-kit:
     needs: [plan, admit-current]

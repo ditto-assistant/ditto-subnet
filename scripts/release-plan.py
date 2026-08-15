@@ -18,6 +18,32 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+ROOT_VERIFICATION_FULL = "full"
+ROOT_VERIFICATION_CONTRACT = "contract"
+ROOT_VERIFICATION_NONE = "none"
+ROOT_VERIFICATION_MODES = frozenset(
+    {
+        ROOT_VERIFICATION_FULL,
+        ROOT_VERIFICATION_CONTRACT,
+        ROOT_VERIFICATION_NONE,
+    }
+)
+
+# These components execute from the root Python project or exercise its runtime
+# contract directly. Their exact merge source keeps the complete root gate.
+ROOT_VERIFICATION_COMPONENTS = frozenset(
+    {
+        "miner_cli",
+        "screening_protocol",
+        "validator",
+        "sandbox_docker",
+    }
+)
+
+# These validator-stack inputs also own the root environment used by the
+# verifier itself, so changing either one requires the complete root gate.
+ROOT_VERIFICATION_PROJECT_PATHS = frozenset({"pyproject.toml", "uv.lock"})
+
 
 @dataclass(frozen=True)
 class Component:
@@ -147,6 +173,29 @@ def select_components(
     return selected
 
 
+def select_root_verification(
+    components: Mapping[str, Component],
+    selected: Mapping[str, bool],
+    changed_paths: Iterable[str],
+) -> str:
+    """Choose the smallest fail-closed root gate for the exact changed paths."""
+    paths = normalize_paths(changed_paths)
+    if any(selected.get(name, False) for name in ROOT_VERIFICATION_COMPONENTS):
+        return ROOT_VERIFICATION_FULL
+    if any(path in ROOT_VERIFICATION_PROJECT_PATHS for path in paths):
+        return ROOT_VERIFICATION_FULL
+
+    validator_stack = components["validator_stack"]
+    validator_stack_changed_directly = any(
+        fnmatch.fnmatchcase(path, pattern)
+        for path in paths
+        for pattern in validator_stack.paths
+    )
+    if validator_stack_changed_directly:
+        return ROOT_VERIFICATION_CONTRACT
+    return ROOT_VERIFICATION_NONE
+
+
 def git_changed_paths(base: str, head: str) -> tuple[str, ...]:
     if set(base) == {"0"}:
         command = [
@@ -179,11 +228,18 @@ def git_changed_paths(base: str, head: str) -> tuple[str, ...]:
     )
 
 
-def write_github_output(path: Path, selected: Mapping[str, bool]) -> None:
+def write_github_output(
+    path: Path,
+    selected: Mapping[str, bool],
+    root_verification: str,
+) -> None:
+    if root_verification not in ROOT_VERIFICATION_MODES:
+        raise ValueError(f"invalid root verification mode: {root_verification!r}")
     with path.open("a", encoding="utf-8") as output:
         for name, value in sorted(selected.items()):
             output.write(f"{name}={str(value).lower()}\n")
         output.write(f"any={str(any(selected.values())).lower()}\n")
+        output.write(f"root_verification={root_verification}\n")
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -211,9 +267,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         else git_changed_paths(args.base, args.head)
     )
     selected = select_components(components, paths, ignored_paths)
+    root_verification = select_root_verification(components, selected, paths)
     if args.github_output is not None:
-        write_github_output(args.github_output, selected)
-    print(json.dumps({"changed_paths": paths, "components": selected}, indent=2))
+        write_github_output(args.github_output, selected, root_verification)
+    print(
+        json.dumps(
+            {
+                "changed_paths": paths,
+                "components": selected,
+                "root_verification": root_verification,
+            },
+            indent=2,
+        )
+    )
     return 0
 
 
