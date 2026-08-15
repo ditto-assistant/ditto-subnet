@@ -860,6 +860,23 @@ details.
 - Memory needs the seed user loaded + Ollama embeddings. Run `seed-user`
 first. If `mem-eval` reports `recall@k: 0.000`, see
 [SETUP.md](SETUP.md) → *Troubleshooting*.
+- Never hold a lock across an `.await` that does network I/O. The bundled
+store owns one connection and rejects overlapping operations, so it is tempting
+to serialize all store access behind one gate. That is fine — but keep embedding
+and model round-trips *outside* the critical section and hold the gate only for
+the store call itself. A scored run executes several cases concurrently; a gate
+that spans a network call turns them back into a single queue, and the run misses
+its deadline even though every individual case was well inside its own budget.
+This is the most expensive mistake we have seen in practice, and it fails as a
+whole-run timeout with no per-case error to point at.
+- Keep CPU-bound work off the async workers. Cross-encoder inference,
+tokenization, and any index you build yourself are synchronous CPU work. Hand
+them to `tokio::task::spawn_blocking` — `reranker.rs` shows the pattern — so they
+cannot occupy a Tokio worker that other cases need for I/O.
+- Re-check what your `bench_version` gates actually enable. A branch written as
+a rare fallback on one version can become the unconditional hot path on the next
+one. Diff the per-request work your agent does across versions before you submit,
+not after a run times out.
 
 
 

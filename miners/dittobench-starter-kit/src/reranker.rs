@@ -15,8 +15,14 @@
 //!   * doc text: `"User: {prompt}\n\nDitto: {response}"` (Memory::FullTextContent).
 //!   * RRF: `ceWeight/(rrfK + ceRank+1) + (1-ceWeight)/(rrfK + compositeRank+1)`,
 //!     defaults rrfK=60, ceWeight=0.7, stable sort (ties keep composite order).
+//!
+//! Threading: one ONNX session guarded by a mutex, so cross-encoder inference is
+//! serialized process-wide. That work runs on Tokio's blocking pool rather than
+//! an async worker — see [`CrossEncoderReranker::rerank`]. If rerank latency ever
+//! dominates your run, the fix is more sessions (a small pool, one lock each), not
+//! removing the lock: `ort`'s `Session::run` needs `&mut`.
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use ditto_harness::retrieval::Reranker;
@@ -33,10 +39,16 @@ pub const DEFAULT_MAX_LEN: usize = 256;
 
 /// Cross-encoder reranker over an ONNX model + BERT WordPiece tokenizer.
 pub struct CrossEncoderReranker {
-    session: Mutex<Session>,
-    tokenizer: Tokenizer,
+    model: Arc<CeModel>,
     rrf_k: f64,
     ce_weight: f64,
+}
+
+/// Tokenizer + ONNX session. Held behind an `Arc` so [`CrossEncoderReranker::rerank`]
+/// can hand it to the blocking pool without borrowing `self` across an await.
+struct CeModel {
+    session: Mutex<Session>,
+    tokenizer: Tokenizer,
 }
 
 impl CrossEncoderReranker {
@@ -48,13 +60,17 @@ impl CrossEncoderReranker {
         let tokenizer = build_bert_tokenizer(vocab_txt, DEFAULT_MAX_LEN)
             .map_err(|e| anyhow::anyhow!("build tokenizer: {e}"))?;
         Ok(CrossEncoderReranker {
-            session: Mutex::new(session),
-            tokenizer,
+            model: Arc::new(CeModel {
+                session: Mutex::new(session),
+                tokenizer,
+            }),
             rrf_k: DEFAULT_RRF_K,
             ce_weight: DEFAULT_CE_WEIGHT,
         })
     }
+}
 
+impl CeModel {
     /// Scores each doc against the query, returning one raw relevance logit per
     /// doc (higher = more relevant). Single batched ONNX run, padded to the
     /// batch's longest sequence (mask 0 on padding).
@@ -130,9 +146,17 @@ impl Reranker for CrossEncoderReranker {
             return Ok(p);
         }
         let docs: Vec<String> = pool.iter().map(full_text_content).collect();
-        // CE inference is synchronous CPU work; no await is held across the lock.
-        let scores = self
-            .score(query, &docs)
+        // Tokenization and CE inference are synchronous, CPU-bound, and serialized
+        // by `session`'s lock. Running them inline would occupy a Tokio worker
+        // thread for the whole batch, so a scored run executing several cases
+        // concurrently would stall every other case's I/O behind this one rerank.
+        // Hand the work to the blocking pool instead; nothing is awaited under the
+        // lock, and the async workers stay free to drive model and store calls.
+        let model = Arc::clone(&self.model);
+        let owned_query = query.to_string();
+        let scores = tokio::task::spawn_blocking(move || model.score(&owned_query, &docs))
+            .await
+            .map_err(|e| HarnessError::Other(format!("cross-encoder rerank task: {e}")))?
             .map_err(|e| HarnessError::Other(format!("cross-encoder rerank: {e}")))?;
         let order = fuse_rrf(&scores, self.rrf_k, self.ce_weight);
 
@@ -233,4 +257,91 @@ fn build_bert_tokenizer(
         direction: tokenizers::tokenizer::TruncationDirection::Right,
     }))?;
     Ok(tok)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn build() -> CrossEncoderReranker {
+        const ONNX_BYTES: &[u8] = include_bytes!("../fixtures/models/cross-encoder.onnx");
+        const VOCAB_TXT: &str = include_str!("../fixtures/models/cross-encoder-vocab.txt");
+        CrossEncoderReranker::from_bytes(ONNX_BYTES, VOCAB_TXT).expect("build cross-encoder")
+    }
+
+    fn memory(id: &str, prompt: &str, response: &str) -> Memory {
+        Memory {
+            id: id.to_string(),
+            prompt: prompt.to_string(),
+            response: response.to_string(),
+            ..Memory::default()
+        }
+    }
+
+    /// `rerank` moves inference onto the blocking pool, which panics if no Tokio
+    /// runtime is in scope and surfaces a `JoinError` if the task dies. Exercise
+    /// the real path so neither regresses silently.
+    #[tokio::test]
+    async fn rerank_scores_on_the_blocking_pool_and_truncates() {
+        let pool = vec![
+            memory("a", "where did I leave my passport", "in the desk drawer"),
+            memory("b", "how do I file quarterly taxes", "use the 1040-ES form"),
+            memory("c", "what is the capital of France", "Paris"),
+        ];
+        let out = build()
+            .rerank("where is my passport", pool, 2)
+            .await
+            .expect("rerank");
+
+        assert_eq!(out.len(), 2, "top_n must truncate");
+        let ids: Vec<&str> = out.iter().map(|m| m.id.as_str()).collect();
+        assert!(
+            ids.iter().all(|id| ["a", "b", "c"].contains(id)),
+            "reranked ids must come from the input pool, got {ids:?}"
+        );
+        assert_ne!(ids[0], ids[1], "a memory must not be emitted twice");
+    }
+
+    /// The empty/zero guard returns before the blocking hop, so it must stay
+    /// correct independently.
+    #[tokio::test]
+    async fn rerank_short_circuits_without_candidates() {
+        let ce = build();
+        assert!(ce
+            .rerank("q", Vec::new(), 5)
+            .await
+            .expect("empty")
+            .is_empty());
+        assert!(ce
+            .rerank("q", vec![memory("a", "p", "r")], 0)
+            .await
+            .expect("zero top_n")
+            .is_empty());
+    }
+
+    #[test]
+    fn fuse_rrf_prefers_agreement_between_both_rankings() {
+        // Index 0 is already the best composite hit; give it the best CE score
+        // too, so it must stay first.
+        let order = fuse_rrf(&[9.0, 1.0, 0.5], DEFAULT_RRF_K, DEFAULT_CE_WEIGHT);
+        assert_eq!(order, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn fuse_rrf_lets_a_strong_ce_score_promote_a_weak_composite_hit() {
+        // Last by composite, first by CE. With ceWeight 0.7 the CE rank wins.
+        let order = fuse_rrf(&[0.1, 0.2, 9.0], DEFAULT_RRF_K, DEFAULT_CE_WEIGHT);
+        assert_eq!(
+            order[0], 2,
+            "strong CE hit should be promoted, got {order:?}"
+        );
+    }
+
+    #[test]
+    fn fuse_rrf_is_stable_on_ties_and_handles_empty() {
+        assert!(fuse_rrf(&[], DEFAULT_RRF_K, DEFAULT_CE_WEIGHT).is_empty());
+        // All-equal CE scores must preserve the incoming composite order.
+        let order = fuse_rrf(&[1.0, 1.0, 1.0], DEFAULT_RRF_K, DEFAULT_CE_WEIGHT);
+        assert_eq!(order, vec![0, 1, 2]);
+    }
 }
