@@ -454,8 +454,17 @@ type embeddingBackpressureGate struct {
 	mu            sync.Mutex
 	retryAt       time.Time
 	probeInFlight bool
+	generation    uint64
 	changed       chan struct{}
 }
+
+// embeddingBackpressureProbe identifies the exact cooldown generation whose
+// recovery one call is probing. A zero value means the gate was already open.
+// The generation prevents a late probe result from clearing newer
+// backpressure reported by an older request that was already in flight.
+type embeddingBackpressureProbe uint64
+
+func (p embeddingBackpressureProbe) active() bool { return p != 0 }
 
 func (g *embeddingBackpressureGate) changedLocked() <-chan struct{} {
 	if g.changed == nil {
@@ -471,18 +480,19 @@ func (g *embeddingBackpressureGate) signalLocked() {
 	}
 }
 
-func (g *embeddingBackpressureGate) wait(ctx context.Context) (bool, error) {
+func (g *embeddingBackpressureGate) wait(ctx context.Context) (embeddingBackpressureProbe, error) {
 	for {
 		g.mu.Lock()
 		now := time.Now()
 		if g.retryAt.IsZero() {
 			g.mu.Unlock()
-			return false, nil
+			return 0, nil
 		}
 		if !now.Before(g.retryAt) && !g.probeInFlight {
 			g.probeInFlight = true
+			probe := embeddingBackpressureProbe(g.generation)
 			g.mu.Unlock()
-			return true, nil
+			return probe, nil
 		}
 		changed := g.changedLocked()
 		delay := time.Duration(0)
@@ -501,7 +511,7 @@ func (g *embeddingBackpressureGate) wait(ctx context.Context) (bool, error) {
 					default:
 					}
 				}
-				return false, ctx.Err()
+				return 0, ctx.Err()
 			case <-changed:
 				if !timer.Stop() {
 					select {
@@ -516,7 +526,7 @@ func (g *embeddingBackpressureGate) wait(ctx context.Context) (bool, error) {
 
 		select {
 		case <-ctx.Done():
-			return false, ctx.Err()
+			return 0, ctx.Err()
 		case <-changed:
 		}
 	}
@@ -531,16 +541,24 @@ func (g *embeddingBackpressureGate) backpressure(retryAfter time.Duration) {
 	if until.After(g.retryAt) {
 		g.retryAt = until
 	}
+	g.generation++
+	if g.generation == 0 {
+		g.generation = 1
+	}
 	g.probeInFlight = false
 	g.signalLocked()
 	g.mu.Unlock()
 }
 
-func (g *embeddingBackpressureGate) finishProbe(probe bool) {
-	if !probe {
+func (g *embeddingBackpressureGate) finishProbe(probe embeddingBackpressureProbe) {
+	if !probe.active() {
 		return
 	}
 	g.mu.Lock()
+	if uint64(probe) != g.generation || !g.probeInFlight {
+		g.mu.Unlock()
+		return
+	}
 	g.retryAt = time.Time{}
 	g.probeInFlight = false
 	g.signalLocked()
@@ -2002,7 +2020,24 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 
 		select {
 		case <-requestContext.Done():
+			requestErr := requestContext.Err()
+			callerErr := r.Context().Err()
+			session.mu.Lock()
+			phaseActive := session.embeddingPhaseActive
+			if phaseActive {
+				if errors.Is(requestErr, context.DeadlineExceeded) && callerErr == nil {
+					session.capacityExhaustions++
+					session.failures++
+				} else {
+					session.callerCancels++
+				}
+			}
+			session.mu.Unlock()
 			cancel()
+			if !phaseActive {
+				writeError(w, http.StatusConflict, "embedding phase unavailable")
+				return
+			}
 			w.Header().Set("Retry-After", "1")
 			writeError(w, http.StatusServiceUnavailable, "embedding source queue timed out")
 			return

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -244,7 +246,7 @@ func TestEmbeddingBackpressureGateReopensWithOneProbe(t *testing.T) {
 	gate.backpressure(25 * time.Millisecond)
 
 	type admission struct {
-		probe bool
+		probe embeddingBackpressureProbe
 		err   error
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -258,7 +260,7 @@ func TestEmbeddingBackpressureGateReopensWithOneProbe(t *testing.T) {
 	}
 
 	first := <-admitted
-	if first.err != nil || !first.probe {
+	if first.err != nil || !first.probe.active() {
 		t.Fatalf("first recovery admission = %+v, want one probe", first)
 	}
 	select {
@@ -267,10 +269,138 @@ func TestEmbeddingBackpressureGateReopensWithOneProbe(t *testing.T) {
 	case <-time.After(25 * time.Millisecond):
 	}
 
-	gate.finishProbe(true)
+	gate.finishProbe(first.probe)
 	second := <-admitted
-	if second.err != nil || second.probe {
+	if second.err != nil || second.probe.active() {
 		t.Fatalf("peer admission after successful probe = %+v", second)
+	}
+}
+
+func TestEmbeddingBackpressureGateStaleProbePreservesNewerCooldown(t *testing.T) {
+	var gate embeddingBackpressureGate
+	gate.backpressure(time.Millisecond)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	probe, err := gate.wait(ctx)
+	if err != nil || !probe.active() {
+		t.Fatalf("initial recovery admission = %v, %v; want a probe", probe, err)
+	}
+
+	// A request admitted before the original cooldown can report a newer 503
+	// while this probe is still in flight. Its cooldown must win even if the
+	// older probe then succeeds.
+	gate.backpressure(time.Hour)
+	gate.finishProbe(probe)
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer waitCancel()
+	if nextProbe, waitErr := gate.wait(waitCtx); !errors.Is(waitErr, context.DeadlineExceeded) {
+		t.Fatalf("stale probe erased newer cooldown: admission=%v err=%v", nextProbe, waitErr)
+	}
+}
+
+func TestEmbeddingQueueTimeoutIsAttributedToValidatorCapacity(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.NotFoundHandler())
+	defer upstream.Close()
+
+	originalLane := v8EmbeddingSessionConcurrency
+	v8EmbeddingSessionConcurrency = 1
+	t.Cleanup(func() { v8EmbeddingSessionConcurrency = originalLane })
+
+	broker := newInferenceBroker(1)
+	broker.embeddingRequestTTL = 20 * time.Millisecond
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter",
+		"openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.156", protocol.BenchVersionV8)
+	if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+		t.Fatal("failed to admit v8 embedding phase")
+	}
+	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	broker.mu.RLock()
+	session := broker.sessions[prepared["session_id"]]
+	broker.mu.RUnlock()
+	holdLane := func() func() {
+		// Hold the complete local lane in the same state as admitted embedding
+		// calls. This isolates queue exits from any upstream/provider result.
+		heldDone := make(chan struct{})
+		heldContext, heldCancel := context.WithCancel(context.Background())
+		go func() {
+			<-heldContext.Done()
+			close(heldDone)
+		}()
+		session.mu.Lock()
+		session.embeddingInFlight = session.embeddingLaneLocked()
+		if session.embeddingCalls == nil {
+			session.embeddingCalls = make(map[chan struct{}]context.CancelFunc)
+		}
+		session.embeddingCalls[heldDone] = heldCancel
+		session.mu.Unlock()
+		return func() {
+			session.mu.Lock()
+			delete(session.embeddingCalls, heldDone)
+			session.embeddingInFlight = 0
+			session.signalEmbeddingQueueLocked()
+			session.mu.Unlock()
+			heldCancel()
+			<-heldDone
+		}
+	}
+
+	releaseLane := holdLane()
+	queued := callEmbedding(broker, "192.0.2.156", "queued")
+	releaseLane()
+	if queued.Code != http.StatusServiceUnavailable {
+		t.Fatalf("queued embedding status=%d, want 503", queued.Code)
+	}
+
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.CapacityExhaustions-start.CapacityExhaustions != 1 ||
+		end.InfrastructureFailures-start.InfrastructureFailures != 1 {
+		t.Fatalf("queue timeout attribution = %+v, want one capacity/infrastructure failure", end)
+	}
+	degraded := relayDegradedSince(start, end)
+	if !errors.Is(degraded, errInferenceLaneSaturated) {
+		t.Fatalf("queue timeout finalization = %v, want inference lane saturation", degraded)
+	}
+	failure := relayFinalizeFailure(degraded)
+	if failure.Kind != "validator_infrastructure" || !failure.Retryable {
+		t.Fatalf("queue timeout failure = %+v, want retryable validator infrastructure", failure)
+	}
+
+	// A shorter caller-owned deadline is cancellation evidence, not permission
+	// to mint a validator-infrastructure retry from self-imposed queue pressure.
+	broker.embeddingRequestTTL = time.Second
+	releaseLane = holdLane()
+	callerContext, cancelCaller := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancelCaller()
+	callerRequest := httptest.NewRequest(http.MethodPost, embeddingAPIPath,
+		bytes.NewBufferString(`{"model":"embeddinggemma","input":["queued"]}`)).WithContext(callerContext)
+	callerRequest.RemoteAddr = "192.0.2.156:4321"
+	callerResponse := httptest.NewRecorder()
+	broker.handleEmbedding(callerResponse, callerRequest)
+	releaseLane()
+	if callerResponse.Code != http.StatusServiceUnavailable {
+		t.Fatalf("caller-deadline queue status=%d, want 503", callerResponse.Code)
+	}
+	afterCaller, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterCaller.CapacityExhaustions != end.CapacityExhaustions ||
+		afterCaller.InfrastructureFailures != end.InfrastructureFailures ||
+		afterCaller.CallerCancellations-end.CallerCancellations != 1 {
+		t.Fatalf("caller-deadline attribution = %+v, want cancellation only", afterCaller)
 	}
 }
 
