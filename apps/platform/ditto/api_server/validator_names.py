@@ -15,9 +15,17 @@ import unicodedata
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import httpx
+
+from ditto.db.queries.validator_names import (
+    load_validator_name_cache,
+    replace_validator_name_cache,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 logger = logging.getLogger(__name__)
 
@@ -174,9 +182,18 @@ class TaostatsValidatorNames:
         self._lock = asyncio.Lock()
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
+        self._session_maker: async_sessionmaker[AsyncSession] | None = None
 
-    async def start(self) -> None:
-        """Start the refresher without waiting for its first network request."""
+    async def start(
+        self, session_maker: async_sessionmaker[AsyncSession] | None = None
+    ) -> None:
+        """Hydrate the durable cache, then start background refreshes."""
+        self._session_maker = session_maker
+        if session_maker is not None:
+            async with session_maker() as session:
+                cached = await load_validator_name_cache(session)
+            if cached is not None:
+                self._names, self._stake_weights, self._refreshed_at = cached
         if self._config.enabled and self._task is None:
             self._task = asyncio.create_task(
                 self._refresh_loop(), name="taostats-validator-names"
@@ -208,6 +225,14 @@ class TaostatsValidatorNames:
         elif age <= self._config.max_stale_seconds:
             status = "stale"
         else:
+            allowed = set(hotkeys)
+            names = {
+                hotkey: name
+                for hotkey, name in self._names.items()
+                if hotkey in allowed
+            }
+            if names:
+                return ValidatorNamesSnapshot("stale", self._refreshed_at, names, {})
             return ValidatorNamesSnapshot("unavailable", self._refreshed_at, {}, {})
         allowed = set(hotkeys)
         return ValidatorNamesSnapshot(
@@ -257,6 +282,10 @@ class TaostatsValidatorNames:
                 names, stake_weights = parse_taostats_validator_metadata(
                     response.json()
                 )
+                if not names and not stake_weights:
+                    raise ValueError(
+                        "Taostats response contained no validator metadata"
+                    )
             except (httpx.HTTPError, ValueError) as error:
                 logger.warning("Taostats validator-name refresh failed: %s", error)
                 return False
@@ -264,6 +293,20 @@ class TaostatsValidatorNames:
             self._names = names
             self._stake_weights = stake_weights
             self._refreshed_at = current
+            if self._session_maker is not None:
+                try:
+                    async with self._session_maker() as session, session.begin():
+                        await replace_validator_name_cache(
+                            session,
+                            names=names,
+                            stake_weights=stake_weights,
+                            refreshed_at=current,
+                        )
+                except Exception:
+                    logger.warning(
+                        "Taostats validator-name DB cache write failed",
+                        exc_info=True,
+                    )
             self._next_attempt_at = current + timedelta(
                 seconds=self._config.refresh_seconds
             )

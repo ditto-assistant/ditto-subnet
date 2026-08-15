@@ -5156,3 +5156,27 @@ class ConfirmationBudgetReservation(Base):
         ),
         Index("confirmation_reservations_day_idx", "utc_day"),
     )
+
+
+class ValidatorNameCache(Base):
+    """Last successful public validator metadata fetched by Platform."""
+
+    __tablename__ = "validator_name_cache"
+
+    validator_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    display_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stake_weight: Mapped[float | None] = mapped_column(Float, nullable=True)
+    refreshed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "display_name IS NULL OR length(display_name) BETWEEN 1 AND 80",
+            name="validator_name_cache_display_name_check",
+        ),
+        CheckConstraint(
+            "stake_weight IS NULL OR stake_weight >= 0",
+            name="validator_name_cache_stake_weight_check",
+        ),
+    )

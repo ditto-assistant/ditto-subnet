@@ -169,6 +169,25 @@ async def test_malformed_json_keeps_service_unavailable() -> None:
         assert cache.snapshot([_ALICE], now=_NOW).status == "unavailable"
 
 
+async def test_empty_success_does_not_erase_last_good_snapshot() -> None:
+    calls = 0
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        payload = {"data": [{"address": {"ss58": _ALICE}, "name": "Rizzo"}]}
+        return httpx.Response(200, json=payload if calls == 1 else {"data": []})
+
+    async with _client(httpx.MockTransport(handler)) as client:
+        cache = TaostatsValidatorNames(_config(), client)
+        assert await cache.refresh(now=_NOW) is True
+        assert await cache.refresh(now=_NOW + timedelta(seconds=61)) is False
+        snapshot = cache.snapshot([_ALICE], now=_NOW + timedelta(seconds=61))
+
+    assert snapshot.status == "stale"
+    assert snapshot.names == {_ALICE: "Rizzo"}
+
+
 async def test_stale_while_revalidate_and_expiry() -> None:
     calls = 0
 
@@ -192,8 +211,8 @@ async def test_stale_while_revalidate_and_expiry() -> None:
     assert stale.status == "stale"
     assert stale.names == {_ALICE: "Rizzo"}
     assert stale.stake_weights == {}
-    assert expired.status == "unavailable"
-    assert expired.names == {}
+    assert expired.status == "stale"
+    assert expired.names == {_ALICE: "Rizzo"}
     assert expired.stake_weights == {}
 
 

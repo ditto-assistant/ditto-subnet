@@ -255,7 +255,8 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
 
             validator_names = app.state.validator_names
             stack.push_async_callback(validator_names.aclose)
-            await validator_names.start()
+            if _process_role() == PLATFORM_ROLE:
+                await validator_names.start(app.state.session_maker)
         except Exception as e:
             raise ApiServerLifespanError(
                 f"failed to open dependencies during startup: {e}"

@@ -2153,6 +2153,20 @@ CREATE TABLE public.validator_lease_audit (
 
 
 --
+-- Name: validator_name_cache; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.validator_name_cache (
+    validator_hotkey text NOT NULL,
+    display_name text,
+    stake_weight double precision,
+    refreshed_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_validator_name_cache_validator_name_cache_display_name_check CHECK (((display_name IS NULL) OR ((length(display_name) >= 1) AND (length(display_name) <= 80)))),
+    CONSTRAINT ck_validator_name_cache_validator_name_cache_stake_weight_check CHECK (((stake_weight IS NULL) OR (stake_weight >= (0)::double precision)))
+);
+
+
+--
 -- Name: validator_queue_reinstatements; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -3035,6 +3049,14 @@ ALTER TABLE ONLY public.upload_admission_reservations
 
 ALTER TABLE ONLY public.validator_lease_audit
     ADD CONSTRAINT pk_validator_lease_audit PRIMARY KEY (audit_id);
+
+
+--
+-- Name: validator_name_cache pk_validator_name_cache; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.validator_name_cache
+    ADD CONSTRAINT pk_validator_name_cache PRIMARY KEY (validator_hotkey);
 
 
 --

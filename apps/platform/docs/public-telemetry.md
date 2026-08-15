@@ -568,11 +568,14 @@ and continues to show each short hotkey, so duplicate names remain unambiguous.
 The name route is decoration only: validator availability, scheduling, scoring,
 and weights never read it.
 
-The cache refreshes in a background task with a 1.5-second default timeout, a
-one-hour refresh interval, a five-minute minimum retry interval, and a bounded
-24-hour stale-while-revalidate window. HTTP errors, timeouts, malformed JSON,
-rate limits, an unknown hotkey, or an expired cache produce an empty fallback;
-no public request performs Taostats I/O. The response parser accepts only the
+The cache refreshes in a Platform-owned background task with a 1.5-second
+default timeout, a one-hour refresh interval, and a five-minute minimum retry
+interval. Every successful snapshot atomically replaces a durable PostgreSQL
+cache; process restarts and upstream failures therefore retain the last known
+names. Stake weights are served for at most 24 hours, while older names remain
+available with `stale` status and no stake values. HTTP errors, timeouts,
+malformed JSON, and rate limits never erase a successful snapshot, and no
+public request performs Taostats I/O. The response parser accepts only the
 documented address/hotkey and name fields, bounds record and name counts, and
 drops control and bidirectional-spoofing characters. Configuration accepts only
 HTTPS URLs on `api.taostats.io`.
