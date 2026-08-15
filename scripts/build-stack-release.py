@@ -21,13 +21,6 @@ IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 
-# Incident-scoped bootstrap target. This public validator hotkey is rendered as
-# signed descriptor policy; the host supplies its configured hotkey separately,
-# and the scorer bootstrap mutates the checkout only when they match exactly.
-FROZEN_UPDATER_BOOTSTRAP_TARGET_HOTKEY = (
-    "5Cg3DiRfrgzB1XzN7VuqQNchTgZ8PzPbphMKmVvHobWSL118"
-)
-
 
 def _argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
@@ -71,10 +64,8 @@ def main() -> None:
     # compat-2 is also the discovery channel used by the original managed-stack
     # updater. That frozen client validates an exact six-service/14-field
     # descriptor before it drains the validator. Keep the retired inference
-    # images as isolated compatibility shims while the signed scorer image
-    # atomically refreshes that host-side updater during candidate startup.
-    # Nothing depends on these services, and the dummy relay credential cannot
-    # authorize an upstream request.
+    # images as isolated compatibility shims. Nothing depends on these services,
+    # and the dummy relay credential cannot authorize an upstream request.
     services.setdefault(
         "model-relay",
         {
@@ -157,41 +148,14 @@ def main() -> None:
         {
             "DITTOBENCH_SOFTWARE_VERSION": args.version,
             "DITTOBENCH_SOURCE_SHA": args.dittobench_revision,
-            # Literal signed-descriptor policy, not an operator substitution.
-            # The image contains the updater from this reviewed source revision.
-            "DITTOBENCH_BOOTSTRAP_VALIDATOR_STACK_UPDATER": "true",
-            "DITTOBENCH_BOOTSTRAP_VALIDATOR_STACK_UPDATER_TARGET_HOTKEY": (
-                FROZEN_UPDATER_BOOTSTRAP_TARGET_HOTKEY
-            ),
-            # The target above is authenticated by the signed descriptor. This
-            # value is the host's public validator identity and must match it
-            # byte-for-byte before the helper can touch the checkout.
-            "DITTOBENCH_BOOTSTRAP_VALIDATOR_HOTKEY": (
-                "${VALIDATOR_HOTKEY:?validator hotkey required}"
-            ),
         }
     )
-    scorer = services["dittobench-api"]
-    # One known frozen host updater cannot update its own retry/rollback logic.
-    # The authenticated scorer image starts briefly as root and atomically
-    # replaces only that target validator's updater entrypoint. It then drops
-    # permanently to uid/gid 65532, proves the mounted scripts tree is no longer
-    # writable, and execs the ordinary scorer. The nested miner daemon never
-    # receives this mount.
-    scorer["user"] = "0:0"
-    scorer["entrypoint"] = ["/updater-bootstrap"]
-    scorer["cap_add"] = ["CHOWN", "DAC_OVERRIDE", "SETGID", "SETUID"]
-    scorer.setdefault("volumes", []).append(
-        {
-            "type": "bind",
-            # validator-stack-compose.sh pins the Compose project directory to
-            # the checkout root, so this is the updater's own scripts directory.
-            "source": "./scripts",
-            "target": "/opt/ditto/host-validator-scripts",
-            "read_only": False,
-            "bind": {"create_host_path": False},
-        }
-    )
+    # The one incident-scoped host updater was replaced before its original
+    # candidate failed the post-bootstrap isolation check. Do not keep every
+    # managed scorer privileged or retain a writable host checkout mount after
+    # that one-time repair. The image's ordinary non-root entrypoint remains
+    # compatible with source/self-managed stacks, while managed releases now
+    # start it without host mutation authority.
 
     remaining_builds = sorted(
         name for name, service in services.items() if "build" in service
