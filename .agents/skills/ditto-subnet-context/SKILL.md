@@ -1,6 +1,6 @@
 ---
 name: ditto-subnet-context
-description: Route any substantial ditto-subnet monorepo task to the owning components, contracts, invariants, source anchors, searches, and validation commands. Use at the start of a new chat or whenever work spans or could affect validator/miner code, Platform API or dashboard, Backroom, screeners, DittoBench, research adapters, releases, deployments, GCP, Cloudflare, or Terraform.
+description: Route any substantial ditto-subnet monorepo task to the owning components, contracts, invariants, source anchors, searches, and validation commands. Use at the start of a new chat or whenever work spans or could affect validator/miner code, Platform API or dashboard, Backroom, screeners, DittoBench, runtime profiling, research adapters, releases, deployments, GCP, Cloudflare, or Terraform.
 ---
 
 # Ditto Subnet Context
@@ -43,6 +43,7 @@ Make one atomic monorepo change when a contract spans components. Keep migration
 
 - Platform API, database, dashboard, or Backroom: `$ditto-subnet-platform`
 - Validator, scoring, DittoBench, datagen, adapters, or protocol: `$ditto-subnet-benchmark`
+- Python py-spy, Go pprof, live hot spots, or performance comparisons: `$ditto-subnet-runtime-profiling`
 - Semantic release, deployments, screeners, Targon/GCE, GCP, Cloudflare, Terraform, or Ansible: `$ditto-subnet-release-ops`
 - Branches, PR stacks, or current-main reconciliation: `$github`
 

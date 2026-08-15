@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ditto Runtime Profiling"
+  short_description: "Capture and interpret Python and Go profiles"
+  default_prompt: "Use $ditto-subnet-runtime-profiling to capture and compare a current runtime profile safely."

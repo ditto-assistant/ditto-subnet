@@ -50,6 +50,18 @@
       "related": ["validator-miner", "platform-api"]
     },
     {
+      "id": "runtime-profiling",
+      "title": "Private Python and Go runtime profiling",
+      "keywords": ["profile", "profiling", "py-spy", "pprof", "flamegraph", "speedscope", "cpu hotspot", "heap", "allocation", "goroutine", "performance win", "port to go"],
+      "summary": "Capture Python and Go sampling evidence through IAP SSH, interpret exact running stacks, and compare equivalent before-and-after profiles.",
+      "owns": [".agents/skills/ditto-subnet-runtime-profiling", "docs/PERFORMANCE-PROFILING.md", "services/model-relay/cmd/pprofctl", "apps/platform/scripts/profile-python.sh"],
+      "read": [".agents/skills/ditto-subnet-runtime-profiling/SKILL.md", "docs/PERFORMANCE-PROFILING.md"],
+      "search": ["rg -n 'pprofserver.Start|PPROF_|profile-python|py-spy' services apps infra docs", "rg -n 'reverse_proxy|debug/pprof|11000|11010|11011|14434' infra docker-compose.yml"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "python3 -m py_compile .agents/skills/ditto-subnet-runtime-profiling/scripts/summarize_python_profile.py", "cd services/model-relay && go test ./internal/pprofserver ./cmd/pprofctl", "cd services/dittobench-api && go test ./internal/pprofserver"],
+      "invariants": ["Profiler listeners remain non-configurable loopback sockets reached only through checked-in SSH/IAP tooling.", "Record exact deployed identity and representative workload; local source or an idle sample does not prove a live performance win."],
+      "related": ["platform-api", "dittobench-scoring", "release-delivery", "infra-cloud"]
+    },
+    {
       "id": "platform-api",
       "title": "Platform API, database, migrations, and queue control",
       "keywords": ["platform", "api", "fastapi", "database", "postgres", "alembic", "migration", "queue", "ticket", "lease", "admin endpoint"],
