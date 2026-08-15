@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dashboard",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": [
+        "-c",
+        "DITTO_DASHBOARD_PROXY_TARGET=https://dittobench.ai pnpm --dir apps/platform/dashboard dev --port 8091"
+      ],
+      "port": 8091
+    }
+  ]
+}

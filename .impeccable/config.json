@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "codex-grid-background",
+        "value": "*",
+        "files": [
+          "apps/platform/dashboard/src/styles/pages/operations.css"
+        ],
+        "createdAt": "2026-08-15T21:06:38.393Z",
+        "reason": "incumbent design: .fleet-atlas is the pipeline map surface — its own comment says the graph grid carries meaning as an operational map, which is the rule's sanctioned map/blueprint case; predates this change"
+      }
+    ]
+  }
+}
