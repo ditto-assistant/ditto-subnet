@@ -13,6 +13,22 @@ export function fx(x: number): string {
   return x.toFixed(3);
 }
 
+/** Six decimals, for a composite that is being compared against another one.
+ *
+ * Three decimals is the right precision for a subscore — `tool_mean` moves in
+ * steps of 0.01 and `memory_mean` in steps of 1/251 ≈ 0.004, so both are fully
+ * resolved there. The composite is not: a single Bench-v9 run moves it in steps
+ * of 0.000996 (half a LongMem case out of 251, at weight 0.5), and a continual
+ * mean over n runs resolves 0.000996/n. Rendering that at three decimals prints
+ * the whole top of a saturated board as one repeated `0.997`, which is exactly
+ * where a reader most needs to tell two agents apart. Six decimals covers the
+ * finest increment the evidence can produce and matches the precision miners
+ * already quote scores in.
+ */
+export function fxScore(x: number): string {
+  return x.toFixed(6);
+}
+
 // Trailing zeros on a consensus parameter read as false precision.
 /** ≤4 decimals with trailing zeros stripped: 0.5000 → "0.5". */
 export function num(x: number): string {

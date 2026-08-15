@@ -13,7 +13,7 @@ import {
   resetBoardState,
   setLeaderboardVersionView,
 } from "../components/board/board-state";
-import { fx, num } from "../lib/format";
+import { fx, fxScore, num } from "../lib/format";
 import { dethroneFloor, displayComposite, rankEntries } from "../lib/scoring";
 import { syncFromLocation } from "../stores/routeStore";
 import { fixtureNameFor, loadFixture } from "../test-fixtures";
@@ -863,7 +863,9 @@ describe("held-crown standing clarity", () => {
     // and gains the not-dethroned note with the floor in its tooltip.
     const note = dimmed.querySelector(".above-champion-note") as HTMLElement;
     expect(note.textContent).toBe("outscores · not dethroned");
-    expect(note.getAttribute("data-tooltip")).toContain("beat " + fx(floor.floor) + " to contend");
+    expect(note.getAttribute("data-tooltip")).toContain(
+      "beat " + fxScore(floor.floor) + " to contend",
+    );
     expect(note.getAttribute("data-tooltip")).toContain(
       "the first-seen incumbent keeps the champion share",
     );

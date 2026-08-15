@@ -14,6 +14,7 @@ import {
   agentVersionLabel,
   fmtMs,
   fx,
+  fxScore,
   pct,
   relTime,
   shortKey,
@@ -291,7 +292,7 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
                 style={{ width: (Math.max(0, Math.min(1, value())) * 100).toFixed(1) + "%" }}
               />
             </div>
-            <span class="mval">{fx(value())}</span>
+            <span class="mval">{fxScore(value())}</span>
           </div>
         </div>
         <div class="score-stack-row">
@@ -375,7 +376,7 @@ function BoardRow(props: {
     );
     return (
       "Scores above the reigning champion, but not by more than the dethrone band" +
-      (floor ? " — beat " + fx(floor.floor) + " to contend" : "") +
+      (floor ? " — beat " + fxScore(floor.floor) + " to contend" : "") +
       ". Until a challenger clears the band, the first-seen incumbent keeps the champion share."
     );
   };
@@ -396,7 +397,7 @@ function BoardRow(props: {
     ", agent " +
     agentLabel(e().agent_name, e().agent_version) +
     ", composite " +
-    fx(displayComposite(e(), props.store.settledView())) +
+    fxScore(displayComposite(e(), props.store.settledView())) +
     (emission() ? ", KOTH " + emission()?.role : "") +
     (aboveChampion() ? ", outscores the champion but has not cleared the dethrone band" : "") +
     ". Activate for run detail.";
@@ -657,7 +658,7 @@ function BoardRow(props: {
                   <span class="submission-version">{agentVersionLabel(member.agent_version)}</span>
                 </span>
                 <span class="family-member-score" title="Canonical three-validator median">
-                  {fx(member.canonical_composite)}
+                  {fxScore(member.canonical_composite)}
                 </span>
                 <span class="family-member-state">
                   <RetestSeedChip count={Number(member.confirmation_seed_depth) || 0} />
