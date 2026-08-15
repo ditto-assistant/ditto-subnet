@@ -20,6 +20,8 @@ IMAGE_KEYS = {
 IMAGE_RE = re.compile(r"^[a-z0-9][a-z0-9./_-]*@sha256:[0-9a-f]{64}$")
 REVISION_RE = re.compile(r"^[0-9a-f]{40}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
+MANAGED_BENCHMARK_CAPACITY = "8"
+MANAGED_LONGMEM_CAPACITY = "4"
 
 
 def _argument_parser() -> argparse.ArgumentParser:
@@ -114,6 +116,13 @@ def main() -> None:
     # to the validator for discovery.
     validator_environment.update(
         {
+            # Managed validators advertise one uniform fleet capability. The
+            # platform's validator-slot cap controls actual concurrency and
+            # the validator's resource gates stop admission under host
+            # pressure; host .env files must not narrow this signed release
+            # contract independently.
+            "VALIDATOR_BENCHMARK_CAPACITY": MANAGED_BENCHMARK_CAPACITY,
+            "VALIDATOR_LONGMEM_CAPACITY": MANAGED_LONGMEM_CAPACITY,
             "VALIDATOR_STACK_MODE": "managed",
             "VALIDATOR_STACK_DESCRIPTOR_REF": (
                 "${VALIDATOR_STACK_DESCRIPTOR_REF:?validated descriptor ref required}"
@@ -160,6 +169,11 @@ def main() -> None:
     # validator verifies these literals against the same signed descriptor.
     scorer_environment.update(
         {
+            # Keep the scorer semaphore byte-for-byte aligned with the
+            # validator capability rendered above. Source/self-managed Compose
+            # remains operator-configurable.
+            "DITTOBENCH_MAX_CONCURRENT_RUNS": MANAGED_BENCHMARK_CAPACITY,
+            "DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS": MANAGED_LONGMEM_CAPACITY,
             "DITTOBENCH_SOFTWARE_VERSION": args.version,
             "DITTOBENCH_SOURCE_SHA": args.dittobench_revision,
         }

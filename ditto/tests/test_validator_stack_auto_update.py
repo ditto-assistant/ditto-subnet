@@ -153,6 +153,8 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         **yaml.safe_load(COMPOSE.read_text())["services"]["ditto-subnet"][
             "environment"
         ],
+        "VALIDATOR_BENCHMARK_CAPACITY": "8",
+        "VALIDATOR_LONGMEM_CAPACITY": "4",
         "VALIDATOR_STACK_MODE": "managed",
         "VALIDATOR_STACK_DESCRIPTOR_REF": (
             "${VALIDATOR_STACK_DESCRIPTOR_REF:?validated descriptor ref required}"
@@ -177,6 +179,8 @@ def test_release_builder_renders_one_image_only_compose_bundle(tmp_path: Path) -
         "bind": {"create_host_path": False},
     } in compose["services"]["ditto-subnet"]["volumes"]
     scorer_environment = compose["services"]["dittobench-api"]["environment"]
+    assert scorer_environment["DITTOBENCH_MAX_CONCURRENT_RUNS"] == "8"
+    assert scorer_environment["DITTOBENCH_MAX_CONCURRENT_CONFIRMATIONS"] == "4"
     assert scorer_environment["DITTOBENCH_SOFTWARE_VERSION"] == "0.10.0"
     assert scorer_environment["DITTOBENCH_SOURCE_SHA"] == REVISION
     scorer = compose["services"]["dittobench-api"]
