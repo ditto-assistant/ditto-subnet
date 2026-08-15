@@ -152,7 +152,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
         const entries = (payload.entries ?? []).map((entry) => ({
           ...entry,
           bench_version: 9,
-          official_composite: 0.612,
+          official_composite: 0.72,
           effective_composite: 0.612,
           pre_efficiency_composite: 0.72,
           efficiency_bonus: null,
@@ -165,7 +165,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     await waitForBoard();
     const chip = await waitFor(() => {
       const value = document.querySelector(".cline2 .efficiency-bonus-chip");
-      expect(value?.textContent).toBe("efficiency −15.0%");
+      expect(value?.textContent).toBe("active efficiency tie-break · 0.612");
       return value;
     });
     expect(chip).toHaveClass("penalized");
@@ -173,7 +173,14 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
       "data-tooltip",
       expect.stringContaining("frozen cohort P25 reference"),
     );
-    expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("0.720 becomes 0.612"));
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("produces tie-break value 0.612"),
+    );
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("quality score stays 0.720 and remains the primary ranking key"),
+    );
   });
 
   it("makes the Bench v9 remaining-headroom uplift visible", async () => {
@@ -184,7 +191,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
         const entries = (payload.entries ?? []).map((entry) => ({
           ...entry,
           bench_version: 9,
-          official_composite: 0.955,
+          official_composite: 0.95,
           effective_composite: 0.955,
           pre_efficiency_composite: 0.95,
           efficiency_bonus: null,
@@ -197,7 +204,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     await waitForBoard();
     const chip = await waitFor(() => {
       const value = document.querySelector(".cline2 .efficiency-bonus-chip");
-      expect(value?.textContent).toBe("efficiency +10.0%");
+      expect(value?.textContent).toBe("active efficiency tie-break · 0.955");
       return value;
     });
     expect(chip).toHaveAttribute(
@@ -206,13 +213,16 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     );
     expect(chip).toHaveAttribute(
       "data-tooltip",
-      expect.stringContaining("applies a +10.0% factor"),
+      expect.stringContaining("frozen cohort P25 reference is +10.0%"),
     );
     expect(chip).toHaveAttribute(
       "data-tooltip",
       expect.stringContaining("0.950 + (1.100 − 1) × (1 − 0.950) = 0.955"),
     );
-    expect(chip).toHaveAttribute("data-tooltip", expect.stringContaining("becomes 0.955"));
+    expect(chip).toHaveAttribute(
+      "data-tooltip",
+      expect.stringContaining("produces tie-break value 0.955"),
+    );
   });
 
   it("marks an unapplied v9 factor as an audit-only projection", async () => {
@@ -235,7 +245,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     await waitForBoard();
     const chip = await waitFor(() => {
       const value = document.querySelector(".cline2 .efficiency-bonus-chip");
-      expect(value?.textContent).toBe("efficiency projection −15.0%");
+      expect(value?.textContent).toBe("efficiency tie-break preview · 0.612");
       return value;
     });
     expect(chip).toHaveClass("partial", "penalized");

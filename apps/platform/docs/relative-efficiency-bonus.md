@@ -287,8 +287,10 @@ Public (`GET /api/v1/public/leaderboard`):
   quality. While confirmation enforcement is active, only full-confirmed rows
   rank and the pre-efficiency value is the verified
   `full_effective_micros / 1_000_000`. Curve v3 then computes
-  a downside multiplication or an upside remaining-headroom adjustment. Curves
-  v1/v2 retain their historical
+  a downside multiplication or an upside remaining-headroom adjustment,
+  independently of the model-use rollout gate. That projection is the
+  exact-quality secondary key when the coordinated fold is active and remains
+  visible as audit telemetry otherwise. Curves v1/v2 retain their historical
   `pre_efficiency_composite * (1 + efficiency_bonus)` fold. The separate fields
   expose the same arithmetic as provenance for the dashboard.
 

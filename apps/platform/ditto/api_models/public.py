@@ -892,7 +892,8 @@ class PublicLeaderboardEntry(BaseModel):
                 "applies upside to pre_efficiency_composite's remaining "
                 "headroom; legacy curves multiply by one plus their bonus. "
                 "With curve-v3 active it is the secondary key only after exact "
-                "official_composite equality; with the fold off it is audit-only. Null "
+                "official_composite equality and is computed independently of "
+                "the model-use rollout gate; with the fold off it is audit-only. Null "
                 "whenever both adjustment fields are null. Signed quality "
                 "evidence is never modified."
             ),

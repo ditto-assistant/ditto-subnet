@@ -174,7 +174,7 @@ const HEADERS: HeaderSpec[] = [
     key: "composite",
     label: "Scores",
     width: "280px",
-    tip: "Current ranking score with tool and memory subscores stacked beneath it. Sort uses the current ranking score.",
+    tip: "Current quality score with tool and memory subscores stacked beneath it. Quality is the primary rank key; when active, the efficiency chip shows the value used only to break exact-quality ties.",
   },
   {
     key: "cost",
@@ -258,6 +258,7 @@ function Bar(props: { kind: "tool" | "memory"; value: number }): JSX.Element {
 // (compositeCell 5582–5601).
 function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): JSX.Element {
   const value = (): number => displayComposite(props.entry, props.store.settledView());
+  const showsEfficiencyTieBreak = (): boolean => props.entry.efficiency_factor != null;
   const band = (): { lo: number; hi: number; width: number } | null =>
     showsCompositeErrBand(props.entry, props.store.settledView())
       ? errBandBounds(value(), props.entry.composite_stderr)
@@ -266,7 +267,7 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
     <td class="scores-cell">
       <div class="score-stack">
         <div class="score-stack-row current">
-          <span class="score-stack-label">Current</span>
+          <span class="score-stack-label">{showsEfficiencyTieBreak() ? "Quality" : "Current"}</span>
           <div class="metric">
             <div class="barwrap">
               <Show when={band()}>

@@ -283,11 +283,25 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
         "."
       );
     }
+    if (factor() != null) {
+      return (
+        "Token efficiency is active as the exact-quality tie-break. The quality score stays " +
+        official() +
+        " and remains the primary ranking key; lower quality never passes higher quality. " +
+        "The bounded factor against this epoch's frozen cohort P25 reference is " +
+        signedDelta() +
+        " and produces tie-break value " +
+        effective() +
+        "." +
+        adjustmentExplanation() +
+        " Ranking, KOTH, and emissions use it only when quality is exactly equal."
+      );
+    }
     return (
       source +
-      (factor() == null
-        ? " changes the authoritative quality score by " + signedDelta() + ": "
-        : " applies a " + signedDelta() + " factor to the authoritative quality score: ") +
+      " changes the authoritative quality score by " +
+      signedDelta() +
+      ": " +
       fx(Number(props.entry.pre_efficiency_composite)) +
       " becomes " +
       effective() +
@@ -308,7 +322,11 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
         tabindex={0}
         text={tip()}
       >
-        {"efficiency " + (applied() ? "" : "projection ") + signedDelta()}
+        {factor() == null
+          ? "efficiency " + (applied() ? "" : "projection ") + signedDelta()
+          : applied()
+            ? "active efficiency tie-break · " + effective()
+            : "efficiency tie-break preview · " + effective()}
       </ChipTip>
     </Show>
   );

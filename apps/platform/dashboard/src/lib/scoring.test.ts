@@ -603,7 +603,7 @@ describe("composite equations (row 38: quality and token adjustments stay separa
       memory_mean: 0.8,
       bench_version: 9,
       composite: 0.8,
-      official_composite: final,
+      official_composite: 0.8,
       effective_composite: final,
       pre_efficiency_composite: 0.8,
       efficiency_bonus: 0.05,
@@ -614,9 +614,11 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     const byKey = Object.fromEntries((rows ?? []).map((row) => [row.k, row.v]));
 
     expect(byKey["Bounded token-efficiency factor"]).toBe(expected);
-    expect(byKey["Folded ranking score"]).toBe(
-      final.toFixed(3) + " · used for rank, KOTH, and emissions",
+    expect(byKey["Current quality score"]).toBe("0.800 · primary ranking key");
+    expect(byKey["Efficiency tie-break"]).toBe(
+      final.toFixed(3) + " · active only after exact quality equality",
     );
+    expect(byKey["Folded ranking score"]).toBeUndefined();
     expect(byKey["Relative token-efficiency bonus"]).toBeUndefined();
   });
 
@@ -626,7 +628,7 @@ describe("composite equations (row 38: quality and token adjustments stay separa
       memory_mean: 0.95,
       bench_version: 9,
       composite: 0.95,
-      official_composite: 0.955,
+      official_composite: 0.95,
       effective_composite: 0.955,
       pre_efficiency_composite: 0.95,
       efficiency_factor: 1.1,
@@ -646,7 +648,8 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     expect(byKey["Bench v9 efficiency transform"]).toBe(
       "0.950 + (1.100 − 1) × (1 − 0.950) = 0.955",
     );
-    expect(byKey["Folded ranking score"]).toBe("0.955 · used for rank, KOTH, and emissions");
+    expect(byKey["Current quality score"]).toBe("0.950 · primary ranking key");
+    expect(byKey["Efficiency tie-break"]).toBe("0.955 · active only after exact quality equality");
   });
 
   it("does not apply the Bench v9 transform to a historical v1/v2 bonus", () => {
@@ -822,7 +825,8 @@ describe("efficiencyBoardStatus", () => {
   it("marks an active cohort as ranking the board", () => {
     const status = efficiencyBoardStatus({ ...cohort, active: true, cohort_size: 12 });
     expect(status?.tone).toBe("applied");
-    expect(status?.headline).toContain("ranking this board");
+    expect(status?.headline).toBe("Token efficiency is active as the quality tie-break");
+    expect(status?.detail).toContain("lower-quality agent never passes a higher-quality agent");
     expect(status?.minimumFactor).toBe(0.85);
     expect(status?.maximumFactor).toBe(1.1);
   });

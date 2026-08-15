@@ -431,10 +431,16 @@ def test_composite_breakdown_shows_no_token_penalty_when_within_budget() -> None
     assert breakdown.token_penalty == 0.0
 
 
-def test_v9_effective_composite_fails_closed_while_signed_gate_is_shadow(
+@pytest.mark.parametrize(
+    ("efficiency_factor", "expected_projection"),
+    [(0.9, 0.72), (1.1, 0.82)],
+)
+def test_v9_effective_composite_uses_quality_while_signed_gate_is_shadow(
     monkeypatch: pytest.MonkeyPatch,
+    efficiency_factor: float,
+    expected_projection: float,
 ) -> None:
-    """A signed shadow root is telemetry and cannot authorize ranking."""
+    """Curve-v3 telemetry mirrors the quality-primary ranking tiebreak."""
     monkeypatch.setattr(public_endpoint, "model_use_factor", lambda *_a, **_kw: 0.0)
 
     def row(bench_version: int) -> LedgerRow:
@@ -462,7 +468,7 @@ def test_v9_effective_composite_fails_closed_while_signed_gate_is_shadow(
         row(9),
         "v9-agent",
         1,
-        efficiency_bonus=0.1,
+        efficiency_factor=efficiency_factor,
         pre_efficiency_composite=0.8,
     )
     legacy = public_endpoint._public_entry(
@@ -474,7 +480,7 @@ def test_v9_effective_composite_fails_closed_while_signed_gate_is_shadow(
         pre_efficiency_composite=0.8,
     )
 
-    assert v9.effective_composite == 0.0
+    assert v9.effective_composite == pytest.approx(expected_projection)
     assert legacy.effective_composite == 0.0
 
 
@@ -509,7 +515,7 @@ def test_v9_bounded_factor_applies_after_full_confirmed_quality_only() -> None:
         row(9),
         "v9-agent",
         1,
-        official_composite=0.8 * 0.85,
+        official_composite=0.8,
         pre_efficiency_composite=0.8,
         efficiency_factor=0.85,
         v9_confirmation=confirmation,
@@ -524,6 +530,7 @@ def test_v9_bounded_factor_applies_after_full_confirmed_quality_only() -> None:
     )
 
     assert v9.efficiency_factor == pytest.approx(0.85)
+    assert v9.official_composite == pytest.approx(0.8)
     assert v9.effective_composite == pytest.approx(0.8 * 0.85)
     assert legacy.efficiency_factor is None
     assert legacy.effective_composite is None
@@ -559,13 +566,14 @@ def test_v9_bounded_factor_projection_scales_remaining_headroom() -> None:
         row,
         "v9-agent",
         1,
-        official_composite=0.955,
+        official_composite=0.95,
         pre_efficiency_composite=0.95,
         efficiency_factor=1.1,
         efficiency_fold_applied=True,
         v9_confirmation=confirmation,
     )
 
+    assert entry.official_composite == pytest.approx(0.95)
     assert entry.effective_composite == pytest.approx(0.955)
 
 

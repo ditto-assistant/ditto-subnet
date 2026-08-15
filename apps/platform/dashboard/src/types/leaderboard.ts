@@ -141,7 +141,7 @@ export interface LeaderboardEntry {
   /** Independently verified full v9 composite; absent before confirmation. */
   v9_full_confirmed_composite?: number | null;
   v9_confirmation_evidence_sha256?: string | null;
-  /** Score after continual aggregation and any active efficiency fold. */
+  /** Authoritative quality and primary ranking key after continual aggregation. */
   official_composite?: number | null;
   /** Score after continual aggregation but before relative efficiency. */
   pre_efficiency_composite?: number | null;
@@ -149,9 +149,9 @@ export interface LeaderboardEntry {
   efficiency_bonus?: number | null;
   /** Frozen Bench-v9 bounded multiplier; supersedes efficiency_bonus when present. */
   efficiency_factor?: number | null;
-  /** True only when the surfaced adjustment is official ranking/emission authority. */
+  /** True when the surfaced curve-v3 tie-break or legacy fold is active. */
   efficiency_fold_applied?: boolean;
-  /** Adjustment projection; equal to official_composite only while the fold is active. */
+  /** Adjustment projection; curve v3 uses this only after exact quality equality. */
   effective_composite?: number | null;
   /** Settled active-version median shown mid-rollout (loose != null check). */
   settled_composite?: number | null;

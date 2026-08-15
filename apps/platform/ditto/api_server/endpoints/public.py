@@ -1882,8 +1882,13 @@ def _public_entry(
     )
     effective_projection: float | None = None
     if efficiency_factor is not None:
+        # Curve v3 is a quality-primary tiebreak. Its public projection must use
+        # the same authoritative quality scalar as ranking, even while the
+        # independent model-use gate is in shadow mode. Applying that gate here
+        # turns a valid upside factor into ``factor - 1`` (and downside into
+        # zero), which is neither the ranking key nor useful audit telemetry.
         effective_projection = bounded_efficiency_adjusted_quality(
-            efficiency_base * platform_model_use_factor,
+            efficiency_base,
             efficiency_factor,
         )
     elif efficiency_bonus is not None:

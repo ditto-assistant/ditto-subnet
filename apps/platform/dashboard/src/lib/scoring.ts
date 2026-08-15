@@ -142,12 +142,13 @@ export function efficiencyBoardStatus(
     return {
       ...common,
       tone: "applied",
-      headline: "Token efficiency is ranking this board",
+      headline: "Token efficiency is active as the quality tie-break",
       detail:
-        "Each of the " +
+        "Quality remains the primary score, so a lower-quality agent never passes a " +
+        "higher-quality agent. Among exact quality ties, each of the " +
         cohortSize +
-        " qualified agents is priced against the cohort's 25th-percentile cost. " +
-        "Cheaper than the reference earns headroom, dearer is bounded penalty.",
+        " qualified agents is ordered against the cohort's 25th-percentile cost: " +
+        "cheaper earns headroom and dearer receives a bounded tie-break penalty.",
     };
   }
   return {
@@ -171,9 +172,10 @@ export interface CurveV3ScoreAdjustment {
 
 /** Reproduce Bench-v9 curve-v3's score transform from public provenance.
  *
- * This is display-only arithmetic: the API's `effective_composite` remains the
- * ranking authority. Legacy v1/v2 bonuses deliberately do not enter this
- * helper because their historical replay remains unchanged.
+ * This is display-only arithmetic: the API's `effective_composite` is the
+ * exact-quality secondary key when the fold is active. Authoritative quality
+ * remains primary. Legacy v1/v2 bonuses deliberately do not enter this helper
+ * because their historical replay remains unchanged.
  */
 export function curveV3ScoreAdjustment(e: {
   bench_version?: number | null;
@@ -813,7 +815,8 @@ export const COMPOSITE_CALC_NOTE =
   "relative-efficiency awards are upside, while Bench v9 uses a bounded factor around a " +
   "frozen cohort P25 reference. Downside multiplies quality; upside scales only remaining " +
   "quality headroom, so imperfect quality cannot become 1.000. Both are computed after " +
-  "authoritative quality aggregation; " +
+  "authoritative quality aggregation. Curve-v3 is only an exact-quality tie-break; " +
+  "lower quality never passes higher quality. " +
   "an audit-only projection is not used for ranking or emissions.";
 
 export function compositeCalculationHeading(e: {
@@ -953,10 +956,23 @@ export function compositeCalculationRows(e: {
     }
     if (hasFactor || hasBonus) {
       if (efficiencyFoldIsApplied(e)) {
-        rows.push({
-          k: "Folded ranking score",
-          v: fx(Number(e.effective_composite)) + " · used for rank, KOTH, and emissions",
-        });
+        if (hasFactor) {
+          rows.push({
+            k: "Current quality score",
+            v:
+              fx(e.official_composite ?? e.composite ?? e.pre_efficiency_composite) +
+              " · primary ranking key",
+          });
+          rows.push({
+            k: "Efficiency tie-break",
+            v: fx(Number(e.effective_composite)) + " · active only after exact quality equality",
+          });
+        } else {
+          rows.push({
+            k: "Folded ranking score",
+            v: fx(Number(e.effective_composite)) + " · used for rank, KOTH, and emissions",
+          });
+        }
       } else {
         rows.push({
           k: "Efficiency projection",

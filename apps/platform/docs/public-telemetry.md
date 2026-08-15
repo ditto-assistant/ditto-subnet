@@ -127,8 +127,10 @@ rate-limited, `Cache-Control: public, max-age=30`. Read-only, aggregate-only.
   `efficiency` block publishes the frozen curve version, P25, exponent, clamps,
   cohort size, activation state, and snapshot id. Preview fields are explicitly
   unapplied. `official_composite` is always the score that currently ranks the
-  board; `effective_composite` shows the frozen-adjustment arithmetic and equals
-  the official value only while the coordinated fold is active. For curve v3,
+  board's primary order; `effective_composite` shows the frozen-adjustment
+  arithmetic used as curve v3's exact-quality secondary order. It is computed
+  from authoritative quality independently of the model-use rollout gate and
+  remains audit-only while the coordinated fold is inactive. For curve v3,
   `effective_composite` is also capped at `1.0`; curves v1/v2 retain their
   historical upside-only arithmetic without this new ceiling.
   Different names and hotkeys under one coldkey compete for one position; the
