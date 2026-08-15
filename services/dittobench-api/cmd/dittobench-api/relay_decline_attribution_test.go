@@ -585,6 +585,7 @@ func TestCapacityExhaustionIsNamedButKeepsItsGrantEndToEnd(t *testing.T) {
 
 	broker := newInferenceBroker(1)
 	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	broker.embeddingRequestTTL = 100 * time.Millisecond
 	proxyURL := configureBrokerUpstream(broker, upstream)
 	prepared := prepareBrokerSession(t, broker)
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)

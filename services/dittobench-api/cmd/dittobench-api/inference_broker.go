@@ -173,6 +173,11 @@ type brokerSession struct {
 	embeddingPhaseActive  bool
 	embeddingInFlight     int
 	embeddingConcurrency  int
+	// embeddingQueueChanged wakes calls waiting behind this session's local
+	// lane whenever capacity is released or the phase is revoked. Excess
+	// harness concurrency is queued inside the trusted broker instead of being
+	// reflected back as a fatal Ollama-compatible 429.
+	embeddingQueueChanged chan struct{}
 	// embeddingCalls tracks every in-flight embedding call so the phase can be
 	// ended -- and every one of them revoked -- as a set. It was a single
 	// (cancel, done) pair while the lane admitted one request at a time; a
@@ -420,21 +425,126 @@ func listenInferenceBrokerTCP4(addr string) (net.Listener, error) {
 }
 
 type inferenceBroker struct {
-	mu                   sync.RWMutex
-	sessions             map[string]*brokerSession
-	tools                map[string]toolRoute
-	client               *http.Client
-	maxSessions          int
-	controlToken         string
-	platformProxyURL     string
-	platformTransportURL string
-	embeddingURL         string
-	embeddingSlots       chan struct{}
-	retry                brokerRetryConfig
-	delayFP              delayFingerprintConfig
-	sleep                func(context.Context, time.Duration) error
-	relayWait            func(string, bool)
-	terminalAgentFailure func(string)
+	mu                    sync.RWMutex
+	sessions              map[string]*brokerSession
+	tools                 map[string]toolRoute
+	client                *http.Client
+	maxSessions           int
+	controlToken          string
+	platformProxyURL      string
+	platformTransportURL  string
+	embeddingURL          string
+	embeddingSlots        chan struct{}
+	embeddingBackpressure embeddingBackpressureGate
+	embeddingRequestTTL   time.Duration
+	retry                 brokerRetryConfig
+	delayFP               delayFingerprintConfig
+	sleep                 func(context.Context, time.Duration) error
+	relayWait             func(string, bool)
+	terminalAgentFailure  func(string)
+}
+
+// embeddingBackpressureGate is a validator-wide circuit breaker for the
+// hosted embedding provider. The first 503 + Retry-After closes the gate for
+// every ticket on this validator. Once the cooldown expires, exactly one call
+// probes recovery; peers remain queued until that probe succeeds. This avoids
+// the synchronized retry wave that otherwise turns one provider throttle into
+// dozens of fresh reservations and duplicate upstream deliveries.
+type embeddingBackpressureGate struct {
+	mu            sync.Mutex
+	retryAt       time.Time
+	probeInFlight bool
+	changed       chan struct{}
+}
+
+func (g *embeddingBackpressureGate) changedLocked() <-chan struct{} {
+	if g.changed == nil {
+		g.changed = make(chan struct{})
+	}
+	return g.changed
+}
+
+func (g *embeddingBackpressureGate) signalLocked() {
+	if g.changed != nil {
+		close(g.changed)
+		g.changed = nil
+	}
+}
+
+func (g *embeddingBackpressureGate) wait(ctx context.Context) (bool, error) {
+	for {
+		g.mu.Lock()
+		now := time.Now()
+		if g.retryAt.IsZero() {
+			g.mu.Unlock()
+			return false, nil
+		}
+		if !now.Before(g.retryAt) && !g.probeInFlight {
+			g.probeInFlight = true
+			g.mu.Unlock()
+			return true, nil
+		}
+		changed := g.changedLocked()
+		delay := time.Duration(0)
+		if now.Before(g.retryAt) {
+			delay = g.retryAt.Sub(now)
+		}
+		g.mu.Unlock()
+
+		if delay > 0 {
+			timer := time.NewTimer(delay)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+				return false, ctx.Err()
+			case <-changed:
+				if !timer.Stop() {
+					select {
+					case <-timer.C:
+					default:
+					}
+				}
+			case <-timer.C:
+			}
+			continue
+		}
+
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+func (g *embeddingBackpressureGate) backpressure(retryAfter time.Duration) {
+	if retryAfter <= 0 {
+		retryAfter = 250 * time.Millisecond
+	}
+	g.mu.Lock()
+	until := time.Now().Add(retryAfter)
+	if until.After(g.retryAt) {
+		g.retryAt = until
+	}
+	g.probeInFlight = false
+	g.signalLocked()
+	g.mu.Unlock()
+}
+
+func (g *embeddingBackpressureGate) finishProbe(probe bool) {
+	if !probe {
+		return
+	}
+	g.mu.Lock()
+	g.retryAt = time.Time{}
+	g.probeInFlight = false
+	g.signalLocked()
+	g.mu.Unlock()
 }
 
 // notifyTerminalAgentFailure ends a run after its first typed allowance
@@ -896,6 +1006,7 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 		embeddingURL: configuredEmbeddingURL(
 			envOr("DITTOBENCH_EMBEDDING_UPSTREAM_URL", "http://host.docker.internal:11434/api/embed"),
 		),
+		embeddingRequestTTL: 65 * time.Second,
 		retry: brokerRetryConfig{
 			maxAttempts: envIntDefault("RELAY_RETRY_MAX_ATTEMPTS", 6),
 			base:        time.Duration(envIntDefault("RELAY_RETRY_BASE_MS", 200)) * time.Millisecond,
@@ -940,6 +1051,7 @@ func (b *inferenceBroker) endEmbeddingPhase(id, runID string) {
 	var pending []chan struct{}
 	if session.boundRunID == runID {
 		session.embeddingPhaseActive = false
+		session.signalEmbeddingQueueLocked()
 		for done, cancel := range session.embeddingCalls {
 			pending = append(pending, done)
 			cancel()
@@ -1644,6 +1756,20 @@ func (session *brokerSession) embeddingLaneLocked() int {
 	return session.embeddingConcurrency
 }
 
+func (session *brokerSession) embeddingQueueChangedLocked() <-chan struct{} {
+	if session.embeddingQueueChanged == nil {
+		session.embeddingQueueChanged = make(chan struct{})
+	}
+	return session.embeddingQueueChanged
+}
+
+func (session *brokerSession) signalEmbeddingQueueLocked() {
+	if session.embeddingQueueChanged != nil {
+		close(session.embeddingQueueChanged)
+		session.embeddingQueueChanged = nil
+	}
+}
+
 func (session *brokerSession) activeLocked(now time.Time) bool {
 	return session.boundRunID != "" && session.expectedSourceIP != "" &&
 		session.expiresAt.After(now) &&
@@ -1673,6 +1799,7 @@ func destroyBrokerSession(session *brokerSession) {
 	session.trustedChatHandler = nil
 	session.requestModel = ""
 	session.embeddingPhaseActive = false
+	session.signalEmbeddingQueueLocked()
 	session.mu.Unlock()
 	for _, done := range pending {
 		<-done
@@ -1843,7 +1970,7 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusServiceUnavailable, "embedding service unavailable")
 		return
 	}
-	requestContext, cancelRequest := context.WithTimeout(r.Context(), 65*time.Second)
+	requestContext, cancelRequest := context.WithTimeout(r.Context(), b.embeddingRequestTTL)
 	var cancelOnce sync.Once
 	cancel := func() {
 		cancelOnce.Do(func() {
@@ -1851,27 +1978,37 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 			_ = r.Body.Close()
 		})
 	}
-	session.mu.Lock()
-	if !session.embeddingPhaseActive {
+	var done chan struct{}
+	for {
+		session.mu.Lock()
+		if !session.embeddingPhaseActive {
+			session.mu.Unlock()
+			cancel()
+			writeError(w, http.StatusConflict, "embedding phase unavailable")
+			return
+		}
+		if session.embeddingInFlight < session.embeddingLaneLocked() {
+			done = make(chan struct{})
+			session.embeddingInFlight++
+			if session.embeddingCalls == nil {
+				session.embeddingCalls = make(map[chan struct{}]context.CancelFunc)
+			}
+			session.embeddingCalls[done] = cancel
+			session.mu.Unlock()
+			break
+		}
+		changed := session.embeddingQueueChangedLocked()
 		session.mu.Unlock()
-		cancel()
-		writeError(w, http.StatusConflict, "embedding phase unavailable")
-		return
+
+		select {
+		case <-requestContext.Done():
+			cancel()
+			w.Header().Set("Retry-After", "1")
+			writeError(w, http.StatusServiceUnavailable, "embedding source queue timed out")
+			return
+		case <-changed:
+		}
 	}
-	if session.embeddingInFlight >= session.embeddingLaneLocked() {
-		session.mu.Unlock()
-		cancel()
-		w.Header().Set("Retry-After", "1")
-		writeError(w, http.StatusTooManyRequests, "embedding source is at capacity")
-		return
-	}
-	done := make(chan struct{})
-	session.embeddingInFlight++
-	if session.embeddingCalls == nil {
-		session.embeddingCalls = make(map[chan struct{}]context.CancelFunc)
-	}
-	session.embeddingCalls[done] = cancel
-	session.mu.Unlock()
 	slotAcquired := false
 	defer func() {
 		if slotAcquired {
@@ -1881,6 +2018,7 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 		if _, tracked := session.embeddingCalls[done]; tracked {
 			delete(session.embeddingCalls, done)
 			session.embeddingInFlight--
+			session.signalEmbeddingQueueLocked()
 		}
 		session.mu.Unlock()
 		cancel()
@@ -2126,10 +2264,22 @@ func (b *inferenceBroker) forwardPlatformEmbeddingWithRetry(
 	ctx context.Context, session *brokerSession, inputs []string,
 ) (embeddingResponse, error) {
 	var lastErr error
+	var lastCapacityErr error
 	capacityWaits := 0
 	for attempt := 1; attempt <= ticketTransientMaxAttempts; {
+		probe, waitErr := b.embeddingBackpressure.wait(ctx)
+		if waitErr != nil {
+			if lastCapacityErr != nil {
+				return embeddingResponse{}, lastCapacityErr
+			}
+			if lastErr != nil {
+				return embeddingResponse{}, lastErr
+			}
+			return embeddingResponse{}, waitErr
+		}
 		decoded, err := b.forwardPlatformEmbedding(ctx, session, inputs)
 		if err == nil {
+			b.embeddingBackpressure.finishProbe(probe)
 			return decoded, nil
 		}
 		lastErr = err
@@ -2141,6 +2291,8 @@ func (b *inferenceBroker) forwardPlatformEmbeddingWithRetry(
 		// attempts on a healthy platform that was merely busy.
 		var atCapacity platformEmbeddingAtCapacity
 		if errors.As(err, &atCapacity) {
+			lastCapacityErr = err
+			b.embeddingBackpressure.backpressure(atCapacity.retryAfter)
 			if capacityWaits >= platformEmbeddingCapacityMaxWaits || ctx.Err() != nil {
 				return embeddingResponse{}, err
 			}
@@ -2157,8 +2309,20 @@ func (b *inferenceBroker) forwardPlatformEmbeddingWithRetry(
 			}
 			continue
 		}
+		// The half-open probe reached the provider and received something other
+		// than a backpressure response. The shared throttle has recovered; the
+		// ordinary transient/integrity classification below remains unchanged.
+		b.embeddingBackpressure.finishProbe(probe)
 
 		var transient platformEmbeddingTransient
+		if ctx.Err() != nil && lastCapacityErr != nil {
+			// A transport can surface the request deadline while the half-open
+			// probe is in flight. Preserve the capacity cause that consumed the
+			// bounded recovery window so finalization names the validator rail,
+			// rather than misclassifying provider saturation as an unrelated
+			// infrastructure failure.
+			return embeddingResponse{}, lastCapacityErr
+		}
 		if !errors.As(err, &transient) || ctx.Err() != nil {
 			return embeddingResponse{}, err
 		}

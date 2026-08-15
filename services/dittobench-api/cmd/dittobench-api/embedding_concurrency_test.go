@@ -136,10 +136,11 @@ func TestHostedV7EmbeddingsActuallyRunConcurrently(t *testing.T) {
 	}
 }
 
-// TestHostedV7EmbeddingLaneStillHasACeiling is the other half of the contract.
-// Widening the lane must not remove it: a harness that floods the endpoint is
-// still refused, and refused with the retryable 429 the harness already knows.
-func TestHostedV7EmbeddingLaneStillHasACeiling(t *testing.T) {
+// TestHostedV7EmbeddingLaneQueuesPastItsCeiling is the other half of the
+// contract. Widening the lane must not remove its ceiling, but a conforming
+// harness that launches a larger seed burst must wait behind it instead of
+// losing the whole attempt to an Ollama-compatible 429.
+func TestHostedV7EmbeddingLaneQueuesPastItsCeiling(t *testing.T) {
 	const lane = 3
 	probe := newConcurrencyProbe(lane)
 	vector := make([]float64, embeddingDimensions)
@@ -171,24 +172,24 @@ func TestHostedV7EmbeddingLaneStillHasACeiling(t *testing.T) {
 	defer broker.endEmbeddingPhase(prepared["session_id"], runID)
 
 	var wg sync.WaitGroup
-	var refused atomic.Int64
+	codes := make([]int, lane+2)
 	// Two more than the lane admits, all launched together.
-	for i := 0; i < lane+2; i++ {
+	for i := range codes {
 		wg.Add(1)
-		go func() {
+		go func(i int) {
 			defer wg.Done()
-			if callEmbedding(broker, "192.0.2.151", "hosted text").Code == http.StatusTooManyRequests {
-				refused.Add(1)
-			}
-		}()
+			codes[i] = callEmbedding(broker, "192.0.2.151", "hosted text").Code
+		}(i)
 	}
 	wg.Wait()
 
 	if probe.peakSeen() > lane {
 		t.Fatalf("peak simultaneous embeddings = %d, exceeds the lane of %d", probe.peakSeen(), lane)
 	}
-	if refused.Load() == 0 {
-		t.Fatal("a flood past the lane ceiling was never refused; the lane is unbounded")
+	for i, code := range codes {
+		if code != http.StatusOK {
+			t.Fatalf("queued embedding %d status=%d, want 200", i, code)
+		}
 	}
 }
 
@@ -235,6 +236,41 @@ func TestLocalOllamaEmbeddingsStayStrictlySerialised(t *testing.T) {
 	if peak := probe.peakSeen(); peak != 1 {
 		t.Fatalf("peak simultaneous LOCAL ollama embeddings = %d, want 1 "+
 			"(the v2-v6 lane must not widen with the hosted one)", peak)
+	}
+}
+
+func TestEmbeddingBackpressureGateReopensWithOneProbe(t *testing.T) {
+	var gate embeddingBackpressureGate
+	gate.backpressure(25 * time.Millisecond)
+
+	type admission struct {
+		probe bool
+		err   error
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	admitted := make(chan admission, 2)
+	for range 2 {
+		go func() {
+			probe, err := gate.wait(ctx)
+			admitted <- admission{probe: probe, err: err}
+		}()
+	}
+
+	first := <-admitted
+	if first.err != nil || !first.probe {
+		t.Fatalf("first recovery admission = %+v, want one probe", first)
+	}
+	select {
+	case second := <-admitted:
+		t.Fatalf("peer bypassed the half-open probe: %+v", second)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	gate.finishProbe(true)
+	second := <-admitted
+	if second.err != nil || second.probe {
+		t.Fatalf("peer admission after successful probe = %+v", second)
 	}
 }
 

@@ -762,9 +762,15 @@ func TestEmbeddingBrokerOneRequestPerSessionDoesNotStarveSibling(t *testing.T) {
 		close(releaseFirst)
 		t.Fatal("first embedding request did not reach upstream")
 	}
-	if got := callEmbedding(broker, "192.0.2.63", "same-session").Code; got != http.StatusTooManyRequests {
+	secondDone := make(chan int, 1)
+	go func() {
+		secondDone <- callEmbedding(broker, "192.0.2.63", "same-session").Code
+	}()
+	select {
+	case status := <-secondDone:
 		close(releaseFirst)
-		t.Fatalf("same-session concurrent embedding status = %d", got)
+		t.Fatalf("same-session embedding bypassed its local queue: status=%d", status)
+	case <-time.After(25 * time.Millisecond):
 	}
 	if got := callEmbedding(broker, "192.0.2.64", "sibling").Code; got != http.StatusOK {
 		close(releaseFirst)
@@ -773,6 +779,75 @@ func TestEmbeddingBrokerOneRequestPerSessionDoesNotStarveSibling(t *testing.T) {
 	close(releaseFirst)
 	if got := <-firstDone; got != http.StatusOK {
 		t.Fatalf("first embedding status = %d", got)
+	}
+	if got := <-secondDone; got != http.StatusOK {
+		t.Fatalf("queued same-session embedding status = %d", got)
+	}
+}
+
+func TestEndEmbeddingPhaseWakesQueuedCalls(t *testing.T) {
+	firstArrived := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(firstArrived)
+		select {
+		case <-r.Context().Done():
+		case <-releaseFirst:
+		}
+	}))
+	defer upstream.Close()
+	defer close(releaseFirst)
+
+	broker := newInferenceBroker(1, 1)
+	broker.embeddingURL = upstream.URL + embeddingAPIPath
+	broker.client.Transport = upstream.Client().Transport
+	id, runID := admittedEmbeddingBrokerSession(t, broker, "192.0.2.74")
+
+	firstDone := make(chan int, 1)
+	go func() {
+		firstDone <- callEmbedding(broker, "192.0.2.74", "hold").Code
+	}()
+	select {
+	case <-firstArrived:
+	case <-time.After(time.Second):
+		t.Fatal("first embedding did not reach upstream")
+	}
+
+	queuedDone := make(chan int, 1)
+	go func() {
+		queuedDone <- callEmbedding(broker, "192.0.2.74", "queued").Code
+	}()
+	select {
+	case status := <-queuedDone:
+		t.Fatalf("queued embedding returned before phase end: %d", status)
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	phaseEnded := make(chan struct{})
+	go func() {
+		broker.endEmbeddingPhase(id, runID)
+		close(phaseEnded)
+	}()
+	select {
+	case status := <-queuedDone:
+		if status != http.StatusConflict {
+			t.Fatalf("queued embedding status after phase end = %d, want 409", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("phase end did not wake queued embedding")
+	}
+	select {
+	case status := <-firstDone:
+		if status != http.StatusBadGateway {
+			t.Fatalf("active embedding status after phase end = %d, want 502", status)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("phase end did not cancel active embedding")
+	}
+	select {
+	case <-phaseEnded:
+	case <-time.After(time.Second):
+		t.Fatal("embedding phase did not finish draining")
 	}
 }
 
