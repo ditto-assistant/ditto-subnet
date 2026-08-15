@@ -541,6 +541,91 @@ describe("accessible benchmark progress (row 22)", () => {
     expect(cell.querySelector('.benchmark-agent [data-entity-link="agent"]')).toBeTruthy();
   });
 
+  it("shows that a managed update is safely draining active runs", async () => {
+    const hotkey = "5ManagedDrainValidatorHotkey0000000000000000000000";
+    const candidate = `ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:a62c6be5${"0".repeat(56)}`;
+    const draining = {
+      ...operations,
+      validators: {
+        ...operations.validators,
+        validators: [
+          {
+            validator_hotkey: hotkey,
+            availability: "available",
+            health: "healthy",
+            state: "running_benchmark",
+            configured_slots: 2,
+            healthy_slots: ["slot-0", "slot-1"],
+            protocol_version: 23,
+            software_version: "0.68.21",
+            reported_at: "2026-07-31T13:55:00Z",
+            seen_at: "2026-07-31T13:55:00Z",
+            stack: { mode: "managed" },
+            updater_status: {
+              enabled: true,
+              channel: "compat-2",
+              state: "draining",
+              transaction_phase: "prepared",
+              current_version: "0.68.21",
+              candidate_descriptor: candidate,
+              candidate_version: null,
+              failed_candidate_count: 0,
+              retry_after: null,
+              suppressed: false,
+              last_success_at: 1_775_131_200,
+              last_failure_at: null,
+              last_failure_reason: null,
+              observed_at: 1_775_132_100,
+            },
+            active_benchmarks: [
+              {
+                slot_id: "slot-0",
+                stage: "running_benchmark",
+                percent: 62,
+                completed_checks: 218,
+                total_checks: 351,
+                bench_version: 9,
+                started_at: "2026-07-31T13:00:00Z",
+                agent_id: "agent-one",
+                agent_name: "One",
+              },
+              {
+                slot_id: "slot-1",
+                stage: "running_benchmark",
+                percent: 66,
+                completed_checks: 233,
+                total_checks: 351,
+                bench_version: 9,
+                started_at: "2026-07-31T13:00:00Z",
+                agent_id: "agent-two",
+                agent_name: "Two",
+              },
+            ],
+          },
+        ],
+      },
+    } satisfies OperationsPayload;
+    restoreFetch?.();
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      if (String(input).includes("/public/operations")) {
+        return Promise.resolve(new Response(JSON.stringify(draining), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ validators: [] }), { status: 200 }));
+    }) as typeof fetch;
+
+    render(() => <OperationsPage />);
+    await waitFor(() => expect(document.querySelector(".fleet-updater-notice")).toBeTruthy());
+
+    const row = document.querySelector(`#fleet-rows tr[data-entity-id="${hotkey}"]`);
+    const notice = row?.querySelector(".fleet-updater-notice");
+    expect(notice).toHaveAttribute("aria-label", "Managed updater status");
+    expect(notice?.querySelector(".stage")?.textContent).toBe("Safe drain");
+    expect(notice?.textContent).toContain("Target a62c6be5…");
+    expect(notice?.textContent).toContain("Finishing 2 active runs before restart · no new work.");
+    expect(row?.querySelector(".fleet-updater-mode")?.textContent).toBe("Managed · compat-2");
+    expect(row?.querySelector(".fleet-updater-success")?.textContent).toContain("Updated");
+  });
+
   it("shows the screener stage vocabulary on the screener fleet", async () => {
     const screening = {
       screeners: [

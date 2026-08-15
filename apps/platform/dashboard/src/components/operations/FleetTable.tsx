@@ -27,6 +27,7 @@ import {
 } from "./fleet";
 import type { FleetEntryExt, FleetLedgerKey, FleetSingular, SlotPolicy } from "./fleet";
 import { BenchmarkProgressView, ScreenerProgressView } from "./progress";
+import { updaterModeLine, updaterView } from "./updater";
 
 const LEDGER_LABELS: Record<FleetLedgerKey, string> = {
   healthy: "Healthy",
@@ -475,6 +476,31 @@ function ConfirmationRows(props: { entry: FleetEntryExt }): JSX.Element {
   );
 }
 
+function UpdaterNotice(props: { entry: FleetEntryExt }): JSX.Element {
+  const view = () => updaterView(props.entry);
+  return (
+    <Show when={view()}>
+      {(status) => (
+        <aside
+          class="fleet-updater-notice"
+          aria-label="Managed updater status"
+          title={status().title}
+        >
+          <span class={stageClass(status().tone)}>{status().label}</span>
+          <Show when={status().target}>
+            {(target) => (
+              <span class="fleet-updater-target" title={status().targetTitle || target()}>
+                {target()}
+              </span>
+            )}
+          </Show>
+          <span class="fleet-updater-summary">{status().summary}</span>
+        </aside>
+      )}
+    </Show>
+  );
+}
+
 function rowActivation(
   singular: FleetSingular,
   hotkey: () => string,
@@ -588,6 +614,7 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
         >
           <SlotRows entry={props.entry} slotPolicy={props.slotPolicy} />
           <ConfirmationRows entry={props.entry} />
+          <UpdaterNotice entry={props.entry} />
         </Show>
       </td>
       <td>
@@ -600,6 +627,22 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
         >
           {protocolLine(props.entry, props.singular)}
         </span>
+        <Show when={props.singular === "validator" ? updaterModeLine(props.entry) : null}>
+          {(mode) => <span class="fleet-updater-mode">{mode()}</span>}
+        </Show>
+        <Show when={props.singular === "validator" && props.entry.updater_status?.last_success_at}>
+          <span
+            class="fleet-updater-success"
+            title={new Date(
+              (props.entry.updater_status?.last_success_at || 0) * 1000,
+            ).toISOString()}
+          >
+            Updated{" "}
+            {relTime(
+              new Date((props.entry.updater_status?.last_success_at || 0) * 1000).toISOString(),
+            )}
+          </span>
+        </Show>
       </td>
       <FleetMetricCells metrics={props.entry.system_metrics} />
     </tr>

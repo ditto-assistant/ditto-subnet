@@ -68,6 +68,52 @@ export interface ValidatorStack {
   components?: Record<string, StackIdentity | null | undefined>;
 }
 
+export type ValidatorUpdaterPhase =
+  | "prepared"
+  | "drained"
+  | "old_stopped"
+  | "candidate_started"
+  | "committed"
+  | "rollback_pending"
+  | "rollback_ready";
+
+export type ValidatorUpdaterState =
+  | "not_managed"
+  | "disabled"
+  | "unavailable"
+  | "idle"
+  | "prefetched"
+  | "draining"
+  | "replacing"
+  | "verifying"
+  | "rollback"
+  | "backoff"
+  | "retry_ready"
+  | "suppressed";
+
+/** Privacy-safe managed updater telemetry signed into heartbeat protocol v23. */
+export interface ValidatorUpdaterStatus {
+  enabled: boolean;
+  channel?: "compat-2" | null;
+  state: ValidatorUpdaterState;
+  transaction_phase?: ValidatorUpdaterPhase | null;
+  current_descriptor?: string | null;
+  current_version?: string | null;
+  candidate_descriptor?: string | null;
+  candidate_version?: string | null;
+  failed_candidate_count: number;
+  /** Unix seconds. */
+  retry_after?: number | null;
+  suppressed: boolean;
+  /** Unix seconds. */
+  last_success_at?: number | null;
+  /** Unix seconds. */
+  last_failure_at?: number | null;
+  last_failure_reason?: string | null;
+  /** Unix seconds. */
+  observed_at: number;
+}
+
 export interface SystemMetrics {
   cpu_percent: number;
   memory_percent: number;
@@ -155,6 +201,7 @@ export interface FleetEntry {
   admission?: string | null;
   capabilities?: ValidatorCapabilities | null;
   stack?: ValidatorStack | null;
+  updater_status?: ValidatorUpdaterStatus | null;
   stack_health?: Record<string, StackComponentHealth | null | undefined> | null;
   system_metrics?: SystemMetrics | null;
 }

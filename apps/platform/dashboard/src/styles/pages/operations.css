@@ -302,6 +302,18 @@
   font-size: 11px;
   color: var(--text-faint);
 }
+.fleet-updater-mode,
+.fleet-updater-success {
+  display: block;
+  margin-top: 5px;
+  color: var(--text-dim);
+  font: 650 9.5px/1.35 var(--mono);
+}
+.fleet-updater-success {
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-weight: 500;
+}
 .fleet-time {
   display: block;
   font-variant-numeric: tabular-nums;
@@ -1116,6 +1128,30 @@
 .fleet-confirmation-work + .fleet-confirmation-work {
   padding-top: 6px;
   border-top: 1px solid var(--border);
+}
+.fleet-updater-notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 7px;
+  margin-top: var(--ops-space-sm);
+  padding-top: var(--ops-space-sm);
+  border-top: 1px solid var(--border);
+}
+.fleet-updater-notice > .stage {
+  flex: 0 0 auto;
+}
+.fleet-updater-target {
+  color: var(--accent-2);
+  font: 650 9.5px/1.35 var(--mono);
+  white-space: nowrap;
+}
+.fleet-updater-summary {
+  flex: 1 0 100%;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.45;
+  text-wrap: pretty;
 }
 .fleet-slot {
   display: flex;
