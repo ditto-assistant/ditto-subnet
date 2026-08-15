@@ -22,6 +22,7 @@ from uuid import UUID, uuid4
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import ditto.db.queries.queue_order as queue_order_module
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
@@ -343,6 +344,49 @@ class TestPreviewMatchesAllocator:
         assert entries[other].gate is None
         assert entries[parked].rank > entries[other].rank
         assert await _allocator_pick(session) != parked
+
+    @pytest.mark.integration
+    async def test_owner_queries_reuse_aliases_across_preview_rows(
+        self, session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One preview does not rebuild ORM proxy metadata per owner row.
+
+        A production CPU profile attributed most queue-preview time to
+        SQLAlchemy adapting fresh aliases in the owner loop.  The aliases are
+        immutable statement metadata, so constructing another one after module
+        import is both unnecessary and a regression in this hot path.
+        """
+        agent_ids = [
+            await _seed_agent(
+                session,
+                name=f"owner-{index}",
+                hotkey=f"5OwnerHotkey{index}",
+                coldkey=f"5OwnerColdkey{index}",
+                created_at=_NOW - timedelta(hours=index + 1),
+            )
+            for index in range(3)
+        ]
+
+        def fail_on_fresh_alias(*_args: object, **_kwargs: object) -> None:
+            raise AssertionError("queue preview rebuilt a per-owner ORM alias")
+
+        linkage = await resolve_owner_linkage_batch(session, agent_ids=agent_ids)
+        monkeypatch.setattr(queue_order_module, "aliased", fail_on_fresh_alias)
+        for agent_id in agent_ids:
+            selected = await queue_order_module.selected_owner_agent_id(
+                session,
+                linkage=linkage[agent_id],
+                bench_version=_BENCH,
+                now=_NOW,
+                provisional_contender_floor=None,
+                rollout=None,
+                capable_validator_hotkeys=(),
+            )
+            leases = await queue_order_module.owner_live_lease_agent_ids(
+                session, linkage=linkage[agent_id], now=_NOW
+            )
+            assert selected is None
+            assert leases == set()
 
     @pytest.mark.integration
     async def test_a_retired_submission_is_excluded_from_both(

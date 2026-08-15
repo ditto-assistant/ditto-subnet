@@ -106,6 +106,19 @@ SQLAlchemy's aliased entities are not statically an ``Agent`` subclass, and the
 column expressions built from them are what this module actually needs.
 """
 
+# Queue previews ask both owner questions once per distinct owner on the page.
+# Constructing fresh ORM aliases inside that loop is surprisingly expensive:
+# SQLAlchemy has to rebuild the mapper's proxy-column index for every alias,
+# even though the statement shape is otherwise identical.  These aliases are
+# immutable query metadata, so share them across calls just as the mapped
+# classes themselves are shared.  The allocator uses the same helpers and
+# therefore keeps the same predicates, results, and transaction semantics;
+# only Python statement-construction work disappears after the first access.
+_OWNER_LIVE_AGENT = aliased(Agent, name="owner_live_agent")
+_OWNER_LIVE_PAYMENT = aliased(EvaluationPayment, name="owner_live_payment")
+_OWNER_SELECTED_AGENT = aliased(Agent, name="owner_selected_agent")
+_OWNER_SELECTED_PAYMENT = aliased(EvaluationPayment, name="owner_selected_payment")
+
 # The KOTH champion plus four participation-tail miners receive emissions.
 EMISSION_CONTENDER_COUNT = 5
 
@@ -783,8 +796,8 @@ async def owner_live_lease_agent_ids(
     count lets the preview answer the question once per owner instead of once
     per row, from the same statement the allocator uses.
     """
-    sibling_agent = aliased(Agent)
-    sibling_payment = aliased(EvaluationPayment)
+    sibling_agent = _OWNER_LIVE_AGENT
+    sibling_payment = _OWNER_LIVE_PAYMENT
     return set(
         await session.scalars(
             select(sibling_agent.agent_id)
@@ -852,8 +865,8 @@ async def selected_owner_agent_id(
     from ditto.db.queries.retirement import retirement_admission_predicate
     from ditto.db.queries.scores import SCORING_QUORUM
 
-    sibling_agent = aliased(Agent)
-    sibling_payment = aliased(EvaluationPayment)
+    sibling_agent = _OWNER_SELECTED_AGENT
+    sibling_payment = _OWNER_SELECTED_PAYMENT
     owner_progress_started_at = (
         select(func.min(ValidatorTicket.issued_at))
         .where(
