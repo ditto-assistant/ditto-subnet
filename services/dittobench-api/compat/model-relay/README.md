@@ -1,12 +1,17 @@
-# Frozen model-relay compatibility source
+# Pinned model-relay compatibility source
 
 This directory preserves the final reviewed `cmd/model-relay` implementation
-required by compatibility-epoch 2 validator updaters. The Go sources, module
-files, and tests were copied byte-for-byte from the former
-`ditto-assistant/dittobench-api` revision recorded in `UPSTREAM_REVISION`.
+required by compatibility-epoch 2 validator updaters. `UPSTREAM_REVISION`
+records the former `ditto-assistant/dittobench-api` revision from which the
+compatibility source was copied.
 
-It is rollback compatibility code, not the active inference path. Do not update
-dependencies or source in place. A replacement requires a new audited upstream
-revision, updated provenance, and an explicit compatibility decision.
-`SHA256SUMS` makes the release fail unless every frozen source file still
-matches that audited snapshot.
+The compatibility-epoch 2 source intentionally carries one monorepo-owned
+operational overlay: it builds with the pinned Go 1.26.6 toolchain and starts a
+non-configurable, loopback-only pprof listener. The provider, HTTP, and failure
+contracts remain unchanged, and the profiler never enters the request plane.
+This is rollback compatibility code, not the active Platform inference path.
+
+`SHA256SUMS` pins every module, Go source, and test file used by the compatibility
+binary. Update it only with an explicit compatibility decision and validation;
+the release fails closed when a pinned file changes. A broader replacement
+still requires a new audited source revision and updated provenance.
