@@ -1470,31 +1470,25 @@ jobs:
             io.heyditto.validator.stack-revision=${{ needs.release.outputs.commit_sha }}
             io.heyditto.validator.stack-service=dittobench-api
 
-  build-dittobench:
-    needs:
-      - plan
-      - release
-      - prepare-dittobench
-      - build-dittobench-amd64
-      - build-dittobench-arm64
+  # The retired relay image is independent of the native scorer children.
+  # Build it while those slower architecture lanes compile instead of making
+  # their fan-in pay the QEMU setup and compatibility build serially.
+  build-model-relay-compat:
+    needs: [plan, release, prepare-dittobench]
     if: >-
       always() &&
       needs.plan.result == 'success' &&
       needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.validator_stack == 'true' &&
-      needs.prepare-dittobench.result == 'success' &&
-      needs.build-dittobench-amd64.result == 'success' &&
-      needs.build-dittobench-arm64.result == 'success'
+      needs.prepare-dittobench.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
       packages: write
     outputs:
-      revision: ${{ needs.prepare-dittobench.outputs.revision }}
-      relay_compat_revision: ${{ needs.prepare-dittobench.outputs.relay_compat_revision }}
-      scorer_digest: ${{ steps.dittobench-api.outputs.digest }}
-      relay_digest: ${{ steps.model-relay.outputs.digest }}
+      digest: ${{ steps.model-relay.outputs.digest }}
+      revision: ${{ needs.prepare-dittobench.outputs.relay_compat_revision }}
     steps:
       - name: Check out the exact release commit
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
@@ -1514,26 +1508,6 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Assemble the scorer multi-platform index
-        id: dittobench-api
-        env:
-          AMD64_DIGEST: ${{ needs.build-dittobench-amd64.outputs.digest }}
-          ARM64_DIGEST: ${{ needs.build-dittobench-arm64.outputs.digest }}
-        run: |
-          for digest in "$AMD64_DIGEST" "$ARM64_DIGEST"; do
-            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          done
-          image="$DITTOBENCH_API_REPOSITORY:sha-${{ needs.release.outputs.commit_sha }}"
-          docker buildx imagetools create --tag "$image" \
-            "$DITTOBENCH_API_REPOSITORY@$AMD64_DIGEST" \
-            "$DITTOBENCH_API_REPOSITORY@$ARM64_DIGEST"
-          digest="$(
-            docker buildx imagetools inspect "$image" \
-              --format '{{json .Manifest}}' | jq -r .digest
-          )"
-          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
-          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
 
       # compat-2 still serves frozen host-side updaters whose signed descriptor
       # contract requires this image. The rendered stack isolates it from the
@@ -1564,6 +1538,60 @@ jobs:
             io.heyditto.validator.stack-service=model-relay
           tags: |
             ${{ env.MODEL_RELAY_REPOSITORY }}:sha-${{ needs.release.outputs.commit_sha }}
+
+  build-dittobench:
+    needs:
+      - plan
+      - release
+      - prepare-dittobench
+      - build-dittobench-amd64
+      - build-dittobench-arm64
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true' &&
+      needs.prepare-dittobench.result == 'success' &&
+      needs.build-dittobench-amd64.result == 'success' &&
+      needs.build-dittobench-arm64.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      revision: ${{ needs.prepare-dittobench.outputs.revision }}
+      scorer_digest: ${{ steps.dittobench-api.outputs.digest }}
+    steps:
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Assemble the scorer multi-platform index
+        id: dittobench-api
+        env:
+          AMD64_DIGEST: ${{ needs.build-dittobench-amd64.outputs.digest }}
+          ARM64_DIGEST: ${{ needs.build-dittobench-arm64.outputs.digest }}
+        run: |
+          for digest in "$AMD64_DIGEST" "$ARM64_DIGEST"; do
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          done
+          image="$DITTOBENCH_API_REPOSITORY:sha-${{ needs.release.outputs.commit_sha }}"
+          docker buildx imagetools create --tag "$image" \
+            "$DITTOBENCH_API_REPOSITORY@$AMD64_DIGEST" \
+            "$DITTOBENCH_API_REPOSITORY@$ARM64_DIGEST"
+          digest="$(
+            docker buildx imagetools inspect "$image" \
+              --format '{{json .Manifest}}' | jq -r .digest
+          )"
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+          printf 'digest=%s\n' "$digest" >>"$GITHUB_OUTPUT"
 
   publish-datagen:
     needs: [plan, release]
@@ -1867,6 +1895,7 @@ jobs:
       - build-validator
       - build-sandbox-docker
       - build-dittobench
+      - build-model-relay-compat
       - build-pylon
     if: >-
       always() &&
@@ -1878,6 +1907,7 @@ jobs:
       needs.build-validator.result == 'success' &&
       needs.build-sandbox-docker.result == 'success' &&
       needs.build-dittobench.result == 'success' &&
+      needs.build-model-relay-compat.result == 'success' &&
       needs.build-pylon.result == 'success'
     runs-on: ubuntu-24.04
     permissions:
@@ -1926,13 +1956,13 @@ jobs:
           VERSION: ${{ needs.release.outputs.version }}
           REVISION: ${{ needs.release.outputs.commit_sha }}
           DITTOBENCH_REVISION: ${{ needs.build-dittobench.outputs.revision }}
-          MODEL_RELAY_COMPAT_REVISION: ${{ needs.build-dittobench.outputs.relay_compat_revision }}
+          MODEL_RELAY_COMPAT_REVISION: ${{ needs.build-model-relay-compat.outputs.revision }}
         run: |
           declare -A artifacts=(
             ["$VALIDATOR_REPOSITORY"]="${{ needs.build-validator.outputs.digest }}"
             ["$SANDBOX_DOCKER_REPOSITORY"]="${{ needs.build-sandbox-docker.outputs.digest }}"
             ["$DITTOBENCH_API_REPOSITORY"]="${{ needs.build-dittobench.outputs.scorer_digest }}"
-            ["$MODEL_RELAY_REPOSITORY"]="${{ needs.build-dittobench.outputs.relay_digest }}"
+            ["$MODEL_RELAY_REPOSITORY"]="${{ needs.build-model-relay-compat.outputs.digest }}"
           )
           declare -A sources=(
             ["$VALIDATOR_REPOSITORY"]="https://github.com/ditto-assistant/ditto-subnet"
@@ -2041,7 +2071,7 @@ jobs:
           VALIDATOR_DIGEST: ${{ needs.build-validator.outputs.digest }}
           SANDBOX_DOCKER_DIGEST: ${{ needs.build-sandbox-docker.outputs.digest }}
           DITTOBENCH_API_DIGEST: ${{ needs.build-dittobench.outputs.scorer_digest }}
-          MODEL_RELAY_DIGEST: ${{ needs.build-dittobench.outputs.relay_digest }}
+          MODEL_RELAY_DIGEST: ${{ needs.build-model-relay-compat.outputs.digest }}
           PYLON_DIGEST: ${{ needs.build-pylon.outputs.digest }}
         run: |
           resolve() {

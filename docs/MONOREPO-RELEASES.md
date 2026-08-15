@@ -90,6 +90,12 @@ multi-platform index. This avoids running the cgo/tree-sitter arm64 compile
 through QEMU: it took 2m38s under emulation in v0.62.2 versus 19.4s in a
 cacheless native arm64 validation.
 
+The frozen relay compatibility image builds in its own standard-runner lane
+while both native scorer children compile. Keep its QEMU setup and cached
+multi-platform build out of the scorer fan-in: that job should only combine the
+two immutable native digests, so stack assembly can begin as soon as the last
+scorer child is available.
+
 The scorer's checksum-pinned LongMemEval input downloads in a deterministic
 Docker `RUN` layer. A clean builder still fetches the immutable upstream URL
 and fails unless its full SHA-256 matches, while subsequent release builds

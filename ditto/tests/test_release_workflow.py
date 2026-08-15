@@ -65,6 +65,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         "build-sandbox-docker",
         "build-dittobench-amd64",
         "build-dittobench-arm64",
+        "build-model-relay-compat",
         "build-dittobench",
         "assemble-stack",
         "smoke-validator-arm64",
@@ -156,6 +157,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "prepare-dittobench",
         "build-dittobench-amd64",
         "build-dittobench-arm64",
+        "build-model-relay-compat",
         "build-dittobench",
         "publish-datagen",
         "deploy-dittobench",
@@ -190,6 +192,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         ),
         "build-dittobench-amd64": ("prepare-dittobench",),
         "build-dittobench-arm64": ("prepare-dittobench",),
+        "build-model-relay-compat": ("prepare-dittobench",),
         "build-dittobench": (
             "prepare-dittobench",
             "build-dittobench-amd64",
@@ -201,6 +204,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
             "build-validator",
             "build-sandbox-docker",
             "build-dittobench",
+            "build-model-relay-compat",
             "build-pylon",
         ),
         "smoke-validator-arm64": ("build-validator",),
@@ -574,7 +578,7 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
     assert all(character in "0123456789abcdef" for character in relay_revision)
 
     prepare = workflow["jobs"]["prepare-dittobench"]
-    build = workflow["jobs"]["build-dittobench"]
+    build = workflow["jobs"]["build-model-relay-compat"]
     source = _step(
         prepare["steps"], "Materialize the retired relay compatibility source"
     )
@@ -620,7 +624,7 @@ def test_retired_relay_bridge_uses_a_frozen_compatibility_source() -> None:
 def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
-    build = jobs["build-dittobench"]
+    build = jobs["build-model-relay-compat"]
     scorers = [
         _step(
             jobs[f"build-dittobench-{architecture}"]["steps"],
@@ -766,6 +770,7 @@ def test_validator_release_smokes_each_architecture_before_promotion() -> None:
         "build-validator",
         "build-sandbox-docker",
         "build-dittobench",
+        "build-model-relay-compat",
         "build-pylon",
     }
     sign_step = _step(
@@ -832,6 +837,25 @@ def test_release_builds_dittobench_on_native_bounded_larger_runners() -> None:
         == "${{ needs.build-dittobench-arm64.outputs.digest }}"
     )
     assert "docker buildx imagetools create" in merge["run"]
+
+    compatibility = jobs["build-model-relay-compat"]
+    assert compatibility["needs"] == ["plan", "release", "prepare-dittobench"]
+    _step(
+        compatibility["steps"],
+        "Set up QEMU for the retired compatibility image",
+    )
+    fan_in_steps = jobs["build-dittobench"]["steps"]
+    assert all(
+        "setup-qemu-action@" not in (step.get("uses") or "") for step in fan_in_steps
+    )
+    assert all(
+        step.get("name") != "Build and publish the retired relay compatibility index"
+        for step in fan_in_steps
+    )
+    assert all(
+        step.get("name") != "Check out the exact release commit"
+        for step in fan_in_steps
+    )
 
 
 def test_release_builds_validator_on_native_standard_runners() -> None:
@@ -1006,7 +1030,7 @@ def test_release_scopes_each_github_actions_cache_to_one_image() -> None:
         "build-pylon": ["pylon"],
         "build-dittobench-amd64": ["dittobench-api-amd64"],
         "build-dittobench-arm64": ["dittobench-api-arm64"],
-        "build-dittobench": ["model-relay-compat"],
+        "build-model-relay-compat": ["model-relay-compat"],
         "assemble-stack": ["stack-release"],
     }
     assert reader_scopes["build-dittobench-amd64"] == [
