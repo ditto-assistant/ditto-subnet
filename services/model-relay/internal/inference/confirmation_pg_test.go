@@ -515,8 +515,9 @@ func TestConfirmationChatRetriesBackpressureOnFrozenRoute(t *testing.T) {
 	f := newConfirmationFixture(t, chatTestConfig(t, upstream.URL), "reader", confirmationTestModel, "openrouter")
 	f.deps.Sleep = func(_ context.Context, delay time.Duration) { sleeps = append(sleeps, delay) }
 
+	nonce := uuid.New()
 	body := []byte(confirmationChatBody())
-	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, uuid.New(), body)))
+	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
 	if w.Code != http.StatusOK {
 		t.Fatalf("retried completion: %d %s", w.Code, w.Body.String())
 	}
@@ -531,6 +532,77 @@ func TestConfirmationChatRetriesBackpressureOnFrozenRoute(t *testing.T) {
 		if sleeps[index] != wantSleeps[index] {
 			t.Fatalf("retry sleeps: got %v want %v", sleeps, wantSleeps)
 		}
+	}
+	var status string
+	var prompt, completion, cost int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT status, prompt_tokens, completion_tokens, cost_microusd
+		 FROM confirmation_inference_requests WHERE grant_id = $1 AND nonce = $2`,
+		f.grantID, nonce).Scan(&status, &prompt, &completion, &cost); err != nil {
+		t.Fatalf("read retried request: %v", err)
+	}
+	if status != "completed" || prompt != 12 || completion != 5 || cost != 2100 {
+		t.Fatalf("retried request settle: %s %d/%d cost=%d", status, prompt, completion, cost)
+	}
+	var requestCount, active, rows int
+	var grantPrompt, grantCompletion, grantCost int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT request_count, active_requests, prompt_tokens, completion_tokens, cost_microusd,
+		        (SELECT count(*) FROM confirmation_inference_requests WHERE grant_id = $1)
+		 FROM confirmation_inference_grants WHERE grant_id = $1`, f.grantID).
+		Scan(&requestCount, &active, &grantPrompt, &grantCompletion, &grantCost, &rows); err != nil {
+		t.Fatalf("read retried grant: %v", err)
+	}
+	if requestCount != 1 || active != 0 || rows != 1 ||
+		grantPrompt != 12 || grantCompletion != 5 || grantCost != 2100 {
+		t.Fatalf("retried grant accounting: count=%d active=%d rows=%d %d/%d cost=%d",
+			requestCount, active, rows, grantPrompt, grantCompletion, grantCost)
+	}
+}
+
+func TestConfirmationChatBackpressureExhaustionSettlesOnce(t *testing.T) {
+	var calls int
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Retry-After", "1")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limited"}`))
+	}))
+	defer upstream.Close()
+	f := newConfirmationFixture(t, chatTestConfig(t, upstream.URL), "reader", confirmationTestModel, "openrouter")
+
+	nonce := uuid.New()
+	body := []byte(confirmationChatBody())
+	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
+	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "confirmation provider unavailable")
+	if calls != providerMaxAttempts {
+		t.Fatalf("backpressure attempts: got %d want %d", calls, providerMaxAttempts)
+	}
+	var status string
+	var prompt, completion, cost, reserved int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT status, prompt_tokens, completion_tokens, cost_microusd, reserved_tokens
+		 FROM confirmation_inference_requests WHERE grant_id = $1 AND nonce = $2`,
+		f.grantID, nonce).Scan(&status, &prompt, &completion, &cost, &reserved); err != nil {
+		t.Fatalf("read exhausted request: %v", err)
+	}
+	if status != "failed" || prompt != reserved || completion != 0 || cost != 0 {
+		t.Fatalf("exhausted request settle: %s %d/%d completion=%d cost=%d",
+			status, prompt, reserved, completion, cost)
+	}
+	var requestCount, active, rows int
+	var grantPrompt, grantCompletion, grantCost int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT request_count, active_requests, prompt_tokens, completion_tokens, cost_microusd,
+		        (SELECT count(*) FROM confirmation_inference_requests WHERE grant_id = $1)
+		 FROM confirmation_inference_grants WHERE grant_id = $1`, f.grantID).
+		Scan(&requestCount, &active, &grantPrompt, &grantCompletion, &grantCost, &rows); err != nil {
+		t.Fatalf("read exhausted grant: %v", err)
+	}
+	if requestCount != 1 || active != 0 || rows != 1 ||
+		grantPrompt != reserved || grantCompletion != 0 || grantCost != 0 {
+		t.Fatalf("exhausted grant accounting: count=%d active=%d rows=%d %d/%d cost=%d",
+			requestCount, active, rows, grantPrompt, grantCompletion, grantCost)
 	}
 }
 

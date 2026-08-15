@@ -854,6 +854,29 @@ class TestV9ConfirmationChatProxy:
         assert response.status_code == 200, response.text
         assert upstream_calls == 2
         assert retry_backpressure_values == [True]
+        async with session_maker() as session:
+            request_rows = list(
+                await session.scalars(
+                    select(ConfirmationInferenceRequest).where(
+                        ConfirmationInferenceRequest.grant_id == UUID(offer["grant_id"])
+                    )
+                )
+            )
+            grant = await session.get(
+                ConfirmationInferenceGrant, UUID(offer["grant_id"])
+            )
+            assert len(request_rows) == 1
+            request_row = request_rows[0]
+            assert request_row.status == "completed"
+            assert request_row.prompt_tokens == 5
+            assert request_row.completion_tokens == 1
+            assert request_row.cost_microusd == 10
+            assert grant is not None
+            assert grant.request_count == 1
+            assert grant.active_requests == 0
+            assert grant.prompt_tokens == 5
+            assert grant.completion_tokens == 1
+            assert grant.cost_microusd == 10
 
     async def test_installed_judge_profile_reaches_zdr_azure_route(
         self,
