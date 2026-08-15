@@ -1598,6 +1598,7 @@ class TestV9ConfirmationChatProxy:
 
     async def test_reader_backpressure_respects_hard_elapsed_deadline(self) -> None:
         calls = 0
+        sleeps: list[float] = []
 
         async def provider(request: httpx.Request) -> httpx.Response:
             nonlocal calls
@@ -1607,6 +1608,9 @@ class TestV9ConfirmationChatProxy:
                 request=request,
                 json={"error": {"code": 429, "message": "capacity"}},
             )
+
+        async def record_sleep(delay: float) -> None:
+            sleeps.append(delay)
 
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(provider)
@@ -1619,10 +1623,12 @@ class TestV9ConfirmationChatProxy:
                     headers={"Authorization": "redacted"},
                     backpressure_max_attempts=7,
                     require_receipt_free_backpressure=True,
-                    max_elapsed_seconds=0.01,
+                    max_elapsed_seconds=1.0,
+                    sleep=record_sleep,
                 )
         assert exc_info.value.timed_out is True
         assert calls == 1
+        assert sleeps == []
 
     async def test_reader_backpressure_propagates_parent_cancellation(self) -> None:
         calls = 0

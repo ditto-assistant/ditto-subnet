@@ -524,9 +524,9 @@ async def _post_provider_with_retry(
                     delay = _provider_retry_after_seconds(response)
                 if deadline is not None:
                     remaining = deadline - time.monotonic()
-                    if remaining <= 0:
+                    if remaining <= 0 or delay >= remaining:
+                        await response.aclose()
                         raise _ProviderCallError(attempts=attempt, timed_out=True)
-                    delay = min(delay, remaining)
                 await response.aclose()
                 await sleep(delay)
                 continue
