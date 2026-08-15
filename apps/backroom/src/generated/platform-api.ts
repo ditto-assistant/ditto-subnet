@@ -14023,7 +14023,7 @@ export interface components {
         PublicValidatorSlotPolicy: {
             /**
              * Disk Percent Ceiling
-             * @description Host disk utilization at or above which a validator is held to a single slot until a fresh heartbeat reports headroom.
+             * @description Host disk utilization at or above which a validator is held to a single slot until a fresh heartbeat reports headroom; zero means disk gating is disabled.
              */
             disk_percent_ceiling: number;
             /**

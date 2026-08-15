@@ -3354,11 +3354,12 @@ class PublicValidatorSlotPolicy(BaseModel):
     disk_percent_ceiling: Annotated[
         int,
         Field(
-            ge=50,
+            ge=0,
             le=100,
             description=(
                 "Host disk utilization at or above which a validator is held to a "
-                "single slot until a fresh heartbeat reports headroom."
+                "single slot until a fresh heartbeat reports headroom; zero means "
+                "disk gating is disabled."
             ),
         ),
     ]

@@ -147,3 +147,13 @@ class TestAuthorizedSlotReporting:
 
         assert snapshot.slot_policy.max_concurrent_slots == 3
         assert snapshot.slot_policy.disk_percent_ceiling == 75
+
+    def test_a_disabled_disk_ceiling_travels_with_the_snapshot(self) -> None:
+        """Zero remains the public disabled value even when disk is saturated."""
+        snapshot = _snapshot(
+            _row(configured_slots=8, disk_percent=100),
+            ValidatorSlotSettings(max_concurrent_slots=8, disk_percent_ceiling=0),
+        )
+
+        assert snapshot.slot_policy.disk_percent_ceiling == 0
+        assert snapshot.validators[0].allowed_slots == 8
