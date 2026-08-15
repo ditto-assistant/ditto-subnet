@@ -368,14 +368,14 @@ describe("URL filter/page restore and sanitize (row 12)", () => {
 
 // ── Row 13: test_submission_filters_are_mobile_and_keyboard_accessible ──────
 // 44px touch targets, aria-pressed state, and a visible focus outline on
-// the activity filter buttons; the table keeps a scrollable min-width floor
-// on small screens.
+// the activity filter buttons; on small screens the table reflows into
+// stacked cards instead of keeping a sideways-scroll floor.
 describe("mobile + keyboard accessible filters (row 13)", () => {
-  it("keeps the 44px touch floor, full-width band, and table min-width in CSS", () => {
+  it("keeps the 44px touch floor, full-width band, and card reflow in CSS", () => {
     expect(WIDGETS_CSS).toMatch(/\.activity-filter\s*\{\s*min-height:\s*44px;\s*\}/);
     expect(WIDGETS_CSS).toMatch(/\.activity-filter-list\s*\{\s*width:\s*100%;\s*\}/);
     expect(WIDGETS_CSS).toMatch(/\.activity-filter\[aria-pressed="true"\]/);
-    expect(SUBMISSIONS_CSS).toMatch(/\.activity-table-frame\s*\{\s*min-width:\s*680px;\s*\}/);
+    expect(SUBMISSIONS_CSS).toMatch(/\.activity tbody tr\s*\{\s*display:\s*grid;/);
     expect(BASE_CSS).toMatch(/:focus-visible\s*\{\s*outline:\s*2px solid var\(--focus\)/);
   });
 

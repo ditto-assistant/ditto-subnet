@@ -130,7 +130,7 @@ export function ActivityBoard(props: { store: ActivityStore }): JSX.Element {
       aria-busy={store.busy() ? "true" : "false"}
       tabindex="0"
       role="region"
-      aria-label="Recent submissions, horizontally scrollable on small screens"
+      aria-label="Recent submissions, shown as stacked cards on small screens"
     >
       <div class="activity-filters" aria-labelledby="activity-filter-label">
         <span class="visually-hidden" id="activity-filter-label">
@@ -251,14 +251,14 @@ export function ActivityBoard(props: { store: ActivityStore }): JSX.Element {
                           <CopyButton value={id} label="agent ID" />
                         </span>
                       </td>
-                      <td class="hide-sm">
+                      <td class="hide-sm miner-cell">
                         <span class="hotkey copyable" title={e.miner_hotkey}>
                           <span>{shortKey(e.miner_hotkey)}</span>
                           <CopyButton value={e.miner_hotkey} label="miner hotkey" />
                         </span>
                       </td>
                       <StageCell entry={e} />
-                      <td>
+                      <td class="validation-cell">
                         <span
                           class={
                             "validation-progress" + (progress() === "Not started" ? " pending" : "")
@@ -267,7 +267,7 @@ export function ActivityBoard(props: { store: ActivityStore }): JSX.Element {
                           {progress()}
                         </span>
                       </td>
-                      <td class="num hide-sm" title={e.submitted_at}>
+                      <td class="num hide-sm submitted-cell" title={e.submitted_at}>
                         {relTime(e.submitted_at)}
                       </td>
                     </tr>

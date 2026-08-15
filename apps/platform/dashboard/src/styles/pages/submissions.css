@@ -55,9 +55,92 @@
 .activity {
   margin-top: 30px;
 }
+/* ── Mobile card reflow (≤720px) ──
+   The five-column table becomes a stack of cards — agent identity, miner,
+   stage evidence, then a labeled validation/submitted row — matching the
+   leaderboard's mobile treatment. The shared .board frame-strip lives in
+   leaderboard.css; the filter band and pagers become their own framed rows. */
 @media (max-width: 720px) {
   .activity-table-frame {
-    min-width: 680px;
+    min-width: 0;
+  }
+  .activity-filters,
+  .activity .pager.top {
+    margin-bottom: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+  .activity table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .activity thead {
+    display: none;
+  }
+  .activity tbody {
+    display: grid;
+    gap: 10px;
+  }
+  .activity tbody tr {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 9px 12px;
+    padding: 13px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elev);
+  }
+  .activity tbody tr:focus-visible {
+    outline-offset: 2px;
+  }
+  .activity tbody td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    text-align: left;
+  }
+  .activity td:first-child,
+  .activity td.miner-cell,
+  .activity td.stage-cell {
+    grid-column: 1 / -1;
+  }
+  /* Cards have room for what the narrow table hid. */
+  .activity td.hide-sm {
+    display: block;
+  }
+  .activity .stage-cell {
+    min-width: 0;
+  }
+  .activity td.empty {
+    grid-column: 1 / -1;
+    padding: 0;
+  }
+  .activity td.empty .empty-msg {
+    position: static;
+    width: auto;
+    padding: 28px 16px;
+  }
+  /* Labels stand in for the hidden column headers. */
+  .activity td.miner-cell::before {
+    content: "Miner";
+  }
+  .activity td.validation-cell::before {
+    content: "Validation";
+  }
+  .activity td.submitted-cell::before {
+    content: "Submitted";
+  }
+  .activity td.miner-cell::before,
+  .activity td.validation-cell::before,
+  .activity td.submitted-cell::before {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--text-faint);
+    font: 650 9.5px/1.2 var(--mono);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
   }
 }
 

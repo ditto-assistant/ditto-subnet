@@ -219,22 +219,22 @@ export function FleetMetricCells(props: {
         };
         return (
           <>
-            <td>
+            <td class="fleet-cpu-cell">
               <FleetMeter value={metrics().cpu_percent} tone="" />
             </td>
-            <td>
+            <td class="fleet-mem-cell">
               <FleetMeter
                 value={metrics().memory_percent}
                 tone={metrics().memory_percent >= 90 ? "warn" : ""}
               />
             </td>
-            <td>
+            <td class="fleet-disk-cell">
               <FleetMeter
                 value={metrics().disk_percent}
                 tone={metrics().disk_percent >= 95 ? "warn" : ""}
               />
             </td>
-            <td>
+            <td class="fleet-docker-cell">
               <span class={"fleet-container-health" + (docker().tone ? " " + docker().tone : "")}>
                 {docker().value}
               </span>
@@ -672,18 +672,18 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
       onClick={activation.onClick}
       onKeyDown={activation.onKeyDown}
     >
-      <td>
+      <td class="fleet-id-cell">
         <FleetIdentity entry={props.entry} singular={props.singular} names={props.names} />
       </td>
-      <td>
+      <td class="fleet-status-cell">
         <span class={stageClass(status()[1])}>{status()[0]}</span>
       </td>
-      <td>
+      <td class="fleet-first-seen-cell">
         <span class="fleet-time" title={props.entry.first_seen_at || ""}>
           {props.entry.first_seen_at ? relTime(props.entry.first_seen_at) : "–"}
         </span>
       </td>
-      <td>
+      <td class="fleet-heartbeat-cell">
         <span class="fleet-time" title={reportedAt() || ""}>
           {relTime(reportedAt())}
         </span>
@@ -724,7 +724,7 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
           <UpdaterNotice entry={props.entry} />
         </Show>
       </td>
-      <td>
+      <td class="fleet-version-cell">
         <span class="fleet-version">{versionLabel(props.entry)}</span>
         <span
           class="fleet-protocol"
@@ -782,7 +782,7 @@ export function RetiredFleetRow(props: RetiredFleetRowProps): JSX.Element {
   const activation = rowActivation(props.singular, hotkey);
   const cells = (): JSX.Element => (
     <>
-      <td>
+      <td class="fleet-id-cell">
         <FleetIdentity
           entry={props.entry}
           singular={props.singular}
@@ -790,18 +790,18 @@ export function RetiredFleetRow(props: RetiredFleetRowProps): JSX.Element {
           screenerFallback="Unknown screener"
         />
       </td>
-      <td>
+      <td class="fleet-status-cell">
         <span class={stageClass(status()[1])}>{status()[0]}</span>
       </td>
-      <td>
+      <td class="fleet-heartbeat-cell">
         <span class="fleet-time" title={reportedAt() || ""}>
           {relTime(reportedAt())}
         </span>
       </td>
-      <td>
+      <td class="fleet-state-cell">
         <span class="stage unknown">{work()[0]}</span>
       </td>
-      <td>
+      <td class="fleet-version-cell">
         <span class="fleet-version">{versionLabel(props.entry)}</span>
         <span class="fleet-protocol">{retiredProtocolLine(props.entry, props.singular)}</span>
       </td>

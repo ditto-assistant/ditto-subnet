@@ -364,7 +364,7 @@ export function OperationsPage(
                 class="board validators"
                 tabindex="0"
                 role="region"
-                aria-label="Fleet health table, horizontally scrollable on small screens"
+                aria-label="Fleet health table, shown as stacked cards on small screens"
               >
                 <table
                   class="fleet-table"
@@ -449,7 +449,7 @@ export function OperationsPage(
                   class="board validators"
                   tabindex="0"
                   role="region"
-                  aria-label="Offline fleet nodes, horizontally scrollable on small screens"
+                  aria-label="Offline fleet nodes, shown as stacked cards on small screens"
                 >
                   <table
                     class="fleet-table fleet-retired-table"

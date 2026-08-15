@@ -1521,30 +1521,23 @@
     width: 28px;
     height: 28px;
   }
-  .pipeline-overview {
-    min-width: 720px;
-  }
+  /* The ledger is a flex child of the now-column table head: its 640px
+     flex-basis would become HEIGHT and stretch the wrapped rows across it.
+     A compact grid states the seven counts in two tidy rows instead. */
   .fleet-ledger {
-    gap: var(--ops-space-md);
-  }
-  .fleet-ledger-row {
-    flex: 1 1 100px;
+    display: grid;
+    flex-basis: auto;
+    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    gap: 8px 14px;
+    width: 100%;
   }
   .fleet-ledger p {
-    flex-basis: 100%;
+    max-width: none;
+    grid-column: 1 / -1;
   }
   .fleet-table-head {
     align-items: flex-start;
     flex-direction: column;
-  }
-  .validators {
-    margin-inline: -16px;
-    border-right: 0;
-    border-left: 0;
-    border-radius: 0;
-  }
-  .fleet-work-col {
-    min-width: 190px;
   }
   .submission-builds {
     margin-inline: -16px;
@@ -1651,4 +1644,183 @@
 }
 .pipeline-review-items .pipeline-item {
   border-top-color: color-mix(in oklch, var(--accent-2) 32%, var(--border));
+}
+
+/* ── Mobile (≤720px): vertical pipeline map + fleet cards ─────
+   Matches the leaderboard's card treatment. The four-stage atlas stops
+   scrolling sideways and reads as a vertical journey down a node rail; the
+   ten-column fleet table reflows into one card per node with labeled stat
+   rows (the shared .board frame-strip lives in leaderboard.css). This block
+   sits last in the sheet so it outranks both the base pipeline spec and the
+   atlas re-spec at equal specificity. */
+@media (max-width: 720px) {
+  .pipeline-map {
+    overflow-x: visible;
+  }
+  .pipeline-overview {
+    grid-template-columns: minmax(0, 1fr);
+    min-width: 0;
+  }
+  /* Each stage: the numbered node on a left rail, head and queue beside it. */
+  .pipeline-column {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr);
+    align-items: start;
+    column-gap: 12px;
+    padding: 0 0 26px;
+  }
+  .pipeline-column:last-child {
+    padding-bottom: 0;
+  }
+  .pipeline-node {
+    grid-row: 1 / span 2;
+    margin: 0;
+  }
+  /* The stage connector turns vertical: a rule down the node rail, with the
+     direction glyph rotated to point at the next stage. */
+  .pipeline-column:not(:last-child)::after {
+    top: 46px;
+    right: auto;
+    bottom: 10px;
+    left: 19px;
+    width: 1px;
+    height: auto;
+  }
+  .pipeline-column:not(:last-child)::before {
+    top: auto;
+    right: auto;
+    bottom: 0;
+    left: 15px;
+    transform: rotate(90deg);
+  }
+  .pipeline-column-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-height: 0;
+    margin-bottom: 5px;
+    text-align: left;
+  }
+  .pipeline-column h3 {
+    min-height: 0;
+  }
+  .pipeline-count {
+    margin: 0;
+  }
+  .pipeline-items {
+    max-height: 320px;
+  }
+  .pipeline-review-branch {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0;
+  }
+
+  /* ── Fleet cards ── */
+  .fleet-table,
+  .fleet-retired-table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    table-layout: auto;
+  }
+  .fleet-table thead {
+    display: none;
+  }
+  .fleet-table tbody {
+    display: grid;
+    gap: 10px;
+  }
+  .fleet-table tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 12px;
+    padding: 13px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elev);
+  }
+  .fleet-table tbody td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+  }
+  .fleet-table td.fleet-id-cell,
+  .fleet-table td.fleet-work-col,
+  .fleet-table td.fleet-version-cell,
+  .fleet-table td.fleet-docker-cell,
+  .fleet-table td.fleet-unreported,
+  .fleet-retired-table td.fleet-state-cell {
+    grid-column: 1 / -1;
+  }
+  /* The active table's state cell keeps its 3-up slot; only the retired
+     table's longer "last reported" line spans (the rule above). */
+  .fleet-table td.empty {
+    grid-column: 1 / -1;
+    padding: 0;
+  }
+  .fleet-table td.empty .empty-msg {
+    position: static;
+    width: auto;
+    padding: 28px 16px;
+  }
+  /* Labels stand in for the hidden column headers. */
+  .fleet-table td.fleet-status-cell::before {
+    content: "Status";
+  }
+  .fleet-table td.fleet-first-seen-cell::before {
+    content: "First seen";
+  }
+  .fleet-table td.fleet-heartbeat-cell::before {
+    content: "Last heartbeat";
+  }
+  .fleet-table td.fleet-work-col::before {
+    content: "Current work";
+  }
+  .fleet-table td.fleet-version-cell::before {
+    content: "Version";
+  }
+  .fleet-table td.fleet-cpu-cell::before {
+    content: "CPU";
+  }
+  .fleet-table td.fleet-mem-cell::before {
+    content: "Memory";
+  }
+  .fleet-table td.fleet-disk-cell::before {
+    content: "Disk";
+  }
+  .fleet-table td.fleet-docker-cell::before {
+    content: "Containers";
+  }
+  .fleet-retired-table td.fleet-state-cell::before {
+    content: "Last reported";
+  }
+  .fleet-table td.fleet-status-cell::before,
+  .fleet-table td.fleet-first-seen-cell::before,
+  .fleet-table td.fleet-heartbeat-cell::before,
+  .fleet-table td.fleet-work-col::before,
+  .fleet-table td.fleet-version-cell::before,
+  .fleet-table td.fleet-cpu-cell::before,
+  .fleet-table td.fleet-mem-cell::before,
+  .fleet-table td.fleet-disk-cell::before,
+  .fleet-table td.fleet-docker-cell::before,
+  .fleet-retired-table td.fleet-state-cell::before {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--text-faint);
+    font: 650 9.5px/1.2 var(--mono);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .fleet-unreported {
+    color: var(--text-faint);
+    font-size: 11px;
+  }
+  .fleet-retired summary {
+    flex-wrap: wrap;
+  }
+  .fleet-retired .board {
+    padding: 0 14px 14px;
+  }
 }
