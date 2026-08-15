@@ -83,6 +83,38 @@ _SCORING_PREFIX = "/api/v1/scoring"
 # benchmark ticket. This does not spend inference budget: no model request can
 # begin until the exchange succeeds.
 _INFERENCE_EXCHANGE_RETRY_DELAYS = (0.25, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
+_INFERENCE_BUDGET_EVIDENCE_HEADERS = {
+    "request_budget": "X-Ditto-Request-Budget",
+    "token_budget": "X-Ditto-Token-Budget",
+    "embedding_request_budget": "X-Ditto-Embedding-Request-Budget",
+    "embedding_token_budget": "X-Ditto-Embedding-Token-Budget",
+    "max_output_tokens": "X-Ditto-Max-Output-Tokens",
+}
+
+
+def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
+    """Read all-or-nothing trusted budget evidence from exchange headers."""
+    raw = {
+        field: response.headers.get(header)
+        for field, header in _INFERENCE_BUDGET_EVIDENCE_HEADERS.items()
+    }
+    if all(value is None for value in raw.values()):
+        return {}
+    if any(value is None for value in raw.values()):
+        raise PlatformInfrastructureError(
+            "inference exchange returned incomplete budget evidence"
+        )
+    try:
+        evidence = {field: int(value) for field, value in raw.items() if value}
+    except ValueError as error:
+        raise PlatformInfrastructureError(
+            "inference exchange returned invalid budget evidence"
+        ) from error
+    if len(evidence) != len(raw) or any(value < 1 for value in evidence.values()):
+        raise PlatformInfrastructureError(
+            "inference exchange returned invalid budget evidence"
+        )
+    return evidence
 
 
 class PlatformClient:
@@ -502,7 +534,8 @@ class PlatformClient:
                     f"inference exchange failed after {attempts} attempts: {error}"
                 ) from error
             if response.status_code == 200:
-                return InferenceExchangeResponse.model_validate(response.json())
+                exchange = InferenceExchangeResponse.model_validate(response.json())
+                return exchange.model_copy(update=_inference_budget_evidence(response))
             retryable = (
                 response.status_code in {408, 429} or response.status_code >= 500
             )

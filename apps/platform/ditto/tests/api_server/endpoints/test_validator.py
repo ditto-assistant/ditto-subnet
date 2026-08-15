@@ -4934,7 +4934,7 @@ class TestRequestJob:
             session,
             validator_hotkey="validator-a",
             now=now,
-            ttl=timedelta(minutes=90),
+            ttl=timedelta(minutes=120),
             bench_version=_BENCH_VERSION,
             artifact_mode="screened_only",
             validator_running_benchmark=False,
@@ -6390,8 +6390,8 @@ class TestRequestJob:
         body = resp.json()
         assert body["agent_id"] == str(agent_id)
         deadline = datetime.fromisoformat(body["deadline"].replace("Z", "+00:00"))
-        assert before + timedelta(minutes=90) <= deadline
-        assert deadline <= after + timedelta(minutes=90)
+        assert before + timedelta(minutes=120) <= deadline
+        assert deadline <= after + timedelta(minutes=120)
 
     async def test_canonical_candidate_preempts_runnable_score_retest(
         self,

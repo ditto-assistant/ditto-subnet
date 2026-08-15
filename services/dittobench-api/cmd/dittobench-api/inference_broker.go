@@ -143,24 +143,37 @@ type brokerSession struct {
 	// reachable only after this broker has authenticated the sandbox source;
 	// unlike a loopback HTTP listener it cannot be scanned or called by another
 	// host process to spend the server-owned provider session.
-	trustedChatHandler  http.Handler
-	generation          int
-	expiresAt           time.Time
-	expectedSourceIP    string
-	provider            string
-	model               string
-	requestModel        string
-	profileRevision     string
-	preparedAt          time.Time
-	ticketAgentID       string
-	ticketSlotID        string
-	ticketDeadline      time.Time
-	boundRunID          string
-	benchVersion        int
-	confirmationSession bool
-	confirmationGrants  map[string]brokerConfirmationGrant
-	embeddingGrant      brokerConfirmationGrant
-	inFlight            int
+	trustedChatHandler http.Handler
+	generation         int
+	expiresAt          time.Time
+	expectedSourceIP   string
+	provider           string
+	model              string
+	requestModel       string
+	// Budget evidence is copied from the authenticated Platform exchange. It is
+	// optional during a rolling upgrade; when present it lets this independent
+	// broker reject an impossible 4102/4104/4109 attribution instead of trusting
+	// one terminal response enough to bill a miner.
+	requestBudget             uint64
+	tokenBudget               uint64
+	embeddingRequestBudget    uint64
+	embeddingTokenBudget      uint64
+	maxOutputTokens           uint64
+	chatDispatches            uint64
+	chatChargeUpperBound      uint64
+	embeddingDispatches       uint64
+	embeddingChargeUpperBound uint64
+	profileRevision           string
+	preparedAt                time.Time
+	ticketAgentID             string
+	ticketSlotID              string
+	ticketDeadline            time.Time
+	boundRunID                string
+	benchVersion              int
+	confirmationSession       bool
+	confirmationGrants        map[string]brokerConfirmationGrant
+	embeddingGrant            brokerConfirmationGrant
+	inFlight                  int
 	// caseGeneration binds every admitted v9 chat request to the ordinary case
 	// window in which it started. A harness may return its /run response while
 	// a background request is still inside the broker's bounded recovery loop;
@@ -201,6 +214,11 @@ type brokerSession struct {
 	// and wire value, so which runs FAIL is unchanged and only who is CHARGED
 	// moves. See relayFinalizeFailure for the tie-break.
 	grantAgentDeclines uint64
+	// declineEvidenceMismatches counts terminal allowance codes contradicted by
+	// the broker's independently observed request/charge upper bounds. Such a
+	// run still fails closed, but it is validator infrastructure and keeps the
+	// miner's attempt.
+	declineEvidenceMismatches uint64
 	// terminalAgentFailureNotified makes the first typed agent-attributable
 	// allowance decline end the benchmark exactly once. Once the platform says
 	// the grant is spent, every later case can only receive the same refusal.
@@ -657,6 +675,10 @@ type platformGrantDenied struct {
 	// code is the platform's decline code, or 0 when it did not send one.
 	// Reporting only -- the action for every terminal decline is identical.
 	code int
+	// reservationUpperBound is the tokenizer-independent maximum this one
+	// refused request could have charged. It lets the caller disprove 4109 and
+	// impossible near-empty 4104 responses without trusting provider usage.
+	reservationUpperBound uint64
 }
 
 // Error deliberately preserves the historical wording so the marker-based
@@ -839,6 +861,65 @@ var declineFaultFor = map[int]declineFault{
 // to the harness. Unknown codes, and the absent code 0, are never agent-fault.
 func declineIsAgentFault(code int) bool {
 	return declineFaultFor[code] == declineFaultAgent
+}
+
+// declineMatchesBudgetEvidenceLocked independently checks whether the typed
+// Platform decline is even possible under what this broker dispatched. The
+// Platform remains authoritative for the exact accounting; these are
+// deliberately conservative upper bounds whose only job is to disprove an
+// impossible attribution. Missing evidence keeps the pre-upgrade behaviour.
+func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedding bool, currentUpperBound uint64) bool {
+	if session == nil {
+		return false
+	}
+	if embedding {
+		if session.embeddingRequestBudget == 0 || session.embeddingTokenBudget == 0 {
+			return true
+		}
+		switch code {
+		case platformDeclineBudgetExhausted:
+			return session.embeddingDispatches > session.embeddingRequestBudget
+		case platformDeclineTokenBudgetExhausted:
+			return session.embeddingChargeUpperBound > session.embeddingTokenBudget
+		case platformDeclineReservationTooLarge:
+			return currentUpperBound > session.embeddingTokenBudget
+		default:
+			return false
+		}
+	}
+	if session.requestBudget == 0 || session.tokenBudget == 0 || session.maxOutputTokens == 0 {
+		return true
+	}
+	switch code {
+	case platformDeclineBudgetExhausted:
+		return session.chatDispatches > session.requestBudget
+	case platformDeclineTokenBudgetExhausted:
+		return session.chatChargeUpperBound > session.tokenBudget
+	case platformDeclineReservationTooLarge:
+		return currentUpperBound > session.tokenBudget
+	default:
+		return false
+	}
+}
+
+// platformChatChargeUpperBound mirrors the Platform's tokenizer-independent
+// charge ceiling: UTF-8 request bytes plus the clamped output allowance. It is
+// not scored usage and intentionally overestimates; if even this bound is below
+// the ticket budget, a token-exhaustion response cannot be true.
+func platformChatChargeUpperBound(body []byte, maximum uint64) uint64 {
+	output := maximum
+	var payload struct {
+		MaxTokens           *int64 `json:"max_tokens"`
+		MaxCompletionTokens *int64 `json:"max_completion_tokens"`
+	}
+	if json.Unmarshal(body, &payload) == nil {
+		for _, candidate := range []*int64{payload.MaxTokens, payload.MaxCompletionTokens} {
+			if candidate != nil && *candidate > 0 && uint64(*candidate) < output {
+				output = uint64(*candidate)
+			}
+		}
+	}
+	return uint64(len(body)) + output
 }
 
 // platformDeclineCode extracts the platform's decline code from an error body,
@@ -1391,18 +1472,23 @@ func (b *inferenceBroker) prepare(w http.ResponseWriter, r *http.Request) {
 }
 
 type brokerActivation struct {
-	ActivationSecret string    `json:"activation_secret"`
-	GrantID          string    `json:"grant_id"`
-	AgentID          string    `json:"agent_id,omitempty"`
-	SlotID           string    `json:"slot_id,omitempty"`
-	TicketDeadline   time.Time `json:"ticket_deadline,omitempty"`
-	Bearer           string    `json:"bearer"`
-	ProxyURL         string    `json:"proxy_url"`
-	Generation       int       `json:"generation"`
-	ExpiresAt        time.Time `json:"expires_at"`
-	Provider         string    `json:"provider"`
-	ProfileRevision  string    `json:"profile_revision"`
-	Model            string    `json:"model"`
+	ActivationSecret       string    `json:"activation_secret"`
+	GrantID                string    `json:"grant_id"`
+	AgentID                string    `json:"agent_id,omitempty"`
+	SlotID                 string    `json:"slot_id,omitempty"`
+	TicketDeadline         time.Time `json:"ticket_deadline,omitempty"`
+	Bearer                 string    `json:"bearer"`
+	ProxyURL               string    `json:"proxy_url"`
+	Generation             int       `json:"generation"`
+	ExpiresAt              time.Time `json:"expires_at"`
+	Provider               string    `json:"provider"`
+	ProfileRevision        string    `json:"profile_revision"`
+	Model                  string    `json:"model"`
+	RequestBudget          uint64    `json:"request_budget,omitempty"`
+	TokenBudget            uint64    `json:"token_budget,omitempty"`
+	EmbeddingRequestBudget uint64    `json:"embedding_request_budget,omitempty"`
+	EmbeddingTokenBudget   uint64    `json:"embedding_token_budget,omitempty"`
+	MaxOutputTokens        uint64    `json:"max_output_tokens,omitempty"`
 }
 
 type brokerConfirmationGrantWire struct {
@@ -1627,6 +1713,12 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 		SlotID: activation.SlotID, TicketDeadline: activation.TicketDeadline,
 	}
 	hasRouteIdentity := activation.Provider != "" || activation.ProfileRevision != "" || activation.Model != ""
+	hasBudgetEvidence := activation.RequestBudget != 0 || activation.TokenBudget != 0 ||
+		activation.EmbeddingRequestBudget != 0 || activation.EmbeddingTokenBudget != 0 ||
+		activation.MaxOutputTokens != 0
+	validBudgetEvidence := !hasBudgetEvidence || (activation.RequestBudget > 0 &&
+		activation.TokenBudget > 0 && activation.EmbeddingRequestBudget > 0 &&
+		activation.EmbeddingTokenBudget > 0 && activation.MaxOutputTokens > 0)
 	transportURL := b.platformTransportURL
 	if transportURL == "" {
 		transportURL = b.platformProxyURL
@@ -1638,6 +1730,7 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 		len(activation.Bearer) > 4096 || grantErr != nil || activation.Generation < 1 ||
 		!activation.ExpiresAt.After(now) || activation.ExpiresAt.After(now.Add(brokerMaximumSessionTTL)) ||
 		b.platformProxyURL == "" || transportURL == "" || activation.ProxyURL != b.platformProxyURL ||
+		!validBudgetEvidence ||
 		(hasRouteIdentity && (!validBrokerTicketIdentity(ticketIdentity, now) ||
 			activation.ExpiresAt.After(activation.TicketDeadline) || activation.Provider == "" ||
 			activation.ProfileRevision == "" || activation.Model == "")) {
@@ -1657,6 +1750,11 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 	session.profileRevision = activation.ProfileRevision
 	session.model = activation.Model
 	session.requestModel = activation.Model
+	session.requestBudget = activation.RequestBudget
+	session.tokenBudget = activation.TokenBudget
+	session.embeddingRequestBudget = activation.EmbeddingRequestBudget
+	session.embeddingTokenBudget = activation.EmbeddingTokenBudget
+	session.maxOutputTokens = activation.MaxOutputTokens
 	session.ticketAgentID = activation.AgentID
 	session.ticketSlotID = activation.SlotID
 	session.ticketDeadline = activation.TicketDeadline
@@ -2228,17 +2326,22 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 			} else if errors.As(err, &denied) {
 				session.grantDenials++
 				attribution := "platform fault: the lease is gone"
-				if declineIsAgentFault(denied.code) {
+				if declineIsAgentFault(denied.code) && declineMatchesBudgetEvidenceLocked(session, denied.code, true, denied.reservationUpperBound) {
 					session.grantAgentDeclines++
 					agentDecline = true
 					attribution = "AGENT fault: the harness spent its own allowance"
+				} else if declineIsAgentFault(denied.code) {
+					session.declineEvidenceMismatches++
+					attribution = "platform fault: terminal allowance code contradicted the broker's budget evidence"
 				}
 				log.Printf(
-					"run %s: platform declined the embedding grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d)",
+					"run %s: platform declined the embedding grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d, evidence-mismatch #%d, signed dispatches=%d/%d, dispatched charge upper bound=%d/%d)",
 					session.boundRunID, platformDeclineReason(denied.code), attribution,
 					session.ticketDeadline.UTC().Format(time.RFC3339),
 					time.Until(session.ticketDeadline).Truncate(time.Second),
-					session.grantDenials, session.grantAgentDeclines,
+					session.grantDenials, session.grantAgentDeclines, session.declineEvidenceMismatches,
+					session.embeddingDispatches, session.embeddingRequestBudget,
+					session.embeddingChargeUpperBound, session.embeddingTokenBudget,
 				)
 			} else if errors.As(err, &saturated) {
 				// The whole bounded wait budget went by and the lane was still
@@ -2483,6 +2586,15 @@ func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session 
 	upstream.Header.Set("X-Ditto-Nonce", nonce)
 	upstream.Header.Set("X-Ditto-Requested-At", requested)
 	upstream.Header.Set("X-Ditto-Proof", proof)
+	// Count every signed dispatch before transport. A request can commit its
+	// Platform reservation and then lose its response, or still be in provider
+	// flight while a concurrent sibling receives a terminal budget decline.
+	// This deliberately overestimates possible spend: the evidence guard only
+	// quarantines a decline when exhaustion is impossible even under this bound.
+	session.mu.Lock()
+	session.embeddingDispatches++
+	session.embeddingChargeUpperBound += uint64(len(body))
+	session.mu.Unlock()
 	response, err := b.client.Do(upstream)
 	if err != nil {
 		// No response at all: transport/connection fault, the transient class.
@@ -2490,8 +2602,9 @@ func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session 
 	}
 	defer response.Body.Close()
 	responseBody, err := io.ReadAll(io.LimitReader(response.Body, embeddingResponseLimit+1))
+	atCapacity := err == nil && platformEmbeddingIsAtCapacity(response)
 	if err != nil || len(responseBody) > embeddingResponseLimit || response.StatusCode < 200 || response.StatusCode >= 300 {
-		if err == nil && platformEmbeddingIsAtCapacity(response) {
+		if atCapacity {
 			// Backpressure, not a fault. Checked before the 5xx branch below
 			// because it IS a 5xx; the Retry-After header is what tells the two
 			// apart, and the platform sets it on this path only.
@@ -2514,8 +2627,9 @@ func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session 
 			// as an upstream failure; the message is unchanged so the existing
 			// marker-based classification still matches.
 			return embeddingResponse{}, platformGrantDenied{
-				status: response.StatusCode,
-				code:   platformDeclineCode(responseBody),
+				status:                response.StatusCode,
+				code:                  platformDeclineCode(responseBody),
+				reservationUpperBound: uint64(len(body)),
 			}
 		}
 		return embeddingResponse{}, fmt.Errorf("embedding platform returned %d", response.StatusCode)
@@ -2568,30 +2682,31 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		status = "unavailable"
 	}
 	writeJSON(w, http.StatusOK, relayHealthSnapshot{
-		AccountingVersion:      2,
-		Status:                 status,
-		Requests:               session.requests,
-		Successes:              session.successes,
-		InfrastructureFailures: session.failures,
-		GrantDenials:           session.grantDenials,
-		GrantAgentDeclines:     session.grantAgentDeclines,
-		AgentRequestRejections: session.agentRequestRejections,
-		CapacityExhaustions:    session.capacityExhaustions,
-		RecoveryWaits:          session.recoveryWaits,
-		RecoveryExhaustions:    session.recoveryExhaustions,
-		EmbeddingRetries:       session.embeddingRetries,
-		CallerCancellations:    session.callerCancels,
-		UpstreamAttempts:       session.upstreamAttempts,
-		Provider:               session.provider,
-		ProfileRevision:        session.profileRevision,
-		Model:                  session.model,
-		UsageAvailable:         session.usageAvailable,
-		UsageUnavailable:       session.usageUnavailable,
-		PromptTokens:           session.promptTokens,
-		PromptBytes:            session.promptBytes,
-		CompletionTokens:       session.completionTokens,
-		ProviderLatencyMs:      session.providerLatency,
-		TTFTStatus:             "not_streamed",
+		AccountingVersion:         2,
+		Status:                    status,
+		Requests:                  session.requests,
+		Successes:                 session.successes,
+		InfrastructureFailures:    session.failures,
+		GrantDenials:              session.grantDenials,
+		GrantAgentDeclines:        session.grantAgentDeclines,
+		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
+		AgentRequestRejections:    session.agentRequestRejections,
+		CapacityExhaustions:       session.capacityExhaustions,
+		RecoveryWaits:             session.recoveryWaits,
+		RecoveryExhaustions:       session.recoveryExhaustions,
+		EmbeddingRetries:          session.embeddingRetries,
+		CallerCancellations:       session.callerCancels,
+		UpstreamAttempts:          session.upstreamAttempts,
+		Provider:                  session.provider,
+		ProfileRevision:           session.profileRevision,
+		Model:                     session.model,
+		UsageAvailable:            session.usageAvailable,
+		UsageUnavailable:          session.usageUnavailable,
+		PromptTokens:              session.promptTokens,
+		PromptBytes:               session.promptBytes,
+		CompletionTokens:          session.completionTokens,
+		ProviderLatencyMs:         session.providerLatency,
+		TTFTStatus:                "not_streamed",
 	})
 }
 
@@ -2712,11 +2827,13 @@ func (b *inferenceBroker) proxy(
 	grantID, bearer, proxyURL, generation := session.grantID, session.bearer, session.proxyURL, session.generation
 	legacyGateway := session.legacyGateway
 	trustedChatHandler := session.trustedChatHandler
+	maxOutputTokens := session.maxOutputTokens
 	grantDenialRoute := legacyGateway
 	if trustedChatHandler != nil {
 		grantDenialRoute = "trusted-in-process"
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
+	currentChargeUpperBound := platformChatChargeUpperBound(body, maxOutputTokens)
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -2803,6 +2920,13 @@ func (b *inferenceBroker) proxy(
 			req.Header.Set("X-Ditto-Nonce", nonce)
 			req.Header.Set("X-Ditto-Requested-At", requested)
 			req.Header.Set("X-Ditto-Proof", proof)
+			// Count before transport for the same reason as embedding dispatches:
+			// concurrent or response-lost admissions must remain in the
+			// conservative upper bound when a sibling receives 4102/4104.
+			session.mu.Lock()
+			session.chatDispatches++
+			session.chatChargeUpperBound += currentChargeUpperBound
+			session.mu.Unlock()
 		}
 		session.mu.Lock()
 		session.upstreamAttempts++
@@ -2926,12 +3050,18 @@ func (b *inferenceBroker) proxy(
 		declineCode := platformDeclineCode(responseBody)
 		attribution := "platform fault: the lease is gone"
 		agentDecline := false
-		if declineIsAgentFault(declineCode) {
+		if declineIsAgentFault(declineCode) && declineMatchesBudgetEvidenceLocked(session, declineCode, false, currentChargeUpperBound) {
 			session.grantAgentDeclines++
 			agentDecline = true
 			attribution = "AGENT fault: the harness spent its own allowance"
+		} else if declineIsAgentFault(declineCode) {
+			session.declineEvidenceMismatches++
+			attribution = "platform fault: terminal allowance code contradicted the broker's budget evidence"
 		}
 		denials, agentDenials := session.grantDenials, session.grantAgentDeclines
+		mismatches := session.declineEvidenceMismatches
+		dispatches, requestBudget := session.chatDispatches, session.requestBudget
+		chargeUpperBound, tokenBudget := session.chatChargeUpperBound, session.tokenBudget
 		runID, deadline := session.boundRunID, session.ticketDeadline
 		session.mu.Unlock()
 		if agentDecline {
@@ -2943,10 +3073,10 @@ func (b *inferenceBroker) proxy(
 		// not merely the same log line but the same CLASSIFICATION. Older
 		// platforms send no code, get the old wording, and stay no-fault.
 		log.Printf(
-			"run %s: platform declined the inference grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d)",
+			"run %s: platform declined the inference grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d, evidence-mismatch #%d, signed dispatches=%d/%d, dispatched charge upper bound=%d/%d)",
 			runID, platformDeclineReason(declineCode), attribution,
 			deadline.UTC().Format(time.RFC3339), time.Until(deadline).Truncate(time.Second),
-			denials, agentDenials,
+			denials, agentDenials, mismatches, dispatches, requestBudget, chargeUpperBound, tokenBudget,
 		)
 		writeError(w, http.StatusBadGateway, "inference provider unavailable")
 		return
@@ -3075,12 +3205,13 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		AccountingVersion: 2, Status: "ok", Requests: session.requests,
 		Successes: session.successes, InfrastructureFailures: session.failures,
 		GrantDenials: session.grantDenials, EmbeddingRetries: session.embeddingRetries,
-		GrantAgentDeclines:     session.grantAgentDeclines,
-		AgentRequestRejections: session.agentRequestRejections,
-		CapacityExhaustions:    session.capacityExhaustions,
-		RecoveryWaits:          session.recoveryWaits,
-		RecoveryExhaustions:    session.recoveryExhaustions,
-		CallerCancellations:    session.callerCancels, UpstreamAttempts: session.upstreamAttempts,
+		GrantAgentDeclines:        session.grantAgentDeclines,
+		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
+		AgentRequestRejections:    session.agentRequestRejections,
+		CapacityExhaustions:       session.capacityExhaustions,
+		RecoveryWaits:             session.recoveryWaits,
+		RecoveryExhaustions:       session.recoveryExhaustions,
+		CallerCancellations:       session.callerCancels, UpstreamAttempts: session.upstreamAttempts,
 		Provider: session.provider, ProfileRevision: session.profileRevision,
 		Model: session.model, UsageAvailable: session.usageAvailable,
 		UsageUnavailable: session.usageUnavailable, PromptTokens: session.promptTokens,

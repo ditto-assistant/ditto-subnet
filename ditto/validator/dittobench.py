@@ -540,6 +540,11 @@ class DittobenchClient:
         provider: str | None,
         profile_revision: str | None,
         model: str | None,
+        request_budget: int | None = None,
+        token_budget: int | None = None,
+        embedding_request_budget: int | None = None,
+        embedding_token_budget: int | None = None,
+        max_output_tokens: int | None = None,
     ) -> None:
         """Deliver the platform capability directly to the trusted broker."""
         try:
@@ -560,6 +565,15 @@ class DittobenchClient:
                 activation["profile_revision"] = profile_revision
             if model is not None:
                 activation["model"] = model
+            for name, value in (
+                ("request_budget", request_budget),
+                ("token_budget", token_budget),
+                ("embedding_request_budget", embedding_request_budget),
+                ("embedding_token_budget", embedding_token_budget),
+                ("max_output_tokens", max_output_tokens),
+            ):
+                if value is not None:
+                    activation[name] = value
             response = await self._client.post(
                 f"{self._config.dittobench_api_url}/v1/inference/session/"
                 f"{session.session_id}/activate",

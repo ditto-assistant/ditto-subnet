@@ -108,9 +108,10 @@ def run_budget_seconds(
     minimum is the whole point: ``VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS`` is an
     operator dial with a fixed default, so it is only ever an upper bound on
     effort — never a promise that the lease will still be alive when it fires.
-    Keeping the two related by hand is what produced the incident: a 4500s cap
-    was correct against a 90-minute TTL only by arithmetic nobody re-checked
-    when the TTL moved, and it measured from the wrong instant regardless.
+    Keeping the two related by hand is what produced the original incident: a
+    fixed harness cap looked safe against one ticket TTL only by arithmetic
+    nobody re-checked when the TTL moved, and it measured from the wrong instant
+    regardless.
 
     An unticketed run (no deadline) keeps the plain cap, which is all the bound
     that exists for it.
@@ -551,7 +552,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_DITTOBENCH_POLL_SECONDS", "10")
         ),
         dittobench_timeout_seconds=float(
-            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "4500")
+            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "6600")
         ),
         http_timeout_seconds=float(
             os.environ.get("VALIDATOR_HTTP_TIMEOUT_SECONDS", "30")

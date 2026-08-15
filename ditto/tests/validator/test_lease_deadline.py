@@ -29,8 +29,8 @@ from ditto.validator.errors import LeaseDeadlineError, ValidatorInfrastructureEr
 
 # The production values at the time of the incident: the operator's harness cap
 # (VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS) against the platform's _TICKET_TTL.
-_HARNESS_CAP_SECONDS = 4500.0
-_TICKET_TTL = timedelta(minutes=90)
+_HARNESS_CAP_SECONDS = 6600.0
+_TICKET_TTL = timedelta(minutes=120)
 
 
 class TestRunBudget:
@@ -54,9 +54,9 @@ class TestRunBudget:
     ) -> None:
         """The latent failure this closes.
 
-        ``_TICKET_TTL`` has already moved 30 -> 45 -> 90 minutes in the
+        ``_TICKET_TTL`` has already moved 30 -> 45 -> 90 -> 120 minutes in the
         platform, a repo this one does not control. At 30 and 45 minutes a
-        fixed 4500s cap outlives the whole lease, so the harness would still be
+        a fixed harness cap can outlive a shortened lease, so the harness would still be
         polling when the ticket died -- guaranteed silent expiry. The budget
         must leave the reporting margin at every TTL, not just the current one.
         """

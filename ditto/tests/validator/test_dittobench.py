@@ -82,6 +82,11 @@ async def test_activate_inference_session_binds_dynamic_route_to_trusted_broker(
             provider="WandB",
             profile_revision="openrouter-route-wandb-v1",
             model="openai/gpt-oss-20b",
+            request_budget=8192,
+            token_budget=75_000_000,
+            embedding_request_budget=100_000,
+            embedding_token_budget=1_000_000_000,
+            max_output_tokens=8192,
         )
 
     assert captured["provider"] == "WandB"
@@ -90,6 +95,11 @@ async def test_activate_inference_session_binds_dynamic_route_to_trusted_broker(
     assert captured["agent_id"] == "00000000-0000-0000-0000-000000000002"
     assert captured["slot_id"] == "slot-3"
     assert captured["ticket_deadline"] == "2026-07-21T22:00:00+00:00"
+    assert captured["request_budget"] == 8192
+    assert captured["token_budget"] == 75_000_000
+    assert captured["embedding_request_budget"] == 100_000
+    assert captured["embedding_token_budget"] == 1_000_000_000
+    assert captured["max_output_tokens"] == 8192
 
 
 def _control_plane_handler(

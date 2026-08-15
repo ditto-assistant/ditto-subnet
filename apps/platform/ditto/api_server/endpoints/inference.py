@@ -1957,6 +1957,19 @@ async def exchange_inference_grant(
         raise HTTPException(status_code=409, detail="inference grant is not live")
     grant, bearer = activated
     response.headers["Cache-Control"] = "no-store"
+    # Budget evidence rides in response headers instead of the strict JSON
+    # contract. Older validators ignore unknown headers, while adding JSON
+    # fields would make their extra="forbid" response model reject an otherwise
+    # valid exchange during a rolling fleet upgrade.
+    response.headers["X-Ditto-Request-Budget"] = str(grant.request_budget)
+    response.headers["X-Ditto-Token-Budget"] = str(grant.token_budget)
+    response.headers["X-Ditto-Embedding-Request-Budget"] = str(
+        grant.embedding_request_budget
+    )
+    response.headers["X-Ditto-Embedding-Token-Budget"] = str(
+        grant.embedding_token_budget
+    )
+    response.headers["X-Ditto-Max-Output-Tokens"] = str(config.max_output_tokens)
     return InferenceExchangeResponse(
         grant_id=grant.grant_id,
         bearer=bearer,

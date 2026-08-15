@@ -2805,6 +2805,14 @@ class ValidatorWorker:
                 or exchange.provider != job.inference.provider
                 or exchange.profile_revision != job.inference.profile_revision
                 or exchange.model not in job.inference.allowed_models
+                or (
+                    exchange.request_budget is not None
+                    and exchange.request_budget != job.inference.request_budget
+                )
+                or (
+                    exchange.token_budget is not None
+                    and exchange.token_budget != job.inference.token_budget
+                )
             )
             if (
                 exchange.grant_id != job.inference.grant_id
@@ -2827,6 +2835,11 @@ class ValidatorWorker:
                 provider=exchange.provider,
                 profile_revision=exchange.profile_revision,
                 model=exchange.model,
+                request_budget=exchange.request_budget,
+                token_budget=exchange.token_budget,
+                embedding_request_budget=exchange.embedding_request_budget,
+                embedding_token_budget=exchange.embedding_token_budget,
+                max_output_tokens=exchange.max_output_tokens,
             )
         except BaseException:
             await self._dittobench.cancel_inference_session(broker.session_id)

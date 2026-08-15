@@ -722,7 +722,7 @@ if ! flock -n 9; then
   die "another stack update is running"
 fi
 LOCK_HELD=true
-drain_timeout="$(setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 4800)"; ready_timeout="$(setting VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS 300)"; check_seconds="$(setting VALIDATOR_AUTO_UPDATE_CHECK_SECONDS 5)"
+drain_timeout="$(setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 7500)"; ready_timeout="$(setting VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS 300)"; check_seconds="$(setting VALIDATOR_AUTO_UPDATE_CHECK_SECONDS 5)"
 failure_backoff_seconds="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_BACKOFF_SECONDS 900)"; failure_max_attempts="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_MAX_ATTEMPTS 3)"
 require_positive_integer drain_timeout "$drain_timeout"; require_positive_integer ready_timeout "$ready_timeout"; require_positive_integer check_seconds "$check_seconds"
 require_positive_integer failure_backoff_seconds "$failure_backoff_seconds"; require_positive_integer failure_max_attempts "$failure_max_attempts"

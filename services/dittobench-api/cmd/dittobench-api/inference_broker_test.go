@@ -1068,10 +1068,10 @@ func activateBrokerSession(t *testing.T, broker *inferenceBroker, prepared map[s
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "", "", "")
 }
 
-func activateBrokerSessionFor(t *testing.T, broker *inferenceBroker, prepared map[string]string, proxyURL, provider, profile, model string) {
+func activateBrokerSessionFor(t *testing.T, broker *inferenceBroker, prepared map[string]string, proxyURL, provider, profile, model string, budgetEvidence ...brokerActivation) {
 	t.Helper()
 	ticketDeadline := time.Now().Add(2 * time.Minute)
-	body, _ := json.Marshal(brokerActivation{
+	activation := brokerActivation{
 		ActivationSecret: prepared["activation_secret"],
 		GrantID:          "00000000-0000-0000-0000-000000000001",
 		AgentID:          testBrokerAgentID,
@@ -1084,7 +1084,15 @@ func activateBrokerSessionFor(t *testing.T, broker *inferenceBroker, prepared ma
 		Provider:         provider,
 		ProfileRevision:  profile,
 		Model:            model,
-	})
+	}
+	if len(budgetEvidence) > 0 {
+		activation.RequestBudget = budgetEvidence[0].RequestBudget
+		activation.TokenBudget = budgetEvidence[0].TokenBudget
+		activation.EmbeddingRequestBudget = budgetEvidence[0].EmbeddingRequestBudget
+		activation.EmbeddingTokenBudget = budgetEvidence[0].EmbeddingTokenBudget
+		activation.MaxOutputTokens = budgetEvidence[0].MaxOutputTokens
+	}
+	body, _ := json.Marshal(activation)
 	request := httptest.NewRequest(http.MethodPost, "/v1/inference/session/id/activate", bytes.NewReader(body))
 	request.RemoteAddr = "127.0.0.1:4321"
 	request.SetPathValue("id", prepared["session_id"])

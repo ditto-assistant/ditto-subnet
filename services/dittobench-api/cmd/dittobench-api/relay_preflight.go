@@ -44,6 +44,10 @@ type relayHealthSnapshot struct {
 	// meaning: which runs fail is unchanged by this field's existence, only who
 	// is charged. A legacy relay reports neither.
 	GrantAgentDeclines uint64 `json:"grant_agent_declines"`
+	// DeclineEvidenceMismatches is the subset of grant denials where the
+	// Platform named an agent allowance code but the broker's independent
+	// request/charge upper bounds proved that code impossible.
+	DeclineEvidenceMismatches uint64 `json:"decline_evidence_mismatches"`
 	// AgentRequestRejections counts pre-reservation 4xx: the platform refusing
 	// the harness's request bytes (schema, size, model) without reserving
 	// capacity or contacting a provider. Already fails the run via
@@ -85,21 +89,22 @@ type relayHealthSnapshot struct {
 // therefore its digest -- are byte-identical to what this code produced before
 // retries existed. Only a run that actually retried carries the extra keys.
 type relayExecutionSummary struct {
-	Requests               uint64 `json:"requests"`
-	Successes              uint64 `json:"successes"`
-	InfrastructureFailures uint64 `json:"infrastructure_failures"`
-	GrantDenials           uint64 `json:"grant_denials,omitempty"`
-	GrantAgentDeclines     uint64 `json:"grant_agent_declines,omitempty"`
-	AgentRequestRejections uint64 `json:"agent_request_rejections,omitempty"`
-	CapacityExhaustions    uint64 `json:"capacity_exhaustions,omitempty"`
-	RecoveryWaits          uint64 `json:"recovery_waits,omitempty"`
-	RecoveryExhaustions    uint64 `json:"recovery_exhaustions,omitempty"`
-	CallerCancellations    uint64 `json:"caller_cancellations"`
-	UpstreamAttempts       uint64 `json:"upstream_attempts"`
-	Retries                uint64 `json:"retries"`
-	EmbeddingRetries       uint64 `json:"embedding_retries,omitempty"`
-	RouteProbeAttempts     uint64 `json:"route_probe_attempts,omitempty"`
-	RouteProbeRouted       uint64 `json:"route_probe_routed,omitempty"`
+	Requests                  uint64 `json:"requests"`
+	Successes                 uint64 `json:"successes"`
+	InfrastructureFailures    uint64 `json:"infrastructure_failures"`
+	GrantDenials              uint64 `json:"grant_denials,omitempty"`
+	GrantAgentDeclines        uint64 `json:"grant_agent_declines,omitempty"`
+	DeclineEvidenceMismatches uint64 `json:"decline_evidence_mismatches,omitempty"`
+	AgentRequestRejections    uint64 `json:"agent_request_rejections,omitempty"`
+	CapacityExhaustions       uint64 `json:"capacity_exhaustions,omitempty"`
+	RecoveryWaits             uint64 `json:"recovery_waits,omitempty"`
+	RecoveryExhaustions       uint64 `json:"recovery_exhaustions,omitempty"`
+	CallerCancellations       uint64 `json:"caller_cancellations"`
+	UpstreamAttempts          uint64 `json:"upstream_attempts"`
+	Retries                   uint64 `json:"retries"`
+	EmbeddingRetries          uint64 `json:"embedding_retries,omitempty"`
+	RouteProbeAttempts        uint64 `json:"route_probe_attempts,omitempty"`
+	RouteProbeRouted          uint64 `json:"route_probe_routed,omitempty"`
 }
 
 // provesV9RouteDisposition distinguishes a genuine zero-request scored
@@ -375,6 +380,7 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 	if end.GrantDenials > start.GrantDenials {
 		denials := end.GrantDenials - start.GrantDenials
 		agentDeclines := end.GrantAgentDeclines - start.GrantAgentDeclines
+		evidenceMismatches := end.DeclineEvidenceMismatches - start.DeclineEvidenceMismatches
 		// Infrastructure wins ties, and this is the tie-break that makes the
 		// whole change safe: the run is charged to the agent ONLY when every
 		// single denial it saw was agent-attributable. One revoked lease, one
@@ -386,6 +392,12 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 			return fmt.Errorf(
 				"%w: the harness exhausted its own inference allowance %d time(s) during benchmark — the lease was alive and the platform healthy",
 				errAgentInferenceDeclined, denials,
+			)
+		}
+		if evidenceMismatches > 0 {
+			return fmt.Errorf(
+				"%w: platform sent %d terminal allowance decline(s) contradicted by the broker's authenticated budget evidence",
+				errGrantDeclineEvidenceMismatch, evidenceMismatches,
 			)
 		}
 		return fmt.Errorf(
@@ -424,6 +436,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.InfrastructureFailures < start.InfrastructureFailures ||
 		end.GrantDenials < start.GrantDenials ||
 		end.GrantAgentDeclines < start.GrantAgentDeclines ||
+		end.DeclineEvidenceMismatches < start.DeclineEvidenceMismatches ||
 		end.AgentRequestRejections < start.AgentRequestRejections ||
 		end.CapacityExhaustions < start.CapacityExhaustions ||
 		end.RecoveryWaits < start.RecoveryWaits ||
@@ -433,7 +446,9 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.UpstreamAttempts < start.UpstreamAttempts ||
 		// A subset counter that outran its total means the two were updated
 		// inconsistently; refuse to classify on it rather than guess.
-		end.GrantAgentDeclines-start.GrantAgentDeclines > end.GrantDenials-start.GrantDenials
+		end.GrantAgentDeclines-start.GrantAgentDeclines > end.GrantDenials-start.GrantDenials ||
+		end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches > end.GrantDenials-start.GrantDenials ||
+		(end.GrantAgentDeclines-start.GrantAgentDeclines)+(end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches) > end.GrantDenials-start.GrantDenials
 }
 
 func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary, error) {
@@ -441,18 +456,19 @@ func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary,
 		return relayExecutionSummary{}, fmt.Errorf("relay restarted during benchmark")
 	}
 	summary := relayExecutionSummary{
-		Requests:               end.Requests - start.Requests,
-		Successes:              end.Successes - start.Successes,
-		InfrastructureFailures: end.InfrastructureFailures - start.InfrastructureFailures,
-		GrantDenials:           end.GrantDenials - start.GrantDenials,
-		GrantAgentDeclines:     end.GrantAgentDeclines - start.GrantAgentDeclines,
-		AgentRequestRejections: end.AgentRequestRejections - start.AgentRequestRejections,
-		CapacityExhaustions:    end.CapacityExhaustions - start.CapacityExhaustions,
-		RecoveryWaits:          end.RecoveryWaits - start.RecoveryWaits,
-		RecoveryExhaustions:    end.RecoveryExhaustions - start.RecoveryExhaustions,
-		EmbeddingRetries:       end.EmbeddingRetries - start.EmbeddingRetries,
-		CallerCancellations:    end.CallerCancellations - start.CallerCancellations,
-		UpstreamAttempts:       end.UpstreamAttempts - start.UpstreamAttempts,
+		Requests:                  end.Requests - start.Requests,
+		Successes:                 end.Successes - start.Successes,
+		InfrastructureFailures:    end.InfrastructureFailures - start.InfrastructureFailures,
+		GrantDenials:              end.GrantDenials - start.GrantDenials,
+		GrantAgentDeclines:        end.GrantAgentDeclines - start.GrantAgentDeclines,
+		DeclineEvidenceMismatches: end.DeclineEvidenceMismatches - start.DeclineEvidenceMismatches,
+		AgentRequestRejections:    end.AgentRequestRejections - start.AgentRequestRejections,
+		CapacityExhaustions:       end.CapacityExhaustions - start.CapacityExhaustions,
+		RecoveryWaits:             end.RecoveryWaits - start.RecoveryWaits,
+		RecoveryExhaustions:       end.RecoveryExhaustions - start.RecoveryExhaustions,
+		EmbeddingRetries:          end.EmbeddingRetries - start.EmbeddingRetries,
+		CallerCancellations:       end.CallerCancellations - start.CallerCancellations,
+		UpstreamAttempts:          end.UpstreamAttempts - start.UpstreamAttempts,
 	}
 	if summary.UpstreamAttempts > summary.Requests {
 		summary.Retries = summary.UpstreamAttempts - summary.Requests
@@ -611,10 +627,11 @@ func (s *server) handleRelayPreflight(w http.ResponseWriter, r *http.Request) {
 //     renames it. Forging it would be worth something -- it mints a retry
 //     grant -- which is precisely why it is a sentinel and not a substring.
 var (
-	errAgentInferenceDeclined = errors.New("agent-attributable inference decline")
-	errAgentModelUseMissing   = errors.New("agent made no authoritative model call")
-	errInferenceLaneSaturated = errors.New("platform inference lane saturated")
-	errRelayRecoveryExhausted = errors.New("provider recovery exhausted")
+	errAgentInferenceDeclined       = errors.New("agent-attributable inference decline")
+	errAgentModelUseMissing         = errors.New("agent made no authoritative model call")
+	errInferenceLaneSaturated       = errors.New("platform inference lane saturated")
+	errRelayRecoveryExhausted       = errors.New("provider recovery exhausted")
+	errGrantDeclineEvidenceMismatch = errors.New("grant decline contradicted broker budget evidence")
 )
 
 // relayFinalizeFailure classifies a finalize-path relay failure.
@@ -694,6 +711,15 @@ func relayFinalizeFailure(err error) *store.Failure {
 			Retryable: true,
 			Diagnostics: map[string]any{
 				"relay_cause": "provider_recovery_exhausted",
+			},
+		}
+	case errors.Is(err, errGrantDeclineEvidenceMismatch):
+		return &store.Failure{
+			Kind:      "validator_infrastructure",
+			Code:      "model_relay_unavailable",
+			Retryable: true,
+			Diagnostics: map[string]any{
+				"relay_cause": "grant_decline_evidence_mismatch",
 			},
 		}
 	default:

@@ -5,8 +5,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -484,6 +487,264 @@ func TestBudgetDeclineIsAttributedToTheAgentEndToEnd(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestImpossibleBudgetDeclineKeepsTheMinerAttempt(t *testing.T) {
+	for _, lane := range []string{"chat", "embedding"} {
+		t.Run(lane, func(t *testing.T) {
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error_code":4102,"message":"request budget exhausted"}`))
+			}))
+			defer upstream.Close()
+
+			broker := newInferenceBroker(1)
+			terminalFailures := 0
+			broker.terminalAgentFailure = func(string) { terminalFailures++ }
+			proxyURL := configureBrokerUpstream(broker, upstream)
+			prepared := prepareBrokerSession(t, broker)
+			activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
+				RequestBudget:          8192,
+				TokenBudget:            75_000_000,
+				EmbeddingRequestBudget: 100_000,
+				EmbeddingTokenBudget:   1_000_000_000,
+				MaxOutputTokens:        8192,
+			})
+			sourceIP := "192.0.2.111"
+			if lane == "embedding" {
+				sourceIP = "192.0.2.112"
+			}
+			runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+			start, err := broker.snapshot(prepared["session_id"])
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if lane == "chat" {
+				request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","max_tokens":64}`))
+				request.RemoteAddr = sourceIP + ":4321"
+				request.SetPathValue("rest", "v1/chat/completions")
+				recorder := httptest.NewRecorder()
+				broker.handle(recorder, request)
+				if recorder.Code != http.StatusBadGateway {
+					t.Fatalf("chat status=%d, want fail-closed 502", recorder.Code)
+				}
+			} else {
+				if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+					t.Fatal("failed to admit embedding phase")
+				}
+				defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+				if response := callEmbedding(broker, sourceIP, "small input"); response.Code != http.StatusBadGateway {
+					t.Fatalf("embedding status=%d, want fail-closed 502", response.Code)
+				}
+			}
+
+			end, err := broker.snapshot(prepared["session_id"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if end.GrantDenials != 1 || end.GrantAgentDeclines != 0 || end.DeclineEvidenceMismatches != 1 {
+				t.Fatalf("impossible decline attribution was not quarantined: %+v", end)
+			}
+			if terminalFailures != 0 {
+				t.Fatalf("impossible decline consumed the attempt via %d terminal callback(s)", terminalFailures)
+			}
+			degraded := relayDegradedSince(start, end)
+			if !errors.Is(degraded, errGrantDeclineEvidenceMismatch) {
+				t.Fatalf("degraded=%v, want evidence mismatch", degraded)
+			}
+			failure := relayFinalizeFailure(degraded)
+			if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "model_relay_unavailable" {
+				t.Fatalf("impossible decline did not preserve the miner attempt: %+v", failure)
+			}
+			if failure.Diagnostics["relay_cause"] != "grant_decline_evidence_mismatch" {
+				t.Fatalf("missing mismatch diagnosis: %+v", failure.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestBudgetEvidenceStillAttributesGenuineExhaustion(t *testing.T) {
+	session := &brokerSession{
+		requestBudget:             1,
+		tokenBudget:               1000,
+		embeddingRequestBudget:    1,
+		embeddingTokenBudget:      1000,
+		maxOutputTokens:           100,
+		chatDispatches:            2,
+		chatChargeUpperBound:      1001,
+		embeddingDispatches:       2,
+		embeddingChargeUpperBound: 1001,
+	}
+	for _, testCase := range []struct {
+		name       string
+		code       int
+		embedding  bool
+		upperBound uint64
+	}{
+		{name: "chat requests", code: platformDeclineBudgetExhausted, upperBound: 10},
+		{name: "chat tokens", code: platformDeclineTokenBudgetExhausted, upperBound: 101},
+		{name: "chat reservation", code: platformDeclineReservationTooLarge, upperBound: 1001},
+		{name: "embedding requests", code: platformDeclineBudgetExhausted, embedding: true, upperBound: 10},
+		{name: "embedding tokens", code: platformDeclineTokenBudgetExhausted, embedding: true, upperBound: 101},
+		{name: "embedding reservation", code: platformDeclineReservationTooLarge, embedding: true, upperBound: 1001},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			if !declineMatchesBudgetEvidenceLocked(session, testCase.code, testCase.embedding, testCase.upperBound) {
+				t.Fatal("genuine exhaustion was incorrectly quarantined")
+			}
+		})
+	}
+}
+
+func TestOutstandingSignedDispatchKeepsConcurrentExhaustionAgentAttributed(t *testing.T) {
+	for _, lane := range []string{"chat", "embedding"} {
+		t.Run(lane, func(t *testing.T) {
+			firstStarted := make(chan struct{})
+			releaseFirst := make(chan struct{})
+			var calls atomic.Int32
+			upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if calls.Add(1) == 1 {
+					close(firstStarted)
+					<-releaseFirst
+					if lane == "chat" {
+						writeJSON(w, http.StatusOK, map[string]any{
+							"usage":   map[string]int{"prompt_tokens": 3, "completion_tokens": 4},
+							"choices": []map[string]any{{"message": map[string]string{"content": "OK"}}},
+						})
+						return
+					}
+					response := platformEmbeddingResponse{Model: hostedEmbeddingModel}
+					response.Data = make([]struct {
+						Index     int       `json:"index"`
+						Embedding []float64 `json:"embedding"`
+					}, 1)
+					response.Data[0].Embedding = make([]float64, embeddingDimensions)
+					response.Usage.PromptTokens = 4
+					response.Usage.TotalTokens = 4
+					writeJSON(w, http.StatusOK, response)
+					return
+				}
+				writeJSON(w, http.StatusTooManyRequests, map[string]any{
+					"error_code": platformDeclineBudgetExhausted,
+					"message":    "request budget exhausted",
+				})
+			}))
+			defer upstream.Close()
+
+			broker := newInferenceBroker(1, 2)
+			terminalFailures := 0
+			broker.terminalAgentFailure = func(string) { terminalFailures++ }
+			proxyURL := configureBrokerUpstream(broker, upstream)
+			prepared := prepareBrokerSession(t, broker)
+			activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
+				RequestBudget:          1,
+				TokenBudget:            1_000_000,
+				EmbeddingRequestBudget: 1,
+				EmbeddingTokenBudget:   1_000_000,
+				MaxOutputTokens:        8192,
+			})
+			sourceIP := "192.0.2.121"
+			if lane == "embedding" {
+				sourceIP = "192.0.2.122"
+			}
+			runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+			if lane == "embedding" {
+				if !broker.beginEmbeddingPhase(prepared["session_id"], runID) {
+					t.Fatal("failed to admit embedding phase")
+				}
+				defer broker.endEmbeddingPhase(prepared["session_id"], runID)
+			}
+
+			firstDone := make(chan *httptest.ResponseRecorder, 1)
+			go func() {
+				if lane == "chat" {
+					request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","max_tokens":64}`))
+					request.RemoteAddr = sourceIP + ":4321"
+					request.SetPathValue("rest", "v1/chat/completions")
+					recorder := httptest.NewRecorder()
+					broker.handle(recorder, request)
+					firstDone <- recorder
+					return
+				}
+				firstDone <- callEmbedding(broker, sourceIP, "first input")
+			}()
+			<-firstStarted
+
+			var second *httptest.ResponseRecorder
+			if lane == "chat" {
+				request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","max_tokens":64}`))
+				request.RemoteAddr = sourceIP + ":4322"
+				request.SetPathValue("rest", "v1/chat/completions")
+				second = httptest.NewRecorder()
+				broker.handle(second, request)
+			} else {
+				second = callEmbedding(broker, sourceIP, "second input")
+			}
+			close(releaseFirst)
+			first := <-firstDone
+			if first.Code != http.StatusOK || second.Code != http.StatusBadGateway {
+				t.Fatalf("first=%d second=%d, want 200 then fail-closed 502", first.Code, second.Code)
+			}
+			snapshot, err := broker.snapshot(prepared["session_id"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.GrantAgentDeclines != 1 || snapshot.DeclineEvidenceMismatches != 0 || terminalFailures != 1 {
+				t.Fatalf("concurrent genuine exhaustion was not agent-attributed: snapshot=%+v callbacks=%d", snapshot, terminalFailures)
+			}
+		})
+	}
+}
+
+func TestResponseLostDispatchRemainsInBudgetEvidence(t *testing.T) {
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	terminalFailures := 0
+	broker.terminalAgentFailure = func(string) { terminalFailures++ }
+	placeholder := httptest.NewTLSServer(http.NotFoundHandler())
+	defer placeholder.Close()
+	proxyURL := configureBrokerUpstream(broker, placeholder)
+	var calls atomic.Int32
+	broker.client = &http.Client{Transport: ablationRoundTripper(func(request *http.Request) (*http.Response, error) {
+		if calls.Add(1) == 1 {
+			return nil, errors.New("response lost after possible admission")
+		}
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     make(http.Header),
+			Body: io.NopCloser(strings.NewReader(
+				`{"error_code":4102,"message":"request budget exhausted"}`,
+			)),
+			Request: request,
+		}, nil
+	})}
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
+		RequestBudget:          1,
+		TokenBudget:            1_000_000,
+		EmbeddingRequestBudget: 1,
+		EmbeddingTokenBudget:   1_000_000,
+		MaxOutputTokens:        8192,
+	})
+	sourceIP := "192.0.2.123"
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","max_tokens":64}`))
+	request.RemoteAddr = sourceIP + ":4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusBadGateway || calls.Load() != 2 {
+		t.Fatalf("status=%d dispatches=%d, want 502 after two signed dispatches", recorder.Code, calls.Load())
+	}
+	snapshot, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.GrantAgentDeclines != 1 || snapshot.DeclineEvidenceMismatches != 0 || terminalFailures != 1 {
+		t.Fatalf("response-lost reservation possibility was discarded: snapshot=%+v callbacks=%d", snapshot, terminalFailures)
 	}
 }
 

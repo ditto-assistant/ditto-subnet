@@ -3122,6 +3122,11 @@ class TestRunOnce:
                 provider="amazon-bedrock",
                 profile_revision=profile_revision,
                 model="openai/gpt-oss-20b",
+                request_budget=inference.request_budget,
+                token_budget=inference.token_budget,
+                embedding_request_budget=100_000,
+                embedding_token_budget=1_000_000_000,
+                max_output_tokens=8192,
             )
         )
         artifact = platform.get_artifact.return_value.model_copy(
@@ -3161,6 +3166,11 @@ class TestRunOnce:
         assert activation["agent_id"] == job.agent_id
         assert activation["slot_id"] == "slot-3"
         assert activation["ticket_deadline"] == deadline
+        assert activation["request_budget"] == inference.request_budget
+        assert activation["token_budget"] == inference.token_budget
+        assert activation["embedding_request_budget"] == 100_000
+        assert activation["embedding_token_budget"] == 1_000_000_000
+        assert activation["max_output_tokens"] == 8192
         score = dittobench.score_tarball.await_args.kwargs
         assert score["inference_session_id"] == "session-v8"
         assert score["inference_grant_id"] == grant_id
