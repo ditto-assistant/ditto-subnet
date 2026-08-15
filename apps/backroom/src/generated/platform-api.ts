@@ -7702,6 +7702,38 @@ export interface components {
             /** Total */
             total?: number | null;
         };
+        /**
+         * BenchmarkRuntimeSettings
+         * @description Per-ticket v10 execution controls delivered to capable validators.
+         *
+         *     These defaults reproduce the deployed behavior exactly: scored cases are
+         *     serial and relay delay fingerprinting is disabled.  The object is additive
+         *     on both the settings JSON and validator job wire, so an older Platform,
+         *     validator, scorer, or harness keeps that behavior during a rolling upgrade.
+         */
+        BenchmarkRuntimeSettings: {
+            /**
+             * Case Concurrency
+             * @default 1
+             */
+            case_concurrency: number;
+            /**
+             * Relay Delay Fingerprint Max Ms
+             * @default 250
+             */
+            relay_delay_fingerprint_max_ms: number;
+            /**
+             * Relay Delay Fingerprint Min Ms
+             * @default 25
+             */
+            relay_delay_fingerprint_min_ms: number;
+            /**
+             * Relay Delay Fingerprint Mode
+             * @default off
+             * @enum {string}
+             */
+            relay_delay_fingerprint_mode: "off" | "shadow";
+        };
         /** Body_upload_agent_api_v1_upload_agent_post */
         Body_upload_agent_api_v1_upload_agent_post: {
             /** Admission Token */
@@ -9369,6 +9401,7 @@ export interface components {
          *     capacity-decline path.
          */
         InferenceConcurrencySettings: {
+            benchmark_runtime?: components["schemas"]["BenchmarkRuntimeSettings"];
             /**
              * Chat Global Concurrency
              * @default 96
@@ -9762,6 +9795,8 @@ export interface components {
              * @description Version-bound benchmark semantics for this lease.
              */
             bench_version?: number | null;
+            /** @description Additive v10 case scheduler and relay-delay policy. Missing means serial cases with delay fingerprinting off for rolling compatibility. */
+            benchmark_runtime?: components["schemas"]["BenchmarkRuntimeSettings"] | null;
             /**
              * Confirmation Datasets
              * @description Exact shared-seed datasets pinned for a continual retest lease.

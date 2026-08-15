@@ -139,6 +139,7 @@ type brokerSession struct {
 	// shown to the harness or the control plane -- the same custody rule as
 	// privateKey above.
 	delayFingerprintKey []byte
+	delayFP             delayFingerprintConfig
 	// trustedChatHandler is an in-process confirmation reader route. It is
 	// reachable only after this broker has authenticated the sandbox source;
 	// unlike a loopback HTTP listener it cannot be scanned or called by another
@@ -184,6 +185,9 @@ type brokerSession struct {
 	activeCaseID          string
 	caseSnapshots         map[uint64]brokerCaseSnapshot
 	caseToolCalls         map[uint64][]brokerModelToolCall
+	caseCapabilities      map[string]uint64
+	caseCapabilityTokens  map[uint64]string
+	caseIDs               map[string]uint64
 	embeddingPhaseStarted bool
 	embeddingPhaseActive  bool
 	embeddingInFlight     int
@@ -1276,6 +1280,7 @@ func (b *inferenceBroker) prepareLegacy(
 		preparedAt:      time.Now(),
 		boundRunID:      runID,
 		cancels:         make(map[string]context.CancelFunc),
+		delayFP:         b.delayFP,
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -1496,13 +1501,17 @@ func (b *inferenceBroker) consumeModelToolCall(
 	argsSHA256, argsErr := canonicalToolArguments(call.Args)
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	generation := session.activeCaseGeneration
+	generation := session.caseIDs[caseID]
+	capabilityBound := generation != 0
+	if generation == 0 {
+		generation = session.activeCaseGeneration
+	}
 	if generation == 0 {
 		return false
 	}
 	snapshot := session.caseSnapshots[generation]
 	snapshot.EndpointAttempts++
-	if session.activeCaseID != caseID {
+	if !capabilityBound && session.activeCaseID != caseID {
 		snapshot.UnmatchedToolCalls++
 		snapshot.ToolFindings |= toolFindingCrossCaseReplay
 		session.caseSnapshots[generation] = snapshot
@@ -1649,6 +1658,7 @@ func (b *inferenceBroker) prepare(w http.ResponseWriter, r *http.Request) {
 	session := &brokerSession{
 		id: id, activationSecret: activation, privateKey: private, publicKey: public,
 		delayFingerprintKey: fingerprintKey,
+		delayFP:             b.delayFP,
 		preparedAt:          time.Now(), cancels: make(map[string]context.CancelFunc),
 	}
 	b.mu.Lock()
@@ -2015,6 +2025,25 @@ func (b *inferenceBroker) claimRun(id, runID string, identity brokerTicketIdenti
 	return true
 }
 
+// configureRun installs the Platform-stamped runtime controls after claimRun
+// has bound the trusted session to this exact run. It is intentionally not an
+// HTTP surface: only the scorer's authenticated /v2/score request can reach it.
+func (b *inferenceBroker) configureRun(id, runID string, delay delayFingerprintConfig) bool {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.boundRunID != runID || session.benchVersion < protocol.BenchVersionV10 {
+		return false
+	}
+	session.delayFP = delay
+	return true
+}
+
 func (b *inferenceBroker) bindSource(id, runID, sourceIP string) bool {
 	b.mu.RLock()
 	session := b.sessions[id]
@@ -2180,6 +2209,22 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest := "/" + strings.TrimLeft(r.PathValue("rest"), "/")
+	caseGeneration := uint64(0)
+	if strings.HasPrefix(rest, "/cases/") {
+		parts := strings.SplitN(strings.TrimPrefix(rest, "/cases/"), "/", 2)
+		if len(parts) != 2 {
+			writeError(w, http.StatusNotFound, "inference route not found")
+			return
+		}
+		session.mu.Lock()
+		caseGeneration = session.caseCapabilities[parts[0]]
+		session.mu.Unlock()
+		if caseGeneration == 0 {
+			writeError(w, http.StatusUnauthorized, "inference case capability unavailable")
+			return
+		}
+		rest = "/" + strings.TrimLeft(parts[1], "/")
+	}
 	if rest == "/health" && r.Method == http.MethodGet {
 		b.health(w, session)
 		return
@@ -2192,7 +2237,7 @@ func (b *inferenceBroker) handle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "inference route not found")
 		return
 	}
-	b.handleChat(w, r, session)
+	b.handleChat(w, r, session, caseGeneration)
 }
 
 // handleOpenRouterShim is the HTTPS compatibility door for harnesses that
@@ -2219,9 +2264,12 @@ func (b *inferenceBroker) handleOpenRouterShim(w http.ResponseWriter, r *http.Re
 	b.handleChat(w, r, session)
 }
 
-func (b *inferenceBroker) handleChat(w http.ResponseWriter, r *http.Request, session *brokerSession) {
+func (b *inferenceBroker) handleChat(w http.ResponseWriter, r *http.Request, session *brokerSession, explicitGeneration ...uint64) {
 	session.mu.Lock()
 	caseGeneration := session.activeCaseGeneration
+	if len(explicitGeneration) > 0 && explicitGeneration[0] != 0 {
+		caseGeneration = explicitGeneration[0]
+	}
 	confirmationCase := session.confirmationSession && caseGeneration != 0
 	if confirmationCase {
 		if session.caseSnapshots == nil {
@@ -3371,9 +3419,9 @@ func (b *inferenceBroker) proxy(
 		if confirmationCase {
 			snapshot.ReaderReceipted++
 		}
-		if session.benchVersion == protocol.BenchVersionV9 {
+		if session.benchVersion >= protocol.BenchVersionV9 {
 			injectedDelay = delayFingerprintFor(
-				session.delayFingerprintKey, caseGeneration, snapshot.DelayedRequests, b.delayFP,
+				session.delayFingerprintKey, caseGeneration, snapshot.DelayedRequests, session.delayFP,
 			)
 			if injectedDelay > 0 {
 				snapshot.DelayedRequests++
@@ -3516,6 +3564,71 @@ type brokerCaseSnapshot struct {
 	UnmatchedToolCalls   uint64
 	ToolEvidenceComplete bool
 	ToolFindings         uint64
+}
+
+// beginCaseCapability opens one independently-addressable v10 attribution
+// ledger. The opaque token is placed only in that case's RunRequest inference
+// URL; the harness cannot mint another token or make one successful request
+// count for two ledgers.
+func (b *inferenceBroker) beginCaseCapability(id, caseID string) (uint64, brokerCaseSnapshot, string, error) {
+	capability, err := randomToken(24)
+	if err != nil {
+		return 0, brokerCaseSnapshot{}, "", fmt.Errorf("mint inference case capability: %w", err)
+	}
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return 0, brokerCaseSnapshot{}, "", fmt.Errorf("inference session unavailable")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.benchVersion < protocol.BenchVersionV10 || caseID == "" {
+		return 0, brokerCaseSnapshot{}, "", fmt.Errorf("v10 inference case unavailable")
+	}
+	if session.caseIDs[caseID] != 0 {
+		return 0, brokerCaseSnapshot{}, "", fmt.Errorf("inference case already active")
+	}
+	session.caseGeneration++
+	generation := session.caseGeneration
+	if session.caseSnapshots == nil {
+		session.caseSnapshots = make(map[uint64]brokerCaseSnapshot)
+	}
+	if session.caseCapabilities == nil {
+		session.caseCapabilities = make(map[string]uint64)
+		session.caseCapabilityTokens = make(map[uint64]string)
+		session.caseIDs = make(map[string]uint64)
+	}
+	snapshot := brokerCaseSnapshot{ToolEvidenceComplete: true}
+	session.caseSnapshots[generation] = snapshot
+	session.caseCapabilities[capability] = generation
+	session.caseCapabilityTokens[generation] = capability
+	session.caseIDs[caseID] = generation
+	return generation, snapshot, capability, nil
+}
+
+func (b *inferenceBroker) endCaseCapability(id string, generation uint64) (brokerCaseSnapshot, error) {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return brokerCaseSnapshot{}, fmt.Errorf("inference session unavailable")
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	token := session.caseCapabilityTokens[generation]
+	if generation == 0 || token == "" {
+		return brokerCaseSnapshot{}, fmt.Errorf("inference case capability unavailable")
+	}
+	delete(session.caseCapabilities, token)
+	delete(session.caseCapabilityTokens, generation)
+	for caseID, activeGeneration := range session.caseIDs {
+		if activeGeneration == generation {
+			delete(session.caseIDs, caseID)
+			break
+		}
+	}
+	return session.caseSnapshots[generation], nil
 }
 
 // beginCaseSnapshot advances the source-bound generation before one ordinary

@@ -2806,6 +2806,9 @@ async def request_job(
     inference_config = await resolved_proxy_config(
         request.app.state, request.app.state.config.inference_proxy
     )
+    inference_settings = await request.app.state.inference_concurrency_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
 
     job: JobResponse | None = None
     async with session.begin():
@@ -3472,6 +3475,11 @@ async def request_job(
                     contract.minimum_screening_policy_version
                 ),
                 requires_screened_image=contract.requires_screened_image,
+                benchmark_runtime=(
+                    inference_settings.benchmark_runtime
+                    if ticket.bench_version >= 10
+                    else None
+                ),
                 inference=(
                     _inference_grant_offer(
                         request=request,
@@ -4324,6 +4332,9 @@ async def request_top5_confirmation_job(
     inference_config = await resolved_proxy_config(
         request.app.state, config.inference_proxy
     )
+    inference_settings = await request.app.state.inference_concurrency_settings.resolve(
+        getattr(request.app.state, "session_maker", None)
+    )
     slot_settings = await _validator_slot_settings(request)
 
     async with session.begin():
@@ -4765,6 +4776,11 @@ async def request_top5_confirmation_job(
                 contract.minimum_screening_policy_version
             ),
             requires_screened_image=contract.requires_screened_image,
+            benchmark_runtime=(
+                inference_settings.benchmark_runtime
+                if ticket.bench_version >= 10
+                else None
+            ),
             confirmation_datasets=confirmation_datasets,
             inference=(
                 _inference_grant_offer(

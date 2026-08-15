@@ -1619,6 +1619,30 @@ export const MAX_CHAT_REQUEST_BUDGET = 16384
 export const MAX_CHAT_TOKEN_BUDGET = 100_000_000
 export const MAX_CHAT_CONCURRENCY = 512
 export const MAX_EMBEDDING_CONCURRENCY = 512
+export const MAX_BENCHMARK_CASE_CONCURRENCY = 16
+export const MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
+
+export const benchmarkRuntimeSettingsSchema = z
+  .object({
+    case_concurrency: z.number().int().min(1).max(MAX_BENCHMARK_CASE_CONCURRENCY),
+    relay_delay_fingerprint_mode: z.enum(['off', 'shadow']),
+    relay_delay_fingerprint_min_ms: z.number().int().min(0).max(MAX_RELAY_DELAY_FINGERPRINT_MS),
+    relay_delay_fingerprint_max_ms: z.number().int().min(0).max(MAX_RELAY_DELAY_FINGERPRINT_MS),
+  })
+  .refine(
+    (value) => value.relay_delay_fingerprint_min_ms <= value.relay_delay_fingerprint_max_ms,
+    {
+      message: 'Relay delay minimum may not exceed the maximum',
+      path: ['relay_delay_fingerprint_min_ms'],
+    },
+  )
+
+export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
+  case_concurrency: 1,
+  relay_delay_fingerprint_mode: 'off' as const,
+  relay_delay_fingerprint_min_ms: 25,
+  relay_delay_fingerprint_max_ms: 250,
+}
 
 const inferenceConcurrencySettingsBaseSchema = z.object({
   // Chat completions one scoring ticket's grant may spend in total. Ships at
@@ -1641,6 +1665,11 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   // simultaneous burst: concurrent admissions can overshoot it by at most the
   // number of racers. Size it as a load-shedding backstop, not an exact valve.
   embedding_global_concurrency: z.number().int().min(1).max(MAX_EMBEDDING_CONCURRENCY),
+  // Additive rolling-upgrade field. A Platform predating the v10 controls
+  // omits it, which must render as the deployed serial/off behavior.
+  benchmark_runtime: benchmarkRuntimeSettingsSchema
+    .nullish()
+    .transform((value) => value ?? DEFAULT_BENCHMARK_RUNTIME_SETTINGS),
 })
 
 // The platform enforces this hierarchy with its own model validator and 422s a
@@ -1686,6 +1715,10 @@ const refineInferenceConcurrencyHierarchy = (
 export const inferenceConcurrencySettingsSchema =
   inferenceConcurrencySettingsBaseSchema.superRefine(refineInferenceConcurrencyHierarchy)
 
+const inferenceConcurrencySettingsWriteSchema = inferenceConcurrencySettingsBaseSchema
+  .extend({ benchmark_runtime: benchmarkRuntimeSettingsSchema })
+  .superRefine(refineInferenceConcurrencyHierarchy)
+
 export const inferenceConcurrencySettingsRevisionSchema = z.object({
   revision: z.number().int().nonnegative(),
   parent_revision: z.number().int().nonnegative(),
@@ -1721,7 +1754,7 @@ export const inferenceConcurrencySettingsControlSchema = z.object({
 export const setInferenceConcurrencySettingsInputSchema = z.object({
   scope: z.literal(INFERENCE_CONCURRENCY_SCOPE).default(INFERENCE_CONCURRENCY_SCOPE),
   expectedRevision: z.number().int().nonnegative(),
-  settings: inferenceConcurrencySettingsSchema,
+  settings: inferenceConcurrencySettingsWriteSchema,
   reason: auditReasonSchema(8),
   confirmation: z.literal(INFERENCE_CONCURRENCY_CONFIRMATION),
 })

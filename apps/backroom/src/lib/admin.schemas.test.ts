@@ -36,9 +36,11 @@ import {
   inferenceRoutingPolicyInputSchema,
   inferencePolicyConfirmation,
   inferenceConcurrencySettingsSchema,
+  INFERENCE_CONCURRENCY_CONFIRMATION,
   MAX_CHAT_CONCURRENCY,
   MAX_CHAT_TOKEN_BUDGET,
   MAX_EMBEDDING_CONCURRENCY,
+  setInferenceConcurrencySettingsInputSchema,
   QUEUE_POLICY_CONFIRMATION,
   effectiveQueuePolicySettingsSchema,
   queuePolicySettingsControlSchema,
@@ -101,6 +103,12 @@ describe('admin API schemas', () => {
       embedding_per_ticket_concurrency: 8,
       embedding_per_validator_concurrency: 24,
       embedding_global_concurrency: 32,
+      benchmark_runtime: {
+        case_concurrency: 1,
+        relay_delay_fingerprint_mode: 'off' as const,
+        relay_delay_fingerprint_min_ms: 25,
+        relay_delay_fingerprint_max_ms: 250,
+      },
     }
     expect(MAX_CHAT_TOKEN_BUDGET).toBe(100_000_000)
     expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
@@ -120,6 +128,12 @@ describe('admin API schemas', () => {
       embedding_per_ticket_concurrency: 512,
       embedding_per_validator_concurrency: 512,
       embedding_global_concurrency: 512,
+      benchmark_runtime: {
+        case_concurrency: 4,
+        relay_delay_fingerprint_mode: 'shadow' as const,
+        relay_delay_fingerprint_min_ms: 25,
+        relay_delay_fingerprint_max_ms: 250,
+      },
     }
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
     expect(MAX_EMBEDDING_CONCURRENCY).toBe(512)
@@ -128,6 +142,33 @@ describe('admin API schemas', () => {
       ...settings,
       embedding_global_concurrency: 513,
     })).toThrow(/512/)
+  })
+
+  it('requires the v10 runtime object on the new write path', () => {
+    const settings = {
+      chat_request_budget: 8192,
+      chat_token_budget: 25_000_000,
+      chat_per_ticket_concurrency: 16,
+      chat_per_validator_concurrency: 48,
+      chat_global_concurrency: 96,
+      embedding_per_ticket_concurrency: 12,
+      embedding_per_validator_concurrency: 48,
+      embedding_global_concurrency: 96,
+    }
+    expect(inferenceConcurrencySettingsSchema.parse(settings).benchmark_runtime).toEqual({
+      case_concurrency: 1,
+      relay_delay_fingerprint_mode: 'off',
+      relay_delay_fingerprint_min_ms: 25,
+      relay_delay_fingerprint_max_ms: 250,
+    })
+    expect(() =>
+      setInferenceConcurrencySettingsInputSchema.parse({
+        expectedRevision: 0,
+        settings,
+        reason: 'raise benchmark throughput',
+        confirmation: INFERENCE_CONCURRENCY_CONFIRMATION,
+      }),
+    ).toThrow(/benchmark_runtime/)
   })
 
   it('requires exact confirmation for v9 contract retests only', () => {

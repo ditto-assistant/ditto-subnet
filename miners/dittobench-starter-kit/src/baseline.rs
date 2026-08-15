@@ -1012,8 +1012,19 @@ impl Baseline {
             .map(|d| Arc::new(WireTool::from_wire(d, exec_ctx.clone())) as Arc<dyn Tool>)
             .collect();
 
+        let case_model = match req
+            .inference_base_url
+            .as_ref()
+            .filter(|url| !url.trim().is_empty())
+        {
+            Some(base_url) => Self::build_model(&ModelProvider::Platform {
+                base_url: base_url.clone(),
+                model: self.model_name.clone(),
+            })?,
+            None => Arc::clone(&self.model),
+        };
         let harness = Harness::new(Options {
-            model: Arc::clone(&self.model),
+            model: case_model,
             memory: Some(Arc::clone(&self.store)),
             tools: host_tools,
             include_memory_tools: self.include_memory_tools,

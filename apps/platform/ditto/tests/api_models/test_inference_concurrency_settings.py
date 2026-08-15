@@ -10,6 +10,8 @@ Two things are pinned here that a future edit could quietly undo:
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 from pydantic import ValidationError
 
@@ -28,6 +30,7 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_EMBEDDING_PER_TICKET_CONCURRENCY,
     MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
     AdminInferenceConcurrencySettingsRequest,
+    BenchmarkRuntimeSettings,
     InferenceConcurrencySettings,
 )
 
@@ -91,6 +94,20 @@ class TestDefaults:
         with pytest.raises(ValidationError, match="less than or equal"):
             InferenceConcurrencySettings(chat_token_budget=MAX_CHAT_TOKEN_BUDGET + 1)
 
+    def test_v10_runtime_defaults_preserve_deployed_behavior(self) -> None:
+        runtime = InferenceConcurrencySettings().benchmark_runtime
+        assert runtime.case_concurrency == 1
+        assert runtime.relay_delay_fingerprint_mode == "off"
+
+    def test_v10_runtime_bounds_are_fail_closed(self) -> None:
+        with pytest.raises(ValidationError):
+            BenchmarkRuntimeSettings(case_concurrency=17)
+        with pytest.raises(ValidationError, match="may not exceed"):
+            BenchmarkRuntimeSettings(
+                relay_delay_fingerprint_min_ms=300,
+                relay_delay_fingerprint_max_ms=100,
+            )
+
 
 class TestHierarchy:
     def test_chat_ticket_may_not_exceed_validator(self) -> None:
@@ -148,7 +165,7 @@ class TestHierarchy:
 
 
 class TestWriteContract:
-    def _request(self, **settings: int) -> AdminInferenceConcurrencySettingsRequest:
+    def _request(self, **settings: Any) -> AdminInferenceConcurrencySettingsRequest:
         return AdminInferenceConcurrencySettingsRequest(
             expected_revision=0,
             settings=InferenceConcurrencySettings(**settings),

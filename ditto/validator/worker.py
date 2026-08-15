@@ -125,6 +125,7 @@ if TYPE_CHECKING:
 
     from ditto.api_models.system_health import SystemMetrics
     from ditto.api_models.validator import (
+        BenchmarkRuntimeSettings,
         FailJobReason,
         JobResponse,
         LedgerEntry,
@@ -3017,6 +3018,7 @@ class ValidatorWorker:
                 inference_slot_id=(
                     job.slot_id if inference_session_id is not None else None
                 ),
+                benchmark_runtime=job.benchmark_runtime,
             )
         finally:
             if broker is not None:
@@ -3037,6 +3039,7 @@ class ValidatorWorker:
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
     ) -> ScoreReport:
         """Run one re-score while managing its benchmark heartbeat.
 
@@ -3062,6 +3065,7 @@ class ValidatorWorker:
                 inference_slot_id=inference_slot_id,
                 inference_ticket_deadline=inference_ticket_deadline,
                 ticket_deadline=ticket_deadline,
+                benchmark_runtime=benchmark_runtime,
             )
         finally:
             heartbeat_stop.set()
@@ -3085,6 +3089,7 @@ class ValidatorWorker:
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
     ) -> ScoreReport:
         """Fetch, verify, and score one artifact without managing heartbeats."""
         if not _supports_bench_version(bench_version):
@@ -3136,6 +3141,7 @@ class ValidatorWorker:
             inference_slot_id=inference_slot_id,
             inference_ticket_deadline=inference_ticket_deadline,
             ticket_deadline=ticket_deadline,
+            benchmark_runtime=benchmark_runtime,
         )
         return report
 
@@ -3255,6 +3261,7 @@ class ValidatorWorker:
         inference_session_id: str | None = None,
         inference_grant_id: UUID | None = None,
         inference_slot_id: str | None = None,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
     ) -> ScoreReport:
         """Fetch an agent's artifact, score it, sign, and submit. The single-seed
         path used by the ticket sweep (:meth:`_score_job`)."""
@@ -3293,6 +3300,7 @@ class ValidatorWorker:
                     ticket_deadline if inference_session_id is not None else None
                 ),
                 ticket_deadline=ticket_deadline,
+                benchmark_runtime=benchmark_runtime,
             )
             await self._publish_benchmark_progress(
                 "finalizing", completed=report.n, total=report.n

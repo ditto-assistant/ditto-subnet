@@ -6,7 +6,7 @@ package main
 // Why timing needs a watermark
 // ----------------------------
 //
-// The v9 model-use gate already attributes every successful chat completion to
+// The v9+ model-use evidence already attributes every successful chat completion to
 // the exact case window it started in (beginCaseSnapshot / endCaseSnapshot),
 // so "did this case reach the model at all" is settled by trusted counters.
 // What the counters cannot see is the mirror-image evasion the platform's

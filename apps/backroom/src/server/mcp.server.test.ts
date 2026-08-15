@@ -1907,6 +1907,12 @@ describe('Backroom MCP tools', () => {
     embedding_per_ticket_concurrency: 12,
     embedding_per_validator_concurrency: 48,
     embedding_global_concurrency: 96,
+    benchmark_runtime: {
+      case_concurrency: 1,
+      relay_delay_fingerprint_mode: 'off' as const,
+      relay_delay_fingerprint_min_ms: 25,
+      relay_delay_fingerprint_max_ms: 250,
+    },
   }
 
   it('reads the hosted inference admission policy in force', async () => {

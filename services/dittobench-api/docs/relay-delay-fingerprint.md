@@ -5,7 +5,7 @@ turning per-case latency into verifiable model-use evidence.
 
 ## Problem
 
-The v9 model-use gate attributes every successful chat completion to the exact
+The v9+ model-use gate attributes every successful chat completion to the exact
 case window it started in, so "did this case reach the model at all" is already
 a trusted fact. Two evasions remain, both documented in the platform's
 model-use rule (`apps/platform/ditto/api_server/model_use.py`):
@@ -69,8 +69,9 @@ trusted side holds both series.
 Follows the shadow-before-enforce precedent (ditto-platform#506 invariant 5),
 and — after the bunny ruling — nothing here is applied retroactively:
 
-1. **off** (default, this PR): no injection, no behavior change.
-2. **shadow**: operator sets `DITTOBENCH_RELAY_DELAY_FP_MODE=shadow`.
+1. **off** (default): no injection, no behavior change.
+2. **shadow**: an operator selects shadow and the delay range on Backroom's
+   **Inference & benchmark runtime** page.
    Injection on, evidence recorded and published, scores untouched. Announce
    to miners before enabling; measure the honest-cohort distribution.
 3. **Screening signal** (follow-up): screener consumes the per-case verdicts
@@ -81,6 +82,13 @@ and — after the bunny ruling — nothing here is applied retroactively:
    with explicit version negotiation and frozen calibration inputs.
 
 ## Configuration
+
+For v10 scored leases, Platform stamps the Backroom-controlled mode and range
+onto the job and the validator forwards them to the broker. An absent runtime
+object preserves serial cases and the existing environment fallback (off by
+default), so every order of a rolling upgrade is safe. The environment
+variables remain fallback controls for older Platform/validator pairs and
+local operation.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -94,11 +102,13 @@ case honest median → ~275ms per case against a multi-second honest p50 and a
 
 ## Non-goals
 
-- Does not change any score, gate model, or wire contract in this PR.
+- Does not change any score or gate model. The v10 runtime fields are
+  additive-optional and capability-negotiated.
 - Does not detect a harness that genuinely waits for and then ignores the
   response *while* paying full wall time — that still requires
   response-conditioned evidence (ditto-platform#518, trace publication). The
   fingerprint prices that evasion at full honest latency, which removes its
   entire speed advantage.
-- Legacy (v2–v8) sessions are untouched: injection is keyed to
-  `BenchVersionV9` case windows, which only exist on the v9 path.
+- Legacy (v2–v8) sessions are untouched. V9 retains serial windows; v10 may
+  use independent broker-minted case capabilities when the harness advertises
+  support.

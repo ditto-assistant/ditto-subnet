@@ -18,8 +18,8 @@ function InferenceConcurrencyPage() {
     <div>
       <PageHeader
         label="SN118 inference"
-        title="Hosted inference budgets & concurrency"
-        description="What one scoring ticket may spend on hosted chat inference, and how parallel its chat and embedding traffic may be. Live within five seconds fleet-wide, with no platform restart, and recorded as an append-only audited revision."
+        title="Inference & benchmark runtime"
+        description="Control hosted inference budgets, chat and embedding admission, v10 case concurrency, and relay delay fingerprints. Changes are lease-stamped from an append-only audited revision; legacy v10 harnesses retain serial attribution."
         aside={
           <div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted-strong)]">
             <Gauge className="h-3.5 w-3.5 text-[var(--cyan)]" />

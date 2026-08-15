@@ -51,6 +51,7 @@ from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
 )
 from ditto.api_models.inference import InferenceGrantOffer
+from ditto.api_models.inference_concurrency_settings import BenchmarkRuntimeSettings
 from ditto.api_models.stack_health import ValidatorStackHealth
 from ditto.api_models.system_health import SystemMetrics
 from ditto.api_models.upload import (
@@ -357,6 +358,13 @@ class JobResponse(BaseModel):
         description="Exact shared-seed datasets pinned for a continual retest lease.",
     )
     inference: InferenceGrantOffer | None = None
+    benchmark_runtime: BenchmarkRuntimeSettings | None = Field(
+        default=None,
+        description=(
+            "Additive v10 case scheduler and relay-delay policy. Missing means "
+            "serial cases with delay fingerprinting off for rolling compatibility."
+        ),
+    )
 
     model_config = ConfigDict(
         json_schema_extra={

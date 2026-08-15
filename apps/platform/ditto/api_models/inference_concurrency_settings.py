@@ -36,7 +36,7 @@ decline is the more expensive way to find out.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -134,6 +134,44 @@ DEFAULT_CHAT_TOKEN_BUDGET = 25_000_000
 # revision this board accepts can never be a value the next restart rejects.
 MAX_CHAT_TOKEN_BUDGET = 100_000_000
 
+DEFAULT_BENCHMARK_CASE_CONCURRENCY = 1
+MAX_BENCHMARK_CASE_CONCURRENCY = 16
+DEFAULT_RELAY_DELAY_FINGERPRINT_MIN_MS = 25
+DEFAULT_RELAY_DELAY_FINGERPRINT_MAX_MS = 250
+MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
+
+
+class BenchmarkRuntimeSettings(BaseModel):
+    """Per-ticket v10 execution controls delivered to capable validators.
+
+    These defaults reproduce the deployed behavior exactly: scored cases are
+    serial and relay delay fingerprinting is disabled.  The object is additive
+    on both the settings JSON and validator job wire, so an older Platform,
+    validator, scorer, or harness keeps that behavior during a rolling upgrade.
+    """
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    case_concurrency: Annotated[int, Field(ge=1, le=MAX_BENCHMARK_CASE_CONCURRENCY)] = (
+        DEFAULT_BENCHMARK_CASE_CONCURRENCY
+    )
+    relay_delay_fingerprint_mode: Literal["off", "shadow"] = "off"
+    relay_delay_fingerprint_min_ms: Annotated[
+        int, Field(ge=0, le=MAX_RELAY_DELAY_FINGERPRINT_MS)
+    ] = DEFAULT_RELAY_DELAY_FINGERPRINT_MIN_MS
+    relay_delay_fingerprint_max_ms: Annotated[
+        int, Field(ge=0, le=MAX_RELAY_DELAY_FINGERPRINT_MS)
+    ] = DEFAULT_RELAY_DELAY_FINGERPRINT_MAX_MS
+
+    @model_validator(mode="after")
+    def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:
+        if self.relay_delay_fingerprint_min_ms > self.relay_delay_fingerprint_max_ms:
+            raise ValueError(
+                "relay_delay_fingerprint_min_ms may not exceed "
+                "relay_delay_fingerprint_max_ms"
+            )
+        return self
+
 
 class InferenceConcurrencySettings(BaseModel):
     """The whole hosted-inference admission policy, stored as one object.
@@ -225,6 +263,11 @@ class InferenceConcurrencySettings(BaseModel):
     backstop with headroom, not as an exact valve.
     """
 
+    benchmark_runtime: BenchmarkRuntimeSettings = Field(
+        default_factory=BenchmarkRuntimeSettings
+    )
+    """Safe, lease-stamped v10 case scheduling and delay-observation policy."""
+
     @model_validator(mode="after")
     def _hierarchy_holds(self) -> InferenceConcurrencySettings:
         if self.chat_per_ticket_concurrency > self.chat_per_validator_concurrency:
@@ -309,8 +352,12 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
         changed one number. ``expected_revision`` cannot catch that -- they hold
         the current revision, they just under-specified the body.
         """
+        # ``benchmark_runtime`` was added after this whole-object board shipped.
+        # A pre-upgrade Backroom is allowed to omit only that additive object;
+        # the endpoint preserves its current value instead of resetting it.
         missing = sorted(
             set(InferenceConcurrencySettings.model_fields)
+            - {"benchmark_runtime"}
             - self.settings.model_fields_set
         )
         if missing:

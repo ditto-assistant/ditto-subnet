@@ -59,6 +59,48 @@ func TestHealthBad(t *testing.T) {
 	}
 }
 
+func TestSupportsCaseScopedInferenceRequiresExplicitCapability(t *testing.T) {
+	capable := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"status": "ok", "capabilities": []string{"case_scoped_inference_v1"},
+		})
+	}))
+	defer capable.Close()
+	if !SupportsCaseScopedInference(sandboxContext(), capable.URL) {
+		t.Fatal("explicit case-scoped inference capability was not detected")
+	}
+
+	legacy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, `{"status":"ok"}`)
+	}))
+	defer legacy.Close()
+	if SupportsCaseScopedInference(sandboxContext(), legacy.URL) {
+		t.Fatal("legacy health response must retain serial attribution")
+	}
+}
+
+func TestRunCaseCarriesCaseScopedInferenceURL(t *testing.T) {
+	var got protocol.RunRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode run request: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(protocol.RunResponse{FinalText: "ok"})
+	}))
+	defer srv.Close()
+
+	const caseURL = "http://host.docker.internal:11436/v1/inference/cases/opaque"
+	if _, err := RunCase(
+		sandboxContext(), srv.URL, "case-v10", "question", nil,
+		CaseOptions{BenchVersion: protocol.BenchVersionV10, InferenceBaseURL: caseURL},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if got.InferenceBaseURL != caseURL {
+		t.Fatalf("inference_base_url=%q, want %q", got.InferenceBaseURL, caseURL)
+	}
+}
+
 func TestRunHarnessEchoesTool(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/run" {

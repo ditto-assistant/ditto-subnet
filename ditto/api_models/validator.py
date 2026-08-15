@@ -238,6 +238,26 @@ class ConfirmationDatasetPin(BaseModel):
     run_size: Annotated[str, Field(min_length=1)]
 
 
+class BenchmarkRuntimeSettings(BaseModel):
+    """Additive v10 runtime policy stamped onto one validator lease."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+
+    case_concurrency: Annotated[int, Field(ge=1, le=16)] = 1
+    relay_delay_fingerprint_mode: Literal["off", "shadow"] = "off"
+    relay_delay_fingerprint_min_ms: Annotated[int, Field(ge=0, le=5_000)] = 25
+    relay_delay_fingerprint_max_ms: Annotated[int, Field(ge=0, le=5_000)] = 250
+
+    @model_validator(mode="after")
+    def _delay_range_is_ordered(self) -> BenchmarkRuntimeSettings:
+        if self.relay_delay_fingerprint_min_ms > self.relay_delay_fingerprint_max_ms:
+            raise ValueError(
+                "relay_delay_fingerprint_min_ms may not exceed "
+                "relay_delay_fingerprint_max_ms"
+            )
+        return self
+
+
 class JobResponse(BaseModel):
     """Returned by ``POST /validator/job`` when a ticket is issued.
 
@@ -294,6 +314,13 @@ class JobResponse(BaseModel):
         description="Exact shared-seed datasets pinned for a continual retest lease.",
     )
     inference: InferenceGrantOffer | None = None
+    benchmark_runtime: BenchmarkRuntimeSettings | None = Field(
+        default=None,
+        description=(
+            "Additive v10 case scheduler and relay-delay policy. Missing means "
+            "serial cases with delay fingerprinting off for rolling compatibility."
+        ),
+    )
     dataset_seed_block: Annotated[
         int | None,
         Field(

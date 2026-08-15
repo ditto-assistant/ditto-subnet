@@ -120,6 +120,38 @@ func Health(ctx context.Context, harnessURL string) error {
 	return nil
 }
 
+// SupportsCaseScopedInference reads the additive harness health capability.
+// Any legacy, malformed, or non-JSON 2xx response safely means unsupported;
+// callers then retain serial case windows.
+func SupportsCaseScopedInference(ctx context.Context, harnessURL string) bool {
+	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, harnessURL+"/health", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := clientFor(ctx).Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return false
+	}
+	var health struct {
+		Capabilities []string `json:"capabilities"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&health) != nil {
+		return false
+	}
+	for _, capability := range health.Capabilities {
+		if capability == "case_scoped_inference_v1" {
+			return true
+		}
+	}
+	return false
+}
+
 // WaitHealthy polls <harnessURL>/health until it returns 2xx or the deadline
 // passes. Used by the sandbox path to wait for a freshly started container to
 // come up before spending the evaluation on it.
@@ -263,9 +295,11 @@ func marshalSeedRequest(req protocol.SeedRequest, benchVersion int) ([]byte, err
 // the user_id the case's memory graph was seeded under (multi-graph isolation).
 // The zero value reproduces self-report behavior (no endpoint, default user).
 type CaseOptions struct {
-	ToolEndpoint string
-	UserID       string
-	BenchVersion int
+	ToolEndpoint        string
+	UserID              string
+	BenchVersion        int
+	InferenceBaseURL    string
+	CaseScopedInference bool
 }
 
 // AttemptTelemetry is validator-observed execution evidence for one HTTP
@@ -359,13 +393,14 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 
 	wireBenchVersion := harnessWireBenchVersion(opts.BenchVersion)
 	reqBody := protocol.RunRequest{
-		CaseID:       c.ID,
-		SystemPrompt: "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request.",
-		UserInput:    c.Prompt,
-		Tools:        tools,
-		BenchVersion: wireBenchVersion,
-		ToolEndpoint: opts.ToolEndpoint,
-		UserID:       opts.UserID,
+		CaseID:           c.ID,
+		SystemPrompt:     "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request.",
+		UserInput:        c.Prompt,
+		Tools:            tools,
+		BenchVersion:     wireBenchVersion,
+		ToolEndpoint:     opts.ToolEndpoint,
+		UserID:           opts.UserID,
+		InferenceBaseURL: opts.InferenceBaseURL,
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {

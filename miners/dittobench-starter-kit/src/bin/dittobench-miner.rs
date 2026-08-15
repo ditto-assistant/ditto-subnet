@@ -203,7 +203,13 @@ async fn serve(port: u16) -> anyhow::Result<()> {
 }
 
 async fn health() -> impl IntoResponse {
-    (StatusCode::OK, Json(serde_json::json!({"status": "ok"})))
+    (
+        StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "ok",
+            "capabilities": ["case_scoped_inference_v1"]
+        })),
+    )
 }
 
 async fn run_handler(

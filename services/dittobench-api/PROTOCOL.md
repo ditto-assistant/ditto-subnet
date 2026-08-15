@@ -134,7 +134,9 @@ receives expected answers, only the prompt and the tool catalog.
 
 ## `GET /health` (harness)
 
-Returns any 2xx to signal readiness. Probed before each evaluation.
+Returns any 2xx to signal readiness. Probed before each evaluation. A v10
+harness may additionally advertise `capabilities: ["case_scoped_inference_v1"]`;
+the scorer never raises v10 case concurrency without that explicit capability.
 
 ## `POST /run` (harness)
 
@@ -153,8 +155,16 @@ The validator sends one `RunRequest` per case; the harness returns a
   "bench_version": 7                                         // optional, additive: sent ONLY for bench_version >= 7.
                                                              // Absent (omitted) for v2–v6, so legacy request bytes
                                                              // are unchanged and old harnesses parse identically.
+  "inference_base_url": "http://host.docker.internal:11436/v1/inference/cases/<opaque>"
+                                                             // optional v10 case-scoped relay capability
 }
 ```
+
+`inference_base_url` is broker-minted and valid only while this `/run` is
+active. Capability-aware v10 harnesses must use it instead of the process-wide
+inference URL for every chat request in that case. Older v10 harnesses ignore
+the additive field and the scorer automatically retains serial attribution;
+dataset generation and scoring semantics are unchanged.
 
 ```jsonc
 // ToolDefinition

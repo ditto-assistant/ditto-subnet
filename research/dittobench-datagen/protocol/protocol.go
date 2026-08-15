@@ -287,6 +287,10 @@ type RunRequest struct {
 	BenchVersion int    `json:"bench_version,omitempty"`
 	ToolEndpoint string `json:"tool_endpoint,omitempty"`
 	UserID       string `json:"user_id,omitempty"`
+	// InferenceBaseURL is a validator-minted, case-scoped v10 relay
+	// capability. Older harnesses ignore the additive field and remain on the
+	// serial compatibility path.
+	InferenceBaseURL string `json:"inference_base_url,omitempty"`
 }
 
 // ToolExecRequest is what a harness POSTs to the validator-served tool_endpoint

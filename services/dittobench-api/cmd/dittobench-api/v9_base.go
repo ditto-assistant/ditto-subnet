@@ -23,6 +23,28 @@ func (s *server) runCaseWithModelAttribution(
 	if opts.BenchVersion < protocol.BenchVersionV9 || inferenceSessionID == "" {
 		return runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
 	}
+	if opts.BenchVersion >= protocol.BenchVersionV10 && opts.CaseScopedInference {
+		generation, before, capability, beforeErr := s.broker.beginCaseCapability(
+			inferenceSessionID, caseID,
+		)
+		if beforeErr == nil {
+			opts.InferenceBaseURL = harnessGateway(inferenceSessionID) + "/cases/" + capability
+		}
+		response, execution, runErr := runner.RunCaseWithTelemetry(
+			ctx, harnessURL, caseID, prompt, tools, opts,
+		)
+		after, afterErr := s.broker.endCaseCapability(inferenceSessionID, generation)
+		execution.ModelInferenceObserved, execution.ModelAttributionComplete =
+			v9GenerationCaseDelta(before, after, beforeErr, afterErr)
+		if execution.ModelAttributionComplete {
+			execution.RelayInjectedDelayMs, execution.RelayDelayConsistent =
+				v9RelayDelayEvidence(before, after, execution.TotalDurationMs)
+		}
+		if beforeErr == nil && afterErr == nil {
+			execution.ToolProvenance = toolProvenanceEvidence(after)
+		}
+		return response, execution, runErr
+	}
 	generation, before, beforeErr := s.broker.beginCaseSnapshot(inferenceSessionID, caseID)
 	response, execution, runErr := runner.RunCaseWithTelemetry(
 		ctx, harnessURL, caseID, prompt, tools, opts,

@@ -646,6 +646,49 @@ type submitRequest struct {
 	InferenceAgentID        string    `json:"inference_agent_id,omitempty"`
 	InferenceSlotID         string    `json:"inference_slot_id,omitempty"`
 	InferenceTicketDeadline time.Time `json:"inference_ticket_deadline,omitempty"`
+	// BenchmarkRuntime is an additive v10 execution policy stamped onto the
+	// Platform lease. Absence preserves the deployed serial/off behavior.
+	BenchmarkRuntime *benchmarkRuntimeSettings `json:"benchmark_runtime,omitempty"`
+}
+
+type benchmarkRuntimeSettings struct {
+	CaseConcurrency            int                  `json:"case_concurrency"`
+	RelayDelayFingerprintMode  delayFingerprintMode `json:"relay_delay_fingerprint_mode"`
+	RelayDelayFingerprintMinMS int                  `json:"relay_delay_fingerprint_min_ms"`
+	RelayDelayFingerprintMaxMS int                  `json:"relay_delay_fingerprint_max_ms"`
+}
+
+func (r *benchmarkRuntimeSettings) validate(benchVersion int) error {
+	if r == nil {
+		return nil
+	}
+	if benchVersion < protocol.BenchVersionV10 {
+		return fmt.Errorf("benchmark_runtime requires bench_version 10 or newer")
+	}
+	if r.CaseConcurrency < 1 || r.CaseConcurrency > 16 {
+		return fmt.Errorf("benchmark_runtime.case_concurrency must be between 1 and 16")
+	}
+	if r.RelayDelayFingerprintMode != delayFingerprintOff &&
+		r.RelayDelayFingerprintMode != delayFingerprintShadow {
+		return fmt.Errorf("benchmark_runtime.relay_delay_fingerprint_mode must be off or shadow")
+	}
+	if r.RelayDelayFingerprintMinMS < 0 || r.RelayDelayFingerprintMaxMS < 0 ||
+		r.RelayDelayFingerprintMinMS > r.RelayDelayFingerprintMaxMS ||
+		r.RelayDelayFingerprintMaxMS > 5000 {
+		return fmt.Errorf("benchmark_runtime relay delay range must satisfy 0 <= min <= max <= 5000")
+	}
+	return nil
+}
+
+func (r *benchmarkRuntimeSettings) delayConfig() delayFingerprintConfig {
+	if r == nil {
+		return delayFingerprintConfig{mode: delayFingerprintOff}
+	}
+	return delayFingerprintConfig{
+		mode:  r.RelayDelayFingerprintMode,
+		minMS: r.RelayDelayFingerprintMinMS,
+		maxMS: r.RelayDelayFingerprintMaxMS,
+	}
 }
 
 func inferenceTicketIdentity(req submitRequest) brokerTicketIdentity {
@@ -1099,6 +1142,10 @@ func validateV8EvidenceAvailability(toolCases []protocol.ToolCase, memoryCases [
 // submitRunSize validates a run_size submission, requires an OpenRouter key,
 // and kicks off the full SN118 pipeline asynchronously (returns 202 + run_id).
 func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submitRequest) {
+	if err := req.BenchmarkRuntime.validate(req.BenchVersion); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if req.GitURL == "" && req.HarnessURL == "" && req.TarballURL == "" {
 		writeError(w, http.StatusBadRequest, "run_size requires git_url / tarball_url (build in Docker) or harness_url (point at an already-running harness, for local dev)")
 		return
@@ -1137,6 +1184,13 @@ func (s *server) submitRunSize(w http.ResponseWriter, r *http.Request, req submi
 		!s.broker.claimRun(req.InferenceSessionID, runID, inferenceTicketIdentity(req), req.BenchVersion) {
 		<-s.runSlots
 		writeError(w, http.StatusConflict, "ticket inference session is unavailable")
+		return
+	}
+	if req.InferenceSessionID != "" && req.BenchmarkRuntime != nil &&
+		!s.broker.configureRun(req.InferenceSessionID, runID, req.BenchmarkRuntime.delayConfig()) {
+		<-s.runSlots
+		s.broker.removeRun(req.InferenceSessionID, runID)
+		writeError(w, http.StatusConflict, "ticket inference runtime policy is unavailable")
 		return
 	}
 	s.store.Create(runID, "run_size", store.StatusQueued, seed, prof.Tools+prof.Mem)
@@ -1634,12 +1688,25 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 	}
 	effectiveCaseConcurrency := activeCaseConcurrency()
-	// The current starter-harness wire has one run-wide inference URL. Until a
-	// future protocol carries a per-case broker capability, the only way to bind
-	// trusted broker successes to distinct cases is a non-overlapping case
-	// window. V8 and earlier retain their existing concurrency exactly.
+	caseScopedInference := false
+	// Existing v9/v10 harnesses have one run-wide inference URL, so they retain
+	// non-overlapping attribution windows. An upgraded v10 harness explicitly
+	// advertises the additive per-case URL and can consume the operator-selected
+	// concurrency without changing dataset or scoring semantics.
 	if scope == scorer.ScopeScored && req.BenchVersion >= protocol.BenchVersionV9 {
 		effectiveCaseConcurrency = 1
+		if req.BenchVersion >= protocol.BenchVersionV10 && req.BenchmarkRuntime != nil &&
+			req.BenchmarkRuntime.CaseConcurrency > 1 {
+			if runner.SupportsCaseScopedInference(ctx, harnessURL) {
+				effectiveCaseConcurrency = req.BenchmarkRuntime.CaseConcurrency
+				caseScopedInference = true
+			} else {
+				log.Printf(
+					"run %s: harness lacks case_scoped_inference_v1; retaining serial attribution",
+					runID,
+				)
+			}
+		}
 	}
 	toolRunUserID := ""
 	if harnessProjection != nil {
@@ -1670,7 +1737,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	runBounded(ctx, len(toolCases), effectiveCaseConcurrency, func(i int) {
 		c := toolCases[i]
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
-		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
+		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion, CaseScopedInference: caseScopedInference})
 		observed := toolSrv.Observed(c.ID)
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
@@ -1823,7 +1890,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				uid = wave.UserID
 			}
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
-			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
+			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion, CaseScopedInference: caseScopedInference})
 			observedCalls := toolSrv.Observed(mc.ID)
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp

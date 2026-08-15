@@ -17,6 +17,7 @@ import pytest
 
 from ditto.api_models.validator import (
     LEGACY_FAILURE_DETAIL_MAX_LENGTH,
+    BenchmarkRuntimeSettings,
     FailJobRequest,
     V9BaseEvidence,
 )
@@ -885,6 +886,39 @@ async def test_current_versions_use_versioned_route_and_bind_request(
         )
     assert seen["path"] == "/v2/score"
     assert cast(dict[str, object], seen["body"])["bench_version"] == bench_version
+
+
+@pytest.mark.asyncio
+async def test_v10_submit_forwards_platform_stamped_runtime_policy() -> None:
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(202, json={"run_id": "run-v10"})
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test", run_size="full"
+    )
+    runtime = BenchmarkRuntimeSettings(
+        case_concurrency=4,
+        relay_delay_fingerprint_mode="shadow",
+        relay_delay_fingerprint_min_ms=40,
+        relay_delay_fingerprint_max_ms=160,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        await DittobenchClient(config, http)._submit(  # type: ignore[arg-type]
+            tarball_url="https://example.test/agent.tgz",
+            dataset_sha256="12" * 32,
+            bench_version=10,
+            screened_image_url="https://example.test/image.tar",
+            screened_image_sha256="34" * 32,
+            screened_image_size_bytes=123,
+            screened_image_id="sha256:" + "56" * 32,
+            screened_image_ref="ditto-screen/agent:latest",
+            benchmark_runtime=runtime,
+        )
+
+    assert seen["benchmark_runtime"] == runtime.model_dump(mode="json")
 
 
 @pytest.mark.asyncio

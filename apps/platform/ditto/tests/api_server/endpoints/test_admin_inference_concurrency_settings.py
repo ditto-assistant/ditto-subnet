@@ -128,6 +128,12 @@ class TestRead:
             "embedding_per_ticket_concurrency": 12,
             "embedding_per_validator_concurrency": 48,
             "embedding_global_concurrency": 96,
+            "benchmark_runtime": {
+                "case_concurrency": 1,
+                "relay_delay_fingerprint_mode": "off",
+                "relay_delay_fingerprint_min_ms": 25,
+                "relay_delay_fingerprint_max_ms": 250,
+            },
         }
 
 
@@ -149,6 +155,40 @@ class TestWrite:
         assert body["effective"]["source"] == "revision"
         assert body["effective"]["settings"]["embedding_per_ticket_concurrency"] == 24
         assert len(body["history"]) == 1
+
+    async def test_legacy_write_preserves_current_v10_runtime_policy(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        settings_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install(app, settings_maker)
+        runtime = {
+            "case_concurrency": 4,
+            "relay_delay_fingerprint_mode": "shadow",
+            "relay_delay_fingerprint_min_ms": 40,
+            "relay_delay_fingerprint_max_ms": 160,
+        }
+        first = await client.post(
+            _URL,
+            json=_payload(benchmark_runtime=runtime),
+            headers=_HEADERS,
+        )
+        assert first.status_code == 200, first.text
+
+        # Simulate an already-deployed Backroom that knows only the original
+        # eight fields. It may change those fields, but it must not reset the
+        # newer runtime controls during a rolling upgrade.
+        legacy = await client.post(
+            _URL,
+            json=_payload(
+                expected_revision=1,
+                embedding_per_ticket_concurrency=10,
+            ),
+            headers=_HEADERS,
+        )
+        assert legacy.status_code == 200, legacy.text
+        assert legacy.json()["settings"]["benchmark_runtime"] == runtime
 
     async def test_emergency_brake_down_is_accepted(
         self,

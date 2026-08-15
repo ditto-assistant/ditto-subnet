@@ -22,10 +22,10 @@ use serde_json::Value;
 /// The benchmark contract selected by local practice and playground flows.
 pub const ACTIVE_BENCH_VERSION: u32 = 9;
 
-/// Wire-compatible contracts this starter can execute. V8 remains the active
-/// local/practice selection until validator activation; accepting V9 here lets
-/// the same screened image consume its opaque UUID capabilities.
-pub const SUPPORTED_BENCH_VERSIONS: [u32; 2] = [8, 9];
+/// Wire-compatible contracts this starter can execute. Local practice remains
+/// pinned independently; accepting V10 lets the same screened image consume
+/// its opaque UUID and case-scoped inference capabilities.
+pub const SUPPORTED_BENCH_VERSIONS: [u32; 3] = [8, 9, 10];
 
 pub fn supports_bench_version(version: u32) -> bool {
     SUPPORTED_BENCH_VERSIONS.contains(&version)
@@ -130,6 +130,10 @@ pub struct RunRequest {
     /// facts. Absent ⇒ the default single-user graph.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
+    /// Validator-minted, case-scoped v10 relay base URL. Additive and optional
+    /// so older v10 scorers and non-concurrent runs keep the process-wide URL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inference_base_url: Option<String>,
 }
 
 /// One mock tool-execution call a harness POSTs to the validator-served
@@ -314,12 +318,30 @@ mod tests {
     }
 
     #[test]
+    fn v10_run_request_accepts_case_scoped_inference_capability() {
+        let json = r#"{
+            "case_id": "f0e310c2-8c21-42e1-9e85-17d34ca9d51a",
+            "system_prompt": "be helpful",
+            "user_input": "ordinary production-semantic question",
+            "tools": [],
+            "bench_version": 10,
+            "inference_base_url": "http://host.docker.internal:11436/v1/inference/cases/opaque"
+        }"#;
+        let req: RunRequest = serde_json::from_str(json).expect("deserialize v10 request");
+        assert!(supports_bench_version(req.bench_version));
+        assert_eq!(
+            req.inference_base_url.as_deref(),
+            Some("http://host.docker.internal:11436/v1/inference/cases/opaque")
+        );
+    }
+
+    #[test]
     fn supported_versions_do_not_implicitly_activate_v9_practice() {
         assert_eq!(ACTIVE_BENCH_VERSION, 9);
         assert!(supports_bench_version(8));
         assert!(supports_bench_version(9));
         assert!(!supports_bench_version(7));
-        assert!(!supports_bench_version(10));
+        assert!(supports_bench_version(10));
     }
 
     #[test]

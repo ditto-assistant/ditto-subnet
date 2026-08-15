@@ -29,7 +29,11 @@ from ditto.api_models.benchmark_progress import (
     MAX_BENCHMARK_CHECKS,
     BenchmarkProgressStage,
 )
-from ditto.api_models.validator import ArtifactResponse, ScoreReport
+from ditto.api_models.validator import (
+    ArtifactResponse,
+    BenchmarkRuntimeSettings,
+    ScoreReport,
+)
 from ditto.api_models.validator_capabilities import (
     ScorerBenchmarkCapability,
     ScorerLivenessProbe,
@@ -1041,6 +1045,7 @@ class DittobenchClient:
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
     ) -> ScoreReport:
         """Score a submission by its presigned tarball URL (mode B).
 
@@ -1088,6 +1093,7 @@ class DittobenchClient:
             inference_slot_id=inference_slot_id,
             inference_ticket_deadline=inference_ticket_deadline,
             ticket_deadline=ticket_deadline,
+            benchmark_runtime=benchmark_runtime,
         )
         return await self._poll(
             run_id,
@@ -1133,6 +1139,7 @@ class DittobenchClient:
         inference_slot_id: str | None = None,
         inference_ticket_deadline: datetime | None = None,
         ticket_deadline: datetime | None = None,
+        benchmark_runtime: BenchmarkRuntimeSettings | None = None,
     ) -> str:
         if bench_version is None or bench_version not in SUPPORTED_BENCH_VERSIONS:
             raise DittobenchError(f"unsupported benchmark version {bench_version!r}")
@@ -1213,6 +1220,8 @@ class DittobenchClient:
             )
         body["dataset_sha256"] = dataset_sha256
         body["bench_version"] = bench_version
+        if benchmark_runtime is not None:
+            body["benchmark_runtime"] = benchmark_runtime.model_dump(mode="json")
         endpoint = "/v2/score"
         url = f"{self._config.dittobench_api_url}{endpoint}"
         admission_budget = (

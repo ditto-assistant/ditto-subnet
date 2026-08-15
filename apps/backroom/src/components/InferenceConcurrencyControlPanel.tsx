@@ -3,10 +3,12 @@ import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, Gauge, RefreshCw, Zap } from 'lucide-react'
 import {
   INFERENCE_CONCURRENCY_CONFIRMATION,
+  MAX_BENCHMARK_CASE_CONCURRENCY,
   MAX_CHAT_REQUEST_BUDGET,
   MAX_CHAT_TOKEN_BUDGET,
   MAX_CHAT_CONCURRENCY,
   MAX_EMBEDDING_CONCURRENCY,
+  MAX_RELAY_DELAY_FINGERPRINT_MS,
   type InferenceConcurrencySettingsControl,
 } from '../lib/admin.schemas'
 import {
@@ -14,8 +16,8 @@ import {
   updateInferenceConcurrencySettings,
 } from '../server/admin.functions'
 
-// The eight fields, in the order an operator reaches for them during an
-// incident: the allowance that actually binds first, then the brake.
+// The eight hosted-inference fields, in the order an operator reaches for them
+// during an incident: the allowance that actually binds first, then the brake.
 const fields = [
   {
     key: 'chat_token_budget',
@@ -100,6 +102,18 @@ export function InferenceConcurrencyControlPanel({
   const applySettings = useServerFn(updateInferenceConcurrencySettings)
   const [state, setState] = useState(initialState)
   const [draft, setDraft] = useState<Draft>(() => draftFrom(initialState))
+  const [caseConcurrency, setCaseConcurrency] = useState(
+    String(initialState.effective.settings.benchmark_runtime.case_concurrency),
+  )
+  const [delayMode, setDelayMode] = useState<'off' | 'shadow'>(
+    initialState.effective.settings.benchmark_runtime.relay_delay_fingerprint_mode,
+  )
+  const [delayMinMs, setDelayMinMs] = useState(
+    String(initialState.effective.settings.benchmark_runtime.relay_delay_fingerprint_min_ms),
+  )
+  const [delayMaxMs, setDelayMaxMs] = useState(
+    String(initialState.effective.settings.benchmark_runtime.relay_delay_fingerprint_max_ms),
+  )
   const [reason, setReason] = useState('')
   const [confirmation, setConfirmation] = useState('')
   const [loading, setLoading] = useState(false)
@@ -123,13 +137,32 @@ export function InferenceConcurrencyControlPanel({
       parsed.embedding_per_ticket_concurrency > parsed.embedding_per_validator_concurrency ||
       parsed.embedding_per_validator_concurrency > parsed.embedding_global_concurrency)
 
-  const changed = fields.some(
-    (field) => parsed[field.key] !== effective.settings[field.key],
-  )
+  const parsedCaseConcurrency = Number(caseConcurrency)
+  const parsedDelayMinMs = Number(delayMinMs)
+  const parsedDelayMaxMs = Number(delayMaxMs)
+  const runtimeInvalid =
+    !Number.isInteger(parsedCaseConcurrency) ||
+    parsedCaseConcurrency < 1 ||
+    parsedCaseConcurrency > MAX_BENCHMARK_CASE_CONCURRENCY ||
+    !Number.isInteger(parsedDelayMinMs) ||
+    parsedDelayMinMs < 0 ||
+    parsedDelayMinMs > MAX_RELAY_DELAY_FINGERPRINT_MS ||
+    !Number.isInteger(parsedDelayMaxMs) ||
+    parsedDelayMaxMs < parsedDelayMinMs ||
+    parsedDelayMaxMs > MAX_RELAY_DELAY_FINGERPRINT_MS
+
+  const changed =
+    fields.some((field) => parsed[field.key] !== effective.settings[field.key]) ||
+    parsedCaseConcurrency !== effective.settings.benchmark_runtime.case_concurrency ||
+    delayMode !== effective.settings.benchmark_runtime.relay_delay_fingerprint_mode ||
+    parsedDelayMinMs !==
+      effective.settings.benchmark_runtime.relay_delay_fingerprint_min_ms ||
+    parsedDelayMaxMs !== effective.settings.benchmark_runtime.relay_delay_fingerprint_max_ms
   const ready =
     changed &&
     invalid.length === 0 &&
     !hierarchyBroken &&
+    !runtimeInvalid &&
     reason.trim().length >= 8 &&
     confirmation === INFERENCE_CONCURRENCY_CONFIRMATION
 
@@ -141,6 +174,14 @@ export function InferenceConcurrencyControlPanel({
 
   function reset(next = state) {
     setDraft(draftFrom(next))
+    setCaseConcurrency(String(next.effective.settings.benchmark_runtime.case_concurrency))
+    setDelayMode(next.effective.settings.benchmark_runtime.relay_delay_fingerprint_mode)
+    setDelayMinMs(
+      String(next.effective.settings.benchmark_runtime.relay_delay_fingerprint_min_ms),
+    )
+    setDelayMaxMs(
+      String(next.effective.settings.benchmark_runtime.relay_delay_fingerprint_max_ms),
+    )
     setReason('')
     setConfirmation('')
   }
@@ -180,6 +221,12 @@ export function InferenceConcurrencyControlPanel({
             embedding_per_ticket_concurrency: parsed.embedding_per_ticket_concurrency,
             embedding_per_validator_concurrency: parsed.embedding_per_validator_concurrency,
             embedding_global_concurrency: parsed.embedding_global_concurrency,
+            benchmark_runtime: {
+              case_concurrency: parsedCaseConcurrency,
+              relay_delay_fingerprint_mode: delayMode,
+              relay_delay_fingerprint_min_ms: parsedDelayMinMs,
+              relay_delay_fingerprint_max_ms: parsedDelayMaxMs,
+            },
           },
           reason,
           confirmation,
@@ -187,7 +234,7 @@ export function InferenceConcurrencyControlPanel({
       })
       setState(next)
       reset(next)
-      setMessage({ kind: 'success', text: 'Hosted inference policy updated.' })
+      setMessage({ kind: 'success', text: 'Inference and benchmark runtime policy updated.' })
     } catch (cause) {
       setMessage({
         kind: 'error',
@@ -206,11 +253,10 @@ export function InferenceConcurrencyControlPanel({
             <Gauge className="h-4 w-4" />
           </div>
           <div>
-            <h2 className="text-sm font-semibold">Current admission policy</h2>
+            <h2 className="text-sm font-semibold">Current inference and runtime policy</h2>
             <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">
-              What one scoring ticket is allowed to spend on hosted inference, and how
-              parallel its chat and embedding traffic may be. Changes reach the admission path
-              within five seconds, fleet-wide, with no platform restart.
+              What one scoring ticket may spend, how parallel inference traffic may be, and
+              how a newly issued v10 lease schedules and fingerprints its cases.
             </p>
           </div>
         </div>
@@ -239,7 +285,7 @@ export function InferenceConcurrencyControlPanel({
           </div>
           <div>
             <dt className="text-[var(--muted)]">Propagation</dt>
-            <dd className="mt-1 font-semibold">Within 5s</dd>
+            <dd className="mt-1 font-semibold">Admission ≤5s · runtime next lease</dd>
           </div>
         </dl>
 
@@ -308,6 +354,89 @@ export function InferenceConcurrencyControlPanel({
             validator more than the fleet.
           </p>
         ) : null}
+
+        <fieldset className="mt-6 border-t border-[var(--line)] pt-5">
+          <legend className="pr-3 text-xs font-semibold text-[var(--muted-strong)]">
+            V10 benchmark runtime
+          </legend>
+          <p className="mb-4 max-w-[76ch] text-[11px] leading-4 text-[var(--muted)]">
+            These values are stamped onto newly issued v10 leases. V9 and running leases are
+            unchanged.
+          </p>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <label className="text-xs font-medium text-[var(--muted-strong)]">
+              V10 case concurrency{' '}
+              <span className="font-normal text-[var(--muted)]">
+                (1–{MAX_BENCHMARK_CASE_CONCURRENCY})
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={MAX_BENCHMARK_CASE_CONCURRENCY}
+                step={1}
+                value={caseConcurrency}
+                disabled={readOnly || loading}
+                onChange={(event) => setCaseConcurrency(event.target.value)}
+                className="mt-2 block min-h-11 w-44 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45"
+              />
+              <span className="mt-2 block text-[11px] font-normal leading-4 text-[var(--muted)]">
+                Applied only when a v10 harness advertises case-scoped inference. Older v10
+                harnesses remain serial so trusted attribution never degrades.
+              </span>
+            </label>
+
+            <label className="text-xs font-medium text-[var(--muted-strong)]">
+              Relay delay fingerprint
+              <select
+                value={delayMode}
+                disabled={readOnly || loading}
+                onChange={(event) => setDelayMode(event.target.value as 'off' | 'shadow')}
+                className="mt-2 block min-h-11 w-44 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45"
+              >
+                <option value="off">Off</option>
+                <option value="shadow">Shadow</option>
+              </select>
+              <span className="mt-2 block text-[11px] font-normal leading-4 text-[var(--muted)]">
+                Shadow injects a secret deterministic hold and records evidence; it does not
+                change scores.
+              </span>
+            </label>
+
+            <label className="text-xs font-medium text-[var(--muted-strong)]">
+              Minimum delay (ms)
+              <input
+                type="number"
+                min={0}
+                max={MAX_RELAY_DELAY_FINGERPRINT_MS}
+                step={1}
+                value={delayMinMs}
+                disabled={readOnly || loading}
+                onChange={(event) => setDelayMinMs(event.target.value)}
+                className="mt-2 block min-h-11 w-44 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45"
+              />
+            </label>
+
+            <label className="text-xs font-medium text-[var(--muted-strong)]">
+              Maximum delay (ms)
+              <input
+                type="number"
+                min={0}
+                max={MAX_RELAY_DELAY_FINGERPRINT_MS}
+                step={1}
+                value={delayMaxMs}
+                disabled={readOnly || loading}
+                onChange={(event) => setDelayMaxMs(event.target.value)}
+                className="mt-2 block min-h-11 w-44 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45"
+              />
+            </label>
+          </div>
+          {runtimeInvalid ? (
+            <p className="mt-3 text-[11px] text-[var(--red)]">
+              Case concurrency must be 1–{MAX_BENCHMARK_CASE_CONCURRENCY}; delays must satisfy
+              0 ≤ minimum ≤ maximum ≤ {MAX_RELAY_DELAY_FINGERPRINT_MS.toLocaleString()} ms.
+            </p>
+          ) : null}
+        </fieldset>
 
         {loweringBrake ? (
           <p className="mt-4 flex gap-3 rounded-lg border border-[var(--amber)]/30 bg-[var(--amber-dim)] p-4 text-xs leading-5 text-[var(--muted-strong)]">
