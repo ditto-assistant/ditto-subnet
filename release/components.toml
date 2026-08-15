@@ -9,6 +9,8 @@ ignored_paths = [
   ".codex/**",
   ".github/**",
   ".gitignore",
+  ".impeccable/**",
+  "apps/platform/dashboard/.impeccable/**",
   ".pre-commit-config.yaml",
   "AGENTS.md",
   "CLAUDE.md",
