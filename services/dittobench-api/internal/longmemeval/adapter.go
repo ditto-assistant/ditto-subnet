@@ -309,6 +309,8 @@ type HTTPHarness struct {
 type HarnessCaseFailure struct {
 	Kind       string
 	StatusCode int
+	received   bool
+	activity   *TrustedCaseInferenceActivity
 }
 
 func (e *HarnessCaseFailure) Error() string {
@@ -316,6 +318,35 @@ func (e *HarnessCaseFailure) Error() string {
 		return fmt.Sprintf("LongMemEval harness returned an unjudgeable response (HTTP %d)", e.StatusCode)
 	}
 	return "LongMemEval harness returned an unjudgeable response"
+}
+
+// TrustedCaseInferenceActivity is scorer-owned, source-bound evidence about
+// provider work admitted while one submitted /run request was active. The
+// submitted harness cannot populate this structure.
+type TrustedCaseInferenceActivity struct {
+	ReaderAttempts         uint64
+	ReaderDispatches       uint64
+	ReaderReceipted        uint64
+	ReaderInFlight         int
+	ReaderCancellations    uint64
+	EmbeddingAttempts      uint64
+	EmbeddingDispatches    uint64
+	EmbeddingDelivered     uint64
+	EmbeddingInFlight      int
+	EmbeddingCancellations uint64
+}
+
+// BindTrustedCaseInferenceActivity attaches scorer-owned activity only to the
+// narrow received-response failure type. Unknown, transport, context, read,
+// and oversized-response failures are returned unchanged and remain fatal.
+func BindTrustedCaseInferenceActivity(err error, activity TrustedCaseInferenceActivity) error {
+	var failure *HarnessCaseFailure
+	if !errors.As(err, &failure) || !failure.received {
+		return err
+	}
+	bound := *failure
+	bound.activity = &activity
+	return &bound
 }
 
 // HarnessFailureDiagnostic is the complete safe-to-log view of a submitted
@@ -547,12 +578,13 @@ func (h *HTTPHarness) Run(ctx context.Context, request protocol.RunRequest) (pro
 			return protocol.RunResponse{}, &HarnessCaseFailure{
 				Kind:       received.kind,
 				StatusCode: received.statusCode,
+				received:   true,
 			}
 		}
 		return protocol.RunResponse{}, err
 	}
 	if response.FinalText == nil {
-		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "missing_final_text"}
+		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "missing_final_text", received: true}
 	}
 	return protocol.RunResponse{
 		FinalText:    *response.FinalText,

@@ -50,6 +50,45 @@ type confirmationActivationFile struct {
 	SandboxHealthTimeoutMilliseconds int64           `json:"sandbox_health_timeout_ms"`
 }
 
+// confirmationLongMemHarness binds one submitted /run call to the scorer's
+// source-bound broker generation. Seed stays on the raw harness deliberately:
+// no seed response failure is eligible for case-local scoring treatment.
+type confirmationLongMemHarness struct {
+	longmemeval.Harness
+	broker    *inferenceBroker
+	sessionID string
+}
+
+func (h *confirmationLongMemHarness) Run(
+	ctx context.Context,
+	request protocol.RunRequest,
+) (protocol.RunResponse, error) {
+	generation, _, err := h.broker.beginCaseSnapshot(h.sessionID)
+	if err != nil {
+		return protocol.RunResponse{}, errors.New("confirmation LongMem case attribution unavailable")
+	}
+	response, runErr := h.Harness.Run(ctx, request)
+	snapshot, snapshotErr := h.broker.endCaseSnapshot(h.sessionID, generation)
+	if snapshotErr != nil {
+		return protocol.RunResponse{}, errors.New("confirmation LongMem case attribution unavailable")
+	}
+	if runErr == nil {
+		return response, nil
+	}
+	return response, longmemeval.BindTrustedCaseInferenceActivity(runErr, longmemeval.TrustedCaseInferenceActivity{
+		ReaderAttempts:         snapshot.ReaderAttempts,
+		ReaderDispatches:       snapshot.ReaderDispatches,
+		ReaderReceipted:        snapshot.ReaderReceipted,
+		ReaderInFlight:         snapshot.ReaderInFlight,
+		ReaderCancellations:    snapshot.ReaderCancellations,
+		EmbeddingAttempts:      snapshot.EmbeddingAttempts,
+		EmbeddingDispatches:    snapshot.EmbeddingDispatches,
+		EmbeddingDelivered:     snapshot.EmbeddingDelivered,
+		EmbeddingInFlight:      snapshot.EmbeddingInFlight,
+		EmbeddingCancellations: snapshot.EmbeddingCancellations,
+	})
+}
+
 func readConfirmationActivationFile(path, expectedSHA256 string) (confirmationActivationFile, error) {
 	if !filepath.IsAbs(path) || filepath.Clean(path) != path || !canonicalConfirmationSHA256(expectedSHA256) {
 		return confirmationActivationFile{}, errors.New("confirmation installation identity is invalid")
@@ -662,7 +701,11 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 	cleanupSession = false
 	zeroKeys = false
 	return &confirmationRuntime{
-		LongMemSource: longMemSource, LongMemHarness: harness, LongMemJudge: provider.Judge(), LongMemMeter: provider,
+		LongMemSource: longMemSource,
+		LongMemHarness: &confirmationLongMemHarness{
+			Harness: harness, broker: factory.broker, sessionID: sessionID,
+		},
+		LongMemJudge: provider.Judge(), LongMemMeter: provider,
 		LongMemProjectionKey:  longMemProjectionKey,
 		AblationPopulation:    ablation.EligiblePopulation{BenchVersion: confirmationBenchVersion, Confirmation: true, Cases: population},
 		AblationCaseRunner:    caseRunner,

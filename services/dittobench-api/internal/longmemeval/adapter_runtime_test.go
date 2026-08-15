@@ -804,6 +804,39 @@ func TestFailureDiagnosticRejectsNonAllowlistedFields(t *testing.T) {
 	}
 }
 
+func TestBindTrustedCaseInferenceActivityOnlyBindsReceivedCaseFailure(t *testing.T) {
+	private := errors.New("private transport detail")
+	if got := BindTrustedCaseInferenceActivity(private, TrustedCaseInferenceActivity{EmbeddingAttempts: 1}); got != private {
+		t.Fatalf("non-case error changed: %v", got)
+	}
+	unsealed := &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError}
+	if got := BindTrustedCaseInferenceActivity(unsealed, TrustedCaseInferenceActivity{EmbeddingAttempts: 1}); got != unsealed {
+		t.Fatalf("unsealed case error changed: %v", got)
+	}
+
+	original := &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError, received: true}
+	bound := BindTrustedCaseInferenceActivity(original, TrustedCaseInferenceActivity{
+		EmbeddingAttempts: 1, EmbeddingDispatches: 1, EmbeddingDelivered: 1,
+	})
+	var failure *HarnessCaseFailure
+	if !errors.As(bound, &failure) || failure == original || failure.activity == nil || failure.activity.EmbeddingDelivered != 1 {
+		t.Fatalf("trusted activity was not privately bound: %#v", failure)
+	}
+	diagnostic, ok := FailureDiagnostic(bound)
+	if !ok || diagnostic != (HarnessFailureDiagnostic{
+		Operation: "run", Kind: "http_status", StatusCode: http.StatusInternalServerError,
+	}) {
+		t.Fatalf("safe diagnostic changed: %#v, %v", diagnostic, ok)
+	}
+	encoded, err := json.Marshal(failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "Embedding") || strings.Contains(string(encoded), "activity") {
+		t.Fatalf("private trusted activity serialized: %s", encoded)
+	}
+}
+
 func TestWirePayloadGolden(t *testing.T) {
 	_, _, dataset := runtimeFixture(t)
 	projected, err := ProjectSelectedCases(dataset, fixtureProjectionKey, 1)

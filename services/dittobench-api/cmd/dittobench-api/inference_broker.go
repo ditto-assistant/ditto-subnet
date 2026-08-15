@@ -2221,19 +2221,31 @@ func (b *inferenceBroker) handleOpenRouterShim(w http.ResponseWriter, r *http.Re
 
 func (b *inferenceBroker) handleChat(w http.ResponseWriter, r *http.Request, session *brokerSession) {
 	session.mu.Lock()
+	caseGeneration := session.activeCaseGeneration
+	confirmationCase := session.confirmationSession && caseGeneration != 0
+	if confirmationCase {
+		if session.caseSnapshots == nil {
+			session.caseSnapshots = make(map[uint64]brokerCaseSnapshot)
+		}
+		snapshot := session.caseSnapshots[caseGeneration]
+		snapshot.ReaderAttempts++
+		session.caseSnapshots[caseGeneration] = snapshot
+	}
 	if session.inFlight >= brokerPerSourceConcurrency {
 		session.mu.Unlock()
 		w.Header().Set("Retry-After", "1")
 		writeError(w, http.StatusTooManyRequests, "inference source is at capacity")
 		return
 	}
-	caseGeneration := session.activeCaseGeneration
 	if caseGeneration != 0 {
 		if session.caseSnapshots == nil {
 			session.caseSnapshots = make(map[uint64]brokerCaseSnapshot)
 		}
 		snapshot := session.caseSnapshots[caseGeneration]
 		snapshot.InFlight++
+		if confirmationCase {
+			snapshot.ReaderInFlight++
+		}
 		session.caseSnapshots[caseGeneration] = snapshot
 	}
 	session.inFlight++
@@ -2244,6 +2256,12 @@ func (b *inferenceBroker) handleChat(w http.ResponseWriter, r *http.Request, ses
 		if caseGeneration != 0 {
 			snapshot := session.caseSnapshots[caseGeneration]
 			snapshot.InFlight--
+			if confirmationCase {
+				snapshot.ReaderInFlight--
+				if r.Context().Err() != nil {
+					snapshot.ReaderCancellations++
+				}
+			}
 			session.caseSnapshots[caseGeneration] = snapshot
 		}
 		session.mu.Unlock()
@@ -2277,6 +2295,16 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 	}
 	session.mu.Lock()
 	benchVersion := session.benchVersion
+	caseGeneration := session.activeCaseGeneration
+	confirmationCase := session.confirmationSession && caseGeneration != 0
+	if confirmationCase {
+		if session.caseSnapshots == nil {
+			session.caseSnapshots = make(map[uint64]brokerCaseSnapshot)
+		}
+		snapshot := session.caseSnapshots[caseGeneration]
+		snapshot.EmbeddingAttempts++
+		session.caseSnapshots[caseGeneration] = snapshot
+	}
 	session.mu.Unlock()
 	if !usesPlatformEmbedding(benchVersion) && b.embeddingURL == "" {
 		writeError(w, http.StatusServiceUnavailable, "embedding service unavailable")
@@ -2302,6 +2330,11 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 		if session.embeddingInFlight < session.embeddingLaneLocked() {
 			done = make(chan struct{})
 			session.embeddingInFlight++
+			if confirmationCase {
+				snapshot := session.caseSnapshots[caseGeneration]
+				snapshot.EmbeddingInFlight++
+				session.caseSnapshots[caseGeneration] = snapshot
+			}
 			if session.embeddingCalls == nil {
 				session.embeddingCalls = make(map[chan struct{}]context.CancelFunc)
 			}
@@ -2348,6 +2381,14 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 			delete(session.embeddingCalls, done)
 			session.embeddingInFlight--
 			session.signalEmbeddingQueueLocked()
+		}
+		if confirmationCase {
+			snapshot := session.caseSnapshots[caseGeneration]
+			snapshot.EmbeddingInFlight--
+			if r.Context().Err() != nil {
+				snapshot.EmbeddingCancellations++
+			}
+			session.caseSnapshots[caseGeneration] = snapshot
 		}
 		session.mu.Unlock()
 		cancel()
@@ -2491,9 +2532,9 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 		// response is then replayed by the paid-free intervention round; only
 		// that replay/synthetic work is allowed to avoid the purpose-bound
 		// Platform grant.
-		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input)
+		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input, caseGeneration)
 	} else if usesPlatformEmbedding(benchVersion) {
-		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input)
+		decoded, err = b.forwardPlatformEmbeddingWithRetry(requestContext, session, payload.Input, caseGeneration)
 	} else {
 		decoded, err = b.forwardLocalEmbedding(requestContext, payload.Input)
 	}
@@ -2579,6 +2620,13 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 			return
 		}
 	}
+	if confirmationCase {
+		session.mu.Lock()
+		snapshot := session.caseSnapshots[caseGeneration]
+		snapshot.EmbeddingDelivered++
+		session.caseSnapshots[caseGeneration] = snapshot
+		session.mu.Unlock()
+	}
 	writeJSON(w, http.StatusOK, decoded)
 }
 
@@ -2595,8 +2643,12 @@ func (b *inferenceBroker) handleEmbedding(w http.ResponseWriter, r *http.Request
 // retry ledger so a run that survived a fault stays distinguishable from one
 // that never faulted.
 func (b *inferenceBroker) forwardPlatformEmbeddingWithRetry(
-	ctx context.Context, session *brokerSession, inputs []string,
+	ctx context.Context, session *brokerSession, inputs []string, caseGeneration ...uint64,
 ) (embeddingResponse, error) {
+	generation := uint64(0)
+	if len(caseGeneration) > 0 {
+		generation = caseGeneration[0]
+	}
 	var lastErr error
 	var lastCapacityErr error
 	capacityWaits := 0
@@ -2611,7 +2663,7 @@ func (b *inferenceBroker) forwardPlatformEmbeddingWithRetry(
 			}
 			return embeddingResponse{}, waitErr
 		}
-		decoded, err := b.forwardPlatformEmbedding(ctx, session, inputs)
+		decoded, err := b.forwardPlatformEmbedding(ctx, session, inputs, generation)
 		if err == nil {
 			b.embeddingBackpressure.finishProbe(probe)
 			return decoded, nil
@@ -2735,7 +2787,9 @@ func platformEmbeddingURL(chatProxyURL string) (string, error) {
 	return parsed.String(), nil
 }
 
-func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session *brokerSession, inputs []string) (embeddingResponse, error) {
+func (b *inferenceBroker) forwardPlatformEmbedding(
+	ctx context.Context, session *brokerSession, inputs []string, caseGeneration uint64,
+) (embeddingResponse, error) {
 	session.mu.Lock()
 	if !usesPlatformEmbedding(session.benchVersion) || !session.activeLocked(time.Now()) {
 		session.mu.Unlock()
@@ -2789,6 +2843,11 @@ func (b *inferenceBroker) forwardPlatformEmbedding(ctx context.Context, session 
 	// quarantines a decline when exhaustion is impossible even under this bound.
 	session.mu.Lock()
 	session.embeddingDispatches++
+	if session.confirmationSession && caseGeneration != 0 {
+		snapshot := session.caseSnapshots[caseGeneration]
+		snapshot.EmbeddingDispatches++
+		session.caseSnapshots[caseGeneration] = snapshot
+	}
 	session.embeddingChargeUpperBound += uint64(len(body))
 	session.mu.Unlock()
 	response, err := b.client.Do(upstream)
@@ -2954,6 +3013,7 @@ func (b *inferenceBroker) proxy(
 		writeError(w, http.StatusUnauthorized, "inference session unavailable")
 		return
 	}
+	confirmationCase := session.confirmationSession && caseGeneration != 0
 	// The model is a property of the ticket, not of the request. The harness
 	// that produced this body is miner-authored, so its model field is at best
 	// advisory: substitute the ticket's model rather than rejecting, so a
@@ -3034,6 +3094,9 @@ func (b *inferenceBroker) proxy(
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
 		snapshot.Requests++
+		if confirmationCase {
+			snapshot.ReaderDispatches++
+		}
 		session.caseSnapshots[caseGeneration] = snapshot
 	}
 	session.promptBytes += uint64(len(body))
@@ -3305,6 +3368,9 @@ func (b *inferenceBroker) proxy(
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
 		snapshot.Successes++
+		if confirmationCase {
+			snapshot.ReaderReceipted++
+		}
 		if session.benchVersion == protocol.BenchVersionV9 {
 			injectedDelay = delayFingerprintFor(
 				session.delayFingerprintKey, caseGeneration, snapshot.DelayedRequests, b.delayFP,
@@ -3421,6 +3487,22 @@ type brokerCaseSnapshot struct {
 	Requests  uint64
 	Successes uint64
 	InFlight  int
+	// Confirmation counters are isolated from the ordinary v9 model-use
+	// counters above. They cover both purpose-bound reader chat and embedding
+	// calls admitted while one LongMem /run generation is active. Delivered is
+	// incremented only after the Platform capability endpoint returned a
+	// validated HTTP 200 response. It corroborates agent activity but is not
+	// canonical signed provider receipt evidence.
+	ReaderAttempts         uint64
+	ReaderDispatches       uint64
+	ReaderReceipted        uint64
+	ReaderInFlight         int
+	ReaderCancellations    uint64
+	EmbeddingAttempts      uint64
+	EmbeddingDispatches    uint64
+	EmbeddingDelivered     uint64
+	EmbeddingInFlight      int
+	EmbeddingCancellations uint64
 	// DelayedRequests and InjectedDelayMS record the delay-fingerprint
 	// schedule realized inside this case window (delay_fingerprint.go): how
 	// many successful completions were held, and for how long in total. Booked

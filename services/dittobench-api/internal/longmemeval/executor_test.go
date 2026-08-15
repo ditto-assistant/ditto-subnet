@@ -289,6 +289,101 @@ func TestExecutorRejectsUnjudgeableRunWithoutCaseLocalProviderReceipt(t *testing
 	}
 }
 
+func TestExecutorScoresEmbeddingBackedReceivedRunFailureAsIncorrectAndContinues(t *testing.T) {
+	profile, raw, _ := runtimeFixture(t)
+	meter := newRecordingMeter(profile)
+	base := newStarterHarness(meter)
+	harness := &trustedEmbeddingFailureHarness{
+		Harness: base,
+		failAt:  4,
+		activity: TrustedCaseInferenceActivity{
+			EmbeddingAttempts: 1, EmbeddingDispatches: 1, EmbeddingDelivered: 1,
+		},
+	}
+	judge := &exactJudge{meter: meter}
+	executor := Executor{Harness: harness, Judge: judge, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+	result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Evidence.Score.CaseCount != 12 || result.Evidence.Score.LongMemMean != 0.916667 {
+		t.Fatalf("score=%#v", result.Evidence.Score)
+	}
+	if harness.runCalls != 12 || base.runs != 11 || len(judge.inputs) != 11 {
+		t.Fatalf("runs/base/judges=%d/%d/%d, want 12/11/11", harness.runCalls, base.runs, len(judge.inputs))
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("http_status")) || bytes.Contains(encoded, []byte("inference")) {
+		t.Fatalf("private case attribution leaked into evidence: %s", encoded)
+	}
+	if err := result.Validate(profile); err != nil {
+		t.Fatalf("embedding-backed received failure produced invalid evidence: %v", err)
+	}
+}
+
+func TestExecutorRejectsAmbiguousEmbeddingBackedRunFailure(t *testing.T) {
+	valid := TrustedCaseInferenceActivity{
+		EmbeddingAttempts: 1, EmbeddingDispatches: 1, EmbeddingDelivered: 1,
+	}
+	tests := map[string]func(*TrustedCaseInferenceActivity){
+		"no embedding activity": func(value *TrustedCaseInferenceActivity) {
+			value.EmbeddingAttempts = 0
+			value.EmbeddingDispatches = 0
+			value.EmbeddingDelivered = 0
+		},
+		"unsigned attempt":     func(value *TrustedCaseInferenceActivity) { value.EmbeddingDispatches = 0 },
+		"unvalidated response": func(value *TrustedCaseInferenceActivity) { value.EmbeddingDelivered = 0 },
+		"retry dispatch":       func(value *TrustedCaseInferenceActivity) { value.EmbeddingDispatches++ },
+		"embedding in flight":  func(value *TrustedCaseInferenceActivity) { value.EmbeddingInFlight = 1 },
+		"embedding cancelled":  func(value *TrustedCaseInferenceActivity) { value.EmbeddingCancellations = 1 },
+		"reader admitted":      func(value *TrustedCaseInferenceActivity) { value.ReaderAttempts = 1 },
+		"reader dispatched":    func(value *TrustedCaseInferenceActivity) { value.ReaderDispatches = 1 },
+		"reader completed":     func(value *TrustedCaseInferenceActivity) { value.ReaderReceipted = 1 },
+		"reader in flight":     func(value *TrustedCaseInferenceActivity) { value.ReaderInFlight = 1 },
+		"reader cancelled":     func(value *TrustedCaseInferenceActivity) { value.ReaderCancellations = 1 },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			profile, raw, _ := runtimeFixture(t)
+			meter := newRecordingMeter(profile)
+			activity := valid
+			mutate(&activity)
+			harness := &trustedEmbeddingFailureHarness{Harness: newStarterHarness(meter), failAt: 1, activity: activity}
+			executor := Executor{Harness: harness, Judge: &exactJudge{meter: meter}, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+			result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+			if err == nil || !strings.Contains(err.Error(), "lacks complete provider receipts") {
+				t.Fatalf("ambiguous activity was scored: result=%#v err=%v", result, err)
+			}
+			if !reflect.DeepEqual(result, ExecutionResult{}) {
+				t.Fatalf("ambiguous activity returned partial result: %#v", result)
+			}
+		})
+	}
+}
+
+func TestExecutorRejectsEmbeddingBackedRunFailureWhenProviderMeterMoves(t *testing.T) {
+	for _, lane := range []string{ReaderLane, JudgeLane} {
+		t.Run(lane, func(t *testing.T) {
+			profile, raw, _ := runtimeFixture(t)
+			meter := newRecordingMeter(profile)
+			harness := &trustedEmbeddingFailureHarness{
+				Harness: newStarterHarness(meter), meter: meter, mutateLane: lane, failAt: 1,
+				activity: TrustedCaseInferenceActivity{
+					EmbeddingAttempts: 1, EmbeddingDispatches: 1, EmbeddingDelivered: 1,
+				},
+			}
+			executor := Executor{Harness: harness, Judge: &exactJudge{meter: meter}, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+			result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+			if err == nil || !strings.Contains(err.Error(), "lacks complete provider receipts") {
+				t.Fatalf("provider meter movement was scored: result=%#v err=%v", result, err)
+			}
+		})
+	}
+}
+
 func TestExecutorKeepsAllUnjudgeableRunsFailClosedAtEvidenceBoundary(t *testing.T) {
 	profile, raw, _ := runtimeFixture(t)
 	meter := newRecordingMeter(profile)
@@ -545,7 +640,10 @@ func (h *allRunFailureHarness) Run(ctx context.Context, request protocol.RunRequ
 	if _, err := h.Harness.Run(ctx, request); err != nil {
 		return protocol.RunResponse{}, err
 	}
-	return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable}
+	return protocol.RunResponse{}, BindTrustedCaseInferenceActivity(
+		&HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable, received: true},
+		TrustedCaseInferenceActivity{ReaderAttempts: 1, ReaderDispatches: 1, ReaderReceipted: 1},
+	)
 }
 
 type providerFailedCaseHarness struct {
@@ -561,10 +659,33 @@ type noProviderAttemptCaseHarness struct {
 	runCalls int
 }
 
+type trustedEmbeddingFailureHarness struct {
+	Harness
+	meter      *recordingMeter
+	mutateLane string
+	failAt     int
+	runCalls   int
+	activity   TrustedCaseInferenceActivity
+}
+
+func (h *trustedEmbeddingFailureHarness) Run(ctx context.Context, request protocol.RunRequest) (protocol.RunResponse, error) {
+	h.runCalls++
+	if h.runCalls == h.failAt {
+		if h.meter != nil && h.mutateLane != "" {
+			h.meter.add(h.mutateLane, 1, 1, 1, true)
+		}
+		return protocol.RunResponse{}, BindTrustedCaseInferenceActivity(
+			&HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError, received: true},
+			h.activity,
+		)
+	}
+	return h.Harness.Run(ctx, request)
+}
+
 func (h *noProviderAttemptCaseHarness) Run(ctx context.Context, request protocol.RunRequest) (protocol.RunResponse, error) {
 	h.runCalls++
 	if h.runCalls == h.failAt {
-		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable}
+		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable, received: true}
 	}
 	return h.Harness.Run(ctx, request)
 }
@@ -574,7 +695,7 @@ func (h *providerFailedCaseHarness) Run(ctx context.Context, request protocol.Ru
 	response, err := h.Harness.Run(ctx, request)
 	if err == nil && h.runCalls == h.failAt {
 		h.meter.add(ReaderLane, 1, 0, 1, false)
-		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable}
+		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable, received: true}
 	}
 	return response, err
 }
@@ -584,7 +705,7 @@ func (h *oneCaseFailureHarness) Seed(ctx context.Context, request protocol.SeedR
 	response, err := h.Harness.Seed(ctx, request)
 	if err == nil && h.operation == "seed" && h.seedCalls == h.failAt {
 		if h.typed {
-			return protocol.SeedResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError}
+			return protocol.SeedResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError, received: true}
 		}
 		return protocol.SeedResponse{}, errors.New("private-failure seed detail")
 	}
@@ -596,7 +717,10 @@ func (h *oneCaseFailureHarness) Run(ctx context.Context, request protocol.RunReq
 	response, err := h.Harness.Run(ctx, request)
 	if err == nil && h.operation == "run" && h.runCalls == h.failAt {
 		if h.typed {
-			return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError}
+			return protocol.RunResponse{}, BindTrustedCaseInferenceActivity(
+				&HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError, received: true},
+				TrustedCaseInferenceActivity{ReaderAttempts: 1, ReaderDispatches: 1, ReaderReceipted: 1},
+			)
 		}
 		return protocol.RunResponse{}, errors.New("private-failure run detail")
 	}

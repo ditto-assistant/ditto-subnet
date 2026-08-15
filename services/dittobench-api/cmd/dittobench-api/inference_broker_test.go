@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
@@ -23,6 +25,137 @@ import (
 )
 
 const testBrokerAgentID = "00000000-0000-0000-0000-000000000002"
+
+func TestConfirmationCaseSnapshotAttributesDeliveredEmbeddingToActiveGeneration(t *testing.T) {
+	attempts := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		attempts++
+		if attempts == 1 {
+			http.Error(w, "transient", http.StatusInternalServerError)
+			return
+		}
+		response := platformEmbeddingResponse{Model: hostedEmbeddingModel}
+		response.Data = append(response.Data, struct {
+			Index     int       `json:"index"`
+			Embedding []float64 `json:"embedding"`
+		}{Index: 0, Embedding: make([]float64, embeddingDimensions)})
+		response.Usage.PromptTokens, response.Usage.TotalTokens = 1, 1
+		_ = json.NewEncoder(w).Encode(response)
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1, 1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, runID := "confirmation-case-embedding", uuid.NewString()
+	session := &brokerSession{
+		id: id, boundRunID: runID, expectedSourceIP: "127.0.0.1", expiresAt: time.Now().Add(time.Hour),
+		benchVersion: confirmationBenchVersion, legacyGateway: "active", privateKey: privateKey,
+		confirmationSession: true,
+		confirmationGrants: map[string]brokerConfirmationGrant{
+			"embedding": {
+				Lane: "embedding", GrantID: uuid.NewString(), Bearer: "capability", ProxyURL: upstream.URL,
+				Generation: 1, Model: hostedEmbeddingModel,
+			},
+		},
+		embeddingPhaseActive: true, embeddingConcurrency: 1,
+		embeddingCalls: make(map[chan struct{}]context.CancelFunc), cancels: make(map[string]context.CancelFunc),
+	}
+	broker.sessions[id] = session
+	generation, _, err := broker.beginCaseSnapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, embeddingAPIPath, bytes.NewBufferString(
+		`{"model":"embeddinggemma","input":["query"]}`,
+	))
+	request.RemoteAddr = "127.0.0.1:4321"
+	response := httptest.NewRecorder()
+	broker.handleEmbedding(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
+	snapshot, err := broker.endCaseSnapshot(id, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.EmbeddingAttempts != 1 || snapshot.EmbeddingDispatches != 2 || snapshot.EmbeddingDelivered != 1 ||
+		snapshot.EmbeddingInFlight != 0 || snapshot.EmbeddingCancellations != 0 {
+		t.Fatalf("embedding case snapshot=%+v", snapshot)
+	}
+	if validEmbeddingOnlyCaseActivityForTest(snapshot) {
+		t.Fatalf("retried embedding was incorrectly complete: %+v", snapshot)
+	}
+
+	generation, _, err = broker.beginCaseSnapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, embeddingAPIPath, bytes.NewBufferString(
+		`{"model":"embeddinggemma","input":["next query"]}`,
+	))
+	request.RemoteAddr = "127.0.0.1:4321"
+	response = httptest.NewRecorder()
+	broker.handleEmbedding(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("second response=%d %s", response.Code, response.Body.String())
+	}
+	snapshot, err = broker.endCaseSnapshot(id, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !validEmbeddingOnlyCaseActivityForTest(snapshot) {
+		t.Fatalf("single delivered embedding was not complete: %+v", snapshot)
+	}
+}
+
+func validEmbeddingOnlyCaseActivityForTest(snapshot brokerCaseSnapshot) bool {
+	return snapshot.ReaderAttempts == 0 && snapshot.ReaderDispatches == 0 && snapshot.ReaderReceipted == 0 &&
+		snapshot.ReaderInFlight == 0 && snapshot.ReaderCancellations == 0 && snapshot.EmbeddingAttempts > 0 &&
+		snapshot.EmbeddingAttempts == snapshot.EmbeddingDispatches &&
+		snapshot.EmbeddingAttempts == snapshot.EmbeddingDelivered && snapshot.EmbeddingInFlight == 0 &&
+		snapshot.EmbeddingCancellations == 0
+}
+
+func TestConfirmationCaseSnapshotAttributesReaderCallToActiveGeneration(t *testing.T) {
+	broker := newInferenceBroker(1, 1)
+	id, runID := "confirmation-case-reader", uuid.NewString()
+	model := llm.HarnessModelForVersion(confirmationBenchVersion)
+	session := &brokerSession{
+		id: id, boundRunID: runID, expectedSourceIP: "127.0.0.1", expiresAt: time.Now().Add(time.Hour),
+		benchVersion: confirmationBenchVersion, confirmationSession: true, requestModel: model, model: model,
+		trustedChatHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
+		}),
+		cancels: make(map[string]context.CancelFunc),
+	}
+	broker.sessions[id] = session
+	generation, _, err := broker.beginCaseSnapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
+		`{"model":"ignored","messages":[{"role":"user","content":"query"}]}`,
+	))
+	request.RemoteAddr = "127.0.0.1:4321"
+	response := httptest.NewRecorder()
+	broker.handleChat(response, request, session)
+	if response.Code != http.StatusOK {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
+	snapshot, err := broker.endCaseSnapshot(id, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ReaderAttempts != 1 || snapshot.ReaderDispatches != 1 || snapshot.ReaderReceipted != 1 ||
+		snapshot.ReaderInFlight != 0 || snapshot.ReaderCancellations != 0 || snapshot.EmbeddingAttempts != 0 {
+		t.Fatalf("reader case snapshot=%+v", snapshot)
+	}
+}
 
 func TestLegacyBrokerSessionsRunConcurrentlyWithIsolatedAccounting(t *testing.T) {
 	var inFlight atomic.Int64

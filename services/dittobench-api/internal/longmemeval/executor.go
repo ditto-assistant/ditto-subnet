@@ -140,15 +140,22 @@ func (e Executor) Execute(
 				return ExecutionResult{}, fmt.Errorf("LongMemEval execution exceeded its time budget: %w", err)
 			}
 			var caseFailure *HarnessCaseFailure
-			if !errors.As(operationErr, &caseFailure) {
+			if !errors.As(operationErr, &caseFailure) || !caseFailure.received {
 				return ExecutionResult{}, fmt.Errorf("LongMemEval run failed for opaque case: %w", operationErr)
 			}
 			beforeReader := current[ReaderLane]
 			afterReader := next[ReaderLane]
+			beforeJudge := current[JudgeLane]
+			afterJudge := next[JudgeLane]
 			requestDelta := afterReader.Requests - beforeReader.Requests
 			successDelta := afterReader.Successes - beforeReader.Successes
 			receiptDelta := afterReader.ReceiptedRequests - beforeReader.ReceiptedRequests
-			if requestDelta == 0 || requestDelta != successDelta || requestDelta != receiptDelta {
+			completeReaderActivity := beforeJudge == afterJudge && requestDelta > 0 &&
+				requestDelta == successDelta && requestDelta == receiptDelta &&
+				validReaderBackedCaseActivity(caseFailure.activity, requestDelta)
+			completeEmbeddingOnlyActivity := beforeReader == afterReader && beforeJudge == afterJudge &&
+				validEmbeddingOnlyCaseActivity(caseFailure.activity)
+			if !completeReaderActivity && !completeEmbeddingOnlyActivity {
 				return ExecutionResult{}, fmt.Errorf(
 					"LongMemEval unjudgeable run lacks complete provider receipts: %w",
 					operationErr,
@@ -205,6 +212,41 @@ func (e Executor) Execute(
 		return ExecutionResult{}, err
 	}
 	return ExecutionResult{Evidence: evidence, selection: dataset.Selection}, nil
+}
+
+// validEmbeddingOnlyCaseActivity is the narrow Rev14 attribution boundary.
+// It accepts an unjudgeable submitted /run response only when the source-bound
+// broker generation proves that this exact case completed at least one query
+// embedding, every admitted/signed embedding dispatch returned a validated
+// Platform 200, no reader request ran, and no request remained in flight or
+// observed cancellation. The 200 is corroboration, not canonical receipt
+// evidence; the executor separately requires exact-zero reader and judge meter
+// deltas before this path is eligible.
+// Reader-backed failures continue through the canonical ProviderMeter path.
+func validEmbeddingOnlyCaseActivity(activity *TrustedCaseInferenceActivity) bool {
+	return activity != nil &&
+		activity.ReaderAttempts == 0 && activity.ReaderDispatches == 0 && activity.ReaderReceipted == 0 &&
+		activity.ReaderInFlight == 0 && activity.ReaderCancellations == 0 &&
+		validEmbeddingActivity(activity, true)
+}
+
+func validReaderBackedCaseActivity(activity *TrustedCaseInferenceActivity, readerRequests uint64) bool {
+	return activity != nil && readerRequests > 0 &&
+		activity.ReaderAttempts == readerRequests && activity.ReaderDispatches == readerRequests &&
+		activity.ReaderReceipted == readerRequests && activity.ReaderInFlight == 0 &&
+		activity.ReaderCancellations == 0 && validEmbeddingActivity(activity, false)
+}
+
+func validEmbeddingActivity(activity *TrustedCaseInferenceActivity, required bool) bool {
+	if activity.EmbeddingAttempts == 0 && activity.EmbeddingDispatches == 0 &&
+		activity.EmbeddingDelivered == 0 && activity.EmbeddingInFlight == 0 &&
+		activity.EmbeddingCancellations == 0 {
+		return !required
+	}
+	return activity.EmbeddingAttempts > 0 &&
+		activity.EmbeddingAttempts == activity.EmbeddingDispatches &&
+		activity.EmbeddingAttempts == activity.EmbeddingDelivered &&
+		activity.EmbeddingInFlight == 0 && activity.EmbeddingCancellations == 0
 }
 
 func readBudgetSnapshot(

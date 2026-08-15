@@ -42,6 +42,55 @@ type fakeConfirmationSandbox struct {
 	released     int
 }
 
+func TestConfirmationLongMemHarnessSealsOneRunGeneration(t *testing.T) {
+	broker := newInferenceBroker(1, 1)
+	sessionID := "confirmation-longmem-generation"
+	session := &brokerSession{
+		confirmationSession: true,
+		caseSnapshots:       make(map[uint64]brokerCaseSnapshot),
+	}
+	broker.sessions[sessionID] = session
+	harnessServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/run" {
+			http.NotFound(writer, request)
+			return
+		}
+		session.mu.Lock()
+		generation := session.activeCaseGeneration
+		snapshot := session.caseSnapshots[generation]
+		snapshot.EmbeddingAttempts++
+		snapshot.EmbeddingDispatches++
+		snapshot.EmbeddingDelivered++
+		session.caseSnapshots[generation] = snapshot
+		session.mu.Unlock()
+		http.Error(writer, "private submitted detail", http.StatusInternalServerError)
+	}))
+	defer harnessServer.Close()
+	rawHarness, err := longmemeval.NewHTTPHarness(harnessServer.URL, harnessServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	harness := &confirmationLongMemHarness{Harness: rawHarness, broker: broker, sessionID: sessionID}
+	_, err = harness.Run(context.Background(), protocol.RunRequest{})
+	diagnostic, ok := longmemeval.FailureDiagnostic(err)
+	if !ok || diagnostic != (longmemeval.HarnessFailureDiagnostic{
+		Operation: "run", Kind: "http_status", StatusCode: http.StatusInternalServerError,
+	}) {
+		t.Fatalf("diagnostic=%#v, %v; err=%v", diagnostic, ok, err)
+	}
+	if strings.Contains(err.Error(), "private submitted detail") {
+		t.Fatalf("submitted response body leaked: %v", err)
+	}
+	session.mu.Lock()
+	active := session.activeCaseGeneration
+	snapshot := session.caseSnapshots[session.caseGeneration]
+	session.mu.Unlock()
+	if active != 0 || snapshot.EmbeddingAttempts != 1 || snapshot.EmbeddingDispatches != 1 ||
+		snapshot.EmbeddingDelivered != 1 {
+		t.Fatalf("sealed generation active=%d snapshot=%+v", active, snapshot)
+	}
+}
+
 func (fake *fakeConfirmationSandbox) Available(context.Context) error { return fake.availableErr }
 func (fake *fakeConfirmationSandbox) Build(context.Context, sandbox.Source) (string, string, *protocol.CodeFingerprint, error) {
 	fake.mu.Lock()
