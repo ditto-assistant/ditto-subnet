@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 
 from ditto.miner_cli.errors import (
     RegistrationNotNeededError,
+    RegistrationOutcomeUnknownError,
     RegistrationSubmissionError,
 )
 from ditto.miner_cli.models import RegistrationQuote
@@ -49,11 +50,11 @@ def quote_registration(
     registered on it, the current recycle amount, and the coldkey's free
     balance. Every one is a chain read taken at call time.
 
-    The already-registered check is what keeps a netuid mismatch from
-    costing the miner TAO. A 1101 rejection is issued by the API server
-    against the netuid *it* is bound to; this function registers against
-    the netuid the *CLI* resolved. When those disagree, the hotkey looks
-    registered here and the correct move is to stop.
+    The already-registered check is the last guard before the burn. Callers
+    are expected to pass the netuid the *platform* reported rather than a
+    local one (see ``_authoritative_netuid`` in the upload command), because
+    this check cannot detect a target mismatch on its own: a hotkey that is
+    unregistered on both subnets looks the same either way.
 
     Args:
         live_wallet: Live bittensor wallet; ``.coldkeypub`` supplies the
@@ -116,10 +117,10 @@ def quote_registration(
     if already_registered:
         raise RegistrationNotNeededError(
             f"hotkey {hotkey_ss58} is already registered on netuid {netuid} "
-            f"according to subtensor {chain_target!r}, but the platform "
-            f"rejected it as unregistered. Confirm the CLI and the platform "
-            f"agree on the netuid (env NETUID) and on the network "
-            f"(--network), then retry. No TAO was recycled."
+            f"according to subtensor {chain_target!r}, while the platform "
+            f"still reports it as unregistered. Ordinarily this just means "
+            f"the platform's cached view has not caught up yet. No TAO was "
+            f"recycled."
         )
 
     try:
@@ -195,8 +196,12 @@ def submit_registration(
 
     Raises:
         RegistrationSubmissionError: The recycle cost rose above the
-            confirmed amount, or the extrinsic was rejected or reported
-            failure. The hotkey is unregistered in every case.
+            confirmed amount, or the submission failed AND the chain
+            confirms the hotkey is still unregistered. Nothing was
+            recycled in either case, so retrying is safe.
+        RegistrationOutcomeUnknownError: The submission errored but the
+            extrinsic landed anyway, or the settling read failed. Retrying
+            could recycle a second time; a human has to look first.
     """
     chain_target = chain_endpoint or subtensor_network
     subtensor = _connect_subtensor(chain_target)
@@ -235,14 +240,37 @@ def submit_registration(
             raise_error=True,
         )
     except Exception as e:
+        # A raised exception does not mean the extrinsic never landed. A
+        # finalization timeout or a dropped connection can surface here after
+        # the chain already recycled the TAO, so the failure is not reported
+        # until the chain itself has been asked.
+        # Returns only when the chain confirms the hotkey is still
+        # unregistered, which is the one case where nothing was spent.
+        _reconcile_ambiguous_submission(
+            subtensor=subtensor,
+            hotkey_ss58=hotkey_ss58,
+            netuid=netuid,
+            cause=e,
+        )
         raise RegistrationSubmissionError(
-            f"burned_register extrinsic rejected: {e}"
+            f"burned_register extrinsic rejected: {e}. The chain confirms "
+            f"hotkey {hotkey_ss58} is still unregistered on netuid {netuid}, "
+            f"so no TAO was recycled and retrying is safe."
         ) from e
 
     if not response.success:
-        # raise_error=True should have raised already; defensive.
+        # raise_error=True should have raised already; defensive. Ambiguous
+        # for the same reason as the exception path.
+        cause = RuntimeError(f"burned_register reported failure: {response.message}")
+        _reconcile_ambiguous_submission(
+            subtensor=subtensor,
+            hotkey_ss58=hotkey_ss58,
+            netuid=netuid,
+            cause=cause,
+        )
         raise RegistrationSubmissionError(
-            f"burned_register reported failure: {response.message}"
+            f"{cause}. The chain confirms hotkey {hotkey_ss58} is still "
+            f"unregistered on netuid {netuid}, so no TAO was recycled."
         )
 
     # The uid is a convenience for the success line. Registration is already
@@ -255,6 +283,58 @@ def submit_registration(
     except Exception as e:
         logger.debug(f"registered but uid lookup failed: {e!r}")
         return None
+
+
+def _reconcile_ambiguous_submission(
+    *,
+    subtensor: bittensor.Subtensor,
+    hotkey_ss58: str,
+    netuid: int,
+    cause: Exception,
+) -> None:
+    """Ask the chain whether a failed-looking submission actually landed.
+
+    A submission error is not proof that nothing happened. ``burned_register``
+    waits for finalization, so a timeout, a dropped socket, or a defensive
+    non-success response can all arrive after the extrinsic was already
+    included and the TAO recycled. Reporting those as a plain rejection, with
+    a retry instruction attached, invites the miner to pay twice.
+
+    Returns normally only when the hotkey is confirmed STILL UNREGISTERED --
+    the one case where nothing was spent and retrying is safe. The caller
+    then raises its own definite error.
+
+    Raises:
+        RegistrationOutcomeUnknownError: The hotkey is now registered (the
+            submission landed despite the error), or the settling read itself
+            failed so nothing can be concluded. Neither is retryable without
+            a human looking first.
+    """
+    try:
+        registered = subtensor.is_hotkey_registered(
+            hotkey_ss58=hotkey_ss58, netuid=netuid
+        )
+    except Exception as read_error:
+        raise RegistrationOutcomeUnknownError(
+            f"the registration submission failed ({cause}), and the follow-up "
+            f"check that would settle whether it landed also failed "
+            f"({read_error}).\n"
+            f"TAO may or may not have been recycled. Do NOT re-run "
+            f"registration blindly -- confirm first with:\n"
+            f"  btcli subnets show --netuid {netuid}\n"
+            f"and look for hotkey {hotkey_ss58}."
+        ) from cause
+
+    if registered:
+        raise RegistrationOutcomeUnknownError(
+            f"the registration submission reported an error ({cause}), but "
+            f"hotkey {hotkey_ss58} IS now registered on netuid {netuid}: the "
+            f"extrinsic landed and the TAO was recycled.\n"
+            f"Do NOT register again. Re-run this upload command; it will skip "
+            f"registration."
+        ) from cause
+
+    logger.debug(f"submission failed and hotkey is still unregistered: {cause!r}")
 
 
 def _connect_subtensor(chain_target: str) -> bittensor.Subtensor:

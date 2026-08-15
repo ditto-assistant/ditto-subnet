@@ -380,6 +380,18 @@
         },
         "type": "array"
       },
+      "netuid": {
+        "anyOf": [
+          {
+            "minimum": 0,
+            "type": "integer"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "ok": {
         "type": "boolean"
       },
@@ -415,6 +427,17 @@
         "anyOf": [
           {
             "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "subtensor_network": {
+        "anyOf": [
+          {
             "type": "string"
           },
           {

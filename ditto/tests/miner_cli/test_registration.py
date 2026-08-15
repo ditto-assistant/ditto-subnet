@@ -31,6 +31,7 @@ import pytest
 
 from ditto.miner_cli.errors import (
     RegistrationNotNeededError,
+    RegistrationOutcomeUnknownError,
     RegistrationSubmissionError,
 )
 from ditto.miner_cli.registration import quote_registration, submit_registration
@@ -316,3 +317,92 @@ class TestSubmitRegistration:
 
         assert uid is None
         subtensor.burned_register.assert_called_once()
+
+
+class TestAmbiguousSubmission:
+    """A submission error is not proof that nothing was recycled.
+
+    ``burned_register`` waits for finalization, so a timeout or a dropped
+    socket can surface after the extrinsic already landed. Reporting that
+    as a plain rejection with a retry hint invites paying twice.
+    """
+
+    def _subtensor_that_fails_submitting(
+        self, *, registered_after: bool | Exception
+    ) -> MagicMock:
+        subtensor = _subtensor()
+        subtensor.burned_register.side_effect = TimeoutError("no finalization")
+        if isinstance(registered_after, Exception):
+            subtensor.is_hotkey_registered.side_effect = registered_after
+        else:
+            subtensor.is_hotkey_registered.return_value = registered_after
+        return subtensor
+
+    def _submit(self, subtensor, monkeypatch):
+        monkeypatch.setattr(bittensor, "Subtensor", MagicMock(return_value=subtensor))
+        return submit_registration(
+            live_wallet=_wallet(),
+            hotkey_ss58=HOTKEY,
+            netuid=NETUID,
+            subtensor_network="finney",
+            confirmed_recycle_rao=500_000,
+        )
+
+    def test_extrinsic_landed_despite_the_error_is_not_retryable(
+        self, monkeypatch
+    ) -> None:
+        subtensor = self._subtensor_that_fails_submitting(registered_after=True)
+
+        with pytest.raises(RegistrationOutcomeUnknownError) as exc:
+            self._submit(subtensor, monkeypatch)
+
+        message = str(exc.value)
+        assert "IS now registered" in message
+        assert "TAO was recycled" in message
+        assert "Do NOT register again" in message
+
+    def test_unresolvable_state_refuses_to_advise_a_retry(self, monkeypatch) -> None:
+        subtensor = self._subtensor_that_fails_submitting(
+            registered_after=RuntimeError("rpc down")
+        )
+
+        with pytest.raises(RegistrationOutcomeUnknownError) as exc:
+            self._submit(subtensor, monkeypatch)
+
+        message = str(exc.value)
+        assert "may or may not have been recycled" in message
+        assert "Do NOT re-run registration blindly" in message
+        assert "btcli subnets show" in message
+
+    def test_confirmed_unregistered_is_a_definite_safe_to_retry_failure(
+        self, monkeypatch
+    ) -> None:
+        subtensor = self._subtensor_that_fails_submitting(registered_after=False)
+
+        with pytest.raises(RegistrationSubmissionError) as exc:
+            self._submit(subtensor, monkeypatch)
+
+        message = str(exc.value)
+        assert "still unregistered" in message
+        assert "no TAO was recycled" in message
+        assert "retrying is safe" in message
+
+    def test_non_success_response_is_also_reconciled(self, monkeypatch) -> None:
+        """The defensive branch gets the same treatment as an exception."""
+        subtensor = _subtensor()
+        response = MagicMock()
+        response.success = False
+        response.message = "unknown"
+        subtensor.burned_register.return_value = response
+        subtensor.is_hotkey_registered.return_value = True
+
+        monkeypatch.setattr(bittensor, "Subtensor", MagicMock(return_value=subtensor))
+
+        with pytest.raises(RegistrationOutcomeUnknownError, match="IS now registered"):
+            submit_registration(
+                live_wallet=_wallet(),
+                hotkey_ss58=HOTKEY,
+                netuid=NETUID,
+                subtensor_network="finney",
+                confirmed_recycle_rao=500_000,
+            )

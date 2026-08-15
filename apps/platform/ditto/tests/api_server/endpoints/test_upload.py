@@ -577,6 +577,37 @@ class TestUploadCheck:
         result = response.json()
         assert result["ok"] is False
         assert ERROR_CODE_HOTKEY_NOT_REGISTERED in result["error_codes"]
+        # A client acting on 1101 must be able to bind to this deployment's
+        # own target. Without it, registering falls back to a local guess and
+        # can recycle TAO on a subnet this platform never reads.
+        chain_config = app.state.config.chain
+        assert result["netuid"] == chain_config.netuid
+        assert result["subtensor_network"] == chain_config.subtensor_network
+
+    async def test_check_always_reports_its_chain_target(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ):
+        """Reported on a registered hotkey too, not only alongside 1101."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from ditto.api_server.dependencies import get_chain_client
+
+        async def _fake_chain() -> MagicMock:
+            chain = MagicMock()
+            chain.is_registered = AsyncMock(return_value=True)
+            chain.get_registered_coldkey = AsyncMock(
+                return_value="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
+            )
+            return chain
+
+        app.dependency_overrides[get_chain_client] = _fake_chain
+        body = _signed_request_body()
+        response = await client.post("/api/v1/upload/check", json=body)
+        assert response.status_code == 200
+        result = response.json()
+        chain_config = app.state.config.chain
+        assert result["netuid"] == chain_config.netuid
+        assert result["subtensor_network"] == chain_config.subtensor_network
 
     async def test_tarball_too_large_returns_1102(
         self, app: FastAPI, client: httpx.AsyncClient

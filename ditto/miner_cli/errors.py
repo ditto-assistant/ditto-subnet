@@ -189,6 +189,24 @@ class RegistrationSubmissionError(MinerCliError):
     pass
 
 
+class RegistrationOutcomeUnknownError(MinerCliError):
+    """Raised when a registration extrinsic's fate cannot be determined.
+
+    This can happen when:
+    - The submission timed out, or the connection dropped, after the
+      extrinsic may already have reached the chain.
+    - The follow-up read that would settle the question also failed, so the
+      CLI cannot say whether TAO was recycled.
+
+    Distinct from :class:`RegistrationSubmissionError`, which is only raised
+    once the hotkey is confirmed still unregistered. This error must never
+    carry a bare "retry" instruction: retrying a registration that actually
+    succeeded recycles the cost a second time.
+    """
+
+    pass
+
+
 class RegistrationNotNeededError(MinerCliError):
     """Raised when the chain says the hotkey is already registered on the netuid.
 

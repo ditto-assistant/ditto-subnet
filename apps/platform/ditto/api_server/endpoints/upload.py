@@ -191,7 +191,8 @@ async def check(
     is miner-reported and unverified at this endpoint; the next-PR
     ``/upload/agent`` re-derives it from the actual tarball bytes.
     """
-    netuid = request.app.state.config.chain.netuid
+    chain_config = request.app.state.config.chain
+    netuid = chain_config.netuid
     codes: list[int] = []
     messages: list[str] = []
 
@@ -404,6 +405,12 @@ async def check(
             if admission is not None and payment_required
             else None
         ),
+        # Always reported, not only alongside 1101. A client that acts on
+        # chain must bind to the deployment's own target rather than to its
+        # local configuration; the disagreement it guards against is
+        # invisible when the hotkey is unregistered on both subnets.
+        netuid=netuid,
+        subtensor_network=chain_config.subtensor_network,
     )
 
 

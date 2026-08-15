@@ -55,6 +55,7 @@ from ditto.miner_cli.errors import (
     PreCheckRejectedError,
     RegistrationCancelledError,
     RegistrationNotNeededError,
+    RegistrationOutcomeUnknownError,
     RegistrationSubmissionError,
     SubmissionCooldownError,
     TarStructureError,
@@ -257,6 +258,7 @@ def run(args: argparse.Namespace) -> int:
         PreCheckRejectedError,
         RegistrationSubmissionError,
         RegistrationNotNeededError,
+        RegistrationOutcomeUnknownError,
         UploadAgentRejectedError,
         PaymentSubmissionError,
         PaymentFinalizationTimeoutError,
@@ -412,6 +414,7 @@ def _run_upload(
                     live_wallet=live_wallet,
                     subtensor_network=subtensor_network,
                     chain_endpoint=chain_endpoint,
+                    check_response=check_response,
                 )
                 # The platform resolves registration from a cached metagraph
                 # snapshot, not from the chain directly, so a finalized
@@ -741,20 +744,82 @@ def _await_platform_registration(
 
 
 def _resolve_netuid() -> int:
-    """Netuid the CLI registers against, matching ``ditto attest``."""
+    """Locally configured netuid, matching ``ditto attest``.
+
+    Display only. Never the target of a registration: see
+    :func:`_authoritative_netuid`.
+    """
     from ditto.miner_cli.commands.attest import DEFAULT_NETUID
 
     return int(os.environ.get("NETUID", str(DEFAULT_NETUID)))
 
 
-def _btcli_register_hint(args: argparse.Namespace, subtensor_network: str) -> str:
+def _authoritative_netuid(
+    *,
+    check_response: UploadCheckResponse,
+    args: argparse.Namespace,
+    subtensor_network: str,
+) -> int:
+    """Return the netuid the platform itself reports, or refuse to register.
+
+    The 1101 rejection is issued against the netuid the *platform* is bound
+    to. Registering against the netuid the *CLI* happens to be configured
+    with is only correct while the two agree, and nothing in the flow proves
+    they do: when the hotkey is unregistered on both, the already-registered
+    guard sees an ordinary unregistered hotkey and waves the burn through
+    onto the wrong subnet.
+
+    So the target is taken from the response or not at all. Falling back to
+    the local value is precisely the behavior that spends TAO in the wrong
+    place, so a server too old to report its binding gets the manual path.
+
+    Raises:
+        RegistrationSubmissionError: The response named no netuid, or named
+            a subtensor network other than the one this run would sign on.
+    """
+    manual = _btcli_register_hint(args, subtensor_network)
+    if check_response.netuid is None:
+        raise RegistrationSubmissionError(
+            "the platform did not report which netuid it is bound to, so the "
+            "CLI cannot know where to register. Registering against the "
+            "locally configured netuid could recycle TAO on a subnet the "
+            "platform does not watch. No TAO was recycled.\n"
+            f"Register manually once you have confirmed the target:\n{manual}"
+        )
+
+    reported_network = check_response.subtensor_network
+    if reported_network is not None and reported_network != subtensor_network:
+        raise RegistrationSubmissionError(
+            f"the platform reads registration from subtensor "
+            f"{reported_network!r} but this run would register on "
+            f"{subtensor_network!r}. The right netuid on the wrong chain is "
+            f"still the wrong target. Re-run with --network matching the "
+            f"platform. No TAO was recycled."
+        )
+
+    local = _resolve_netuid()
+    if check_response.netuid != local:
+        # Not fatal: the platform is authoritative and the CLI follows it.
+        # Worth saying out loud, because the local value is what every other
+        # netuid-taking command in this CLI would have used.
+        print(
+            f"note: registering on netuid {check_response.netuid} as reported "
+            f"by the platform, not the locally configured {local}.",
+            file=sys.stderr,
+        )
+    return check_response.netuid
+
+
+def _btcli_register_hint(
+    args: argparse.Namespace, subtensor_network: str, *, netuid: int | None = None
+) -> str:
     """The equivalent btcli command, with this run's wallet already filled in.
 
     Printed on every path where the CLI will not or cannot register, so a
     miner is never left holding only an error code.
     """
     return (
-        f"  btcli subnets register --netuid {_resolve_netuid()} "
+        f"  btcli subnets register --netuid {netuid or _resolve_netuid()} "
         f"--wallet-name {args.coldkey_name} --hotkey {args.hotkey_name} "
         f"--network {subtensor_network}"
     )
@@ -783,8 +848,16 @@ def _register_hotkey(
     live_wallet: bittensor.Wallet,
     subtensor_network: str,
     chain_endpoint: str | None,
+    check_response: UploadCheckResponse,
 ) -> int | None:
     """Quote, confirm, and submit a burned registration, then continue.
+
+    The target comes from the platform's own response, never from local
+    configuration. Registering against a locally chosen netuid can recycle
+    TAO on a subnet the platform does not watch, and the already-registered
+    guard cannot catch it: a hotkey unregistered on both subnets looks
+    identical either way. A server that does not report its target is
+    treated as unregisterable rather than guessed at.
 
     Every failure mode ends by printing the equivalent btcli command, so a
     miner the CLI cannot register is never left without the next step.
@@ -795,10 +868,17 @@ def _register_hotkey(
 
     Raises:
         RegistrationCancelledError: The miner declined the prompt.
-        RegistrationSubmissionError: Quoting or submission failed.
+        RegistrationSubmissionError: The platform did not name a target, the
+            target disagrees with this run's chain, or quoting failed.
+        RegistrationOutcomeUnknownError: Submission left chain state
+            ambiguous.
     """
-    netuid = _resolve_netuid()
-    btcli_hint = _btcli_register_hint(args, subtensor_network)
+    netuid = _authoritative_netuid(
+        check_response=check_response,
+        args=args,
+        subtensor_network=subtensor_network,
+    )
+    btcli_hint = _btcli_register_hint(args, subtensor_network, netuid=netuid)
 
     try:
         quote = quote_registration(
@@ -857,6 +937,11 @@ def _register_hotkey(
             confirmed_recycle_rao=quote.recycle_rao,
             chain_endpoint=chain_endpoint,
         )
+    except RegistrationOutcomeUnknownError as e:
+        # Deliberately no btcli hint: this path cannot say whether TAO was
+        # already recycled, and a register command here reads as "try again".
+        print(f"\n{e}", file=sys.stderr)
+        raise
     except RegistrationSubmissionError as e:
         print(f"\n{e}\nTo register manually:\n{btcli_hint}", file=sys.stderr)
         raise

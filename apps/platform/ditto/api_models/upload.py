@@ -123,6 +123,23 @@ class UploadCheckResponse(BaseModel):
     payment_send_address: Annotated[str, Field(pattern=_SS58_PATTERN)] | None = None
     """Destination bound to the payment instructions for this admission."""
 
+    netuid: Annotated[int, Field(ge=0)] | None = None
+    """Netuid this platform deployment is bound to.
+
+    Authoritative target for anything a client does on chain in response to
+    :data:`ERROR_CODE_HOTKEY_NOT_REGISTERED`. A client that registers against
+    a locally configured netuid instead can recycle TAO on the wrong subnet
+    and still fail this check, since being unregistered on both subnets hides
+    the disagreement. ``None`` only from a server predating this field.
+    """
+
+    subtensor_network: str | None = None
+    """Subtensor network this platform deployment reads registration from.
+
+    Pairs with :attr:`netuid`: the right netuid on the wrong chain is still
+    the wrong target. ``None`` only from a server predating this field.
+    """
+
 
 class UploadAgentResponse(BaseModel):
     """Returned by ``POST /upload/agent`` on a successful upload.

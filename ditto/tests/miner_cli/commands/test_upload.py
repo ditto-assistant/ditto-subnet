@@ -1633,17 +1633,23 @@ class TestPaymentDisposition:
         assert upload_kwargs["allow_identical_rescore"] is False
 
 
-def _unregistered_check() -> UploadCheckResponse:
+def _unregistered_check(
+    netuid: int | None = 118, subtensor_network: str | None = "local"
+) -> UploadCheckResponse:
     return UploadCheckResponse(
         ok=False,
         error_codes=[1101],
         messages=["hotkey is not registered on netuid 118"],
+        netuid=netuid,
+        subtensor_network=subtensor_network,
     )
 
 
 def _multi_rejected_check() -> UploadCheckResponse:
     return UploadCheckResponse(
         ok=False,
+        netuid=118,
+        subtensor_network="local",
         error_codes=[1100, 1101],
         messages=[
             "signature did not verify",
@@ -2039,3 +2045,105 @@ class TestRegistrationVisibilityLag:
         err = capsys.readouterr().err
         assert "chain already reports" in err
         assert "no TAO was recycled" in err
+
+
+class TestRegistrationTargetBinding:
+    """Registration binds to the platform's target, never to a local guess.
+
+    1101 is issued against the netuid the PLATFORM is bound to. Registering
+    against whatever the CLI is locally configured with is only correct
+    while the two agree, and the already-registered guard cannot detect the
+    disagreement: a hotkey unregistered on both subnets looks identical
+    either way, so the burn lands on the wrong subnet and the check still
+    fails.
+    """
+
+    def _run(self, good_tar: Path, monkeypatch, *, check, **arg_overrides):
+        monkeypatch.setenv("NETUID", "118")
+        monkeypatch.setattr(
+            "ditto.miner_cli.commands.upload.time.sleep", lambda _: None
+        )
+        client = MagicMock()
+        client.post_upload_check.side_effect = [check, _ok_check()]
+        client.get_eval_pricing.return_value = _pricing()
+        client.post_upload_agent.return_value = _upload_response()
+        fake_handle = MagicMock(hotkey_ss58=HOTKEY, coldkey_name="miner")
+        stdin = MagicMock()
+        stdin.isatty.return_value = True
+
+        with (
+            patch("ditto.miner_cli.commands.upload.sys.stdin", stdin),
+            patch(
+                "ditto.miner_cli.commands.upload.load_wallet",
+                return_value=(fake_handle, MagicMock()),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.run_preflight",
+                return_value=_good_preflight(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.sign_upload_payload",
+                return_value="cd" * 64,
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.submit_eval_payment",
+                return_value=_payment_receipt(),
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.ApiClient", _patch_api_client(client)
+            ),
+            patch(
+                "ditto.miner_cli.commands.upload.quote_registration",
+                return_value=_quote(),
+            ) as quote,
+            patch(
+                "ditto.miner_cli.commands.upload.submit_registration", return_value=37
+            ) as register,
+            patch("ditto.miner_cli.commands.upload.confirm_registration"),
+        ):
+            rc = run(make_args(good_tar, **arg_overrides))
+        return rc, quote, register
+
+    def test_platform_netuid_is_used_over_the_local_one(
+        self, good_tar: Path, monkeypatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc, quote, register = self._run(
+            good_tar, monkeypatch, check=_unregistered_check(netuid=42)
+        )
+
+        assert rc == 0
+        assert quote.call_args.kwargs["netuid"] == 42
+        assert register.call_args.kwargs["netuid"] == 42
+        assert "registering on netuid 42" in capsys.readouterr().err
+
+    def test_a_server_that_names_no_netuid_cannot_trigger_a_burn(
+        self, good_tar: Path, monkeypatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        rc, quote, register = self._run(
+            good_tar, monkeypatch, check=_unregistered_check(netuid=None)
+        )
+
+        assert rc == 1
+        quote.assert_not_called()
+        register.assert_not_called()
+        err = capsys.readouterr().err
+        assert "did not report which netuid" in err
+        assert "No TAO was recycled" in err
+        assert "btcli subnets register" in err
+
+    def test_a_different_chain_is_refused(
+        self, good_tar: Path, monkeypatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """The right netuid on the wrong chain is still the wrong target."""
+        rc, quote, register = self._run(
+            good_tar,
+            monkeypatch,
+            check=_unregistered_check(subtensor_network="finney"),
+        )
+
+        assert rc == 1
+        quote.assert_not_called()
+        register.assert_not_called()
+        err = capsys.readouterr().err
+        assert "reads registration from subtensor 'finney'" in err
+        assert "No TAO was recycled" in err
