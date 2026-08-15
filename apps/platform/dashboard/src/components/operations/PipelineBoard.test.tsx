@@ -153,11 +153,13 @@ describe("continual retests and rescores in Evaluating", () => {
     ],
   });
 
-  it("projects a scored agent with live work into Evaluating by active slot", () => {
+  it("shows scored agents in both their canonical lifecycle and active rescore lanes", () => {
     const container = board([retest], { statusCounts: { scored: 1 } });
     expect(container.querySelectorAll("#pipeline-evaluating .pipeline-item").length).toBe(1);
+    expect(container.querySelectorAll("#pipeline-scored .pipeline-item").length).toBe(1);
     // The headline counts the same slot rows the board renders.
     expect(container.querySelector("#pipeline-evaluating-count")?.textContent).toBe("1");
+    expect(container.querySelector("#pipeline-scored-count")?.textContent).toBe("1");
     expect(
       container.querySelector("#pipeline-evaluating .pipeline-item .pipeline-item-meta")
         ?.textContent,

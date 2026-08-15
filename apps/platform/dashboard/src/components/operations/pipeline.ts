@@ -41,9 +41,9 @@ export function queueRelevantBenchmark(
   );
 }
 
-/** Which column a submission renders in (7917–7921): finalized top-five
- * agents keep their scored/live lifecycle while a continual retest runs, so
- * cards project into Evaluating by active slot, not lifecycle. */
+/** Which work-in-progress column a submission renders in (7917–7921).
+ * Scored/live lifecycle membership is handled independently below because a
+ * continual retest adds live work without replacing the canonical score. */
 export function pipelineBoardStage(entry: PipelineEntry, activeVersion: number | null): string {
   return (entry.active_benchmarks || []).some((progress) =>
     queueRelevantBenchmark(progress, activeVersion),
@@ -246,7 +246,15 @@ export function pipelineColumnViews(
   return PIPELINE_COLUMNS.map((def) => {
     let indexed: IndexedEntry[] = [];
     entries.forEach((entry, index) => {
-      if (def.statuses.indexOf(pipelineBoardStage(entry, activeVersion)) >= 0) {
+      // A rescore is additive state: keep the accepted canonical score in the
+      // scored/live lane while also projecting its active work into Scoring.
+      // Other lifecycle rows still move into Scoring while their first score
+      // is being produced.
+      const stage =
+        def.status === "scored"
+          ? String(entry.status || "")
+          : pipelineBoardStage(entry, activeVersion);
+      if (def.statuses.indexOf(stage) >= 0) {
         indexed.push({ entry, index });
       }
     });
