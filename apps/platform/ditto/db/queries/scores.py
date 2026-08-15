@@ -116,12 +116,39 @@ def _is_ranked() -> ColumnElement[bool]:
 # roughly a third of a typical per-row standard error. Widen it only with a
 # concrete case where a legitimate reign was forfeited.
 CROWN_ANCHOR_MARGIN = 0.0005
+# ...but it cannot be narrower than the benchmark's own resolution *below* the
+# defended score, which is why the band is asymmetric.
+#
+# Bench v9 scores 251 memory cases in half-point steps and averages against a
+# tool mean, so the smallest composite change a miner can possibly produce is
+# 0.25/251 = 0.000996. ``CROWN_ANCHOR_MARGIN`` decays to ~0.000226 at the top of
+# a saturated board -- a quarter of one step. A floor beneath one step does not
+# mean "only re-measurement jitter"; it means "improve by the smallest amount
+# the benchmark can express and forfeit your seniority", which is the outcome
+# the lineage anchor exists to prevent. Six live rows on 2026-08-14 sat in that
+# hole, five of them for having got *better*.
+#
+# The ceiling stays tight: an ancestor scoring *above* what an owner now
+# defends is a reign the owner has regressed out of, and no amount of
+# quantization makes that one the same score.
+#
+# Not decayed, unlike the margin. Quantization does not shrink as scores bunch;
+# it is the same 0.000996 at 0.99 as at 0.60. Revisit when a benchmark ships a
+# different case count -- a coarser one needs a larger value here, and this
+# constant is a floor for every version rather than a per-version table only
+# because every scoreable version to date resolves at least this finely.
+MIN_RESOLVABLE_COMPOSITE_STEP = 0.001
 
 
 def _crown_band(
     defended_score: ColumnElement[Any], bench_version: ColumnElement[Any]
 ) -> ColumnElement[Any]:
-    """How far an ancestor may sit from the defended score, in SQL.
+    """How far *above* the defended score an ancestor may sit, in SQL.
+
+    The band's ceiling. :func:`_crown_anchor_floor` is the other side, and it is
+    deliberately looser: an owner that regressed out of a reign should lose it
+    immediately, while an owner that improved past an ancestor should not lose
+    anything at all.
 
     :data:`CROWN_ANCHOR_MARGIN` scaled by the same versioned high-score decay
     the fold uses (:func:`ditto.api_server.koth._dethrone_band_scale`), so a
@@ -161,6 +188,28 @@ def _crown_band(
             ),
         ),
         else_=CROWN_ANCHOR_MARGIN,
+    )
+
+
+def _crown_anchor_floor(
+    defended_score: ColumnElement[Any], bench_version: ColumnElement[Any]
+) -> ColumnElement[Any]:
+    """How far *below* the defended score an ancestor may sit, in SQL.
+
+    The ceiling (:func:`_crown_band`) with
+    :data:`MIN_RESOLVABLE_COMPOSITE_STEP` as a floor beneath it, so the test can
+    never come out narrower than one move of the benchmark it is reading.
+
+    The two directions answer different questions, which is why they are
+    different numbers. Above the defended score: "is this a reign the owner has
+    fallen out of?" — tight, because regressing out of a score should cost the
+    seniority for it at once. Below it: "did the owner already hold this score?"
+    — and a generation one benchmark step back is not distinguishable from the
+    current one by anything the benchmark can measure, so treating it as a
+    different score charges the owner for improving.
+    """
+    return func.greatest(
+        _crown_band(defended_score, bench_version), MIN_RESOLVABLE_COMPOSITE_STEP
     )
 
 
@@ -2167,10 +2216,11 @@ async def list_eligible_ledger(
     # from. A correlated minimum can, at the cost of one indexed probe per
     # candidate row.
     #
-    # Two-sided on purpose. Below the defended score is the ancestor that never
-    # reached it; above it is the generation the owner has regressed from. Both
-    # are "this owner does not currently hold that score", and only the second
-    # can hand out a reign nobody is defending.
+    # Two-sided, and asymmetric. Above the defended score is a reign the owner
+    # has regressed out of, and it should stop counting at once. Below it is an
+    # ancestor the owner improved past, which must keep counting out to the
+    # benchmark's own resolution -- charging an owner for a one-step improvement
+    # is the failure this anchor exists to prevent.
     ancestors = rooted.alias("crown_ancestors")
     crown_first_seen = (
         select(func.min(ancestors.c.first_seen))
@@ -2178,8 +2228,14 @@ async def list_eligible_ledger(
             ancestors.c.owner_root == owner_ranked.c.owner_root,
             ancestors.c.eligible,
             ancestors.c.bench_version == owner_ranked.c.bench_version,
-            func.abs(ancestors.c.official_score - owner_ranked.c.official_score)
-            <= _crown_band(owner_ranked.c.official_score, owner_ranked.c.bench_version),
+            ancestors.c.official_score
+            >= owner_ranked.c.official_score
+            - _crown_anchor_floor(
+                owner_ranked.c.official_score, owner_ranked.c.bench_version
+            ),
+            ancestors.c.official_score
+            <= owner_ranked.c.official_score
+            + _crown_band(owner_ranked.c.official_score, owner_ranked.c.bench_version),
         )
         .scalar_subquery()
         .label("crown_first_seen")

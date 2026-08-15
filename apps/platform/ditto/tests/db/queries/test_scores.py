@@ -833,11 +833,24 @@ class TestListEligibleLedger:
 # turns on the third decimal place of the decay.
 _WINNER_COMPOSITE = 0.90
 _WITHIN_BAND = 0.8999
-# 0.0007 behind the winner: inside the *dethrone* band and comfortably outside
-# the crown-anchor band. This is the gap that crowned white-bolt on 2026-08-13
-# while it had never once led the rival it outranked, and it is the whole reason
-# the two bands are separate numbers.
-_BEHIND_A_RIVAL = 0.8993
+# Two benchmark steps behind the winner: inside the *dethrone* band and outside
+# the crown-anchor band. This is the shape that crowned white-bolt on
+# 2026-08-13 while it had never once led the rival it outranked, and it is the
+# whole reason the two bands are separate numbers.
+#
+# Was 0.8993 -- 0.0007 back -- until the anchor floor was held to
+# MIN_RESOLVABLE_COMPOSITE_STEP. That original gap is *below* what bench v9 can
+# express (0.25/251 = 0.000996 per step), so no real ancestor can sit there:
+# the case it described was untestable in production and the distinction it
+# asserted was one the benchmark cannot make. At two steps the ancestor is
+# measurably behind, which is what "never led" has to mean to be enforceable.
+_BEHIND_A_RIVAL = 0.898
+# One real bench-v9 step behind the winner: 251 memory cases in half-point
+# steps, halved by the tool mean, is 0.25/251 = 0.000996 of composite. Spelled
+# as a literal rather than derived from MIN_RESOLVABLE_COMPOSITE_STEP so the
+# test asserts against the benchmark's actual resolution and keeps failing if
+# that constant is ever tuned below it.
+_ONE_STEP_BACK = 0.90 - 0.000996
 _OUTSIDE_BAND = 0.88
 
 
@@ -960,6 +973,43 @@ class TestCrownFirstSeen:
         assert by_arrival[fell_back_later].fold_first_seen == fell_back_later
         # ... while the peak keeps the reign it actually earned.
         assert by_arrival[peaked_early].crown_first_seen == peaked_early
+
+    async def test_improving_by_one_benchmark_step_keeps_the_anchor(
+        self, session: AsyncSession
+    ) -> None:
+        """Getting better must never cost an owner its seniority.
+
+        The band's floor is held to :data:`MIN_RESOLVABLE_COMPOSITE_STEP` for
+        this case alone. A generation one step back is not distinguishable from
+        the current one by anything the benchmark can measure, so treating it as
+        a different score would charge the owner for the smallest improvement it
+        is possible to make -- and a one-step gain is nowhere near enough to
+        dethrone anyone, so the owner would pay the seniority and get nothing.
+        On 2026-08-14 five of the six rows that stood to lose an inherited
+        anchor were in exactly this position.
+        """
+        improved_from = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        improved_at = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_ONE_STEP_BACK,
+            created_at=improved_from,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_WINNER_COMPOSITE,
+            created_at=improved_at,
+            n=MIN_ELIGIBLE_CASES,
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.composite == pytest.approx(_WINNER_COMPOSITE)
+        assert row.crown_first_seen == improved_from
+        assert row.fold_first_seen == improved_from
 
     async def test_a_plateau_resubmission_keeps_its_anchor(
         self, session: AsyncSession
