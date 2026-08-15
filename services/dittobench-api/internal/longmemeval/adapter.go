@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
@@ -23,6 +24,7 @@ const (
 	NativeMemoryCondition     = "longmemeval-s-cleaned-native-memory-tools-v2"
 	minimumProjectionKeyBytes = 32
 	maxHarnessResponseBytes   = 4 << 20
+	seedMaxAttempts           = 3
 )
 
 const nativeMemorySystemPrompt = "Answer the question using the user's stored conversation memory. " +
@@ -277,8 +279,9 @@ func NativeMemoryTools() []protocol.ToolDefinition {
 // HTTPHarness is the production-compatible Go replacement for the imported
 // Python HTTP adapter. It sends no authorization header or environment data.
 type HTTPHarness struct {
-	baseURL string
-	client  *http.Client
+	baseURL        string
+	client         *http.Client
+	seedRetryDelay [seedMaxAttempts - 1]time.Duration
 }
 
 // HarnessCaseFailure identifies a response received from the submitted
@@ -308,6 +311,25 @@ type receivedHarnessResponseError struct {
 	statusCode int
 }
 
+// harnessResponseIOError marks an ambiguous request/response transport
+// failure. LongMem /seed is an ordered idempotent upsert by protocol, so Seed
+// may safely retry this class without duplicating memory. Run must continue to
+// fail closed because a repeated model/tool execution is not idempotent.
+type harnessResponseIOError struct {
+	kind       string
+	statusCode int
+	cause      error
+}
+
+func (e *harnessResponseIOError) Error() string {
+	if e.kind == "response_read" {
+		return fmt.Sprintf("read LongMemEval harness response: %v", e.cause)
+	}
+	return fmt.Sprintf("LongMemEval harness request failed: %v", e.cause)
+}
+
+func (e *harnessResponseIOError) Unwrap() error { return e.cause }
+
 func (e *receivedHarnessResponseError) Error() string {
 	if e.statusCode != 0 {
 		return fmt.Sprintf("LongMemEval harness returned an invalid response (HTTP %d)", e.statusCode)
@@ -324,7 +346,12 @@ func NewHTTPHarness(baseURL string, client *http.Client) (*HTTPHarness, error) {
 	if client == nil {
 		return nil, errors.New("LongMemEval harness HTTP client is nil")
 	}
-	return &HTTPHarness{baseURL: strings.TrimRight(baseURL, "/"), client: client}, nil
+	return &HTTPHarness{
+		baseURL: strings.TrimRight(baseURL, "/"), client: client,
+		// The harness is a local submitted container, so keep recovery short and
+		// deterministic rather than trusting an untrusted Retry-After header.
+		seedRetryDelay: [seedMaxAttempts - 1]time.Duration{time.Second, 2 * time.Second},
+	}, nil
 }
 
 func (h *HTTPHarness) Seed(ctx context.Context, request protocol.SeedRequest) (protocol.SeedResponse, error) {
@@ -345,13 +372,65 @@ func (h *HTTPHarness) Seed(ctx context.Context, request protocol.SeedRequest) (p
 		body.Links = []protocol.SubjectLink{}
 	}
 	var response protocol.SeedResponse
-	if err := h.post(ctx, "/seed", body, &response); err != nil {
-		return protocol.SeedResponse{}, err
+	for attempt := 1; ; attempt++ {
+		response = protocol.SeedResponse{}
+		err := h.post(ctx, "/seed", body, &response)
+		if err == nil {
+			break
+		}
+		if attempt >= seedMaxAttempts || !retryableSeedFailure(ctx, err) {
+			return protocol.SeedResponse{}, err
+		}
+		if !waitForSeedRetry(ctx, h.seedRetryDelay[attempt-1]) {
+			return protocol.SeedResponse{}, ctx.Err()
+		}
 	}
 	if response.Pairs != len(request.Pairs) || response.Subjects != len(request.Subjects) || response.Links != len(request.Links) {
 		return protocol.SeedResponse{}, errors.New("LongMemEval harness acknowledged incomplete seed payload")
 	}
 	return response, nil
+}
+
+func waitForSeedRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func retryableSeedFailure(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var received *receivedHarnessResponseError
+	if errors.As(err, &received) {
+		if received.kind == "malformed_json" {
+			return true
+		}
+		return retryableSeedStatus(received.statusCode)
+	}
+	var responseIO *harnessResponseIOError
+	if !errors.As(err, &responseIO) {
+		return false
+	}
+	return responseIO.statusCode == 0 ||
+		(responseIO.statusCode >= http.StatusOK && responseIO.statusCode < http.StatusMultipleChoices) ||
+		retryableSeedStatus(responseIO.statusCode)
+}
+
+func retryableSeedStatus(statusCode int) bool {
+	switch statusCode {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *HTTPHarness) Run(ctx context.Context, request protocol.RunRequest) (protocol.RunResponse, error) {
@@ -408,7 +487,7 @@ func (h *HTTPHarness) post(ctx context.Context, path string, input, output any) 
 	request.Header["User-Agent"] = []string{}
 	response, err := h.client.Do(request)
 	if err != nil {
-		return fmt.Errorf("LongMemEval harness request failed: %w", err)
+		return &harnessResponseIOError{kind: "request", cause: err}
 	}
 	defer response.Body.Close()
 
@@ -417,7 +496,7 @@ func (h *HTTPHarness) post(ctx context.Context, path string, input, output any) 
 	// its private contents are never included in the returned error.
 	raw, err := io.ReadAll(io.LimitReader(response.Body, maxHarnessResponseBytes+1))
 	if err != nil {
-		return fmt.Errorf("read LongMemEval harness response: %w", err)
+		return &harnessResponseIOError{kind: "response_read", statusCode: response.StatusCode, cause: err}
 	}
 	if len(raw) > maxHarnessResponseBytes {
 		return errors.New("LongMemEval harness response exceeds the public size bound")
