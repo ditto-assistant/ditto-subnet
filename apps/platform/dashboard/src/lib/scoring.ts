@@ -170,6 +170,13 @@ export interface CurveV3ScoreAdjustment {
   mode: "downside" | "neutral" | "headroom";
 }
 
+/** Curve-v3 factor bounds, mirroring the platform's efficiency-bonus policy
+ * (`minimum_factor` / `maximum_factor`). A factor resting on a bound is worth
+ * calling out: it means the cohort reference, not the agent's own cost, is what
+ * is now limiting the tie-break. */
+export const CURVE_V3_MIN_FACTOR = 0.85;
+export const CURVE_V3_MAX_FACTOR = 1.1;
+
 /** Reproduce Bench-v9 curve-v3's score transform from public provenance.
  *
  * This is display-only arithmetic: the API's `effective_composite` is the
@@ -196,8 +203,8 @@ export function curveV3ScoreAdjustment(e: {
     !Number.isFinite(factor) ||
     quality < 0 ||
     quality > 1 ||
-    factor < 0.85 ||
-    factor > 1.1
+    factor < CURVE_V3_MIN_FACTOR ||
+    factor > CURVE_V3_MAX_FACTOR
   ) {
     return null;
   }
@@ -207,6 +214,55 @@ export function curveV3ScoreAdjustment(e: {
     factor,
     adjusted,
     mode: factor < 1 ? "downside" : factor > 1 ? "headroom" : "neutral",
+  };
+}
+
+export interface EfficiencyTieBreakChip {
+  label: string;
+  direction: "up" | "down" | "neutral";
+  /** The factor is resting on `minimum_factor` / `maximum_factor`. */
+  atBound: boolean;
+}
+
+/** Chip copy for the curve-v3 tie-break: which way it moves you, and by how
+ * much — never the raw tie-break value.
+ *
+ * The absolute tie-break value is not a number a reader can use. It lives on
+ * the efficiency-adjusted scale, it is consulted only inside an exact-quality
+ * tier, and printed beside a 0.997 quality score it reads as a contradiction
+ * rather than as a tie-break: a floored agent shows `0.847` next to `0.997`
+ * and the honest reading of the row becomes "one of these is wrong". Worse,
+ * the two directions are not comparable in that unit — at quality 0.997 a
+ * −15% factor moves the value by −0.14955 while +10% moves it by +0.00030,
+ * because downside multiplies quality and upside only closes remaining
+ * headroom. Printing both as bare values invites a 500x misreading.
+ *
+ * The factor is what a miner can actually act on: it is bounded, it is
+ * comparable between agents, and its sign is the whole content of a tie-break.
+ * The exact value stays in the tooltip and the calculation breakdown, where a
+ * precise number is expected and has room to be explained.
+ */
+export function efficiencyTieBreakChipLabel(
+  e: { efficiency_factor?: number | null },
+  opts: { applied: boolean },
+): EfficiencyTieBreakChip | null {
+  if (e.efficiency_factor == null) return null;
+  const factor = Number(e.efficiency_factor);
+  if (!Number.isFinite(factor)) return null;
+  const prefix = opts.applied ? "efficiency tie-break" : "efficiency tie-break preview";
+  const magnitude = Math.abs(factor - 1) * 100;
+  // Below the displayed precision the arrow would assert a direction the
+  // number cannot support, so it reads as neutral instead.
+  if (magnitude < 0.05) {
+    return { label: prefix + " · neutral", direction: "neutral", atBound: false };
+  }
+  const up = factor > 1;
+  const atBound = factor <= CURVE_V3_MIN_FACTOR || factor >= CURVE_V3_MAX_FACTOR;
+  const bound = atBound ? (up ? " (cap)" : " (floor)") : "";
+  return {
+    label: prefix + " " + (up ? "▲" : "▼") + " " + magnitude.toFixed(1) + "%" + bound,
+    direction: up ? "up" : "down",
+    atBound,
   };
 }
 

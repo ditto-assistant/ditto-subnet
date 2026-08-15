@@ -165,7 +165,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     await waitForBoard();
     const chip = await waitFor(() => {
       const value = document.querySelector(".cline2 .efficiency-bonus-chip");
-      expect(value?.textContent).toBe("active efficiency tie-break · 0.612");
+      expect(value?.textContent).toBe("efficiency tie-break ▼ 15.0% (floor)");
       return value;
     });
     expect(chip).toHaveClass("penalized");
@@ -204,7 +204,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     await waitForBoard();
     const chip = await waitFor(() => {
       const value = document.querySelector(".cline2 .efficiency-bonus-chip");
-      expect(value?.textContent).toBe("active efficiency tie-break · 0.955");
+      expect(value?.textContent).toBe("efficiency tie-break ▲ 10.0% (cap)");
       return value;
     });
     expect(chip).toHaveAttribute(
@@ -245,7 +245,7 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     await waitForBoard();
     const chip = await waitFor(() => {
       const value = document.querySelector(".cline2 .efficiency-bonus-chip");
-      expect(value?.textContent).toBe("efficiency tie-break preview · 0.612");
+      expect(value?.textContent).toBe("efficiency tie-break preview ▼ 15.0% (floor)");
       return value;
     });
     expect(chip).toHaveClass("partial", "penalized");

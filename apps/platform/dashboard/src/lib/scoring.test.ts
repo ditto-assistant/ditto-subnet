@@ -24,6 +24,7 @@ import {
   continualSampleCount,
   continualWaves,
   curveV3ScoreAdjustment,
+  efficiencyTieBreakChipLabel,
   efficiencyBoardStatus,
   dethroneBandScale,
   dethroneFloor,
@@ -650,6 +651,47 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     );
     expect(byKey["Current quality score"]).toBe("0.950 · primary ranking key");
     expect(byKey["Efficiency tie-break"]).toBe("0.955 · active only after exact quality equality");
+  });
+
+  it("labels the tie-break by direction and magnitude, never by its raw value", () => {
+    // A floored agent's tie-break value (0.847 beside quality 0.997) is the
+    // exact pairing that reads as a contradiction on the board.
+    expect(efficiencyTieBreakChipLabel({ efficiency_factor: 0.85 }, { applied: true })).toEqual({
+      label: "efficiency tie-break ▼ 15.0% (floor)",
+      direction: "down",
+      atBound: true,
+    });
+    expect(efficiencyTieBreakChipLabel({ efficiency_factor: 1.1 }, { applied: true })).toEqual({
+      label: "efficiency tie-break ▲ 10.0% (cap)",
+      direction: "up",
+      atBound: true,
+    });
+    // Off the bounds the chip drops the qualifier but keeps the direction.
+    expect(
+      efficiencyTieBreakChipLabel({ efficiency_factor: 1.0182248358524693 }, { applied: true })
+        ?.label,
+    ).toBe("efficiency tie-break ▲ 1.8%");
+    // An unapplied factor stays marked as a preview.
+    expect(
+      efficiencyTieBreakChipLabel({ efficiency_factor: 0.85 }, { applied: false })?.label,
+    ).toBe("efficiency tie-break preview ▼ 15.0% (floor)");
+  });
+
+  it("reads a sub-precision factor as neutral rather than asserting a direction", () => {
+    expect(efficiencyTieBreakChipLabel({ efficiency_factor: 1 }, { applied: true })).toEqual({
+      label: "efficiency tie-break · neutral",
+      direction: "neutral",
+      atBound: false,
+    });
+    expect(
+      efficiencyTieBreakChipLabel({ efficiency_factor: 1.0004 }, { applied: true })?.direction,
+    ).toBe("neutral");
+  });
+
+  it("has no tie-break chip without a curve-v3 factor", () => {
+    expect(efficiencyTieBreakChipLabel({}, { applied: true })).toBeNull();
+    expect(efficiencyTieBreakChipLabel({ efficiency_factor: null }, { applied: true })).toBeNull();
+    expect(efficiencyTieBreakChipLabel({ efficiency_factor: NaN }, { applied: true })).toBeNull();
   });
 
   it("does not apply the Bench v9 transform to a historical v1/v2 bonus", () => {

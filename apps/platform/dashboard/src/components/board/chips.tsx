@@ -11,6 +11,7 @@ import { esc, fx } from "../../lib/format";
 import {
   curveV3ScoreAdjustment,
   efficiencyFoldIsApplied,
+  efficiencyTieBreakChipLabel,
   qualityGateChipLabel,
   scoreQuorum,
   continualWaves,
@@ -214,6 +215,7 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
   const factor = (): number | null =>
     props.entry.efficiency_factor == null ? null : Number(props.entry.efficiency_factor);
   const applied = (): boolean => efficiencyFoldIsApplied(props.entry);
+  const tieBreak = () => efficiencyTieBreakChipLabel(props.entry, { applied: applied() });
   const effective = (): string =>
     props.entry.effective_composite == null
       ? "unavailable"
@@ -322,11 +324,7 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
         tabindex={0}
         text={tip()}
       >
-        {factor() == null
-          ? "efficiency " + (applied() ? "" : "projection ") + signedDelta()
-          : applied()
-            ? "active efficiency tie-break · " + effective()
-            : "efficiency tie-break preview · " + effective()}
+        {tieBreak()?.label ?? "efficiency " + (applied() ? "" : "projection ") + signedDelta()}
       </ChipTip>
     </Show>
   );
