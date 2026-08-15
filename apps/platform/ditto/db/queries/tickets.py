@@ -16,7 +16,7 @@ lock guarantees one validator cannot hold two live assignments across agents.
 from __future__ import annotations
 
 import logging
-from collections.abc import Collection
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
@@ -156,6 +156,33 @@ class ScoreFloor:
     which is not in general the raw quorum median on :attr:`row`."""
 
 
+def score_priority_floor_rows_from_resolved_ledger(
+    rows: Sequence[LedgerRow],
+    *,
+    scores: Mapping[UUID, float],
+) -> tuple[ScoreFloor | None, ScoreFloor | None]:
+    """Cut both queue floors from one already-resolved ledger snapshot.
+
+    Public views that already need the canonical ranking can share that exact
+    population and score map instead of re-reading and re-resolving the whole
+    ledger solely to name its fifth-place row.  Keeping the cut here preserves
+    the queue's owner reduction, exact-tie order, efficiency secondary scores,
+    and sparse-era behavior at that shared boundary.
+    """
+    eligible = [row for row in rows if row.eligible]
+    if len(eligible) < EMISSION_CONTENDER_COUNT:
+        return None, None
+    ranked = dedupe_owner_rows(eligible, scores=scores)
+
+    def floor_at(position: int) -> ScoreFloor | None:
+        if len(ranked) < position:
+            return None
+        row = ranked[position - 1]
+        return ScoreFloor(row=row, score=scores.get(row.agent_id, row.composite))
+
+    return floor_at(EMISSION_CONTENDER_COUNT), floor_at(PROVISIONAL_CONTENDER_LANE_SIZE)
+
+
 async def get_score_priority_floor_rows(
     session: AsyncSession,
     *,
@@ -221,15 +248,7 @@ async def get_score_priority_floor_rows(
         now=now,
         active_version=active_version,
     )
-    ranked = dedupe_owner_rows(eligible, scores=official)
-
-    def floor_at(position: int) -> ScoreFloor | None:
-        if len(ranked) < position:
-            return None
-        row = ranked[position - 1]
-        return ScoreFloor(row=row, score=official.get(row.agent_id, row.composite))
-
-    return floor_at(EMISSION_CONTENDER_COUNT), floor_at(PROVISIONAL_CONTENDER_LANE_SIZE)
+    return score_priority_floor_rows_from_resolved_ledger(eligible, scores=official)
 
 
 async def get_score_priority_floors(
@@ -264,6 +283,7 @@ async def get_score_continuation_floor_row(
     bench_version: int | None = None,
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
+    active_version: int | None = None,
 ) -> ScoreFloor | None:
     """Return the fifth-place continuation floor and the row that holds it.
 
@@ -276,6 +296,7 @@ async def get_score_continuation_floor_row(
         bench_version=bench_version,
         efficiency_config=efficiency_config,
         now=now,
+        active_version=active_version,
     )
     return continuation
 

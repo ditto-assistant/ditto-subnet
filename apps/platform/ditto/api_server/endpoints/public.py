@@ -339,6 +339,7 @@ from ditto.db.queries.tickets import (
     get_score_continuation_floor,
     get_score_continuation_floor_row,
     get_score_priority_floors,
+    score_priority_floor_rows_from_resolved_ledger,
 )
 from ditto.score_order import score_order_key
 
@@ -5436,7 +5437,12 @@ async def agent_pipeline(
         session,
         include_fingerprints=False,
         include_details=False,
+        # Every owner candidate is ranked once below with the fully resolved
+        # score. Asking SQL to compute the continual fold too duplicates that
+        # work without changing this undeduplicated population.
+        owner_score="canonical",
         dedupe_owners=False,
+        active_version=canonical_version,
     )
     family_bench_version = (
         current_ledger_rows[0].bench_version
@@ -5454,18 +5460,27 @@ async def agent_pipeline(
         ),
         [],
     )
-    if agent_family_members:
-        family_agent_ids = {member.agent_id for member in agent_family_members}
+    # The family representative and canonical queue floor consume the same
+    # owner-complete ranking snapshot in the ordinary (non-rollout) case. Keep
+    # one score map for both instead of independently rebuilding the global
+    # ledger for every per-agent request.
+    current_ranking_scores = None
+    if current_ledger_rows and (
+        agent_family_members or family_bench_version == canonical_version
+    ):
         current_ranking_scores = await resolve_ranking_scores(
             session,
             rows=current_ledger_rows,
             bench_version=None,
             efficiency_config=efficiency_config,
             now=now,
+            active_version=canonical_version,
         )
+    if agent_family_members:
+        family_agent_ids = {member.agent_id for member in agent_family_members}
         current_representatives = dedupe_owner_rows(
             current_ledger_rows,
-            scores=current_ranking_scores,
+            scores=current_ranking_scores or {},
         )
         official_representative_id = next(
             (
@@ -5544,14 +5559,23 @@ async def agent_pipeline(
     running_attempt = next(
         (attempt for attempt in attempts if attempt.status == "running"), None
     )
-    # One read, so the quoted floor and the agent credited with it cannot come
-    # from two different snapshots of a ledger that moves between calls.
-    score_floor = await get_score_continuation_floor_row(
-        session,
-        bench_version=canonical_version,
-        efficiency_config=efficiency_config,
-        now=now,
-    )
+    # Cut the canonical floor from the ranking snapshot already used above.
+    # During an open rollout the current authoritative ledger may deliberately
+    # be ahead of the active version; in that case retain the historical
+    # canonical read instead of mixing eras.
+    if family_bench_version == canonical_version:
+        score_floor, _ = score_priority_floor_rows_from_resolved_ledger(
+            current_ledger_rows,
+            scores=current_ranking_scores or {},
+        )
+    else:
+        score_floor = await get_score_continuation_floor_row(
+            session,
+            bench_version=canonical_version,
+            efficiency_config=efficiency_config,
+            now=now,
+            active_version=canonical_version,
+        )
     score_continuation_floor = score_floor.score if score_floor is not None else None
     score_floor_agent = (
         await session.get(Agent, score_floor.row.agent_id)

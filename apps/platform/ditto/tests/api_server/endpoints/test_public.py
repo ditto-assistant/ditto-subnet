@@ -13,6 +13,7 @@ import hashlib
 import json
 import logging
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -6760,6 +6761,7 @@ class TestPublicActivity:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """A miner told "below the floor" must be able to check the floor.
 
@@ -6811,6 +6813,24 @@ class TestPublicActivity:
                 )
         _install_db(app, session_maker)
 
+        # Model an open-rollout authority boundary: the current ledger is the
+        # desired generation while this public surface still reports the
+        # active generation's floor. Snapshot sharing must not cross eras.
+        original_ledger_read = public_endpoint.list_eligible_ledger
+
+        async def desired_ledger(*args: object, **kwargs: object) -> list[LedgerRow]:
+            rows = await original_ledger_read(*args, **kwargs)  # type: ignore[arg-type]
+            return [replace(row, bench_version=_ERA + 1) for row in rows]
+
+        original_floor_read = public_endpoint.get_score_continuation_floor_row
+        fallback_floor_read = AsyncMock(side_effect=original_floor_read)
+        monkeypatch.setattr(public_endpoint, "list_eligible_ledger", desired_ledger)
+        monkeypatch.setattr(
+            public_endpoint,
+            "get_score_continuation_floor_row",
+            fallback_floor_read,
+        )
+
         pipeline = (
             await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
         ).json()
@@ -6826,6 +6846,7 @@ class TestPublicActivity:
             await client.get(f"/api/v1/public/agent/{fifth_place_agent_id}/pipeline")
         ).json()
         assert floor_holder["final_composite"] == pytest.approx(pipeline["score_floor"])
+        assert fallback_floor_read.await_count == 2
 
     async def test_score_floor_attribution_is_null_below_five_ranked_agents(
         self,
@@ -6863,6 +6884,7 @@ class TestPublicActivity:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         """The support report, resolved: "fifth place" names ONE agent.
 
@@ -6964,6 +6986,17 @@ class TestPublicActivity:
                 )
         _install_db(app, session_maker)
 
+        legacy_floor_read = AsyncMock(
+            side_effect=AssertionError(
+                "canonical pipeline floor must reuse its resolved ledger snapshot"
+            )
+        )
+        monkeypatch.setattr(
+            public_endpoint,
+            "get_score_continuation_floor_row",
+            legacy_floor_read,
+        )
+
         board = (await client.get("/api/v1/public/leaderboard")).json()
         assert board["continual_aggregate_active"] is True
         entries = board["entries"]
@@ -6990,6 +7023,7 @@ class TestPublicActivity:
         # And it is not the row the retired raw-composite cut would have named.
         assert pipeline["score_floor_agent_id"] != fifth_by_composite
         assert pipeline["score_floor"] == pytest.approx(0.84)
+        legacy_floor_read.assert_not_awaited()
 
     async def test_public_progress_never_combines_benchmark_eras(
         self,

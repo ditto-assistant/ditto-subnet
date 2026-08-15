@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
@@ -49,8 +50,11 @@ from ditto.db.queries.score_ranking import (
     resolve_efficiency_adjustments,
     resolve_official_composites,
 )
-from ditto.db.queries.scores import list_eligible_ledger, upsert_score
-from ditto.db.queries.tickets import get_score_priority_floor_rows
+from ditto.db.queries.scores import LedgerRow, list_eligible_ledger, upsert_score
+from ditto.db.queries.tickets import (
+    get_score_priority_floor_rows,
+    score_priority_floor_rows_from_resolved_ledger,
+)
 from ditto.score_order import rank_submissions, score_order_key
 
 _BENCH = MIN_SCOREABLE_BENCH_VERSION
@@ -619,9 +623,24 @@ class TestEfficiencyAdjustedFloors:
             efficiency_config=config,
             now=_BASE,
         )
+        shared_continuation, shared_provisional = (
+            score_priority_floor_rows_from_resolved_ledger(
+                cast(list[LedgerRow], rows),
+                scores=official_composites(
+                    rows,
+                    quorum={},
+                    completed_waves={},
+                    continual_mean_active=False,
+                    efficiency_factors=factors,
+                    efficiency_fold_active=True,
+                ),
+            )
+        )
 
         assert continuation is not None
         assert provisional is not None
+        assert shared_continuation == continuation
+        assert shared_provisional == provisional
         # Factor order is the reverse of submission-time order. Raw-score ties
         # would put rows[4] fifth; the canonical adjusted floor is rows[5].
         assert continuation.row.agent_id == rows[5].agent_id
