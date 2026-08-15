@@ -94,7 +94,7 @@ def test_relay_release_prefers_private_gcs_with_accelerated_iap_fallback() -> No
     )
 
 
-def test_relay_gcs_transport_has_prefix_scoped_create_only_iam() -> None:
+def test_relay_gcs_transport_has_prefix_scoped_create_and_preflight_iam() -> None:
     terraform = GCP_PLATFORM_TERRAFORM.read_text()
 
     resource = (
@@ -106,6 +106,15 @@ def test_relay_gcs_transport_has_prefix_scoped_create_only_iam() -> None:
     assert 'role     = "roles/storage.objectCreator"' in grant
     assert "/objects/relay-releases/" in grant
     assert 'role     = "roles/storage.objectAdmin"' not in grant
+
+    read_resource = (
+        'resource "google_storage_bucket_iam_member" "platform_deploy_relay_read"'
+    )
+    read_start = terraform.index(read_resource)
+    read_grant = terraform[read_start : terraform.index("\n}\n", read_start) + 3]
+    assert 'role     = "roles/storage.objectViewer"' in read_grant
+    assert "/objects/relay-releases/" in read_grant
+    assert 'role     = "roles/storage.objectAdmin"' not in read_grant
     assert 'matches_prefix = ["relay-releases/"]' in terraform
 
 

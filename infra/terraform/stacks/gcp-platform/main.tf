@@ -216,9 +216,11 @@ resource "google_storage_bucket_iam_member" "platform_api_agents_rw" {
   member   = "serviceAccount:${local.platform_api_sa_email}"
 }
 
-# GitHub Actions may only create uniquely named relay transport objects. It
-# cannot read agent tarballs, list the bucket, overwrite an existing object, or
-# delete anything; the VM's runtime identity owns download and cleanup.
+# GitHub Actions may only create uniquely named relay transport objects. The
+# Cloud SDK also reads destination metadata before creating an object, so a
+# second prefix-scoped binding permits that preflight without exposing agent
+# tarballs or bucket listing. The VM's runtime identity owns download and
+# cleanup.
 resource "google_storage_bucket_iam_member" "platform_deploy_relay_create" {
   for_each = google_storage_bucket.agents
   bucket   = each.value.name
@@ -228,6 +230,19 @@ resource "google_storage_bucket_iam_member" "platform_deploy_relay_create" {
   condition {
     title       = "relay-release-artifact-create"
     description = "Create-only access to ephemeral relay release transport objects"
+    expression  = "resource.name.startsWith(\"projects/_/buckets/${each.value.name}/objects/relay-releases/\")"
+  }
+}
+
+resource "google_storage_bucket_iam_member" "platform_deploy_relay_read" {
+  for_each = google_storage_bucket.agents
+  bucket   = each.value.name
+  role     = "roles/storage.objectViewer"
+  member   = "serviceAccount:${google_service_account.platform_deploy.email}"
+
+  condition {
+    title       = "relay-release-artifact-read"
+    description = "Read ephemeral relay object metadata required by Cloud SDK uploads"
     expression  = "resource.name.startsWith(\"projects/_/buckets/${each.value.name}/objects/relay-releases/\")"
   }
 }

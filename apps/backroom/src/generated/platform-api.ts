@@ -2888,6 +2888,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/controller/release": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Release Screener Controller
+         * @description Relinquish the exact current writer lease during a graceful deploy.
+         */
+        post: operations["release_screener_controller_api_v1_screener_controller_release_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/controller/submission-image-builds/claim": {
         parameters: {
             query?: never;
@@ -22018,6 +22038,39 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ScreenerNodeStatusRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    release_screener_controller_api_v1_screener_controller_release_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerControllerFenceRequest"];
             };
         };
         responses: {

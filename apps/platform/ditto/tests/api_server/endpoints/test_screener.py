@@ -1069,6 +1069,49 @@ class TestFederatedScreenerNodes:
         )
         assert overwritten.status_code == 409
 
+    async def test_current_controller_can_release_lease_for_graceful_handoff(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        first = await client.put(
+            "/api/v1/screener/controller/capacity",
+            headers=headers,
+            json=_capacity_payload("prod:first"),
+        )
+        assert first.status_code == 200, first.text
+
+        released = await client.post(
+            "/api/v1/screener/controller/release",
+            headers=headers,
+            json={"environment": "prod", "controller_epoch": "prod:first"},
+        )
+        assert released.status_code == 204, released.text
+
+        second = await client.put(
+            "/api/v1/screener/controller/capacity",
+            headers=headers,
+            json=_capacity_payload("prod:second"),
+        )
+        assert second.status_code == 200, second.text
+
+        stale_release = await client.post(
+            "/api/v1/screener/controller/release",
+            headers=headers,
+            json={"environment": "prod", "controller_epoch": "prod:first"},
+        )
+        assert stale_release.status_code == 409
+
     async def test_controller_lease_fences_other_epochs_and_bootstraps_node(
         self,
         app: FastAPI,

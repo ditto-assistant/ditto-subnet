@@ -13,6 +13,9 @@ CONTROLLER_UV_BIN="${SCREENER_CONTROLLER_UV_BIN:-/usr/local/bin/uv}"
 CONTROLLER_UNIT="${SCREENER_CONTROLLER_UNIT:-ditto-screener-capacity}"
 BUILDER_UNIT="${SCREENER_BUILDER_UNIT:-ditto-image-builder}"
 CONTROLLER_HEALTH_URL="${SCREENER_CONTROLLER_HEALTH_URL:-https://platform-api.heyditto.ai/api/v1/public/screener-capacity-watchdog?environment=prod}"
+CONTROLLER_PLATFORM_URL="${SCREENER_CONTROLLER_PLATFORM_URL:-https://platform-api.heyditto.ai}"
+CONTROLLER_TOKEN_FILE="${SCREENER_CONTROLLER_TOKEN_FILE:-/etc/ditto-screener-capacity/platform-controller-token}"
+CONTROLLER_ENVIRONMENT="${SCREENER_CONTROLLER_ENVIRONMENT:-prod}"
 
 service_dir="$CONTROLLER_ROOT/services/screener-orchestrator"
 venv="$service_dir/.venv"
@@ -48,6 +51,65 @@ as_deploy() {
 health_epoch() {
   curl --fail --silent --show-error --max-time 10 "$CONTROLLER_HEALTH_URL" \
     | jq -er '.controller_epoch // empty'
+}
+
+release_lease() {
+  local epoch="${1:-}"
+  if [[ -z "$epoch" ]]; then
+    echo "controller epoch was unavailable; retaining expiry-based handoff" >&2
+    return 0
+  fi
+  if [[ ! -r "$CONTROLLER_TOKEN_FILE" ]]; then
+    echo "controller token is unavailable; retaining expiry-based handoff" >&2
+    return 0
+  fi
+
+  # Keep the bearer out of argv and logs. A rejected or unavailable endpoint is
+  # deliberately non-fatal: the new epoch remains fenced until the old lease's
+  # existing TTL expires, preserving the pre-handoff deployment behavior.
+  if as_deploy env \
+    SCREENER_CONTROLLER_PLATFORM_URL="$CONTROLLER_PLATFORM_URL" \
+    SCREENER_CONTROLLER_TOKEN_FILE="$CONTROLLER_TOKEN_FILE" \
+    SCREENER_CONTROLLER_EPOCH="$epoch" \
+    SCREENER_CONTROLLER_ENVIRONMENT="$CONTROLLER_ENVIRONMENT" \
+    "$venv/bin/python" - <<'PY'
+import json
+import os
+from pathlib import Path
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
+
+base_url = os.environ["SCREENER_CONTROLLER_PLATFORM_URL"].rstrip("/")
+token = Path(os.environ["SCREENER_CONTROLLER_TOKEN_FILE"]).read_text().strip()
+payload = json.dumps(
+    {
+        "environment": os.environ["SCREENER_CONTROLLER_ENVIRONMENT"],
+        "controller_epoch": os.environ["SCREENER_CONTROLLER_EPOCH"],
+    }
+).encode()
+request = Request(
+    f"{base_url}/api/v1/screener/controller/release",
+    data=payload,
+    method="POST",
+    headers={
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    },
+)
+try:
+    with urlopen(request, timeout=10) as response:
+        if response.status != 204:
+            raise SystemExit(f"lease release returned HTTP {response.status}")
+except HTTPError as error:
+    raise SystemExit(f"lease release returned HTTP {error.code}") from None
+except URLError as error:
+    raise SystemExit(f"lease release failed: {error.reason}") from None
+PY
+  then
+    echo "released controller lease for graceful handoff"
+  else
+    echo "controller lease release failed; retaining expiry-based handoff" >&2
+  fi
 }
 
 verify_services() {
@@ -95,8 +157,10 @@ verify_services() {
 
 activate_revision() {
   local revision="$1"
-  local prior_epoch="${2:-}"
-  systemctl stop "$BUILDER_UNIT" "$CONTROLLER_UNIT" || true
+  local prior_epoch
+  prior_epoch="$(health_epoch 2>/dev/null || true)"
+  systemctl stop "$BUILDER_UNIT" "$CONTROLLER_UNIT" || return 1
+  release_lease "$prior_epoch"
   as_deploy git -C "$CONTROLLER_ROOT" reset --hard "$revision" || return 1
   as_deploy env UV_PROJECT_ENVIRONMENT="$venv" \
     "$CONTROLLER_UV_BIN" sync --project "$service_dir" --frozen || return 1
@@ -118,7 +182,6 @@ if ! as_deploy git -C "$CONTROLLER_ROOT" merge-base --is-ancestor \
 fi
 
 previous_sha="$(as_deploy git -C "$CONTROLLER_ROOT" rev-parse HEAD)"
-previous_epoch="$(health_epoch 2>/dev/null || true)"
 if [[ -s "$deployed_marker" ]]; then
   marker_sha="$(<"$deployed_marker")"
   if [[ "$marker_sha" =~ ^[0-9a-f]{40}$ ]] \
@@ -138,9 +201,9 @@ if [[ "$previous_sha" == "$CONTROLLER_EXPECTED_SHA" ]] \
 fi
 
 echo "deploying controller and builder at $CONTROLLER_EXPECTED_SHA"
-if ! activate_revision "$CONTROLLER_EXPECTED_SHA" "$previous_epoch"; then
+if ! activate_revision "$CONTROLLER_EXPECTED_SHA"; then
   echo "deployment failed; rolling back to $previous_sha" >&2
-  if ! activate_revision "$previous_sha" "$previous_epoch"; then
+  if ! activate_revision "$previous_sha"; then
     echo "rollback failed; both systemd unit statuses were printed above" >&2
     exit 2
   fi

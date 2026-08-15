@@ -824,6 +824,24 @@ async def fence_screener_controller(
         )
 
 
+@router.post("/controller/release", response_model=None, status_code=204)
+async def release_screener_controller(
+    payload: ScreenerControllerFenceRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    """Relinquish the exact current writer lease during a graceful deploy."""
+    now = datetime.now(UTC)
+    async with session.begin():
+        snapshot = await _require_controller_epoch(
+            session,
+            environment=payload.environment,
+            epoch=payload.controller_epoch,
+            now=now,
+        )
+        snapshot.controller_lease_expires_at = now
+
+
 @router.post(
     "/controller/trusted-image-builds",
     response_model=TrustedImageBuildView,

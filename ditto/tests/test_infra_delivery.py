@@ -80,6 +80,23 @@ def test_controller_deploy_proves_exact_fresh_controller_heartbeat() -> None:
     assert 'as_deploy git -C "$CONTROLLER_ROOT" cat-file -e' in updater
 
 
+def test_controller_deploy_releases_only_the_stopped_writer_epoch() -> None:
+    updater = (
+        ROOT / "services" / "screener-orchestrator" / "scripts" / "update-controller.sh"
+    ).read_text()
+
+    stop = 'systemctl stop "$BUILDER_UNIT" "$CONTROLLER_UNIT"'
+    release = 'release_lease "$prior_epoch"'
+    start = 'systemctl start "$CONTROLLER_UNIT"'
+    assert updater.index(stop) < updater.index(release) < updater.index(start)
+    assert "/api/v1/screener/controller/release" in updater
+    assert '"environment": os.environ["SCREENER_CONTROLLER_ENVIRONMENT"]' in updater
+    assert '"controller_epoch": os.environ["SCREENER_CONTROLLER_EPOCH"]' in updater
+    assert "retaining expiry-based handoff" in updater
+    assert '"Authorization": f"Bearer {token}"' in updater
+    assert f"{stop} || true" not in updater
+
+
 def test_capacity_controller_cannot_administer_compute_project_wide() -> None:
     terraform = (GCP_ROOT / "screener-capacity-controller.tf").read_text()
     assert 'role    = "roles/compute.instanceAdmin.v1"' not in terraform
