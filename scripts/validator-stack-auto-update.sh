@@ -153,6 +153,58 @@ release_image_keys() {
   fi
 }
 
+is_prunable_managed_image() {
+  [[ "$1" =~ ^ghcr\.io/ditto-assistant/(ditto-subnet-stack|ditto-subnet-validator|ditto-subnet-sandbox-docker|dittobench-api-sandbox|dittobench-api-relay|ditto-subnet-pylon)@sha256:[0-9a-f]{64}$ ]]
+}
+
+retained_release_images() {
+  local dir descriptor key image
+  for dir in "$CURRENT_DIR" "$PREVIOUS_DIR"; do
+    if [ "$dir" = "$CURRENT_DIR" ]; then
+      [ -d "$dir" ] || return 1
+    else
+      [ -d "$dir" ] || continue
+    fi
+    validate_manifest "$dir" || return 1
+    descriptor="$(cat "$dir/.descriptor-ref" 2>/dev/null || true)"
+    is_descriptor_digest "$descriptor" || return 1
+    printf '%s\n' "$descriptor"
+    while IFS= read -r key; do
+      image="$(manifest_value "$dir/manifest.env" "$key")"
+      is_image_digest "$image" || return 1
+      printf '%s\n' "$image"
+    done < <(release_image_keys "$dir")
+  done
+}
+
+prune_obsolete_managed_images() {
+  local inventory retained image removed=0
+  # Managed releases never build on the host, so there is no outer BuildKit
+  # cache to prune. Restrict cleanup to exact Ditto-owned repository digests;
+  # never touch containers, volumes, networks, third-party images, or other
+  # operator workloads on the Docker daemon.
+  if ! inventory="$(docker image ls --digests --format '{{.Repository}}@{{.Digest}}' 2>/dev/null)"; then
+    log "warning: could not inventory obsolete managed release images; retrying later"
+    return 0
+  fi
+  if ! retained="$(retained_release_images | sort -u)"; then
+    log "warning: retained release state is invalid; refusing image cleanup"
+    return 0
+  fi
+  while IFS= read -r image; do
+    is_prunable_managed_image "$image" || continue
+    grep -Fqx -- "$image" <<<"$retained" && continue
+    if docker image rm "$image" >/dev/null 2>&1; then
+      removed=$((removed + 1))
+    else
+      # No --force: an unexpected container reference must win over cleanup.
+      log "warning: obsolete managed image is still referenced or could not be removed: $image"
+    fi
+  done <<<"$inventory"
+  [ "$removed" -eq 0 ] || log "removed $removed obsolete managed release image(s)"
+  return 0
+}
+
 validate_manifest() {
   local dir="$1" file line key value count=0 expected_count image_key seen_keys='|' allowed
   file="$dir/manifest.env"
@@ -656,6 +708,7 @@ perform_update() {
   record_managed "$candidate_ref"
   printf 'PREVIOUS_RELEASE=%s\nCURRENT_RELEASE=%s\nCURRENT_VERSION=%s\nUPDATED_AT=%s\n' "$previous_ref" "$candidate_ref" "$candidate_version" "$(date +%s)" >"$LAST_UPDATE_FILE"
   rm -f "$FAILED_CANDIDATE_FILE" "$PREFETCHED_FILE" "$TRANSACTION_FILE"
+  prune_obsolete_managed_images
   log "updated complete validator stack $current_version -> $candidate_version"
 }
 
@@ -798,6 +851,7 @@ verify_descriptor_signature "$candidate" || die "candidate descriptor publisher 
 if failed_candidate_is_suppressed "$candidate"; then exit 0; fi
 if [ "$candidate" = "$(managed_release)" ]; then
   rm -f "$PREFETCHED_FILE"
+  prune_obsolete_managed_images
   log "already running stack release $candidate"
   exit 0
 fi

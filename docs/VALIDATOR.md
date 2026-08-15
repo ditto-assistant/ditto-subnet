@@ -336,7 +336,12 @@ to be visible.
 - **Host rebooted:** verify Docker is enabled and active, then check Compose
   and updater status. Do not add PM2 or another systemd service for the stack.
 - **Disk use grows:** inspect `sandbox-docker`. Its nested daemon prunes unused
-  benchmark data; do not run broad cleanup against the host Docker daemon.
+  benchmark data every six hours. Managed updates also remove superseded
+  Ditto-owned outer images after preserving both the current and rollback
+  releases. Cleanup is exact-digest and best-effort: it never uses
+  `docker system prune`, never removes containers, volumes, networks, or
+  third-party images, and never forces removal of an image still referenced by
+  a container. Do not run broad cleanup against the host Docker daemon.
 - **Sandbox resource failure (`sandbox_oom`, `sandbox_tmpfs_exhausted`):**
   these are validator-infrastructure classifications, not miner verdicts; the
   worker stops claiming work and the ticket expires safely. Fix the resource

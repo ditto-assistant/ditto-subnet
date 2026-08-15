@@ -562,6 +562,15 @@ elif args[:2] == ["image", "inspect"]:
         elif "Labels" in fmt:
             label = fmt.split('Labels "', 1)[1].split('"', 1)[0]
             print(state["descriptor_labels"].get(ref, {}).get(label, "<no value>"))
+elif args[:2] == ["image", "ls"]:
+    if state.get("fail_image_ls"):
+        die("image inventory failed")
+    print("\n".join(state.get("image_inventory", [])))
+elif args[:2] == ["image", "rm"]:
+    ref = args[2]
+    if ref in state.get("fail_image_rm", []):
+        die("image is still referenced")
+    state.setdefault("removed_images", []).append(ref)
 elif args[:1] == ["inspect"]:
     container = state["containers"][args[-1]]
     fmt = args[args.index("--format") + 1]
@@ -825,6 +834,12 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
         },
         "descriptor_labels": labels,
         "images": image_ids,
+        "image_inventory": [
+            OLD_STACK_DIGEST,
+            STACK_DIGEST,
+            *old_images.values(),
+            *new_images.values(),
+        ],
         "containers": containers,
         "runtime_state": {
             "compatibility_epoch": 2,
@@ -1153,6 +1168,90 @@ def test_success_replaces_and_commits_the_complete_stack(
     assert up_calls[1][-1] == "ditto-subnet"
     assert state["runtime_state"]["state"] == "working"
     assert "unrelated-container" not in {call[-1] for call in state["calls"] if call}
+
+
+def test_success_prunes_only_superseded_ditto_owned_images(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    obsolete_validator = (
+        "ghcr.io/ditto-assistant/ditto-subnet-validator@sha256:" + "8" * 64
+    )
+    obsolete_descriptor = STACK_REPOSITORY + "@sha256:" + "7" * 64
+    unrelated = "ghcr.io/example/unrelated@sha256:" + "6" * 64
+    third_party = "docker.io/ollama/ollama@sha256:" + "5" * 64
+    state = json.loads(state_path.read_text())
+    state["image_inventory"].extend(
+        [obsolete_validator, obsolete_descriptor, unrelated, third_party]
+    )
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    final = json.loads(state_path.read_text())
+    assert set(final["removed_images"]) == {
+        obsolete_validator,
+        obsolete_descriptor,
+    }
+    assert not any(
+        call[:2] in (["system", "prune"], ["container", "prune"], ["volume", "prune"])
+        or call[:2] == ["network", "prune"]
+        for call in final["calls"]
+    )
+
+
+def test_noop_tick_retries_best_effort_obsolete_image_cleanup(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    obsolete = "ghcr.io/ditto-assistant/dittobench-api-sandbox@sha256:" + "8" * 64
+    state = json.loads(state_path.read_text())
+    state["channel_digest"] = OLD_STACK_DIGEST
+    state["image_inventory"].append(obsolete)
+    state["fail_image_rm"] = [obsolete]
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    first = _run_updater(env, "run")
+
+    assert first.returncode == 0, first.stderr
+    assert "obsolete managed image is still referenced" in first.stderr
+    state = json.loads(state_path.read_text())
+    state["fail_image_rm"] = []
+    state_path.write_text(json.dumps(state))
+
+    second = _run_updater(env, "run")
+
+    assert second.returncode == 0, second.stderr
+    assert obsolete in json.loads(state_path.read_text())["removed_images"]
+
+
+def test_cleanup_fails_closed_when_retained_release_state_is_invalid(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    obsolete = "ghcr.io/ditto-assistant/ditto-subnet-stack@sha256:" + "8" * 64
+    state = json.loads(state_path.read_text())
+    state["channel_digest"] = OLD_STACK_DIGEST
+    state["image_inventory"].append(obsolete)
+    state_path.write_text(json.dumps(state))
+    (state_dir / "current/manifest.env").write_text("malformed\n")
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert "refusing image cleanup" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final.get("removed_images", []) == []
 
 
 def test_update_reacquires_pruned_current_descriptor_before_validation(
