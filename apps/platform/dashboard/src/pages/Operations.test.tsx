@@ -928,3 +928,69 @@ describe("refresh resilience", () => {
     expect(text("operations-snapshot")).toContain("2h ago");
   });
 });
+
+// ── Fleet on-chain weights: what each validator's revealed vector sets ──────
+// The fleet page answers "which miner UIDs is THIS validator pointing at"
+// per row, from /public/weights, with the leaderboard's gold-top-choice /
+// magenta-support chip vocabulary. A validator the snapshot carries no
+// vector for says "none revealed" — on a weight-setting fleet that is a
+// finding, not missing data.
+describe("fleet on-chain weights", () => {
+  it("lists the miner UIDs each validator's revealed vector points at", async () => {
+    await renderPage();
+    expect(fetchedPaths().some((u) => u.includes("/public/weights"))).toBe(true);
+    const row = document.querySelector(`#fleet-rows tr[data-entity-id="${DITTO}"]`) as HTMLElement;
+    await waitFor(() => expect(row.querySelector(".fleet-chain-weights")).toBeTruthy());
+    expect(row.querySelector(".fleet-chain-weights-label")?.textContent).toContain(
+      "On-chain weights",
+    );
+    // Ditto's fixture vector: five destinations, heaviest first, shares
+    // normalized within the vector (UID 160 carries 65535 of ~100k).
+    const chips = row.querySelectorAll(".chain-vector-chip") as NodeListOf<HTMLElement>;
+    expect(chips.length).toBe(5);
+    expect(chips[0]).toHaveClass("top-choice");
+    expect(chips[0]?.textContent).toContain("UID 160");
+    expect(chips[0]?.textContent).toContain("65.0%");
+    expect(chips[1]).toHaveClass("support");
+    expect(chips[1]?.textContent).toContain("UID 31");
+    // Block provenance rides on the tooltip, not a per-row repeat.
+    expect(row.querySelector(".fleet-chain-weights")?.getAttribute("title")).toContain(
+      "Revealed at block",
+    );
+  });
+
+  it('says "none revealed" for a validator the snapshot has no vector for', async () => {
+    const base = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (raw.includes("/public/weights")) {
+        const body = loadFixture<{ vectors: { validator_hotkey?: string }[] }>("weights");
+        body.vectors = body.vectors.filter((vector) => vector.validator_hotkey !== DITTO);
+        return Promise.resolve(
+          new Response(JSON.stringify(body), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+        );
+      }
+      return base(input);
+    }) as typeof fetch;
+    try {
+      await renderPage();
+      const row = document.querySelector(
+        `#fleet-rows tr[data-entity-id="${DITTO}"]`,
+      ) as HTMLElement;
+      await waitFor(() =>
+        expect(row.querySelector(".fleet-chain-weights-none")?.textContent).toBe("none revealed"),
+      );
+      expect(row.querySelectorAll(".chain-vector-chip").length).toBe(0);
+      // A validator that DOES reveal a vector keeps its chips beside it.
+      const withVector = document.querySelector(
+        `#fleet-rows tr[data-entity-id="${hotkeyOf("5CFtzzb4")}"]`,
+      ) as HTMLElement;
+      expect(withVector.querySelectorAll(".chain-vector-chip").length).toBeGreaterThan(0);
+    } finally {
+      globalThis.fetch = base;
+    }
+  });
+});

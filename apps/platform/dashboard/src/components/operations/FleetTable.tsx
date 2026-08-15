@@ -6,7 +6,8 @@
 import { For, Show, createMemo } from "solid-js";
 import type { JSX } from "solid-js";
 
-import { relTime, shortKey } from "../../lib/format";
+import { pct, relTime, shortKey } from "../../lib/format";
+import type { ValidatorWeightView } from "../../lib/scoring";
 import { pushEntityRoute } from "../../stores/routeStore";
 import type { ConfirmationProgress, FleetEntry, SystemMetrics } from "../../types/fleet";
 import type { BenchmarkProgress } from "../../types/pipeline";
@@ -583,6 +584,70 @@ function ConfirmationRows(props: { entry: FleetEntryExt }): JSX.Element {
   );
 }
 
+/** The revealed weight matrix, per validator hotkey (OperationsPage folds
+ * /public/weights once for the whole table). */
+export interface FleetChainVectors {
+  byValidator: Record<string, ValidatorWeightView>;
+  block: number | null;
+  stale: boolean;
+}
+
+/**
+ * The miner UIDs this exact validator's most recently revealed on-chain
+ * vector points at, heaviest first with per-vector shares — gold for its top
+ * choice, magenta for the rest, sharing the leaderboard's chip vocabulary. A
+ * validator the snapshot carries no vector for says so explicitly: on a
+ * weight-setting fleet, "none revealed" is a finding, not missing data.
+ */
+function FleetChainWeights(props: {
+  hotkey: string;
+  chainVectors: FleetChainVectors;
+}): JSX.Element {
+  const vector = (): ValidatorWeightView | null =>
+    props.chainVectors.byValidator[props.hotkey] ?? null;
+  const blockNote = (): string =>
+    (props.chainVectors.block == null
+      ? ""
+      : "Revealed at block " + Number(props.chainVectors.block).toLocaleString() + ". ") +
+    (props.chainVectors.stale ? "Chain re-read is failing; this is the last good matrix. " : "") +
+    "Commit-reveal can lag active commitments.";
+  return (
+    <div class="fleet-chain-weights" title={blockNote()}>
+      <span class="fleet-chain-weights-label">
+        On-chain weights
+        <Show when={props.chainVectors.stale}>
+          <span class="chain-weights-stale">stale</span>
+        </Show>
+      </span>
+      <Show when={vector()} fallback={<span class="fleet-chain-weights-none">none revealed</span>}>
+        {(view) => (
+          <span class="fleet-chain-weights-set">
+            <For each={view().entries}>
+              {(entry) => (
+                <span
+                  class={"chain-vector-chip " + (entry.top ? "top-choice" : "support")}
+                  title={
+                    entry.hotkey +
+                    " · raw u16 " +
+                    entry.value +
+                    " · " +
+                    pct(entry.share) +
+                    " of this vector's miner weight" +
+                    (entry.top ? " · top choice" : "")
+                  }
+                >
+                  <span class="chain-vector-chip-uid">UID {entry.uid}</span>
+                  <span class="chain-vector-chip-share">{pct(entry.share)}</span>
+                </span>
+              )}
+            </For>
+          </span>
+        )}
+      </Show>
+    </div>
+  );
+}
+
 function UpdaterNotice(props: { entry: FleetEntryExt }): JSX.Element {
   const view = () => updaterView(props.entry);
   return (
@@ -641,6 +706,9 @@ export interface FleetRowProps {
   slotPolicy: SlotPolicy | null;
   benchVersion: number | null;
   highlightId: string | null;
+  /** Null while no weight snapshot has loaded (nothing renders — absence of
+   * data is not "no weights"); validators only. */
+  chainVectors?: FleetChainVectors | null;
 }
 
 /** One active fleet row (renderFleet 9017–9109). */
@@ -722,6 +790,11 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
           <SlotRows entry={props.entry} slotPolicy={props.slotPolicy} />
           <ConfirmationRows entry={props.entry} />
           <UpdaterNotice entry={props.entry} />
+          <Show when={props.chainVectors}>
+            {(chainVectors) => (
+              <FleetChainWeights hotkey={hotkey()} chainVectors={chainVectors()} />
+            )}
+          </Show>
         </Show>
       </td>
       <td class="fleet-version-cell">

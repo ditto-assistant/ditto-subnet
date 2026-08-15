@@ -666,8 +666,12 @@ export interface ChainWeightFold {
  * positive non-owner miner weights are kept, empty vectors are skipped, the
  * vector champion is the chainChampionCompare winner, and every touched
  * hotkey accumulates { weighted, champion } with the final vectors total
- * stamped on all of them. Null when the snapshot has no vectors array
- * (chain unreachable — the original hides the panel).
+ * stamped on all of them. `share` additionally accumulates each vector's
+ * normalized weight (value / vector miner total) and lands as the mean over
+ * ALL miner-bearing vectors, so a miner two of twelve validators point at
+ * cannot read as heavier than one all twelve point at. Null when the
+ * snapshot has no vectors array (chain unreachable — the original hides the
+ * panel).
  */
 export function foldChainWeights(
   snapshot: ChainWeightsSnapshot | null | undefined,
@@ -691,18 +695,77 @@ export function foldChainWeights(
         weighted: 0,
         champion: 0,
         vectors: 0,
+        share: 0,
       });
       info.weighted += 1;
+      info.share += weight.value / total;
       if (weight.hotkey === champion.hotkey) info.champion += 1;
     });
   });
   Object.keys(byHotkey).forEach((hotkey) => {
-    (byHotkey[hotkey] as ChainWeightInfo).vectors = minerVectors;
+    const info = byHotkey[hotkey] as ChainWeightInfo;
+    info.vectors = minerVectors;
+    info.share = info.share / minerVectors;
   });
   const leaders = Object.keys(championCounts).sort(
     (a, b) => (championCounts[b] as number) - (championCounts[a] as number) || a.localeCompare(b),
   );
   return { byHotkey, championCounts, minerVectors, leaders };
+}
+
+// ── Per-validator revealed weight views (fleet + raw-matrix panel) ──
+
+export interface ValidatorWeightEntry {
+  uid: number;
+  hotkey: string;
+  /** Raw u16 chain value as revealed. */
+  value: number;
+  /** This destination's share of the vector's miner-weight mass (0–1). */
+  share: number;
+  /** True for the vector's chainChampionCompare winner. */
+  top: boolean;
+}
+
+export interface ValidatorWeightView {
+  validatorUid: number | null;
+  validatorHotkey: string;
+  /** Positive non-owner destinations, heaviest first (chainChampionCompare). */
+  entries: ValidatorWeightEntry[];
+}
+
+/**
+ * One view per revealed miner-bearing vector, in snapshot order: the same
+ * owner/positive filter and champion ordering as foldChainWeights, kept as
+ * per-validator rows instead of folded per miner. Vectors with no miner
+ * weight (owner-only or empty) are skipped, matching the fold's
+ * `minerVectors` accounting. Null when the snapshot has no vectors array.
+ */
+export function validatorWeightViews(
+  snapshot: ChainWeightsSnapshot | null | undefined,
+): ValidatorWeightView[] | null {
+  if (!snapshot || !Array.isArray(snapshot.vectors)) return null;
+  const owner = snapshot.owner_hotkey || "";
+  const views: ValidatorWeightView[] = [];
+  snapshot.vectors.forEach((vector) => {
+    const minerWeights = (vector.weights || []).filter(
+      (weight) => weight && weight.value > 0 && weight.hotkey !== owner,
+    );
+    const total = minerWeights.reduce((sum, weight) => sum + weight.value, 0);
+    if (!total) return;
+    const ordered = minerWeights.slice().sort(chainChampionCompare);
+    views.push({
+      validatorUid: vector.validator_uid ?? null,
+      validatorHotkey: vector.validator_hotkey || "",
+      entries: ordered.map((weight, index) => ({
+        uid: weight.uid,
+        hotkey: weight.hotkey,
+        value: weight.value,
+        share: weight.value / total,
+        top: index === 0,
+      })),
+    });
+  });
+  return views;
 }
 
 /**

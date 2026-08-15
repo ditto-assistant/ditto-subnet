@@ -183,12 +183,203 @@
   letter-spacing: 0.05em;
   text-transform: uppercase;
 }
+/* Per-row revealed-weights badge: this used to be faint ghost text, and
+   "which rows do the validators actually point at" was unreadable at a
+   glance. Gold = at least one vector's top choice, magenta (the memory plum)
+   = weighted without the crown; a ranked row with neither stays bare, which
+   is exactly the out-of-sync reading the tints exist for. */
 .chain-weight-note {
-  display: block;
-  margin-top: 4px;
-  color: var(--text-faint);
-  font: 9.5px/1.35 var(--mono);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-dim);
+  font: 700 10px/1.5 var(--mono);
   white-space: nowrap;
+}
+.chain-weight-note .chain-weight-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 6px currentColor;
+}
+.chain-weight-note.top-choice {
+  color: var(--gold);
+  border-color: color-mix(in oklch, var(--gold) 55%, var(--border));
+  background: color-mix(in oklch, var(--gold) 9%, transparent);
+  box-shadow: 0 0 12px color-mix(in oklch, var(--gold) 28%, transparent);
+}
+.chain-weight-note.support {
+  color: var(--memory);
+  border-color: color-mix(in oklch, var(--memory) 55%, var(--border));
+  background: color-mix(in oklch, var(--memory) 9%, transparent);
+  box-shadow: 0 0 12px color-mix(in oklch, var(--memory) 28%, transparent);
+}
+/* The ghost overlay of the weights themselves: mean share of the revealed
+   miner-weight mass. Same gold/magenta vocabulary as the badge above it. */
+.chain-weight-meter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  max-width: 132px;
+}
+.chain-weight-meter-track {
+  flex: 1 1 auto;
+  height: 4px;
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--text) 9%, transparent);
+  overflow: hidden;
+}
+.chain-weight-meter-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+}
+.chain-weight-meter.top-choice .chain-weight-meter-track i {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--gold) 55%, transparent),
+    var(--gold)
+  );
+  box-shadow: 0 0 8px color-mix(in oklch, var(--gold) 45%, transparent);
+}
+.chain-weight-meter.support .chain-weight-meter-track i {
+  background: linear-gradient(
+    90deg,
+    color-mix(in oklch, var(--memory) 55%, transparent),
+    var(--memory)
+  );
+  box-shadow: 0 0 8px color-mix(in oklch, var(--memory) 45%, transparent);
+}
+.chain-weight-meter-value {
+  flex: 0 0 auto;
+  color: var(--text-dim);
+  font: 650 9.5px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── The raw weight matrix disclosure (ChainWeightsPanel) ───── */
+.chain-weights {
+  margin: 0 0 10px;
+}
+.chain-weights-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 11px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  font: 700 10.5px/1.5 var(--mono);
+  letter-spacing: 0.03em;
+  cursor: pointer;
+}
+.chain-weights-toggle:hover {
+  border-color: color-mix(in oklch, var(--gold) 45%, var(--border));
+  color: var(--text);
+}
+.chain-weights-toggle-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gold);
+  box-shadow: 0 0 6px var(--gold);
+}
+.chain-weights-stale {
+  padding: 1px 6px;
+  border: 1px solid color-mix(in oklch, var(--warn) 50%, var(--border));
+  border-radius: 999px;
+  color: var(--warn);
+  font: 700 9px/1.4 var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.chain-weights-caret {
+  color: var(--text-faint);
+}
+.chain-weights-panel {
+  margin-top: 8px;
+  padding: 10px 14px 6px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg-elev);
+}
+.chain-weights-hint {
+  margin: 0 0 8px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.chain-vector {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 7px 0;
+  border-top: 1px dashed var(--border);
+}
+.chain-vector-validator {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 7px;
+  flex: 0 0 176px;
+  font: 650 11px/1.5 var(--mono);
+}
+.chain-vector-uid {
+  color: var(--text-faint);
+  font: 650 9.5px/1.5 var(--mono);
+  letter-spacing: 0.04em;
+}
+.chain-vector-weights {
+  display: flex;
+  flex: 1 1 320px;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chain-vector-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font: 650 10px/1.5 var(--mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-dim);
+}
+.chain-vector-chip.top-choice {
+  color: var(--gold);
+  border-color: color-mix(in oklch, var(--gold) 55%, var(--border));
+  background: color-mix(in oklch, var(--gold) 9%, transparent);
+}
+.chain-vector-chip.support {
+  color: var(--memory);
+  border-color: color-mix(in oklch, var(--memory) 45%, var(--border));
+  background: color-mix(in oklch, var(--memory) 7%, transparent);
+}
+.chain-vector-chip-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chain-vector-chip-share {
+  color: var(--text);
+  font-weight: 750;
+}
+.chain-vector-chip.top-choice .chain-vector-chip-share {
+  color: var(--gold);
+}
+.chain-vector-chip.support .chain-vector-chip-share {
+  color: var(--memory);
 }
 
 .rollout-strip {
@@ -962,6 +1153,28 @@ tbody tr.champion:hover {
 tbody tr.joint-champion > td {
   background: color-mix(in srgb, var(--gold) 5%, transparent);
 }
+/* Chain-weight sync tints: a golden leading rule where at least one revealed
+   vector crowns the row its top choice, a magenta one where vectors assign
+   weight without the crown. The KOTH champion keeps its full gold rule
+   (:not(.champion) leaves that rule authoritative); a ranked row with no
+   tint at all is a row the validators are NOT currently pointing at —
+   weights out of sync with what the board shows. */
+tbody tr.chain-top:not(.champion) {
+  background: color-mix(in oklch, var(--gold) 4%, var(--bg-elev));
+  box-shadow: inset 3px 0 0 color-mix(in oklch, var(--gold) 72%, transparent);
+}
+tbody tr.chain-top:not(.champion):hover,
+tbody tr.chain-top:not(.champion):focus-visible {
+  background: color-mix(in oklch, var(--gold) 9%, var(--bg-elev));
+}
+tbody tr.chain-weighted:not(.champion) {
+  background: color-mix(in oklch, var(--memory) 5%, var(--bg-elev));
+  box-shadow: inset 3px 0 0 color-mix(in oklch, var(--memory) 72%, transparent);
+}
+tbody tr.chain-weighted:not(.champion):hover,
+tbody tr.chain-weighted:not(.champion):focus-visible {
+  background: color-mix(in oklch, var(--memory) 10%, var(--bg-elev));
+}
 /* Higher-scoring rows that have NOT dethroned the incumbent: dimmed so the
    crown reads as the winner at a glance ("why is #4 champion?" — the rows
    above it lead, but not by more than the dethrone band). Hover or focus
@@ -1235,6 +1448,16 @@ tbody tr.champion .rank {
      the rounded card reads as one gold frame rather than a stray stripe. */
   .board #board tbody tr.champion {
     border-color: color-mix(in oklch, var(--gold) 45%, var(--border));
+  }
+  /* Chain-weight sync tints move to the card border, same as the crown. */
+  .board #board tbody tr.chain-top:not(.champion) {
+    border-color: color-mix(in oklch, var(--gold) 38%, var(--border));
+  }
+  .board #board tbody tr.chain-weighted:not(.champion) {
+    border-color: color-mix(in oklch, var(--memory) 38%, var(--border));
+  }
+  .board #board .chain-weight-meter {
+    max-width: none;
   }
   .board #board tbody td {
     display: block;

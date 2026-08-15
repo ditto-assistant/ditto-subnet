@@ -48,6 +48,7 @@ import {
   tokenPenaltyChipLabel,
   trendDirection,
   unrankedKind,
+  validatorWeightViews,
   vectorChampion,
 } from "./scoring";
 import type { CompositeBreakdown } from "../types";
@@ -430,11 +431,47 @@ describe("chain-observation champion", () => {
     expect(fold).not.toBeNull();
     expect(fold?.minerVectors).toBe(2);
     expect(fold?.championCounts).toEqual({ m1: 1, m2: 1 });
-    expect(fold?.byHotkey["m1"]).toEqual({ weighted: 2, champion: 1, vectors: 2 });
-    expect(fold?.byHotkey["m2"]).toEqual({ weighted: 2, champion: 1, vectors: 2 });
+    expect(fold?.byHotkey["m1"]).toMatchObject({ weighted: 2, champion: 1, vectors: 2 });
+    expect(fold?.byHotkey["m2"]).toMatchObject({ weighted: 2, champion: 1, vectors: 2 });
+    // Mean normalized share across ALL miner-bearing vectors: m1 holds 0.6
+    // of vector one and 0.2 of vector two, m2 the complements.
+    expect(fold?.byHotkey["m1"]?.share).toBeCloseTo(0.4, 10);
+    expect(fold?.byHotkey["m2"]?.share).toBeCloseTo(0.6, 10);
     expect(fold?.byHotkey["m3"]).toBeUndefined();
     // Ties on crown count break lexicographically.
     expect(fold?.leaders).toEqual(["m1", "m2"]);
+  });
+
+  it("builds per-validator weight views in snapshot order, heaviest first", () => {
+    const views = validatorWeightViews({
+      owner_hotkey: "owner",
+      vectors: [
+        {
+          validator_uid: 7,
+          validator_hotkey: "vali-a",
+          weights: [
+            { hotkey: "m2", value: 25, uid: 2 },
+            { hotkey: "m1", value: 75, uid: 1 },
+            { hotkey: "owner", value: 100, uid: 0 },
+          ],
+        },
+        // Owner-only vector is skipped, matching foldChainWeights.
+        {
+          validator_uid: 8,
+          validator_hotkey: "vali-b",
+          weights: [{ hotkey: "owner", value: 1, uid: 0 }],
+        },
+      ],
+    });
+    expect(views).toHaveLength(1);
+    expect(views?.[0]?.validatorUid).toBe(7);
+    expect(views?.[0]?.validatorHotkey).toBe("vali-a");
+    expect(views?.[0]?.entries.map((e) => e.uid)).toEqual([1, 2]);
+    expect(views?.[0]?.entries[0]).toMatchObject({ top: true, value: 75 });
+    expect(views?.[0]?.entries[0]?.share).toBeCloseTo(0.75, 10);
+    expect(views?.[0]?.entries[1]).toMatchObject({ top: false, value: 25 });
+    expect(validatorWeightViews(null)).toBeNull();
+    expect(validatorWeightViews({})).toBeNull();
   });
 
   it("returns null when the chain snapshot has no vectors array", () => {
@@ -443,13 +480,13 @@ describe("chain-observation champion", () => {
   });
 
   it("labels rows 'Validator top choice · c/v' or 'Validator support · w/v'", () => {
-    expect(chainWeightLabel({ weighted: 3, champion: 2, vectors: 5 })).toBe(
+    expect(chainWeightLabel({ weighted: 3, champion: 2, vectors: 5, share: 0.4 })).toBe(
       "Validator top choice · 2/5",
     );
-    expect(chainWeightLabel({ weighted: 3, champion: 0, vectors: 5 })).toBe(
+    expect(chainWeightLabel({ weighted: 3, champion: 0, vectors: 5, share: 0.2 })).toBe(
       "Validator support · 3/5",
     );
-    expect(chainWeightLabel({ weighted: 3, champion: 1, vectors: 0 })).toBe("");
+    expect(chainWeightLabel({ weighted: 3, champion: 1, vectors: 0, share: 0 })).toBe("");
     expect(chainWeightLabel(null)).toBe("");
   });
 });

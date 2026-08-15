@@ -66,6 +66,8 @@ import {
   V9ConfirmationChip,
 } from "./chips";
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
+import type { ChainWeightInfo } from "../../types/leaderboard";
+import { ChainWeightsPanel } from "./ChainWeightsPanel";
 
 // Matching agent name, UID, and hotkey covers how people actually look a
 // miner up: by what they called it, by the number on the board, or by
@@ -364,11 +366,7 @@ function BoardRow(props: {
   const registered = (): boolean => isRegistered(e());
   const emission = (): ReturnType<LeaderboardStore["emissionFor"]> =>
     v9ConfirmationSuppressed() ? null : props.store.emissionFor(e().agent_id);
-  const chainWeight = (): ReturnType<LeaderboardStore["chainFold"]> extends infer _
-    ? unknown
-    : never => undefined as never;
-  void chainWeight;
-  const chainInfo = (): { weighted: number; champion: number; vectors: number } | null =>
+  const chainInfo = (): ChainWeightInfo | null =>
     props.store.chainFold()?.byHotkey[e().miner_hotkey] ?? null;
   const isChamp = (): boolean => emission()?.role === "champion";
   const isJointChamp = (): boolean => emission()?.role === "joint_champion";
@@ -418,6 +416,22 @@ function BoardRow(props: {
     (emission() ? ", KOTH " + emission()?.role : "") +
     (aboveChampion() ? ", outscores the champion but has not cleared the dethrone band" : "") +
     ". Activate for run detail.";
+  // KOTH standing class first, then the chain-weight sync tint: gold when at
+  // least one revealed vector crowns this miner its top choice, magenta when
+  // vectors assign it weight without the crown. A ranked row with NEITHER is
+  // the out-of-sync state the tints exist to expose — it stays untinted.
+  const rowClass = (): string | undefined => {
+    const standing = isChamp()
+      ? "champion"
+      : isJointChamp()
+        ? "joint-champion"
+        : aboveChampion()
+          ? "above-champion"
+          : "";
+    const info = chainInfo();
+    const chain = info ? (info.champion ? " chain-top" : " chain-weighted") : "";
+    return (standing + chain).trim() || undefined;
+  };
   const familyKey = (): string => String(e().agent_id);
   const familyMembers = () => e().submission_family?.members ?? [];
   const familyExpanded = (): boolean => expandedFamilies().has(familyKey());
@@ -437,15 +451,7 @@ function BoardRow(props: {
     <>
       <tr
         data-i={props.index}
-        class={
-          isChamp()
-            ? "champion"
-            : isJointChamp()
-              ? "joint-champion"
-              : aboveChampion()
-                ? "above-champion"
-                : undefined
-        }
+        class={rowClass()}
         tabindex="0"
         aria-label={rowLabel()}
         onClick={activate}
@@ -617,16 +623,48 @@ function BoardRow(props: {
           </Show>
           <Show when={chainInfo()}>
             {(info) => (
-              <ChipTip
-                class="chain-weight-note tip-chip"
-                text={
-                  "How many validators most recently revealed this miner as their top choice, or assigned it any weight. Block " +
-                  (props.store.chainWeights()?.block ?? "") +
-                  "; this can lag active commitments and is not final Yuma emissions."
-                }
-              >
-                {chainWeightLabel(info())}
-              </ChipTip>
+              <>
+                <ChipTip
+                  class={
+                    "chain-weight-note tip-chip " + (info().champion ? "top-choice" : "support")
+                  }
+                  text={
+                    "On-chain weights are currently set on this miner. " +
+                    (info().champion
+                      ? info().champion + " of " + info().vectors + " revealed validator vectors"
+                      : info().weighted + " of " + info().vectors + " revealed validator vectors") +
+                    (info().champion
+                      ? " crown it their top choice."
+                      : " assign it weight without crowning it.") +
+                    " Block " +
+                    (props.store.chainWeights()?.block ?? "") +
+                    "; this can lag active commitments and is not final Yuma emissions."
+                  }
+                >
+                  <span class="chain-weight-dot" aria-hidden="true" />
+                  {chainWeightLabel(info())}
+                </ChipTip>
+                {/* The ghost overlay of the weights themselves: this miner's
+                    mean share of the revealed miner-weight mass. */}
+                <div
+                  class={"chain-weight-meter " + (info().champion ? "top-choice" : "support")}
+                  title={
+                    pct(info().share) +
+                    " mean share of the revealed on-chain miner-weight mass across " +
+                    info().vectors +
+                    " validator vectors."
+                  }
+                >
+                  <span class="chain-weight-meter-track" aria-hidden="true">
+                    <i
+                      style={{
+                        width: (Math.max(0, Math.min(1, info().share)) * 100).toFixed(1) + "%",
+                      }}
+                    />
+                  </span>
+                  <span class="chain-weight-meter-value">{pct(info().share)}</span>
+                </div>
+              </>
             )}
           </Show>
         </td>
@@ -899,6 +937,7 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
           </div>
         </div>
       </div>
+      <ChainWeightsPanel store={store} />
       <table
         id="board"
         tabindex="-1"

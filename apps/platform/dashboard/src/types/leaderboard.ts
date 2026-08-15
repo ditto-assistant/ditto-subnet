@@ -12,6 +12,9 @@ export interface ChainWeightInfo {
   champion: number;
   /** Total revealed miner-bearing vectors in the snapshot. */
   vectors: number;
+  /** Mean share of the revealed miner-weight mass across all miner-bearing
+   * vectors (0–1; a vector that omits this miner contributes 0). */
+  share: number;
 }
 
 export interface EmissionRecipient {
@@ -320,6 +323,8 @@ export interface ChainWeight {
 }
 
 export interface ChainWeightVector {
+  validator_uid?: number;
+  validator_hotkey?: string;
   weights?: ChainWeight[];
 }
 

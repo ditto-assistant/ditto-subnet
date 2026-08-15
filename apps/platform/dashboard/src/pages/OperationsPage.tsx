@@ -27,11 +27,14 @@ import type {
   SlotPolicy,
 } from "../components/operations/fleet";
 import { EmptyRow } from "../components/ui/States";
+import type { WeightsSnapshot } from "../components/board/leaderboard-data";
 import { operationsResource } from "../data/operations";
 import { useEndpoint } from "../data/useEndpoint";
 import type { ResourceState } from "../data/useEndpoint";
 import { REFRESH_MS } from "../lib/config";
 import { relTime } from "../lib/format";
+import { validatorWeightViews } from "../lib/scoring";
+import type { ValidatorWeightView } from "../lib/scoring";
 import { entityRoute } from "../stores/routeStore";
 import type { FleetReport, OperationsPayload, ValidatorNamesPayload } from "../types/fleet";
 import { latest, useOperationsSnapshot } from "./operations-shared";
@@ -71,6 +74,29 @@ export function OperationsPage(
     pollMs: REFRESH_MS,
   });
   const screeners = useEndpoint<FleetReport>("/public/screeners", { pollMs: REFRESH_MS });
+  const weights = useEndpoint<WeightsSnapshot>("/public/weights", { pollMs: REFRESH_MS });
+
+  // Revealed on-chain weight vectors, keyed by validator hotkey. A failed
+  // weights tick keeps the previous matrix (the leaderboard store's
+  // anti-flicker rule); the API also serves last-known-good with `stale` set.
+  const chainWeights = createMemo<WeightsSnapshot | null>(
+    (prev) => latest(weights) ?? prev ?? null,
+    null,
+  );
+  const chainVectors = createMemo<{
+    byValidator: Record<string, ValidatorWeightView>;
+    block: number | null;
+    stale: boolean;
+  } | null>(() => {
+    const snapshot = chainWeights();
+    const views = validatorWeightViews(snapshot);
+    if (!views) return null;
+    const byValidator: Record<string, ValidatorWeightView> = {};
+    views.forEach((view) => {
+      if (view.validatorHotkey) byValidator[view.validatorHotkey] = view;
+    });
+    return { byValidator, block: snapshot?.block ?? null, stale: Boolean(snapshot?.stale) };
+  });
 
   const snap = useOperationsSnapshot(operations);
   const ops = snap.ops;
@@ -426,6 +452,7 @@ export function OperationsPage(
                             slotPolicy={fleet().slotPolicy}
                             benchVersion={benchVersion()}
                             highlightId={highlightId()}
+                            chainVectors={fleet().singular === "validator" ? chainVectors() : null}
                           />
                         )}
                       </For>

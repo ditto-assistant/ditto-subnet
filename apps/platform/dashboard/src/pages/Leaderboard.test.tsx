@@ -1043,3 +1043,91 @@ describe("composite cell chips (row 1 slice)", () => {
     expect(gateChips.length).toBeLessThan(rows.length);
   });
 });
+
+// ── On-chain weight visibility: sync tints, upgraded badges, the ghost
+// share meter, and the raw weight matrix disclosure ──
+// "What are the weights CURRENTLY SET TO" must be readable off the board:
+// gold marks rows at least one revealed vector crowns its top choice,
+// magenta marks weighted-but-not-crowned rows, and a ranked row with neither
+// is exactly the out-of-sync state the tints exist to expose. The panel then
+// shows the matrix itself, per validator.
+describe("on-chain weight visibility", () => {
+  const rowFor = (name: string): HTMLElement =>
+    Array.from(document.querySelectorAll("#rows tr[data-i]")).find((row) =>
+      row.textContent?.includes(name),
+    ) as HTMLElement;
+
+  it("tints weight-holding rows and upgrades the chain badge with a share meter", async () => {
+    renderPage();
+    await waitForBoard();
+    await waitFor(() => expect(document.querySelector(".chain-weight-note")).toBeTruthy());
+
+    // kabaw-v57 (UID 160) is a vector top choice in 4 of the fixture's 11
+    // miner-bearing vectors: gold treatment.
+    const topRow = rowFor("kabaw-v57");
+    expect(topRow).toHaveClass("chain-top");
+    const badge = topRow.querySelector(".chain-weight-note") as HTMLElement;
+    expect(badge).toHaveClass("top-choice");
+    expect(badge.textContent).toContain("Validator top choice · 4/11");
+    expect(badge.querySelector(".chain-weight-dot")).toBeTruthy();
+    const topMeter = topRow.querySelector(".chain-weight-meter") as HTMLElement;
+    expect(topMeter).toHaveClass("top-choice");
+    const fill = topMeter.querySelector(".chain-weight-meter-track i") as HTMLElement;
+    expect(parseFloat(fill.style.width)).toBeGreaterThan(0);
+    expect(topMeter.querySelector(".chain-weight-meter-value")?.textContent).toMatch(/%$/);
+
+    // dominator-6 (UID 26) is weighted in every vector but crowned in none:
+    // magenta support treatment.
+    const supportRow = rowFor("dominator-6");
+    expect(supportRow).toHaveClass("chain-weighted");
+    const supportBadge = supportRow.querySelector(".chain-weight-note") as HTMLElement;
+    expect(supportBadge).toHaveClass("support");
+    expect(supportBadge.textContent).toContain("Validator support · 11/11");
+
+    // Exactly the six board hotkeys the matrix touches are tinted; every
+    // other scored row stays bare — the visible out-of-sync reading.
+    expect(document.querySelectorAll("#rows tr[data-i].chain-top").length).toBe(2);
+    expect(document.querySelectorAll("#rows tr[data-i].chain-weighted").length).toBe(4);
+  });
+
+  it("keeps the sync tints gold/magenta in CSS with the champion rule authoritative", () => {
+    // :not(.champion) leaves the crown's full gold rule in charge when the
+    // champion is also a chain top choice.
+    const topRule = cssNorm.match(/tbody tr\.chain-top:not\(\.champion\) \{[^}]*\}/);
+    expect(topRule?.[0]).toContain("var(--gold)");
+    const supportRule = cssNorm.match(/tbody tr\.chain-weighted:not\(\.champion\) \{[^}]*\}/);
+    expect(supportRule?.[0]).toContain("var(--memory)");
+    expect(cssNorm).toContain(".chain-weight-note.top-choice");
+    expect(cssNorm).toContain(".chain-weight-note.support");
+  });
+
+  it("opens the raw weight matrix panel: every revealed vector, UIDs, shares", async () => {
+    renderPage();
+    await waitForBoard();
+    await waitFor(() => expect(document.getElementById("chain-weights-toggle")).toBeTruthy());
+    const toggle = el("chain-weights-toggle");
+    expect(toggle.textContent).toContain("Show on-chain weights");
+    expect(toggle.textContent).toContain("11 validator vectors");
+    expect(toggle.textContent).toContain("block 8,741,835");
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect((el("chain-weights-panel") as HTMLElement).hidden).toBe(true);
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect((el("chain-weights-panel") as HTMLElement).hidden).toBe(false);
+
+    const vectors = document.querySelectorAll("#chain-weights-panel .chain-vector");
+    expect(vectors.length).toBe(11);
+    // The first vector in snapshot order (validator UID 0): five miner
+    // destinations, heaviest first, top choice gold, shares normalized
+    // within the vector, board rows named inline.
+    const chips = vectors[0]?.querySelectorAll(".chain-vector-chip") as NodeListOf<HTMLElement>;
+    expect(chips.length).toBe(5);
+    expect(chips[0]).toHaveClass("top-choice");
+    expect(chips[0]?.textContent).toContain("UID 160");
+    expect(chips[0]?.textContent).toContain("kabaw-v57");
+    expect(chips[0]?.textContent).toContain("65.0%");
+    expect(chips[1]).toHaveClass("support");
+    expect(vectors[0]?.querySelector(".chain-vector-uid")?.textContent).toBe("UID 0");
+  });
+});

@@ -1145,6 +1145,36 @@
   padding-top: var(--ops-space-sm);
   border-top: 1px solid var(--border);
 }
+/* The miner UIDs this validator's revealed on-chain vector points at —
+   chain-vector-chip (gold top choice / magenta support) is the leaderboard's
+   vocabulary, shared so the two surfaces read as one instrument. */
+.fleet-chain-weights {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 7px;
+  margin-top: var(--ops-space-sm);
+  padding-top: var(--ops-space-sm);
+  border-top: 1px solid var(--border);
+}
+.fleet-chain-weights-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-faint);
+  font: 650 9.5px/1.4 var(--mono);
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.fleet-chain-weights-none {
+  color: var(--text-faint);
+  font: 650 10px/1.5 var(--mono);
+}
+.fleet-chain-weights-set {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
 .fleet-updater-notice > .stage {
   flex: 0 0 auto;
 }
