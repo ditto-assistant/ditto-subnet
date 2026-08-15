@@ -49,6 +49,60 @@ type DatasetCase struct {
 	AnswerSessionIDs   []string        `json:"answer_session_ids"`
 }
 
+// datasetCaseWire mirrors the public cleaned LongMemEval row while retaining
+// the answer's JSON type. The pinned upstream file contains both strings and
+// integer numbers; both represent private judge text and neither crosses the
+// submitted Harness boundary.
+type datasetCaseWire struct {
+	QuestionID         string          `json:"question_id"`
+	QuestionType       string          `json:"question_type"`
+	Question           string          `json:"question"`
+	Answer             json.RawMessage `json:"answer"`
+	QuestionDate       string          `json:"question_date"`
+	HaystackSessionIDs []string        `json:"haystack_session_ids"`
+	HaystackDates      []string        `json:"haystack_dates"`
+	HaystackSessions   [][]DatasetTurn `json:"haystack_sessions"`
+	AnswerSessionIDs   []string        `json:"answer_session_ids"`
+}
+
+func decodeDatasetCase(decoder *json.Decoder) (DatasetCase, error) {
+	var wire datasetCaseWire
+	if err := decoder.Decode(&wire); err != nil {
+		return DatasetCase{}, err
+	}
+	answer, err := decodeDatasetAnswer(wire.Answer)
+	if err != nil {
+		return DatasetCase{}, err
+	}
+	return DatasetCase{
+		QuestionID:         wire.QuestionID,
+		QuestionType:       wire.QuestionType,
+		Question:           wire.Question,
+		Answer:             answer,
+		QuestionDate:       wire.QuestionDate,
+		HaystackSessionIDs: wire.HaystackSessionIDs,
+		HaystackDates:      wire.HaystackDates,
+		HaystackSessions:   wire.HaystackSessions,
+		AnswerSessionIDs:   wire.AnswerSessionIDs,
+	}, nil
+}
+
+func decodeDatasetAnswer(raw json.RawMessage) (string, error) {
+	if len(raw) > 0 && raw[0] == '"' {
+		var answer string
+		if err := json.Unmarshal(raw, &answer); err == nil {
+			return answer, nil
+		}
+	}
+	if len(raw) > 0 && (raw[0] == '-' || (raw[0] >= '0' && raw[0] <= '9')) {
+		var answer json.Number
+		if err := json.Unmarshal(raw, &answer); err == nil {
+			return answer.String(), nil
+		}
+	}
+	return "", errors.New("LongMemEval answer must be a string or number")
+}
+
 // LoadedDataset contains only the selected full rows. Selection metadata is
 // scanned first, keeping the 265 MiB JSON file out of the Go heap.
 type LoadedDataset struct {
@@ -157,8 +211,8 @@ func scanDataset(ctx context.Context, source io.Reader, visit func(DatasetCase) 
 	}
 	index := 0
 	for decoder.More() {
-		var entry DatasetCase
-		if err := decoder.Decode(&entry); err != nil {
+		entry, err := decodeDatasetCase(decoder)
+		if err != nil {
 			return fmt.Errorf("decode LongMemEval dataset entry %d: %w", index, err)
 		}
 		if entry.QuestionID == "" || entry.QuestionType == "" {

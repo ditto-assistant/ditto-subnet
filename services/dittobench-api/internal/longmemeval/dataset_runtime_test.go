@@ -107,6 +107,67 @@ func TestLoadSelectedDatasetRejectsMalformedJSONShapes(t *testing.T) {
 	}
 }
 
+func TestLoadSelectedDatasetNormalizesOfficialNumericAnswer(t *testing.T) {
+	values := runtimeDatasetCases()
+	raw, err := json.Marshal(values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	from := []byte(`"answer":"passphrase-00-00"`)
+	to := []byte(`"answer":3`)
+	raw = bytes.Replace(raw, from, to, 1)
+	if bytes.Contains(raw, from) {
+		t.Fatal("numeric answer fixture replacement did not apply")
+	}
+	profile := loadTestProfile(t)
+	profile.CasesPerCapability = 2
+	digest := sha256.Sum256(raw)
+	profile.DatasetSHA256 = hex.EncodeToString(digest[:])
+	dataset, err := LoadSelectedDataset(context.Background(), bytes.NewReader(raw), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if answer := dataset.selected["private-extract-00"].Answer; answer != "3" {
+		t.Fatalf("normalized answer=%q, want 3", answer)
+	}
+	canonical, err := json.Marshal(dataset.selected["private-extract-00"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(canonical, []byte(`"answer":"3"`)) {
+		t.Fatalf("canonical numeric answer was not normalized as text: %s", canonical)
+	}
+}
+
+func TestLoadSelectedDatasetRejectsNonTextAnswerShapes(t *testing.T) {
+	for name, replacement := range map[string]string{
+		"null":    `null`,
+		"boolean": `true`,
+		"array":   `[]`,
+		"object":  `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			values := runtimeDatasetCases()
+			raw, err := json.Marshal(values)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw = bytes.Replace(
+				raw,
+				[]byte(`"answer":"passphrase-00-00"`),
+				[]byte(`"answer":`+replacement),
+				1,
+			)
+			profile := loadTestProfile(t)
+			profile.CasesPerCapability = 2
+			digest := sha256.Sum256(raw)
+			profile.DatasetSHA256 = hex.EncodeToString(digest[:])
+			_, err = LoadSelectedDataset(context.Background(), bytes.NewReader(raw), profile)
+			requireErrorContains(t, err, "answer must be a string or number")
+		})
+	}
+}
+
 func TestLoadSelectedDatasetRejectsDuplicateAndUnderfilledStrata(t *testing.T) {
 	base := runtimeDatasetCases()
 	for name, mutate := range map[string]func([]DatasetCase) []DatasetCase{
