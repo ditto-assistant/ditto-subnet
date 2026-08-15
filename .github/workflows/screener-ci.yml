@@ -1,13 +1,8 @@
 name: Screener CI
 
 on:
+  workflow_dispatch:
   pull_request:
-    paths:
-      - workers/screener/**
-      - packages/ditto-screening-protocol/**
-      - .github/workflows/screener-ci.yml
-  push:
-    branches: [main]
     paths:
       - workers/screener/**
       - packages/ditto-screening-protocol/**

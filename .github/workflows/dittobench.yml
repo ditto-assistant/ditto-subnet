@@ -1,19 +1,8 @@
 name: DittoBench
 
 on:
+  workflow_dispatch:
   pull_request:
-    paths:
-      - services/dittobench-api/**
-      - research/dittobench-datagen/**
-      - packages/ditto-screening-protocol/ditto_screening_protocol/data/**
-      - scripts/generate_confirmation_installation.py
-      - docker-compose.yml
-      - Dockerfile.sandbox-docker
-      - scripts/sandbox-docker-entrypoint.sh
-      - scripts/test-validator-embedding-gateway.sh
-      - .github/workflows/dittobench.yml
-  push:
-    branches: [main]
     paths:
       - services/dittobench-api/**
       - research/dittobench-datagen/**

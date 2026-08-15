@@ -1,18 +1,8 @@
 name: Backroom CI
 
 on:
+  workflow_dispatch:
   pull_request:
-    paths:
-      - apps/backroom/**
-      - apps/platform/ditto/api_models/**
-      - apps/platform/ditto/api_server/endpoints/**
-      - apps/platform/ditto/api_server/factory.py
-      - apps/platform/pyproject.toml
-      - apps/platform/uv.lock
-      - packages/ditto-screening-protocol/**
-      - .github/workflows/backroom-ci.yml
-  push:
-    branches: [main]
     paths:
       - apps/backroom/**
       - apps/platform/ditto/api_models/**

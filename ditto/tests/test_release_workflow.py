@@ -7,12 +7,40 @@ from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
+WORKFLOW_DIR = RELEASE_WORKFLOW_PATH.parent
 PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
 ROOT_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
+
+RELEASE_OWNED_COMPONENT_WORKFLOWS = (
+    "ci.yml",
+    "backroom-ci.yml",
+    "datagen-ci.yml",
+    "dittobench.yml",
+    "model-relay.yml",
+    "platform-ci.yml",
+    "platform-dashboard-ci.yml",
+    "screener-ci.yml",
+    "starter-kit-ci.yml",
+)
 
 
 def _step(steps: list[dict], name: str) -> dict:
     return next(step for step in steps if step.get("name") == name)
+
+
+def test_release_is_the_single_post_merge_component_orchestrator() -> None:
+    release = yaml.load(RELEASE_WORKFLOW_PATH.read_text(), Loader=yaml.BaseLoader)
+    assert release["on"] == {"push": {"branches": ["main"]}}
+    assert "actions/workflows" not in RELEASE_WORKFLOW_PATH.read_text()
+
+    for workflow_name in RELEASE_OWNED_COMPONENT_WORKFLOWS:
+        workflow = yaml.load(
+            (WORKFLOW_DIR / workflow_name).read_text(), Loader=yaml.BaseLoader
+        )
+        triggers = workflow["on"]
+        assert "pull_request" in triggers, workflow_name
+        assert "workflow_dispatch" in triggers, workflow_name
+        assert "push" not in triggers, workflow_name
 
 
 def test_release_fanout_is_gated_by_the_component_plan() -> None:

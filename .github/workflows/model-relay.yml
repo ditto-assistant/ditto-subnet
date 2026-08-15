@@ -1,18 +1,13 @@
 name: Model Relay
 
 on:
+  workflow_dispatch:
   pull_request:
     paths:
       - services/model-relay/**
       - .github/workflows/model-relay.yml
       # The relay's db/schema.sql is a generated mirror of the Alembic chain;
       # a migration must re-run the drift guard below.
-      - apps/platform/alembic/**
-  push:
-    branches: [main]
-    paths:
-      - services/model-relay/**
-      - .github/workflows/model-relay.yml
       - apps/platform/alembic/**
 
 concurrency:

@@ -6,12 +6,6 @@ on:
     paths:
       - miners/dittobench-starter-kit/**
       - .github/workflows/starter-kit-ci.yml
-  push:
-    branches: [main]
-    paths:
-      - miners/dittobench-starter-kit/**
-      - .github/workflows/starter-kit-ci.yml
-
 permissions:
   contents: read
 

@@ -11,17 +11,6 @@ on:
       - packages/ditto-screening-protocol/**
       - .github/workflows/platform-dashboard-ci.yml
       - .github/workflows/platform-verify.yml
-  push:
-    branches: [main]
-    paths:
-      - apps/platform/dashboard/**
-      - apps/platform/faircopy.config.mjs
-      - apps/platform/package.json
-      - apps/platform/package-lock.json
-      - packages/ditto-screening-protocol/**
-      - .github/workflows/platform-dashboard-ci.yml
-      - .github/workflows/platform-verify.yml
-
 permissions:
   contents: read
 

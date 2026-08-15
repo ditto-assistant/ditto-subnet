@@ -47,8 +47,9 @@ def test_backend_and_dashboard_workflows_own_disjoint_platform_paths() -> None:
     for paths in (backend_paths, dashboard_paths):
         assert "packages/ditto-screening-protocol/**" in paths
         assert ".github/workflows/platform-verify.yml" in paths
-    assert backend_triggers["push"]["paths"] == backend_paths
-    assert dashboard_triggers["push"]["paths"] == dashboard_paths
+    for triggers in (backend_triggers, dashboard_triggers):
+        assert "workflow_dispatch" in triggers
+        assert "push" not in triggers
 
 
 def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
@@ -135,7 +136,7 @@ def test_shared_dashboard_preserves_copy_check_test_and_build() -> None:
     ]
 
 
-def test_release_reuses_shared_exact_source_component_gates() -> None:
+def test_release_owns_shared_exact_source_component_gates() -> None:
     workflow = _load(RELEASE_WORKFLOW)
     plan = workflow["jobs"]["plan"]
     verify = workflow["jobs"]["verify-platform"]
@@ -146,6 +147,7 @@ def test_release_reuses_shared_exact_source_component_gates() -> None:
     assert plan["outputs"]["platform_dashboard"] == (
         "${{ steps.components.outputs.platform_dashboard }}"
     )
+
     assert "needs.plan.outputs.platform == 'true'" in verify["if"]
     assert verify["uses"] == SHARED_WORKFLOW_USE
     assert verify["with"] == {

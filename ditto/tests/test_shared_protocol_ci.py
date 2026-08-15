@@ -19,19 +19,20 @@ SHARED_PROTOCOL_PATH = "packages/ditto-screening-protocol/**"
         "screener-ci.yml",
     ],
 )
-@pytest.mark.parametrize("event", ["pull_request", "push"])
 def test_shared_protocol_changes_trigger_every_filtered_consumer_workflow(
-    workflow_name: str, event: str
+    workflow_name: str,
 ) -> None:
     workflow = yaml.load(
         (ROOT / ".github/workflows" / workflow_name).read_text(),
         Loader=yaml.BaseLoader,
     )
 
-    assert SHARED_PROTOCOL_PATH in workflow["on"][event]["paths"], (
+    assert SHARED_PROTOCOL_PATH in workflow["on"]["pull_request"]["paths"], (
         f"{workflow_name} must run on {SHARED_PROTOCOL_PATH} changes so shared "
         "Pydantic semantics are tested by the consumer that imports them"
     )
+    assert "workflow_dispatch" in workflow["on"]
+    assert "push" not in workflow["on"]
 
 
 def test_root_validator_ci_is_unfiltered() -> None:
@@ -41,4 +42,5 @@ def test_root_validator_ci_is_unfiltered() -> None:
     )
 
     assert not workflow["on"]["pull_request"]
-    assert "paths" not in workflow["on"]["push"]
+    assert "workflow_dispatch" in workflow["on"]
+    assert "push" not in workflow["on"]

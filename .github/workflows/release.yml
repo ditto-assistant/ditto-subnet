@@ -487,9 +487,8 @@ jobs:
     if: >-
       needs.admit-current.outputs.current == 'true' &&
       needs.plan.outputs.platform == 'true'
-    # Use the same exact-source gates and complete pytest shards as pull-request
-    # CI. Component inputs keep API-only releases out of dashboard checks and
-    # dashboard-only releases out of the 4k-test backend suite.
+    # Release is the sole post-merge component orchestrator. Use the same
+    # exact-source verifier as pull-request CI without polling another run.
     uses: ./.github/workflows/platform-verify.yml
     permissions:
       contents: read
