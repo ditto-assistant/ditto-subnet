@@ -28,7 +28,7 @@ from ditto.db.models import (
     SubmissionRetirement,
 )
 from ditto.db.queries.benchmark_admission import (
-    activated_rollout_for_version,
+    admission_rollout_for_active_version,
     benchmark_admission_predicate,
     validator_queue_admission_predicate,
 )
@@ -339,7 +339,7 @@ class PublicActivityPage:
     status_counts: dict[str, int]
     downloadable_count: int
     waiting_agent_ids: list[UUID]
-    activated_rollout: BenchmarkRollout | None
+    admission_rollout: BenchmarkRollout | None
 
 
 async def query_public_activity_page(
@@ -365,7 +365,9 @@ async def query_public_activity_page(
     queries over the same derived status expression, so adding a filter cannot
     quietly restore the previous all-submission ORM materialization.
     """
-    rollout = await activated_rollout_for_version(session, bench_version=bench_version)
+    rollout = await admission_rollout_for_active_version(
+        session, bench_version=bench_version
+    )
     score_counts = (
         select(
             Score.agent_id.label("agent_id"),
@@ -656,7 +658,7 @@ async def query_public_activity_page(
         status_counts=status_counts,
         downloadable_count=int(downloadable_count),
         waiting_agent_ids=waiting_agent_ids,
-        activated_rollout=rollout,
+        admission_rollout=rollout,
     )
 
 

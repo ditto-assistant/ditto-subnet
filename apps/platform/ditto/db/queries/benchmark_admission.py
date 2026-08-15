@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, or_, select
+from sqlalchemy import ColumnElement, case, or_, select
 from sqlalchemy.orm.util import AliasedClass
 
 from ditto.db.models import (
@@ -37,6 +37,50 @@ async def activated_rollout_for_version(
             BenchmarkRollout.status == "activated",
         )
         .order_by(BenchmarkRollout.activated_at.desc())
+        .limit(1)
+    )
+
+
+async def admission_rollout_for_active_version(
+    session: AsyncSession, *, bench_version: int
+) -> BenchmarkRollout | None:
+    """Return the rollout that bounds admission to the active benchmark era.
+
+    Ledger authority can move to the desired version before the wider rescore
+    cohort finishes.  During that bounded settling window the rollout remains
+    ``collecting``, even though callers already resolved ``bench_version`` as
+    the active version.  Looking only for a terminal ``activated`` row drops
+    the era predicate and makes every unwithdrawn historical submission look
+    admitted to the public queue.
+
+    Ticket issuance deliberately keeps using
+    :func:`activated_rollout_for_version`; this helper is only for projections
+    and operator admission checks whose input is the already-resolved active
+    version.
+    """
+
+    return await session.scalar(
+        select(BenchmarkRollout)
+        .where(
+            BenchmarkRollout.desired_version == bench_version,
+            BenchmarkRollout.status.in_(
+                ("collecting", "blocked_ineligible", "activated")
+            ),
+        )
+        # An authority-holding open rollout is the current boundary.  The
+        # activated fallback covers the steady state after it closes.  Keep
+        # this one query: Activity is an eight-second polling hot path with a
+        # five-round-trip budget enforced by its large-fixture test.
+        .order_by(
+            case(
+                (
+                    BenchmarkRollout.status.in_(("collecting", "blocked_ineligible")),
+                    0,
+                ),
+                else_=1,
+            ),
+            BenchmarkRollout.created_at.desc(),
+        )
         .limit(1)
     )
 
@@ -121,7 +165,9 @@ async def admitted_agent_ids(
     requested = set(agent_ids)
     if not requested:
         return set()
-    rollout = await activated_rollout_for_version(session, bench_version=bench_version)
+    rollout = await admission_rollout_for_active_version(
+        session, bench_version=bench_version
+    )
     statement = select(Agent.agent_id).where(
         Agent.agent_id.in_(requested),
         validator_queue_admission_predicate(bench_version=bench_version),

@@ -84,6 +84,7 @@ from ditto.db.models import (
     BenchmarkDataset,
     BenchmarkRollout,
     BenchmarkRolloutAudit,
+    BenchmarkRolloutCarryover,
     BenchmarkRolloutMember,
     EvaluationPayment,
     InferenceGrant,
@@ -5733,18 +5734,19 @@ class TestPublicActivity:
         assert entry["review_original_reason"] == original_reason
         assert "operator@example.com" not in response.text
 
-    async def test_previous_generation_rows_rank_behind_the_current_era(
+    async def test_unadopted_previous_generation_is_not_counted_as_waiting(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        """A stranded backlog must not appear to hold the head of the queue.
+        """A stranded backlog is history, not actionable validator work.
 
-        Pre-rollout submissions are served only by the carryover and
-        source-backfill lanes, which issue into an empty current-era queue and
-        nothing else. Ranking them by arrival alone told miners the opposite of
-        the order the fleet actually works in -- the exact report this fixes.
+        Ledger authority moves before the wider rollout cohort finishes, so the
+        rollout is still ``collecting`` here.  That settling state must enforce
+        the same admission boundary as a terminal ``activated`` rollout: only
+        fresh, cohort, adopted-carryover, or audited-refresh rows belong in the
+        displayed queue count.
         """
         rollout_started = datetime(2026, 7, 18, 14, 30, tzinfo=UTC)
         stranded_id = await _seed_agent(
@@ -5781,51 +5783,38 @@ class TestPublicActivity:
         _install_db(app, session_maker)
 
         response = await client.get("/api/v1/public/activity")
-        by_id = {entry["agent_id"]: entry for entry in response.json()["entries"]}
+        body = response.json()
+        by_id = {entry["agent_id"]: entry for entry in body["entries"]}
 
-        # Older by arrival, last by priority.
         assert by_id[fresh_id]["validator_queue_rank"] == 1
-        assert by_id[stranded_id]["validator_queue_rank"] == 2
-        assert by_id[stranded_id]["status"] == "waiting_validator"
-        # The rank number alone cannot say *why* the row is last, so the era is
-        # reported too. Both rows are "waiting_validator" and both carry an
-        # integer rank; only this distinguishes a stranded row from a queued one.
-        assert by_id[stranded_id]["previous_generation"] is True
+        assert by_id[stranded_id]["validator_queue_rank"] is None
+        assert by_id[stranded_id]["status"] == "not_queued"
+        assert body["status_counts"]["waiting_validator"] == 1
+        assert body["status_counts"]["not_queued"] == 1
         assert by_id[fresh_id]["previous_generation"] is False
-        # ``previous_generation`` is the era-specific case of the general gate,
-        # read off the same shared preview so the two cannot disagree.
-        assert by_id[stranded_id]["validator_queue_gate"] == "previous_generation"
+        assert by_id[stranded_id]["validator_queue_gate"] is None
         assert by_id[fresh_id]["validator_queue_gate"] is None
 
-        # The operations board renders the pipeline the miners actually look
-        # at, and it never received #448's ranking fix: it called the
-        # projection without the previous-generation set at all, so a stranded
-        # backlog kept holding rank 1 there -- badged "Up next" -- after
-        # /activity was corrected. Both endpoints now go through one preview.
         operations = (await client.get("/api/v1/public/operations")).json()
         ops_by_id = {
             entry["agent_id"]: entry for entry in operations["activity"]["entries"]
         }
         assert ops_by_id[fresh_id]["validator_queue_rank"] == 1
-        assert ops_by_id[stranded_id]["validator_queue_rank"] == 2
-        assert ops_by_id[stranded_id]["validator_queue_gate"] == "previous_generation"
-        assert ops_by_id[stranded_id]["previous_generation"] is True
+        assert stranded_id not in ops_by_id
+        assert operations["activity"]["status_counts"]["waiting_validator"] == 1
 
-    async def test_flags_a_previous_generation_row_that_holds_rank_one(
+    async def test_adopted_previous_generation_remains_in_the_waiting_count(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        """Being first in a stalled line is not the same as being next.
+        """An explicit carryover credential keeps old work in the real queue.
 
-        Sorting stranded rows last fixes the common case, but it cannot fix this
-        one: once the current era has nothing waiting, the top of the queue is a
-        previous-generation row and its rank is 1. The dashboard badges rank 1 as
-        "Up next", which a miner reads as "about to be scored" -- while the lanes
-        that serve this row issue only into an empty current-era queue and may
-        stay shut indefinitely. The flag is what lets the client tell the truth,
-        so it must survive precisely the arrangement that makes rank misleading.
+        The visual fix must not hide previous-generation work an operator
+        deliberately adopted into the desired era.  Its durable carryover row
+        is the admission credential, so it remains waiting and keeps the gate
+        that explains its low-priority lane.
         """
         rollout_started = datetime(2026, 7, 18, 14, 30, tzinfo=UTC)
         stranded_id = await _seed_agent(
@@ -5838,27 +5827,37 @@ class TestPublicActivity:
         )
         rollout_id = uuid4()
         async with session_maker() as session, session.begin():
-            session.add(
-                BenchmarkRollout(
-                    rollout_id=rollout_id,
-                    from_version=_ERA - 1,
-                    desired_version=_ERA,
-                    status="collecting",
-                    cohort_size=5,
-                    created_at=rollout_started,
-                )
+            session.add_all(
+                [
+                    BenchmarkRollout(
+                        rollout_id=rollout_id,
+                        from_version=_ERA - 1,
+                        desired_version=_ERA,
+                        status="collecting",
+                        cohort_size=5,
+                        created_at=rollout_started,
+                    ),
+                    BenchmarkRolloutCarryover(
+                        rollout_id=rollout_id,
+                        agent_id=UUID(stranded_id),
+                        position=1,
+                        frozen_score_count=0,
+                        frozen_owner_key=f"hotkey:{_MINER_A}",
+                        created_at=rollout_started,
+                    ),
+                ]
             )
         await _take_authority(session_maker, rollout_id=rollout_id, at=rollout_started)
         _install_db(app, session_maker)
 
         response = await client.get("/api/v1/public/activity")
-        by_id = {entry["agent_id"]: entry for entry in response.json()["entries"]}
+        body = response.json()
+        by_id = {entry["agent_id"]: entry for entry in body["entries"]}
 
         assert by_id[stranded_id]["validator_queue_rank"] == 1
         assert by_id[stranded_id]["previous_generation"] is True
-        # The gate is what the badge must key on: rank 1 in a stalled lane is
-        # exactly the arrangement that made "Up next" a lie.
         assert by_id[stranded_id]["validator_queue_gate"] == "previous_generation"
+        assert body["status_counts"]["waiting_validator"] == 1
 
     async def test_exposes_queue_priority_with_provisional_composites(
         self,

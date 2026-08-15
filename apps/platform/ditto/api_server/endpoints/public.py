@@ -4754,7 +4754,7 @@ async def activity(
         now=now,
         score_continuation_floor=score_continuation_floor,
         provisional_contender_floor=provisional_contender_floor,
-        rollout=activity_page.activated_rollout,
+        rollout=activity_page.admission_rollout,
         waiting_agent_ids=activity_page.waiting_agent_ids,
     )
     return _public_activity_response(
@@ -5021,7 +5021,7 @@ async def operations(
             now=now,
             score_continuation_floor=score_continuation_floor,
             provisional_contender_floor=provisional_contender_floor,
-            rollout=activity_page.activated_rollout,
+            rollout=activity_page.admission_rollout,
             waiting_agent_ids=activity_page.waiting_agent_ids,
         ),
         active_bench_version=active_version,
