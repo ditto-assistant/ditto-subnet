@@ -24,6 +24,9 @@ CADDYFILE_TEMPLATE = (
     / "templates"
     / "Caddyfile.j2"
 )
+GCP_PLATFORM_TERRAFORM = (
+    MONOREPO_ROOT / "infra" / "terraform" / "stacks" / "gcp-platform" / "main.tf"
+)
 
 
 def _workflow() -> dict:
@@ -59,15 +62,51 @@ def test_api_and_relay_releases_have_independent_concurrency_lanes() -> None:
     assert jobs["relay-release"]["needs"] == ["changes", "relay-build", "deploy"]
 
 
-def test_relay_release_enables_accelerated_iap_uploads() -> None:
+def test_relay_release_prefers_private_gcs_with_accelerated_iap_fallback() -> None:
     release = _workflow()["jobs"]["relay-release"]
     steps = {step.get("name"): step for step in release["steps"]}
 
-    assert release["env"]["CLOUDSDK_PYTHON_SITEPACKAGES"] == "1"
-    acceleration = steps["Accelerate IAP artifact upload"]["run"]
-    assert "value(basic.python_location)" in acceleration
-    assert "numpy==2.4.4" in acceleration
-    assert "import numpy" in acceleration
+    assert "CLOUDSDK_PYTHON_SITEPACKAGES" not in release["env"]
+    assert "Accelerate IAP artifact upload" not in steps
+
+    roll = steps["Roll relay services without shared downtime"]["run"]
+    gcs_uri = (
+        "gs://ditto-platform-agents-${TARGET_ENVIRONMENT}/relay-releases/"
+        "${DEPLOY_REVISION}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
+    )
+    assert f'artifact_uri="{gcs_uri}"' in roll
+    assert 'gcloud storage cp relay-artifact.tgz "$artifact_uri"' in roll
+    assert (
+        "sudo -iu deploy gcloud storage cp '$artifact_uri' "
+        "'$remote_artifact/relay-artifact.tgz'" in roll
+    )
+    assert "sudo -iu deploy gcloud storage rm '$artifact_uri'" in roll
+
+    # The rollout must remain usable before the Terraform IAM grant is applied.
+    # NumPy is installed only on that slow fallback path, never on the GCS path.
+    assert "falling back to accelerated IAP upload" in roll
+    assert "CLOUDSDK_PYTHON_SITEPACKAGES=1" in roll
+    assert "numpy==2.4.4" in roll
+    assert "import numpy" in roll
+    assert "gcloud compute scp relay-artifact.tgz" in roll
+    assert roll.index("gcloud storage cp relay-artifact.tgz") < roll.index(
+        "gcloud compute scp relay-artifact.tgz"
+    )
+
+
+def test_relay_gcs_transport_has_prefix_scoped_create_only_iam() -> None:
+    terraform = GCP_PLATFORM_TERRAFORM.read_text()
+
+    resource = (
+        'resource "google_storage_bucket_iam_member" "platform_deploy_relay_create"'
+    )
+    start = terraform.index(resource)
+    grant = terraform[start : terraform.index("\n}\n", start) + 3]
+
+    assert 'role     = "roles/storage.objectCreator"' in grant
+    assert "/objects/relay-releases/" in grant
+    assert 'role     = "roles/storage.objectAdmin"' not in grant
+    assert 'matches_prefix = ["relay-releases/"]' in terraform
 
 
 def test_relay_build_uses_the_self_contained_artifact_builder() -> None:
@@ -198,22 +237,23 @@ def test_relay_artifact_is_extracted_as_the_deploy_user() -> None:
     )["run"]
 
     create = "sudo install -d -o deploy -g ditto -m 0750 '$remote_artifact'"
-    stage = (
+    fallback_stage = (
         "sudo install -o deploy -g ditto -m 0640 '$remote_artifact.tgz' "
+        "'$remote_artifact/relay-artifact.tgz'"
+    )
+    gcs_stage = (
+        "sudo -iu deploy gcloud storage cp '$artifact_uri' "
         "'$remote_artifact/relay-artifact.tgz'"
     )
     extract = "sudo -u deploy tar --extract --gzip"
     launch = "sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh'"
 
     assert create in roll
-    assert stage in roll
+    assert fallback_stage in roll
+    assert gcs_stage in roll
     assert extract in roll
     assert launch in roll
-    assert (
-        roll.index(create)
-        < roll.index(stage)
-        < roll.index(extract)
-        < roll.index(launch)
-    )
+    assert f"{create} && $remote_fetch && {extract}" in roll
+    assert roll.index(extract) < roll.index(launch)
     assert "mkdir -p '$remote_artifact'" not in roll
     assert "sudo rm -rf -- '$remote_artifact' '$remote_artifact.tgz'" in roll

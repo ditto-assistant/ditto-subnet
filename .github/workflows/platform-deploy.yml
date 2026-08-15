@@ -11,9 +11,9 @@ name: Deploy Platform
 # VM, and runs scripts/update.sh. On main pushes that touch relay runtime paths,
 # a sibling job builds the statically linked Go model-relay binary at the same
 # time. After the API deploy has migrated and verified that exact commit,
-# relay-release installs the artifact under a commit-specific path and rolls
-# the two PM2 relay services one at a time. There is always one relay left
-# behind Caddy.
+# relay-release stages the immutable artifact through a private GCS prefix, has
+# the VM install it under a commit-specific path, and rolls the two PM2 relay
+# services one at a time. There is always one relay left behind Caddy.
 #
 # A green run means the public host answered /health on the revision the deploy
 # put there. It does NOT mean only that a script exited 0: update.sh compares
@@ -440,9 +440,6 @@ jobs:
     environment: ${{ inputs.environment || 'dev' }}
     env:
       GCP_ZONE: us-central1-a
-      # gcloud's IAP tunnel can use NumPy for its upload data path. Without
-      # site-package access, even a small relay artifact can take minutes.
-      CLOUDSDK_PYTHON_SITEPACKAGES: "1"
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -455,14 +452,6 @@ jobs:
           service_account: ${{ secrets.GCP_PLATFORM_DEPLOY_SA }}
 
       - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-
-      - name: Accelerate IAP artifact upload
-        run: |
-          set -euo pipefail
-          gcloud_python="$(gcloud info --format='value(basic.python_location)')"
-          "$gcloud_python" -m pip install --disable-pip-version-check --quiet \
-            'numpy==2.4.4'
-          "$gcloud_python" -c 'import numpy'
 
       - name: Register release SSH key
         run: |
@@ -483,15 +472,35 @@ jobs:
             target_vm=ditto-platform-dev
           fi
           remote_artifact="/tmp/platform-relay-$DEPLOY_REVISION"
+          artifact_uri="gs://ditto-platform-agents-${TARGET_ENVIRONMENT}/relay-releases/${DEPLOY_REVISION}/${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
           # The artifact IS the tarball (created before upload by relay-build,
           # because the artifact store strips file permissions); ship it as-is.
+          # GCS avoids pushing the binary through IAP's very slow TCP tunnel.
+          # The create-only deploy identity writes a unique attempt object; the
+          # VM's attached runtime identity reads and removes it after staging.
           mv relay-artifact/relay-artifact.tgz relay-artifact.tgz
-          gcloud compute scp relay-artifact.tgz \
-            "$target_vm:$remote_artifact.tgz" \
-            --zone "$GCP_ZONE" --tunnel-through-iap --quiet
+          if gcloud storage cp relay-artifact.tgz "$artifact_uri" --quiet; then
+            echo "staged relay artifact through private GCS"
+            remote_fetch="sudo -iu deploy gcloud storage cp '$artifact_uri' '$remote_artifact/relay-artifact.tgz' --quiet"
+            remote_cleanup="sudo -iu deploy gcloud storage rm '$artifact_uri' --quiet >/dev/null 2>&1 || true"
+          else
+            # Terraform owns the prefix-scoped bucket grant. Until that reviewed
+            # change is applied, keep releases working through the old transport.
+            echo "::warning::GCS relay staging unavailable; falling back to accelerated IAP upload"
+            export CLOUDSDK_PYTHON_SITEPACKAGES=1
+            gcloud_python="$(gcloud info --format='value(basic.python_location)')"
+            "$gcloud_python" -m pip install --disable-pip-version-check --quiet \
+              'numpy==2.4.4'
+            "$gcloud_python" -c 'import numpy'
+            gcloud compute scp relay-artifact.tgz \
+              "$target_vm:$remote_artifact.tgz" \
+              --zone "$GCP_ZONE" --tunnel-through-iap --quiet
+            remote_fetch="sudo install -o deploy -g ditto -m 0640 '$remote_artifact.tgz' '$remote_artifact/relay-artifact.tgz'"
+            remote_cleanup=true
+          fi
           gcloud compute ssh "$target_vm" \
             --zone "$GCP_ZONE" --tunnel-through-iap --quiet \
-            --command "sudo install -d -o deploy -g ditto -m 0750 '$remote_artifact' && sudo install -o deploy -g ditto -m 0640 '$remote_artifact.tgz' '$remote_artifact/relay-artifact.tgz' && sudo -u deploy tar --extract --gzip --file '$remote_artifact/relay-artifact.tgz' --directory '$remote_artifact' && sudo -u deploy rm -- '$remote_artifact/relay-artifact.tgz' && sudo install -d -o deploy -g ditto /opt/ditto-platform-relay && sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh' '$remote_artifact' '$DEPLOY_REVISION'; code=\$?; sudo rm -rf -- '$remote_artifact' '$remote_artifact.tgz'; exit \$code"
+            --command "sudo install -d -o deploy -g ditto -m 0750 '$remote_artifact' && $remote_fetch && sudo -u deploy tar --extract --gzip --file '$remote_artifact/relay-artifact.tgz' --directory '$remote_artifact' && sudo -u deploy rm -- '$remote_artifact/relay-artifact.tgz' && sudo install -d -o deploy -g ditto /opt/ditto-platform-relay && sudo -iu deploy bash '$remote_artifact/deploy-relay-release.sh' '$remote_artifact' '$DEPLOY_REVISION'; code=\$?; $remote_cleanup; sudo rm -rf -- '$remote_artifact' '$remote_artifact.tgz'; exit \$code"
 
       - name: Deregister release SSH key
         if: always()

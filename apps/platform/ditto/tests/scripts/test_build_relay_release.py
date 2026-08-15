@@ -157,6 +157,10 @@ def test_builder_produces_stamped_static_binary_artifact(tmp_path: Path) -> None
     assert "CGO_ENABLED=0" in build
     assert "-trimpath" in build
     assert f"-X main.buildCommit={head}" in build
+    # Keep symbol and DWARF data in the deployed binary: operators use the
+    # relay's private pprof listener for live CPU and allocation diagnosis.
+    assert " -s " not in f" {build} "
+    assert " -w " not in f" {build} "
     assert "./cmd/model-relay" in build
     assert "go mod tidy -diff" in commands
     assert "go mod verify" in commands

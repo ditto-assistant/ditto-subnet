@@ -160,6 +160,19 @@ resource "google_storage_bucket" "agents" {
     }
   }
 
+  # Relay release tarballs are unique, short-lived transport objects. The VM
+  # deletes each object immediately after staging it; this bounds leftovers
+  # from a canceled workflow or an SSH failure before remote cleanup runs.
+  lifecycle_rule {
+    condition {
+      age            = 1
+      matches_prefix = ["relay-releases/"]
+    }
+    action {
+      type = "Delete"
+    }
+  }
+
   # Keep a bounded rollback window after the platform explicitly supersedes or
   # deletes an artifact. `ARCHIVED` is required: current source tarballs and
   # screened images remain available for active/top-agent rescoring regardless
@@ -201,6 +214,22 @@ resource "google_storage_bucket_iam_member" "platform_api_agents_rw" {
   bucket   = each.value.name
   role     = "roles/storage.objectAdmin"
   member   = "serviceAccount:${local.platform_api_sa_email}"
+}
+
+# GitHub Actions may only create uniquely named relay transport objects. It
+# cannot read agent tarballs, list the bucket, overwrite an existing object, or
+# delete anything; the VM's runtime identity owns download and cleanup.
+resource "google_storage_bucket_iam_member" "platform_deploy_relay_create" {
+  for_each = google_storage_bucket.agents
+  bucket   = each.value.name
+  role     = "roles/storage.objectCreator"
+  member   = "serviceAccount:${google_service_account.platform_deploy.email}"
+
+  condition {
+    title       = "relay-release-artifact-create"
+    description = "Create-only access to ephemeral relay release transport objects"
+    expression  = "resource.name.startsWith(\"projects/_/buckets/${each.value.name}/objects/relay-releases/\")"
+  }
 }
 
 # --- Sensitive app config in Secret Manager ---
