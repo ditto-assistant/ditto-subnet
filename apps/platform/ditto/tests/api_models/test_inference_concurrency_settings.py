@@ -76,8 +76,8 @@ class TestDefaults:
 
     def test_board_ceiling_matches_the_relay_hard_ceiling(self) -> None:
         """The API must reject values the Go admission process cannot enforce."""
-        assert MAX_EMBEDDING_GLOBAL_CONCURRENCY == 128
-        assert MAX_CHAT_CONCURRENCY == 128
+        assert MAX_EMBEDDING_GLOBAL_CONCURRENCY == 512
+        assert MAX_CHAT_CONCURRENCY == 512
 
     def test_chat_token_ceiling_has_room_for_the_measured_tail(self) -> None:
         assert DEFAULT_CHAT_TOKEN_BUDGET == 25_000_000
@@ -141,9 +141,9 @@ class TestHierarchy:
     def test_above_ceiling_is_refused(self) -> None:
         with pytest.raises(ValidationError):
             InferenceConcurrencySettings(
-                embedding_per_ticket_concurrency=129,
-                embedding_per_validator_concurrency=129,
-                embedding_global_concurrency=129,
+                embedding_per_ticket_concurrency=513,
+                embedding_per_validator_concurrency=513,
+                embedding_global_concurrency=513,
             )
 
 
@@ -216,37 +216,45 @@ class TestWriteContract:
             )
 
 
-class TestCeilingIsSizedFromMeasurement:
-    """The ceiling stays at 128, and that is a finding rather than an oversight.
+class TestCeilingMatchesMultiSlotFleet:
+    """The hard ceiling leaves room for the full multi-validator slot fleet."""
 
-    The recurring request is to raise these because embedding serialisation is
-    assumed to be what makes a v7 run take an hour. Production says the ceiling
-    has never bound: peak in-flight embeddings fleet-wide is 14 against 128, and
-    the peak for any single grant is exactly 8 -- dittobench-api's own per-run
-    semaphore, which lives in ditto-subnet and cannot be widened from here.
+    VALIDATOR_SLOTS = 8
+    OPERATING_PER_TICKET = 32
+    OPERATING_PER_VALIDATOR = 256
+    OPERATING_GLOBAL = 512
 
-    These assertions exist so that raising the bound requires deleting a test
-    that states why it should not be raised, rather than editing a constant.
-    """
-
-    # Reconstructed from `inference_requests` over 12h of production by summing
-    # a start/complete event stream. See the module docstring in
-    # `ditto/api_models/inference_concurrency_settings.py` for the full series.
-    OBSERVED_PEAK_INFLIGHT_FLEET_WIDE = 14
-    OBSERVED_PEAK_INFLIGHT_PER_GRANT = 8
-
-    def test_per_ticket_ceiling_dwarfs_the_largest_demand_a_validator_can_express(
-        self,
-    ) -> None:
-        # The broker will not ask for a ninth concurrent embedding on one run,
-        # so anything at or above 8 is unreachable headroom. 128 is 16x that.
-        assert MAX_EMBEDDING_PER_TICKET_CONCURRENCY >= (
-            self.OBSERVED_PEAK_INFLIGHT_PER_GRANT * 16
+    def test_chat_and_embedding_accept_the_same_operating_distribution(self) -> None:
+        settings = InferenceConcurrencySettings(
+            chat_per_ticket_concurrency=self.OPERATING_PER_TICKET,
+            chat_per_validator_concurrency=self.OPERATING_PER_VALIDATOR,
+            chat_global_concurrency=self.OPERATING_GLOBAL,
+            embedding_per_ticket_concurrency=self.OPERATING_PER_TICKET,
+            embedding_per_validator_concurrency=self.OPERATING_PER_VALIDATOR,
+            embedding_global_concurrency=self.OPERATING_GLOBAL,
+        )
+        assert (
+            (
+                settings.chat_per_ticket_concurrency,
+                settings.chat_per_validator_concurrency,
+                settings.chat_global_concurrency,
+            )
+            == (
+                settings.embedding_per_ticket_concurrency,
+                settings.embedding_per_validator_concurrency,
+                settings.embedding_global_concurrency,
+            )
+            == (32, 256, 512)
         )
 
-    def test_global_ceiling_dwarfs_peak_observed_fleet_concurrency(self) -> None:
+    def test_one_validator_can_run_every_slot_at_operating_concurrency(self) -> None:
+        assert MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY >= (
+            self.VALIDATOR_SLOTS * self.OPERATING_PER_TICKET
+        )
+
+    def test_two_full_validators_fit_below_the_global_ceiling(self) -> None:
         assert MAX_EMBEDDING_GLOBAL_CONCURRENCY >= (
-            self.OBSERVED_PEAK_INFLIGHT_FLEET_WIDE * 8
+            2 * self.VALIDATOR_SLOTS * self.OPERATING_PER_TICKET
         )
 
     def test_the_three_ceilings_stay_equal(self) -> None:
@@ -261,11 +269,12 @@ class TestCeilingIsSizedFromMeasurement:
             MAX_EMBEDDING_PER_TICKET_CONCURRENCY
             == MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY
             == MAX_EMBEDDING_GLOBAL_CONCURRENCY
-            == 128
+            == MAX_CHAT_CONCURRENCY
+            == 512
         )
 
     def test_the_flat_maximum_revision_is_accepted(self) -> None:
-        """128/128/128 is a legal policy: it is what production runs today."""
+        """The shared 512/512/512 hard maximum is a legal policy."""
         settings = InferenceConcurrencySettings(
             chat_request_budget=DEFAULT_CHAT_REQUEST_BUDGET,
             chat_token_budget=DEFAULT_CHAT_TOKEN_BUDGET,
@@ -276,7 +285,7 @@ class TestCeilingIsSizedFromMeasurement:
             embedding_per_validator_concurrency=MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
             embedding_global_concurrency=MAX_EMBEDDING_GLOBAL_CONCURRENCY,
         )
-        assert settings.embedding_global_concurrency == 128
+        assert settings.embedding_global_concurrency == 512
 
 
 class TestChatBudgetsSurviveAnEmbeddingOnlyEdit:

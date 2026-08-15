@@ -1508,8 +1508,8 @@ export const INFERENCE_CONCURRENCY_CONFIRMATION = 'APPLY INFERENCE CONCURRENCY S
 
 export const MAX_CHAT_REQUEST_BUDGET = 16384
 export const MAX_CHAT_TOKEN_BUDGET = 100_000_000
-export const MAX_CHAT_CONCURRENCY = 128
-export const MAX_EMBEDDING_CONCURRENCY = 128
+export const MAX_CHAT_CONCURRENCY = 512
+export const MAX_EMBEDDING_CONCURRENCY = 512
 
 const inferenceConcurrencySettingsBaseSchema = z.object({
   // Chat completions one scoring ticket's grant may spend in total. Ships at

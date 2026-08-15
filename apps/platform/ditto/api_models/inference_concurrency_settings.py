@@ -43,7 +43,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 DEFAULT_CHAT_PER_TICKET_CONCURRENCY = 16
 DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY = 48
 DEFAULT_CHAT_GLOBAL_CONCURRENCY = 96
-MAX_CHAT_CONCURRENCY = 128
+MAX_CHAT_CONCURRENCY = 512
 
 # The shipped values. Every one of these is a raise -- there is no configuration
 # of this board that reproduces the old serialised behaviour by default, because
@@ -52,67 +52,20 @@ DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY = 12
 DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY = 48
 DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY = 96
 
-# Ceilings, not recommendations. A fat-fingered revision must not point the
-# whole fleet at a number that saturates the admission path (see
-# `ditto/db/queries/inference.py`: a
-# reservation no longer serialises fleet-wide, but it still takes a grant-row
-# `FOR UPDATE` plus the cross-grant admission aggregates on every call).
+# Ceilings, not recommendations. The active fleet now exposes up to eight
+# benchmark slots per validator and can run several validators concurrently.
+# A global ceiling of 128 can therefore bind before the operator-selected
+# per-ticket and per-validator hierarchy does: eight tickets at 32 chat calls
+# each already express 256 concurrent calls on one validator.
 #
-# THESE STAY AT 128, AND THE REASON IS MEASURED RATHER THAN CAUTIOUS.
-#
-# The standing hypothesis was that embedding serialisation is what makes a v7
-# run take 62-71 minutes, and that the fix is a bigger ceiling. Reconstructing
-# in-flight intervals from `inference_requests` over 12h of production
-# (start/complete event stream, running sum) says otherwise, decisively:
-#
-#   * peak in-flight embeddings FLEET-WIDE:            14   (ceiling 128)
-#   * p99 in-flight fleet-wide:                         6
-#   * p50 in-flight fleet-wide:                         1
-#   * peak in-flight for any single GRANT:              8   (ceiling 128)
-#
-# The per-grant peak of exactly 8 is not a coincidence and not a platform
-# effect: it is dittobench-api's own per-run embedding semaphore, described at
-# the top of this module. The validator never asks for a ninth slot, so the
-# per-ticket ceiling has never once bound -- it is already 16x the largest
-# demand the fleet is capable of expressing. A ceiling above 128 would widen a
-# valve that nothing is pressing against.
-#
-# Nor is the wait large enough to matter. Summed embedding service time for the
-# heaviest embedding grant in 72h (2,627 calls) is 242 seconds against a
-# 742-second grant span -- an achieved embedding concurrency of 0.33, i.e. no
-# embedding is in flight at all for two thirds of the run. Driving that to zero
-# saves ~4 minutes of a 62-71 minute run, and only if the run were blocked on
-# it, which the 0.33 says it is not.
-#
-# The provider is not the constraint either, and this is the measurement that
-# rules out "raise it and see". Across 24h, p50 embedding latency against our
-# own offered load:
-#
-#   2.07 req/s -> 75 ms      1.34 req/s -> 129 ms     0.20 req/s -> 104 ms
-#   2.06 req/s -> 73 ms      0.99 req/s -> 153 ms     0.18 req/s -> 112 ms
-#
-# Latency is flat-to-INVERSE in our throughput over a 10x range: the busiest
-# hours are the fastest. Latency excursions are uncorrelated with our load, so
-# they are provider-side variance we cannot schedule around. (Latency does rise
-# with observed in-flight count -- 76 ms at 1, 129 ms at 12 -- but that is
-# Little's law read backwards: slow provider periods CAUSE requests to overlap.
-# The throughput series above is the same question without the confound.)
-#
-# What per-agent latency differences actually track is payload size, not
-# queueing: <2000 prompt tokens p50 77 ms, >=2000 p50 302 ms.
-#
-# So the honest ordering of binding constraints for embeddings today is
-# (1) the broker's own 8-slot per-run semaphore, in ditto-subnet and not
-# reachable from here, (2) provider latency variance, and (3) nothing else
-# close. Raising these numbers cannot move any of them; it can only queue more
-# work deeper into a provider that is already answering in 75 ms.
-#
-# `ditto_inference_admission_at_capacity_total{lane="embedding"}` now exports
-# this directly. Before raising a ceiling, look at that counter: if it is zero,
-# the ceiling is not what is slow.
-MAX_EMBEDDING_PER_TICKET_CONCURRENCY = 128
-MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY = 128
-MAX_EMBEDDING_GLOBAL_CONCURRENCY = 128
+# Keep one shared 512 ceiling across both lanes. This is large enough for two
+# fully occupied eight-slot validators at 32 calls per ticket, while remaining
+# a finite guard that the Platform, Go relay, Backroom, and provider transport
+# all enforce identically. The live policy remains the load-shedding control;
+# raising this hard ceiling alone does not widen production admission.
+MAX_EMBEDDING_PER_TICKET_CONCURRENCY = 512
+MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY = 512
+MAX_EMBEDDING_GLOBAL_CONCURRENCY = 512
 
 # The chat request budget, sized against the observed distribution rather than
 # against the round number it replaces (1024, which was never justified against

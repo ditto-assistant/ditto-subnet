@@ -245,9 +245,9 @@ class TestWrite:
         response = await client.post(
             _URL,
             json=_payload(
-                embedding_per_ticket_concurrency=129,
-                embedding_per_validator_concurrency=129,
-                embedding_global_concurrency=129,
+                embedding_per_ticket_concurrency=513,
+                embedding_per_validator_concurrency=513,
+                embedding_global_concurrency=513,
             ),
             headers=_HEADERS,
         )

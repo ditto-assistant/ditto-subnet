@@ -16,8 +16,10 @@ from ditto.api_models.inference_concurrency_settings import (
     DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY,
     DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY,
     DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
+    MAX_CHAT_CONCURRENCY,
     MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
+    MAX_EMBEDDING_GLOBAL_CONCURRENCY,
 )
 from ditto.api_server.datapipeline import (
     DataPipelineConfig,
@@ -910,19 +912,21 @@ def check_config(config: ApiServerConfig) -> None:
         inference.per_ticket_concurrency
         <= inference.per_validator_concurrency
         <= inference.global_concurrency
-        <= 128
+        <= MAX_CHAT_CONCURRENCY
     ):
         raise ApiServerConfigError(
-            "inference concurrency must be ordered ticket <= validator <= global <= 128"
+            "inference concurrency must be ordered ticket <= validator <= global "
+            f"<= {MAX_CHAT_CONCURRENCY}"
         )
     if not (
         inference.embedding_per_ticket_concurrency
         <= inference.embedding_per_validator_concurrency
         <= inference.embedding_global_concurrency
-        <= 128
+        <= MAX_EMBEDDING_GLOBAL_CONCURRENCY
     ):
         raise ApiServerConfigError(
-            "embedding concurrency must be ordered ticket <= validator <= global <= 128"
+            "embedding concurrency must be ordered ticket <= validator <= global "
+            f"<= {MAX_EMBEDDING_GLOBAL_CONCURRENCY}"
         )
     if not (
         inference.per_ticket_requests_per_minute

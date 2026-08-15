@@ -81,6 +81,31 @@ func TestParseConcurrencySettingsReadsChatHierarchy(t *testing.T) {
 	}
 }
 
+func TestParseConcurrencySettingsAcceptsShared512Ceiling(t *testing.T) {
+	settings, err := parseConcurrencySettings([]byte(`{
+		"chat_per_ticket_concurrency":512,
+		"chat_per_validator_concurrency":512,
+		"chat_global_concurrency":512,
+		"embedding_per_ticket_concurrency":512,
+		"embedding_per_validator_concurrency":512,
+		"embedding_global_concurrency":512
+	}`))
+	if err != nil {
+		t.Fatalf("parse shared hard ceiling: %v", err)
+	}
+	if settings.ChatGlobalConcurrency != 512 || settings.EmbeddingGlobalConcurrency != 512 {
+		t.Fatalf("shared hard ceiling mismatch: %+v", settings)
+	}
+
+	if _, err := parseConcurrencySettings([]byte(`{
+		"chat_per_ticket_concurrency":513,
+		"chat_per_validator_concurrency":513,
+		"chat_global_concurrency":513
+	}`)); err == nil {
+		t.Fatal("over-ceiling chat concurrency must be rejected")
+	}
+}
+
 func TestParseConcurrencySettingsRejectsChatHierarchy(t *testing.T) {
 	_, err := parseConcurrencySettings([]byte(`{
 		"chat_per_ticket_concurrency":64,

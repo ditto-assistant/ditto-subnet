@@ -29,11 +29,11 @@ const (
 	defaultChatPerTicketConcurrency         = 16
 	defaultChatPerValidatorConcurrency      = 48
 	defaultChatGlobalConcurrency            = 96
-	maxChatConcurrency                      = 128
+	maxChatConcurrency                      = 512
 	defaultEmbeddingPerTicketConcurrency    = 12
 	defaultEmbeddingPerValidatorConcurrency = 48
 	defaultEmbeddingGlobalConcurrency       = 96
-	maxEmbeddingConcurrency                 = 128
+	maxEmbeddingConcurrency                 = 512
 	settingsRefreshInterval                 = 5 * time.Second
 )
 

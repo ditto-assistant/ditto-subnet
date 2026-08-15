@@ -36,7 +36,9 @@ import {
   inferenceRoutingPolicyInputSchema,
   inferencePolicyConfirmation,
   inferenceConcurrencySettingsSchema,
+  MAX_CHAT_CONCURRENCY,
   MAX_CHAT_TOKEN_BUDGET,
+  MAX_EMBEDDING_CONCURRENCY,
   QUEUE_POLICY_CONFIRMATION,
   effectiveQueuePolicySettingsSchema,
   queuePolicySettingsControlSchema,
@@ -106,6 +108,26 @@ describe('admin API schemas', () => {
       ...settings,
       chat_token_budget: MAX_CHAT_TOKEN_BUDGET + 1,
     })).toThrow(/100000000/)
+  })
+
+  it('mirrors the shared Platform and relay concurrency ceiling', () => {
+    const settings = {
+      chat_request_budget: 8192,
+      chat_token_budget: 75_000_000,
+      chat_per_ticket_concurrency: 512,
+      chat_per_validator_concurrency: 512,
+      chat_global_concurrency: 512,
+      embedding_per_ticket_concurrency: 512,
+      embedding_per_validator_concurrency: 512,
+      embedding_global_concurrency: 512,
+    }
+    expect(MAX_CHAT_CONCURRENCY).toBe(512)
+    expect(MAX_EMBEDDING_CONCURRENCY).toBe(512)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(() => inferenceConcurrencySettingsSchema.parse({
+      ...settings,
+      embedding_global_concurrency: 513,
+    })).toThrow(/512/)
   })
 
   it('requires exact confirmation for v9 contract retests only', () => {
