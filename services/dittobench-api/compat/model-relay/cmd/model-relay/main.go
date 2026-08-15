@@ -56,7 +56,6 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
-	"github.com/ditto-assistant/dittobench-api/internal/pprofserver"
 )
 
 // providerProfile is one code-frozen upstream the relay may pin to. Every
@@ -240,12 +239,7 @@ type relayHealth struct {
 }
 
 func main() {
-	port, err := strconv.Atoi(envOr("PORT", "11434"))
-	if err != nil || port < 1 || port > 65535 {
-		log.Fatal("PORT must be a valid port")
-	}
-	addr := ":" + strconv.Itoa(port)
-	pprofserver.Start(context.Background(), "dittobench-model-relay", port)
+	addr := ":" + envOr("PORT", "11434")
 	if strings.TrimSpace(os.Getenv("RELAY_DISABLED")) == "1" {
 		mux := http.NewServeMux()
 		mux.HandleFunc("/", disabledHandler)
