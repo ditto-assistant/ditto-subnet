@@ -64,6 +64,8 @@ import {
   setEfficiencyBonusSettingsInputSchema,
   setContinualRetestSettingsInputSchema,
   setInferenceConcurrencySettingsInputSchema,
+  runtimeProfileCaptureInputSchema,
+  runtimeProfileLookupInputSchema,
   setQueuePolicySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
@@ -131,6 +133,9 @@ import {
   fetchContinualRetestSettings,
   setContinualRetestSettings,
   fetchInferenceConcurrencySettings,
+  fetchInferenceRuntimeMetrics,
+  captureRuntimeProfile,
+  downloadRuntimeProfile,
   fetchQueuePolicySettings,
   setInferenceConcurrencySettings,
   setQueuePolicySettings,
@@ -191,6 +196,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_queue_policy_settings',
   'set_validator_slot_settings',
   'set_inference_concurrency_settings',
+  'start_runtime_profile',
   'set_submission_cooldown',
   'set_source_release_policy',
   'set_burn_settings',
@@ -201,6 +207,7 @@ export const WRITE_TOOL_NAMES = new Set([
 export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
+  ['download_runtime_profile', BACKROOM_ARTIFACT_SCOPE],
   // Source listings and excerpts expose miner-submitted code, so they gate
   // on the same dedicated artifact scope as the tarball download.
   ['list_screening_source_files', BACKROOM_ARTIFACT_SCOPE],
@@ -395,6 +402,12 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Reverse an active-era removal using a fresh snapshot and "REINSTATE TO VALIDATOR QUEUE", not "EVICT LIVE VALIDATOR LEASES" or "REMOVE FROM VALIDATOR QUEUE". It does not mint a no-fault retry grant or restore attempts; retry_budget_snapshot records that invariant. Refused when the removal era is no longer the active one.',
   set_inference_concurrency_settings:
     'Apply the complete eight-field hosted-inference policy with expectedRevision, reason, and "APPLY INFERENCE CONCURRENCY SETTINGS". Chat budgets affect newly minted grants; chat and embedding concurrency are live admission controls and each must satisfy per-ticket <= per-validator <= global.',
+  get_inference_runtime_metrics:
+    'Read live/recent inference load and relay health.',
+  start_runtime_profile:
+    'Capture bounded private relay pprof.',
+  download_runtime_profile:
+    'Download profile base64; artifact scope.',
   get_owner_attestations:
     'Read direct signed owner links for one hotkey. Links are symmetric, direct-only, non-transitive, and exempt only near-duplicate screening; evidence_grade is context, not a gate. Include revoked links when judging historical submissions. Requires backroom:read, not artifact access.',
   list_lease_revocations:
@@ -519,7 +532,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   const artifact = async (operation: () => Promise<unknown>) => {
     if (!hasArtifactAccess(props)) {
       return errorResult(
-        'This connection cannot download source artifacts. Reauthorize with backroom:artifact:read; production write access is not required.',
+        'This connection cannot download private artifacts. Reauthorize with backroom:artifact:read; production write access is not required.',
       )
     }
     return result(await operation())
@@ -1468,6 +1481,43 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           REVISION_LISTS,
         ),
       ),
+  )
+
+  registerTool(
+    'get_inference_runtime_metrics',
+    {
+      title: 'Get hosted inference runtime metrics',
+      description:
+        'Read the current hosted chat and embedding load plus 1, 5, 15, and 60 minute calls, tokens, latency, failures, timeouts, concurrency peaks, live admission limits, exact relay revisions, and per-process capacity-decline counters. This is the first tool to call before changing a concurrency setting.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchInferenceRuntimeMetrics()),
+  )
+
+  registerTool(
+    'start_runtime_profile',
+    {
+      title: 'Start a private relay runtime profile',
+      description:
+        'Capture one bounded Go pprof artifact from platform-relay-1 or platform-relay-2 without exposing or proxying /debug/pprof. CPU captures require 5-30 seconds; heap, allocs, and goroutine are snapshots. The artifact is mode-0600, SHA-256 pinned, expires after 15 minutes, and records the exact running and checked-out revisions. Supply an audit reason and confirmation "CAPTURE RUNTIME PROFILE".',
+      inputSchema: runtimeProfileCaptureInputSchema,
+      annotations: toolAnnotations('write'),
+    },
+    async (input) =>
+      write(() => captureRuntimeProfile(input, props.session.email)),
+  )
+
+  registerTool(
+    'download_runtime_profile',
+    {
+      title: 'Download a private runtime profile',
+      description:
+        'Return one unexpired checksum-verified pprof artifact as base64 with its filename and metadata. Decode data_base64 to the named .pb.gz file and inspect it locally with go tool pprof. Requires backroom:artifact:read and a live write-level account.',
+      inputSchema: runtimeProfileLookupInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      artifact(() => downloadRuntimeProfile(input, props.session.email)),
   )
 
   registerTool(

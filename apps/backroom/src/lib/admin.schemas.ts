@@ -1505,6 +1505,115 @@ export type QueuePolicySettingsControl = z.infer<typeof queuePolicySettingsContr
 // this board can never accept a number the next platform restart would refuse.
 export const INFERENCE_CONCURRENCY_SCOPE = '*'
 export const INFERENCE_CONCURRENCY_CONFIRMATION = 'APPLY INFERENCE CONCURRENCY SETTINGS'
+export const RUNTIME_PROFILE_CONFIRMATION = 'CAPTURE RUNTIME PROFILE'
+
+const inferenceRequestKindSchema = z.enum(['chat', 'embedding'])
+const runtimeProfileTargetSchema = z.enum(['platform-relay-1', 'platform-relay-2'])
+const runtimeProfileTypeSchema = z.enum(['cpu', 'heap', 'allocs', 'goroutine'])
+
+export const inferenceRuntimeMetricsSchema = z.object({
+  observed_at: z.string(),
+  settings_revision: z.number().int().nonnegative(),
+  settings_checksum: z.string(),
+  lanes: z.array(
+    z.object({
+      request_kind: inferenceRequestKindSchema,
+      active_requests: z.number().int().nonnegative(),
+      live_grants: z.number().int().nonnegative(),
+      stale_started_requests: z.number().int().nonnegative(),
+      per_ticket_limit: z.number().int().positive(),
+      per_validator_limit: z.number().int().positive(),
+      global_limit: z.number().int().positive(),
+      peak_per_ticket_concurrency_60m: z.number().int().nonnegative(),
+      peak_per_validator_concurrency_60m: z.number().int().nonnegative(),
+      peak_global_concurrency_60m: z.number().int().nonnegative(),
+    }),
+  ),
+  windows: z.array(
+    z.object({
+      window_seconds: z.number().int().positive(),
+      request_kind: inferenceRequestKindSchema,
+      calls: z.number().int().nonnegative(),
+      calls_per_second: z.number().nonnegative(),
+      tokens: z.number().int().nonnegative(),
+      tokens_per_second: z.number().nonnegative(),
+      completed: z.number().int().nonnegative(),
+      failed: z.number().int().nonnegative(),
+      canceled: z.number().int().nonnegative(),
+      timed_out: z.number().int().nonnegative(),
+      latency_p50_ms: z.number().int().nonnegative().nullable(),
+      latency_p95_ms: z.number().int().nonnegative().nullable(),
+      latency_max_ms: z.number().int().nonnegative().nullable(),
+      peak_global_concurrency: z.number().int().nonnegative(),
+    }),
+  ),
+  relays: z.array(
+    z.object({
+      target: runtimeProfileTargetSchema,
+      status: z.enum(['ok', 'unavailable']),
+      source_revision: z.string().nullable().optional(),
+      checked_out_revision: z.string().nullable().optional(),
+      revision_drift: z.boolean().nullable().optional(),
+      process_started_at: z.string().nullable().optional(),
+      capacity_declines: z.record(z.string(), z.number().int().nonnegative()).default({}),
+      error: z.string().nullable().optional(),
+    }),
+  ),
+})
+
+export const runtimeProfileCaptureInputSchema = z
+  .object({
+    target: runtimeProfileTargetSchema,
+    profileType: runtimeProfileTypeSchema,
+    seconds: z.number().int().min(5).max(30).optional(),
+    reason: z.string().trim().min(8),
+    confirmation: z.literal(RUNTIME_PROFILE_CONFIRMATION),
+  })
+  .superRefine((value, context) => {
+    if (value.profileType === 'cpu' && value.seconds === undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['seconds'],
+        message: 'seconds is required for a CPU profile',
+      })
+    }
+    if (value.profileType !== 'cpu' && value.seconds !== undefined) {
+      context.addIssue({
+        code: 'custom',
+        path: ['seconds'],
+        message: 'seconds is only valid for a CPU profile',
+      })
+    }
+  })
+
+export const runtimeProfileLookupInputSchema = z.object({
+  profileId: z.string().uuid(),
+})
+
+export const runtimeProfileArtifactSchema = z.object({
+  profile_id: z.string().uuid(),
+  target: runtimeProfileTargetSchema,
+  profile_type: runtimeProfileTypeSchema,
+  seconds: z.number().int().min(5).max(30).nullable(),
+  source_revision: z.string().length(40),
+  checked_out_revision: z.string().length(40),
+  revision_drift: z.boolean(),
+  actor: z.string(),
+  reason: z.string(),
+  created_at: z.string(),
+  expires_at: z.string(),
+  byte_size: z.number().int().nonnegative(),
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  media_type: z.string(),
+  filename: z.string(),
+  download_path: z.string(),
+})
+
+export const runtimeProfileDownloadSchema = z.object({
+  profile: runtimeProfileArtifactSchema,
+  encoding: z.literal('base64'),
+  data_base64: z.string(),
+})
 
 export const MAX_CHAT_REQUEST_BUDGET = 16384
 export const MAX_CHAT_TOKEN_BUDGET = 100_000_000

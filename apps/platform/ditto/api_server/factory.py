@@ -45,6 +45,7 @@ from ditto.api_server.endpoints import (
     admin_copy_review_router,
     admin_efficiency_bonus_settings_router,
     admin_inference_concurrency_settings_router,
+    admin_inference_observability_router,
     admin_inference_routes_router,
     admin_lease_revocations_router,
     admin_miner_fees_router,
@@ -87,6 +88,7 @@ from ditto.api_server.middleware.public_cache import compute_etag, if_none_match
 from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
+from ditto.api_server.runtime_profiles import RuntimeProfileStore
 from ditto.api_server.storage import create_storage_client
 from ditto.api_server.validator_names import create_validator_names
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
@@ -308,6 +310,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.state.continual_retest_settings = ContinualRetestSettingsResolver()
     app.state.queue_policy_settings = QueuePolicySettingsResolver()
     app.state.inference_concurrency_settings = InferenceConcurrencySettingsResolver()
+    app.state.runtime_profiles = RuntimeProfileStore()
     # Exact public verification profiles are release assets. Provider
     # credentials never enter this registry; claim-time grants remain the only
     # authority to use Platform's reader, judge, and embedding lanes.
@@ -364,6 +367,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
+    app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_routes_router, prefix="/api/v1")
     app.include_router(admin_lease_revocations_router, prefix="/api/v1")

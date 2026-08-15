@@ -120,8 +120,13 @@ import {
   parseContinualRetestSettingsControl,
   setContinualRetestSettingsInputSchema,
   inferenceConcurrencySettingsControlSchema,
+  inferenceRuntimeMetricsSchema,
   queuePolicySettingsControlSchema,
   setInferenceConcurrencySettingsInputSchema,
+  runtimeProfileArtifactSchema,
+  runtimeProfileCaptureInputSchema,
+  runtimeProfileDownloadSchema,
+  runtimeProfileLookupInputSchema,
   setQueuePolicySettingsInputSchema,
   VALIDATOR_SLOT_SETTINGS_SCOPE,
   validatorSlotSettingsControlSchema,
@@ -164,6 +169,7 @@ import {
 import {
   PlatformAdminError,
   isPlatformPublicNotFound,
+  platformAdminBinaryRequest,
   platformAdminRequest,
   platformPublicRequest,
 } from './ditto.server'
@@ -714,6 +720,78 @@ export async function setQueuePolicySettings(rawInput: unknown, actor: string) {
 }
 
 const INFERENCE_CONCURRENCY_SETTINGS_PATH = '/api/v1/admin/inference-concurrency-settings'
+const INFERENCE_RUNTIME_METRICS_PATH = '/api/v1/admin/inference-runtime-metrics'
+const RUNTIME_PROFILES_PATH = '/api/v1/admin/runtime-profiles'
+
+export async function fetchInferenceRuntimeMetrics() {
+  const payload = await platformAdminRequest(INFERENCE_RUNTIME_METRICS_PATH, {
+    timeoutMs: 30_000,
+  })
+  return inferenceRuntimeMetricsSchema.parse(payload)
+}
+
+export async function captureRuntimeProfile(rawInput: unknown, actor: string) {
+  const input = runtimeProfileCaptureInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(RUNTIME_PROFILES_PATH, {
+    method: 'POST',
+    actor,
+    timeoutMs: (input.seconds ?? 0) * 1_000 + 15_000,
+    body: {
+      target: input.target,
+      profile_type: input.profileType,
+      seconds: input.seconds,
+      reason: input.reason,
+      confirmation: input.confirmation,
+    },
+  })
+  return runtimeProfileArtifactSchema.parse(payload)
+}
+
+export async function fetchRuntimeProfile(rawInput: unknown) {
+  const input = runtimeProfileLookupInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `${RUNTIME_PROFILES_PATH}/${encodeURIComponent(input.profileId)}`,
+  )
+  return runtimeProfileArtifactSchema.parse(payload)
+}
+
+function bytesToBase64(bytes: Uint8Array) {
+  let binary = ''
+  const chunkSize = 32_768
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize))
+  }
+  return btoa(binary)
+}
+
+async function sha256Hex(bytes: Uint8Array) {
+  const copy = new Uint8Array(bytes.byteLength)
+  copy.set(bytes)
+  const digest = await crypto.subtle.digest('SHA-256', copy.buffer)
+  return Array.from(new Uint8Array(digest), (byte) =>
+    byte.toString(16).padStart(2, '0'),
+  ).join('')
+}
+
+export async function downloadRuntimeProfile(rawInput: unknown, actor: string) {
+  const input = runtimeProfileLookupInputSchema.parse(rawInput)
+  const profile = await fetchRuntimeProfile(input)
+  const artifact = await platformAdminBinaryRequest(
+    `${RUNTIME_PROFILES_PATH}/${encodeURIComponent(input.profileId)}/download`,
+    { actor, maxBytes: 4 * 1024 * 1024 },
+  )
+  if (artifact.sha256 && artifact.sha256 !== profile.sha256) {
+    throw new Error('Runtime profile download checksum disagrees with its metadata')
+  }
+  if ((await sha256Hex(artifact.bytes)) !== profile.sha256) {
+    throw new Error('Runtime profile bytes do not match the recorded checksum')
+  }
+  return runtimeProfileDownloadSchema.parse({
+    profile,
+    encoding: 'base64',
+    data_base64: bytesToBase64(artifact.bytes),
+  })
+}
 
 export async function fetchInferenceConcurrencySettings() {
   const payload = await platformAdminRequest(INFERENCE_CONCURRENCY_SETTINGS_PATH)

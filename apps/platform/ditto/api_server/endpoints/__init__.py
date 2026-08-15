@@ -29,6 +29,9 @@ from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
 from ditto.api_server.endpoints.admin_inference_concurrency_settings import (
     router as admin_inference_concurrency_settings_router,
 )
+from ditto.api_server.endpoints.admin_inference_observability import (
+    router as admin_inference_observability_router,
+)
 from ditto.api_server.endpoints.admin_inference_routes import (
     router as admin_inference_routes_router,
 )
@@ -93,6 +96,7 @@ __all__ = [
     "admin_benchmark_rollout_router",
     "admin_burn_settings_router",
     "admin_inference_concurrency_settings_router",
+    "admin_inference_observability_router",
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",
     "admin_inference_routes_router",

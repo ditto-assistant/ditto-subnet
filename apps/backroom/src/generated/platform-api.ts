@@ -555,6 +555,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/inference-runtime-metrics": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Inference Runtime Metrics
+         * @description Current load, recent throughput/latency, headroom, and relay health.
+         */
+        get: operations["get_inference_runtime_metrics_api_v1_admin_inference_runtime_metrics_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/lease-revocations": {
         parameters: {
             query?: never;
@@ -775,6 +795,57 @@ export interface paths {
          * @description Close out one submission whose benchmark generation has ended.
          */
         post: operations["retire_previous_generation_submission_api_v1_admin_retirements__agent_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/runtime-profiles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Capture Runtime Profile */
+        post: operations["capture_runtime_profile_api_v1_admin_runtime_profiles_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/runtime-profiles/{profile_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Runtime Profile */
+        get: operations["get_runtime_profile_api_v1_admin_runtime_profiles__profile_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/runtime-profiles/{profile_id}/download": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Runtime Profile */
+        get: operations["download_runtime_profile_api_v1_admin_runtime_profiles__profile_id__download_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9436,6 +9507,66 @@ export interface components {
             /** Token Budget */
             token_budget: number;
         };
+        /** InferenceLaneCurrent */
+        InferenceLaneCurrent: {
+            /** Active Requests */
+            active_requests: number;
+            /** Global Limit */
+            global_limit: number;
+            /** Live Grants */
+            live_grants: number;
+            /** Peak Global Concurrency 60M */
+            peak_global_concurrency_60m: number;
+            /** Peak Per Ticket Concurrency 60M */
+            peak_per_ticket_concurrency_60m: number;
+            /** Peak Per Validator Concurrency 60M */
+            peak_per_validator_concurrency_60m: number;
+            /** Per Ticket Limit */
+            per_ticket_limit: number;
+            /** Per Validator Limit */
+            per_validator_limit: number;
+            /**
+             * Request Kind
+             * @enum {string}
+             */
+            request_kind: "chat" | "embedding";
+            /** Stale Started Requests */
+            stale_started_requests: number;
+        };
+        /** InferenceLaneWindow */
+        InferenceLaneWindow: {
+            /** Calls */
+            calls: number;
+            /** Calls Per Second */
+            calls_per_second: number;
+            /** Canceled */
+            canceled: number;
+            /** Completed */
+            completed: number;
+            /** Failed */
+            failed: number;
+            /** Latency Max Ms */
+            latency_max_ms: number | null;
+            /** Latency P50 Ms */
+            latency_p50_ms: number | null;
+            /** Latency P95 Ms */
+            latency_p95_ms: number | null;
+            /** Peak Global Concurrency */
+            peak_global_concurrency: number;
+            /**
+             * Request Kind
+             * @enum {string}
+             */
+            request_kind: "chat" | "embedding";
+            /** Timed Out */
+            timed_out: number;
+            /** Tokens */
+            tokens: number;
+            /** Tokens Per Second */
+            tokens_per_second: number;
+            /** Window Seconds */
+            window_seconds: number;
+        };
         /** InferenceRouteView */
         InferenceRouteView: {
             /** Calibration Composite */
@@ -9543,6 +9674,24 @@ export interface components {
              * Format: date-time
              */
             updated_at: string;
+        };
+        /** InferenceRuntimeMetrics */
+        InferenceRuntimeMetrics: {
+            /** Lanes */
+            lanes: components["schemas"]["InferenceLaneCurrent"][];
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Relays */
+            relays: components["schemas"]["RelayRuntimeSnapshot"][];
+            /** Settings Checksum */
+            settings_checksum: string;
+            /** Settings Revision */
+            settings_revision: number;
+            /** Windows */
+            windows: components["schemas"]["InferenceLaneWindow"][];
         };
         /**
          * JobRequest
@@ -14145,6 +14294,33 @@ export interface components {
             /** Broker Recovery Exhausted Ticket Count */
             broker_recovery_exhausted_ticket_count: number;
         };
+        /** RelayRuntimeSnapshot */
+        RelayRuntimeSnapshot: {
+            /** Capacity Declines */
+            capacity_declines?: {
+                [key: string]: number;
+            };
+            /** Checked Out Revision */
+            checked_out_revision?: string | null;
+            /** Error */
+            error?: string | null;
+            /** Process Started At */
+            process_started_at?: string | null;
+            /** Revision Drift */
+            revision_drift?: boolean | null;
+            /** Source Revision */
+            source_revision?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "ok" | "unavailable";
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "platform-relay-1" | "platform-relay-2";
+        };
         /**
          * RouteCalibrationRequest
          * @description Exact reviewed manifest decision for one immutable route profile.
@@ -14205,6 +14381,78 @@ export interface components {
             min_tool_accuracy: number;
             /** Speed Weight */
             speed_weight: number;
+        };
+        /** RuntimeProfileArtifact */
+        RuntimeProfileArtifact: {
+            /** Actor */
+            actor: string;
+            /** Byte Size */
+            byte_size: number;
+            /** Checked Out Revision */
+            checked_out_revision: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Download Path */
+            download_path: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Filename */
+            filename: string;
+            /**
+             * Media Type
+             * @default application/octet-stream
+             */
+            media_type: string;
+            /**
+             * Profile Id
+             * Format: uuid
+             */
+            profile_id: string;
+            /**
+             * Profile Type
+             * @enum {string}
+             */
+            profile_type: "cpu" | "heap" | "allocs" | "goroutine";
+            /** Reason */
+            reason: string;
+            /** Revision Drift */
+            revision_drift: boolean;
+            /** Seconds */
+            seconds: number | null;
+            /** Sha256 */
+            sha256: string;
+            /** Source Revision */
+            source_revision: string;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "platform-relay-1" | "platform-relay-2";
+        };
+        /** RuntimeProfileCaptureRequest */
+        RuntimeProfileCaptureRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Profile Type
+             * @enum {string}
+             */
+            profile_type: "cpu" | "heap" | "allocs" | "goroutine";
+            /** Reason */
+            reason: string;
+            /** Seconds */
+            seconds?: number | null;
+            /**
+             * Target
+             * @enum {string}
+             */
+            target: "platform-relay-1" | "platform-relay-2";
         };
         /**
          * ScoreReport
@@ -18240,6 +18488,37 @@ export interface operations {
             };
         };
     };
+    get_inference_runtime_metrics_api_v1_admin_inference_runtime_metrics_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["InferenceRuntimeMetrics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     lease_revocations_api_v1_admin_lease_revocations_get: {
         parameters: {
             query?: {
@@ -18578,6 +18857,107 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["AdminRetirementResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    capture_runtime_profile_api_v1_admin_runtime_profiles_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RuntimeProfileCaptureRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeProfileArtifact"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_runtime_profile_api_v1_admin_runtime_profiles__profile_id__get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RuntimeProfileArtifact"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    download_runtime_profile_api_v1_admin_runtime_profiles__profile_id__download_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                profile_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

@@ -13,7 +13,8 @@ Every long-lived Go HTTP process in `services/model-relay` and
 the request server. Its host is not configurable, no profiler port is published
 by Docker or the cloud firewall, and public Caddy explicitly returns 404 for
 `/debug/pprof` and its descendants. Collection enters through IAP SSH and the
-checked-in operator tooling only.
+checked-in operator tooling, or through the authenticated Platform admin
+capture described below. Neither path publishes the profiler listener.
 
 Known production mappings:
 
@@ -60,6 +61,28 @@ overhead.
 
 Profiles are operational artifacts. They land under `.tmp/pprof/`, are ignored
 by Git, and should not be attached to public issues without review.
+
+### Backroom inference diagnostics
+
+Backroom MCP provides a private operational path when an operator needs relay
+evidence without opening an SSH session:
+
+- `get_inference_runtime_metrics` reads current and 1/5/15/60-minute chat and
+  embedding traffic, token throughput, latency, failure counts, concurrency
+  peaks, admission budgets, and relay process identity;
+- `start_runtime_profile` captures a bounded CPU, heap, allocation, or
+  goroutine profile from `platform-relay-1` or `platform-relay-2`; and
+- `download_runtime_profile` returns the private artifact plus its SHA-256 for
+  local `go tool pprof` inspection.
+
+The capture endpoint has no configurable host or port. Platform connects only
+to the two fixed relay loopback listeners, verifies the relay's reported source
+and checkout revisions, permits one capture per relay at a time, rejects files
+over 4 MiB, and expires mode-0600 artifacts after 15 minutes. CPU captures are
+limited to 5-30 seconds. Starting a capture requires an operator identity,
+reason, and the exact confirmation `CAPTURE RUNTIME PROFILE`; downloading it
+requires the live operator identity again. Raw artifacts remain restricted to
+the Backroom artifact tool scope and must not be copied into public reports.
 
 ## Python py-spy
 

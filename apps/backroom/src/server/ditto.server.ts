@@ -200,3 +200,54 @@ export async function platformAdminRequest(
     )
   }
 }
+
+/** Read one private binary artifact without exposing the Platform bearer. */
+export async function platformAdminBinaryRequest(
+  path: string,
+  options: { timeoutMs?: number; maxBytes?: number; actor?: string } = {},
+) {
+  const baseUrl = (
+    process.env.DITTO_PLATFORM_API_BASE_URL ?? 'https://platform-api.heyditto.ai'
+  ).replace(/\/$/, '')
+  const token =
+    process.env.DITTO_ADMIN_API_TOKEN ??
+    process.env.DITTO_PLATFORM_ADMIN_TOKEN
+  if (!token) {
+    throw new Error('Platform administration is not configured in Backroom')
+  }
+  const response = await fetch(`${baseUrl}${path}`, {
+    method: 'GET',
+    headers: {
+      Accept: 'application/octet-stream',
+      Authorization: `Bearer ${token}`,
+      ...(options.actor ? { 'X-Admin-Actor': options.actor } : {}),
+    },
+    signal: AbortSignal.timeout(options.timeoutMs ?? 20_000),
+  })
+  if (!response.ok) {
+    const payload = decodeResponseBody(await response.text())
+    const message = errorMessage(payload, response.status)
+    throw new PlatformAdminError(
+      response.status === 401 || response.status === 403
+        ? 'auth'
+        : response.status >= 500
+          ? 'server'
+          : 'request',
+      message,
+      response.status,
+    )
+  }
+  const declaredLength = Number(response.headers.get('content-length') ?? '0')
+  const maxBytes = options.maxBytes ?? 2 * 1024 * 1024
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error(`Runtime profile is ${declaredLength} bytes; inline download is capped at ${maxBytes}`)
+  }
+  const bytes = new Uint8Array(await response.arrayBuffer())
+  if (bytes.byteLength > maxBytes) {
+    throw new Error(`Runtime profile is ${bytes.byteLength} bytes; inline download is capped at ${maxBytes}`)
+  }
+  return {
+    bytes,
+    sha256: response.headers.get('x-profile-sha256'),
+  }
+}

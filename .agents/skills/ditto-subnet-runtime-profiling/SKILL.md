@@ -64,6 +64,18 @@ descendants. Start from high-flat application frames, then walk their cumulative
 callers to the route or worker responsible. A high cumulative wrapper is not by
 itself the implementation to optimize.
 
+For the two central Platform relays, Backroom MCP is the lower-friction private
+path. Read `get_inference_runtime_metrics` first so the profile has request,
+token, latency, concurrency, and exact-process context. Use
+`start_runtime_profile` with an operator reason and exact confirmation, then
+`download_runtime_profile` before its 15-minute expiry. Verify the returned
+SHA-256 locally before opening it with `go tool pprof`. These tools orchestrate
+a fetch from fixed loopback listeners; they do not expose a profiler route.
+
+Backroom capture currently covers only `platform-relay-1` and
+`platform-relay-2`. Continue to use `pprofctl` through IAP for validator-local
+DittoBench processes and any target outside the central Platform host.
+
 ## Capture Python with py-spy
 
 Enter the Platform VM through GCP IAP SSH, record the deployed checkout SHA,
@@ -171,7 +183,8 @@ and what a comparable post-deploy profile must show.
 ## Security and artifact handling
 
 - Never bind pprof outside `127.0.0.1`, publish its ports, proxy its paths, add a
-  firewall exception, or create a public tunnel. Use `pprofctl` and IAP SSH.
+  firewall exception, or create a public tunnel. Use `pprofctl` through IAP or
+  the authenticated Backroom capture that fetches fixed loopback targets.
 - Never upload profiles to public issues or third-party viewers. Profiles can
   disclose function names, paths, dependencies, and runtime behavior.
 - Treat raw access-log windows as private too. They may contain identifiers or

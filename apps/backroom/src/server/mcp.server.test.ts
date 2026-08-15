@@ -82,6 +82,8 @@ describe('Backroom MCP tools', () => {
         'get_confirmation_bundle',
         'get_efficiency_bonus_settings',
         'get_inference_concurrency_settings',
+        'get_inference_runtime_metrics',
+        'download_runtime_profile',
         'get_queue_policy_settings',
         'get_validator_slot_settings',
         'list_confirmation_bundles',
@@ -139,6 +141,7 @@ describe('Backroom MCP tools', () => {
         'replace_validator_score',
         'queue_validator_score_retests',
         'set_inference_concurrency_settings',
+        'start_runtime_profile',
         'set_source_release_policy',
         'set_submission_cooldown',
       ].sort(),
@@ -161,12 +164,11 @@ describe('Backroom MCP tools', () => {
     //
     // Prose is guarded exactly by the two description assertions below; this
     // number is the coarse whole-payload backstop, and input schemas dominate
-    // it. Curve v3 added three required numeric policy knobs to
-    // set_efficiency_bonus_settings (~240 chars of schema, no new prose) and
-    // the previous 75k ceiling had only 24 chars of slack left, so it tripped
-    // on a legitimate field rather than on bloat. Raised with headroom; tighten
-    // the description budgets, not this one, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(78_000)
+    // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
+    // bounded input schemas without relaxing either prose budget below. Keep
+    // modest headroom for schema evolution; tighten the description budgets,
+    // not this whole-payload backstop, to push back on tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(81_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
       20_000,
@@ -1943,6 +1945,169 @@ describe('Backroom MCP tools', () => {
     expect(url).toBe(
       'https://platform-api.heyditto.ai/api/v1/admin/inference-concurrency-settings',
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads current and recent inference runtime pressure', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        observed_at: '2026-08-15T19:26:00Z',
+        settings_revision: 14,
+        settings_checksum: 'ab'.repeat(32),
+        lanes: [
+          {
+            request_kind: 'chat',
+            active_requests: 5,
+            live_grants: 12,
+            stale_started_requests: 11,
+            per_ticket_limit: 32,
+            per_validator_limit: 256,
+            global_limit: 512,
+            peak_per_ticket_concurrency_60m: 1,
+            peak_per_validator_concurrency_60m: 5,
+            peak_global_concurrency_60m: 11,
+          },
+        ],
+        windows: [
+          {
+            window_seconds: 60,
+            request_kind: 'chat',
+            calls: 93,
+            calls_per_second: 1.55,
+            tokens: 1_859_056,
+            tokens_per_second: 30_984.3,
+            completed: 90,
+            failed: 0,
+            canceled: 0,
+            timed_out: 0,
+            latency_p50_ms: 1953,
+            latency_p95_ms: 9995,
+            latency_max_ms: 10_738,
+            peak_global_concurrency: 6,
+          },
+        ],
+        relays: [
+          {
+            target: 'platform-relay-1',
+            status: 'ok',
+            source_revision: 'ab'.repeat(20),
+            checked_out_revision: 'ab'.repeat(20),
+            revision_drift: false,
+            process_started_at: '2026-08-15T15:41:56Z',
+            capacity_declines: {},
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_inference_runtime_metrics',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      settings_revision: 14,
+      lanes: [{ request_kind: 'chat', peak_global_concurrency_60m: 11 }],
+      windows: [{ calls_per_second: 1.55, latency_p95_ms: 9995 }],
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  const runtimeProfile = {
+    profile_id: '11111111-1111-4111-8111-111111111111',
+    target: 'platform-relay-1',
+    profile_type: 'cpu',
+    seconds: 15,
+    source_revision: 'ab'.repeat(20),
+    checked_out_revision: 'ab'.repeat(20),
+    revision_drift: false,
+    actor: 'peyton@omniaura.ai',
+    reason: 'investigate slow benchmark runs',
+    created_at: '2026-08-15T19:26:00Z',
+    expires_at: '2026-08-15T19:41:00Z',
+    byte_size: 5,
+    sha256: '137a5d59256c9738cc9c854fcce790757623d7ce2df7bbafe972d45dbd46ee80',
+    media_type: 'application/octet-stream',
+    filename: 'platform-relay-1-cpu.pb.gz',
+    download_path:
+      '/api/v1/admin/runtime-profiles/11111111-1111-4111-8111-111111111111/download',
+  }
+
+  it('starts a bounded audited runtime profile capture', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(Response.json(runtimeProfile))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'start_runtime_profile',
+      arguments: {
+        target: 'platform-relay-1',
+        profileType: 'cpu',
+        seconds: 15,
+        reason: 'investigate slow benchmark runs',
+        confirmation: 'CAPTURE RUNTIME PROFILE',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('https://platform-api.heyditto.ai/api/v1/admin/runtime-profiles')
+    expect(init.headers).toMatchObject({ 'X-Admin-Actor': 'peyton@omniaura.ai' })
+    expect(JSON.parse(String(init.body))).toEqual({
+      target: 'platform-relay-1',
+      profile_type: 'cpu',
+      seconds: 15,
+      reason: 'investigate slow benchmark runs',
+      confirmation: 'CAPTURE RUNTIME PROFILE',
+    })
+
+    await client.close()
+    await server.close()
+  })
+
+  it('downloads a checksum-pinned profile only through artifact scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(runtimeProfile))
+      .mockResolvedValueOnce(
+        new Response(new TextEncoder().encode('pprof'), {
+          status: 200,
+          headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-Profile-SHA256': runtimeProfile.sha256,
+          },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_ARTIFACT_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'download_runtime_profile',
+      arguments: { profileId: runtimeProfile.profile_id },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      encoding: 'base64',
+      data_base64: 'cHByb2Y=',
+      profile: { profile_id: runtimeProfile.profile_id },
+    })
 
     await client.close()
     await server.close()
