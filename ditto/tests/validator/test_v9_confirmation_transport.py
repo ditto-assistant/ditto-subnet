@@ -932,7 +932,6 @@ def test_job_contract_requires_longmem_projection_key() -> None:
         {"profile_revision": ""},
         {"profile_checksum": "A" * 64},
         {"requested_at": datetime(2026, 8, 8, 1, 2, 3)},
-        {"unknown": "not allowed"},
     ],
 )
 def test_claim_contract_is_strict_and_fail_closed(
@@ -944,6 +943,7 @@ def test_claim_contract_is_strict_and_fail_closed(
         "slot_id": "longmem-3",
         "profile_revision": _PROFILE_REVISION,
         "profile_checksum": _PROFILE_CHECKSUM,
+        "broker_public_key": _BROKER_PUBLIC_KEY,
         "nonce": _NONCE,
         "requested_at": _REQUESTED_AT,
         "signature": "ab" * 64,
@@ -954,11 +954,26 @@ def test_claim_contract_is_strict_and_fail_closed(
         V9ConfirmationClaimRequest.model_validate(payload)
 
 
-def test_report_and_submit_contracts_forbid_unknown_fields() -> None:
+def test_claim_report_and_submit_contracts_ignore_unknown_fields() -> None:
+    claim = {
+        "validator_hotkey": _HOTKEY,
+        "slot_id": "longmem-3",
+        "profile_revision": _PROFILE_REVISION,
+        "profile_checksum": _PROFILE_CHECKSUM,
+        "broker_public_key": _BROKER_PUBLIC_KEY,
+        "nonce": _NONCE,
+        "requested_at": _REQUESTED_AT,
+        "signature": "ab" * 64,
+        "unknown": "ignored",
+    }
+    assert (
+        "unknown" not in V9ConfirmationClaimRequest.model_validate(claim).model_dump()
+    )
+
     report = _report().model_dump(mode="python")
     report["untrusted_advisory"] = True
-    with pytest.raises(ValidationError):
-        V9ConfirmationCompletionReport.model_validate(report)
+    parsed_report = V9ConfirmationCompletionReport.model_validate(report)
+    assert "untrusted_advisory" not in parsed_report.model_dump()
 
     submit = {
         "validator_hotkey": _HOTKEY,
@@ -966,8 +981,8 @@ def test_report_and_submit_contracts_forbid_unknown_fields() -> None:
         "report": _report(),
         "legacy_confirmation_seeds": [1, 2, 3],
     }
-    with pytest.raises(ValidationError):
-        V9ConfirmationSubmitRequest.model_validate(submit)
+    parsed_submit = V9ConfirmationSubmitRequest.model_validate(submit)
+    assert "legacy_confirmation_seeds" not in parsed_submit.model_dump()
 
 
 @pytest.mark.parametrize(
@@ -1015,7 +1030,9 @@ async def test_claim_uses_exact_private_route_headers_and_signed_profile() -> No
             requested_at=claim.requested_at,
         )
         assert keypair.verify(message, bytes.fromhex(claim.signature))
-        return httpx.Response(200, json=_job_payload())
+        body = _job_payload()
+        body["execution_profile"]["future_profile_field"] = True
+        return httpx.Response(200, json=body)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         client = PlatformClient(_config(keypair.ss58_address), http, keypair)
@@ -1029,6 +1046,7 @@ async def test_claim_uses_exact_private_route_headers_and_signed_profile() -> No
     assert job is not None
     assert job.purpose == "v9_confirmation_bundle"
     assert job.bench_version == 9
+    assert "future_profile_field" not in job.execution_profile.model_dump()
     assert len(requests) == 1
     assert "top5-confirmation" not in requests[0].url.path
 
@@ -1078,10 +1096,6 @@ async def test_claim_returns_none_on_204_without_parsing_a_body() -> None:
         ),
         (
             lambda body: body.update(deadline="2026-08-09T01:02:03"),
-            "response was invalid",
-        ),
-        (
-            lambda body: body["execution_profile"].update(unexpected=True),
             "response was invalid",
         ),
     ],
@@ -1269,7 +1283,9 @@ async def test_prepare_uses_exact_private_route_header_body_digest_and_signature
             "embedding_ablation": result.embedding_ablation.model_dump(mode="json"),
             "signature": prepare.signature,
         }
-        return httpx.Response(200, json=_prepared_payload())
+        body = _prepared_payload()
+        body["future_preparation_field"] = True
+        return httpx.Response(200, json=body)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         prepared = await PlatformClient(
@@ -1279,6 +1295,7 @@ async def test_prepare_uses_exact_private_route_header_body_digest_and_signature
     assert prepared == _prepared()
     assert prepared.evidence_sha256 == _EVIDENCE_SHA
     assert prepared.evidence_sha256 != result.evidence_sha256
+    assert "future_preparation_field" not in prepared.model_dump()
 
 
 async def test_prepare_rejects_untrusted_scorer_wire_digest_before_http() -> None:
@@ -1320,7 +1337,6 @@ async def test_prepare_rejects_untrusted_scorer_wire_digest_before_http() -> Non
             lambda body: body.update(evidence_sha256="not-a-root"),
             "response was invalid",
         ),
-        (lambda body: body.update(unexpected=True), "response was invalid"),
     ],
 )
 async def test_prepare_rejects_malformed_or_identity_mismatched_response(

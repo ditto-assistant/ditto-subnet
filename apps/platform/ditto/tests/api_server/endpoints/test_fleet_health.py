@@ -103,7 +103,7 @@ def test_saturated_cpu_is_healthy_workload(
     ) == (True, "available", "healthy")
 
 
-def test_malformed_stored_metrics_are_not_partially_exposed() -> None:
+def test_additive_stored_metrics_are_ignored_not_exposed() -> None:
     raw = {
         "collected_at": int(datetime.now(UTC).timestamp()),
         "cpu_percent": 20,
@@ -116,7 +116,9 @@ def test_malformed_stored_metrics_are_not_partially_exposed() -> None:
         },
         "hostname": "private-host",
     }
-    assert _public_system_metrics(raw) is None
+    metrics = _public_system_metrics(raw)
+    assert metrics is not None
+    assert "hostname" not in metrics.model_dump()
 
 
 def test_early_stage_past_threshold_is_stalled() -> None:

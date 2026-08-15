@@ -72,7 +72,7 @@ class AdminQuarantineList(BaseModel):
 
 
 class AdminQuarantineResolveRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     resolution: QuarantineResolution
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3)]
@@ -107,7 +107,7 @@ class AdminScreeningDisputeList(BaseModel):
 
 
 class AdminScreeningDisputeResolveRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     resolution: DisputeResolution
     reason: Annotated[str, Field(min_length=3)]
@@ -162,7 +162,7 @@ class AdminScreeningSubmissionList(BaseModel):
 
 
 class AdminScreeningRescreenRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[str, Field(min_length=3)]
     expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -177,7 +177,7 @@ class AdminScreeningRescreenResponse(BaseModel):
 class AdminScreeningRetryNowRequest(BaseModel):
     """Compare-and-swap guards for waiving one failed attempt's backoff."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[str, Field(min_length=8)]
     expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -198,7 +198,7 @@ class AdminScreeningRetryNowResponse(BaseModel):
 class AdminBenchmarkContractRefreshRequest(BaseModel):
     """Compare-and-swap guard for rebuilding one stale benchmark contract."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[str, Field(min_length=3)]
     expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -232,7 +232,7 @@ class AdminBenchmarkContractRefreshResponse(BaseModel):
 class AdminScreenedImageRebuildRequest(BaseModel):
     """Compare-and-swap guard for rebuilding only the screened image."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[str, Field(min_length=8)]
     expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -269,7 +269,7 @@ class AdminScreenedImageRebuildResponse(BaseModel):
 class AdminBenchmarkContractMigrationRequest(BaseModel):
     """Compare-and-swap guard for moving one zero-score v2 artifact to v3."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[str, Field(min_length=3)]
     expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -311,7 +311,7 @@ class AdminBenchmarkContractMigrationResponse(BaseModel):
 class AdminBenchmarkQualificationRequest(BaseModel):
     """Compare-and-swap guard for qualifying a scored rolling contender."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[str, Field(min_length=3)]
     expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -467,7 +467,7 @@ class AdminQuarantineContext(BaseModel):
 class AdminQuarantineBatchContextRequest(BaseModel):
     """Bounded context fan-out for queue workbenches and MCP clients."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     quarantine_ids: Annotated[list[UUID], Field(min_length=1, max_length=50)]
 
@@ -486,7 +486,7 @@ class AdminQuarantineBatchContextResponse(BaseModel):
 class AdminQuarantineBatchDecision(BaseModel):
     """One guarded decision in a separately previewed batch."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     quarantine_id: UUID
     expected_agent_id: UUID
@@ -496,7 +496,7 @@ class AdminQuarantineBatchDecision(BaseModel):
 
 
 class AdminQuarantineBatchPreviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     decisions: Annotated[
         list[AdminQuarantineBatchDecision], Field(min_length=1, max_length=50)
@@ -698,7 +698,7 @@ class AdminValidatorAssignmentList(BaseModel):
 
 
 class AdminValidatorAssignmentReleaseRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     expected_deadline: datetime
     reason: Annotated[str, Field(min_length=8)]

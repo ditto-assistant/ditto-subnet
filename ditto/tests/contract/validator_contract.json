@@ -280,7 +280,6 @@
   "LedgerEntry": {
     "$defs": {
       "AblationBudget": {
-        "additionalProperties": false,
         "properties": {
           "max_chat_input_bytes": {
             "maximum": 9007199254740991,
@@ -318,7 +317,6 @@
         "type": "object"
       },
       "AblationDimensionEnvelope": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "$ref": "#/$defs/AblationEvidence"
@@ -377,7 +375,6 @@
         "type": "object"
       },
       "AblationEvidence": {
-        "additionalProperties": false,
         "properties": {
           "ablated_mean_micros": {
             "anyOf": [
@@ -591,7 +588,6 @@
         "type": "object"
       },
       "AblationSyntheticUsage": {
-        "additionalProperties": false,
         "properties": {
           "budget": {
             "$ref": "#/$defs/AblationBudget"
@@ -742,7 +738,6 @@
         "type": "object"
       },
       "ConfirmationUsageTotals": {
-        "additionalProperties": false,
         "properties": {
           "input_tokens": {
             "maximum": 9007199254740991,
@@ -875,7 +870,6 @@
         "type": "object"
       },
       "LongMemCapabilityScore": {
-        "additionalProperties": false,
         "properties": {
           "capability": {
             "enum": [
@@ -913,7 +907,6 @@
         "type": "object"
       },
       "LongMemDimensionEnvelope": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "$ref": "#/$defs/LongMemEvidence"
@@ -972,7 +965,6 @@
         "type": "object"
       },
       "LongMemEvidence": {
-        "additionalProperties": false,
         "properties": {
           "artifact_sha256": {
             "maxLength": 64,
@@ -1035,7 +1027,6 @@
         "type": "object"
       },
       "LongMemProviderLaneEvidence": {
-        "additionalProperties": false,
         "properties": {
           "completion_tokens": {
             "maximum": 9007199254740991,
@@ -1131,7 +1122,6 @@
         "type": "object"
       },
       "LongMemScoreEvidence": {
-        "additionalProperties": false,
         "properties": {
           "case_count": {
             "maximum": 9007199254740991,
@@ -1164,7 +1154,6 @@
         "type": "object"
       },
       "V9AuthoritativeToolGate": {
-        "additionalProperties": false,
         "properties": {
           "coverage_bps": {
             "maximum": 10000,
@@ -1233,7 +1222,6 @@
         "type": "object"
       },
       "V9BaseEvidence": {
-        "additionalProperties": false,
         "properties": {
           "applied_gate_factor_bps": {
             "enum": [
@@ -1324,7 +1312,6 @@
         "type": "object"
       },
       "V9ConfirmationCompositePolicy": {
-        "additionalProperties": false,
         "properties": {
           "base_weight_bps": {
             "exclusiveMaximum": 10000,
@@ -1365,7 +1352,6 @@
         "type": "object"
       },
       "V9ConfirmationEvidenceRoot": {
-        "additionalProperties": false,
         "properties": {
           "ablation_coordinator_latency_ms": {
             "maximum": 9007199254740991,
@@ -1440,7 +1426,6 @@
         "type": "object"
       },
       "V9ConfirmationReceipt": {
-        "additionalProperties": false,
         "properties": {
           "applied_factor_bps": {
             "enum": [
@@ -1569,7 +1554,6 @@
         "type": "object"
       },
       "V9GateExclusions": {
-        "additionalProperties": false,
         "properties": {
           "ablation": {
             "maximum": 10000000,
@@ -1601,7 +1585,6 @@
         "type": "object"
       },
       "V9ModelUseGate": {
-        "additionalProperties": false,
         "properties": {
           "administered_cases": {
             "maximum": 10000000,
@@ -1702,7 +1685,6 @@
         "type": "object"
       },
       "V9ScoreContract": {
-        "additionalProperties": false,
         "properties": {
           "manifest_sha256": {
             "pattern": "^[0-9a-f]{64}$",
@@ -1720,7 +1702,6 @@
         "type": "object"
       },
       "V9ScoreGateEvidence": {
-        "additionalProperties": false,
         "properties": {
           "authoritative_tool": {
             "$ref": "#/$defs/V9AuthoritativeToolGate"
@@ -1758,7 +1739,6 @@
         "type": "object"
       },
       "V9ThresholdProfile": {
-        "additionalProperties": false,
         "properties": {
           "id": {
             "pattern": "^[a-z0-9][a-z0-9._:@/-]{0,127}$",
@@ -1987,7 +1967,6 @@
   "LedgerResponse": {
     "$defs": {
       "AblationBudget": {
-        "additionalProperties": false,
         "properties": {
           "max_chat_input_bytes": {
             "maximum": 9007199254740991,
@@ -2025,7 +2004,6 @@
         "type": "object"
       },
       "AblationDimensionEnvelope": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "$ref": "#/$defs/AblationEvidence"
@@ -2084,7 +2062,6 @@
         "type": "object"
       },
       "AblationEvidence": {
-        "additionalProperties": false,
         "properties": {
           "ablated_mean_micros": {
             "anyOf": [
@@ -2298,7 +2275,6 @@
         "type": "object"
       },
       "AblationSyntheticUsage": {
-        "additionalProperties": false,
         "properties": {
           "budget": {
             "$ref": "#/$defs/AblationBudget"
@@ -2449,7 +2425,6 @@
         "type": "object"
       },
       "ConfirmationUsageTotals": {
-        "additionalProperties": false,
         "properties": {
           "input_tokens": {
             "maximum": 9007199254740991,
@@ -2791,7 +2766,6 @@
         "type": "object"
       },
       "LongMemCapabilityScore": {
-        "additionalProperties": false,
         "properties": {
           "capability": {
             "enum": [
@@ -2829,7 +2803,6 @@
         "type": "object"
       },
       "LongMemDimensionEnvelope": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "$ref": "#/$defs/LongMemEvidence"
@@ -2888,7 +2861,6 @@
         "type": "object"
       },
       "LongMemEvidence": {
-        "additionalProperties": false,
         "properties": {
           "artifact_sha256": {
             "maxLength": 64,
@@ -2951,7 +2923,6 @@
         "type": "object"
       },
       "LongMemProviderLaneEvidence": {
-        "additionalProperties": false,
         "properties": {
           "completion_tokens": {
             "maximum": 9007199254740991,
@@ -3047,7 +3018,6 @@
         "type": "object"
       },
       "LongMemScoreEvidence": {
-        "additionalProperties": false,
         "properties": {
           "case_count": {
             "maximum": 9007199254740991,
@@ -3080,7 +3050,6 @@
         "type": "object"
       },
       "V9AuthoritativeToolGate": {
-        "additionalProperties": false,
         "properties": {
           "coverage_bps": {
             "maximum": 10000,
@@ -3149,7 +3118,6 @@
         "type": "object"
       },
       "V9BaseEvidence": {
-        "additionalProperties": false,
         "properties": {
           "applied_gate_factor_bps": {
             "enum": [
@@ -3240,7 +3208,6 @@
         "type": "object"
       },
       "V9ConfirmationCompositePolicy": {
-        "additionalProperties": false,
         "properties": {
           "base_weight_bps": {
             "exclusiveMaximum": 10000,
@@ -3281,7 +3248,6 @@
         "type": "object"
       },
       "V9ConfirmationEvidenceRoot": {
-        "additionalProperties": false,
         "properties": {
           "ablation_coordinator_latency_ms": {
             "maximum": 9007199254740991,
@@ -3356,7 +3322,6 @@
         "type": "object"
       },
       "V9ConfirmationReceipt": {
-        "additionalProperties": false,
         "properties": {
           "applied_factor_bps": {
             "enum": [
@@ -3485,7 +3450,6 @@
         "type": "object"
       },
       "V9GateExclusions": {
-        "additionalProperties": false,
         "properties": {
           "ablation": {
             "maximum": 10000000,
@@ -3517,7 +3481,6 @@
         "type": "object"
       },
       "V9ModelUseGate": {
-        "additionalProperties": false,
         "properties": {
           "administered_cases": {
             "maximum": 10000000,
@@ -3618,7 +3581,6 @@
         "type": "object"
       },
       "V9ScoreContract": {
-        "additionalProperties": false,
         "properties": {
           "manifest_sha256": {
             "pattern": "^[0-9a-f]{64}$",
@@ -3636,7 +3598,6 @@
         "type": "object"
       },
       "V9ScoreGateEvidence": {
-        "additionalProperties": false,
         "properties": {
           "authoritative_tool": {
             "$ref": "#/$defs/V9AuthoritativeToolGate"
@@ -3674,7 +3635,6 @@
         "type": "object"
       },
       "V9ThresholdProfile": {
-        "additionalProperties": false,
         "properties": {
           "id": {
             "pattern": "^[a-z0-9][a-z0-9._:@/-]{0,127}$",
@@ -4496,7 +4456,6 @@
   "ValidatorHeartbeatRequest": {
     "$defs": {
       "ActiveBenchmarkSlot": {
-        "additionalProperties": false,
         "properties": {
           "agent_id": {
             "format": "uuid",
@@ -4534,7 +4493,6 @@
         "type": "object"
       },
       "BenchmarkCapacity": {
-        "additionalProperties": false,
         "properties": {
           "active": {
             "items": {
@@ -4570,7 +4528,6 @@
         "type": "object"
       },
       "BenchmarkProgress": {
-        "additionalProperties": false,
         "properties": {
           "completed": {
             "anyOf": [
@@ -4636,7 +4593,6 @@
         "type": "object"
       },
       "ConfirmationProgress": {
-        "additionalProperties": false,
         "properties": {
           "agent_id": {
             "format": "uuid",
@@ -4706,7 +4662,6 @@
         "type": "object"
       },
       "DockerHealth": {
-        "additionalProperties": false,
         "properties": {
           "running_containers": {
             "maximum": 1000,
@@ -4735,7 +4690,6 @@
         "type": "object"
       },
       "InferenceCalibrationRoute": {
-        "additionalProperties": false,
         "properties": {
           "model": {
             "maxLength": 120,
@@ -4760,7 +4714,6 @@
         "type": "object"
       },
       "ObservedComponentIdentity": {
-        "additionalProperties": false,
         "properties": {
           "image_digest": {
             "anyOf": [
@@ -4802,7 +4755,6 @@
         "type": "object"
       },
       "ScorerBenchmarkCapability": {
-        "additionalProperties": false,
         "properties": {
           "observed_at": {
             "anyOf": [
@@ -4886,7 +4838,6 @@
         "type": "object"
       },
       "ScorerLivenessProbe": {
-        "additionalProperties": false,
         "properties": {
           "consecutive_failures": {
             "default": 0,
@@ -4961,7 +4912,6 @@
         "type": "object"
       },
       "SystemMetrics": {
-        "additionalProperties": false,
         "properties": {
           "collected_at": {
             "minimum": 0,
@@ -4999,7 +4949,6 @@
         "type": "object"
       },
       "V7InferenceCalibration": {
-        "additionalProperties": false,
         "properties": {
           "manifest_sha256": {
             "pattern": "^[0-9a-f]{64}$",
@@ -5019,7 +4968,6 @@
         "type": "object"
       },
       "ValidatorCapabilities": {
-        "additionalProperties": false,
         "properties": {
           "executor_isolation": {
             "enum": [
@@ -5081,7 +5029,6 @@
         "type": "object"
       },
       "ValidatorComponentHealth": {
-        "additionalProperties": false,
         "properties": {
           "health": {
             "enum": [
@@ -5149,7 +5096,6 @@
         "type": "object"
       },
       "ValidatorComponentIdentity": {
-        "additionalProperties": false,
         "properties": {
           "image_digest": {
             "anyOf": [
@@ -5202,7 +5148,6 @@
         "type": "object"
       },
       "ValidatorStackComponents": {
-        "additionalProperties": false,
         "properties": {
           "ditto_subnet": {
             "$ref": "#/$defs/ValidatorComponentIdentity"
@@ -5248,7 +5193,6 @@
         "type": "object"
       },
       "ValidatorStackHealth": {
-        "additionalProperties": false,
         "properties": {
           "ditto_subnet": {
             "$ref": "#/$defs/ValidatorComponentHealth"
@@ -5294,7 +5238,6 @@
         "type": "object"
       },
       "ValidatorStackIdentity": {
-        "additionalProperties": false,
         "properties": {
           "components": {
             "$ref": "#/$defs/ValidatorStackComponents"
@@ -5332,7 +5275,6 @@
         "type": "object"
       },
       "ValidatorUpdaterStatus": {
-        "additionalProperties": false,
         "properties": {
           "candidate_descriptor": {
             "anyOf": [
@@ -5510,7 +5452,6 @@
         "type": "object"
       }
     },
-    "additionalProperties": false,
     "properties": {
       "active_agent_id": {
         "anyOf": [
@@ -5667,7 +5608,6 @@
   "ValidatorHeartbeatResponse": {
     "$defs": {
       "HeldLease": {
-        "additionalProperties": false,
         "properties": {
           "agent_id": {
             "format": "uuid",

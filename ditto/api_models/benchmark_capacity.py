@@ -32,7 +32,7 @@ the new value, which is why the platform change lands first.
 class ActiveBenchmarkSlot(BaseModel):
     """One active, ticket-bound benchmark execution slot."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     slot_id: Annotated[str, Field(pattern=_SLOT_PATTERN)]
     agent_id: UUID
@@ -59,7 +59,7 @@ class BenchmarkCapacity(BaseModel):
     draining or unhealthy, but the platform will never place new work there.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     configured_slots: Annotated[int, Field(ge=1, le=8)] = 1
     healthy_slots: Annotated[list[str], Field(max_length=8)] = Field(

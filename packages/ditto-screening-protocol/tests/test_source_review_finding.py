@@ -174,7 +174,7 @@ def test_serialization_schema_retains_typed_v1_and_v2_fields() -> None:
     schema = SourceReviewFinding.model_json_schema(mode="serialization")
 
     assert schema["type"] == "object"
-    assert schema["additionalProperties"] is False
+    assert schema.get("additionalProperties") is not False
     assert set(schema["properties"]) == {
         "artifact_sha256",
         "prompt_revision",
@@ -586,14 +586,15 @@ def test_role_binding_bounds_are_enforced(field: str, value: str | int) -> None:
         SourceReviewCausalRoleBinding.model_validate(raw)
 
 
-def test_unknown_v2_fields_are_rejected() -> None:
+def test_unknown_v2_fields_are_ignored_and_not_canonicalized() -> None:
     raw = _v2_finding().model_dump(mode="json")
     causal = raw["causal_evidence"]
     assert isinstance(causal, dict)
     causal["private_reasoning"] = "not allowed"
 
-    with pytest.raises(ValidationError, match="private_reasoning"):
-        SourceReviewFinding.model_validate(raw)
+    finding = SourceReviewFinding.model_validate(raw)
+    assert "private_reasoning" not in finding.causal_evidence.model_dump()
+    assert b"private_reasoning" not in finding.canonical_bytes()
 
 
 def test_v2_json_round_trip_keeps_canonical_identity() -> None:

@@ -152,7 +152,7 @@ class InferenceConcurrencySettings(BaseModel):
     capacity-decline path.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     chat_request_budget: Annotated[int, Field(ge=1, le=MAX_CHAT_REQUEST_BUDGET)] = (
         DEFAULT_CHAT_REQUEST_BUDGET
@@ -262,7 +262,7 @@ class InferenceConcurrencySettings(BaseModel):
 
 
 class InferenceConcurrencySettingsRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -277,7 +277,7 @@ class InferenceConcurrencySettingsRevision(BaseModel):
 class EffectiveInferenceConcurrencySettings(BaseModel):
     """What the admission path is enforcing right now, and where it came from."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     scope: str
@@ -288,7 +288,7 @@ class EffectiveInferenceConcurrencySettings(BaseModel):
 
 
 class AdminInferenceConcurrencySettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     scope: str = "*"
     expected_revision: Annotated[int, Field(ge=0)]
@@ -324,7 +324,7 @@ class AdminInferenceConcurrencySettingsRequest(BaseModel):
 
 
 class AdminInferenceConcurrencySettingsResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: list[InferenceConcurrencySettingsRevision]
     history: list[InferenceConcurrencySettingsRevision]

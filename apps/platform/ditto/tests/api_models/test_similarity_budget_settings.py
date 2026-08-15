@@ -147,10 +147,12 @@ def test_a_complete_write_is_accepted() -> None:
     assert request.settings.similarity_budget.enabled is True
 
 
-def test_the_board_is_frozen_and_rejects_unknown_fields() -> None:
+def test_the_board_is_frozen_and_ignores_unknown_fields() -> None:
     settings = SimilarityBudgetSettings()
 
-    with pytest.raises(ValidationError):
-        SimilarityBudgetSettings(jaccard_treshold=0.9)  # type: ignore[call-arg]
+    with_typo = SimilarityBudgetSettings(
+        jaccard_treshold=0.9  # type: ignore[call-arg]
+    )
+    assert "jaccard_treshold" not in with_typo.model_dump()
     with pytest.raises(ValidationError):
         settings.enabled = False  # type: ignore[misc]

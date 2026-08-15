@@ -144,7 +144,6 @@ func TestExchangeValidation(t *testing.T) {
 	// precedes even the proxy-disabled 404.
 	for name, body := range map[string]string{
 		"not json":         "{",
-		"unknown field":    exchangeBody(map[string]any{"extra": 1}),
 		"missing field":    exchangeBody(map[string]any{"signature": nil}),
 		"bad hotkey":       exchangeBody(map[string]any{"validator_hotkey": "0Oli"}),
 		"bad broker key":   exchangeBody(map[string]any{"broker_public_key": "short"}),
@@ -158,6 +157,15 @@ func TestExchangeValidation(t *testing.T) {
 			expectEnvelope(t, w, 422, relayhttp.CodeRequestValidation, "request validation failed")
 		})
 	}
+
+	t.Run("unknown field is ignored", func(t *testing.T) {
+		parsed, ok := parseExchangeRequest(
+			[]byte(exchangeBody(map[string]any{"future_field": 1})),
+		)
+		if !ok || parsed == nil {
+			t.Fatal("additive exchange field must not reject an older relay")
+		}
+	})
 
 	t.Run("disabled proxy", func(t *testing.T) {
 		disabled := newGateDeps(t, testConfig(t, map[string]string{"DITTO_INFERENCE_PROXY_ENABLED": "0", "OPENROUTER_API_KEY": ""}))

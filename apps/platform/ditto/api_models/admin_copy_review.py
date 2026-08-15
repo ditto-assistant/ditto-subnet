@@ -222,14 +222,14 @@ class AdminSourceDiffFileDetail(BaseModel):
 
 
 class AdminCopyReviewResolveRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     # release/ban remain accepted for Backroom #20 wire compatibility.
     resolution: Literal["clear", "reject", "release", "ban"]
     reason: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3)]
 
 
 class AdminCopyReviewOpenRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     expected_sha256: Annotated[
         str, StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-f]{64}$")
     ]

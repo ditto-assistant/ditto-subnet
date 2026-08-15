@@ -1876,11 +1876,14 @@ class TestHeartbeat:
 
         malformed = dict(payload)
         malformed["updater_status"] = {**updater, "journal": "secret host log"}
-        assert (
-            await client.post(
-                "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=malformed
-            )
-        ).status_code == 422
+        accepted = await client.post(
+            "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=malformed
+        )
+        assert accepted.status_code == 200, accepted.text
+        async with session_maker() as session:
+            row = await session.get(ValidatorHeartbeat, _VALIDATOR_HOTKEY)
+            assert row is not None
+            assert row.updater_status == updater
 
     async def test_pre_v23_heartbeat_remains_valid_without_updater_state(
         self,
@@ -3715,7 +3718,7 @@ class TestHeartbeat:
         ):
             assert forbidden not in str(entry).lower()
 
-    async def test_v3_rejects_tampered_or_malformed_metrics(
+    async def test_v3_rejects_tampering_and_ignores_additive_metrics(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -3738,10 +3741,10 @@ class TestHeartbeat:
             protocol_version=3, timestamp=timestamp, system_metrics=metrics
         )
         malformed["system_metrics"]["hostname"] = "private"  # type: ignore[index]
-        rejected = await client.post(
+        accepted = await client.post(
             "/api/v1/validator/heartbeat", headers=_AUTH_HEADER, json=malformed
         )
-        assert rejected.status_code == 422
+        assert accepted.status_code == 200, accepted.text
 
     async def test_heartbeat_payload_size_is_bounded(
         self,
@@ -3847,21 +3850,21 @@ class TestHeartbeat:
                 )
             )
 
-        malformed = _heartbeat_payload(
+        additive = _heartbeat_payload(
             keypair=_KEYPAIRS[2],
             protocol_version=3,
             timestamp=timestamp,
             system_metrics=metrics,
         )
-        malformed_metrics = malformed["system_metrics"]
-        assert isinstance(malformed_metrics, dict)
-        malformed_metrics["hostname"] = "must-never-be-accepted"
-        rejected = await client.post(
+        additive_metrics = additive["system_metrics"]
+        assert isinstance(additive_metrics, dict)
+        additive_metrics["hostname"] = "must-never-be-published"
+        accepted = await client.post(
             "/api/v1/validator/heartbeat",
             headers={"X-Validator-Hotkey": _KEYPAIRS[2].ss58_address},
-            json=malformed,
+            json=additive,
         )
-        assert rejected.status_code == 422
+        assert accepted.status_code == 200, accepted.text
 
         validators = (await client.get("/api/v1/public/validators")).json()
         assert validators["reported_count"] == 2
@@ -3872,6 +3875,7 @@ class TestHeartbeat:
         assert old["availability"] == "available"
         assert old["system_metrics"] is None
         assert current["availability"] == "available"
+        assert "hostname" not in json.dumps(current)
         # Both are legacy reporters (protocol 2 and 3) and the floor for
         # advertising v7 is protocol 12, so neither can serve the era being
         # scored and both are graded on that before their host metrics are

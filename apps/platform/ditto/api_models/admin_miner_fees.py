@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class MinerFeeDay(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     date: date
     paid_submissions: int = Field(ge=0)
@@ -21,7 +21,7 @@ class MinerFeeDay(BaseModel):
 class AdminMinerFeeSummary(BaseModel):
     """Ledger-derived gross revenue; wallet holdings are intentionally separate."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     generated_at: datetime
     payment_address: str

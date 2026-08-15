@@ -276,6 +276,15 @@ async def lease_liveness(
             return _assume_running(
                 REASON_CAPACITY_UNREADABLE, heartbeat_age_seconds=age_seconds
             )
+        # Ignoring additive fields must not let an unknown-only object collapse
+        # into BenchmarkCapacity's defaults and become affirmative idle evidence.
+        # A normal capacity payload always carries at least one established key.
+        if heartbeat.benchmark_capacity and not (
+            set(heartbeat.benchmark_capacity) & set(BenchmarkCapacity.model_fields)
+        ):
+            return _assume_running(
+                REASON_CAPACITY_UNREADABLE, heartbeat_age_seconds=age_seconds
+            )
         try:
             capacity = BenchmarkCapacity.model_validate(heartbeat.benchmark_capacity)
         except ValidationError:

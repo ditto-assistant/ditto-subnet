@@ -60,7 +60,7 @@ _SYSTEM_METRICS_SAMPLE_SECONDS = 120.0
 class DockerHealth(BaseModel):
     """Aggregate Docker health without names or image metadata."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     status: DockerHealthStatus
     running_containers: Annotated[int, Field(ge=0, le=1000)]
@@ -84,7 +84,7 @@ class DockerHealth(BaseModel):
 class SystemMetrics(BaseModel):
     """One bounded and intentionally coarse host-health sample."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     collected_at: Annotated[int, Field(ge=0)]
     cpu_percent: Annotated[int, Field(ge=0, le=100, multiple_of=5)]
@@ -96,7 +96,7 @@ class SystemMetrics(BaseModel):
 class ScreenerProgress(BaseModel):
     """Small, public-safe description of an active screening job."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     stage: ScreenerProgressStage
     started_at: Annotated[int, Field(ge=0)]
@@ -105,7 +105,7 @@ class ScreenerProgress(BaseModel):
 class ReviewSettingsStatus(BaseModel):
     """Secret-free settings revision actually active for the next lease."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     revision: Annotated[int, Field(ge=0)]
     scope: Annotated[str, Field(pattern=r"^(?:bootstrap|\*|[a-zA-Z0-9._-]{1,63})$")]
@@ -117,7 +117,7 @@ class ReviewSettingsStatus(BaseModel):
 class ScreenerHeartbeatRequest(BaseModel):
     """Dedicated screener identity, work, and optional coarse host health."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     screener_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     software_version: Annotated[str, Field(pattern=_SOFTWARE_VERSION_PATTERN)]

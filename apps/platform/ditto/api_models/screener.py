@@ -77,14 +77,14 @@ ScreenerProgressStage = Literal[
 class ScreenerProgress(BaseModel):
     """Signed, public-safe progress for one active screening job."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     stage: ScreenerProgressStage
     started_at: Annotated[int, Field(ge=0)]
 
 
 class ScreenerReviewSettingsStatus(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     revision: Annotated[int, Field(ge=0)]
     scope: Annotated[str, Field(pattern=r"^(?:bootstrap|\*|[a-zA-Z0-9._-]{1,63})$")]
@@ -96,7 +96,7 @@ class ScreenerReviewSettingsStatus(BaseModel):
 class ScreenerHeartbeatRequest(BaseModel):
     """Dedicated screener identity, work, and optional host-health report."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     screener_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     software_version: Annotated[str, Field(pattern=_SOFTWARE_VERSION_PATTERN)]
@@ -149,7 +149,7 @@ class ScreenerHeartbeatResponse(BaseModel):
 
 
 class ShadowReviewUsage(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     input_tokens: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
@@ -172,7 +172,7 @@ MAX_SHADOW_PROVIDER_STAGES = 50
 class ShadowReviewObservationRequest(BaseModel):
     """Bounded, non-authoritative observation for an active attempt."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     attempt_id: UUID
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -206,7 +206,7 @@ class ShadowReviewObservationRequest(BaseModel):
 
 
 class ShadowReviewObservationResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     accepted: bool
 

@@ -123,7 +123,7 @@ class ConfirmationBundleSettings(BaseModel):
     cap and a frozen profile identity before the API accepts them.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     mode: ConfirmationBundleMode = ConfirmationBundleMode.OFF
     eligibility_mode: ConfirmationEligibilityMode = ConfirmationEligibilityMode.RANK
@@ -183,7 +183,7 @@ class ConfirmationBundleSettings(BaseModel):
 
 
 class ConfirmationBundleSettingsRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -196,7 +196,7 @@ class ConfirmationBundleSettingsRevision(BaseModel):
 
 
 class EffectiveConfirmationBundleSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     scope: str
@@ -213,7 +213,7 @@ class EffectiveConfirmationBundleSettings(BaseModel):
 
 
 class AdminConfirmationBundleSettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     scope: str = "*"
     expected_revision: Annotated[int, Field(ge=0)]
@@ -224,7 +224,7 @@ class AdminConfirmationBundleSettingsRequest(BaseModel):
 
 
 class AdminConfirmationBundleSettingsResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: list[ConfirmationBundleSettingsRevision]
     history: list[ConfirmationBundleSettingsRevision]
@@ -233,7 +233,7 @@ class AdminConfirmationBundleSettingsResponse(BaseModel):
 
 
 class ConfirmationDimensionEvidenceView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     dimension: ConfirmationDimension
     status: Literal["completed", "not_run", "unavailable"]
@@ -249,7 +249,7 @@ class ConfirmationDimensionEvidenceView(BaseModel):
 
 
 class ConfirmationBundleTicketView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     ticket_id: UUID
     validator_hotkey: str
@@ -263,7 +263,7 @@ class ConfirmationBundleTicketView(BaseModel):
 
 
 class ConfirmationBundleSubjectView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     agent_id: UUID
     bench_version: int
@@ -285,7 +285,7 @@ class ConfirmationBundleSubjectView(BaseModel):
 
 
 class ConfirmationBundleView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     bundle_id: UUID
     artifact_sha256: Sha256
@@ -315,7 +315,7 @@ class ConfirmationBundleView(BaseModel):
 
 
 class ConfirmationDailyBudgetView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     utc_day: date
     revision: int
@@ -337,7 +337,7 @@ class ConfirmationShadowCalibrationView(BaseModel):
     not guess a chain constant.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     observed_from_utc_day: date | None
     observed_through_utc_day: date | None
@@ -409,7 +409,7 @@ class ConfirmationShadowCalibrationView(BaseModel):
 
 
 class AdminConfirmationBundleListResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     items: list[ConfirmationBundleView]
     count: int
@@ -418,7 +418,7 @@ class AdminConfirmationBundleListResponse(BaseModel):
 
 
 class AdminConfirmationBundleRetestRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     request_id: Annotated[UUID, Field(strict=False)]
     expected_generation: Annotated[int, Field(ge=0)]
@@ -428,7 +428,7 @@ class AdminConfirmationBundleRetestRequest(BaseModel):
 
 
 class AdminConfirmationBundleRetestResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     authorization_id: UUID
     superseded_bundle_id: UUID

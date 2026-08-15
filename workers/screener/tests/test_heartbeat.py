@@ -150,20 +150,20 @@ def test_docker_probe_preserves_only_rootless_socket_selector(
     }
 
 
-def test_heartbeat_rejects_arbitrary_private_host_fields() -> None:
-    with pytest.raises(ValidationError):
-        ScreenerHeartbeatRequest.model_validate(
-            {
-                "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-                "software_version": "0.1.0",
-                "protocol_version": 1,
-                "policy_version": 6,
-                "state": "polling",
-                "timestamp": 1,
-                "signature": "ab" * 64,
-                "hostname": "must-not-leave-the-host",
-            }
-        )
+def test_heartbeat_drops_arbitrary_private_host_fields() -> None:
+    heartbeat = ScreenerHeartbeatRequest.model_validate(
+        {
+            "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "software_version": "0.1.0",
+            "protocol_version": 1,
+            "policy_version": 6,
+            "state": "polling",
+            "timestamp": 1,
+            "signature": "ab" * 64,
+            "hostname": "must-not-leave-the-host",
+        }
+    )
+    assert "hostname" not in heartbeat.model_dump()
 
 
 def test_v4_requires_bounded_review_settings_status() -> None:

@@ -44,20 +44,9 @@ DEFAULT_SETTINGS = QueuePolicySettings()
 DEFAULT_SETTINGS_TTL_SECONDS = 5.0
 
 
-# Keys that were removed from the policy and must be ignored when a revision
-# written before the removal is read back.
-#
-# ``prev_gen_carryover`` is stored WHOLE, and the model is ``extra="forbid"``.
-# Without this, a revision that still carries a retired key fails validation --
-# and because this decoder fails open, the operator's ENTIRE policy (cohort
-# sizes, lane cycle, owner limits, all of it) would silently revert to the
-# shipped defaults behind one log line. Dropping the dead key instead keeps
-# every setting the operator actually chose.
-#
-# Read-side only, and deliberately so: the WRITE path stays strict, so an
-# operator or a stale Backroom client that still sends the key is REJECTED
-# rather than quietly ignored. Forgiving a stored document is not the same as
-# accepting a new instruction.
+# Known keys removed from whole-policy storage. Pydantic ignores all unknown
+# fields for rolling compatibility; this explicit read-side strip additionally
+# records when a historical retired control is encountered.
 _RETIRED_CARRYOVER_KEYS = frozenset({"allow_retired_era_backfill"})
 
 

@@ -37,7 +37,7 @@ class ConfirmationProgress(BaseModel):
     publishing it.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     bundle_id: UUID
     ticket_id: UUID

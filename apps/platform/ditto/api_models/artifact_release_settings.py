@@ -11,7 +11,7 @@ from ditto.api_models.source_disclosure import SourceDisclosure
 
 
 class ArtifactReleaseSettingsRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -27,14 +27,14 @@ class ArtifactReleaseSettingsRevision(BaseModel):
 
 
 class AdminArtifactReleaseSettingsResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: ArtifactReleaseSettingsRevision
     history: list[ArtifactReleaseSettingsRevision]
 
 
 class AdminArtifactReleaseSettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     expected_revision: Annotated[int, Field(ge=0)]
     # `strict=False` on this one field: the model is strict so an operator

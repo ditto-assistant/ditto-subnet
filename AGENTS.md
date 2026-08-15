@@ -25,6 +25,15 @@ before editing a component.
 - Test-only changes must use the `chore(tests):` scope, for example
   `chore(tests): pin legacy confirmation regression`.
 
+## Forward-compatible JSON models
+
+- Pydantic wire models must ignore unknown JSON fields so rolling upgrades can
+  add fields without breaking older consumers. Use `ConfigDict(extra="ignore")`
+  when the policy should be explicit; never use `extra="forbid"`.
+- Keep known-field validation strict through field types, bounds, validators,
+  required fields, and signature verification. Ignoring an unknown field must
+  not make that field authoritative or include it in canonical signed output.
+
 ## Git-backed Docker build contexts
 
 - Never pin a Git build context with the legacy URL-fragment form

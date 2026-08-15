@@ -83,7 +83,7 @@ class ValidatorSlotSettings(BaseModel):
     with any edit to this model.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     max_concurrent_slots: Annotated[int, Field(ge=1, le=HARD_SLOT_CEILING)] = 2
     """Maximum benchmark slots the platform will issue live tickets for on any
@@ -217,7 +217,7 @@ class ValidatorSlotSettings(BaseModel):
 class ValidatorSlotSettingsRevision(BaseModel):
     """One append-only, operator-audited revision of the slot policy."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -234,7 +234,7 @@ class EffectiveValidatorSlotSettings(BaseModel):
     module default when none exists), plus provenance for the operator
     console."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     """The governing revision number, or 0 when no revision exists."""
@@ -262,7 +262,7 @@ class EffectiveValidatorSlotSettings(BaseModel):
 class AdminValidatorSlotSettingsRequest(BaseModel):
     """Append one optimistic, confirmation-gated revision."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     scope: str = "*"
     """Slot policy is subnet-global; only ``*`` is accepted."""
@@ -284,7 +284,7 @@ class AdminValidatorSlotSettingsResponse(BaseModel):
     """Current policy per scope, append-only history, the module default, and
     the settings actually in force right now."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: list[ValidatorSlotSettingsRevision]
     history: list[ValidatorSlotSettingsRevision]

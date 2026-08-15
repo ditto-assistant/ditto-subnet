@@ -220,7 +220,7 @@ class AdminStuckSubmissionsResponse(BaseModel):
 
 
 class AdminValidationRetryRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     request_id: UUID
     expected_snapshot: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -236,7 +236,7 @@ class AdminValidationRetryResponse(BaseModel):
 
 
 class AdminValidationQueueWithdrawalRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     request_id: UUID
     expected_snapshot: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -267,7 +267,7 @@ class AdminValidationQueueEvictionRequest(BaseModel):
     phrase for an ordinary removal.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     request_id: UUID
     expected_snapshot: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -328,7 +328,7 @@ class AdminValidationQueueReinstatementRequest(BaseModel):
     422 rather than the opposite of what they intended.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     request_id: UUID
     expected_snapshot: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -352,7 +352,7 @@ class AdminValidationQueueReinstatementResponse(BaseModel):
 
 
 class AdminBatchRetryItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     agent_id: UUID
     request_id: UUID
@@ -367,7 +367,7 @@ class AdminBatchRetryRequest(BaseModel):
     an item whose state moved is skipped, never force-granted.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[
         str,
@@ -418,7 +418,7 @@ class AdminValidatorScoreReplacementDetail(BaseModel):
 
 
 class AdminValidatorScoreReplacementRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     request_id: UUID
     expected_snapshot: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -443,7 +443,7 @@ class AdminValidatorScoreReplacementResponse(BaseModel):
 
 
 class AdminValidatorScoreRetestQueueItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     agent_id: UUID
     request_id: UUID
@@ -454,7 +454,7 @@ class AdminValidatorScoreRetestQueueItem(BaseModel):
 
 
 class AdminValidatorScoreRetestQueueRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[
         str,
@@ -510,7 +510,7 @@ class AdminValidatorScoreRetestQueueResponse(BaseModel):
 
 
 class AdminValidatorScoreRetestReleaseRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     request_id: UUID
     expected_snapshot: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]

@@ -238,13 +238,12 @@ def test_base_evidence_rejects_tampered_derived_fields(
         V9BaseEvidence.model_validate(raw)
 
 
-def test_contract_is_strict_and_frozen() -> None:
+def test_contract_ignores_unknown_fields_and_is_frozen() -> None:
     raw = _base()
     raw["unexpected"] = True
-    with pytest.raises(ValidationError, match="Extra inputs"):
-        V9BaseEvidence.model_validate(raw)
+    evidence = V9BaseEvidence.model_validate(raw)
+    assert "unexpected" not in evidence.model_dump()
 
-    evidence = V9BaseEvidence.model_validate(_base())
     with pytest.raises(ValidationError, match="frozen"):
         evidence.run_id = "other"
 

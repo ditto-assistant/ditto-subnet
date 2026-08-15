@@ -53,7 +53,7 @@ def _require_actor(value: str | None) -> str:
 class RouteCalibrationRequest(BaseModel):
     """Exact reviewed manifest decision for one immutable route profile."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     model: str
     provider: str
@@ -69,7 +69,7 @@ class RouteCalibrationRequest(BaseModel):
 class RoutingPolicyRequest(BaseModel):
     """Complete auditable replacement for one model's routing policy."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     enabled: bool
     expected_revision: Annotated[int, Field(ge=0)]

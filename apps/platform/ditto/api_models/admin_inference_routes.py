@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 class AggregateRouteView(BaseModel):
     """The single logical route served while routing mode is aggregate."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     model: str
     provider: str
@@ -35,7 +35,7 @@ class AggregateRouteView(BaseModel):
 
 
 class InferenceRoutingPolicyView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     model: str
     revision: int = Field(ge=0)
@@ -55,7 +55,7 @@ class InferenceRoutingPolicyView(BaseModel):
 
 
 class InferenceRouteView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     model: str
     provider: str
@@ -82,7 +82,7 @@ class InferenceRouteView(BaseModel):
 
 
 class InferenceRoutingAuditView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     audit_id: str
     actor: str
@@ -103,7 +103,7 @@ class ProviderTelemetryView(BaseModel):
     "not measured".
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     provider: str
     request_count: int = Field(ge=0)
@@ -125,7 +125,7 @@ class ProviderTelemetryView(BaseModel):
 class RelayRecoveryTelemetryView(BaseModel):
     """Ticket-level abort evidence retained by the benchmark control plane."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     benchmark_relay_abort_ticket_count: int = Field(ge=0)
     broker_recovery_exhausted_ticket_count: int = Field(ge=0)
@@ -134,7 +134,7 @@ class RelayRecoveryTelemetryView(BaseModel):
 class AdminInferenceRoutes(BaseModel):
     """Everything the operator console renders for inference routing."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     routing_mode: str
     aggregate_route: AggregateRouteView | None

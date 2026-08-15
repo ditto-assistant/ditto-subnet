@@ -14,7 +14,7 @@ from ditto.api_models.system_health import DockerHealth, SystemMetrics
 from ditto.system_health import SystemMetricsCollector
 
 
-def test_system_metrics_forbid_arbitrary_keys_and_invalid_ranges() -> None:
+def test_system_metrics_ignore_arbitrary_keys_and_reject_invalid_ranges() -> None:
     payload: dict[str, Any] = {
         "collected_at": 1_752_443_200,
         "cpu_percent": 15,
@@ -26,9 +26,9 @@ def test_system_metrics_forbid_arbitrary_keys_and_invalid_ranges() -> None:
             "unhealthy_containers": 0,
         },
     }
-    assert SystemMetrics.model_validate(payload).cpu_percent == 15
-    with pytest.raises(ValidationError):
-        SystemMetrics.model_validate({**payload, "hostname": "private-host"})
+    parsed = SystemMetrics.model_validate({**payload, "hostname": "private-host"})
+    assert parsed.cpu_percent == 15
+    assert "hostname" not in parsed.model_dump()
     with pytest.raises(ValidationError):
         SystemMetrics.model_validate({**payload, "cpu_percent": 101})
     with pytest.raises(ValidationError):

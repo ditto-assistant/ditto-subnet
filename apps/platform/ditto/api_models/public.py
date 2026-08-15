@@ -2585,7 +2585,7 @@ class PublicScreeningDispute(BaseModel):
 class CreateScreeningDisputeRequest(BaseModel):
     """One signed appeal of a rejected screening decision."""
 
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+    model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     message: Annotated[str, Field(min_length=20, max_length=1000)]
     signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]

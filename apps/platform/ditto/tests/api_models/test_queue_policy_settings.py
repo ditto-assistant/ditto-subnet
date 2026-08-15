@@ -11,7 +11,6 @@ implementation.
 from __future__ import annotations
 
 import pytest
-from pydantic import ValidationError
 
 from ditto.api_models.queue_policy_settings import (
     DEFAULT_FRESH_SUBMISSION_SLOTS,
@@ -127,7 +126,7 @@ class TestQueuePolicyBoundsMatchQueueConstants:
         with pytest.raises(ValueError):
             PrevGenCarryoverSettings(max_agents=MAX_PREV_GEN_CARRYOVER_AGENTS + 1)
 
-    def test_a_retired_era_has_no_knob_left_to_turn(self) -> None:
+    def test_a_retired_era_has_no_authoritative_knob_left_to_turn(self) -> None:
         """``allow_retired_era_backfill`` is gone, and gone is stronger than off.
 
         It shipped ``False``, but it was an MCP-exposed runtime setting whose
@@ -135,17 +134,20 @@ class TestQueuePolicyBoundsMatchQueueConstants:
         admission "without a deploy". One Backroom write re-opened v6. A
         default is not a floor.
 
-        ``extra="forbid"`` is what makes the removal load-bearing rather than
-        cosmetic: a stale writer that still sends the key is REJECTED, not
-        silently ignored, so nobody gets to believe they turned it back on.
+        A stale writer may still send the retired key during a rolling upgrade,
+        but it is ignored and never becomes an authoritative model field.
         """
         assert "allow_retired_era_backfill" not in PrevGenCarryoverSettings.model_fields
-        with pytest.raises(ValidationError):
-            PrevGenCarryoverSettings(allow_retired_era_backfill=True)  # type: ignore[call-arg]
-        with pytest.raises(ValidationError):
-            QueuePolicySettings(
-                prev_gen_carryover={"allow_retired_era_backfill": True}  # type: ignore[arg-type]
-            )
+        carryover = PrevGenCarryoverSettings(
+            allow_retired_era_backfill=True  # type: ignore[call-arg]
+        )
+        settings = QueuePolicySettings(
+            prev_gen_carryover={"allow_retired_era_backfill": True}  # type: ignore[arg-type]
+        )
+        assert "allow_retired_era_backfill" not in carryover.model_dump()
+        assert "allow_retired_era_backfill" not in (
+            settings.prev_gen_carryover.model_dump()
+        )
 
 
 class TestLaneDecision:

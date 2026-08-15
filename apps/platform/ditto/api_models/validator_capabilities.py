@@ -83,7 +83,7 @@ class ScorerLivenessProbe(BaseModel):
     restart the validator has no evidence about the past, and reports none.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     outcome: ScorerProbeOutcome
     observed_at: Annotated[int, Field(ge=0)]
@@ -119,7 +119,7 @@ class ScorerLivenessProbe(BaseModel):
 
 
 class InferenceCalibrationRoute(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     provider: Annotated[str, Field(min_length=1, max_length=120)]
     profile_revision: Annotated[str, Field(pattern=_PROFILE_PATTERN)]
@@ -133,7 +133,7 @@ InferenceCalibrationRoutes = Annotated[
 
 
 class V7InferenceCalibration(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     manifest_sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]
     supported_routes: InferenceCalibrationRoutes
@@ -152,7 +152,7 @@ class V7InferenceCalibration(BaseModel):
 class ScorerBenchmarkCapability(BaseModel):
     """Identity-bound benchmark support observed from the scorer sidecar."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     status: ScorerBenchmarkStatus
     supported_bench_versions: SupportedBenchVersions
@@ -220,7 +220,7 @@ class ScorerBenchmarkCapability(BaseModel):
 class ValidatorCapabilities(BaseModel):
     """Closed capability set used by the platform to issue compatible work."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     screened_images: bool
     require_screened_image: bool
@@ -259,7 +259,7 @@ class ValidatorCapabilities(BaseModel):
 class ValidatorComponentIdentity(BaseModel):
     """Bounded identity for one member of the validator Compose stack."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     image_digest: Annotated[str | None, Field(pattern=_DIGEST_PATTERN)] = None
     source_revision: Annotated[str | None, Field(pattern=_REVISION_PATTERN)] = None
@@ -284,7 +284,7 @@ class ValidatorComponentIdentity(BaseModel):
 class ValidatorStackComponents(BaseModel):
     """Current stack components plus nullable rolling-transition sidecars."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     ditto_subnet: ValidatorComponentIdentity
     dittobench_api: ValidatorComponentIdentity
@@ -297,7 +297,7 @@ class ValidatorStackComponents(BaseModel):
 class ValidatorStackIdentity(BaseModel):
     """Verified release identity, or explicit source-stack identity."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     mode: StackMode
     compose_schema: Annotated[int, Field(ge=1, le=2**31 - 1)]

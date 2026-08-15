@@ -123,18 +123,25 @@ class TestValidatorComponentHealth:
             {"env": {"OPENROUTER_API_KEY": "sk-x"}},
             {"logs": ["line"]},
         ):
-            with pytest.raises(ValidationError):
-                ValidatorComponentHealth(
-                    health="healthy",
-                    required=True,
-                    observed_at=1,
-                    ready=True,
-                    **forbidden,  # type: ignore[arg-type]
-                )
+            health = ValidatorComponentHealth(
+                health="healthy",
+                required=True,
+                observed_at=1,
+                ready=True,
+                **forbidden,  # type: ignore[arg-type]
+            )
+            assert set(health.model_dump()) == {
+                "health",
+                "required",
+                "observed_at",
+                "ready",
+                "model_ready",
+                "observed_identity",
+            }
 
 
 class TestValidatorStackHealth:
-    def test_exactly_six_components_no_extras(self) -> None:
+    def test_exactly_six_components_and_ignores_extras(self) -> None:
         health = _stack_health()
         assert set(ValidatorStackHealth.model_fields) == {
             "ditto_subnet",
@@ -144,11 +151,11 @@ class TestValidatorStackHealth:
             "pylon",
             "ollama",
         }
-        with pytest.raises(ValidationError):
-            ValidatorStackHealth(
-                **dict(health),
-                prometheus=_healthy(),  # type: ignore[call-arg]
-            )
+        parsed = ValidatorStackHealth(
+            **dict(health),
+            prometheus=_healthy(),  # type: ignore[call-arg]
+        )
+        assert "prometheus" not in parsed.model_dump()
 
     def test_reporter_must_observe_itself(self) -> None:
         with pytest.raises(ValidationError, match="always required"):

@@ -78,7 +78,7 @@ SubmissionImageBuildStatus = Literal[
 class SubmissionImageBuildRequest(BaseModel):
     """Queue one attempt-bound remote image build after local source validation."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
 
@@ -86,7 +86,7 @@ class SubmissionImageBuildRequest(BaseModel):
 class SubmissionImageBuildResponse(BaseModel):
     """Public-safe status and, when ready, the verified image archive."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     build_id: UUID
     attempt_id: UUID
@@ -95,18 +95,12 @@ class SubmissionImageBuildResponse(BaseModel):
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     image_ref: Annotated[
         str,
-        Field(
-            pattern=(
-                r"^ditto-screen/[0-9a-f-]{73}:latest$"
-            )
-        ),
+        Field(pattern=(r"^ditto-screen/[0-9a-f-]{73}:latest$")),
     ]
     output_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
     output_size_bytes: Annotated[int, Field(gt=0, le=4 * 1024**3)] | None = None
     download_url: str | None = None
-    error_code: Annotated[
-        str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")
-    ] | None = None
+    error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None
 
     @model_validator(mode="after")
     def validate_terminal_payload(self) -> SubmissionImageBuildResponse:
@@ -127,7 +121,7 @@ class SubmissionImageBuildResponse(BaseModel):
 class ScreenedImageUploadRequest(BaseModel):
     """Lease-bound metadata used to mint a pre-signed image upload URL."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
     sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -139,7 +133,7 @@ class ScreenedImageUploadRequest(BaseModel):
 class ScreenedImageUploadResponse(BaseModel):
     """Lease-bound multipart upload initiated by the platform."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     image_upload_id: UUID
     storage_upload_id: Annotated[str, Field(min_length=1, max_length=1024)]
@@ -150,7 +144,7 @@ class ScreenedImageUploadResponse(BaseModel):
 class ScreenedImagePartUploadRequest(BaseModel):
     """Request a presigned URL for one part of an active image upload."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
     storage_upload_id: Annotated[str, Field(min_length=1, max_length=1024)]
@@ -161,7 +155,7 @@ class ScreenedImagePartUploadRequest(BaseModel):
 class ScreenedImagePartUploadResponse(BaseModel):
     """Short-lived direct-to-object-storage URL for one multipart part."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     upload_url: str
     expires_at: datetime
@@ -171,7 +165,7 @@ class ScreenedImagePartUploadResponse(BaseModel):
 class ScreenedImageCompletedPart(BaseModel):
     """One uploaded multipart part and the storage ETag returned for it."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     part_number: Annotated[int, Field(ge=1, le=10_000)]
     etag: Annotated[str, Field(min_length=1, max_length=256)]
@@ -180,7 +174,7 @@ class ScreenedImageCompletedPart(BaseModel):
 class ScreenedImageUploadCompleteRequest(BaseModel):
     """Finalize a multipart image upload and request full-byte verification."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
     storage_upload_id: Annotated[str, Field(min_length=1, max_length=1024)]
@@ -204,7 +198,7 @@ class ScreenedImageUploadCompleteRequest(BaseModel):
 class ScreenedImageUploadCompleteResponse(BaseModel):
     """Acknowledgement that platform verification matched the signed archive."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     verified: Literal[True]
 
@@ -212,7 +206,7 @@ class ScreenedImageUploadCompleteResponse(BaseModel):
 class ScreenedImageUploadAbortRequest(BaseModel):
     """Abort an unfinished multipart upload owned by a screening attempt."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
     storage_upload_id: Annotated[str, Field(min_length=1, max_length=1024)]
@@ -221,7 +215,7 @@ class ScreenedImageUploadAbortRequest(BaseModel):
 class ScreenedImageUploadAbortResponse(BaseModel):
     """Acknowledgement that an unfinished multipart upload was aborted."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     aborted: bool
 
@@ -349,7 +343,7 @@ class ScreenEvidenceItem(BaseModel):
     belong here.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     module_id: Annotated[
         str,
@@ -379,7 +373,7 @@ class ScreenEvidenceItem(BaseModel):
 class SourceReviewEvidenceItem(BaseModel):
     """One flagged source location from the read-only source review."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     path: Annotated[str, Field(min_length=1, max_length=240)]
     line: Annotated[int, Field(ge=1)]
@@ -469,7 +463,7 @@ _SCORER_VISIBLE_EFFECTS_BY_TRANSITION = {
 class SourceReviewCausalRoleBinding(BaseModel):
     """One role assigned to an existing public-safe finding location."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     path: Annotated[str, Field(min_length=1, max_length=240)]
     line: Annotated[int, Field(ge=1)]
@@ -480,7 +474,7 @@ class SourceReviewCausalRoleBinding(BaseModel):
 class SourceReviewCausalEvidence(BaseModel):
     """Opt-in v2 causal evidence carried alongside the legacy location list."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     schema_version: Literal[2] = 2
     authority_transition: SourceReviewAuthorityTransition
@@ -521,7 +515,7 @@ class SourceReviewFinding(BaseModel):
     stores is exactly the one the screener attested.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     prompt_revision: Annotated[str, Field(min_length=1, max_length=64)]
@@ -654,7 +648,7 @@ class SourceReviewFinding(BaseModel):
 class ScreenReviewAudit(BaseModel):
     """Public-safe accounting for a bounded review that could not conclude."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     stage: Literal["l1", "l2"]
     reason_code: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9-]{0,63}$")]

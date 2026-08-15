@@ -96,7 +96,7 @@ class AdminRetirementPreviewResponse(BaseModel):
 
 
 class AdminRetirementRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     request_id: UUID
     expected_snapshot: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -113,7 +113,7 @@ class AdminRetirementResponse(BaseModel):
 
 
 class AdminRetirementBatchItem(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     agent_id: UUID
     request_id: UUID
@@ -129,7 +129,7 @@ class AdminRetirementBatchRequest(BaseModel):
     force-applied. The confirmation phrase is required once for the whole set.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     reason: Annotated[
         str,

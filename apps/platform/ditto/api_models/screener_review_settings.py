@@ -20,7 +20,7 @@ ReasoningEffort = Literal["low", "medium"]
 class ScreenerReviewSettings(BaseModel):
     """Strict, secret-free settings applied between screening leases."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     mode: ReviewMode = "off"
     l2_model: ReviewModel = "moonshotai/kimi-k3"
@@ -59,7 +59,7 @@ class ScreenerReviewSettings(BaseModel):
 
 
 class ScreenerReviewSettingsRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -72,7 +72,7 @@ class ScreenerReviewSettingsRevision(BaseModel):
 
 
 class EffectiveScreenerReviewSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     scope: str
@@ -82,7 +82,7 @@ class EffectiveScreenerReviewSettings(BaseModel):
 
 
 class AdminScreenerReviewSettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     scope: str
     expected_revision: Annotated[int, Field(ge=0)]
@@ -93,7 +93,7 @@ class AdminScreenerReviewSettingsRequest(BaseModel):
 
 
 class AppliedScreenerReviewSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     instance_id: str
     revision: int
@@ -110,7 +110,7 @@ class AppliedScreenerReviewSettings(BaseModel):
 
 
 class AdminShadowReviewObservation(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     attempt_id: UUID
     agent_id: UUID
@@ -132,7 +132,7 @@ class AdminShadowReviewObservation(BaseModel):
 
 
 class AdminScreenerReviewSettingsResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: list[ScreenerReviewSettingsRevision]
     history: list[ScreenerReviewSettingsRevision]

@@ -63,7 +63,7 @@ def normalize_v9_score_report_omitempty(value: object) -> object:
 class V9ScoreContract(BaseModel):
     """Frozen identity of the ordinary v9 score contract."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: Annotated[str, Field(pattern=_V9_PROFILE_ID_PATTERN)]
     manifest_sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]
@@ -72,7 +72,7 @@ class V9ScoreContract(BaseModel):
 class V9ThresholdProfile(BaseModel):
     """Frozen identity of the calibrated v9 gate thresholds."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     id: Annotated[str, Field(pattern=_V9_PROFILE_ID_PATTERN)]
     manifest_sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]
@@ -81,7 +81,7 @@ class V9ThresholdProfile(BaseModel):
 class V9GateExclusions(BaseModel):
     """Cases excluded from the model-use denominator for trusted reasons."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     preflight: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
     ablation: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
@@ -104,7 +104,7 @@ V9GateResult = Literal[
 class V9ModelUseGate(BaseModel):
     """Trusted relay evidence for the v9 model-use binary gate."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     administered_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
     eligible_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
@@ -193,7 +193,7 @@ class V9ModelUseGate(BaseModel):
 class V9AuthoritativeToolGate(BaseModel):
     """Trusted tool-server evidence for the v9 authoritative-tool gate."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     expected_executions: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
     matched_executions: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
@@ -241,7 +241,7 @@ class V9AuthoritativeToolGate(BaseModel):
 class V9ScoreGateEvidence(BaseModel):
     """Complete typed mirror of ``internal/scoregates.Evidence``."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     schema_version: Literal[1]
     bench_version: Literal[9]
@@ -300,7 +300,7 @@ class V9ScoreGateEvidence(BaseModel):
 class V9BaseEvidence(BaseModel):
     """Signature-bound ordinary v9 score identity and binary gate evidence."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     schema_version: Literal[1]
     bench_version: Literal[9]

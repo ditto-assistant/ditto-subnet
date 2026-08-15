@@ -228,11 +228,11 @@ class TestConfirmationBundleSettings:
         with pytest.raises(ValidationError, match=field):
             ConfirmationBundleSettings.model_validate(active_settings(**{field: value}))
 
-    def test_unknown_settings_field_is_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="extra_forbidden"):
-            ConfirmationBundleSettings.model_validate_json(
-                json.dumps(active_settings(seed_count=32))
-            )
+    def test_unknown_settings_field_is_ignored(self) -> None:
+        settings = ConfirmationBundleSettings.model_validate_json(
+            json.dumps(active_settings(seed_count=32))
+        )
+        assert "seed_count" not in settings.model_dump()
 
     def test_settings_are_frozen(self) -> None:
         settings = ConfirmationBundleSettings()
@@ -285,11 +285,11 @@ class TestAdminWriteContracts:
                 json.dumps(self.request_payload(reason=reason))
             )
 
-    def test_unknown_write_field_is_rejected(self) -> None:
-        with pytest.raises(ValidationError, match="extra_forbidden"):
-            AdminConfirmationBundleSettingsRequest.model_validate_json(
-                json.dumps(self.request_payload(patch=True))
-            )
+    def test_unknown_write_field_is_ignored(self) -> None:
+        request = AdminConfirmationBundleSettingsRequest.model_validate_json(
+            json.dumps(self.request_payload(patch=True))
+        )
+        assert "patch" not in request.model_dump()
 
     def test_retest_authorization_is_strict_and_audited(self) -> None:
         request_id = uuid4()
@@ -347,13 +347,13 @@ class TestTypedEvidenceWireModels:
         assert "evidence_sha256" not in fields
 
     @pytest.mark.parametrize("extra", ["full_composite", "evidence_sha256", "metadata"])
-    def test_opaque_or_authoritative_top_level_fields_are_rejected(
+    def test_opaque_or_authoritative_top_level_fields_are_ignored(
         self, extra: str
     ) -> None:
         payload = unsigned_report().model_dump(mode="json")
         payload[extra] = 0
-        with pytest.raises(ValidationError, match="extra_forbidden"):
-            ConfirmationCompletionReport.model_validate(payload)
+        report = ConfirmationCompletionReport.model_validate(payload)
+        assert extra not in report.model_dump()
 
     @pytest.mark.parametrize(
         "field,value",
@@ -368,7 +368,7 @@ class TestTypedEvidenceWireModels:
             ("receipt_set_sha256", "A" * 64),
         ],
     )
-    def test_provider_lane_rejects_untrusted_accounting(
+    def test_provider_lane_rejects_invalid_known_accounting(
         self, field: str, value: object
     ) -> None:
         payload = (
@@ -398,7 +398,7 @@ class TestTypedEvidenceWireModels:
             ("synthetic", False),
         ],
     )
-    def test_ablation_envelope_cannot_claim_upstream_usage(
+    def test_ablation_envelope_rejects_invalid_known_upstream_usage(
         self, field: str, value: object
     ) -> None:
         payload = ablation_envelope("inference").model_dump(mode="json")
@@ -413,11 +413,11 @@ class TestTypedEvidenceWireModels:
         with pytest.raises(ValidationError, match="bundle_signature"):
             ConfirmationCompletionReport.model_validate(payload)
 
-    def test_unknown_nested_metadata_is_rejected(self) -> None:
+    def test_unknown_nested_metadata_is_ignored(self) -> None:
         payload = unsigned_report().model_dump(mode="json")
         payload["longmemeval"]["evidence"]["metadata"] = {"trust_me": True}
-        with pytest.raises(ValidationError, match="extra_forbidden"):
-            ConfirmationCompletionReport.model_validate(payload)
+        report = ConfirmationCompletionReport.model_validate(payload)
+        assert "metadata" not in report.longmemeval.evidence.model_dump()
 
 
 class TestBudgetWireModel:

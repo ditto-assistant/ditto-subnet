@@ -14,7 +14,8 @@ from ditto import __version__
 # unchanged (the v11 domain still applies and the field is omitted when absent),
 # so the bump exists so the platform can tell a validator that cannot report
 # probe evidence from one that reported none. The platform must ship v15
-# awareness before validators send it: its heartbeat models forbid extras.
+# awareness before validators send it: platforms predating forward-compatible
+# JSON parsing reject the extra field before signature verification.
 #
 # v16 reports a slot from the moment it is claimed, with ``progress`` null until
 # there is something to say. Through v15 the worker omitted such a slot from

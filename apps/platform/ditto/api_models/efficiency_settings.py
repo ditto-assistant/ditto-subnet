@@ -30,7 +30,7 @@ class EfficiencyBonusSettings(BaseModel):
     read never has to merge partial revisions.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     enabled: bool = False
     """Master switch. Gates cohort snapshotting, frozen bonus assignment, and
@@ -112,7 +112,7 @@ class EfficiencyBonusSettingsWrite(EfficiencyBonusSettings):
 class EfficiencyBonusSettingsRevision(BaseModel):
     """One append-only, operator-audited revision of the bonus policy."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -132,7 +132,7 @@ class EffectiveEfficiencyBonusSettings(BaseModel):
     """What the compute path actually reads: the latest revision (or the env
     seed when none exists), plus its provenance for the operator console."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     """The governing revision number, or 0 when no revision exists (seed)."""
@@ -158,7 +158,7 @@ class EffectiveEfficiencyBonusSettings(BaseModel):
 class AdminEfficiencyBonusSettingsRequest(BaseModel):
     """Append one optimistic, confirmation-gated revision."""
 
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     scope: str = "*"
     """Efficiency-bonus policy is subnet-global; only ``*`` is accepted."""
@@ -179,7 +179,7 @@ class AdminEfficiencyBonusSettingsResponse(BaseModel):
     """Current policy per scope, append-only history, the env seed, and the
     settings actually in force right now."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: list[EfficiencyBonusSettingsRevision]
     history: list[EfficiencyBonusSettingsRevision]

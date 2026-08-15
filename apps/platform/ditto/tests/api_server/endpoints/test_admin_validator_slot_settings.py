@@ -540,7 +540,7 @@ class TestValidation:
         )
         assert resp.status_code == 422, resp.text
 
-    async def test_unknown_setting_key_rejected(
+    async def test_unknown_setting_key_ignored(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -550,7 +550,8 @@ class TestValidation:
         resp = await client.post(
             _URL, headers=_ADMIN_HEADERS, json=_payload(max_slots_typo=4)
         )
-        assert resp.status_code == 422
+        assert resp.status_code == 200, resp.text
+        assert "max_slots_typo" not in resp.json()["settings"]
 
     async def test_short_reason_rejected(
         self,

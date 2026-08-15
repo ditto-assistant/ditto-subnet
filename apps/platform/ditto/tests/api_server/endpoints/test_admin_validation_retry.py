@@ -1223,7 +1223,6 @@ async def test_evict_interlocks_reject_a_mismatched_or_malformed_call(
     for malformed in (
         _payload(expected_snapshot="not-a-snapshot"),
         _payload(reason="short"),
-        _payload(unexpected_field="x"),
     ):
         response = await client.post(
             f"/api/v1/admin/validation-retries/{agent_id}/evict",
@@ -1267,6 +1266,7 @@ async def test_evict_replay_is_idempotent_and_never_double_revokes(
         "expected_snapshot": detail.json()["snapshot"],
         "reason": _EVICT_REASON,
         "confirmation": _EVICT_CONFIRMATION,
+        "future_audit_field": "ignored",
     }
     first = await client.post(
         f"/api/v1/admin/validation-retries/{agent_id}/evict",
@@ -1388,7 +1388,7 @@ async def test_reinstatement_returns_an_evicted_submission_to_the_queue(
     assert body["withdrawal"]["reinstated_at"] is None
     assert body["reinstatement"] is None
 
-    response = await _reinstate(client, agent_id)
+    response = await _reinstate(client, agent_id, future_reinstatement_field="ignored")
     assert response.status_code == 200, response.text
     reinstated = response.json()
     assert reinstated["idempotent"] is False
@@ -1499,7 +1499,6 @@ async def test_reinstatement_interlocks_reject_a_wrong_phrase_or_stale_snapshot(
     for malformed in (
         {"expected_snapshot": "not-a-snapshot"},
         {"reason": "short"},
-        {"unexpected_field": "x"},
     ):
         response = await _reinstate(client, agent_id, **malformed)
         assert response.status_code == 422, response.text

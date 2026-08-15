@@ -168,7 +168,7 @@ class DeferredSourceReviewSettings(BaseModel):
     switch. "No source review" never means "no copy detection".
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     mode: Literal["off", "observe", "enforce", "bypass"] = "off"
     """Where the expensive source review runs, and whether it can hold.
@@ -300,7 +300,7 @@ class PrevGenCarryoverSettings(BaseModel):
     versions -- never whether a dead one comes back.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     enabled: bool = False
     """Whether stranded previous-generation submissions are admitted at all.
@@ -432,7 +432,7 @@ class SimilarityBudgetSettings(BaseModel):
     distributions the shipped values were chosen from.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     enabled: bool = True
     """Whether the similarity rail is consulted at all.
@@ -508,7 +508,7 @@ class QueuePolicySettings(BaseModel):
     always reconstructable and a read never merges partial revisions.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     # -- NEXT ROLLOUT (frozen onto the rollout row at start) ----------------
 
@@ -692,7 +692,7 @@ def rollout_locked_change(
 
 
 class QueuePolicySettingsRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -707,7 +707,7 @@ class QueuePolicySettingsRevision(BaseModel):
 class EffectiveQueuePolicySettings(BaseModel):
     """What the queue is using now, plus what an open rollout already froze."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     scope: str
@@ -733,7 +733,7 @@ class EffectiveQueuePolicySettings(BaseModel):
 
 
 class AdminQueuePolicySettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     scope: str = "*"
     expected_revision: Annotated[int, Field(ge=0)]
@@ -797,7 +797,7 @@ class AdminQueuePolicySettingsRequest(BaseModel):
 
 
 class AdminQueuePolicySettingsResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: list[QueuePolicySettingsRevision]
     history: list[QueuePolicySettingsRevision]

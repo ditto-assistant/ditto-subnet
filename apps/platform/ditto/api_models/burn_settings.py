@@ -50,7 +50,7 @@ already does and adding this surface changes no weights on deploy.
 class BurnSettings(BaseModel):
     """Complete subnet-global emission-burn policy stored per revision."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     burn_share: Annotated[float, Field(ge=MIN_BURN_SHARE, le=MAX_BURN_SHARE)] = (
         DEFAULT_BURN_SHARE
@@ -71,7 +71,7 @@ class BurnSettings(BaseModel):
 
 
 class BurnSettingsRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -84,7 +84,7 @@ class BurnSettingsRevision(BaseModel):
 
 
 class EffectiveBurnSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     scope: str
@@ -115,7 +115,7 @@ class EffectiveBurnSettings(BaseModel):
 
 
 class AdminBurnSettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     scope: str = "*"
     expected_revision: Annotated[int, Field(ge=0)]
@@ -126,7 +126,7 @@ class AdminBurnSettingsRequest(BaseModel):
 
 
 class AdminBurnSettingsResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: list[BurnSettingsRevision]
     history: list[BurnSettingsRevision]

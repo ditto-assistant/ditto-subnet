@@ -2845,7 +2845,7 @@ class TestV9ConfirmationPrepareAdmission:
     @pytest.mark.parametrize(
         "drift", ["extra_wrapper", "missing_binding", "legacy_schema", "micros"]
     )
-    async def test_strict_native_go_wrapper_drift_is_rejected_after_authentication(
+    async def test_native_go_semantic_drift_is_rejected_but_additive_wrapper_is_ignored(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -2881,9 +2881,11 @@ class TestV9ConfirmationPrepareAdmission:
 
         response = await _prepare(client, bundle_id=seeded.bundle_id, payload=payload)
 
-        assert response.status_code == (422 if drift == "extra_wrapper" else 409), (
+        assert response.status_code == (200 if drift == "extra_wrapper" else 409), (
             response.text
         )
+        if drift == "extra_wrapper":
+            assert "producer_version" not in response.json()["longmemeval"]
         await _assert_unsettled(session_maker, seeded=seeded)
 
     async def test_prepare_returns_canonical_typed_root_without_settlement(

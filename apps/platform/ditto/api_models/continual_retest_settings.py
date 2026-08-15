@@ -45,7 +45,7 @@ DEFAULT_RETEST_ELIGIBILITY_Z = 1.64
 class ContinualRetestSettings(BaseModel):
     """Complete subnet-global continual-retest policy stored per revision."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     aggregate_mode: Literal["disabled", "fleet_ready", "enabled"] = "fleet_ready"
 
@@ -202,7 +202,7 @@ class ContinualRetestSettings(BaseModel):
 
 
 class ContinualRetestSettingsRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -215,7 +215,7 @@ class ContinualRetestSettingsRevision(BaseModel):
 
 
 class EffectiveContinualRetestSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     scope: str
@@ -251,7 +251,7 @@ class EffectiveContinualRetestSettings(BaseModel):
 
 
 class AdminContinualRetestSettingsRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     scope: str = "*"
     expected_revision: Annotated[int, Field(ge=0)]
@@ -262,7 +262,7 @@ class AdminContinualRetestSettingsRequest(BaseModel):
 
 
 class AdminContinualRetestSettingsResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: list[ContinualRetestSettingsRevision]
     history: list[ContinualRetestSettingsRevision]

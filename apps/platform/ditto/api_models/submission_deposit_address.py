@@ -27,7 +27,7 @@ SubmissionPaymentAddress = Annotated[
 
 
 class SubmissionDepositAddressRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     revision: int
     parent_revision: int
@@ -38,14 +38,14 @@ class SubmissionDepositAddressRevision(BaseModel):
 
 
 class AdminSubmissionDepositAddressResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: SubmissionDepositAddressRevision
     history: list[SubmissionDepositAddressRevision]
 
 
 class AdminSubmissionDepositAddressRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    model_config = ConfigDict(extra="ignore", strict=True, str_strip_whitespace=True)
 
     expected_revision: Annotated[int, Field(ge=0)]
     payment_address: SubmissionPaymentAddress

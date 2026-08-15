@@ -28,7 +28,7 @@ _IMAGE_REFERENCE = r"^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$
 
 
 class ScreenerBootstrapGrantRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     node_id: Annotated[str, Field(pattern=_NODE_ID)]
@@ -39,7 +39,7 @@ class ScreenerBootstrapGrantRequest(BaseModel):
 
 
 class ScreenerBootstrapGrantResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     grant_id: UUID
     registration_token: Annotated[str, Field(min_length=43, max_length=128)]
@@ -47,7 +47,7 @@ class ScreenerBootstrapGrantResponse(BaseModel):
 
 
 class ScreenerNodeRegistrationRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     node_id: Annotated[str, Field(pattern=_NODE_ID)]
@@ -60,7 +60,7 @@ class ScreenerNodeRegistrationRequest(BaseModel):
 
 
 class ScreenerNodeCredentialResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     node_id: Annotated[str, Field(pattern=_NODE_ID)]
@@ -70,7 +70,7 @@ class ScreenerNodeCredentialResponse(BaseModel):
 
 
 class ScreenerNodeRefreshRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     node_id: Annotated[str, Field(pattern=_NODE_ID)]
     screener_hotkey: Annotated[str, Field(pattern=_SS58)]
@@ -80,14 +80,14 @@ class ScreenerNodeRefreshRequest(BaseModel):
 
 
 class ScreenerControllerFenceRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
 
 
 class ScreenerNodeStatusRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     status: ScreenerNodeStatus
@@ -96,7 +96,7 @@ class ScreenerNodeStatusRequest(BaseModel):
 
 
 class ScreenerControllerNodeState(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     node_id: Annotated[str, Field(pattern=_NODE_ID)]
     provider_resource_id: Annotated[str, Field(min_length=1, max_length=200)]
@@ -109,13 +109,13 @@ class ScreenerControllerNodeState(BaseModel):
 
 
 class ScreenerControllerNodesResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     nodes: tuple[ScreenerControllerNodeState, ...]
 
 
 class ScreenerCapacityEventRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     event_type: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_-]{1,63}$")]
     provider: ScreenerProvider | None = None
@@ -124,7 +124,7 @@ class ScreenerCapacityEventRequest(BaseModel):
 
 
 class ScreenerCapacitySnapshotRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
@@ -153,7 +153,7 @@ class ScreenerCapacitySnapshotRequest(BaseModel):
 
 
 class ScreenerCapacitySnapshotResponse(ScreenerCapacitySnapshotRequest):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     controller_heartbeat_at: datetime
     controller_lease_expires_at: datetime
@@ -161,7 +161,7 @@ class ScreenerCapacitySnapshotResponse(ScreenerCapacitySnapshotRequest):
 
 
 class ScreenerNodeView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: str
     node_id: str
@@ -184,7 +184,7 @@ class ScreenerNodeView(BaseModel):
 
 
 class ScreenerCapacityEventView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     event_id: UUID
     event_type: str
@@ -196,7 +196,7 @@ class ScreenerCapacityEventView(BaseModel):
 
 
 class TrustedImageBuildCreateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     component: Literal["screener"]
     source_sha: Annotated[str, Field(pattern=r"^[0-9a-f]{40}$")]
@@ -204,7 +204,7 @@ class TrustedImageBuildCreateRequest(BaseModel):
 
 
 class TrustedImageBuildView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     build_id: UUID
     environment: str
@@ -231,20 +231,20 @@ class TrustedImageBuildView(BaseModel):
 
 
 class TrustedImageBuildClaimRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
 
 
 class TrustedImageBuildClaimResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     build: TrustedImageBuildView | None
 
 
 class TrustedImageBuildUpdateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
@@ -260,7 +260,7 @@ class TrustedImageBuildUpdateRequest(BaseModel):
 class SubmissionImageBuildClaimView(BaseModel):
     """One miner build leased to the dedicated Targon builder."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     build_id: UUID
     agent_id: UUID
@@ -275,13 +275,13 @@ class SubmissionImageBuildClaimView(BaseModel):
 
 
 class SubmissionImageBuildClaimResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     build: SubmissionImageBuildClaimView | None
 
 
 class SubmissionImageBuildControllerUpdateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
@@ -303,7 +303,7 @@ class SubmissionImageBuildControllerUpdateRequest(BaseModel):
 class SubmissionImageBuildCleanupRequest(BaseModel):
     """Durable notice that a suspended provider rental still needs deletion."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
@@ -313,7 +313,7 @@ class SubmissionImageBuildCleanupRequest(BaseModel):
 class SubmissionImageBuildControllerStatusResponse(BaseModel):
     """Authority-free completion state used by the provider controller."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     build_id: UUID
     status: Literal[
@@ -328,7 +328,7 @@ class SubmissionImageBuildControllerStatusResponse(BaseModel):
 
 
 class SubmissionBuildSourceResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     source_url_b64: str
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -339,14 +339,14 @@ class SubmissionBuildSourceResponse(BaseModel):
 
 
 class SubmissionBuildUploadRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     output_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     output_size_bytes: Annotated[int, Field(gt=0, le=4 * 1024**3)]
 
 
 class SubmissionBuildUploadResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     upload_url_b64: str
     required_headers: dict[str, str]
@@ -358,13 +358,13 @@ class SubmissionBuildCompleteRequest(SubmissionBuildUploadRequest):
 
 
 class SubmissionBuildCompleteResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     verified: Literal[True]
 
 
 class ScreenerCapacityView(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     snapshot: ScreenerCapacitySnapshotResponse | None
     nodes: list[ScreenerNodeView]

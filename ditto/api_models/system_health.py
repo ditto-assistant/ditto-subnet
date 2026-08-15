@@ -12,7 +12,7 @@ DockerHealthStatus = Literal["healthy", "degraded", "unavailable"]
 class DockerHealth(BaseModel):
     """Aggregate Docker health without container identities or image metadata."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     status: DockerHealthStatus
     running_containers: Annotated[int, Field(ge=0, le=1000)]
@@ -36,7 +36,7 @@ class DockerHealth(BaseModel):
 class SystemMetrics(BaseModel):
     """One bounded and intentionally coarse host-health sample."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     collected_at: Annotated[int, Field(ge=0, description="Unix sample time (UTC).")]
     cpu_percent: Annotated[int, Field(ge=0, le=100, multiple_of=5)]

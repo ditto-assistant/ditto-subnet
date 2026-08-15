@@ -63,10 +63,10 @@ func defaultConcurrencySettings() concurrencySettings {
 	}
 }
 
-// parseConcurrencySettings validates a stored settings payload with the same
-// strictness Pydantic applies (strict=True, extra="forbid", per-field bounds,
-// hierarchy validator). Any violation returns an error and the resolver keeps
-// its last-known-good snapshot.
+// parseConcurrencySettings validates known settings with the same strict types,
+// field bounds, and hierarchy rules as Pydantic. Unknown fields are ignored so
+// an older relay can consume a revision written by a newer Platform. Any known
+// field violation returns an error and preserves the last-known-good snapshot.
 func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	out := defaultConcurrencySettings()
 	var raw map[string]json.RawMessage
@@ -125,9 +125,6 @@ func parseConcurrencySettings(payload []byte) (concurrencySettings, error) {
 	}
 	if err := intField("embedding_global_concurrency", &embeddingGlobal, 1, maxEmbeddingConcurrency); err != nil {
 		return defaultConcurrencySettings(), err
-	}
-	if len(raw) > 0 {
-		return defaultConcurrencySettings(), errors.New("unknown settings fields")
 	}
 	if chatPerTicket > chatPerValidator || chatPerValidator > chatGlobal {
 		return defaultConcurrencySettings(), errors.New("chat concurrency hierarchy violated")

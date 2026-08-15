@@ -12,7 +12,7 @@ from ditto.api_models.upload import _SIGNATURE_HEX_PATTERN, _SS58_PATTERN
 
 
 class InferenceGrantOffer(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     grant_id: UUID
     exchange_url: str
@@ -37,7 +37,7 @@ class InferenceGrantOffer(BaseModel):
 
 
 class InferenceExchangeRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     grant_id: UUID
@@ -55,7 +55,7 @@ class InferenceExchangeRequest(BaseModel):
 
 
 class InferenceExchangeResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     grant_id: UUID
     bearer: Annotated[str, Field(min_length=32, max_length=128)]

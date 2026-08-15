@@ -46,7 +46,7 @@ ValidatorUpdaterFailureReason = Literal[
 class ValidatorUpdaterStatus(BaseModel):
     """Bounded updater state; never contains paths, logs, env, or errors."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     enabled: bool
     channel: Literal["compat-2"] | None = None

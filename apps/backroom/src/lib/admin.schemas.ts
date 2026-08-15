@@ -1173,10 +1173,9 @@ export const prevGenCarryoverSchema = z.object({
   // ledgers plus a `validator_tickets` lease trigger). See ditto-platform's
   // `MIN_SCOREABLE_BENCH_VERSION`.
   //
-  // Removing it here is required, not cosmetic. The platform's model is
-  // `extra="forbid"`, and this block is sent WHOLE on every write, so a schema
-  // that still carried the key would make `set_queue_policy_settings` fail with
-  // a 422 for every field, not just this one.
+  // Removing it here is required, not cosmetic. The Platform ignores additive
+  // fields for rolling compatibility, so retaining the retired key would look
+  // accepted to an old client even though it can no longer affect policy.
 })
 
 // The write half of `prevGenCarryoverSchema`. The platform stores the carryover

@@ -1,19 +1,15 @@
 """Reading back a revision written before a policy field was retired.
 
-``prev_gen_carryover`` is stored WHOLE and its model is ``extra="forbid"``, so
-removing a field is not free: every revision already in the table still carries
-it. ``settings_from_row`` fails open onto the shipped defaults, which means an
-unhandled removal would not crash -- it would do something quieter and worse,
-silently reverting the operator's entire policy (cohort sizes, lane cycle,
-owner limits) behind a single log line.
+``prev_gen_carryover`` is stored WHOLE, so every revision written before a field
+was retired still carries it. Models ignore unknown fields during rolling
+upgrades, preserving the rest of the operator's policy rather than resetting it.
 
 Production is not exposed to this today: `queue_policy_settings_revisions` is
 empty, so there is no stored revision to misread. Staging and any future
 removal are, which is what these tests are for.
 
-The asymmetry is the point: forgiving a STORED document is not the same as
-accepting a NEW instruction. The read path drops the dead key; the write path
-still rejects it.
+Both stored documents and new writes drop the dead key. It cannot become an
+authoritative setting or re-open retired behavior.
 """
 
 from __future__ import annotations

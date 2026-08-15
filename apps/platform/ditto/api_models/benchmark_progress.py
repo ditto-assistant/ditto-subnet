@@ -47,7 +47,7 @@ class BenchmarkProgress(BaseModel):
     counts are derived and coarsened by the platform.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     stage: BenchmarkProgressStage
     completed: Annotated[

@@ -26,7 +26,7 @@ _MAX_SHADOW_PROVIDER_STAGES = 50
 
 
 class ShadowReviewUsage(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     input_tokens: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
@@ -39,7 +39,7 @@ class ShadowReviewUsage(BaseModel):
 class ShadowReviewObservationRequest(BaseModel):
     """Bounded non-authoritative telemetry for one active shadow attempt."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     attempt_id: UUID
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
@@ -73,13 +73,13 @@ class ShadowReviewObservationRequest(BaseModel):
 
 
 class ShadowReviewObservationResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     accepted: bool
 
 
 class ReviewSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     mode: Literal["off", "shadow", "enforce"]
     l2_model: ReviewModel
@@ -107,7 +107,7 @@ class ReviewSettings(BaseModel):
 
 
 class EffectiveReviewSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     revision: Annotated[int, Field(ge=0)]
     scope: str
@@ -159,7 +159,7 @@ class EffectiveReviewSettings(BaseModel):
 
 
 class CachedReviewSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     cached_at: Annotated[int, Field(ge=0)]
     effective: EffectiveReviewSettings

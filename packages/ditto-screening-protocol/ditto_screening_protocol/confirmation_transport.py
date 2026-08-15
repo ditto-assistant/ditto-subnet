@@ -62,7 +62,7 @@ class ConfirmationEligibilityMode(StrEnum):
 
 
 class ConfirmationProviderLaneProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     lane: Annotated[str, Field(min_length=1, max_length=128)]
     provider: Annotated[str, Field(min_length=1, max_length=128)]
@@ -86,7 +86,7 @@ class ConfirmationEmbeddingLaneProfile(BaseModel):
     chat model.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     lane: Literal["embedding"]
     provider: Annotated[str, Field(min_length=1, max_length=128)]
@@ -99,7 +99,7 @@ class ConfirmationEmbeddingLaneProfile(BaseModel):
 
 
 class ConfirmationAblationProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     intervention: Literal["inference", "embedding"]
     contract_version: Annotated[str, Field(min_length=1, max_length=128)]
@@ -108,7 +108,7 @@ class ConfirmationAblationProfile(BaseModel):
 
 
 class ConfirmationAblationCoordinatorProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     sample_size: Annotated[int, Field(gt=0)]
     max_attempts: Annotated[int, Field(gt=0)]
@@ -135,7 +135,7 @@ class ConfirmationAblationCoordinatorProfile(BaseModel):
 
 
 class ConfirmationCompositeProfile(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     schema_version: Literal[1]
     revision: Annotated[str, Field(min_length=1, max_length=128)]
@@ -148,7 +148,7 @@ class ConfirmationCompositeProfile(BaseModel):
 class ConfirmationExecutionProfile(BaseModel):
     """Complete non-secret profile needed by the trusted local executor."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     schema_version: Literal[1]
     revision: Annotated[str, Field(min_length=1, max_length=128)]
@@ -191,7 +191,7 @@ class V9ConfirmationClaimRequest(BaseModel):
     # FastAPI receives UUIDs and datetimes from JSON as strings.  Field-level
     # constraints still reject malformed values; model-wide strict mode would
     # make this otherwise valid JSON transport impossible to call.
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[str, Field(pattern=SS58_PATTERN)]
     slot_id: LongMemSlotId
@@ -213,7 +213,7 @@ class V9ConfirmationClaimRequest(BaseModel):
 class ConfirmationInferenceGrantOffer(BaseModel):
     """One ticket-scoped, lane-specific Platform inference capability."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     lane: Literal["reader", "judge", "embedding"]
     grant_id: UUID
@@ -255,7 +255,7 @@ class ConfirmationInferenceGrantOffer(BaseModel):
 
 
 class V9ConfirmationJobResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     purpose: Literal["v9_confirmation_bundle"]
     bundle_id: UUID
@@ -289,7 +289,7 @@ V9ConfirmationCompletionReport = ConfirmationCompletionReport
 
 
 class V9ConfirmationSubmitRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[str, Field(pattern=SS58_PATTERN)]
     ticket_id: UUID
@@ -299,7 +299,7 @@ class V9ConfirmationSubmitRequest(BaseModel):
 class V9ConfirmationRawDimension(BaseModel):
     """One exact native Go evidence wrapper returned by the local scorer."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     go_evidence_sha256: Sha256
     latency_ms: UsageCount
@@ -309,7 +309,7 @@ class V9ConfirmationRawDimension(BaseModel):
 class V9ConfirmationPrepareRequest(BaseModel):
     """Authenticated native Go evidence awaiting Platform normalization."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[str, Field(pattern=SS58_PATTERN)]
     ticket_id: UUID
@@ -331,7 +331,7 @@ class V9ConfirmationPrepareRequest(BaseModel):
 
 
 class V9ConfirmationPreparedReport(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     bundle_id: UUID
     ticket_id: UUID
@@ -343,7 +343,7 @@ class V9ConfirmationPreparedReport(BaseModel):
 
 
 class V9ConfirmationFailRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[str, Field(pattern=SS58_PATTERN)]
     ticket_id: UUID
@@ -361,7 +361,7 @@ class V9ConfirmationFailRequest(BaseModel):
 
 
 class V9ConfirmationFailResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     bundle_id: UUID
     ticket_id: UUID
@@ -372,7 +372,7 @@ class V9ConfirmationFailResponse(BaseModel):
 
 
 class V9ConfirmationSubmitResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     bundle_id: UUID
     ticket_id: UUID

@@ -75,14 +75,14 @@ _Actor = Annotated[
 
 
 class AdminRolloutSupersedeRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     reason: _Reason
     actor: _Actor = "admin_api"
     confirmation: str
 
 
 class AdminRolloutStartRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     reason: _Reason
     actor: _Actor = "admin_api"
     confirmation: str
@@ -90,7 +90,7 @@ class AdminRolloutStartRequest(BaseModel):
 
 
 class AdminRolloutExpandRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     reason: _Reason
     actor: _Actor = "admin_api"
     confirmation: str
@@ -100,7 +100,7 @@ class AdminRolloutExpandRequest(BaseModel):
 
 
 class AdminActiveContractRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
     reason: _Reason
     actor: _Actor = "admin_api"
     confirmation: str

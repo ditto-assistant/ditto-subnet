@@ -4,12 +4,12 @@ Heartbeat v7/v8 report *configured* identity for the six Compose components
 (:mod:`ditto.api_models.validator_capabilities`); this module adds the
 *observed* runtime side: whether each component is currently reachable and
 functionally ready, and what identity — if any — could be independently
-observed from a live probe. The schema is deliberately closed and bounded:
-health is a small enum, observations are Unix timestamps and booleans, and an
-observed identity reuses the exact digest/revision/version grammar of the
-configured identity. Anything host-shaped (container ids, hostnames, URLs,
-paths, environment values) has no field to live in and is rejected by
-``extra="forbid"``.
+observed from a live probe. The schema's authoritative fields are deliberately
+bounded: health is a small enum, observations are Unix timestamps and booleans,
+and an observed identity reuses the exact digest/revision/version grammar of
+the configured identity. Anything host-shaped (container ids, hostnames, URLs,
+paths, environment values) has no authoritative field and is ignored during
+validation, so it cannot enter canonical signed output.
 
 A probe that cannot independently observe a running digest/revision reports
 ``None`` (unknown) rather than echoing the configured pin into an observed
@@ -37,7 +37,7 @@ ComponentHealthState = Literal[
 class ObservedComponentIdentity(BaseModel):
     """Identity actually observed from a live component, never a copied pin."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     image_digest: Annotated[str | None, Field(pattern=_DIGEST_PATTERN)] = None
     source_revision: Annotated[str | None, Field(pattern=_REVISION_PATTERN)] = None
@@ -67,7 +67,7 @@ class ValidatorComponentHealth(BaseModel):
     component-probe staleness is visible independently of heartbeat staleness.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     health: ComponentHealthState
     required: bool
@@ -109,7 +109,7 @@ class ValidatorComponentHealth(BaseModel):
 class ValidatorStackHealth(BaseModel):
     """Current components and optional retired-sidecar observations."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     ditto_subnet: ValidatorComponentHealth
     dittobench_api: ValidatorComponentHealth

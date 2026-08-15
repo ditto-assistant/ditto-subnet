@@ -103,15 +103,27 @@ def test_factory_registers_only_the_exact_release_profile() -> None:
     "mutate",
     [
         lambda payload: payload.update(checksum="0" * 64),
-        lambda payload: payload.update(provider_api_key="forbidden"),
         lambda payload: payload["provider_lanes"][0].update(max_requests=49),
         lambda payload: payload["composite"].update(checksum="0" * 64),
     ],
 )
-def test_decoder_rejects_drift_unknown_secret_fields_and_bad_checksums(
+def test_decoder_rejects_drift_and_bad_checksums(
     mutate,
 ) -> None:
     payload = _installed_payload()
     mutate(payload)
     with pytest.raises(ConfirmationProfileInstallationError):
         decode_confirmation_verification_profile(json.dumps(payload).encode())
+
+
+def test_decoder_ignores_unknown_secret_shaped_fields() -> None:
+    payload = _installed_payload()
+    payload["provider_api_key"] = "must-not-become-authoritative"
+
+    decoded = decode_confirmation_verification_profile(json.dumps(payload).encode())
+    expected = decode_confirmation_verification_profile(
+        json.dumps(_installed_payload()).encode()
+    )
+
+    assert decoded == expected
+    assert "provider_api_key" not in decoded.payload()

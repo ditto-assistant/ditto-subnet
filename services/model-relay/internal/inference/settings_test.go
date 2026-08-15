@@ -81,6 +81,21 @@ func TestParseConcurrencySettingsReadsChatHierarchy(t *testing.T) {
 	}
 }
 
+func TestParseConcurrencySettingsIgnoresUnknownFields(t *testing.T) {
+	settings, err := parseConcurrencySettings([]byte(`{
+		"chat_per_ticket_concurrency":24,
+		"chat_per_validator_concurrency":64,
+		"chat_global_concurrency":112,
+		"future_admission_control":true
+	}`))
+	if err != nil {
+		t.Fatalf("additive settings field must be ignored: %v", err)
+	}
+	if settings.ChatGlobalConcurrency != 112 {
+		t.Fatalf("known settings must still parse: %+v", settings)
+	}
+}
+
 func TestParseConcurrencySettingsAcceptsShared512Ceiling(t *testing.T) {
 	settings, err := parseConcurrencySettings([]byte(`{
 		"chat_per_ticket_concurrency":512,

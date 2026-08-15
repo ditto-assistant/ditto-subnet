@@ -73,8 +73,10 @@ def test_managed_stack_accepts_transition_and_current_component_sets() -> None:
     )
     assert current_stack.components.model_relay is None
     assert current_stack.components.ollama is None
-    with pytest.raises(ValidationError):
-        ValidatorStackComponents(**(_components() | {"unexpected": _component()}))
+    with_extra = ValidatorStackComponents(
+        **(_components() | {"unexpected": _component()})
+    )
+    assert "unexpected" not in with_extra.model_dump()
     with pytest.raises(ValidationError):
         ValidatorStackIdentity(
             mode="managed",
@@ -327,9 +329,9 @@ def test_a_scorer_probe_cannot_report_evidence_it_does_not_have() -> None:
 def test_a_validator_without_probe_evidence_signs_the_legacy_bytes() -> None:
     """The cross-repo compatibility guarantee for the additive v15 field.
 
-    The heartbeat is signed and the platform's models forbid extras, so an
-    additive field that shifted the canonical token would reject every existing
-    reporter. Absence has to serialize to exactly nothing.
+    The heartbeat is signed, so an additive field must not shift the canonical
+    token emitted by an existing reporter. Absence has to serialize to exactly
+    nothing.
     """
     payload = json.loads(_V7_VECTOR.read_text())
     capabilities = ValidatorCapabilities.model_validate(

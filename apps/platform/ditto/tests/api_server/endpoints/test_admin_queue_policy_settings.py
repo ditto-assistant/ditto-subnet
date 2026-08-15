@@ -318,24 +318,23 @@ class TestValidation:
         )
         assert response.status_code == 422
 
-    async def test_unknown_knob_is_refused(
+    async def test_unknown_knob_is_ignored_and_not_stored(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         settings_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        # extra="forbid": a typo'd knob must not be silently stored as no-op
-        # policy that an operator then believes is in force.
         _install(app, settings_maker)
         response = await client.post(
             _URL,
             headers=_HEADERS,
             json={
                 **_payload(),
-                "settings": {"rescore_cohort_size": 25, "cohort_size": 25},
+                "settings": _settings(cohort_size=25),
             },
         )
-        assert response.status_code == 422
+        assert response.status_code == 200, response.text
+        assert "cohort_size" not in response.json()["settings"]
 
 
 class TestWholePolicyWrites:

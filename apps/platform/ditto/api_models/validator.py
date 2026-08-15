@@ -524,7 +524,7 @@ class ValidatorHeartbeatRequest(BaseModel):
     Git label. ``timestamp`` is Unix time and is freshness-checked by the server.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Reporting validator hotkey.")
@@ -753,7 +753,7 @@ class HeldLease(BaseModel):
     moves, and a deadline mismatch must never be able to authorize a kill.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     slot_id: Annotated[
         str,
@@ -1315,7 +1315,7 @@ class V9ConfirmationReceipt(BaseModel):
     # UUIDs and datetimes arrive as JSON strings over HTTP. Keep the wire model
     # parseable from ``response.json()``; scalar score fields below remain
     # strict integers and the signed root uses its own strict schema.
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     mode: Literal["enforce"]
     result_status: Literal["full_confirmed"]

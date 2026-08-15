@@ -121,11 +121,6 @@ def test_json_wire_deadline_parses_and_normalizes_to_utc() -> None:
         },
         {
             "stage": "running_benchmark",
-            "ticket_deadline": _DEADLINE,
-            "error": "private failure body",
-        },
-        {
-            "stage": "running_benchmark",
             "ticket_deadline": datetime(2026, 7, 14, 12, 30),
         },
     ],
@@ -135,6 +130,18 @@ def test_malformed_or_malicious_progress_is_rejected(
 ) -> None:
     with pytest.raises(ValidationError):
         BenchmarkProgress.model_validate(payload)
+
+
+def test_unknown_progress_fields_are_ignored_and_not_signed() -> None:
+    progress = BenchmarkProgress.model_validate(
+        {
+            "stage": "running_benchmark",
+            "ticket_deadline": _DEADLINE,
+            "error": "private failure body",
+        }
+    )
+    assert "error" not in progress.model_dump()
+    assert "private failure body" not in benchmark_progress_signing_token(progress)
 
 
 def test_signing_token_contains_only_allowlisted_fields() -> None:

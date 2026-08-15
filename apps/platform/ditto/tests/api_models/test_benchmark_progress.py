@@ -57,12 +57,25 @@ def test_accepts_every_allowlisted_stage(
         {"stage": "preparing", "completed": 0, "total": 10},
         {"stage": "finalizing", "completed": 9, "total": 10},
         {"stage": "submitting_result"},
-        {"stage": "running_benchmark", "display": "private text"},
     ],
 )
 def test_rejects_malformed_or_malicious_progress(payload: dict[str, object]) -> None:
     with pytest.raises(ValidationError):
         BenchmarkProgress.model_validate({**payload, "ticket_deadline": _DEADLINE})
+
+
+def test_ignores_additive_progress_fields() -> None:
+    progress = BenchmarkProgress.model_validate(
+        {
+            "stage": "running_benchmark",
+            "completed": 1,
+            "total": 10,
+            "ticket_deadline": _DEADLINE,
+            "display": "private text",
+        }
+    )
+
+    assert "display" not in progress.model_dump()
 
 
 def test_requires_timezone_and_canonicalizes_signing_token() -> None:

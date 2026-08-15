@@ -45,7 +45,7 @@ CAPABILITY_ORDER: tuple[LongMemCapability, ...] = (
 class LongMemCapabilityScore(BaseModel):
     """One member of the frozen six-capability LongMem macro average."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     capability: LongMemCapability
     correct: UsageCount
@@ -62,7 +62,7 @@ class LongMemCapabilityScore(BaseModel):
 class LongMemProviderLaneEvidence(BaseModel):
     """Receipt-derived accounting for one frozen LongMem provider lane."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     lane: Annotated[str, Field(min_length=1, max_length=128)]
     cost_source: Literal["provider_receipt_v1"]
@@ -92,7 +92,7 @@ class LongMemProviderLaneEvidence(BaseModel):
 
 
 class LongMemScoreEvidence(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     longmem_mean_micros: ScoreMicros
     longmem_stderr_micros: ScoreMicros
@@ -103,7 +103,7 @@ class LongMemScoreEvidence(BaseModel):
 class LongMemEvidence(BaseModel):
     """Typed mirror of the trusted LongMem evidence, with integer scores."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     schema_version: Literal[2]
     artifact_sha256: Sha256
@@ -117,7 +117,7 @@ class LongMemEvidence(BaseModel):
 
 
 class AblationBudget(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     max_chat_requests: UsageCount
     max_chat_input_bytes: UsageCount
@@ -129,7 +129,7 @@ class AblationBudget(BaseModel):
 class AblationSyntheticUsage(BaseModel):
     """Provider-free intervention accounting; upstream use is always zero."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     synthetic: Literal[True]
     intervention: Literal["inference", "embedding"]
@@ -193,7 +193,7 @@ class AblationSyntheticUsage(BaseModel):
 class AblationEvidence(BaseModel):
     """One binary semantic gate; it is never a weighted score dimension."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     contract_version: Annotated[str, Field(min_length=1, max_length=128)]
     bench_version: Literal[9]
@@ -286,7 +286,7 @@ class AblationEvidence(BaseModel):
 
 
 class LongMemDimensionEnvelope(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     status: Literal["completed"]
     evidence_sha256: Sha256
@@ -300,7 +300,7 @@ class LongMemDimensionEnvelope(BaseModel):
 
 
 class AblationDimensionEnvelope(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     status: Literal["completed", "not_run", "unavailable"]
     evidence_sha256: Sha256
@@ -326,7 +326,7 @@ class AblationDimensionEnvelope(BaseModel):
 
 
 class ConfirmationUsageTotals(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     request_count: UsageCount
     input_tokens: UsageCount
@@ -344,7 +344,7 @@ class ConfirmationCompositePolicy(BaseModel):
     subject's full composite without trusting a Platform-projected scalar.
     """
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     schema_version: Literal[1]
     revision: Annotated[str, Field(min_length=1, max_length=128)]
@@ -363,7 +363,7 @@ class ConfirmationCompositePolicy(BaseModel):
 class ConfirmationCompletionReport(BaseModel):
     """Raw typed evidence plus exactly one signature over the rebuilt root."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     ablation_coordinator_latency_ms: UsageCount
     longmemeval: LongMemDimensionEnvelope
@@ -386,7 +386,7 @@ class ConfirmationCompletionReport(BaseModel):
 class ConfirmationEvidenceRoot(BaseModel):
     """Server-rebuilt shared bundle evidence; never owns subject quality."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     schema_version: Literal[1]
     artifact_sha256: Sha256

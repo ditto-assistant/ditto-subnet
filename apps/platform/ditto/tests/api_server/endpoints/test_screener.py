@@ -1750,10 +1750,19 @@ class TestHeartbeat:
         response = await client.post("/api/v1/screener/heartbeat", json=tampered)
         assert response.status_code == 401
 
-        malformed = _heartbeat_payload(timestamp=timestamp, system_metrics=metrics)
-        malformed["system_metrics"]["container_names"] = ["secret"]  # type: ignore[index]
-        response = await client.post("/api/v1/screener/heartbeat", json=malformed)
-        assert response.status_code == 422
+        additive = _heartbeat_payload(timestamp=timestamp, system_metrics=metrics)
+        additive["system_metrics"]["container_names"] = ["secret"]  # type: ignore[index]
+        response = await client.post("/api/v1/screener/heartbeat", json=additive)
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            heartbeat = await session.scalar(
+                select(ScreenerHeartbeat).where(
+                    ScreenerHeartbeat.screener_hotkey == _SCREENER_HOTKEY
+                )
+            )
+            assert heartbeat is not None
+            assert heartbeat.system_metrics is not None
+            assert "container_names" not in heartbeat.system_metrics
 
         response = await client.post(
             "/api/v1/screener/heartbeat",
@@ -1786,7 +1795,15 @@ class TestHeartbeat:
         )
         private_field["progress"]["dependency"] = "private-package"  # type: ignore[index]
         response = await client.post("/api/v1/screener/heartbeat", json=private_field)
-        assert response.status_code == 422
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            heartbeat = await session.scalar(
+                select(ScreenerHeartbeat).where(
+                    ScreenerHeartbeat.screener_hotkey == _SCREENER_HOTKEY
+                )
+            )
+            assert heartbeat is not None
+            assert "private-package" not in json.dumps(heartbeat.system_metrics)
 
         invalid_stage = _heartbeat_payload(
             timestamp=now,

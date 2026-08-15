@@ -26,8 +26,8 @@ var (
 	signaturePattern = regexp.MustCompile(`^[0-9a-fA-F]{128}$`)
 )
 
-// exchangeRequestWire mirrors InferenceExchangeRequest (extra="forbid";
-// every field required; requested_at must be timezone-aware).
+// exchangeRequestWire mirrors InferenceExchangeRequest (unknown fields ignored;
+// every known field required; requested_at must be timezone-aware).
 type exchangeRequestWire struct {
 	ValidatorHotkey *string `json:"validator_hotkey"`
 	GrantID         *string `json:"grant_id"`
@@ -48,7 +48,6 @@ type exchangeParsed struct {
 
 func parseExchangeRequest(body []byte) (*exchangeParsed, bool) {
 	dec := json.NewDecoder(bytes.NewReader(body))
-	dec.DisallowUnknownFields()
 	var wire exchangeRequestWire
 	if err := dec.Decode(&wire); err != nil {
 		return nil, false

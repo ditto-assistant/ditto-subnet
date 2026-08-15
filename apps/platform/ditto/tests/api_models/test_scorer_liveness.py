@@ -216,8 +216,8 @@ def test_an_absent_probe_reproduces_the_legacy_signing_bytes_exactly() -> None:
     """The compatibility guarantee, checked against the frozen v7 vector.
 
     A validator that predates v15 signs what it always signed. The heartbeat is
-    signed and its models forbid extras, so an additive field that changed the
-    canonical token for existing reporters would reject the whole fleet.
+    signed, so an additive field must not change the canonical token produced
+    by an older reporter.
     """
     fixture = json.loads(
         (

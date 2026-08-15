@@ -2,7 +2,6 @@
   "ConfirmationExecutionProfile": {
     "$defs": {
       "AblationBudget": {
-        "additionalProperties": false,
         "properties": {
           "max_chat_input_bytes": {
             "maximum": 9007199254740991,
@@ -40,7 +39,6 @@
         "type": "object"
       },
       "ConfirmationAblationCoordinatorProfile": {
-        "additionalProperties": false,
         "properties": {
           "max_attempts": {
             "exclusiveMinimum": 0,
@@ -73,7 +71,6 @@
         "type": "object"
       },
       "ConfirmationAblationProfile": {
-        "additionalProperties": false,
         "properties": {
           "budget": {
             "$ref": "#/$defs/AblationBudget"
@@ -105,7 +102,6 @@
         "type": "object"
       },
       "ConfirmationCompositeProfile": {
-        "additionalProperties": false,
         "properties": {
           "base_weight_bps": {
             "exclusiveMaximum": 10000,
@@ -149,7 +145,6 @@
         "type": "object"
       },
       "ConfirmationEmbeddingLaneProfile": {
-        "additionalProperties": false,
         "properties": {
           "dimensions": {
             "exclusiveMinimum": 0,
@@ -201,7 +196,6 @@
         "type": "object"
       },
       "ConfirmationProviderLaneProfile": {
-        "additionalProperties": false,
         "properties": {
           "lane": {
             "maxLength": 128,
@@ -270,7 +264,6 @@
         "type": "object"
       }
     },
-    "additionalProperties": false,
     "properties": {
       "ablation_coordinator_policy": {
         "$ref": "#/$defs/ConfirmationAblationCoordinatorProfile"
@@ -418,7 +411,6 @@
     "type": "object"
   },
   "V9ConfirmationClaimRequest": {
-    "additionalProperties": false,
     "properties": {
       "broker_public_key": {
         "pattern": "^[A-Za-z0-9_-]{43}=?$",
@@ -471,7 +463,6 @@
     "type": "object"
   },
   "V9ConfirmationFailRequest": {
-    "additionalProperties": false,
     "properties": {
       "nonce": {
         "format": "uuid",
@@ -516,7 +507,6 @@
     "type": "object"
   },
   "V9ConfirmationFailResponse": {
-    "additionalProperties": false,
     "properties": {
       "accepted": {
         "const": true,
@@ -555,7 +545,6 @@
   "V9ConfirmationJobResponse": {
     "$defs": {
       "AblationBudget": {
-        "additionalProperties": false,
         "properties": {
           "max_chat_input_bytes": {
             "maximum": 9007199254740991,
@@ -593,7 +582,6 @@
         "type": "object"
       },
       "ConfirmationAblationCoordinatorProfile": {
-        "additionalProperties": false,
         "properties": {
           "max_attempts": {
             "exclusiveMinimum": 0,
@@ -626,7 +614,6 @@
         "type": "object"
       },
       "ConfirmationAblationProfile": {
-        "additionalProperties": false,
         "properties": {
           "budget": {
             "$ref": "#/$defs/AblationBudget"
@@ -666,7 +653,6 @@
         "type": "string"
       },
       "ConfirmationCompositeProfile": {
-        "additionalProperties": false,
         "properties": {
           "base_weight_bps": {
             "exclusiveMaximum": 10000,
@@ -710,7 +696,6 @@
         "type": "object"
       },
       "ConfirmationEmbeddingLaneProfile": {
-        "additionalProperties": false,
         "properties": {
           "dimensions": {
             "exclusiveMinimum": 0,
@@ -762,7 +747,6 @@
         "type": "object"
       },
       "ConfirmationExecutionProfile": {
-        "additionalProperties": false,
         "properties": {
           "ablation_coordinator_policy": {
             "$ref": "#/$defs/ConfirmationAblationCoordinatorProfile"
@@ -910,7 +894,6 @@
         "type": "object"
       },
       "ConfirmationInferenceGrantOffer": {
-        "additionalProperties": false,
         "properties": {
           "bearer": {
             "maxLength": 128,
@@ -998,7 +981,6 @@
         "type": "object"
       },
       "ConfirmationProviderLaneProfile": {
-        "additionalProperties": false,
         "properties": {
           "lane": {
             "maxLength": 128,
@@ -1067,7 +1049,6 @@
         "type": "object"
       }
     },
-    "additionalProperties": false,
     "properties": {
       "agent_id": {
         "format": "uuid",
@@ -1170,7 +1151,6 @@
   "V9ConfirmationPrepareRequest": {
     "$defs": {
       "V9ConfirmationRawDimension": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "additionalProperties": true,
@@ -1196,7 +1176,6 @@
         "type": "object"
       }
     },
-    "additionalProperties": false,
     "properties": {
       "ablation_coordinator_latency_ms": {
         "maximum": 9007199254740991,
@@ -1258,7 +1237,6 @@
   "V9ConfirmationPreparedReport": {
     "$defs": {
       "AblationBudget": {
-        "additionalProperties": false,
         "properties": {
           "max_chat_input_bytes": {
             "maximum": 9007199254740991,
@@ -1296,7 +1274,6 @@
         "type": "object"
       },
       "AblationDimensionEnvelope": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "$ref": "#/$defs/AblationEvidence"
@@ -1355,7 +1332,6 @@
         "type": "object"
       },
       "AblationEvidence": {
-        "additionalProperties": false,
         "properties": {
           "ablated_mean_micros": {
             "anyOf": [
@@ -1569,7 +1545,6 @@
         "type": "object"
       },
       "AblationSyntheticUsage": {
-        "additionalProperties": false,
         "properties": {
           "budget": {
             "$ref": "#/$defs/AblationBudget"
@@ -1666,7 +1641,6 @@
         "type": "object"
       },
       "LongMemCapabilityScore": {
-        "additionalProperties": false,
         "properties": {
           "capability": {
             "enum": [
@@ -1704,7 +1678,6 @@
         "type": "object"
       },
       "LongMemDimensionEnvelope": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "$ref": "#/$defs/LongMemEvidence"
@@ -1763,7 +1736,6 @@
         "type": "object"
       },
       "LongMemEvidence": {
-        "additionalProperties": false,
         "properties": {
           "artifact_sha256": {
             "maxLength": 64,
@@ -1826,7 +1798,6 @@
         "type": "object"
       },
       "LongMemProviderLaneEvidence": {
-        "additionalProperties": false,
         "properties": {
           "completion_tokens": {
             "maximum": 9007199254740991,
@@ -1922,7 +1893,6 @@
         "type": "object"
       },
       "LongMemScoreEvidence": {
-        "additionalProperties": false,
         "properties": {
           "case_count": {
             "maximum": 9007199254740991,
@@ -1955,7 +1925,6 @@
         "type": "object"
       }
     },
-    "additionalProperties": false,
     "properties": {
       "ablation_coordinator_latency_ms": {
         "maximum": 9007199254740991,
@@ -2000,7 +1969,6 @@
   "V9ConfirmationSubmitRequest": {
     "$defs": {
       "AblationBudget": {
-        "additionalProperties": false,
         "properties": {
           "max_chat_input_bytes": {
             "maximum": 9007199254740991,
@@ -2038,7 +2006,6 @@
         "type": "object"
       },
       "AblationDimensionEnvelope": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "$ref": "#/$defs/AblationEvidence"
@@ -2097,7 +2064,6 @@
         "type": "object"
       },
       "AblationEvidence": {
-        "additionalProperties": false,
         "properties": {
           "ablated_mean_micros": {
             "anyOf": [
@@ -2311,7 +2277,6 @@
         "type": "object"
       },
       "AblationSyntheticUsage": {
-        "additionalProperties": false,
         "properties": {
           "budget": {
             "$ref": "#/$defs/AblationBudget"
@@ -2408,7 +2373,6 @@
         "type": "object"
       },
       "ConfirmationCompletionReport": {
-        "additionalProperties": false,
         "properties": {
           "ablation_coordinator_latency_ms": {
             "maximum": 9007199254740991,
@@ -2441,7 +2405,6 @@
         "type": "object"
       },
       "LongMemCapabilityScore": {
-        "additionalProperties": false,
         "properties": {
           "capability": {
             "enum": [
@@ -2479,7 +2442,6 @@
         "type": "object"
       },
       "LongMemDimensionEnvelope": {
-        "additionalProperties": false,
         "properties": {
           "evidence": {
             "$ref": "#/$defs/LongMemEvidence"
@@ -2538,7 +2500,6 @@
         "type": "object"
       },
       "LongMemEvidence": {
-        "additionalProperties": false,
         "properties": {
           "artifact_sha256": {
             "maxLength": 64,
@@ -2601,7 +2562,6 @@
         "type": "object"
       },
       "LongMemProviderLaneEvidence": {
-        "additionalProperties": false,
         "properties": {
           "completion_tokens": {
             "maximum": 9007199254740991,
@@ -2697,7 +2657,6 @@
         "type": "object"
       },
       "LongMemScoreEvidence": {
-        "additionalProperties": false,
         "properties": {
           "case_count": {
             "maximum": 9007199254740991,
@@ -2730,7 +2689,6 @@
         "type": "object"
       }
     },
-    "additionalProperties": false,
     "properties": {
       "report": {
         "$ref": "#/$defs/ConfirmationCompletionReport"
@@ -2752,7 +2710,6 @@
     "type": "object"
   },
   "V9ConfirmationSubmitResponse": {
-    "additionalProperties": false,
     "properties": {
       "accepted": {
         "const": true,

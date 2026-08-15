@@ -71,7 +71,7 @@ from ditto_screening_protocol.confirmation_transport import (
 
 
 class V9ConfirmationScorerReadiness(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     ready: Literal[True]
     profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
@@ -79,7 +79,7 @@ class V9ConfirmationScorerReadiness(BaseModel):
 
 
 class V9ConfirmationScorerRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     purpose: Literal["v9_confirmation_bundle"]
     bundle_id: UUID
@@ -115,7 +115,7 @@ class V9ConfirmationScorerRequest(BaseModel):
 
 
 class V9ConfirmationScorerResult(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     longmemeval: V9ConfirmationRawDimension
     inference_ablation: V9ConfirmationRawDimension

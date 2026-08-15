@@ -4423,7 +4423,7 @@ class TestScorerLivenessSurfacing:
         assert entry.health_reasons == []
         assert entry.health == "healthy"
 
-    def test_malformed_stored_updater_json_is_omitted_not_echoed(self) -> None:
+    def test_additive_stored_updater_json_is_projected_without_unknowns(self) -> None:
         now = datetime(2026, 7, 25, 3, 0, tzinfo=UTC)
         row = _liveness_row(
             now,
@@ -4455,7 +4455,10 @@ class TestScorerLivenessSurfacing:
             slot_settings=SLOT_SETTINGS_DEFAULT,
         )
 
-        assert response.validators[0].updater_status is None
+        updater = response.validators[0].updater_status
+        assert updater is not None
+        assert updater.channel == "compat-2"
+        assert "journal" not in updater.model_dump()
 
     def test_a_validator_below_protocol_15_reads_unreported_not_broken(self) -> None:
         """Forward compatibility: the fleet must not go red during the roll-out."""
@@ -7504,7 +7507,7 @@ class TestPublicActivity:
             for row in fleet["validators"]
             if row["active_benchmark"] is not None
         ]
-        assert len(shown) == 2
+        assert len(shown) == 3
         assert all(set(progress) == public_progress_keys for progress in shown)
         first = next(
             progress for progress in shown if progress["completed_checks"] == 51
@@ -7520,9 +7523,9 @@ class TestPublicActivity:
         )
         assert threshold["percent"] == 37  # 3/8 = 37.5%, truncated, not bucketed.
         activity = responses[1].json()["entries"][0]
-        assert len(activity["active_benchmarks"]) == 2
+        assert len(activity["active_benchmarks"]) == 3
         pipeline = responses[2].json()
-        assert sum(a["actively_running"] for a in pipeline["validation_attempts"]) == 2
+        assert sum(a["actively_running"] for a in pipeline["validation_attempts"]) == 3
         assert all(a["bench_version"] == _ERA for a in pipeline["validation_attempts"])
 
         forbidden_keys = {

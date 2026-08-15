@@ -18,7 +18,7 @@ from ditto_screener.errors import ScreenerConfigError
 
 
 class NodeCredential(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: str
     node_id: str
@@ -32,7 +32,7 @@ class NodeCredential(BaseModel):
 
 
 class NodeEnrollmentIntent(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     registration_id: UUID
     mnemonic: str = Field(repr=False)
