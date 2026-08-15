@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 
 	"github.com/ditto-assistant/dittobench-api/internal/runner"
 	"github.com/ditto-assistant/dittobench-api/internal/scoregates"
@@ -29,7 +30,55 @@ func (s *server) runCaseWithModelAttribution(
 	after, afterErr := s.broker.endCaseSnapshot(inferenceSessionID, generation)
 	execution.ModelInferenceObserved, execution.ModelAttributionComplete =
 		v9GenerationCaseDelta(before, after, beforeErr, afterErr)
+	if execution.ModelAttributionComplete {
+		execution.RelayInjectedDelayMs, execution.RelayDelayConsistent =
+			v9RelayDelayEvidence(before, after, execution.TotalDurationMs)
+	}
 	return response, execution, runErr
+}
+
+// v9RelayDelayEvidence turns the case window's delay-fingerprint counters into
+// per-case shadow evidence: the total delay the broker verifiably injected
+// inside this window, and whether the case's trusted wall time can contain it.
+//
+// Concurrent calls overlap their holds, so the wall clock is only guaranteed
+// to cover the LARGEST single injected delay, which the counters do not carry.
+// The per-call mean is a floor on that maximum, so comparing against the mean
+// can never flag an honest case -- an inconsistency here means the harness
+// returned its answer in less wall time than the relay verifiably spent
+// holding a response the same window counts as delivered. nil means
+// unmeasured: no delayed call landed in the window (fingerprint off, or the
+// case never reached the model).
+func v9RelayDelayEvidence(
+	before brokerCaseSnapshot,
+	after brokerCaseSnapshot,
+	totalDurationMs int64,
+) (int64, *bool) {
+	if after.DelayedRequests < before.DelayedRequests ||
+		after.InjectedDelayMS < before.InjectedDelayMS {
+		return 0, nil
+	}
+	injected := after.InjectedDelayMS - before.InjectedDelayMS
+	delayed := after.DelayedRequests - before.DelayedRequests
+	if delayed == 0 {
+		return int64(injected), nil
+	}
+	consistent := totalDurationMs >= int64(injected/delayed)
+	return int64(injected), &consistent
+}
+
+// v9DelayInconsistentCases counts scored cases whose shadow delay evidence
+// came back inconsistent. Reporting only -- the count goes to the operator
+// log, never to a score.
+func v9DelayInconsistentCases(transcripts []transcriptCase) int {
+	inconsistent := 0
+	for _, transcript := range transcripts {
+		verdict := transcript.Execution.RelayDelayConsistent
+		if verdict != nil && !*verdict {
+			inconsistent++
+		}
+	}
+	return inconsistent
 }
 
 func v9GenerationCaseDelta(
@@ -39,7 +88,10 @@ func v9GenerationCaseDelta(
 	afterErr error,
 ) (observed bool, complete bool) {
 	if beforeErr != nil || afterErr != nil || before != (brokerCaseSnapshot{}) || after.InFlight < 0 ||
-		after.Requests < before.Requests || after.Successes < before.Successes {
+		after.Requests < before.Requests || after.Successes < before.Successes ||
+		after.DelayedRequests < before.DelayedRequests ||
+		after.InjectedDelayMS < before.InjectedDelayMS ||
+		after.DelayedRequests > after.Successes {
 		return false, false
 	}
 	requestDelta := after.Requests - before.Requests
@@ -104,6 +156,17 @@ func applyV9BaseEvidence(
 	// screened image is a separate derived build product and must never replace
 	// the tarball identity at this trust boundary.
 	artifactSHA256 := req.TarballSHA256
+	// Delay-fingerprint shadow reporting (delay_fingerprint.go). An
+	// inconsistent case returned its answer in less wall time than the relay
+	// verifiably held a response inside that case's window. Log-only until the
+	// honest-cohort distribution is measured; the signed gate evidence below
+	// is deliberately untouched.
+	if inconsistent := v9DelayInconsistentCases(transcripts); inconsistent > 0 {
+		log.Printf(
+			"run %s: delay-fingerprint shadow: %d case(s) returned faster than their injected relay delay",
+			report.RunID, inconsistent,
+		)
+	}
 	model := v9AggregateModelTelemetry(usage, execution, perCase, transcripts)
 	if !model.DistinctCaseAttributionComplete {
 		return protocol.ScoreReport{}, fmt.Errorf(

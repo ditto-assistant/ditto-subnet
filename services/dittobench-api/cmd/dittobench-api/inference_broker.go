@@ -134,6 +134,11 @@ type brokerSession struct {
 	bearer           string
 	proxyURL         string
 	legacyGateway    string
+	// delayFingerprintKey seeds the deterministic response-delay schedule
+	// (delay_fingerprint.go). Minted with the session, never serialized, never
+	// shown to the harness or the control plane -- the same custody rule as
+	// privateKey above.
+	delayFingerprintKey []byte
 	// trustedChatHandler is an in-process confirmation reader route. It is
 	// reachable only after this broker has authenticated the sandbox source;
 	// unlike a loopback HTTP listener it cannot be scanned or called by another
@@ -426,6 +431,7 @@ type inferenceBroker struct {
 	embeddingURL         string
 	embeddingSlots       chan struct{}
 	retry                brokerRetryConfig
+	delayFP              delayFingerprintConfig
 	sleep                func(context.Context, time.Duration) error
 	relayWait            func(string, bool)
 	terminalAgentFailure func(string)
@@ -896,7 +902,8 @@ func newInferenceBroker(maxSessions int, embeddingCapacity ...int) *inferenceBro
 			cap:         time.Duration(envIntDefault("RELAY_RETRY_CAP_MS", 2000)) * time.Millisecond,
 			factor:      envFloatDefault("RELAY_RETRY_FACTOR", 2),
 		},
-		sleep: brokerSleep,
+		delayFP: parseDelayFingerprintConfig(),
+		sleep:   brokerSleep,
 	}
 }
 
@@ -1227,9 +1234,15 @@ func (b *inferenceBroker) prepare(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "inference broker unavailable")
 		return
 	}
+	fingerprintKey := make([]byte, delayFingerprintKeySize)
+	if _, err := rand.Read(fingerprintKey); err != nil {
+		writeError(w, http.StatusInternalServerError, "inference broker unavailable")
+		return
+	}
 	session := &brokerSession{
 		id: id, activationSecret: activation, privateKey: private, publicKey: public,
-		preparedAt: time.Now(), cancels: make(map[string]context.CancelFunc),
+		delayFingerprintKey: fingerprintKey,
+		preparedAt:          time.Now(), cancels: make(map[string]context.CancelFunc),
 	}
 	b.mu.Lock()
 	if len(b.sessions) >= b.maxSessions {
@@ -2759,9 +2772,23 @@ func (b *inferenceBroker) proxy(
 	usageOK := json.Unmarshal(responseBody, &decoded) == nil && decoded.Usage != nil && decoded.Usage.PromptTokens >= 0 && decoded.Usage.CompletionTokens >= 0
 	session.mu.Lock()
 	session.successes++
+	// The delay fingerprint is computed and booked in the same locked section
+	// that books the success, so the scorer's case-window deltas see the two
+	// facts move together. The sleep itself happens after the lock is
+	// released: only this handler's response waits, never a sibling call.
+	var injectedDelay time.Duration
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
 		snapshot.Successes++
+		if session.benchVersion == protocol.BenchVersionV9 {
+			injectedDelay = delayFingerprintFor(
+				session.delayFingerprintKey, caseGeneration, snapshot.DelayedRequests, b.delayFP,
+			)
+			if injectedDelay > 0 {
+				snapshot.DelayedRequests++
+				snapshot.InjectedDelayMS += uint64(injectedDelay / time.Millisecond)
+			}
+		}
 		session.caseSnapshots[caseGeneration] = snapshot
 	}
 	session.providerLatency += totalLatency
@@ -2773,6 +2800,15 @@ func (b *inferenceBroker) proxy(
 		session.usageUnavailable++
 	}
 	session.mu.Unlock()
+	if injectedDelay > 0 {
+		// Hold the completed upstream response for the scheduled fingerprint
+		// delay before releasing it to the harness. The upstream work, the
+		// platform accounting, and the case-window booking above are all done;
+		// a caller cancel during the hold is honored by the shared sleep and
+		// simply abandons a response that was already recorded as delivered
+		// evidence -- exactly like a cancel during an upstream read today.
+		_ = b.sleep(requestCtx, injectedDelay)
+	}
 	if ordinaryAblationCall >= 0 {
 		if !ablationScope.completeOrdinaryCall(true, ordinaryAblationCall, responseBody) {
 			writeError(w, http.StatusServiceUnavailable, "ordinary inference trace unavailable")
@@ -2858,6 +2894,13 @@ type brokerCaseSnapshot struct {
 	Requests  uint64
 	Successes uint64
 	InFlight  int
+	// DelayedRequests and InjectedDelayMS record the delay-fingerprint
+	// schedule realized inside this case window (delay_fingerprint.go): how
+	// many successful completions were held, and for how long in total. Booked
+	// under the session lock at the same moment as Successes, so the scorer's
+	// begin/end deltas attribute them with the same exactness.
+	DelayedRequests uint64
+	InjectedDelayMS uint64
 }
 
 // beginCaseSnapshot advances the source-bound generation before one ordinary

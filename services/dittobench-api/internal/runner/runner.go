@@ -290,6 +290,12 @@ type CaseExecution struct {
 	TerminalOutcome          string             `json:"terminal_outcome"`
 	ModelInferenceObserved   bool               `json:"model_inference_observed,omitempty"`
 	ModelAttributionComplete bool               `json:"model_attribution_complete,omitempty"`
+	// RelayInjectedDelayMs is the total delay-fingerprint hold the trusted
+	// relay imposed inside this case's window; RelayDelayConsistent reports
+	// whether the case's wall time can contain it (nil = unmeasured). Shadow
+	// evidence only: published for calibration, never consulted by scoring.
+	RelayInjectedDelayMs int64 `json:"relay_injected_delay_ms,omitempty"`
+	RelayDelayConsistent *bool `json:"relay_delay_consistent,omitempty"`
 }
 
 // RunCase POSTs one tool OR memory case to <harnessURL>/run. For a tool case,
