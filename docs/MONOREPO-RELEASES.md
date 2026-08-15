@@ -66,6 +66,13 @@ release spent 125 seconds running 1,553 ordinary tests serially, so the split
 removes roughly one minute from the pre-release critical path without using
 billed runners or running any test concurrently inside one checkout.
 
+The release job runs the repository's hash-locked Python Semantic Release CLI
+directly on the GitHub host after the final superseded-main check. Keep its
+exact version in the dedicated `release` dependency group and `uv.lock`; the
+upstream Docker action installs the same package but rebuilds a compiler-heavy
+container before every invocation. The CLI itself emits the `released`,
+`version`, `tag`, and `commit_sha` GitHub outputs consumed by the fan-out.
+
 Platform pull-request CI and exact-source release verification both call
 `.github/workflows/platform-verify.yml`. The reusable workflow runs static and
 dashboard gates independently and splits the complete backend suite across four

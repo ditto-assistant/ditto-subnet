@@ -244,14 +244,24 @@ jobs:
             git push origin v0.1.0
           fi
 
+      - name: Install uv
+        if: steps.release-head.outputs.current == 'true'
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Install the locked release tool
+        if: steps.release-head.outputs.current == 'true'
+        run: uv sync --locked --only-group release
+
       - name: Version, tag, and create the GitHub release
         id: semantic-release
         if: steps.release-head.outputs.current == 'true'
-        uses: python-semantic-release/python-semantic-release@39dd2052f2ce8282a5d932c31d58a2ca06d2550e
-        with:
-          github_token: ${{ secrets.RELEASE_TOKEN }}
-          git_committer_name: github-actions
-          git_committer_email: actions@users.noreply.github.com
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GIT_COMMIT_AUTHOR: github-actions <actions@users.noreply.github.com>
+          PSR_DOCKER_GITHUB_ACTION: 'true'
+        run: uv run --no-sync semantic-release -v version
 
   # ---------------------------------------------------------------------------
   # Fan-out: root and selected-component verification run in parallel from the

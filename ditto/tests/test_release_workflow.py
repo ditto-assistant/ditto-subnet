@@ -419,11 +419,51 @@ def test_superseded_verified_source_skips_release_mutations() -> None:
     for name in (
         "Configure the release committer",
         "Bootstrap the existing v0.1.0 baseline",
+        "Install uv",
+        "Install the locked release tool",
         "Version, tag, and create the GitHub release",
     ):
         assert _step(steps, name)["if"] == (
             "steps.release-head.outputs.current == 'true'"
         )
+
+
+def test_release_uses_the_hash_locked_host_semantic_release_cli() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    steps = workflow["jobs"]["release"]["steps"]
+    project = tomllib.loads(PYPROJECT_PATH.read_text())
+
+    assert project["dependency-groups"]["release"] == [
+        "python-semantic-release==10.6.1"
+    ]
+    assert not any(
+        str(step.get("uses", "")).startswith(
+            "python-semantic-release/python-semantic-release@"
+        )
+        for step in steps
+    )
+
+    release_head = _step(steps, "Classify a superseded release attempt")
+    install_uv = _step(steps, "Install uv")
+    install_release = _step(steps, "Install the locked release tool")
+    semantic_release = _step(steps, "Version, tag, and create the GitHub release")
+    current = "steps.release-head.outputs.current == 'true'"
+
+    assert steps.index(release_head) < steps.index(install_uv)
+    assert str(install_uv["uses"]).startswith("astral-sh/setup-uv@")
+    assert install_uv["with"]["enable-cache"] is True
+    assert install_uv["if"] == current
+    assert install_release == {
+        "name": "Install the locked release tool",
+        "if": current,
+        "run": "uv sync --locked --only-group release",
+    }
+    assert semantic_release["run"] == ("uv run --no-sync semantic-release -v version")
+    assert semantic_release["env"] == {
+        "GH_TOKEN": "${{ secrets.RELEASE_TOKEN }}",
+        "GIT_COMMIT_AUTHOR": ("github-actions <actions@users.noreply.github.com>"),
+        "PSR_DOCKER_GITHUB_ACTION": "true",
+    }
 
 
 def test_release_uses_the_root_projects_minimum_python() -> None:
@@ -508,7 +548,7 @@ def test_public_screener_dependency_needs_no_private_authentication() -> None:
         "name": "Install dependencies",
         "run": "uv sync --locked --group dev",
     }
-    assert "env" not in release
+    assert release["env"]["GH_TOKEN"] == "${{ secrets.RELEASE_TOKEN }}"
     for workflow_path in (CI_WORKFLOW_PATH, RELEASE_WORKFLOW_PATH):
         text = workflow_path.read_text()
         assert "DITTO_SCREENER_PROTOCOL_READ_KEY" not in text

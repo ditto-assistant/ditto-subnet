@@ -47,6 +47,9 @@ dev = [
     "pytest-cov>=5",
     "pre-commit>=3.7",
 ]
+release = [
+    "python-semantic-release==10.6.1",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["ditto"]
