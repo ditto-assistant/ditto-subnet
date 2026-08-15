@@ -229,8 +229,14 @@ func postProviderWithRetryPolicy(ctx context.Context, client *http.Client, url s
 				if remaining <= 0 {
 					return nil, &providerCallError{attempts: attempt, timedOut: true}
 				}
-				if delay > remaining {
-					delay = remaining
+				if delay >= remaining {
+					// A retry scheduled at the deadline is already outside the
+					// elapsed-time budget. Treat it as terminal after waiting out
+					// the remaining budget instead of racing the backoff timer
+					// against context cancellation and possibly issuing one more
+					// provider request.
+					sleep(retryCtx, remaining)
+					return nil, &providerCallError{attempts: attempt, timedOut: true}
 				}
 			}
 			sleep(retryCtx, delay)

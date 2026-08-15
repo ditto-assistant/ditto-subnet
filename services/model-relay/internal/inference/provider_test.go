@@ -3,12 +3,19 @@ package inference
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
 
 func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 	tests := map[string]struct {
@@ -48,17 +55,24 @@ func TestConfirmationReaderBackpressureDelay(t *testing.T) {
 
 func TestConfirmationReaderBackpressureRespectsHardElapsedDeadline(t *testing.T) {
 	var calls int
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var slept time.Duration
+	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		calls++
-		w.WriteHeader(http.StatusTooManyRequests)
-		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"}}`))
-	}))
-	defer upstream.Close()
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Header:     http.Header{"Retry-After": []string{"60"}},
+			Body: io.NopCloser(strings.NewReader(
+				`{"error":{"code":429,"message":"rate limited"}}`,
+			)),
+			Request: request,
+		}, nil
+	})}
+	const elapsedBudget = 30 * time.Second
 
 	result, callErr := postProviderWithRetryPolicy(
 		context.Background(),
-		upstream.Client(),
-		upstream.URL,
+		client,
+		"https://provider.invalid/v1/chat/completions",
 		map[string]any{"model": "fixed/model"},
 		nil,
 		1024,
@@ -67,15 +81,18 @@ func TestConfirmationReaderBackpressureRespectsHardElapsedDeadline(t *testing.T)
 			retryBackpressure:              true,
 			backpressureMaxAttempts:        confirmationReaderBackpressureMaxAttempts,
 			requireReceiptFreeBackpressure: true,
-			maxElapsed:                     5 * time.Millisecond,
+			maxElapsed:                     elapsedBudget,
 		},
-		defaultSleep,
+		func(_ context.Context, delay time.Duration) { slept = delay },
 	)
 	if result != nil || callErr == nil || !callErr.timedOut {
 		t.Fatalf("deadline result=%v error=%v", result, callErr)
 	}
 	if calls != 1 {
 		t.Fatalf("deadline attempts: got %d want 1", calls)
+	}
+	if slept <= 0 || slept > elapsedBudget {
+		t.Fatalf("deadline sleep: got %s want within (0s, %s]", slept, elapsedBudget)
 	}
 }
 
