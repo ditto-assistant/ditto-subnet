@@ -13,7 +13,17 @@ import { For, Show, createEffect, createMemo, onCleanup, onMount } from "solid-j
 import type { JSX } from "solid-js";
 
 import { rolloutStripState } from "../../lib/bench-state";
-import { agentName, esc, fx, marginText, num, pct, relDuration, shortKey } from "../../lib/format";
+import {
+  agentName,
+  esc,
+  fx,
+  fxScore,
+  marginText,
+  num,
+  pct,
+  relDuration,
+  shortKey,
+} from "../../lib/format";
 import {
   dethroneBandScale,
   dethroneFloor,
@@ -281,11 +291,32 @@ function VersionSwitch(props: { store: LeaderboardStore }): JSX.Element {
 // so this is the only explanation the compact board carries). Every number
 // is read from the fold; the strip below keeps the full math.
 
+function crownComparisonNote(method: string | undefined): string {
+  if (method === "paired") {
+    return "Paired shared-seed comparison: dataset difficulty is removed from the crown decision.";
+  }
+  if (method === "unpaired") {
+    return "Unpaired uncertainty band: shared-seed evidence is not yet sufficient for a paired comparison, so more shared retests can change this threshold.";
+  }
+  return "Fixed protection margin: the first-seen incumbent holds until the challenger clears it.";
+}
+
 function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
   const store = props.store;
   const floor = createMemo(() =>
     dethroneFloor(store.emissions(), store.champion(), store.settledView()),
   );
+  const contest = createMemo(() => {
+    const emissions = store.emissions();
+    const champion = store.champion();
+    const decision = emissions?.raw_leader_decision;
+    const leader = store
+      .entries()
+      .find((entry) => String(entry.agent_id) === String(emissions?.raw_leader_agent_id));
+    return emissions && champion && decision && leader
+      ? { emissions, champion, decision, leader }
+      : null;
+  });
   const shown = createMemo(() => {
     if (store.unavailable()) return false;
     if (store.emissions()?.allocation_mode === "score_ceiling_pool") return true;
@@ -297,6 +328,9 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
     const n = aboveCount();
     return n === 1 ? "1 agent scores higher than it" : n + " agents score higher than it";
   };
+  const rawMedianDiffers = (entry: BoardEntry): boolean =>
+    Number.isFinite(entry.composite) &&
+    Math.abs(entry.composite - displayComposite(entry, store.settledView())) >= 0.0000005;
   return (
     <div
       class="koth-standing"
@@ -311,40 +345,106 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
             <span class="koth-standing-crown" aria-hidden="true">
               ♛
             </span>
-            <span class="koth-standing-copy" id="koth-standing-copy">
+            <div class="koth-standing-copy" id="koth-standing-copy">
               <Show
                 when={store.emissions()?.allocation_mode === "score_ceiling_pool"}
                 fallback={
-                  <>
-                    <b>
-                      <EntityButton
-                        kind="agent"
-                        id={champ().agent_id}
-                        label={agentName(champ().agent_name)}
-                      />
-                      {" is the reigning champion from raw #" + champ().rank + "."}
-                    </b>{" "}
-                    {aboveText() +
-                      ", but the crown only moves when a challenger beats the first-seen incumbent " +
-                      "by more than the dethrone band"}
-                    <Show when={floor()}>
-                      {(f) => (
-                        <>
-                          {" — "}
-                          <b class="beat">{"beat " + fx(f().floor) + " to contend"}</b>
-                        </>
-                      )}
-                    </Show>
-                    {". Until then the incumbent keeps the champion share of emissions; " +
-                      "the dimmed rows outscore it, but not by enough."}
-                  </>
+                  <Show
+                    when={contest()}
+                    fallback={
+                      <>
+                        <b>
+                          <EntityButton
+                            kind="agent"
+                            id={champ().agent_id}
+                            label={agentName(champ().agent_name)}
+                          />
+                          {" is the reigning champion from raw #" + champ().rank + "."}
+                        </b>{" "}
+                        {aboveText() +
+                          ", but the crown only moves when a challenger beats the first-seen incumbent " +
+                          "by more than the dethrone band"}
+                        <Show when={floor()}>
+                          {(f) => (
+                            <>
+                              {" — "}
+                              <b class="beat">{"current floor " + fx(f().floor)}</b>
+                            </>
+                          )}
+                        </Show>
+                        {
+                          ". The exact decision is unavailable from this older leaderboard response."
+                        }
+                      </>
+                    }
+                  >
+                    {(current) => (
+                      <>
+                        <div class="koth-standing-title">
+                          <b>
+                            <EntityButton
+                              kind="agent"
+                              id={current().leader.agent_id}
+                              label={agentName(current().leader.agent_name)}
+                            />
+                            {" is rank #1. "}
+                            <EntityButton
+                              kind="agent"
+                              id={current().champion.agent_id}
+                              label={agentName(current().champion.agent_name)}
+                            />
+                            {" remains champion."}
+                          </b>
+                        </div>
+                        <dl class="koth-standing-metrics">
+                          <div>
+                            <dt>Rank / KOTH score</dt>
+                            <dd>
+                              {fxScore(displayComposite(current().leader, store.settledView()))}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt>
+                              {current().decision.method === "paired"
+                                ? "Paired-seed lead"
+                                : "Current lead"}
+                            </dt>
+                            <dd>{"+" + fxScore(current().decision.challenger_lead)}</dd>
+                          </div>
+                          <div>
+                            <dt>Lead required</dt>
+                            <dd>{">+" + fxScore(current().decision.required_lead)}</dd>
+                          </div>
+                          <Show when={current().decision.required_score}>
+                            {(score) => (
+                              <div>
+                                <dt>Dethrone score</dt>
+                                <dd>{">" + fxScore(score())}</dd>
+                              </div>
+                            )}
+                          </Show>
+                        </dl>
+                        <div class="koth-standing-detail">
+                          <Show when={rawMedianDiffers(current().leader)}>
+                            {"The " +
+                              fxScore(current().leader.composite) +
+                              " raw quorum median is not the crown score; ranking and KOTH use " +
+                              (current().leader.aggregate_method === "continual_mean"
+                                ? "the official continual score after accepted retests. "
+                                : "the official score shown above. ")}
+                          </Show>
+                          {crownComparisonNote(current().decision.method)}
+                        </div>
+                      </>
+                    )}
+                  </Show>
                 }
               >
                 <b>Score-ceiling joint crown.</b>{" "}
                 {(store.emissions()?.score_ceiling_pool_size || 0) +
                   " highest evidence-tied agents split the full miner pool equally because the incumbent's required dethrone score cannot be exceeded within the score range. The historical incumbent no longer reserves a separate champion share."}
               </Show>
-            </span>
+            </div>
           </>
         )}
       </Show>

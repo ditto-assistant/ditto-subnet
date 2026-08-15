@@ -54,6 +54,7 @@
 }
 .koth-standing-copy {
   min-width: 0;
+  flex: 1;
 }
 .koth-standing-copy b {
   color: var(--text);
@@ -65,6 +66,52 @@
   color: var(--gold);
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
+}
+.koth-standing-title {
+  font-size: 13.5px;
+  line-height: 1.4;
+}
+.koth-standing-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 22px;
+  margin: 9px 0 7px;
+}
+.koth-standing-metrics > div {
+  min-width: 116px;
+}
+.koth-standing-metrics dt {
+  margin-bottom: 1px;
+  color: var(--text-faint);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.045em;
+  line-height: 1.25;
+  text-transform: uppercase;
+}
+.koth-standing-metrics dd {
+  margin: 0;
+  color: var(--text);
+  font: 700 13px/1.35 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.koth-standing-metrics > div:nth-child(n + 3) dd {
+  color: var(--gold);
+}
+.koth-standing-detail {
+  max-width: 75ch;
+  color: var(--text-dim);
+}
+
+@media (max-width: 680px) {
+  .koth-standing-metrics {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px 14px;
+  }
+  .koth-standing-metrics > div {
+    min-width: 0;
+  }
 }
 
 .emissions-strip {

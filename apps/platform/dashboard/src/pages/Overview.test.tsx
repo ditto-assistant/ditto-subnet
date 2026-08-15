@@ -20,7 +20,7 @@ import {
 } from "../components/overview/memory-timeline";
 import { resetBoardState, setLeaderboardVersionView } from "../components/board/board-state";
 import { refreshAllEndpoints } from "../data/useEndpoint";
-import { fx, pct } from "../lib/format";
+import { fx, fxScore, pct } from "../lib/format";
 import { dethroneFloor, displayComposite, rankEntries } from "../lib/scoring";
 import { syncFromLocation } from "../stores/routeStore";
 import { fixtureNameFor, loadFixture } from "../test-fixtures";
@@ -361,10 +361,8 @@ describe("overview leaderboard block (row 1 slice)", () => {
     expect(document.querySelectorAll("tr.above-champion")).toHaveLength(
       (championEntry.rank as number) - 1,
     );
-    const floor = dethroneFloor(emissions, championEntry);
-    expect(floor).not.toBeNull();
     expect(el("koth-standing").textContent).toContain(
-      "beat " + fx((floor as NonNullable<typeof floor>).floor) + " to contend",
+      "Lead required>+" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
     );
     expect(cssNorm).toContain(
       ".overview-main #board .above-champion-note { white-space: normal; }",

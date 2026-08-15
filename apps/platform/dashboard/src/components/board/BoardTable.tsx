@@ -20,7 +20,6 @@ import {
   shortKey,
 } from "../../lib/format";
 import {
-  dethroneFloor,
   displayComposite,
   chainWeightLabel,
   errBandBounds,
@@ -285,7 +284,7 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
     <td class="scores-cell">
       <div class="score-stack">
         <div class="score-stack-row current">
-          <span class="score-stack-label">{showsEfficiencyTieBreak() ? "Quality" : "Current"}</span>
+          <span class="score-stack-label">{showsEfficiencyTieBreak() ? "Quality" : "KOTH"}</span>
           <div class="metric">
             <div class="barwrap">
               <Show when={band()}>
@@ -352,7 +351,7 @@ function BoardRow(props: {
   chainRegistrationUnknown: boolean;
   /** The reigning champion's display rank, or null when there is no ranked
    * champion. Rows ranked above it outscore the incumbent without having
-   * dethroned it — they dim and carry the "outscores · not dethroned" note. */
+   * dethroned it — they dim and carry the "crown held" note. */
   championRank: number | null;
 }): JSX.Element {
   const e = (): BoardEntry => props.entry;
@@ -386,16 +385,33 @@ function BoardRow(props: {
     props.championRank > 1 &&
     (e().rank as number) < props.championRank;
   const aboveChampionTip = (): string => {
-    const floor = dethroneFloor(
-      props.store.emissions(),
-      props.store.champion(),
-      props.store.settledView(),
-    );
+    const emissions = props.store.emissions();
+    const decision = emissions?.raw_leader_decision;
+    const isRawLeader = String(emissions?.raw_leader_agent_id) === String(e().agent_id);
+    if (decision && isRawLeader) {
+      const threshold =
+        typeof decision.required_score === "number" && Number.isFinite(decision.required_score)
+          ? " The challenger score must exceed " + fxScore(decision.required_score) + "."
+          : "";
+      return (
+        "Rank #1 challenger, not champion. Its KOTH lead is +" +
+        fxScore(decision.challenger_lead) +
+        "; the current fold requires more than +" +
+        fxScore(decision.required_lead) +
+        "." +
+        threshold
+      );
+    }
     return (
-      "Scores above the reigning champion, but not by more than the dethrone band" +
-      (floor ? " — beat " + fxScore(floor.floor) + " to contend" : "") +
-      ". Until a challenger clears the band, the first-seen incumbent keeps the champion share."
+      "Scores above the reigning champion, but the exact fold decision has not moved the crown. " +
+      "Raw rank alone never replaces the first-seen incumbent."
     );
+  };
+  const aboveChampionLabel = (): string => {
+    const emissions = props.store.emissions();
+    return String(emissions?.raw_leader_agent_id) === String(e().agent_id)
+      ? "#1 challenger · crown held"
+      : "outscores · crown held";
   };
   // Rank medals (r1–r3) require live emission eligibility:
   // e.emission_eligible === true, never a looser truthiness.
@@ -612,7 +628,7 @@ function BoardRow(props: {
           </Show>
           <Show when={aboveChampion()}>
             <ChipTip class="above-champion-note tip-chip" text={aboveChampionTip()}>
-              outscores · not dethroned
+              {aboveChampionLabel()}
             </ChipTip>
           </Show>
           <Show when={chainInfo()}>

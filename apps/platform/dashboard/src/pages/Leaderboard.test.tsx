@@ -33,6 +33,9 @@ const emissions = leaderboard.emissions ?? null;
 const championEntry = ranked.find(
   (e) => String(e.agent_id) === String(emissions?.champion_agent_id),
 ) as LeaderboardEntry & { rank: number | null };
+const rawLeaderEntry = ranked.find(
+  (e) => String(e.agent_id) === String(emissions?.raw_leader_agent_id),
+) as LeaderboardEntry & { rank: number | null };
 
 interface FetchOptions {
   onRequest?: (path: string) => void;
@@ -830,24 +833,28 @@ describe("dethrone floor + rollout strip (row 36)", () => {
 // the table, dim the not-yet-dethroning leaders, and crown the incumbent's
 // row, all from fold-fed numbers.
 describe("held-crown standing clarity", () => {
-  const floor = dethroneFloor(emissions, championEntry) as NonNullable<
-    ReturnType<typeof dethroneFloor>
-  >;
-
-  it("calls out the held crown above the board with the fold-fed floor", async () => {
+  it("calls out the held crown above the board with the exact fold decision", async () => {
     renderPage();
     await waitForBoard();
     await waitFor(() => expect(el("koth-standing").classList.contains("show")).toBe(true));
     const callout = el("koth-standing");
     expect(callout).toHaveAttribute("role", "note");
+    expect(callout.textContent).toContain((rawLeaderEntry.agent_name as string) + " is rank #1");
     expect(callout.textContent).toContain(championEntry.agent_name as string);
+    expect(callout.textContent).toContain("remains champion");
     expect(callout.textContent).toContain(
-      "is the reigning champion from raw #" + championEntry.rank,
+      "Rank / KOTH score" + fxScore(displayComposite(rawLeaderEntry)),
     );
-    expect(callout.textContent).toContain("1 agent scores higher than it");
-    // The score to beat is the additive fold floor, never a hardcoded value.
-    expect(callout.textContent).toContain("beat " + fx(floor.floor) + " to contend");
-    expect(callout.textContent).toContain("the dimmed rows outscore it, but not by enough");
+    expect(callout.textContent).toContain(
+      "Paired-seed lead+" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
+    );
+    expect(callout.textContent).toContain(
+      "Lead required>+" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
+    );
+    expect(callout.textContent).toContain(
+      fxScore(rawLeaderEntry.composite) + " raw quorum median is not the crown score",
+    );
+    expect(callout.textContent).toContain("Paired shared-seed comparison");
   });
 
   it("dims every higher-scoring row and notes it outscores without dethroning", async () => {
@@ -860,14 +867,14 @@ describe("held-crown standing clarity", () => {
     );
     const dimmed = document.querySelector("tr.above-champion") as HTMLElement;
     // The dimmed leader keeps its tail badge (it still earns tail emissions)
-    // and gains the not-dethroned note with the floor in its tooltip.
+    // and gains the not-dethroned note with the exact decision in its tooltip.
     const note = dimmed.querySelector(".above-champion-note") as HTMLElement;
-    expect(note.textContent).toBe("outscores · not dethroned");
+    expect(note.textContent).toBe("#1 challenger · crown held");
     expect(note.getAttribute("data-tooltip")).toContain(
-      "beat " + fxScore(floor.floor) + " to contend",
+      "KOTH lead is +" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
     );
     expect(note.getAttribute("data-tooltip")).toContain(
-      "the first-seen incumbent keeps the champion share",
+      "requires more than +" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
     );
     expect(dimmed.getAttribute("aria-label")).toContain(
       "outscores the champion but has not cleared the dethrone band",
@@ -881,6 +888,36 @@ describe("held-crown standing clarity", () => {
     expect(document.querySelectorAll("#rows tr[data-i]").length).toBeGreaterThan(
       document.querySelectorAll("tr.above-champion").length + 1,
     );
+  });
+
+  it("names an unpaired threshold and exact dethrone score without presenting the floor as enough", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          emissions: {
+            ...payload.emissions,
+            raw_leader_decision: {
+              method: "unpaired",
+              challenger_lead: 0.0185715,
+              required_lead: 0.046305194,
+              required_score: 0.750175444,
+            },
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("koth-standing-copy").textContent).toContain("Unpaired uncertainty band"),
+    );
+    const copy = el("koth-standing-copy").textContent;
+    expect(copy).toContain("Current lead+0.018572");
+    expect(copy).toContain("Lead required>+0.046305");
+    expect(copy).toContain("Dethrone score>0.750175");
+    expect(copy).not.toContain("beat 0.710");
   });
 
   it("pins the dimming and hover-restore rules in the stylesheet", () => {
