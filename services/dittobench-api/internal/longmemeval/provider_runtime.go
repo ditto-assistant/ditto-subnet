@@ -22,11 +22,12 @@ import (
 )
 
 const (
-	maxProviderRequestBytes  = 4 << 20
-	maxProviderResponseBytes = 16 << 20
-	officialJudgeMaxTokens   = 10
-	officialJudgeModel       = "openai/gpt-4o-2024-08-06"
-	officialJudgeRevision    = "longmemeval-official-gpt4o-openrouter-v1"
+	maxProviderRequestBytes      = 4 << 20
+	maxProviderResponseBytes     = 16 << 20
+	officialJudgeMaxTokens       = 10
+	officialJudgeModel           = "openai/gpt-4o-2024-08-06"
+	officialJudgeRevision        = "longmemeval-official-gpt4o-openrouter-v1"
+	platformConfirmationChatPath = "/api/v1/inference/confirmation/chat/completions"
 )
 
 // RequestAuthorizer applies trusted provider authorization to one outbound
@@ -215,14 +216,20 @@ func validateProviderLaneRuntime(policy ProviderPolicy, config ProviderLaneRunti
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return fmt.Errorf("provider upstream URL is invalid for lane %q", policy.Lane)
 	}
-	if parsed.Path != "/api/v1/chat/completions" && parsed.Path != "/v1/chat/completions" &&
-		parsed.Path != "/chat/completions" {
+	platformProxy := parsed.Path == platformConfirmationChatPath
+	directProvider := parsed.Path == "/api/v1/chat/completions" || parsed.Path == "/v1/chat/completions" ||
+		parsed.Path == "/chat/completions"
+	if !platformProxy && !directProvider {
 		return fmt.Errorf("provider upstream path is not a chat completion endpoint for lane %q", policy.Lane)
 	}
-	if parsed.Scheme != "https" && !(parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname())) {
+	if parsed.Scheme != "https" && !(directProvider && parsed.Scheme == "http" && isLoopbackHost(parsed.Hostname())) {
 		return fmt.Errorf("provider upstream transport is insecure for lane %q", policy.Lane)
 	}
-	if !isLoopbackHost(parsed.Hostname()) && !strings.EqualFold(parsed.Hostname(), "openrouter.ai") {
+	// The ticket-scoped Platform route may live on a deployment-specific host.
+	// Its RequestAuthorizer binds the exact URL from the signed grant before it
+	// adds any bearer or request signature. Direct provider routes retain the
+	// stricter OpenRouter-or-loopback origin allowlist below.
+	if directProvider && !isLoopbackHost(parsed.Hostname()) && !strings.EqualFold(parsed.Hostname(), "openrouter.ai") {
 		return fmt.Errorf("provider upstream host is not OpenRouter for lane %q", policy.Lane)
 	}
 	if policy.Provider != "openrouter" {

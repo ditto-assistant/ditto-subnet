@@ -681,6 +681,38 @@ func TestConfirmationFactoryAcquireAndCloseOwnEveryResource(t *testing.T) {
 	}
 }
 
+func TestConfirmationProviderRuntimeAcceptsTicketScopedPlatformProxy(t *testing.T) {
+	fixture := newConfirmationFactoryFixture(t, true)
+	const proxyURL = "https://platform.test/api/v1/inference/confirmation/chat/completions"
+	session := fixture.factory.broker.sessions[fixture.identity.InferenceSessionID]
+	session.mu.Lock()
+	for _, lane := range []string{longmemeval.ReaderLane, longmemeval.JudgeLane} {
+		grant := session.confirmationGrants[lane]
+		grant.ProxyURL = proxyURL
+		session.confirmationGrants[lane] = grant
+	}
+	session.mu.Unlock()
+
+	config, err := fixture.factory.broker.confirmationProviderRuntime(
+		fixture.identity.InferenceSessionID,
+		fixture.factory.profile,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerSession, err := longmemeval.NewProviderSession(
+		context.Background(),
+		fixture.factory.profile.longMemProfile(),
+		config,
+	)
+	if err != nil || providerSession == nil {
+		t.Fatalf("ticket-scoped Platform runtime rejected: session=%#v err=%v", providerSession, err)
+	}
+	if err := providerSession.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestConfirmationFactoryFailsBeforeSpendAndCleansEveryPartialLifecycle(t *testing.T) {
 	for name, test := range map[string]struct {
 		configure func(*confirmationFactoryFixture)

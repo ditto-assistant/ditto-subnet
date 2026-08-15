@@ -384,6 +384,67 @@ func TestProviderSessionConstructorFailsClosed(t *testing.T) {
 	}
 }
 
+func TestProviderSessionAcceptsTicketScopedPlatformProxyRoute(t *testing.T) {
+	profile := runtimeProviderProfile(t)
+	authorizer := &recordingAuthorizer{credential: "ticket-scoped-capability"}
+	config := ProviderRuntimeConfig{
+		Authorizer: authorizer,
+		Lanes: []ProviderLaneRuntimeConfig{
+			{
+				Lane: ReaderLane, UpstreamURL: "https://platform.test" + platformConfirmationChatPath,
+				RouteProvider: "openai", ReceiptProvider: "OpenAI", RequestTimeout: time.Second,
+			},
+			{
+				Lane: JudgeLane, UpstreamURL: "https://platform.test" + platformConfirmationChatPath,
+				RouteProvider: "openai", ReceiptProvider: "OpenAI", RequestTimeout: time.Second,
+			},
+		},
+	}
+	session, err := NewProviderSession(context.Background(), profile, config)
+	if err != nil || session == nil {
+		t.Fatalf("ticket-scoped Platform proxy rejected: session=%#v err=%v", session, err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(authorizer.snapshot()) != 0 {
+		t.Fatal("constructor contacted the ticket capability authorizer")
+	}
+}
+
+func TestProviderSessionRejectsPlatformProxyNearMisses(t *testing.T) {
+	profile := runtimeProviderProfile(t)
+	base := "https://platform.test" + platformConfirmationChatPath
+	tests := map[string]string{
+		"insecure transport": "http://platform.test" + platformConfirmationChatPath,
+		"query":              base + "?lane=reader",
+		"fragment":           base + "#reader",
+		"credential":         "https://user:pass@platform.test" + platformConfirmationChatPath,
+		"wrong path":         "https://platform.test/api/v1/inference/chat/completions",
+		"path suffix":        base + "/other",
+	}
+	for name, upstreamURL := range tests {
+		t.Run(name, func(t *testing.T) {
+			config := ProviderRuntimeConfig{
+				Authorizer: &recordingAuthorizer{credential: "ticket-scoped-capability"},
+				Lanes: []ProviderLaneRuntimeConfig{
+					{
+						Lane: ReaderLane, UpstreamURL: upstreamURL,
+						RouteProvider: "openai", ReceiptProvider: "OpenAI", RequestTimeout: time.Second,
+					},
+					{
+						Lane: JudgeLane, UpstreamURL: base,
+						RouteProvider: "openai", ReceiptProvider: "OpenAI", RequestTimeout: time.Second,
+					},
+				},
+			}
+			if session, err := NewProviderSession(context.Background(), profile, config); err == nil || session != nil {
+				t.Fatalf("near-miss Platform proxy accepted: session=%#v", session)
+			}
+		})
+	}
+}
+
 func TestValidateProviderRuntimeConfigIsSideEffectFree(t *testing.T) {
 	profile := runtimeProviderProfile(t)
 	upstream := newRuntimeUpstream(t)
