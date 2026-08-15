@@ -181,7 +181,7 @@ from ditto.api_server.continual_retest_settings import (
 from ditto.api_server.datapipeline import DataPipelineError
 from ditto.api_server.efficiency import (
     EfficiencyBoardView,
-    ensure_efficiency_state,
+    ensure_current_efficiency_state,
     preview_efficiency_board,
     read_efficiency_board,
 )
@@ -2428,8 +2428,11 @@ async def leaderboard(
         # this session. A no-op below bench_version 7 and after the first call
         # of an epoch; failure degrades to serving the board without bonuses.
         try:
-            await ensure_efficiency_state(
-                session, efficiency_config, now=datetime.now(UTC)
+            await ensure_current_efficiency_state(
+                request.app.state,
+                session,
+                efficiency_config,
+                now=datetime.now(UTC),
             )
         except SQLAlchemyError:
             logger.warning(
@@ -4605,7 +4608,9 @@ async def activity(
     )
     now = datetime.now(UTC)
     if efficiency_config.enabled:
-        await ensure_efficiency_state(session, efficiency_config, now=now)
+        await ensure_current_efficiency_state(
+            request.app.state, session, efficiency_config, now=now
+        )
     requested_statuses = set(status or [])
     unknown_statuses = requested_statuses - _PUBLIC_ACTIVITY_STATUSES
     if unknown_statuses:
@@ -4845,7 +4850,9 @@ async def operations(
         getattr(request.app.state, "session_maker", None)
     )
     if efficiency_config.enabled:
-        await ensure_efficiency_state(session, efficiency_config, now=now)
+        await ensure_current_efficiency_state(
+            request.app.state, session, efficiency_config, now=now
+        )
     heartbeat_rows = await list_validator_heartbeats(session)
     benchmark_rollout = await rollout_state(session, now=now, heartbeats=heartbeat_rows)
     active_version = cast(int, benchmark_rollout["active_version"])
@@ -5130,7 +5137,9 @@ async def agent_summary(
         getattr(request.app.state, "session_maker", None)
     )
     if efficiency_config.enabled:
-        await ensure_efficiency_state(session, efficiency_config, now=now)
+        await ensure_current_efficiency_state(
+            request.app.state, session, efficiency_config, now=now
+        )
     active_version = await active_bench_version(session)
     row = await get_public_activity_by_id(
         session,
@@ -5268,7 +5277,9 @@ async def agent_pipeline(
         getattr(request.app.state, "session_maker", None)
     )
     if efficiency_config.enabled:
-        await ensure_efficiency_state(session, efficiency_config, now=now)
+        await ensure_current_efficiency_state(
+            request.app.state, session, efficiency_config, now=now
+        )
     agent = await session.get(Agent, agent_id)
     if agent is None:
         raise HTTPException(status_code=404, detail="submission not found")

@@ -38,7 +38,10 @@ and no bonus row is ever written for them.
 
 from __future__ import annotations
 
+import asyncio
+import hashlib
 import logging
+import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -109,6 +112,14 @@ has at least one successful controlled request.
 """
 V9_EFFICIENCY_MIN_PROMPT_TOKENS_PER_CASE = 200
 V9_EFFICIENCY_MIN_PROMPT_TOKENS_PER_REQUEST = 300
+
+EFFICIENCY_EVIDENCE_POLL_SECONDS = 0.0
+"""Default to a fresh cheap watermark so new scores are assigned immediately.
+
+The coordinator still single-flights concurrent callers and skips the expensive
+ledger whenever that watermark is unchanged. A positive interval remains
+available to deliberately trade assignment latency for fewer scalar reads.
+"""
 
 
 @dataclass(frozen=True)
@@ -839,6 +850,232 @@ class EfficiencyBoardView:
     """Quality-qualified preview candidates after payment-owner dedupe."""
     preview_lineage_deduped_count: int | None = None
     """Quality-qualified preview candidates after owner and lineage dedupe."""
+
+
+@dataclass(frozen=True)
+class EfficiencyEvidenceWatermark:
+    """Cheap identity of every mutable input to efficiency materialization."""
+
+    active_bench_version: int
+    candidate_digest: str
+    owner_attestation_digest: str
+    score_count: int
+    score_updated_at: datetime | None
+    confirmation_score_count: int
+    confirmation_score_created_at: datetime | None
+    confirmation_subject_count: int
+    confirmation_subject_updated_at: datetime | None
+    confirmation_bundle_count: int
+    confirmation_bundle_updated_at: datetime | None
+    confirmation_settings_revision: int
+
+
+def _rows_digest(rows: Sequence[Any]) -> str:
+    """Return a stable digest for a small ordered scalar projection."""
+
+    digest = hashlib.sha256()
+    for row in rows:
+        payload = repr(tuple(row)).encode()
+        digest.update(len(payload).to_bytes(8, "big"))
+        digest.update(payload)
+    return digest.hexdigest()
+
+
+async def _efficiency_evidence_watermark(
+    session: AsyncSession,
+) -> EfficiencyEvidenceWatermark:
+    """Read the small indexed state that can change a materialization result.
+
+    This deliberately avoids :func:`list_eligible_ledger`. Candidate identity
+    is a scalar-only projection and the score/evidence ledgers collapse to
+    counts plus monotonic timestamps. The production query is a few
+    milliseconds instead of a full Python ranking-ledger rebuild.
+    """
+    from sqlalchemy import func, select
+
+    from ditto.api_models.agent_status import AgentStatus
+    from ditto.db.models import (
+        Agent,
+        ConfirmationBundle,
+        ConfirmationBundleSettingsRevision,
+        ConfirmationBundleSubject,
+        ConfirmationScore,
+        EvaluationPayment,
+        OwnerAttestation,
+        Score,
+    )
+    from ditto.db.queries.benchmark_rollout import active_bench_version
+
+    bench_version = await active_bench_version(session)
+    candidate_rows = (
+        await session.execute(
+            select(
+                Agent.agent_id,
+                Agent.status,
+                Agent.sha256,
+                Agent.normalized_source_hash,
+                Agent.created_at,
+                Agent.miner_hotkey,
+                EvaluationPayment.miner_coldkey,
+            )
+            .select_from(Agent)
+            .join(
+                Score,
+                (Score.agent_id == Agent.agent_id)
+                & (Score.bench_version == bench_version),
+            )
+            .outerjoin(
+                EvaluationPayment,
+                EvaluationPayment.agent_id == Agent.agent_id,
+            )
+            .where(Agent.status == AgentStatus.SCORED)
+            .distinct()
+            .order_by(Agent.agent_id)
+        )
+    ).all()
+    owner_attestation_rows = (
+        await session.execute(
+            select(
+                OwnerAttestation.netuid,
+                OwnerAttestation.hotkey_lo,
+                OwnerAttestation.hotkey_hi,
+                OwnerAttestation.created_at,
+            )
+            .where(OwnerAttestation.revoked_at.is_(None))
+            .order_by(
+                OwnerAttestation.netuid,
+                OwnerAttestation.hotkey_lo,
+                OwnerAttestation.hotkey_hi,
+            )
+        )
+    ).all()
+
+    def count_for(model: Any) -> Any:
+        return (
+            select(func.count())
+            .select_from(model)
+            .where(model.bench_version == bench_version)
+            .scalar_subquery()
+        )
+
+    def max_for(model: Any, column: Any) -> Any:
+        return (
+            select(func.max(column))
+            .select_from(model)
+            .where(model.bench_version == bench_version)
+            .scalar_subquery()
+        )
+
+    state = (
+        await session.execute(
+            select(
+                count_for(Score),
+                max_for(Score, Score.updated_at),
+                count_for(ConfirmationScore),
+                max_for(ConfirmationScore, ConfirmationScore.created_at),
+                count_for(ConfirmationBundleSubject),
+                max_for(
+                    ConfirmationBundleSubject,
+                    ConfirmationBundleSubject.updated_at,
+                ),
+                count_for(ConfirmationBundle),
+                max_for(ConfirmationBundle, ConfirmationBundle.updated_at),
+                select(
+                    func.coalesce(
+                        func.max(ConfirmationBundleSettingsRevision.revision), 0
+                    )
+                )
+                .where(ConfirmationBundleSettingsRevision.scope == "*")
+                .scalar_subquery(),
+            )
+        )
+    ).one()
+    return EfficiencyEvidenceWatermark(
+        active_bench_version=bench_version,
+        candidate_digest=_rows_digest(candidate_rows),
+        owner_attestation_digest=_rows_digest(owner_attestation_rows),
+        score_count=int(state[0]),
+        score_updated_at=state[1],
+        confirmation_score_count=int(state[2]),
+        confirmation_score_created_at=state[3],
+        confirmation_subject_count=int(state[4]),
+        confirmation_subject_updated_at=state[5],
+        confirmation_bundle_count=int(state[6]),
+        confirmation_bundle_updated_at=state[7],
+        confirmation_settings_revision=int(state[8]),
+    )
+
+
+class EfficiencyStateMaterializer:
+    """Single-flight, evidence-driven efficiency materialization coordinator.
+
+    A successful materialization is reusable until its epoch, effective config,
+    or evidence watermark changes. Failures are never cached. One instance per
+    API process prevents validator and dashboard requests from rebuilding the
+    same unchanged ledger.
+    """
+
+    def __init__(
+        self, *, poll_seconds: float = EFFICIENCY_EVIDENCE_POLL_SECONDS
+    ) -> None:
+        self._poll_seconds = max(0.0, poll_seconds)
+        self._lock = asyncio.Lock()
+        self._last_scope: tuple[EfficiencyBonusConfig, int] | None = None
+        self._last_watermark: EfficiencyEvidenceWatermark | None = None
+        self._last_checked_at = 0.0
+
+    async def ensure(
+        self,
+        session: AsyncSession,
+        config: EfficiencyBonusConfig,
+        *,
+        now: datetime,
+    ) -> None:
+        if not config.enabled:
+            return
+        scope = (config, epoch_index_for(now, config.epoch_hours))
+        checked_at = time.monotonic()
+        if (
+            self._last_scope == scope
+            and self._last_watermark is not None
+            and checked_at - self._last_checked_at < self._poll_seconds
+        ):
+            return
+
+        async with self._lock:
+            checked_at = time.monotonic()
+            if (
+                self._last_scope == scope
+                and self._last_watermark is not None
+                and checked_at - self._last_checked_at < self._poll_seconds
+            ):
+                return
+            async with session.begin():
+                watermark = await _efficiency_evidence_watermark(session)
+            if self._last_scope == scope and self._last_watermark == watermark:
+                self._last_checked_at = time.monotonic()
+                return
+
+            await ensure_efficiency_state(session, config, now=now)
+            self._last_scope = scope
+            self._last_watermark = watermark
+            self._last_checked_at = time.monotonic()
+
+
+async def ensure_current_efficiency_state(
+    app_state: Any,
+    session: AsyncSession,
+    config: EfficiencyBonusConfig,
+    *,
+    now: datetime,
+) -> None:
+    """Use the app coordinator, with a direct-call fallback for small tests."""
+
+    materializer = getattr(app_state, "efficiency_materializer", None)
+    if materializer is None:
+        await ensure_efficiency_state(session, config, now=now)
+        return
+    await materializer.ensure(session, config, now=now)
 
 
 def _candidates_from_rows(

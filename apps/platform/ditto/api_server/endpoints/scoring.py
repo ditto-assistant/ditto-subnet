@@ -47,7 +47,7 @@ from ditto.api_server.continual_retest_settings import (
     aggregate_is_active,
     tie_weighting_is_active,
 )
-from ditto.api_server.efficiency import ensure_efficiency_state
+from ditto.api_server.efficiency import ensure_current_efficiency_state
 from ditto.api_server.endpoints.validator import (
     ChainDep,
     SessionDep,
@@ -596,7 +596,9 @@ async def scores(
         # leaving this session clean for ensure_efficiency_state's transaction.
         efficiency_config = ledger_context.policy.efficiency
         if efficiency_config.enabled:
-            await ensure_efficiency_state(session, efficiency_config, now=auth_now)
+            await ensure_current_efficiency_state(
+                request.app.state, session, efficiency_config, now=auth_now
+            )
         rows = await list_eligible_ledger(
             session,
             include_fingerprints=False,

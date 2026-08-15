@@ -145,7 +145,7 @@ from ditto.api_server.dependencies import (
 )
 from ditto.api_server.efficiency import (
     audited_v9_run_token_total,
-    ensure_efficiency_state,
+    ensure_current_efficiency_state,
 )
 from ditto.api_server.endpoints.retrieval import AgentNotFoundError
 from ditto.api_server.fingerprint import reference_corpus_provenance
@@ -2742,7 +2742,9 @@ async def request_job(
     # cannot issue work against a temporary raw-score order while waiting for a
     # leaderboard or scoring-ledger request to create its assignments.
     if efficiency_config.enabled:
-        await ensure_efficiency_state(session, efficiency_config, now=now)
+        await ensure_current_efficiency_state(
+            request.app.state, session, efficiency_config, now=now
+        )
     # Resolve the operator slot cap on the resolver's own session, before the
     # request transaction opens: reading it on `session` here would autobegin and
     # break the `session.begin()` below.
@@ -4259,7 +4261,9 @@ async def request_top5_confirmation_job(
         getattr(request.app.state, "session_maker", None)
     )
     if efficiency_config.enabled:
-        await ensure_efficiency_state(session, efficiency_config, now=now)
+        await ensure_current_efficiency_state(
+            request.app.state, session, efficiency_config, now=now
+        )
     # Resolved before the transaction opens: the resolver reads on its own
     # session, and this one supplies the request budget stamped onto new grants.
     inference_config = await resolved_proxy_config(
@@ -6297,8 +6301,11 @@ async def submit_score(
             getattr(request.app.state, "session_maker", None)
         )
         if crown_efficiency_config.enabled:
-            await ensure_efficiency_state(
-                session, crown_efficiency_config, now=audit_now
+            await ensure_current_efficiency_state(
+                request.app.state,
+                session,
+                crown_efficiency_config,
+                now=audit_now,
             )
         async with session.begin():
             champion_members = await _current_emission_set(

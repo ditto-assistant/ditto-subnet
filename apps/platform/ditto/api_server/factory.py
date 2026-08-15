@@ -29,6 +29,7 @@ from ditto.api_server.confirmation_profile_installation import (
 )
 from ditto.api_server.continual_retest_settings import ContinualRetestSettingsResolver
 from ditto.api_server.datapipeline import create_generator
+from ditto.api_server.efficiency import EfficiencyStateMaterializer
 from ditto.api_server.efficiency_settings import (
     DEFAULT_SETTINGS_TTL_SECONDS,
     EfficiencyBonusSettingsResolver,
@@ -298,6 +299,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         config.efficiency_bonus,
         ttl_seconds=_efficiency_settings_ttl_seconds(),
     )
+    app.state.efficiency_materializer = EfficiencyStateMaterializer()
     # Operator-owned share of miner emission routed to the owner burn hotkey.
     # Served on the scoring ledger, so a change reaches the fleet on its next
     # poll instead of on a validator release.
