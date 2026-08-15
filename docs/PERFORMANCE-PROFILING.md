@@ -81,11 +81,18 @@ uses `sudo` only for the ptrace operation. The output opens in
 paths, so copy it off the host only to an approved private location and remove
 stale `/tmp` profiles as part of incident cleanup.
 
+CPU observed while py-spy is attached includes `ptrace` sampling overhead. Use
+a separate post-detach CPU window when deciding whether the application itself
+is saturated.
+
 ## Comparison loop
 
 1. Capture a representative profile while the target route is under normal or
    reproduced load, recording the exact process commit.
-2. Tie the hot stack to request counts/latency and database or upstream volume.
-3. Change one bounded cost center and validate locally.
+2. Tie the hot stack to request counts/latency, successful versus failed status,
+   request-key reuse, and database or upstream volume. Keep raw profile and
+   access-log artifacts private; report aggregate evidence.
+3. Change one bounded cost center and validate semantic parity plus the intended
+   structural reduction locally.
 4. After merge, release, deployment, and rollout are separately confirmed,
    capture the same workload again and compare profiles and route latency.
