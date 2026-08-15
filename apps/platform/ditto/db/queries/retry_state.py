@@ -8,6 +8,7 @@ plus a bulk loader — so the two surfaces can never drift.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -39,7 +40,10 @@ _UNRESOLVED_ROLLOUT = object()
 
 
 async def work_available_validator_hotkeys(
-    session: AsyncSession, *, now: datetime
+    session: AsyncSession,
+    *,
+    now: datetime,
+    heartbeat_rows: Iterable[ValidatorHeartbeat] | None = None,
 ) -> set[str]:
     """Validators that can consume an automatic retry right now.
 
@@ -48,6 +52,13 @@ async def work_available_validator_hotkeys(
     eventual return, but it must not prevent an operator from reviving exhausted
     healthy siblings needed to reach quorum in the meantime.
     """
+    if heartbeat_rows is not None:
+        cutoff = now - VALIDATOR_RETRY_ONLINE_WINDOW
+        return {
+            row.validator_hotkey
+            for row in heartbeat_rows
+            if aware(row.seen_at) >= cutoff and row.state not in ("paused", "error")
+        }
     return set(
         (
             await session.scalars(
@@ -387,6 +398,7 @@ async def classify_agent_retry_states(
     agents: list[Agent],
     now: datetime,
     require_work_available_validator: bool = False,
+    available_validator_hotkeys: set[str] | None = None,
     rollout: BenchmarkRollout | None | object = _UNRESOLVED_ROLLOUT,
     canonical_version: int | None = None,
 ) -> dict[UUID, AgentRetryState]:
@@ -476,11 +488,9 @@ async def classify_agent_retry_states(
     )
     if canonical_version is None:
         canonical_version = await active_bench_version(session)
-    available_hotkeys = (
-        await work_available_validator_hotkeys(session, now=now)
-        if require_work_available_validator
-        else None
-    )
+    available_hotkeys = available_validator_hotkeys
+    if available_hotkeys is None and require_work_available_validator:
+        available_hotkeys = await work_available_validator_hotkeys(session, now=now)
 
     result: dict[UUID, AgentRetryState] = {}
     for agent_id, agent in agent_by_id.items():

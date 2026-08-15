@@ -886,18 +886,28 @@ def sign_job_fail_request(
 def top5_confirmation_job_signing_message(
     *,
     validator_hotkey: str,
-    champion_agent_id: UUID,
-    member_agent_id: UUID,
     nonce: UUID,
     requested_at: datetime,
+    slot_id: str | None = None,
+    champion_agent_id: UUID | None = None,
+    member_agent_id: UUID | None = None,
 ) -> bytes:
     """Build canonical bytes for one top-5 shared-seed rescore claim.
 
-    Distinct domain tag (``validator-top5-confirmation-job:v1``) from the
-    single-leader confirmation claim, so a signature for one lane can never be
-    replayed into the other.
+    V2 binds only the requested execution slot because Platform chooses the
+    authoritative member and seed. The legacy v1 member-targeted form remains
+    byte-identical for validators already in the field.
     """
     requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    if slot_id is not None:
+        if champion_agent_id is not None or member_agent_id is not None:
+            raise ValueError("slot-routed claims cannot include a legacy target")
+        return (
+            "validator-top5-confirmation-job:v2:"
+            f"{validator_hotkey}:{slot_id}:{nonce}:{requested}"
+        ).encode()
+    if champion_agent_id is None or member_agent_id is None:
+        raise ValueError("legacy claims require champion_agent_id and member_agent_id")
     return (
         "validator-top5-confirmation-job:v1:"
         f"{validator_hotkey}:{champion_agent_id}:{member_agent_id}:"
@@ -909,14 +919,16 @@ def sign_top5_confirmation_job_request(
     keypair: Any,
     *,
     validator_hotkey: str,
-    champion_agent_id: UUID,
-    member_agent_id: UUID,
     nonce: UUID,
     requested_at: datetime,
+    slot_id: str | None = None,
+    champion_agent_id: UUID | None = None,
+    member_agent_id: UUID | None = None,
 ) -> str:
     signature: bytes = keypair.sign(
         top5_confirmation_job_signing_message(
             validator_hotkey=validator_hotkey,
+            slot_id=slot_id,
             champion_agent_id=champion_agent_id,
             member_agent_id=member_agent_id,
             nonce=nonce,

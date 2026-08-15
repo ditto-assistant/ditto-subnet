@@ -9579,6 +9579,28 @@ def _top5_job_payload(
     }
 
 
+def _auto_top5_job_payload(
+    slot_id: str,
+    *,
+    keypair: bittensor.Keypair = _KEYPAIR,
+) -> dict[str, str]:
+    nonce = uuid4()
+    requested_at = datetime.now(UTC)
+    requested = requested_at.isoformat(timespec="microseconds")
+    validator_hotkey = keypair.ss58_address
+    message = (
+        "validator-top5-confirmation-job:v2:"
+        f"{validator_hotkey}:{slot_id}:{nonce}:{requested}"
+    ).encode()
+    return {
+        "validator_hotkey": validator_hotkey,
+        "slot_id": slot_id,
+        "nonce": str(nonce),
+        "requested_at": requested_at.isoformat(),
+        "signature": keypair.sign(message).hex(),
+    }
+
+
 def _top5_auth_header(keypair: bittensor.Keypair) -> dict[str, str]:
     return {"X-Validator-Hotkey": keypair.ss58_address}
 
@@ -9635,6 +9657,33 @@ class TestTop5ConfirmationLane:
         """
         _install_dataset_generator(app)
         await _install_ticket_inference(app, session_maker)
+
+    async def test_platform_routed_claim_recovers_from_stale_local_member(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        members = await _seed_top5_emission_set(session_maker)
+        _install_db(app, session_maker)
+        _install_chain_with_block(app, block_number=1)
+
+        stale = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_top5_job_payload(members[0], uuid4()),
+        )
+        routed = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_AUTH_HEADER,
+            json=_auto_top5_job_payload("slot-0"),
+        )
+
+        assert stale.status_code == 409, stale.text
+        assert "not in the current retest cohort" in stale.text
+        assert routed.status_code == 200, routed.text
+        assert UUID(routed.json()["agent_id"]) in set(members)
+        assert routed.json()["slot_id"] == "slot-0"
 
     async def test_paused_validator_gets_no_new_continual_retest(
         self,

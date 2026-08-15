@@ -1067,6 +1067,7 @@ async def _idle_retest_slot(
     slot_settings: ValidatorSlotSettings,
     validator_hotkey: str,
     now: datetime,
+    requested_slot_id: str | None = None,
 ) -> str | None:
     """Pick a slot a continual retest may occupy, or None when there is none.
 
@@ -1115,6 +1116,8 @@ async def _idle_retest_slot(
     free = [slot for slot in offered if slot not in held]
     if not free:
         return None
+    if requested_slot_id is not None:
+        return requested_slot_id if requested_slot_id in free else None
     return min(free, key=_slot_ordinal)
 
 
@@ -1906,13 +1909,21 @@ def _job_signing_message(
 
 def _top5_confirmation_job_signing_message(
     validator_hotkey: str,
-    champion_agent_id: UUID,
-    member_agent_id: UUID,
     nonce: UUID,
     requested_at: datetime,
+    *,
+    slot_id: str | None = None,
+    champion_agent_id: UUID | None = None,
+    member_agent_id: UUID | None = None,
 ) -> bytes:
     """Canonical proof-of-possession bytes for one top-five job claim."""
     requested = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    if slot_id is not None:
+        return (
+            "validator-top5-confirmation-job:v2:"
+            f"{validator_hotkey}:{slot_id}:{nonce}:{requested}"
+        ).encode()
+    assert champion_agent_id is not None and member_agent_id is not None
     return (
         "validator-top5-confirmation-job:v1:"
         f"{validator_hotkey}:{champion_agent_id}:{member_agent_id}:"
@@ -4238,7 +4249,7 @@ async def _canonical_tail_is_draining(
     "/top5-confirmation-job",
     response_model=JobResponse,
     responses={
-        204: {"description": "Validator issuance is paused."},
+        204: {"description": "No authoritative retest is claimable for this slot."},
         401: {"description": "Missing/invalid validator auth."},
         409: {"description": "Stale/replayed claim, closed round, or non-member."},
         426: {"description": "Validator software or protocol must be upgraded."},
@@ -4263,10 +4274,11 @@ async def request_top5_confirmation_job(
         )
     signed = _top5_confirmation_job_signing_message(
         payload.validator_hotkey,
-        payload.champion_agent_id,
-        payload.member_agent_id,
         payload.nonce,
         payload.requested_at,
+        slot_id=payload.slot_id,
+        champion_agent_id=payload.champion_agent_id,
+        member_agent_id=payload.member_agent_id,
     )
     if not _verify_signature(payload.validator_hotkey, signed, payload.signature):
         raise ValidatorAuthError("top-5 confirmation claim signature did not verify")
@@ -4278,6 +4290,8 @@ async def request_top5_confirmation_job(
 
     config = request.app.state.config
     if config.top5_backoff_base <= 0:
+        if payload.slot_id is not None:
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
         raise HTTPException(
             status_code=409, detail="top-5 shared-seed rescore lane is disabled"
         )
@@ -4329,25 +4343,40 @@ async def request_top5_confirmation_job(
                 detail="top-5 confirmation claim nonce has already been used",
             ) from exc
         canonical_version = await active_bench_version(session)
+        auto_routed = payload.slot_id is not None
         live_retest: ValidatorTicket | None = None
+        if auto_routed:
+            live_retest = await session.scalar(
+                select(ValidatorTicket)
+                .where(
+                    ValidatorTicket.validator_hotkey == payload.validator_hotkey,
+                    ValidatorTicket.bench_version == canonical_version,
+                    ValidatorTicket.status == TicketStatus.ISSUED,
+                    ValidatorTicket.deadline > now,
+                    ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST,
+                    ValidatorTicket.slot_id == payload.slot_id,
+                )
+                .limit(1)
+            )
         if validator_issuance_paused(
             slot_settings, validator_hotkey=payload.validator_hotkey
         ):
             # Do not strand a continual lease that was issued before the
             # operator pause. The exact validator/member lease may still be
             # resumed and reported; any new member assignment is withheld.
-            live_retest = await session.scalar(
-                select(ValidatorTicket)
-                .where(
-                    ValidatorTicket.agent_id == payload.member_agent_id,
-                    ValidatorTicket.validator_hotkey == payload.validator_hotkey,
-                    ValidatorTicket.bench_version == canonical_version,
-                    ValidatorTicket.status == TicketStatus.ISSUED,
-                    ValidatorTicket.deadline > now,
-                    ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST,
+            if not auto_routed:
+                live_retest = await session.scalar(
+                    select(ValidatorTicket)
+                    .where(
+                        ValidatorTicket.agent_id == payload.member_agent_id,
+                        ValidatorTicket.validator_hotkey == payload.validator_hotkey,
+                        ValidatorTicket.bench_version == canonical_version,
+                        ValidatorTicket.status == TicketStatus.ISSUED,
+                        ValidatorTicket.deadline > now,
+                        ValidatorTicket.purpose == TicketPurpose.CONTINUAL_RETEST,
+                    )
+                    .limit(1)
                 )
-                .limit(1)
-            )
             if live_retest is None:
                 logger.info(
                     "declined continual retest reason=validator_paused "
@@ -4395,6 +4424,8 @@ async def request_top5_confirmation_job(
                 standdown_rollout.desired_version,
                 continual_settings.rollout_standdown,
             )
+            if auto_routed and live_retest is None:
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(status_code=409, detail=standdown)
         v7_calibration = None
         if canonical_version >= 7:
@@ -4449,18 +4480,20 @@ async def request_top5_confirmation_job(
         wave_member_ids = tuple(member.agent_id for member in wave_members)
         emission_member_ids = frozenset(member.agent_id for member in emission_members)
         if not members:
+            if auto_routed:
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
                 detail="the current retest cohort is empty",
             )
-        # The validator signs the champion it observed in the scoring ledger,
-        # but that ledger and the authoritative continual fold are read in
-        # separate requests. A completed wave may legitimately change the king
-        # between them. Treat the signed value as an observation, not routing
-        # authority: membership is still checked against the current cohort and
-        # every seed decision below is anchored to Platform's current king.
+        # Platform's current fold is the only routing authority. Legacy v1
+        # validators still send the champion/member they observed; v2 sends a
+        # slot only and lets this transaction pick from the authoritative cohort.
         champion_agent_id = members[0].agent_id
-        if champion_agent_id != payload.champion_agent_id:
+        if (
+            payload.champion_agent_id is not None
+            and champion_agent_id != payload.champion_agent_id
+        ):
             logger.info(
                 "continual retest resolving stale champion validator=%s "
                 "claimed=%s authoritative=%s member=%s",
@@ -4469,7 +4502,11 @@ async def request_top5_confirmation_job(
                 champion_agent_id,
                 payload.member_agent_id,
             )
-        if payload.member_agent_id not in {member.agent_id for member in members}:
+        requested_member_id = (
+            live_retest.agent_id if live_retest is not None else payload.member_agent_id
+        )
+        member_ids = tuple(member.agent_id for member in members)
+        if requested_member_id is not None and requested_member_id not in member_ids:
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -4518,52 +4555,94 @@ async def request_top5_confirmation_job(
             canonical_version=canonical_version,
             now=now,
         )
-        if (
-            not scheduled_round
-            and not spare_capacity_round
-            and not continual_settings.idle_retests_enabled
-            and payload.member_agent_id not in catchup_member_ids
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="top-5 shared-seed rescore round is not due at this block",
+        candidate_member_ids: tuple[UUID, ...]
+        if requested_member_id is not None:
+            candidate_member_ids = (requested_member_id,)
+        else:
+            # Settle the emission wave before spending spare capacity deeper in
+            # the configured/statistical cohort. Platform's fairness guard below
+            # is still authoritative; this ordering merely avoids rejected probes.
+            candidate_member_ids = (
+                *(
+                    member_id
+                    for member_id in member_ids
+                    if member_id in emission_member_ids
+                ),
+                *(
+                    member_id
+                    for member_id in member_ids
+                    if member_id not in emission_member_ids
+                ),
             )
-        seeds = await _top5_confirmation_seed_plan(
-            session,
-            champion_agent_id=champion_agent_id,
-            member_agent_id=payload.member_agent_id,
-            wave_member_ids=wave_member_ids,
-            cohort_member_ids=tuple(member.agent_id for member in members),
-            canonical_version=canonical_version,
-        )
-        if not seeds:
-            raise HTTPException(
-                status_code=409,
-                detail="the requested member has no pending confirmation seeds",
-            )
-        # The plan is the member's whole outstanding gap; take one unleased seed
-        # of it so sibling validators converge the rest of the gap in parallel
-        # instead of queueing behind a single open wave seed.
-        member_leases = (
-            await _live_retest_leases(
+
+        selected_member_id: UUID | None = None
+        selected_wave_seed: int | None = None
+        legacy_decline: str | None = None
+        for candidate_member_id in candidate_member_ids:
+            if (
+                not scheduled_round
+                and not spare_capacity_round
+                and not continual_settings.idle_retests_enabled
+                and candidate_member_id not in catchup_member_ids
+            ):
+                legacy_decline = (
+                    "top-5 shared-seed rescore round is not due at this block"
+                )
+                continue
+            seeds = await _top5_confirmation_seed_plan(
                 session,
-                member_agent_ids=(payload.member_agent_id,),
+                champion_agent_id=champion_agent_id,
+                member_agent_id=candidate_member_id,
+                wave_member_ids=wave_member_ids,
+                cohort_member_ids=member_ids,
+                canonical_version=canonical_version,
+            )
+            if not seeds:
+                legacy_decline = (
+                    "the requested member has no pending confirmation seeds"
+                )
+                continue
+            member_leases = (
+                await _live_retest_leases(
+                    session,
+                    member_agent_ids=(candidate_member_id,),
+                    canonical_version=canonical_version,
+                    now=now,
+                )
+            ).get(candidate_member_id, {})
+            claimable = _claimable_confirmation_seed(
+                seeds=seeds,
+                leases=member_leases,
+                validator_hotkey=payload.validator_hotkey,
+            )
+            if claimable is None and requested_member_id is None:
+                continue
+            wave_seed = claimable if claimable is not None else seeds[0]
+            if not await _top5_member_is_least_covered(
+                session,
+                members=members,
+                emission_member_ids=emission_member_ids,
+                catchup_member_ids=catchup_member_ids,
+                requested_member_id=candidate_member_id,
+                wave_seed=wave_seed,
+                validator_hotkey=payload.validator_hotkey,
                 canonical_version=canonical_version,
                 now=now,
-            )
-        ).get(payload.member_agent_id, {})
-        claimable = _claimable_confirmation_seed(
-            seeds=seeds,
-            leases=member_leases,
-            validator_hotkey=payload.validator_hotkey,
-        )
-        # Every pending seed already leased falls back to the head of the plan so
-        # the coverage guard below declines it with the answer it has always
-        # given ("another cohort member has less confirmation coverage"). That
-        # guard sees the same live leases, so it cannot admit the claim; routing
-        # through it keeps one 409 vocabulary on the wire rather than adding a
-        # second reason validators would have to learn.
-        wave_seed = claimable if claimable is not None else seeds[0]
+            ):
+                legacy_decline = "another cohort member has less confirmation coverage"
+                continue
+            selected_member_id = candidate_member_id
+            selected_wave_seed = wave_seed
+            break
+
+        if selected_member_id is None or selected_wave_seed is None:
+            if requested_member_id is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=legacy_decline or "the requested retest is not claimable",
+                )
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
+
         confirmation_datasets: list[ConfirmationDatasetPin] = []
         if canonical_version >= 3:
             if generator.run_size is None:
@@ -4573,28 +4652,13 @@ async def request_top5_confirmation_job(
                 )
             confirmation_datasets = [
                 ConfirmationDatasetPin(
-                    seed=wave_seed,
+                    seed=selected_wave_seed,
                     dataset_sha256=await generator.generate(
-                        wave_seed, bench_version=canonical_version
+                        selected_wave_seed, bench_version=canonical_version
                     ),
                     run_size=generator.run_size,
                 )
             ]
-        if not await _top5_member_is_least_covered(
-            session,
-            members=members,
-            emission_member_ids=emission_member_ids,
-            catchup_member_ids=catchup_member_ids,
-            requested_member_id=payload.member_agent_id,
-            wave_seed=wave_seed,
-            validator_hotkey=payload.validator_hotkey,
-            canonical_version=canonical_version,
-            now=now,
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail="another cohort member has less confirmation coverage",
-            )
         # Place this retest on a real execution slot. The lane occupies one
         # slot exactly like a canonical lease, so it answers the same two
         # questions the canonical lane already answers: which slots is this
@@ -4611,21 +4675,24 @@ async def request_top5_confirmation_job(
                 slot_settings=slot_settings,
                 validator_hotkey=payload.validator_hotkey,
                 now=now,
+                requested_slot_id=payload.slot_id,
             )
         )
         if retest_slot is None:
+            if auto_routed:
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
                 detail="validator has no idle slot for a continual retest",
             )
         ticket = await issue_confirmation_ticket(
             session,
-            agent_id=payload.member_agent_id,
+            agent_id=selected_member_id,
             validator_hotkey=payload.validator_hotkey,
             now=now,
             ttl=_TICKET_TTL,
             bench_version=canonical_version,
-            seed=(wave_seed if confirmation_datasets else None),
+            seed=(selected_wave_seed if confirmation_datasets else None),
             dataset_sha256=(
                 confirmation_datasets[0].dataset_sha256
                 if confirmation_datasets
@@ -4634,6 +4701,8 @@ async def request_top5_confirmation_job(
             slot_id=retest_slot,
         )
         if ticket is None:
+            if auto_routed:
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -4706,7 +4775,7 @@ async def request_top5_confirmation_job(
     logger.info(
         "issued top-5 rescore job champion=%s member=%s validator=%s",
         champion_agent_id,
-        payload.member_agent_id,
+        selected_member_id,
         payload.validator_hotkey,
     )
     return job

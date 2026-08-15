@@ -374,6 +374,35 @@ def test_top5_confirmation_claim_binds_champion_and_member() -> None:
     assert not keypair.verify(swapped, bytes.fromhex(signature))
 
 
+def test_top5_confirmation_v2_claim_binds_platform_routed_slot() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    nonce = UUID("7f4d1800-4cf1-4a24-8fd5-2e4cd59942ae")
+    requested_at = datetime(2026, 8, 15, 7, 0, tzinfo=UTC)
+    signature = sign_top5_confirmation_job_request(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        slot_id="slot-3",
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    message = top5_confirmation_job_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        slot_id="slot-3",
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+
+    assert message.startswith(b"validator-top5-confirmation-job:v2:")
+    assert keypair.verify(message, bytes.fromhex(signature))
+    wrong_slot = top5_confirmation_job_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        slot_id="slot-4",
+        nonce=nonce,
+        requested_at=requested_at,
+    )
+    assert not keypair.verify(wrong_slot, bytes.fromhex(signature))
+
+
 def test_artifact_signature_binds_agent_nonce_and_timestamp() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")

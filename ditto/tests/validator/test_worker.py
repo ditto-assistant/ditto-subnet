@@ -742,6 +742,13 @@ def _confirmation_pins(
     ]
 
 
+def _slot_routed_job(job: JobResponse) -> AsyncMock:
+    async def request(*, slot_id: str) -> JobResponse | None:
+        return job if slot_id == job.slot_id else None
+
+    return AsyncMock(side_effect=request)
+
+
 def _config() -> MagicMock:
     cfg = MagicMock()
     cfg.validator_hotkey = _VALIDATOR_HOTKEY
@@ -855,7 +862,7 @@ class TestTop5ConfirmationLane:
         )
         assert payload.report.composite_stderr == report.composite_stderr
 
-    async def test_cold_start_plans_v9_from_platform_ledger_authority(self) -> None:
+    async def test_claim_names_only_slot_and_never_routes_from_ledger(self) -> None:
         entry = _entry("5MinerV9" + "x" * 39, 0.9).model_copy(
             update={"bench_version": 9}
         )
@@ -873,17 +880,18 @@ class TestTop5ConfirmationLane:
         await worker._run_top5_confirmation_lane()
 
         platform.request_top5_confirmation_job.assert_awaited_once_with(
-            champion_agent_id=entry.agent_id,
-            member_agent_id=entry.agent_id,
+            slot_id="slot-0",
         )
+        platform.get_ledger.assert_not_awaited()
 
-    async def test_older_ledger_without_authority_does_not_guess_v8(self) -> None:
+    async def test_no_pending_platform_job_is_a_quiet_idle_slot(self) -> None:
         entry = _entry("5MinerV9" + "x" * 39, 0.9).model_copy(
             update={"bench_version": 9}
         )
         platform = _platform_with_ledger(
             jobs=[], ledger=[entry], active_bench_version=None
         )
+        platform.request_top5_confirmation_job = AsyncMock(return_value=None)
         worker = ValidatorWorker(
             config=_config(),
             platform=platform,
@@ -894,7 +902,10 @@ class TestTop5ConfirmationLane:
 
         await worker._run_top5_confirmation_lane()
 
-        platform.request_top5_confirmation_job.assert_not_awaited()
+        platform.request_top5_confirmation_job.assert_awaited_once_with(
+            slot_id="slot-0"
+        )
+        platform.get_ledger.assert_not_awaited()
 
     async def test_idle_slots_catch_up_distinct_members_concurrently(self) -> None:
         entries = [
@@ -904,22 +915,15 @@ class TestTop5ConfirmationLane:
             for index in range(3)
         ]
         platform = _platform_with_ledger(jobs=[], ledger=entries)
-        slot_by_agent = {
-            entry.agent_id: f"slot-{index}" for index, entry in enumerate(entries)
-        }
+        entry_by_slot = {f"slot-{index}": entry for index, entry in enumerate(entries)}
 
-        async def request_job(
-            *, champion_agent_id: UUID, member_agent_id: UUID
-        ) -> JobResponse:
-            assert champion_agent_id in slot_by_agent
-            entry = next(item for item in entries if item.agent_id == member_agent_id)
-            return _job(
-                entry.miner_hotkey, slot_id=slot_by_agent[member_agent_id]
-            ).model_copy(
+        async def request_job(*, slot_id: str) -> JobResponse:
+            entry = entry_by_slot[slot_id]
+            return _job(entry.miner_hotkey, slot_id=slot_id).model_copy(
                 update={
-                    "agent_id": member_agent_id,
+                    "agent_id": entry.agent_id,
                     "bench_version": 8,
-                    "confirmation_datasets": _confirmation_pins(member_agent_id),
+                    "confirmation_datasets": _confirmation_pins(entry.agent_id),
                     "deadline": datetime.now(UTC) + timedelta(hours=3),
                 }
             )
@@ -961,15 +965,10 @@ class TestTop5ConfirmationLane:
         assert platform.submit_top5_confirmation_score.await_count == len(entries)
         assert all(slot.active_agent_id is None for slot in worker._slots.values())
 
-    async def test_extended_cohort_waits_for_priority_claims_not_runs(self) -> None:
-        """Spare ranks retry after top-five admission without waiting 90 minutes.
-
-        Platform serializes the fairness decision. If all ranks are offered at
-        once, an extended request can arrive before the top-five ticket writes
-        commit, receive a priority 409, and remain idle until an accepted run
-        completes. The worker must stage claims at that transaction boundary
-        while still executing every accepted job concurrently.
-        """
+    async def test_all_slots_ask_platform_after_the_previous_claim_resolves(
+        self,
+    ) -> None:
+        """Claims are staged at Platform's transaction boundary, not run end."""
         entries = [
             _entry(f"5Miner{index}" + "x" * 40, 0.90 - index * 0.01).model_copy(
                 update={"bench_version": 8}
@@ -980,36 +979,19 @@ class TestTop5ConfirmationLane:
         platform.get_ledger.return_value = platform.get_ledger.return_value.model_copy(
             update={"continual_retest_cohort_size": 6}
         )
-        priority_ids = {entry.agent_id for entry in entries[:5]}
-        priority_started = 0
-        priority_resolved = 0
-        release_priority = asyncio.Event()
+        resolved_slots: list[str] = []
 
-        async def request_job(
-            *, champion_agent_id: UUID, member_agent_id: UUID
-        ) -> JobResponse:
-            nonlocal priority_started, priority_resolved
-            assert champion_agent_id == entries[0].agent_id
-            if member_agent_id in priority_ids:
-                priority_started += 1
-                if priority_started == len(priority_ids):
-                    release_priority.set()
-                await release_priority.wait()
-                priority_resolved += 1
-            elif priority_resolved != len(priority_ids):
-                raise PlatformError("emission members still need coverage")
-            index = next(
-                idx
-                for idx, entry in enumerate(entries)
-                if entry.agent_id == member_agent_id
-            )
-            return _job(
-                entries[index].miner_hotkey, slot_id=f"slot-{index}"
-            ).model_copy(
+        async def request_job(*, slot_id: str) -> JobResponse:
+            index = int(slot_id.removeprefix("slot-"))
+            assert len(resolved_slots) == index
+            resolved_slots.append(slot_id)
+            return _job(entries[index].miner_hotkey, slot_id=slot_id).model_copy(
                 update={
-                    "agent_id": member_agent_id,
+                    "agent_id": entries[index].agent_id,
                     "bench_version": 8,
-                    "confirmation_datasets": _confirmation_pins(member_agent_id),
+                    "confirmation_datasets": _confirmation_pins(
+                        entries[index].agent_id
+                    ),
                     "deadline": datetime.now(UTC) + timedelta(hours=3),
                 }
             )
@@ -1043,7 +1025,7 @@ class TestTop5ConfirmationLane:
 
         await worker._run_top5_confirmation_lane()
 
-        assert priority_resolved == len(priority_ids)
+        assert resolved_slots == [f"slot-{index}" for index in range(len(entries))]
         assert platform.request_top5_confirmation_job.await_count == len(entries)
         assert platform.submit_top5_confirmation_score.await_count == len(entries)
 
@@ -1123,7 +1105,7 @@ class TestTop5ConfirmationLane:
             }
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
-        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        platform.request_top5_confirmation_job = _slot_routed_job(job)
         dittobench = MagicMock()
         dittobench.cancel_inference_session = AsyncMock()
         worker = ValidatorWorker(
@@ -1177,7 +1159,7 @@ class TestTop5ConfirmationLane:
             update={"agent_id": entry.agent_id, "bench_version": 8}
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
-        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        platform.request_top5_confirmation_job = _slot_routed_job(job)
         worker = ValidatorWorker(
             config=_config(),
             platform=platform,
@@ -1214,7 +1196,7 @@ class TestTop5ConfirmationLane:
         platform = _platform_with_ledger(
             jobs=[], ledger=[entry], active_bench_version=9
         )
-        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        platform.request_top5_confirmation_job = _slot_routed_job(job)
         config = _config()
         config.benchmark_capacity = 2
         worker = ValidatorWorker(
@@ -1256,7 +1238,7 @@ class TestTop5ConfirmationLane:
         platform = _platform_with_ledger(
             jobs=[], ledger=[entry], active_bench_version=9
         )
-        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        platform.request_top5_confirmation_job = _slot_routed_job(job)
         worker = ValidatorWorker(
             config=_config(),
             platform=platform,
@@ -1314,7 +1296,7 @@ class TestTop5ConfirmationLaneSlotBinding:
             }
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
-        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        platform.request_top5_confirmation_job = _slot_routed_job(job)
         worker = self._lane_worker(platform, capacity=2)
         observed: list[tuple[str, UUID | None]] = []
 
@@ -1380,7 +1362,7 @@ class TestTop5ConfirmationLaneSlotBinding:
             update={"agent_id": entry.agent_id, "bench_version": 8}
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
-        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        platform.request_top5_confirmation_job = AsyncMock(side_effect=[job, None])
         worker = self._lane_worker(platform, capacity=2)
         worker._evaluate = AsyncMock()  # type: ignore[method-assign]
 
@@ -1407,7 +1389,7 @@ class TestTop5ConfirmationLaneSlotBinding:
             }
         )
         platform = _platform_with_ledger(jobs=[], ledger=[entry])
-        platform.request_top5_confirmation_job = AsyncMock(return_value=job)
+        platform.request_top5_confirmation_job = _slot_routed_job(job)
         worker = self._lane_worker(platform, capacity=2)
 
         async def evaluate(
@@ -1969,10 +1951,12 @@ class TestRunOnce:
 
         assert outcome.queue_depth == 0
         platform.request_job.assert_awaited_once()
-        # The continual lane may inspect the ledger, but the platform claim is
-        # still the authorization boundary; a declined claim does no work.
-        platform.get_ledger.assert_awaited_once()
-        platform.request_top5_confirmation_job.assert_not_awaited()
+        # The validator no longer derives a target from its local ledger. It
+        # offers the idle slot to Platform, whose declined claim does no work.
+        platform.get_ledger.assert_not_awaited()
+        platform.request_top5_confirmation_job.assert_awaited_once_with(
+            slot_id="slot-0"
+        )
         confirm_and_submit.assert_not_awaited()
 
     async def test_canonical_queue_work_then_uses_spare_capacity_for_retests(
@@ -1996,8 +1980,10 @@ class TestRunOnce:
 
         assert outcome.queue_depth == 1
         platform.submit_score.assert_awaited_once()
-        platform.get_ledger.assert_awaited_once()
-        platform.request_top5_confirmation_job.assert_not_awaited()
+        platform.get_ledger.assert_not_awaited()
+        platform.request_top5_confirmation_job.assert_awaited_once_with(
+            slot_id="slot-0"
+        )
 
     async def test_scores_queue_and_sets_weights_from_ledger(self) -> None:
         job = _job("5MinerA" + "x" * 41)
@@ -4323,7 +4309,10 @@ class TestRunOnce:
         n = await worker.run_once(set_weights=False)
         assert n.queue_depth == 1
         assert platform.submit_score.await_count == 1
-        platform.get_ledger.assert_awaited_once()
+        platform.get_ledger.assert_not_awaited()
+        platform.request_top5_confirmation_job.assert_awaited_once_with(
+            slot_id="slot-0"
+        )
         chain.put_weights.assert_not_awaited()
 
     async def test_one_agent_failure_does_not_block_weights(self) -> None:

@@ -15867,28 +15867,24 @@ export interface components {
         TicketPurpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
         /**
          * Top5ConfirmationJobRequest
-         * @description Fresh signed claim for a member of the top-5 shared-seed rescore lane.
+         * @description Fresh signed claim for the top-5 shared-seed rescore lane.
          *
-         *     Covers the whole emission set (champion + participation tail). The
-         *     validator claims one ticket per set member it wants to rescore this round,
-         *     each anchored to the current champion so the platform can rebuild the same
-         *     emission set and validate that ``member_agent_id`` is either the champion or
-         *     a current tail entrant, and that ``champion_agent_id`` is the reigning
-         *     incumbent (the CRN seed anchor both sides derive identically).
+         *     Current validators name only the execution ``slot_id`` and let Platform
+         *     choose the authoritative cohort member and seed atomically. The optional
+         *     champion/member pair preserves the v1 wire contract for already-deployed
+         *     validators while the fleet rolls forward.
          */
         Top5ConfirmationJobRequest: {
             /**
              * Champion Agent Id
-             * Format: uuid
-             * @description Current KOTH incumbent (the CRN seed anchor).
+             * @description Legacy v1 observation of the current KOTH incumbent.
              */
-            champion_agent_id: string;
+            champion_agent_id?: string | null;
             /**
              * Member Agent Id
-             * Format: uuid
-             * @description Emission-set member (champion or tail) to rescore.
+             * @description Legacy v1 requested emission/cohort member.
              */
-            member_agent_id: string;
+            member_agent_id?: string | null;
             /**
              * Nonce
              * Format: uuid
@@ -15906,6 +15902,8 @@ export interface components {
              * @description sr25519 signature over the canonical top-5 claim.
              */
             signature: string;
+            /** Slot Id */
+            slot_id?: string | null;
             /**
              * Validator Hotkey
              * @description Claiming validator hotkey.
@@ -23161,7 +23159,7 @@ export interface operations {
                     "application/json": components["schemas"]["JobResponse"];
                 };
             };
-            /** @description Validator issuance is paused. */
+            /** @description No authoritative retest is claimable for this slot. */
             204: {
                 headers: {
                     [name: string]: unknown;

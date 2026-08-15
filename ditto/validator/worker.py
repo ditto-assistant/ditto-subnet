@@ -110,8 +110,6 @@ from ditto.validator.update_control import write_update_state
 from ditto.validator.updater_status import collect_updater_status
 from ditto.validator.weights import (
     DEFAULT_BENCH_VERSION,
-    Top5ConfirmationPlan,
-    Top5Member,
     _entry_has_seeds,
     agents_needing_rescore,
     apply_miner_emission_cap,
@@ -120,7 +118,6 @@ from ditto.validator.weights import (
     filter_weight_confirmed,
     resolve_miner_emission_share,
     select_champion,
-    top5_confirmation_set,
 )
 
 if TYPE_CHECKING:
@@ -2022,314 +2019,206 @@ class ValidatorWorker:
         *,
         stop_requested: asyncio.Event | None = None,
         drain_requested: asyncio.Event | None = None,
-        _member_agent_id: UUID | None = None,
-        _plan: Top5ConfirmationPlan | None = None,
+        _slot_id: str | None = None,
         _claim_resolved: asyncio.Event | None = None,
     ) -> None:
-        """Claim and execute bounded append-only work for the current top five.
+        """Fill locally healthy slots with Platform-routed continual retests.
 
-        The outer invocation fans the cohort out concurrently. Each child asks
-        the platform for one member and binds execution to the distinct slot the
-        platform leases back. This lets an idle multi-slot host help several
-        members at once, while the platform remains authoritative for the
-        operator cap, seed uniqueness, and one live lease per slot.
+        Platform chooses the member and seed in the lease transaction. The
+        validator supplies only a slot and never routes from its independently
+        fetched scoring ledger, which may reflect a different completed fold.
+        Claims are staged until each HTTP transaction resolves; accepted jobs
+        continue concurrently while the next slot asks for remaining work.
         """
-        plan = _plan
-        if plan is None:
-            try:
-                ledger = await self._platform.get_ledger()
-            except PlatformError as exc:
-                logger.warning("top-five confirmation ledger fetch failed: %s", exc)
-                return
-            current_version = _ledger_active_bench_version(ledger)
-            if current_version is None:
-                return
-            plan = top5_confirmation_set(
-                ledger.entries,
-                current_version=current_version,
-                margin=self._config.koth_margin,
-                dethrone_z=self._config.koth_dethrone_z,
-                tail_size=self._config.koth_tail_size,
-                baseline_seeds=self._config.koth_confirmation_seeds,
-                max_seeds=self._config.top5_max_confirmation_seeds,
-                catch_up_rate=self._config.top5_catch_up_rate,
-                # Operator policy, re-read on every ledger poll so a Backroom
-                # change reaches the fleet without a validator restart. A stale
-                # last-known-good ledger omits it and falls back to emissions.
-                cohort_size=ledger.continual_retest_cohort_size,
-                max_cohort_size=self._config.top5_max_cohort_size,
-            )
-        if plan is None:
-            return
-        if _member_agent_id is None:
-            # Ordinary queue work has already polled empty before this lane is
-            # entered. Use every locally healthy slot for catch-up rather than
-            # serializing the cohort through slot-0. The platform may grant
-            # fewer leases than we ask for (operator cap, global fairness, or a
-            # sibling validator already covering the seed); those 409s are
-            # harmless and the next sweep reconciles from durable evidence.
-            #
-            # One member appears once in this fan-out, so a single validator
-            # never runs two seeds for the same agent concurrently. Different
-            # validators can -- and do -- take distinct missing seeds for that
-            # agent, giving a five-validator fleet five-way per-agent catch-up
-            # while up to five cohort members run on each host.
-            priority = tuple(
-                member
-                for member in plan.members
-                if member.entry.agent_id in plan.emission_member_ids
-            )
-            extended = tuple(
-                member
-                for member in plan.members
-                if member.entry.agent_id not in plan.emission_member_ids
-            )
-
-            async def start_claims(
-                members: Sequence[Top5Member],
-            ) -> list[asyncio.Task[None]]:
-                tasks: list[asyncio.Task[None]] = []
-                resolved: list[asyncio.Event] = []
-                for member in members:
-                    claim_resolved = asyncio.Event()
-                    resolved.append(claim_resolved)
-                    tasks.append(
-                        asyncio.create_task(
-                            self._run_top5_confirmation_lane(
-                                stop_requested=stop_requested,
-                                drain_requested=drain_requested,
-                                _member_agent_id=member.entry.agent_id,
-                                _plan=plan,
-                                _claim_resolved=claim_resolved,
-                            )
-                        )
+        if _slot_id is None:
+            tasks: list[asyncio.Task[None]] = []
+            for slot_id in sorted(self._healthy_slots):
+                if self._new_work_blocked(stop_requested, drain_requested):
+                    break
+                claim_resolved = asyncio.Event()
+                task = asyncio.create_task(
+                    self._run_top5_confirmation_lane(
+                        stop_requested=stop_requested,
+                        drain_requested=drain_requested,
+                        _slot_id=slot_id,
+                        _claim_resolved=claim_resolved,
                     )
-                if resolved:
-                    await asyncio.gather(*(event.wait() for event in resolved))
-                return tasks
-
-            # Platform admits the emission set before extended cohort members.
-            # Resolve those HTTP claims first, but do not wait for their long
-            # benchmark executions: once their transactions have committed,
-            # lower-priority claims can see them as covered and immediately use
-            # the remaining healthy slots. Launching every rank together made
-            # early extended requests lose this race and then wait for the one
-            # accepted run to finish before the next dispatch pass.
-            tasks = await start_claims(priority)
-            tasks.extend(await start_claims(extended))
+                )
+                tasks.append(task)
+                await claim_resolved.wait()
             if tasks:
                 await asyncio.gather(*tasks)
             return
-        for member in plan.members:
-            if member.entry.agent_id != _member_agent_id:
-                continue
-            if self._new_work_blocked(stop_requested, drain_requested):
-                if _claim_resolved is not None:
-                    _claim_resolved.set()
-                return
-            entry = member.entry
-            job = None
-            slot_token = None
-            ticket_claimed = False
+
+        if self._new_work_blocked(stop_requested, drain_requested):
+            if _claim_resolved is not None:
+                _claim_resolved.set()
+            return
+        job = None
+        slot_token = None
+        ticket_claimed = False
+        try:
             try:
-                try:
-                    job = await self._platform.request_top5_confirmation_job(
-                        champion_agent_id=plan.champion.agent_id,
-                        member_agent_id=entry.agent_id,
-                    )
-                finally:
-                    # The HTTP response is observed only after Platform's lease
-                    # transaction resolves. Wake the next admission tier here;
-                    # execution may keep this task busy for the full lease.
-                    if _claim_resolved is not None:
-                        _claim_resolved.set()
-                # Mirrors the canonical path's slot-mismatch guard: binding an
-                # unserved slot below would raise KeyError out of the lane and
-                # take the rest of the sweep's confirmations with it.
-                if job.slot_id not in self._slots:
-                    logger.warning(
-                        "top-five confirmation leased unserved slot %s for "
-                        "agent %s; this validator serves %s",
-                        job.slot_id,
-                        entry.agent_id,
-                        sorted(self._slots),
-                    )
-                    await self._report_ticket_failed(
-                        job, "infrastructure", "confirmation_slot_not_served"
-                    )
-                    continue
-                # This lane runs in the sweep body, after the per-slot gather
-                # and therefore outside the context ``run_slot`` establishes.
-                # Every per-slot write below -- the active ticket, published
-                # progress, and the slot key ``_report_heartbeat`` files pending
-                # progress under -- resolves through ``_CURRENT_SLOT``, so
-                # without this bind the whole retest reported against the
-                # default ``slot-0`` while the platform leased ``job.slot_id``.
-                # The platform drops slot progress it cannot match to a live
-                # ticket on that exact slot, so the assigned slot published
-                # nothing at all and read as frozen for its whole lease.
-                # Bind per lease rather than around the lane: the slot belongs
-                # to the ticket, not to the lane. Plain awaits inherit this
-                # context, and the scorer's progress callback runs under tasks
-                # created after this point, which copy it at creation.
-                slot_token = _CURRENT_SLOT.set(job.slot_id)
-                expected_seeds = tuple(member.seeds_to_score)
-                received_seeds = tuple(
-                    dataset.seed for dataset in job.confirmation_datasets
+                job = await self._platform.request_top5_confirmation_job(
+                    slot_id=_slot_id
                 )
-                if not _supports_bench_version(job.bench_version):
-                    logger.warning(
-                        "top-five confirmation received unsupported benchmark "
-                        "version agent=%s version=%r",
-                        entry.agent_id,
-                        job.bench_version,
-                    )
-                    await self._report_ticket_failed(
-                        job, "infrastructure", "unsupported_bench_version"
-                    )
-                    continue
-                if not received_seeds:
-                    logger.warning(
-                        "top-five confirmation dataset contract missing pins "
-                        "agent=%s local_plan=%s",
-                        entry.agent_id,
-                        expected_seeds,
-                    )
-                    await self._report_ticket_failed(
-                        job, "infrastructure", "confirmation_dataset_pins_missing"
-                    )
-                    continue
-                if len(received_seeds) != len(set(received_seeds)):
-                    logger.warning(
-                        "top-five confirmation dataset contract contains duplicate "
-                        "pins agent=%s received=%s",
-                        entry.agent_id,
-                        received_seeds,
-                    )
-                    await self._report_ticket_failed(
-                        job, "infrastructure", "confirmation_dataset_pins_duplicated"
-                    )
-                    continue
-                datasets = job.confirmation_datasets
-                # Set before the claim, not after: ``_begin_active_ticket``
-                # occupies the slot as its first act, so a failure part-way
-                # through must still leave the slot clearable below.
-                ticket_claimed = True
-                await self._begin_active_ticket(
-                    job.agent_id,
-                    job.deadline,
-                    job.bench_version or DEFAULT_BENCH_VERSION,
-                )
-                broker = await self._activate_ticket_inference(job)
-                try:
-                    report = await self._evaluate_confirmation_report(
-                        entry.agent_id,
-                        entry.sha256,
-                        datasets=datasets,
-                        bench_version=job.bench_version,
-                        inference_session_id=(
-                            broker.session_id if broker is not None else None
-                        ),
-                        inference_grant_id=(
-                            job.inference.grant_id
-                            if broker is not None and job.inference is not None
-                            else None
-                        ),
-                        inference_slot_id=(job.slot_id if broker is not None else None),
-                        inference_ticket_deadline=(
-                            job.deadline if broker is not None else None
-                        ),
-                        ticket_deadline=job.deadline,
-                    )
-                finally:
-                    if broker is not None:
-                        await self._dittobench.cancel_inference_session(
-                            broker.session_id
-                        )
-                if report is None:
-                    await self._report_ticket_failed(
-                        job, "scoring_error", "confirmation_run_produced_no_report"
-                    )
-                    continue
-                await self._platform.submit_top5_confirmation_score(
-                    entry.agent_id,
-                    report=report,
-                    ticket_deadline=job.deadline,
-                )
-                self._resolve_ticket_deadline(job.agent_id, job.deadline)
-            except LeaseDeadlineError as exc:
-                logger.warning(
-                    "top-five confirmation reached the lease deadline "
-                    "champion=%s member=%s: %s",
-                    plan.champion.agent_id,
-                    entry.agent_id,
-                    exc,
-                )
-                if job is not None:
-                    # Same attribution rule as the canonical lane: running out
-                    # of lease is not this host's infrastructure failing.
-                    await self._report_ticket_failed(
-                        job, "scoring_error", failure_detail(exc)
-                    )
-            except SandboxOomError as exc:
-                logger.warning(
-                    "top-five confirmation sandbox ran out of memory "
-                    "champion=%s member=%s: %s",
-                    plan.champion.agent_id,
-                    entry.agent_id,
-                    exc,
-                )
-                if job is not None:
-                    await self._report_ticket_failed(
-                        job, "sandbox_oom", failure_detail(exc)
-                    )
-            except (
-                ValidatorInfrastructureError,
-                PlatformInfrastructureError,
-            ) as exc:
-                logger.warning(
-                    "top-five confirmation infrastructure failed "
-                    "champion=%s member=%s: %s",
-                    plan.champion.agent_id,
-                    entry.agent_id,
-                    exc,
-                )
-                if job is not None:
-                    await self._report_ticket_failed(
-                        job, "infrastructure", failure_detail(exc)
-                    )
-                    self._healthy_slots.discard(job.slot_id)
-            except (PlatformError, DittobenchError) as exc:
-                logger.warning(
-                    "top-five confirmation scoring failed champion=%s member=%s: %s",
-                    plan.champion.agent_id,
-                    entry.agent_id,
-                    exc,
-                )
-                if job is not None:
-                    await self._report_ticket_failed(
-                        job, "scoring_error", failure_detail(exc)
-                    )
             finally:
                 if _claim_resolved is not None:
-                    # Also cover early exits and unexpected exceptions before
-                    # the request boundary above.
                     _claim_resolved.set()
-                # Release whatever this iteration actually claimed. Matching on
-                # ``entry.agent_id`` instead would leak the slot for the rest of
-                # the lease if a lease ever came back for a different agent than
-                # the member requested: the claim is made from ``job.agent_id``,
-                # so a divergence left the slot occupied with no way to revoke
-                # it. Both the clear and its heartbeat must run before the slot
-                # context is unwound, or they land on the wrong slot.
-                if ticket_claimed:
-                    self._clear_active_ticket()
-                    await self._report_heartbeat("polling")
-                if slot_token is not None:
-                    _CURRENT_SLOT.reset(slot_token)
-        if _claim_resolved is not None:
-            # Defensive for a caller that supplies an id absent from the plan.
-            _claim_resolved.set()
+            if job is None:
+                return
+            # Mirrors the canonical path's slot-mismatch guard: binding an
+            # unserved slot below would raise KeyError out of the lane and take
+            # the rest of the sweep's confirmations with it.
+            if job.slot_id not in self._slots:
+                logger.warning(
+                    "top-five confirmation leased unserved slot %s for agent %s; "
+                    "this validator serves %s",
+                    job.slot_id,
+                    job.agent_id,
+                    sorted(self._slots),
+                )
+                await self._report_ticket_failed(
+                    job, "infrastructure", "confirmation_slot_not_served"
+                )
+                return
+            # This lane runs in the sweep body, outside the per-slot context
+            # ``run_slot`` establishes, so bind every state write to the slot
+            # Platform actually returned.
+            slot_token = _CURRENT_SLOT.set(job.slot_id)
+            received_seeds = tuple(
+                dataset.seed for dataset in job.confirmation_datasets
+            )
+            if not _supports_bench_version(job.bench_version):
+                logger.warning(
+                    "top-five confirmation received unsupported benchmark "
+                    "version agent=%s version=%r",
+                    job.agent_id,
+                    job.bench_version,
+                )
+                await self._report_ticket_failed(
+                    job, "infrastructure", "unsupported_bench_version"
+                )
+                return
+            if not received_seeds:
+                logger.warning(
+                    "top-five confirmation dataset contract missing pins agent=%s",
+                    job.agent_id,
+                )
+                await self._report_ticket_failed(
+                    job, "infrastructure", "confirmation_dataset_pins_missing"
+                )
+                return
+            if len(received_seeds) != len(set(received_seeds)):
+                logger.warning(
+                    "top-five confirmation dataset contract contains duplicate "
+                    "pins agent=%s received=%s",
+                    job.agent_id,
+                    received_seeds,
+                )
+                await self._report_ticket_failed(
+                    job, "infrastructure", "confirmation_dataset_pins_duplicated"
+                )
+                return
+            datasets = job.confirmation_datasets
+            # Set before the claim, not after: ``_begin_active_ticket`` occupies
+            # the slot first, so a partial failure must still clear it below.
+            ticket_claimed = True
+            await self._begin_active_ticket(
+                job.agent_id,
+                job.deadline,
+                job.bench_version or DEFAULT_BENCH_VERSION,
+            )
+            broker = await self._activate_ticket_inference(job)
+            try:
+                report = await self._evaluate_confirmation_report(
+                    job.agent_id,
+                    job.sha256,
+                    datasets=datasets,
+                    bench_version=job.bench_version,
+                    inference_session_id=(
+                        broker.session_id if broker is not None else None
+                    ),
+                    inference_grant_id=(
+                        job.inference.grant_id
+                        if broker is not None and job.inference is not None
+                        else None
+                    ),
+                    inference_slot_id=(job.slot_id if broker is not None else None),
+                    inference_ticket_deadline=(
+                        job.deadline if broker is not None else None
+                    ),
+                    ticket_deadline=job.deadline,
+                )
+            finally:
+                if broker is not None:
+                    await self._dittobench.cancel_inference_session(broker.session_id)
+            if report is None:
+                await self._report_ticket_failed(
+                    job, "scoring_error", "confirmation_run_produced_no_report"
+                )
+                return
+            await self._platform.submit_top5_confirmation_score(
+                job.agent_id,
+                report=report,
+                ticket_deadline=job.deadline,
+            )
+            self._resolve_ticket_deadline(job.agent_id, job.deadline)
+        except LeaseDeadlineError as exc:
+            logger.warning(
+                "top-five confirmation reached the lease deadline agent=%s: %s",
+                job.agent_id if job is not None else None,
+                exc,
+            )
+            if job is not None:
+                # Same attribution rule as the canonical lane: running out
+                # of lease is not this host's infrastructure failing.
+                await self._report_ticket_failed(
+                    job, "scoring_error", failure_detail(exc)
+                )
+        except SandboxOomError as exc:
+            logger.warning(
+                "top-five confirmation sandbox ran out of memory agent=%s: %s",
+                job.agent_id if job is not None else None,
+                exc,
+            )
+            if job is not None:
+                await self._report_ticket_failed(
+                    job, "sandbox_oom", failure_detail(exc)
+                )
+        except (
+            ValidatorInfrastructureError,
+            PlatformInfrastructureError,
+        ) as exc:
+            logger.warning(
+                "top-five confirmation infrastructure failed agent=%s: %s",
+                job.agent_id if job is not None else None,
+                exc,
+            )
+            if job is not None:
+                await self._report_ticket_failed(
+                    job, "infrastructure", failure_detail(exc)
+                )
+                self._healthy_slots.discard(job.slot_id)
+        except (PlatformError, DittobenchError) as exc:
+            logger.warning(
+                "top-five confirmation scoring failed slot=%s agent=%s: %s",
+                _slot_id,
+                job.agent_id if job is not None else None,
+                exc,
+            )
+            if job is not None:
+                await self._report_ticket_failed(
+                    job, "scoring_error", failure_detail(exc)
+                )
+        finally:
+            if _claim_resolved is not None:
+                _claim_resolved.set()
+            if ticket_claimed:
+                self._clear_active_ticket()
+                await self._report_heartbeat("polling")
+            if slot_token is not None:
+                _CURRENT_SLOT.reset(slot_token)
 
     async def _evaluate_confirmation_report(
         self,

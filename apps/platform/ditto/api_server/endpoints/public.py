@@ -234,6 +234,7 @@ from ditto.db.models import (
     ScreeningDispute,
     ScreeningQuarantine,
     SubmissionImageBuild,
+    ValidatorHeartbeat,
     ValidatorTicket,
 )
 from ditto.db.queries.agents import (
@@ -299,6 +300,7 @@ from ditto.db.queries.retry_state import (
     AgentRetryState,
     classify_agent_retry_states,
     resolve_bench_version,
+    work_available_validator_hotkeys,
 )
 from ditto.db.queries.score_ranking import (
     completed_wave_data,
@@ -4593,6 +4595,34 @@ async def _ath_review_public_snapshot(
     return snapshots, medians
 
 
+async def _public_retry_states(
+    request: Request,
+    session: AsyncSession,
+    *,
+    agents: list[Agent],
+    now: datetime,
+    canonical_version: int,
+    heartbeat_rows: list[ValidatorHeartbeat] | None = None,
+) -> dict[UUID, AgentRetryState]:
+    """Classify retries against validators that can receive a lease now.
+
+    A remaining attempt on an offline heartbeat or an issuance-paused legacy
+    validator is preserved ledger capacity, not actionable public queue work.
+    """
+    available = await work_available_validator_hotkeys(
+        session, now=now, heartbeat_rows=heartbeat_rows
+    )
+    slot_settings = await resolve_slot_settings(request.app.state)
+    available.difference_update(slot_settings.paused_validator_hotkeys)
+    return await classify_agent_retry_states(
+        session,
+        agents=agents,
+        now=now,
+        canonical_version=canonical_version,
+        available_validator_hotkeys=available,
+    )
+
+
 @router.get("/activity", response_model=PublicActivityResponse)
 async def activity(
     request: Request,
@@ -4713,7 +4743,8 @@ async def activity(
         artifact_releases=artifact_releases,
         queue_preview=queue_preview,
         active_bench_version=active_version,
-        retry_states=await classify_agent_retry_states(
+        retry_states=await _public_retry_states(
+            request,
             session,
             agents=[row.agent for row in rows],
             now=now,
@@ -4921,11 +4952,13 @@ async def operations(
     activity_statuses = {
         row.agent.agent_id: cast(str, row.public_status) for row in activity_rows
     }
-    retry_states = await classify_agent_retry_states(
+    retry_states = await _public_retry_states(
+        request,
         session,
         agents=[row.agent for row in activity_rows],
         now=now,
         canonical_version=active_version,
+        heartbeat_rows=heartbeat_rows,
     )
     artifact_releases = await _artifact_release_snapshot(
         session,

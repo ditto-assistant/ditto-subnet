@@ -207,26 +207,26 @@ class JobRequest(BaseModel):
 
 
 class Top5ConfirmationJobRequest(BaseModel):
-    """Fresh signed claim for a member of the top-5 shared-seed rescore lane.
+    """Fresh signed claim for the top-5 shared-seed rescore lane.
 
-    Covers the whole emission set (champion + participation tail). The
-    validator claims one ticket per set member it wants to rescore this round,
-    each anchored to the current champion so the platform can rebuild the same
-    emission set and validate that ``member_agent_id`` is either the champion or
-    a current tail entrant, and that ``champion_agent_id`` is the reigning
-    incumbent (the CRN seed anchor both sides derive identically).
+    Current validators name only the execution ``slot_id`` and let Platform
+    choose the authoritative cohort member and seed atomically. The optional
+    champion/member pair preserves the v1 wire contract for already-deployed
+    validators while the fleet rolls forward.
     """
 
     validator_hotkey: Annotated[
         str, Field(pattern=_SS58_PATTERN, description="Claiming validator hotkey.")
     ]
+    slot_id: Annotated[str | None, Field(pattern=r"^slot-[0-7]$")] = None
     champion_agent_id: Annotated[
-        UUID, Field(description="Current KOTH incumbent (the CRN seed anchor).")
-    ]
+        UUID | None,
+        Field(description="Legacy v1 observation of the current KOTH incumbent."),
+    ] = None
     member_agent_id: Annotated[
-        UUID,
-        Field(description="Emission-set member (champion or tail) to rescore."),
-    ]
+        UUID | None,
+        Field(description="Legacy v1 requested emission/cohort member."),
+    ] = None
     nonce: Annotated[UUID, Field(description="One-time claim nonce.")]
     requested_at: Annotated[
         datetime, Field(description="UTC time at which the claim was signed.")
@@ -245,6 +245,20 @@ class Top5ConfirmationJobRequest(BaseModel):
         if value.tzinfo is None:
             raise ValueError("requested_at must include a timezone")
         return value
+
+    @model_validator(mode="after")
+    def target_mode_is_atomic(self) -> Top5ConfirmationJobRequest:
+        legacy = self.champion_agent_id is not None or self.member_agent_id is not None
+        if legacy:
+            if self.champion_agent_id is None or self.member_agent_id is None:
+                raise ValueError(
+                    "champion_agent_id and member_agent_id must be supplied together"
+                )
+            if self.slot_id is not None:
+                raise ValueError("legacy member claims cannot also name slot_id")
+        elif self.slot_id is None:
+            raise ValueError("Platform-routed confirmation claims require slot_id")
+        return self
 
 
 class ConfirmationDatasetPin(BaseModel):

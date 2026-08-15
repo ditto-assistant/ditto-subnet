@@ -92,6 +92,7 @@ from ditto.db.models import (
     ScreeningQuarantine,
     SubmissionImageBuild,
     ValidatorHeartbeat,
+    ValidatorSlotSettingsRevision,
     ValidatorTicket,
 )
 from ditto.db.queries.audit import (
@@ -7161,6 +7162,18 @@ class TestPublicActivity:
         )
         cooldown_until = now + timedelta(hours=6)
         async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_C,
+                    software_version="0.68.5",
+                    protocol_version=23,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                )
+            )
             for agent_id in (exhausted_id, rejected_id):
                 for index in range(3):
                     session.add(
@@ -7179,7 +7192,7 @@ class TestPublicActivity:
             session.add(
                 ValidatorTicket(
                     agent_id=cooling_id,
-                    validator_hotkey="validator-0",
+                    validator_hotkey=_VALIDATOR_C,
                     status=TicketStatus.EXPIRED,
                     issued_at=now - timedelta(hours=1),
                     deadline=now - timedelta(minutes=30),
@@ -7213,6 +7226,75 @@ class TestPublicActivity:
         ).json()["entries"][0]
         assert rejected["retry_state"] is None
         assert rejected["retry_after"] is None
+
+    async def test_retry_label_ignores_attempts_on_an_issuance_paused_validator(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        now = datetime.now(UTC)
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="paused-validator-retry",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorHeartbeat(
+                    validator_hotkey=_VALIDATOR_C,
+                    software_version="0.68.5",
+                    protocol_version=23,
+                    code_digest="ab" * 32,
+                    state="idle",
+                    reported_at=now,
+                    seen_at=now,
+                    signature="cd" * 64,
+                )
+            )
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=_VALIDATOR_C,
+                    status=TicketStatus.EXPIRED,
+                    issued_at=now - timedelta(hours=2),
+                    deadline=now - timedelta(hours=1),
+                    bench_version=_ERA,
+                    attempt_count=1,
+                    infra_retry_grants=1,
+                    retry_after=now - timedelta(minutes=30),
+                )
+            )
+            session.add(
+                ValidatorSlotSettingsRevision(
+                    parent_revision=0,
+                    scope="*",
+                    settings={
+                        "max_concurrent_slots": 8,
+                        "disk_percent_ceiling": 90,
+                        "memory_percent_ceiling": 90,
+                        "cpu_percent_ceiling": 0,
+                        "resource_block_percent_ceiling": 95,
+                        "paused_validator_hotkeys": [_VALIDATOR_C],
+                    },
+                    checksum="a" * 64,
+                    reason="do not wait for the legacy validator",
+                    actor="backroom:test",
+                )
+            )
+        app.state.session_maker = session_maker
+        app.state.validator_slot_settings.invalidate()
+
+        entry = (
+            await client.get("/api/v1/public/activity", params={"q": str(agent_id)})
+        ).json()["entries"][0]
+
+        assert entry["retry_state"] == "queued"
+        assert entry["retry_state"] != "retry_available"
 
     async def test_secondary_multislot_work_is_reported_as_scoring(
         self,
@@ -7738,7 +7820,9 @@ class TestPublicActivity:
             event.remove(engine.sync_engine, "before_cursor_execute", record_statement)
         # Includes authority, assignments, queue floors, release state, queue
         # preview, retry state and ATH metadata around the page query itself.
-        assert len(statements) <= 17
+        # Includes one bounded heartbeat query so retry labels only count work
+        # that a currently available validator can actually consume.
+        assert len(statements) <= 18
         assert body["count"] == 1
         assert body["total"] == 2
         assert body["total_pages"] == 2
