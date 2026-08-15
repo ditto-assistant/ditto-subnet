@@ -2400,7 +2400,7 @@ async def proxy_confirmation_embeddings(
             grant is None
             or grant.lane != "embedding"
             or grant.model != config.embedding_model
-            or grant.provider != config.embedding_provider
+            or grant.provider.casefold() != config.embedding_provider.casefold()
         ):
             raise HTTPException(status_code=401, detail="invalid confirmation proof")
         _confirmation_proof_headers(

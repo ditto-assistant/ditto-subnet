@@ -9,11 +9,12 @@ rollback properties this protocol exists to provide.
 from __future__ import annotations
 
 import asyncio
+import base64
 import copy
 import hashlib
 import json
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -23,6 +24,7 @@ from uuid import UUID, uuid4
 import bittensor
 import httpx
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -45,9 +47,13 @@ from ditto.api_server.confirmation_evidence import (
     confirmation_signing_message,
     rebuild_confirmation_evidence,
 )
+from ditto.api_server.confirmation_profile_installation import (
+    installed_confirmation_verification_profiles,
+)
 from ditto.api_server.confirmation_wire import completion_report_from_go_dimensions
 from ditto.api_server.dependencies import get_chain_client, get_session
 from ditto.api_server.endpoints import validator_confirmation as confirmation_mod
+from ditto.api_server.endpoints.inference import _proxy_message
 from ditto.api_server.endpoints.validator_confirmation import (
     v9_confirmation_claim_signing_message,
     v9_confirmation_fail_signing_message,
@@ -64,6 +70,7 @@ from ditto.db.models import (
     ConfirmationBundleSubject,
     ConfirmationBundleTicket,
     ConfirmationDimensionEvidence,
+    ConfirmationInferenceGrant,
     ConfirmationScore,
     Score,
     ValidatorSlotSettingsRevision,
@@ -475,13 +482,13 @@ def _claim_payload(
     keypair: bittensor.Keypair = VALIDATOR_KEYPAIR,
     profile_revision: str | None = None,
     profile_checksum: str | None = None,
+    broker_public_key: str = "A" * 43,
 ) -> dict[str, Any]:
     profile = verification_profile()
     revision = profile_revision or profile.revision
     checksum = profile_checksum or profile.checksum()
     claim_nonce = nonce or uuid4()
     claimed_at = requested_at or datetime.now(UTC)
-    broker_public_key = "A" * 43
     signature = keypair.sign(
         v9_confirmation_claim_signing_message(
             validator_hotkey=keypair.ss58_address,
@@ -517,6 +524,176 @@ async def _claim(
         json=body,
         headers={"X-Validator-Hotkey": header_hotkey or str(body["validator_hotkey"])},
     )
+
+
+def _installed_profile_settings() -> tuple[
+    ConfirmationBundleSettings, ConfirmationVerificationProfile
+]:
+    registry = installed_confirmation_verification_profiles()
+    assert len(registry) == 1
+    profile = next(iter(registry.values()))
+    settings = active_settings(mode=ConfirmationBundleMode.SHADOW).model_copy(
+        update={
+            "daily_dollar_cap_microusd": 10_000_000,
+            "per_bundle_request_cap": 10_000,
+            "per_bundle_token_cap": 10_000_000,
+            "profile_revision": profile.revision,
+            "profile_checksum": profile.checksum(),
+        }
+    )
+    return settings, profile
+
+
+async def _claim_installed_profile(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> tuple[dict[str, Any], Ed25519PrivateKey]:
+    settings, profile = _installed_profile_settings()
+    await _seed_bundle(
+        maker,
+        settings=settings,
+        verification_profile_override=profile,
+    )
+    signer = Ed25519PrivateKey.generate()
+    public_key = signer.public_key().public_bytes_raw()
+    broker_public_key = base64.urlsafe_b64encode(public_key).decode().rstrip("=")
+    _install_transport(app, maker, profile=profile)
+    response = await _claim(
+        client,
+        payload=_claim_payload(
+            profile_revision=profile.revision,
+            profile_checksum=profile.checksum(),
+            broker_public_key=broker_public_key,
+        ),
+    )
+    assert response.status_code == 200, response.text
+    offers = response.json()["inference_grants"]
+    embedding = next(offer for offer in offers if offer["lane"] == "embedding")
+    assert embedding["provider"] == "perplexity"
+    return embedding, signer
+
+
+def _confirmation_embedding_request(
+    offer: dict[str, Any], signer: Ed25519PrivateKey
+) -> tuple[bytes, dict[str, str]]:
+    body = json.dumps(
+        {
+            "model": offer["model"],
+            "input": ["private memory"],
+            "dimensions": 768,
+            "encoding_format": "float",
+        },
+        separators=(",", ":"),
+    ).encode()
+    grant_id = UUID(offer["grant_id"])
+    generation = int(offer["generation"])
+    nonce = uuid4()
+    requested_at = datetime.now(UTC)
+    proof = signer.sign(
+        _proxy_message(
+            grant_id=grant_id,
+            generation=generation,
+            nonce=nonce,
+            requested_at=requested_at,
+            body=body,
+        )
+    )
+    return body, {
+        "Authorization": f"Bearer {offer['bearer']}",
+        "X-Ditto-Grant": str(grant_id),
+        "X-Ditto-Generation": str(generation),
+        "X-Ditto-Nonce": str(nonce),
+        "X-Ditto-Requested-At": requested_at.isoformat(),
+        "X-Ditto-Proof": base64.urlsafe_b64encode(proof).decode().rstrip("="),
+    }
+
+
+def _enable_confirmation_proxy(app: FastAPI) -> None:
+    inference = replace(
+        app.state.config.inference_proxy,
+        enabled=True,
+        openrouter_api_key="openrouter-test-key",
+        perplexity_api_key=None,
+    )
+    app.state.config = replace(app.state.config, inference_proxy=inference)
+
+
+class TestV9ConfirmationEmbeddingProxy:
+    async def test_installed_profile_provider_slug_reaches_embedding_upstream(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        offer, signer = await _claim_installed_profile(app, client, session_maker)
+        app.state.session_maker = session_maker
+        _enable_confirmation_proxy(app)
+        body, headers = _confirmation_embedding_request(offer, signer)
+        upstream_calls = 0
+
+        async def provider(request: httpx.Request) -> httpx.Response:
+            nonlocal upstream_calls
+            upstream_calls += 1
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "object": "list",
+                    "model": offer["model"],
+                    "data": [
+                        {
+                            "object": "embedding",
+                            "index": 0,
+                            "embedding": [0.0] * 768,
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 3, "total_tokens": 3},
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(provider)
+        ) as provider_client:
+            app.state.inference_client = provider_client
+            response = await client.post(
+                "/api/v1/inference/confirmation/embeddings",
+                content=body,
+                headers=headers,
+            )
+
+        assert response.status_code == 200, response.text
+        assert upstream_calls == 1
+        assert response.json()["model"] == offer["model"]
+
+    async def test_different_embedding_provider_is_rejected_before_upstream(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        offer, signer = await _claim_installed_profile(app, client, session_maker)
+        app.state.session_maker = session_maker
+        _enable_confirmation_proxy(app)
+        async with session_maker() as session, session.begin():
+            grant = await session.get(
+                ConfirmationInferenceGrant, UUID(offer["grant_id"])
+            )
+            assert grant is not None
+            grant.provider = "different-provider"
+        body, headers = _confirmation_embedding_request(offer, signer)
+        app.state.inference_client = MagicMock(
+            side_effect=AssertionError("mismatched provider reached upstream")
+        )
+
+        response = await client.post(
+            "/api/v1/inference/confirmation/embeddings",
+            content=body,
+            headers=headers,
+        )
+
+        assert response.status_code == 401, response.text
+        assert "invalid confirmation proof" in response.text
 
 
 async def _claimed_rows(
