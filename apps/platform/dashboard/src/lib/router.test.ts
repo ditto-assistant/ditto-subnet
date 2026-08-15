@@ -48,9 +48,13 @@ describe("PAGES registry", () => {
       title: "Leaderboard",
       sub: "Every scored miner · canonical ranks · sortable by any metric",
     });
+    expect(PAGES.pipeline).toEqual({
+      title: "Submission pipeline",
+      sub: "Every submission from upload to scored · admission, validation, and integrity review",
+    });
     expect(PAGES.operations).toEqual({
-      title: "Network operations",
-      sub: "Live submission pipeline and validator / screener fleet health",
+      title: "Fleet",
+      sub: "Validator and screener capacity · live slot work · trusted miner-image builds",
     });
     expect(PAGES.submissions).toEqual({
       title: "Recent submissions",

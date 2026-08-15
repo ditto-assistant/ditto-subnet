@@ -1,4 +1,4 @@
-// The sidebar shell (monolith 2536–2605): brand + bench badge, the six-item
+// The sidebar shell (monolith 2536–2605): brand + bench badge, the
 // hash-routed nav with its inline SVG icons, the theme switcher, and the
 // side-foot controls (wandb telemetry link, platform source link, manual
 // refresh). SiteFooter is the open-source repository footer (2995–3007) that
@@ -51,14 +51,27 @@ const NAV_ITEMS: NavItem[] = [
     ),
   },
   {
-    page: "operations",
-    label: "Network ops",
-    desc: () => "Pipeline & fleet health",
+    page: "pipeline",
+    label: "Pipeline",
+    desc: () => "Submission flow & screening",
     icon: () => (
       <svg class="ic" viewBox="0 0 24 24">
         <rect width="8" height="8" x="3" y="3" rx="2" />
         <path d="M7 11v4a2 2 0 0 0 2 2h4" />
         <rect width="8" height="8" x="13" y="13" rx="2" />
+      </svg>
+    ),
+  },
+  {
+    page: "operations",
+    label: "Fleet",
+    desc: () => "Validators, screeners & builds",
+    icon: () => (
+      <svg class="ic" viewBox="0 0 24 24">
+        <rect width="20" height="8" x="2" y="2" rx="2" />
+        <rect width="20" height="8" x="2" y="14" rx="2" />
+        <path d="M6 6h.01" />
+        <path d="M6 18h.01" />
       </svg>
     ),
   },

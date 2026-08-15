@@ -11,6 +11,7 @@ import { bootParams } from "./config";
 export type PageName =
   | "overview"
   | "leaderboard"
+  | "pipeline"
   | "operations"
   | "submissions"
   | "reviews"
@@ -28,9 +29,13 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
     title: "Leaderboard",
     sub: "Every scored miner · canonical ranks · sortable by any metric",
   },
+  pipeline: {
+    title: "Submission pipeline",
+    sub: "Every submission from upload to scored · admission, validation, and integrity review",
+  },
   operations: {
-    title: "Network operations",
-    sub: "Live submission pipeline and validator / screener fleet health",
+    title: "Fleet",
+    sub: "Validator and screener capacity · live slot work · trusted miner-image builds",
   },
   submissions: {
     title: "Recent submissions",

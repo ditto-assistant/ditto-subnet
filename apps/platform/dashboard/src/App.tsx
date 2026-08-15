@@ -51,6 +51,7 @@ import { BenchmarkPage } from "./pages/BenchmarkPage";
 import { LeaderboardPage } from "./pages/LeaderboardPage";
 import { OperationsPage } from "./pages/OperationsPage";
 import { OverviewPage } from "./pages/OverviewPage";
+import { PipelinePage } from "./pages/PipelinePage";
 import { ReviewsPage } from "./pages/ReviewsPage";
 import { SubmissionsPage } from "./pages/SubmissionsPage";
 
@@ -105,6 +106,7 @@ export default function App(): JSX.Element {
     if (
       manual ||
       currentPage() === "operations" ||
+      currentPage() === "pipeline" ||
       Boolean(validatorNames.error()) ||
       Boolean(screeners.error())
     ) {
@@ -159,12 +161,12 @@ export default function App(): JSX.Element {
       }
       backgroundTick();
     }, REFRESH_MS);
-    // The fleet page is the live one: poll just the shared operations
-    // snapshot on a tighter cadence while a viewer is actually on that page.
+    // The pipeline and fleet pages are the live ones: poll just the shared
+    // operations snapshot on a tighter cadence while a viewer is on either.
     const ops = setInterval(() => {
       if (document.hidden) return;
       if (agentCardOpen()) return;
-      if (currentPage() === "operations") operations.refresh();
+      if (currentPage() === "operations" || currentPage() === "pipeline") operations.refresh();
     }, OPS_REFRESH_MS);
     const onVisibility = (): void => {
       if (!document.hidden && refreshStale) {
@@ -343,6 +345,9 @@ export default function App(): JSX.Element {
               </Match>
               <Match when={currentPage() === "leaderboard"}>
                 <LeaderboardPage />
+              </Match>
+              <Match when={currentPage() === "pipeline"}>
+                <PipelinePage operations={operations} />
               </Match>
               <Match when={currentPage() === "operations"}>
                 <OperationsPage operations={operations} />

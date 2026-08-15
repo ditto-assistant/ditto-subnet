@@ -26,7 +26,12 @@ import {
   validatorSlotIds,
 } from "./fleet";
 import type { FleetEntryExt, FleetLedgerKey, FleetSingular, SlotPolicy } from "./fleet";
-import { BenchmarkProgressView, ScreenerProgressView } from "./progress";
+import {
+  ElapsedTime,
+  ScreenerProgressView,
+  benchmarkProgressText,
+  benchmarkStageLabel,
+} from "./progress";
 import { updaterModeLine, updaterView } from "./updater";
 
 const LEDGER_LABELS: Record<FleetLedgerKey, string> = {
@@ -273,6 +278,113 @@ export function AssignmentDetail(props: { entry: FleetEntryExt }): JSX.Element {
   );
 }
 
+/** Compact stage vocabulary for the one-line slot rows. running_benchmark is
+ * deliberately absent: once a percentage exists, the bar and the numbers say
+ * it, and the full label stays in the tooltip and the bar's aria-label. */
+const SLOT_STAGE_SHORT: Record<string, string> = {
+  preparing: "preparing",
+  building_harness: "loading image",
+  generating_dataset: "generating dataset",
+  starting_harness: "starting harness",
+  running_benchmark: "benchmark",
+  finalizing: "finalizing",
+  submitting_result: "submitting",
+  waiting_for_relay: "waiting for relay",
+};
+
+/**
+ * One running slot as a single dense line: slot id, bench chip, agent link,
+ * live bar, and the numbers (`47% · 132/281 · 15m 0s`). Nothing is dropped —
+ * the full progress sentence (stage label, stall reason, delayed-telemetry
+ * note) rides on the line's tooltip and the bar's accessible label, so eight
+ * busy slots read as eight rows of a ledger instead of eight stacked cards.
+ */
+function SlotLine(props: { slotId: string; progress: BenchmarkProgress }): JSX.Element {
+  const p = () => props.progress;
+  const stalled = () => Boolean(p().stalled);
+  const failed = () => p().stage === "failed_retrying";
+  const delayed = () => Boolean(p()._telemetry_delayed);
+  const determinate = () => p().percent != null && !stalled() && !failed();
+  const counts = () =>
+    p().completed_checks != null && p().total_checks != null
+      ? String(p().completed_checks) + "/" + String(p().total_checks)
+      : "";
+  const value = () => Math.max(0, Math.min(100, Number(p().percent) || 0));
+  const sentence = () =>
+    props.slotId +
+    ". " +
+    (p().bench_version ? "Bench v" + p().bench_version + ". " : "") +
+    benchmarkStageLabel(p().stage) +
+    ". " +
+    benchmarkProgressText(p());
+  const numbers = createMemo(() => {
+    const parts: string[] = [];
+    if (delayed()) parts.push("update delayed");
+    if (failed()) parts.push("failed · retrying");
+    else if (stalled()) parts.push("stalled");
+    else if (p().stage && p().stage !== "running_benchmark") {
+      parts.push(SLOT_STAGE_SHORT[p().stage as string] || "working");
+    } else if (!p().stage && !delayed()) {
+      parts.push("awaiting progress");
+    }
+    if (p().percent != null) parts.push(String(p().percent) + "%");
+    if (counts()) parts.push(counts());
+    return parts.join(" · ");
+  });
+  return (
+    <div
+      class="fleet-slot-line"
+      classList={{ warn: stalled() || failed() }}
+      title={sentence()}
+      data-slot={props.slotId}
+    >
+      <span class="fleet-slot-id">{props.slotId}</span>
+      <Show when={p().bench_version}>
+        {(version) => (
+          <span class="benchmark-version-chip" title={"Bench v" + version()}>
+            v{version()}
+          </span>
+        )}
+      </Show>
+      <span class="fleet-slot-agent" title={String(p().agent_id || "")}>
+        <EntityButton
+          kind="agent"
+          id={p().agent_id}
+          label={
+            (p().agent_name || "Unnamed agent") + " · " + String(p().agent_id || "").slice(0, 8)
+          }
+        />
+      </span>
+      <Show
+        when={determinate()}
+        fallback={
+          <span
+            class="bench-bar"
+            classList={{ indeterminate: !stalled() && !failed() && !delayed() }}
+            role="img"
+            aria-label={sentence()}
+          >
+            <i />
+          </span>
+        }
+      >
+        <progress max="100" value={value()} aria-label={sentence()} />
+      </Show>
+      <span class="fleet-slot-status">
+        {numbers()}
+        <Show when={p().started_at}>
+          {(startedAt) => (
+            <>
+              {numbers() ? " · " : ""}
+              <ElapsedTime class="fleet-slot-elapsed" startedAt={startedAt()} />
+            </>
+          )}
+        </Show>
+      </span>
+    </div>
+  );
+}
+
 /** One benchmark slot's state line. Order matters: real leased work outranks
  * an orphan record, and an orphan outranks every free-slot reading below it —
  * "Idle" and "Unavailable" are the two claims the eviction window makes
@@ -354,12 +466,7 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
   return (
     <div class="fleet-slot-overview">
       <For each={runningSlots()}>
-        {(slotId) => (
-          <div class="fleet-slot fleet-slot-running" title={slotId}>
-            <SlotLabel slotId={slotId} />
-            <BenchmarkProgressView progress={benchmarkFor(slotId)!} showAgent={true} />
-          </div>
-        )}
+        {(slotId) => <SlotLine slotId={slotId} progress={benchmarkFor(slotId)!} />}
       </For>
       <For each={orphanedSlots()}>
         {(slotId) => {

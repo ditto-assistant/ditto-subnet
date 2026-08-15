@@ -1,21 +1,16 @@
-// The operations page (monolith markup 2742–2862 + loadOperations 9434–9462,
+// The fleet page (monolith markup 2742–2862 + loadOperations 9434–9462,
 // loadValidatorNames 9464–9484, loadScreeners 9486–9500, renderFleet
-// 8922–9114, resolveEntityRoute fleet targets 9365–9398). Every panel — the
-// pipeline board, the rescreen notice, the fleet ledger and both fleet
-// tables — consumes exactly ONE /public/operations snapshot per tick, and the
-// snapshot note states the reconciliation plus its age (skew is visible, not
-// papered over). Validator display names arrive on a separate feed and are
-// optional untrusted decoration: reset on every refetch, rendered as inert
-// text, never a substitute for the hotkey identity.
+// 8922–9114, resolveEntityRoute fleet targets 9365–9398): validator and
+// screener capacity plus Targon build provenance. The submission-pipeline
+// atlas lives on its own page (PipelinePage); both consume exactly ONE
+// /public/operations snapshot per tick through operations-shared. Validator
+// display names arrive on a separate feed and are optional untrusted
+// decoration: reset on every refetch, rendered as inert text, never a
+// substitute for the hotkey identity.
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { FleetLedger, FleetRow, RetiredFleetRow } from "../components/operations/FleetTable";
-import {
-  IntegrityReviewBranch,
-  PipelineBoard,
-  RescreenNotice,
-} from "../components/operations/PipelineBoard";
 import { SubmissionBuildLane } from "../components/operations/SubmissionBuildLane";
 import {
   fleetLedgerCounts,
@@ -31,7 +26,6 @@ import type {
   FleetSingular,
   SlotPolicy,
 } from "../components/operations/fleet";
-import type { PipelineEntryExt } from "../components/operations/pipeline";
 import { EmptyRow } from "../components/ui/States";
 import { operationsResource } from "../data/operations";
 import { useEndpoint } from "../data/useEndpoint";
@@ -40,26 +34,7 @@ import { REFRESH_MS } from "../lib/config";
 import { relTime } from "../lib/format";
 import { entityRoute } from "../stores/routeStore";
 import type { FleetReport, OperationsPayload, ValidatorNamesPayload } from "../types/fleet";
-
-/** Errored resources read as absent — stated absence, never stale-as-fresh. */
-function latest<T>(resource: ResourceState<T>): T | undefined {
-  if (resource.error()) return undefined;
-  try {
-    return resource.data();
-  } catch {
-    return undefined;
-  }
-}
-
-/** The operations activity slice as actually served — the shared PipelineFeed
- * type declares only `entries`; the feed also carries the authoritative
- * status counts and the visible/total window the snapshot note reads. */
-interface OpsActivityFeed {
-  entries?: PipelineEntryExt[];
-  status_counts?: Record<string, number>;
-  count?: number;
-  total?: number;
-}
+import { latest, useOperationsSnapshot } from "./operations-shared";
 
 interface FleetView {
   kind: "validators" | "screeners";
@@ -97,14 +72,9 @@ export function OperationsPage(
   });
   const screeners = useEndpoint<FleetReport>("/public/screeners", { pollMs: REFRESH_MS });
 
-  // A refresh failure does not invalidate the last reconciled snapshot: every
-  // panel keeps rendering it while the next poll retries, and only the note
-  // changes. Only a cold start with no trustworthy data renders the
-  // unavailable placeholders (loadOperations catch, weekend drift 9816–9834).
-  const ops = createMemo<OperationsPayload | undefined>((prev) => latest(operations) ?? prev);
-  const refreshDelayed = () => Boolean(operations.error()) && Boolean(ops());
-  const opsUnavailable = () => Boolean(operations.error()) && !ops();
-  const opsLoading = () => !ops() && !opsUnavailable();
+  const snap = useOperationsSnapshot(operations);
+  const ops = snap.ops;
+  const opsUnavailable = snap.opsUnavailable;
 
   const [operationsView, setOperationsView] = createSignal<OperationsView>("validators");
 
@@ -140,27 +110,6 @@ export function OperationsPage(
   const benchVersion = createMemo(() => {
     const report = preservedValidators();
     return Number(report?.active_bench_version) || Number(ops()?.active_bench_version) || null;
-  });
-
-  const activity = (): OpsActivityFeed | undefined =>
-    ops()?.activity as OpsActivityFeed | undefined;
-  const pipelineEntries = createMemo<PipelineEntryExt[]>(() => activity()?.entries ?? []);
-  const statusCounts = () => activity()?.status_counts ?? {};
-
-  // The one shared snapshot's provenance note (loadOperations 9448–9460).
-  const snapshotNote = createMemo(() => {
-    if (opsUnavailable()) return "Shared operations snapshot unavailable";
-    if (refreshDelayed()) {
-      const at = ops()?.generated_at;
-      return "Refresh delayed · showing last reconciled snapshot" + (at ? " · " + relTime(at) : "");
-    }
-    const data = ops();
-    if (!data) return "Loading one shared operations snapshot…";
-    const visibleHistory =
-      Number(activity()?.count ?? NaN) < Number(activity()?.total ?? NaN)
-        ? " · recent history shown; full history in Activity"
-        : "";
-    return "Pipeline and fleet reconciled" + visibleHistory + " · " + relTime(data.generated_at);
   });
 
   const fleet = createMemo<FleetView>(() => {
@@ -347,43 +296,14 @@ export function OperationsPage(
       }}
     >
       <section class="operations" aria-labelledby="page-title">
-        <div class="fleet-atlas">
-          <div class="pipeline-map">
-            <div class="atlas-label">
-              <div>
-                <h2 class="atlas-title">Submission pipeline</h2>
-                <span class="atlas-note">
-                  Mechanical admission builds a verified image before validators. Source integrity
-                  review happens later only for qualifying or anomalous results.
-                </span>
-                <span class="atlas-note" id="operations-snapshot" aria-live="polite">
-                  {snapshotNote()}
-                </span>
-              </div>
-            </div>
-            <RescreenNotice entries={pipelineEntries()} unavailable={opsUnavailable()} />
-            <PipelineBoard
-              entries={pipelineEntries()}
-              statusCounts={statusCounts()}
-              unavailable={opsUnavailable()}
-              loading={opsLoading()}
-              screeners={latest(screeners) ?? null}
-              activeVersion={benchVersion()}
-            />
-            <IntegrityReviewBranch
-              entries={pipelineEntries()}
-              statusCounts={statusCounts()}
-              unavailable={opsUnavailable()}
-              loading={opsLoading()}
-            />
-          </div>
-        </div>
-
         <div class="operations-workspace">
           <div class="operations-head">
             <div>
               <h2>Operational capacity</h2>
               <p>Live worker capacity and trusted miner-image builds.</p>
+              <p class="hint" id="operations-snapshot" aria-live="polite">
+                {snap.snapshotNote()}
+              </p>
             </div>
             <div class="operations-tabs" role="tablist" aria-label="Operational capacity views">
               <For each={OPERATIONS_VIEWS}>
@@ -419,7 +339,7 @@ export function OperationsPage(
                 <SubmissionBuildLane
                   snapshot={ops()?.submission_builds}
                   unavailable={opsUnavailable()}
-                  loading={opsLoading()}
+                  loading={snap.opsLoading()}
                 />
               </section>
             }
@@ -453,34 +373,34 @@ export function OperationsPage(
                 >
                   <thead>
                     <tr>
-                      <th scope="col" id="fleet-node-heading" style="width:240px">
+                      <th scope="col" id="fleet-node-heading" style="width:190px">
                         {fleet().Kind}
                       </th>
-                      <th scope="col" style="width:100px">
+                      <th scope="col" style="width:84px">
                         Status
                       </th>
-                      <th scope="col" style="width:88px">
+                      <th scope="col" style="width:74px">
                         First seen
                       </th>
-                      <th scope="col" style="width:96px">
+                      <th scope="col" style="width:84px">
                         Last heartbeat
                       </th>
-                      <th scope="col" class="fleet-work-col" style="width:276px">
+                      <th scope="col" class="fleet-work-col">
                         Current work
                       </th>
-                      <th scope="col" style="width:108px">
+                      <th scope="col" style="width:104px">
                         Version
                       </th>
-                      <th scope="col" style="width:88px">
+                      <th scope="col" style="width:80px">
                         CPU
                       </th>
-                      <th scope="col" style="width:88px">
+                      <th scope="col" style="width:80px">
                         Memory
                       </th>
-                      <th scope="col" style="width:88px">
+                      <th scope="col" style="width:80px">
                         Disk
                       </th>
-                      <th scope="col" style="width:78px">
+                      <th scope="col" style="width:72px">
                         Containers
                       </th>
                     </tr>

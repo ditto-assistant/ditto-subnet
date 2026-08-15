@@ -579,8 +579,15 @@
   color: var(--text-dim);
   font-size: 11px;
 }
+/* The workspace opens the fleet page now that the pipeline atlas lives on
+   its own page — no stacked-section offset. */
 .operations-workspace {
-  margin-top: var(--ops-space-2xl);
+  margin-top: 0;
+}
+.operations-head .hint {
+  margin: 4px 0 0;
+  color: var(--text-dim);
+  font: 400 10px/1.4 var(--mono);
 }
 .operations-tabs {
   display: flex;
@@ -979,7 +986,7 @@
   padding-inline: 12px;
 }
 .fleet-table tbody td {
-  padding-block: 10px;
+  padding-block: 8px;
 }
 .fleet-node-wrap {
   display: block;
@@ -1080,9 +1087,9 @@
 
 .fleet-confirmation-lane {
   display: grid;
-  gap: 6px;
-  margin-top: 10px;
-  padding: 9px 10px;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 7px 9px;
   border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border));
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 7%, transparent);
@@ -1152,6 +1159,120 @@
   font-size: 10.5px;
   line-height: 1.45;
   text-wrap: pretty;
+}
+/* One running slot per line: id · bench chip · agent · bar · numbers. The
+   full progress sentence rides on the tooltip and the bar's accessible
+   label, so a busy eight-slot validator reads as a ledger, not a card
+   stack. */
+.fleet-slot-line {
+  display: grid;
+  /* The agent is the identity of the work: it may truncate but never
+     collapse, so it keeps a floor while the bar flexes within its band. */
+  grid-template-columns: auto auto minmax(64px, 1fr) minmax(40px, 80px) auto;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-block: 2px;
+}
+.fleet-slot-line + .fleet-slot-line {
+  margin-top: 2px;
+}
+.fleet-slot-line + .fleet-slot {
+  margin-top: var(--ops-space-sm);
+}
+.fleet-slot-id {
+  color: var(--text-faint);
+  font: 650 10px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fleet-slot-agent {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--accent-2);
+  font-family: var(--mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-slot-line progress {
+  display: block;
+  width: 100%;
+  height: 5px;
+  border: 0;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+  color: var(--accent-2);
+  accent-color: var(--accent-2);
+}
+.fleet-slot-line progress::-webkit-progress-bar {
+  background: var(--bg-elev-2);
+  border-radius: 999px;
+}
+.fleet-slot-line progress::-webkit-progress-value {
+  background: var(--accent-2);
+  border-radius: 999px;
+}
+.fleet-slot-line progress::-moz-progress-bar {
+  background: var(--accent-2);
+  border-radius: 999px;
+}
+.fleet-slot-line .bench-bar {
+  display: block;
+  width: 100%;
+  height: 5px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg-elev-2);
+}
+.fleet-slot-line .bench-bar > i {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent-2);
+}
+.fleet-slot-line .bench-bar.indeterminate > i {
+  width: 38%;
+  animation: bench-indeterminate 1.15s ease-in-out infinite;
+}
+.fleet-slot-line.warn .bench-bar > i,
+.fleet-slot-line.warn progress::-webkit-progress-value,
+.fleet-slot-line.warn progress::-moz-progress-bar {
+  background: var(--warn);
+}
+.fleet-slot-status {
+  justify-self: end;
+  color: var(--text-dim);
+  font: 400 10px/1.3 var(--mono);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.fleet-slot-line.warn .fleet-slot-status {
+  color: var(--warn);
+}
+@media (prefers-reduced-motion: reduce) {
+  .fleet-slot-line .bench-bar.indeterminate > i {
+    width: 100%;
+    animation: none;
+    opacity: 0.55;
+  }
+}
+@media (forced-colors: active) {
+  .fleet-slot-line progress,
+  .fleet-slot-line .bench-bar {
+    border: 1px solid CanvasText;
+    forced-color-adjust: auto;
+  }
+  .fleet-slot-line .bench-bar > i {
+    background: CanvasText;
+  }
+  .fleet-slot-id,
+  .fleet-slot-agent,
+  .fleet-slot-status {
+    color: CanvasText;
+  }
 }
 .fleet-slot {
   display: flex;

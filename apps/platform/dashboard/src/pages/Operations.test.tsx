@@ -1,7 +1,9 @@
-// Parity tests for the operations page (assert-inventory rows 15, 16, 17,
-// 18, 22, 26). The old suite grepped the monolith's source; these render the
-// SolidJS port against the recorded fixtures (frozen clock 2026-07-31T14:00Z,
-// the golden renderer's instant) and assert the same contracts on the DOM.
+// Parity tests for the fleet page (assert-inventory rows 15, 16, 17, 18, 22,
+// 26). The old suite grepped the monolith's source; these render the SolidJS
+// port against the recorded fixtures (frozen clock 2026-07-31T14:00Z, the
+// golden renderer's instant) and assert the same contracts on the DOM. The
+// pipeline half of the old single operations page is covered by
+// Pipeline.test.tsx.
 import { cleanup, fireEvent, render, waitFor } from "@solidjs/testing-library";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
@@ -226,7 +228,7 @@ describe("accessible fleet status (row 15)", () => {
     expect(row?.querySelector("td:nth-child(6) .fleet-protocol")?.textContent).toContain(
       "0 of 2 slots",
     );
-    expect(row?.querySelector(".benchmark-progress")?.textContent).toContain("Benchmark 47%");
+    expect(row?.querySelector(".fleet-slot-line")?.textContent).toContain("47% · 132/281");
     expect(row?.querySelector(".stage.capped")?.textContent).toBe("Capped");
   });
 
@@ -524,21 +526,28 @@ describe("accessible benchmark progress (row 22)", () => {
     }) as typeof fetch;
     render(() => <OperationsPage />);
     await waitFor(() =>
-      expect(document.querySelector("td.fleet-work-col .benchmark-progress")).toBeTruthy(),
+      expect(document.querySelector("td.fleet-work-col .fleet-slot-line")).toBeTruthy(),
     );
     const cell = document.querySelector("td.fleet-work-col") as HTMLElement;
-    expect(cell.querySelector(".benchmark-version-chip")?.textContent).toBe("Bench v7");
-    const bar = cell.querySelector("progress") as HTMLProgressElement;
+    const line = cell.querySelector(".fleet-slot-line") as HTMLElement;
+    // The compact chip carries the full version in its tooltip.
+    expect(line.querySelector(".benchmark-version-chip")?.textContent).toBe("v7");
+    expect(line.querySelector(".benchmark-version-chip")).toHaveAttribute("title", "Bench v7");
+    const bar = line.querySelector("progress") as HTMLProgressElement;
     expect(bar).toHaveAttribute("max", "100");
     expect(bar).toHaveAttribute("value", "47");
+    // The full sentence survives compaction on the accessible label and the
+    // line's tooltip; the visible line carries the numbers.
     expect(bar.getAttribute("aria-label")).toContain("Running benchmark");
-    expect(cell.textContent).toContain("Benchmark 47% · 132 of 281 checks");
+    expect(bar.getAttribute("aria-label")).toContain("132 of 281 checks");
+    expect(line.getAttribute("title")).toContain("Running benchmark");
+    expect(line.textContent).toContain("47% · 132/281");
     // Per-second elapsed timer node, driven from progress.started_at.
-    const time = cell.querySelector(".benchmark-progress-time");
+    const time = line.querySelector(".fleet-slot-elapsed");
     expect(time).toHaveAttribute("data-started-at", "2026-07-31T13:00:00Z");
     expect(time?.textContent).toBe("1h 0m 0s");
     // The agent under evaluation is linked, not just named.
-    expect(cell.querySelector('.benchmark-agent [data-entity-link="agent"]')).toBeTruthy();
+    expect(line.querySelector('.fleet-slot-agent [data-entity-link="agent"]')).toBeTruthy();
   });
 
   it("shows that a managed update is safely draining active runs", async () => {
@@ -822,54 +831,6 @@ describe("validator names are untrusted decoration (row 26)", () => {
   });
 });
 
-// ── Pipeline board on the shared snapshot (map: operations markup 2742–2862) ─
-describe("pipeline board from the shared snapshot", () => {
-  it("renders the four stage columns with authoritative counts", async () => {
-    await renderPage();
-    const stages = Array.from(
-      document.querySelectorAll("#pipeline-overview .pipeline-column"),
-      (col) => col.getAttribute("data-pipeline-stage"),
-    );
-    expect(stages).toEqual(["admission", "waiting_validator", "evaluating", "scored"]);
-    expect(text("pipeline-scored-count")).toContain("628");
-    expect(document.querySelectorAll("#pipeline-scored .pipeline-item").length).toBe(50);
-    expect(document.querySelector("#pipeline-scored .pipeline-more")?.textContent).toBe(
-      "578 older submissions in Activity",
-    );
-    // Newest score first.
-    expect(
-      document.querySelector("#pipeline-scored .pipeline-item .pipeline-item-name")?.textContent,
-    ).toBe("blackhole_v8");
-  });
-
-  it("separates the stuck backlog behind its quick-filter", async () => {
-    await renderPage();
-    // The three waiting entries all exhausted their retry budget: the count
-    // stays authoritative while the actionable lane reads empty.
-    const count = document.getElementById("pipeline-wait-validator-count") as HTMLElement;
-    expect(count.textContent).toContain("3");
-    const stuck = count.querySelector("[data-pipeline-stuck-filter]") as HTMLButtonElement;
-    expect(stuck.textContent).toBe("3 stuck");
-    expect(stuck).toHaveAttribute("aria-pressed", "false");
-    expect(document.querySelector("#pipeline-wait-validator .pipeline-empty")?.textContent).toBe(
-      "No submissions waiting.",
-    );
-
-    fireEvent.click(stuck);
-    await waitFor(() =>
-      expect(document.querySelectorAll("#pipeline-wait-validator .pipeline-item").length).toBe(3),
-    );
-    const chips = document.querySelectorAll("#pipeline-wait-validator .retry-chip.exhausted");
-    expect(chips.length).toBe(3);
-    expect(chips[0]?.textContent).toBe("Stuck · needs operator");
-  });
-
-  it("hides the rescreen notice when no policy rescreen is queued", async () => {
-    await renderPage();
-    expect((document.getElementById("rescreen-notice") as HTMLElement).hidden).toBe(true);
-  });
-});
-
 describe("Targon submission build provenance", () => {
   it("shows provider provenance independently from the screener fleet", async () => {
     const payload: OperationsPayload = {
@@ -937,50 +898,10 @@ describe("Targon submission build provenance", () => {
   });
 });
 
-// ── Weekend drift: renamed lanes, the integrity-review branch, and the
-// last-reconciled-snapshot rule (Python guards
-// test_operations_refresh_keeps_last_successful_snapshot and the #623/#635
-// board reshape) ─────────────────────────────────────────────────────────────
-describe("weekend drift: board reshape and refresh resilience", () => {
-  it("renders the mechanical-admission lane names and the atlas explainer", async () => {
-    const { container } = render(() => <OperationsPage />);
-    await waitFor(() => {
-      expect(container.querySelector("#pipeline-admission-title")?.textContent).toBe(
-        "Build & admission",
-      );
-    });
-    expect(container.querySelectorAll("#pipeline-overview .pipeline-column")).toHaveLength(4);
-    expect(container.querySelector("#pipeline-wait-validator-title")?.textContent).toBe(
-      "Waiting for validators",
-    );
-    expect(container.querySelector("#pipeline-evaluating-title")?.textContent).toBe("Scoring");
-    expect(container.querySelector("#pipeline-scored-title")?.textContent).toBe("Scored & live");
-    expect(container.textContent).toContain(
-      "Mechanical admission builds a verified image before validators.",
-    );
-  });
-
-  it("shows the conditional integrity-review branch with the authoritative count", async () => {
-    const { container } = render(() => <OperationsPage />);
-    await waitFor(() => {
-      expect(container.querySelector("#pipeline-review-count")?.textContent).toBe("53");
-    });
-    const aside = container.querySelector(".pipeline-review-branch");
-    expect(aside?.querySelector(".pipeline-review-eyebrow")?.textContent).toBe(
-      "Conditional after scoring",
-    );
-    expect(aside?.querySelector("#pipeline-review-title")?.textContent).toBe(
-      "Source integrity review",
-    );
-    // Only qualifiers and anomaly holds enter — the copy says so, and the
-    // fixture window carries none, so the branch states that rather than
-    // implying review of everything.
-    expect(aside?.textContent).toContain("Only leaderboard qualifiers and robust anomaly holds");
-    expect(container.querySelector("#pipeline-review-items")?.textContent).toContain(
-      "No submissions are held for integrity review.",
-    );
-  });
-
+// ── Refresh resilience (Python guard
+// test_operations_refresh_keeps_last_successful_snapshot); the pipeline
+// board's half of this rule lives in Pipeline.test.tsx ──────────────────────
+describe("refresh resilience", () => {
   it("keeps the last reconciled snapshot when a refresh fails", async () => {
     const { container } = render(() => <OperationsPage />);
     await waitFor(() => {
@@ -989,7 +910,7 @@ describe("weekend drift: board reshape and refresh resilience", () => {
     const rowsBefore = container.querySelectorAll("#fleet-rows tr").length;
     expect(rowsBefore).toBeGreaterThan(0);
 
-    // Every subsequent operations fetch fails; the board must NOT blank.
+    // Every subsequent operations fetch fails; the table must NOT blank.
     restoreFetch?.();
     restoreFetch = null;
     vi.spyOn(globalThis, "fetch").mockImplementation(() =>
@@ -1002,25 +923,8 @@ describe("weekend drift: board reshape and refresh resilience", () => {
       );
     });
     // A refresh failure does not invalidate the last reconciled snapshot:
-    // the fleet table and the board keep rendering it while polls retry.
+    // the fleet table keeps rendering it while polls retry.
     expect(container.querySelectorAll("#fleet-rows tr").length).toBe(rowsBefore);
-    expect(container.querySelector("#pipeline-review-count")?.textContent).toBe("53");
     expect(text("operations-snapshot")).toContain("2h ago");
-  });
-
-  it("cold-start failure still renders the unavailable placeholders", async () => {
-    restoreFetch?.();
-    restoreFetch = null;
-    vi.spyOn(globalThis, "fetch").mockImplementation(() =>
-      Promise.reject(new Error("network down")),
-    );
-    const { container } = render(() => <OperationsPage />);
-    await waitFor(() => {
-      expect(text("operations-snapshot")).toBe("Shared operations snapshot unavailable");
-    });
-    expect(container.querySelector("#pipeline-review-count")?.textContent).toBe("–");
-    expect(container.querySelector("#pipeline-review-items")?.textContent).toContain(
-      "Review state unavailable.",
-    );
   });
 });

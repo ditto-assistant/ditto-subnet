@@ -486,13 +486,11 @@ describe("slot fan-out in the fleet table", () => {
     await renderFleet(snapshotWith([overflow, concurrent]));
 
     const overflowCell = workCell(String(overflow.validator_hotkey));
-    const visibleRows = Array.from(
-      overflowCell.querySelectorAll<HTMLElement>(".fleet-slot-running"),
-    );
+    const visibleRows = Array.from(overflowCell.querySelectorAll<HTMLElement>(".fleet-slot-line"));
     const foldedRows = Array.from(
       overflowCell.querySelectorAll<HTMLElement>(".fleet-slot-inactive"),
     );
-    expect(visibleRows.map((row) => row.querySelector(".fleet-protocol")?.textContent)).toEqual([
+    expect(visibleRows.map((row) => row.querySelector(".fleet-slot-id")?.textContent)).toEqual([
       "slot-3",
     ]);
     expect(foldedRows.map((row) => row.querySelector(".fleet-protocol")?.textContent)).toEqual([
@@ -500,16 +498,18 @@ describe("slot fan-out in the fleet table", () => {
     ]);
     // The out-of-range slot is where the work is; it must be the row that
     // stays visible and shows a running benchmark.
-    expect(visibleRows[0]?.querySelector(".benchmark-progress")).toBeTruthy();
-    expect(foldedRows[0]?.querySelector(".benchmark-progress")).toBeNull();
+    expect(visibleRows[0]?.querySelector("progress, .bench-bar")).toBeTruthy();
+    expect(foldedRows[0]?.querySelector("progress, .bench-bar")).toBeNull();
 
     const cell = workCell(String(concurrent.validator_hotkey));
-    expect(cell.querySelectorAll(".fleet-slot").length).toBe(2);
     // Two distinct jobs, in slot order, each naming its own agent — the exact
     // reading a substring assertion could not make.
-    expect(cell.querySelectorAll(".benchmark-progress").length).toBe(2);
+    expect(cell.querySelectorAll(".fleet-slot-line").length).toBe(2);
     expect(
-      Array.from(cell.querySelectorAll(".benchmark-agent"), (node) => node.getAttribute("title")),
+      cell.querySelectorAll(".fleet-slot-line progress, .fleet-slot-line .bench-bar").length,
+    ).toBe(2);
+    expect(
+      Array.from(cell.querySelectorAll(".fleet-slot-agent"), (node) => node.getAttribute("title")),
     ).toEqual(["agent-slot-0", "agent-slot-1"]);
   });
 });
