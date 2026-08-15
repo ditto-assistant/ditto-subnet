@@ -281,6 +281,40 @@ type HTTPHarness struct {
 	client  *http.Client
 }
 
+// HarnessCaseFailure identifies a response received from the submitted
+// harness that cannot be judged as an answer. It deliberately carries only a
+// stable local classification and optional HTTP status: response bodies and
+// submitted implementation details must never cross into signed evidence.
+// Transport and context failures are not this type because the validator
+// cannot attribute those failures to the submitted harness response.
+type HarnessCaseFailure struct {
+	Kind       string
+	StatusCode int
+}
+
+func (e *HarnessCaseFailure) Error() string {
+	if e.StatusCode != 0 {
+		return fmt.Sprintf("LongMemEval harness returned an unjudgeable response (HTTP %d)", e.StatusCode)
+	}
+	return "LongMemEval harness returned an unjudgeable response"
+}
+
+// receivedHarnessResponseError is intentionally unexported. Both /seed and
+// /run share the HTTP transport, but only Run is allowed to attribute a
+// received unjudgeable response to one scored case. Seed must remain fatal for
+// every acknowledgement failure.
+type receivedHarnessResponseError struct {
+	kind       string
+	statusCode int
+}
+
+func (e *receivedHarnessResponseError) Error() string {
+	if e.statusCode != 0 {
+		return fmt.Sprintf("LongMemEval harness returned an invalid response (HTTP %d)", e.statusCode)
+	}
+	return "LongMemEval harness returned an invalid response"
+}
+
 func NewHTTPHarness(baseURL string, client *http.Client) (*HTTPHarness, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
@@ -336,10 +370,17 @@ func (h *HTTPHarness) Run(ctx context.Context, request protocol.RunRequest) (pro
 	}
 	var response runWireResponse
 	if err := h.post(ctx, "/run", request, &response); err != nil {
+		var received *receivedHarnessResponseError
+		if errors.As(err, &received) {
+			return protocol.RunResponse{}, &HarnessCaseFailure{
+				Kind:       received.kind,
+				StatusCode: received.statusCode,
+			}
+		}
 		return protocol.RunResponse{}, err
 	}
 	if response.FinalText == nil {
-		return protocol.RunResponse{}, errors.New("LongMemEval harness response lacks final_text")
+		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "missing_final_text"}
 	}
 	return protocol.RunResponse{
 		FinalText:    *response.FinalText,
@@ -370,13 +411,22 @@ func (h *HTTPHarness) post(ctx context.Context, path string, input, output any) 
 		return fmt.Errorf("LongMemEval harness request failed: %w", err)
 	}
 	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, maxHarnessResponseBytes))
-		return fmt.Errorf("LongMemEval harness returned HTTP %d", response.StatusCode)
+
+	// Read at most the public response bound plus one sentinel byte. The body
+	// is used only to distinguish a received response from a transport failure;
+	// its private contents are never included in the returned error.
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxHarnessResponseBytes+1))
+	if err != nil {
+		return fmt.Errorf("read LongMemEval harness response: %w", err)
 	}
-	decoder := json.NewDecoder(io.LimitReader(response.Body, maxHarnessResponseBytes))
-	if err := decoder.Decode(output); err != nil {
-		return fmt.Errorf("decode LongMemEval harness response: %w", err)
+	if len(raw) > maxHarnessResponseBytes {
+		return errors.New("LongMemEval harness response exceeds the public size bound")
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return &receivedHarnessResponseError{kind: "http_status", statusCode: response.StatusCode}
+	}
+	if err := json.Unmarshal(raw, output); err != nil {
+		return &receivedHarnessResponseError{kind: "malformed_json", statusCode: response.StatusCode}
 	}
 	return nil
 }

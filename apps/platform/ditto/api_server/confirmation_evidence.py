@@ -39,6 +39,34 @@ class ConfirmationEvidenceError(ValueError):
     """Typed confirmation evidence contradicts its frozen server contract."""
 
 
+def confirmation_inference_cap_requirements(
+    profile: ConfirmationVerificationProfile,
+) -> tuple[int, int]:
+    """Return the full chat plus embedding request and token maxima."""
+    requests = profile.embedding_lane.max_requests + sum(
+        lane.max_requests for lane in profile.provider_lanes
+    )
+    tokens = profile.embedding_lane.max_input_tokens + sum(
+        lane.max_total_tokens for lane in profile.provider_lanes
+    )
+    return requests, tokens
+
+
+def validate_confirmation_inference_caps(
+    profile: ConfirmationVerificationProfile,
+    *,
+    request_cap: int,
+    token_cap: int,
+) -> None:
+    required_requests, required_tokens = confirmation_inference_cap_requirements(
+        profile
+    )
+    if request_cap < required_requests or token_cap < required_tokens:
+        raise ConfirmationEvidenceError(
+            "confirmation policy cannot fund the frozen inference lane maxima"
+        )
+
+
 @dataclass(frozen=True)
 class ProviderLanePolicy:
     lane: str
@@ -945,7 +973,9 @@ __all__ = [
     "VerifiedConfirmationEvidence",
     "canonical_json",
     "compute_subject_projection",
+    "confirmation_inference_cap_requirements",
     "confirmation_signing_message",
     "evidence_digest",
     "rebuild_confirmation_evidence",
+    "validate_confirmation_inference_caps",
 ]

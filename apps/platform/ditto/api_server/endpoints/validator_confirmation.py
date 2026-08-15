@@ -45,6 +45,7 @@ from ditto.api_server.confirmation_evidence import (
     ConfirmationEvidenceError,
     ConfirmationVerificationProfile,
     rebuild_confirmation_evidence,
+    validate_confirmation_inference_caps,
 )
 from ditto.api_server.confirmation_wire import (
     ConfirmationWireError,
@@ -539,6 +540,16 @@ async def request_v9_confirmation_job(
                 or latest_settings.profile_revision != profile.revision
                 or latest_settings.profile_checksum != profile.checksum()
             ):
+                response.status_code = 204
+                return response
+
+            try:
+                validate_confirmation_inference_caps(
+                    profile,
+                    request_cap=latest_settings.per_bundle_request_cap,
+                    token_cap=latest_settings.per_bundle_token_cap,
+                )
+            except ConfirmationEvidenceError:
                 response.status_code = 204
                 return response
 

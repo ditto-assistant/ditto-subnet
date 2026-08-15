@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -320,10 +321,59 @@ func TestHTTPHarnessRejectsInvalidConstructionAndResponses(t *testing.T) {
 		t.Fatal("nil HTTP client accepted")
 	}
 
+	tests := map[string]struct {
+		handler http.HandlerFunc
+		kind    string
+		status  int
+	}{
+		"status": {
+			handler: func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(http.StatusBadGateway)
+				_, _ = writer.Write([]byte(`{"error":"private submitted detail"}`))
+			},
+			kind: "http_status", status: http.StatusBadGateway,
+		},
+		"bad json": {
+			handler: func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write([]byte(`{`)) },
+			kind:    "malformed_json", status: http.StatusOK,
+		},
+		"missing final": {
+			handler: func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write([]byte(`{"tool_calls":[]}`)) },
+			kind:    "missing_final_text",
+		},
+	}
+	for name, testCase := range tests {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(testCase.handler)
+			defer server.Close()
+			harness, err := NewHTTPHarness(server.URL, server.Client())
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = harness.Run(context.Background(), protocol.RunRequest{Tools: []protocol.ToolDefinition{}})
+			var failure *HarnessCaseFailure
+			if !errors.As(err, &failure) {
+				t.Fatal("invalid run response accepted")
+			}
+			if failure.Kind != testCase.kind || failure.StatusCode != testCase.status {
+				t.Fatalf("failure=%#v", failure)
+			}
+			if strings.Contains(err.Error(), "private submitted detail") {
+				t.Fatalf("private response body leaked: %v", err)
+			}
+		})
+	}
+}
+
+func TestHTTPHarnessSeedReceivedFailuresRemainFatal(t *testing.T) {
 	tests := map[string]http.HandlerFunc{
-		"status":        func(writer http.ResponseWriter, _ *http.Request) { writer.WriteHeader(http.StatusBadGateway) },
-		"bad json":      func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write([]byte(`{`)) },
-		"missing final": func(writer http.ResponseWriter, _ *http.Request) { _, _ = writer.Write([]byte(`{"tool_calls":[]}`)) },
+		"status": func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusBadGateway)
+			_, _ = writer.Write([]byte(`{"error":"private submitted detail"}`))
+		},
+		"malformed json": func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(`{`))
+		},
 	}
 	for name, handler := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -333,11 +383,100 @@ func TestHTTPHarnessRejectsInvalidConstructionAndResponses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := harness.Run(context.Background(), protocol.RunRequest{Tools: []protocol.ToolDefinition{}}); err == nil {
-				t.Fatal("invalid run response accepted")
+			_, err = harness.Seed(context.Background(), protocol.SeedRequest{
+				Pairs: []protocol.MemoryPair{}, Subjects: []protocol.Subject{}, Links: []protocol.SubjectLink{},
+			})
+			var failure *HarnessCaseFailure
+			if err == nil || errors.As(err, &failure) {
+				t.Fatalf("seed response failure was attributed to a scored case: %v", err)
+			}
+			if strings.Contains(err.Error(), "private submitted detail") {
+				t.Fatalf("private response body leaked: %v", err)
 			}
 		})
 	}
+}
+
+func TestHTTPHarnessTransportFailureIsNotAttributedToSubmittedCase(t *testing.T) {
+	client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network path failed")
+	})}
+	harness, err := NewHTTPHarness("http://harness.invalid", client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = harness.Run(context.Background(), protocol.RunRequest{Tools: []protocol.ToolDefinition{}})
+	var failure *HarnessCaseFailure
+	if err == nil || errors.As(err, &failure) {
+		t.Fatalf("transport failure was attributed to submitted response: %v", err)
+	}
+}
+
+func TestHTTPHarnessMalformedResponseCannotRetainPartialFinalText(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		_, _ = writer.Write([]byte(`{"final_text":"must-not-survive",`))
+	}))
+	defer server.Close()
+	harness, err := NewHTTPHarness(server.URL, server.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := harness.Run(context.Background(), protocol.RunRequest{Tools: []protocol.ToolDefinition{}})
+	var failure *HarnessCaseFailure
+	if !errors.As(err, &failure) || failure.Kind != "malformed_json" {
+		t.Fatalf("failure=%v", err)
+	}
+	if response.FinalText != "" {
+		t.Fatalf("partial final_text escaped malformed response: %#v", response)
+	}
+}
+
+func TestHTTPHarnessOversizeAndBodyReadFailuresRemainInfrastructureFatal(t *testing.T) {
+	t.Run("oversize", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			_, _ = writer.Write([]byte(strings.Repeat("x", maxHarnessResponseBytes+1)))
+		}))
+		defer server.Close()
+		harness, err := NewHTTPHarness(server.URL, server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = harness.Run(context.Background(), protocol.RunRequest{Tools: []protocol.ToolDefinition{}})
+		var failure *HarnessCaseFailure
+		if err == nil || errors.As(err, &failure) || !strings.Contains(err.Error(), "size bound") {
+			t.Fatalf("oversize response was not fatal: %v", err)
+		}
+	})
+
+	t.Run("body read", func(t *testing.T) {
+		client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(errorReader{}),
+				Header:     make(http.Header),
+				Request:    request,
+			}, nil
+		})}
+		harness, err := NewHTTPHarness("http://harness.invalid", client)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = harness.Run(context.Background(), protocol.RunRequest{Tools: []protocol.ToolDefinition{}})
+		var failure *HarnessCaseFailure
+		if err == nil || errors.As(err, &failure) || !strings.Contains(err.Error(), "read LongMemEval") {
+			t.Fatalf("body read failure was not fatal: %v", err)
+		}
+	})
+}
+
+type errorReader struct{}
+
+func (errorReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return fn(request)
 }
 
 func TestHTTPHarnessRejectsIncompleteSeedAcknowledgement(t *testing.T) {

@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "packages" / "ditto-screening-protocol"))
 
 from ditto.api_server.confirmation_evidence import (  # noqa: E402
     ABLATION_PROFILE_CONTRACT_VERSION,
+    CAPABILITY_ORDER,
     LONGMEM_SELECTOR_REVISION_V1,
     AblationCoordinatorPolicy,
     AblationVerificationPolicy,
@@ -53,10 +54,11 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-15-zdr-v2"
-LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-12-zdr-v2"
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-15-zdr-v3"
+LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-12-zdr-v3"
 ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-4-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
+STARTER_MAX_AGENT_TURNS = 24
 
 
 def _sha256(raw: bytes) -> str:
@@ -114,10 +116,15 @@ def _outputs() -> dict[Path, bytes]:
                     "longmemeval-openrouter-gpt-oss-20b-deepinfra-zdr-shadow-v2"
                 ),
                 model="openai/gpt-oss-20b",
-                max_requests=48,
-                max_prompt_tokens=600_000,
-                max_completion_tokens=96_000,
-                max_total_tokens=696_000,
+                # The public starter harness declares 24 agent turns per case.
+                # Twelve selected cases therefore require 288 reader requests
+                # at the frozen protocol maximum. Scale the original per-turn
+                # prompt/completion rails by six; the per-request completion
+                # bound remains 2,000 tokens.
+                max_requests=288,
+                max_prompt_tokens=3_600_000,
+                max_completion_tokens=576_000,
+                max_total_tokens=4_176_000,
                 max_cost_usd_micros=1_500_000,
             ),
             ProviderLanePolicy(
@@ -195,6 +202,10 @@ def _outputs() -> dict[Path, bytes]:
         ablation_profile_checksum=profile.ablation_checksum(),
     )
     profile.validate()
+    reader = next(lane for lane in profile.provider_lanes if lane.lane == "reader")
+    selected_cases = profile.longmem_cases_per_capability * len(CAPABILITY_ORDER)
+    if reader.max_requests < selected_cases * STARTER_MAX_AGENT_TURNS:
+        raise ValueError("reader lane cannot cover the public starter turn contract")
     execution_payload = {**profile.payload(), "checksum": profile.checksum()}
     # Cross-check the exact public wire contract, including strict types and
     # the exact reader/judge lane population.
@@ -203,7 +214,7 @@ def _outputs() -> dict[Path, bytes]:
 
     launch = {
         "schema_version": 1,
-        "revision": "v9-confirmation-shadow-launch-2026-08-15-zdr-v2",
+        "revision": "v9-confirmation-shadow-launch-2026-08-15-zdr-v3",
         "mode": "shadow",
         "execution_profile_revision": profile.revision,
         "execution_profile_checksum": profile.checksum(),
@@ -217,8 +228,10 @@ def _outputs() -> dict[Path, bytes]:
         "issuance_caps": {
             "daily_bundles": 1,
             "daily_cost_microusd": 5_000_000,
-            "requests_per_bundle": 5_200,
-            "tokens_per_bundle": 5_800_000,
+            # embedding 5,000 + reader 288 + judge 12.
+            "requests_per_bundle": 5_300,
+            # embedding 5m + reader 4.176m + judge 26k, rounded up.
+            "tokens_per_bundle": 9_300_000,
         },
         "guarantees": {
             "changes_canonical_scores": False,
@@ -228,6 +241,16 @@ def _outputs() -> dict[Path, bytes]:
             "validator_provider_credentials": False,
         },
     }
+    required_requests = profile.embedding_lane.max_requests + sum(
+        lane.max_requests for lane in profile.provider_lanes
+    )
+    required_tokens = profile.embedding_lane.max_input_tokens + sum(
+        lane.max_total_tokens for lane in profile.provider_lanes
+    )
+    if launch["issuance_caps"]["requests_per_bundle"] < required_requests:
+        raise ValueError("bundle request cap is below frozen lane maxima")
+    if launch["issuance_caps"]["tokens_per_bundle"] < required_tokens:
+        raise ValueError("bundle token cap is below frozen lane maxima")
     launch_raw = _json_bytes(launch)
     installation = {
         "schema_version": 1,

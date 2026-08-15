@@ -389,8 +389,9 @@ def active_settings(
         top_n=5,
         daily_bundle_cap=10,
         daily_dollar_cap_microusd=1_000_000,
-        per_bundle_request_cap=100,
-        per_bundle_token_cap=10_000,
+        # Fund the complete provider fixture, including the embedding lane.
+        per_bundle_request_cap=1_100,
+        per_bundle_token_cap=1_010_000,
         profile_revision=profile.revision,
         profile_checksum=profile.checksum(),
         challenger_z=1.64,

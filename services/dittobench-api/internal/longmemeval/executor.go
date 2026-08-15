@@ -135,10 +135,27 @@ func (e Executor) Execute(
 		if accountingErr != nil {
 			return ExecutionResult{}, fmt.Errorf("LongMemEval provider accounting after run: %w", accountingErr)
 		}
-		current = next
 		if operationErr != nil {
-			return ExecutionResult{}, fmt.Errorf("LongMemEval run failed for opaque case: %w", operationErr)
+			if err := ctx.Err(); err != nil {
+				return ExecutionResult{}, fmt.Errorf("LongMemEval execution exceeded its time budget: %w", err)
+			}
+			var caseFailure *HarnessCaseFailure
+			if !errors.As(operationErr, &caseFailure) {
+				return ExecutionResult{}, fmt.Errorf("LongMemEval run failed for opaque case: %w", operationErr)
+			}
+			beforeReader := current[ReaderLane]
+			afterReader := next[ReaderLane]
+			requestDelta := afterReader.Requests - beforeReader.Requests
+			successDelta := afterReader.Successes - beforeReader.Successes
+			receiptDelta := afterReader.ReceiptedRequests - beforeReader.ReceiptedRequests
+			if requestDelta == 0 || requestDelta != successDelta || requestDelta != receiptDelta {
+				return ExecutionResult{}, errors.New("LongMemEval unjudgeable run lacks complete provider receipts")
+			}
+			current = next
+			outcomes = append(outcomes, Outcome{QuestionID: item.questionID, Correct: false})
+			continue
 		}
+		current = next
 
 		entry := dataset.selected[item.questionID]
 		if err := requireLaneHeadroom(profile, current, JudgeLane); err != nil {

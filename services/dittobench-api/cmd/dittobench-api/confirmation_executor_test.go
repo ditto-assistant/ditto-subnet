@@ -231,8 +231,8 @@ func validTrustedConfirmationRequest(t *testing.T, profileRaw json.RawMessage, p
 	request.ProfileRevision = profile.Revision
 	request.ProfileChecksum = profile.Checksum
 	request.ExecutionProfile = append(json.RawMessage(nil), profileRaw...)
-	request.PerBundleRequestCap = 20
-	request.PerBundleTokenCap = 400
+	request.PerBundleRequestCap = 1_020
+	request.PerBundleTokenCap = 1_000_400
 	return request
 }
 

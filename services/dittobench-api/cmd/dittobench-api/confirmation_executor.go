@@ -475,6 +475,15 @@ func validateConfirmationAggregateCaps(profile confirmationExecutionProfileWire,
 			return errors.New("confirmation provider token caps overflow")
 		}
 	}
+	var ok bool
+	requests, ok = checkedAdd(requests, profile.EmbeddingLane.MaxRequests)
+	if !ok {
+		return errors.New("confirmation provider request caps overflow")
+	}
+	tokens, ok = checkedAdd(tokens, profile.EmbeddingLane.MaxInputTokens)
+	if !ok {
+		return errors.New("confirmation provider token caps overflow")
+	}
 	if requests > request.PerBundleRequestCap || tokens > request.PerBundleTokenCap {
 		return errors.New("confirmation installed profile exceeds the ticket aggregate caps")
 	}

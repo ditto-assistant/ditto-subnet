@@ -3,10 +3,17 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
 from ditto.api_server import create_api_server
+from ditto.api_server.confirmation_evidence import (
+    CAPABILITY_ORDER,
+    ConfirmationEvidenceError,
+    confirmation_inference_cap_requirements,
+    validate_confirmation_inference_caps,
+)
 from ditto.api_server.confirmation_profile_installation import (
     ConfirmationProfileInstallationError,
     decode_confirmation_verification_profile,
@@ -34,6 +41,55 @@ def test_installed_profile_is_exact_bounded_shadow_contract() -> None:
     assert profile.composite.longmem_weight_bps == 3_000
     assert {lane.lane for lane in profile.provider_lanes} == {"reader", "judge"}
     assert profile.embedding_lane.provider == "perplexity"
+
+
+def test_installed_profile_covers_starter_turn_and_aggregate_lane_maxima() -> None:
+    profile = next(iter(installed_confirmation_verification_profiles().values()))
+    reader = next(lane for lane in profile.provider_lanes if lane.lane == "reader")
+    selected_cases = profile.longmem_cases_per_capability * len(CAPABILITY_ORDER)
+    assert reader.max_requests >= selected_cases * 24
+
+    root = Path(__file__).resolve().parents[5]
+    launch = json.loads(
+        (
+            root
+            / "packages"
+            / "ditto-screening-protocol"
+            / "ditto_screening_protocol"
+            / "data"
+            / "confirmation_launch_manifest_v9_shadow.json"
+        ).read_text()
+    )
+    required_requests = profile.embedding_lane.max_requests + sum(
+        lane.max_requests for lane in profile.provider_lanes
+    )
+    required_tokens = profile.embedding_lane.max_input_tokens + sum(
+        lane.max_total_tokens for lane in profile.provider_lanes
+    )
+    assert launch["issuance_caps"]["requests_per_bundle"] >= required_requests
+    assert launch["issuance_caps"]["tokens_per_bundle"] >= required_tokens
+
+    assert confirmation_inference_cap_requirements(profile) == (
+        required_requests,
+        required_tokens,
+    )
+    validate_confirmation_inference_caps(
+        profile,
+        request_cap=required_requests,
+        token_cap=required_tokens,
+    )
+    with pytest.raises(ConfirmationEvidenceError, match="cannot fund"):
+        validate_confirmation_inference_caps(
+            profile,
+            request_cap=required_requests - 1,
+            token_cap=required_tokens,
+        )
+    with pytest.raises(ConfirmationEvidenceError, match="cannot fund"):
+        validate_confirmation_inference_caps(
+            profile,
+            request_cap=required_requests,
+            token_cap=required_tokens - 1,
+        )
 
 
 def test_factory_registers_only_the_exact_release_profile() -> None:

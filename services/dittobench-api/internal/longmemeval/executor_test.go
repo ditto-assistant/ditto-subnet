@@ -209,22 +209,114 @@ func TestExecutorJudgeBoundaryReceivesReferencesHarnessNeverDoes(t *testing.T) {
 	}
 }
 
-func TestExecutorRejectsHarnessAndJudgeFailuresWithoutPartialEvidence(t *testing.T) {
+func TestExecutorRejectsTrustedJudgeFailureWithoutPartialEvidence(t *testing.T) {
 	profile, raw, _ := runtimeFixture(t)
-	for name, configure := range map[string]func(*starterHarness, *exactJudge){
-		"seed":  func(h *starterHarness, _ *exactJudge) { h.failSeed = errFixture },
-		"run":   func(h *starterHarness, _ *exactJudge) { h.failRun = errFixture },
-		"judge": func(_ *starterHarness, j *exactJudge) { j.err = errFixture },
+	executor, _, judge, _ := validExecutor(profile)
+	judge.err = errFixture
+	result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+	if err == nil {
+		t.Fatal("failed judge produced evidence")
+	}
+	if !reflect.DeepEqual(result, ExecutionResult{}) {
+		t.Fatalf("failure returned partial evidence: %#v", result)
+	}
+}
+
+func TestExecutorScoresOneReceivedUnjudgeableRunAsIncorrectAndContinues(t *testing.T) {
+	profile, raw, _ := runtimeFixture(t)
+	meter := newRecordingMeter(profile)
+	base := newStarterHarness(meter)
+	harness := &oneCaseFailureHarness{Harness: base, failAt: 4, operation: "run", typed: true}
+	judge := &exactJudge{meter: meter}
+	executor := Executor{Harness: harness, Judge: judge, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+	result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Evidence.Score.CaseCount != 12 || result.Evidence.Score.LongMemMean != 0.916667 {
+		t.Fatalf("score=%#v", result.Evidence.Score)
+	}
+	if len(judge.inputs) != 11 || base.runs != 12 {
+		t.Fatalf("runs/judges=%d/%d, want 12/11", base.runs, len(judge.inputs))
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(encoded, []byte("private-failure")) || bytes.Contains(encoded, []byte("opaque case")) {
+		t.Fatalf("private harness failure leaked into evidence: %s", encoded)
+	}
+	if err := result.Validate(profile); err != nil {
+		t.Fatalf("case-local miss produced invalid evidence: %v", err)
+	}
+}
+
+func TestExecutorRejectsUnjudgeableRunWithFailedProviderAttempt(t *testing.T) {
+	profile, raw, _ := runtimeFixture(t)
+	meter := newRecordingMeter(profile)
+	base := newStarterHarness(meter)
+	harness := &providerFailedCaseHarness{Harness: base, meter: meter, failAt: 4}
+	judge := &exactJudge{meter: meter}
+	executor := Executor{Harness: harness, Judge: judge, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+	result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+	if err == nil || !strings.Contains(err.Error(), "lacks complete provider receipts") {
+		t.Fatalf("failed provider attempt was scored as an incorrect case: result=%#v err=%v", result, err)
+	}
+	if !reflect.DeepEqual(result, ExecutionResult{}) || base.runs != 4 || len(judge.inputs) != 3 {
+		t.Fatalf("provider failure returned partial evidence: result=%#v runs=%d judges=%d", result, base.runs, len(judge.inputs))
+	}
+}
+
+func TestExecutorRejectsUnjudgeableRunWithoutCaseLocalProviderReceipt(t *testing.T) {
+	profile, raw, _ := runtimeFixture(t)
+	meter := newRecordingMeter(profile)
+	base := newStarterHarness(meter)
+	harness := &noProviderAttemptCaseHarness{Harness: base, failAt: 4}
+	judge := &exactJudge{meter: meter}
+	executor := Executor{Harness: harness, Judge: judge, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+	result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+	if err == nil || !strings.Contains(err.Error(), "lacks complete provider receipts") {
+		t.Fatalf("zero-delta harness failure was scored as an incorrect case: result=%#v err=%v", result, err)
+	}
+	if !reflect.DeepEqual(result, ExecutionResult{}) || base.runs != 3 || len(judge.inputs) != 3 {
+		t.Fatalf("earlier successful cases masked zero-delta failure: result=%#v runs=%d judges=%d", result, base.runs, len(judge.inputs))
+	}
+}
+
+func TestExecutorKeepsAllUnjudgeableRunsFailClosedAtEvidenceBoundary(t *testing.T) {
+	profile, raw, _ := runtimeFixture(t)
+	meter := newRecordingMeter(profile)
+	base := newStarterHarness(meter)
+	harness := &allRunFailureHarness{Harness: base}
+	judge := &exactJudge{meter: meter}
+	executor := Executor{Harness: harness, Judge: judge, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+	result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+	if err == nil || !strings.Contains(err.Error(), `lane "judge"`) {
+		t.Fatalf("zero-judge provider evidence was accepted: result=%#v err=%v", result, err)
+	}
+	if !reflect.DeepEqual(result, ExecutionResult{}) || base.runs != 12 || len(judge.inputs) != 0 {
+		t.Fatalf("all-unjudgeable boundary returned partial evidence: result=%#v runs=%d judges=%d", result, base.runs, len(judge.inputs))
+	}
+}
+
+func TestExecutorKeepsSeedAndNonResponseRunFailuresFailClosed(t *testing.T) {
+	for _, testCase := range []struct {
+		name      string
+		operation string
+		typed     bool
+	}{
+		{name: "received seed failure", operation: "seed", typed: true},
+		{name: "transport run failure", operation: "run", typed: false},
 	} {
-		t.Run(name, func(t *testing.T) {
-			executor, harness, judge, _ := validExecutor(profile)
-			configure(harness, judge)
+		t.Run(testCase.name, func(t *testing.T) {
+			profile, raw, _ := runtimeFixture(t)
+			meter := newRecordingMeter(profile)
+			base := newStarterHarness(meter)
+			harness := &oneCaseFailureHarness{Harness: base, failAt: 1, operation: testCase.operation, typed: testCase.typed}
+			executor := Executor{Harness: harness, Judge: &exactJudge{meter: meter}, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
 			result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
-			if err == nil {
-				t.Fatal("failed operation produced evidence")
-			}
-			if !reflect.DeepEqual(result, ExecutionResult{}) {
-				t.Fatalf("failure returned partial evidence: %#v", result)
+			if err == nil || !reflect.DeepEqual(result, ExecutionResult{}) {
+				t.Fatalf("failure returned result=%#v err=%v", result, err)
 			}
 		})
 	}
@@ -430,6 +522,79 @@ type hookHarness struct {
 	Harness
 	afterRun  func()
 	mutateRun func(*protocol.RunResponse)
+}
+
+type oneCaseFailureHarness struct {
+	Harness
+	failAt    int
+	operation string
+	typed     bool
+	seedCalls int
+	runCalls  int
+}
+
+type allRunFailureHarness struct{ Harness }
+
+func (h *allRunFailureHarness) Run(ctx context.Context, request protocol.RunRequest) (protocol.RunResponse, error) {
+	if _, err := h.Harness.Run(ctx, request); err != nil {
+		return protocol.RunResponse{}, err
+	}
+	return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable}
+}
+
+type providerFailedCaseHarness struct {
+	Harness
+	meter    *recordingMeter
+	failAt   int
+	runCalls int
+}
+
+type noProviderAttemptCaseHarness struct {
+	Harness
+	failAt   int
+	runCalls int
+}
+
+func (h *noProviderAttemptCaseHarness) Run(ctx context.Context, request protocol.RunRequest) (protocol.RunResponse, error) {
+	h.runCalls++
+	if h.runCalls == h.failAt {
+		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable}
+	}
+	return h.Harness.Run(ctx, request)
+}
+
+func (h *providerFailedCaseHarness) Run(ctx context.Context, request protocol.RunRequest) (protocol.RunResponse, error) {
+	h.runCalls++
+	response, err := h.Harness.Run(ctx, request)
+	if err == nil && h.runCalls == h.failAt {
+		h.meter.add(ReaderLane, 1, 0, 1, false)
+		return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusServiceUnavailable}
+	}
+	return response, err
+}
+
+func (h *oneCaseFailureHarness) Seed(ctx context.Context, request protocol.SeedRequest) (protocol.SeedResponse, error) {
+	h.seedCalls++
+	response, err := h.Harness.Seed(ctx, request)
+	if err == nil && h.operation == "seed" && h.seedCalls == h.failAt {
+		if h.typed {
+			return protocol.SeedResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError}
+		}
+		return protocol.SeedResponse{}, errors.New("private-failure seed detail")
+	}
+	return response, err
+}
+
+func (h *oneCaseFailureHarness) Run(ctx context.Context, request protocol.RunRequest) (protocol.RunResponse, error) {
+	h.runCalls++
+	response, err := h.Harness.Run(ctx, request)
+	if err == nil && h.operation == "run" && h.runCalls == h.failAt {
+		if h.typed {
+			return protocol.RunResponse{}, &HarnessCaseFailure{Kind: "http_status", StatusCode: http.StatusInternalServerError}
+		}
+		return protocol.RunResponse{}, errors.New("private-failure run detail")
+	}
+	return response, err
 }
 
 type seedResponseHarness struct{ Harness }

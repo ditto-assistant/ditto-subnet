@@ -1635,8 +1635,8 @@ class TestV9ConfirmationClaimAdmission:
         assert body["agent_id"] == str(seeded.agent_id)
         assert body["bench_version"] == 9
         assert body["slot_id"] == "longmem-0"
-        assert body["per_bundle_request_cap"] == 100
-        assert body["per_bundle_token_cap"] == 10_000
+        assert body["per_bundle_request_cap"] == 1_100
+        assert body["per_bundle_token_cap"] == 1_010_000
         assert body["mode"] == "shadow"
         execution = body["execution_profile"]
         assert execution["revision"] == profile.revision
@@ -2383,7 +2383,7 @@ class TestV9ConfirmationReportAdmission:
         assert "signature did not verify" in response.text
         await _assert_unsettled(session_maker, seeded=seeded)
 
-    async def test_bundle_budget_cap_failure_is_atomic(
+    async def test_underfunded_bundle_caps_block_issuance_atomically(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -2395,21 +2395,22 @@ class TestV9ConfirmationReportAdmission:
         seeded = await _seed_bundle(session_maker, settings=settings)
         _install_transport(app, session_maker)
         claim = await _claim(client)
-        assert claim.status_code == 200, claim.text
-        assert claim.json()["per_bundle_request_cap"] == 2
-        bundle, ticket, _, _ = await _claimed_rows(
-            session_maker, bundle_id=seeded.bundle_id
-        )
-
-        response = await client.post(
-            _REPORT_URL.format(bundle_id=seeded.bundle_id),
-            json=_report_payload(bundle=bundle, ticket=ticket),
-            headers={"X-Validator-Hotkey": VALIDATOR_KEYPAIR.ss58_address},
-        )
-
-        assert response.status_code == 409
-        assert "bundle request cap exceeded" in response.text
-        await _assert_unsettled(session_maker, seeded=seeded)
+        assert claim.status_code == 204, claim.text
+        async with session_maker() as session:
+            bundle = await session.get(ConfirmationBundle, seeded.bundle_id)
+            assert bundle is not None and bundle.state == "pending"
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(ConfirmationBundleTicket)
+                )
+                == 0
+            )
+            assert (
+                await session.scalar(
+                    select(func.count()).select_from(ConfirmationBudgetReservation)
+                )
+                == 0
+            )
 
     async def test_success_settles_and_completes_atomically_then_replays_idempotently(
         self,
