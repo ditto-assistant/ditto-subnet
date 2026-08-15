@@ -1327,15 +1327,11 @@ jobs:
           (cd "$MODEL_RELAY_COMPAT_DIR" && sha256sum --check SHA256SUMS)
           printf 'relay_compat_revision=%s\n' "$relay_revision" >>"$GITHUB_OUTPUT"
 
-      - name: Set up the scorer toolchain
-        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
-        with:
-          go-version: "1.26.6"
-          cache-dependency-path: services/dittobench-api/go.sum
-
-      - name: Verify the exact dittobench-api source
-        working-directory: services/dittobench-api
-        run: go test ./...
+      # Changed scorer source already passed verify-dittobench-api before the
+      # semantic release, while unchanged source passed the gate in its owning
+      # release. Both native image builds compile the exact release checkout.
+      # Keep the release-only source/provenance checks above, but do not repeat
+      # the full Go toolchain setup and test suite on the fan-out critical path.
 
   # The scorer requires cgo for tree-sitter. Building arm64 inside the amd64
   # job therefore runs the entire C/Go compile through QEMU (2m38s in the
@@ -2144,16 +2140,6 @@ jobs:
               "build/stack-release-$architecture/compose.yml"
           done
 
-      - name: Boot the exact release runtime dependencies
-        env:
-          # Public SS58 fixture required to render the targeted bootstrap policy.
-          # Keep it different from the WSL allowlisted hotkey so this dependency
-          # smoke cannot exercise the exceptional host-updater replacement.
-          VALIDATOR_HOTKEY: 5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp
-        run: |
-          scripts/test-validator-stack-release-runtime.sh \
-            build/stack-release-amd64/compose.yml
-
       - name: Build and publish the immutable stack descriptor
         id: stack
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
@@ -2207,6 +2193,114 @@ jobs:
               '^https://github.com/ditto-assistant/ditto-subnet/.github/workflows/release.yml@refs/heads/main$' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             "$exact" >/dev/null
+
+  # Boot the exact digest-bound amd64 runtime beside descriptor assembly. The
+  # smoke remains a fail-closed promotion prerequisite, but its network pulls
+  # and container startup no longer serialize descriptor publication/staging.
+  smoke-stack-runtime-amd64:
+    needs:
+      - plan
+      - release
+      - build-validator
+      - build-sandbox-docker
+      - build-dittobench
+      - build-model-relay-compat
+      - build-pylon
+    if: >-
+      always() &&
+      needs.plan.result == 'success' &&
+      needs.release.result == 'success' &&
+      needs.release.outputs.released == 'true' &&
+      needs.plan.outputs.validator_stack == 'true' &&
+      needs.build-validator.result == 'success' &&
+      needs.build-sandbox-docker.result == 'success' &&
+      needs.build-dittobench.result == 'success' &&
+      needs.build-model-relay-compat.result == 'success' &&
+      needs.build-pylon.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Check out the exact release commit
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          ref: ${{ needs.release.outputs.commit_sha }}
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@8d55fbecc275b1c35dbe060458839f8d30439ccf # v3
+        with:
+          enable-cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Log in to GHCR
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Render the exact amd64 runtime bundle
+        env:
+          VALIDATOR_DIGEST: ${{ needs.build-validator.outputs.digest }}
+          SANDBOX_DOCKER_DIGEST: ${{ needs.build-sandbox-docker.outputs.digest }}
+          DITTOBENCH_API_DIGEST: ${{ needs.build-dittobench.outputs.scorer_digest }}
+          MODEL_RELAY_DIGEST: ${{ needs.build-model-relay-compat.outputs.digest }}
+          PYLON_DIGEST: ${{ needs.build-pylon.outputs.digest }}
+        run: |
+          resolve() {
+            local repository="$1" digest="$2" raw child_digest
+            raw="$(docker buildx imagetools inspect --raw "$repository@$digest")"
+            child_digest="$(
+              jq -er '
+                [.manifests[] |
+                  select(.platform.os == "linux" and .platform.architecture == "amd64")] |
+                if length == 1 then .[0].digest
+                else error("expected exactly one canonical child for linux/amd64")
+                end
+              ' <<<"$raw"
+            )"
+            [[ "$child_digest" =~ ^sha256:[0-9a-f]{64}$ ]]
+            printf '%s\n' "$child_digest"
+          }
+          validator_digest="$(resolve "$VALIDATOR_REPOSITORY" "$VALIDATOR_DIGEST")"
+          sandbox_digest="$(resolve "$SANDBOX_DOCKER_REPOSITORY" "$SANDBOX_DOCKER_DIGEST")"
+          api_digest="$(resolve "$DITTOBENCH_API_REPOSITORY" "$DITTOBENCH_API_DIGEST")"
+          relay_digest="$(resolve "$MODEL_RELAY_REPOSITORY" "$MODEL_RELAY_DIGEST")"
+          pylon_digest="$(resolve "$PYLON_REPOSITORY" "$PYLON_DIGEST")"
+          uv run --isolated --no-project --with pyyaml==6.0.3 \
+            python scripts/build-stack-release.py \
+              --compose docker-compose.yml \
+              --output build/stack-runtime-smoke-amd64 \
+              --version "${{ needs.release.outputs.version }}" \
+              --revision "${{ needs.release.outputs.commit_sha }}" \
+              --dittobench-revision "${{ needs.build-dittobench.outputs.revision }}" \
+              --compatibility-epoch "$COMPATIBILITY_EPOCH" \
+              --update-protocol "$UPDATE_PROTOCOL" \
+              --heartbeat-protocol "$HEARTBEAT_PROTOCOL" \
+              --compose-schema "$COMPOSE_SCHEMA" \
+              --validator-image "$VALIDATOR_REPOSITORY@$validator_digest" \
+              --sandbox-docker-image "$SANDBOX_DOCKER_REPOSITORY@$sandbox_digest" \
+              --dittobench-api-image "$DITTOBENCH_API_REPOSITORY@$api_digest" \
+              --model-relay-image "$MODEL_RELAY_REPOSITORY@$relay_digest" \
+              --ollama-image "$OLLAMA_IMAGE" \
+              --pylon-image "$PYLON_REPOSITORY@$pylon_digest"
+          test "$(grep -c '^' build/stack-runtime-smoke-amd64/manifest.env)" = 14
+          ! grep -qE '(^|[[:space:]])build:' \
+            build/stack-runtime-smoke-amd64/compose.yml
+
+      - name: Boot the exact release runtime dependencies
+        env:
+          # Public SS58 fixture required to render the targeted bootstrap policy.
+          # Keep it different from the WSL allowlisted hotkey so this dependency
+          # smoke cannot exercise the exceptional host-updater replacement.
+          VALIDATOR_HOTKEY: 5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp
+        run: |
+          scripts/test-validator-stack-release-runtime.sh \
+            build/stack-runtime-smoke-amd64/compose.yml
 
   smoke-validator-arm64:
     needs: [plan, release, build-validator]
@@ -2311,7 +2405,13 @@ jobs:
           test "$staged" = "$STACK_DIGEST"
 
   promote-stack-release:
-    needs: [plan, release, assemble-stack, smoke-validator-arm64, stage-stack-release]
+    needs:
+      - plan
+      - release
+      - assemble-stack
+      - smoke-stack-runtime-amd64
+      - smoke-validator-arm64
+      - stage-stack-release
     if: >-
       always() &&
       needs.plan.result == 'success' &&
@@ -2319,6 +2419,7 @@ jobs:
       needs.release.outputs.released == 'true' &&
       needs.plan.outputs.validator_stack == 'true' &&
       needs.assemble-stack.result == 'success' &&
+      needs.smoke-stack-runtime-amd64.result == 'success' &&
       needs.smoke-validator-arm64.result == 'success' &&
       needs.stage-stack-release.result == 'success'
     runs-on: ubuntu-24.04

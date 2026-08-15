@@ -68,6 +68,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         "build-model-relay-compat",
         "build-dittobench",
         "assemble-stack",
+        "smoke-stack-runtime-amd64",
         "smoke-validator-arm64",
         "promote-stack-release",
     )
@@ -162,6 +163,7 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
         "publish-datagen",
         "deploy-dittobench",
         "assemble-stack",
+        "smoke-stack-runtime-amd64",
         "smoke-validator-arm64",
         "stage-stack-release",
         "promote-stack-release",
@@ -207,10 +209,18 @@ def test_post_release_fanout_evaluates_after_optional_verification_skips() -> No
             "build-model-relay-compat",
             "build-pylon",
         ),
+        "smoke-stack-runtime-amd64": (
+            "build-validator",
+            "build-sandbox-docker",
+            "build-dittobench",
+            "build-model-relay-compat",
+            "build-pylon",
+        ),
         "smoke-validator-arm64": ("build-validator",),
         "stage-stack-release": ("assemble-stack",),
         "promote-stack-release": (
             "assemble-stack",
+            "smoke-stack-runtime-amd64",
             "smoke-validator-arm64",
             "stage-stack-release",
         ),
@@ -674,6 +684,7 @@ def test_compat_channel_is_automatically_published_for_frozen_updaters() -> None
         "release",
         "assemble-stack",
     ]
+    assert "smoke-stack-runtime-amd64" in jobs["promote-stack-release"]["needs"]
     assert "smoke-validator-arm64" in jobs["promote-stack-release"]["needs"]
     assert "stage-stack-release" in jobs["promote-stack-release"]["needs"]
     assert '--tag "$STACK_REPOSITORY:compat-$COMPATIBILITY_EPOCH"' in promotion
@@ -780,15 +791,37 @@ def test_validator_release_smokes_each_architecture_before_promotion() -> None:
     assert 'cosign sign --yes "$exact"' in sign_step["run"]
 
     # The mutable discovery tag is promoted only after the descriptor is
-    # assembled + signed (assemble-stack) AND both native validator smokes pass
-    # (the amd64 smoke gates assemble-stack; the arm64 smoke gates directly).
+    # assembled + signed, the exact generated runtime boots, and both native
+    # validator smokes pass.
     assert jobs["promote-stack-release"]["needs"] == [
         "plan",
         "release",
         "assemble-stack",
+        "smoke-stack-runtime-amd64",
         "smoke-validator-arm64",
         "stage-stack-release",
     ]
+
+
+def test_dittobench_prepare_does_not_repeat_exact_source_tests() -> None:
+    workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
+    jobs = workflow["jobs"]
+    verify = jobs["verify-dittobench-api"]
+    prepare = jobs["prepare-dittobench"]
+
+    exact_source_gate = _step(
+        verify["steps"], "Gate DittoBench API release on exact merge source"
+    )
+    assert exact_source_gate["run"] == "go test ./..."
+    _step(prepare["steps"], "Bind DittoBench to the monorepo release")
+    materialize = _step(
+        prepare["steps"], "Materialize the retired relay compatibility source"
+    )
+    assert "sha256sum --check SHA256SUMS" in materialize["run"]
+    assert all(
+        "actions/setup-go@" not in step.get("uses", "") for step in prepare["steps"]
+    )
+    assert all("go test ./..." not in step.get("run", "") for step in prepare["steps"])
 
 
 def test_release_builds_dittobench_on_native_bounded_larger_runners() -> None:
@@ -945,33 +978,53 @@ def test_release_parallelizes_independent_artifact_authentication() -> None:
     assert 'wait "$pid"' in verify
 
 
-def test_release_boots_exact_generated_runtime_dependencies_before_publish() -> None:
+def test_release_boots_exact_generated_runtime_dependencies_beside_publish() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
-    steps = workflow["jobs"]["assemble-stack"]["steps"]
+    jobs = workflow["jobs"]
+    assembly_steps = jobs["assemble-stack"]["steps"]
+    smoke = jobs["smoke-stack-runtime-amd64"]
+    steps = smoke["steps"]
+    assert all(
+        step.get("name") != "Boot the exact release runtime dependencies"
+        for step in assembly_steps
+    )
+    assert "assemble-stack" not in smoke["needs"]
+    assert set(smoke["needs"]) == {
+        "plan",
+        "release",
+        "build-validator",
+        "build-sandbox-docker",
+        "build-dittobench",
+        "build-model-relay-compat",
+        "build-pylon",
+    }
     render_index = next(
         index
         for index, step in enumerate(steps)
-        if step.get("name") == "Render the architecture-bound stack bundles"
+        if step.get("name") == "Render the exact amd64 runtime bundle"
     )
     smoke_index = next(
         index
         for index, step in enumerate(steps)
         if step.get("name") == "Boot the exact release runtime dependencies"
     )
-    publish_index = next(
-        index
-        for index, step in enumerate(steps)
-        if step.get("name") == "Build and publish the immutable stack descriptor"
-    )
-
-    assert render_index < smoke_index < publish_index
+    assert render_index < smoke_index
     assert (
         "scripts/test-validator-stack-release-runtime.sh" in steps[smoke_index]["run"]
     )
-    assert "build/stack-release-amd64/compose.yml" in steps[smoke_index]["run"]
+    assert "build/stack-runtime-smoke-amd64/compose.yml" in steps[smoke_index]["run"]
+    render = steps[render_index]["run"]
+    assert "uv run --isolated --no-project --with pyyaml==6.0.3" in render
+    assert "linux/amd64" in render
+    assert "needs.build-validator.outputs.digest" in str(steps[render_index])
     smoke_hotkey = steps[smoke_index]["env"]["VALIDATOR_HOTKEY"]
     assert smoke_hotkey == "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
     assert smoke_hotkey != ("5Cg3DiRfrgzB1XzN7VuqQNchTgZ8PzPbphMKmVvHobWSL118")
+    assert "smoke-stack-runtime-amd64" in jobs["promote-stack-release"]["needs"]
+    assert (
+        "needs.smoke-stack-runtime-amd64.result == 'success'"
+        in jobs["promote-stack-release"]["if"]
+    )
 
     runtime_script = (
         RELEASE_WORKFLOW_PATH.parents[2]

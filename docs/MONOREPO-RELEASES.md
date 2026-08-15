@@ -96,6 +96,12 @@ multi-platform build out of the scorer fan-in: that job should only combine the
 two immutable native digests, so stack assembly can begin as soon as the last
 scorer child is available.
 
+Changed DittoBench API source runs its complete Go suite in the pre-release
+exact-source gate. After semantic release, `prepare-dittobench` should only bind
+the in-tree source revision and authenticate the pinned compatibility source;
+the two native image builds then compile the exact release checkout. Do not put
+the same Go toolchain setup and test suite back on that fan-out critical path.
+
 The scorer's checksum-pinned LongMemEval input downloads in a deterministic
 Docker `RUN` layer. A clean builder still fetches the immutable upstream URL
 and fails unless its full SHA-256 matches, while subsequent release builds
@@ -114,9 +120,11 @@ including 3m24s in the build-and-publish step.
 Stack assembly keeps authentication fail-closed while overlapping independent
 network work. The four first-party image indexes authenticate concurrently;
 Pylon authenticates in its own build lane before that lane can satisfy the
-assembly dependency; and the generated runtime smoke pulls its two exact
-dependency images concurrently before startup. In v0.63.2 those serialized
-operations occupied about 92 seconds of the assembly critical path.
+assembly dependency; and the generated amd64 runtime smoke runs beside
+descriptor assembly, pulling its exact dependency images concurrently before
+startup. Final promotion still requires that smoke, both validator architecture
+smokes, the signed descriptor, and candidate staging. In the v0.65.2 release,
+the runtime boot alone occupied 54 seconds of the serialized assembly path.
 
 Do not move short planning, tagging, verification, deployment, smoke, or
 promotion jobs to the billed pools without measured job-level evidence. If
