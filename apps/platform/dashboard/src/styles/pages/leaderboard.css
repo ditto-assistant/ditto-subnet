@@ -1137,3 +1137,189 @@ tbody tr.champion .rank {
   padding: 1px 6px;
   white-space: nowrap;
 }
+
+/* ── Mobile card board (≤720px) ──────────────────────────────
+   On a phone the six-column table reflows into a stack of cards — identity,
+   emissions, the score bars, then a labeled cost/latency/first-seen stat
+   row — instead of scrolling sideways (page mount) or squeezing six columns
+   into fixed percentages (overview mount). The rules apply to BOTH mounts:
+   this sheet loads after overview.css, so equal-specificity ties resolve
+   here, and the heavier compact-pane selectors are re-declared explicitly.
+   Grid items are blockified, so the page-scoped `display: table-cell`
+   re-assert above needs no undoing. The sortable headers are hidden in this
+   layout; .board-sort-mobile in the toolbar takes over sorting. */
+.board-sort-mobile {
+  display: none;
+}
+@media (max-width: 720px) {
+  /* The emissions strip's fixed-minimum recipients column would leave the
+     summary a few characters of width on a phone; stack the two instead. */
+  .emissions-strip.show {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .emissions-recipients {
+    flex-basis: auto;
+    text-align: left;
+  }
+  /* The frame moves from the board to each card. */
+  .board,
+  .overview-main .board {
+    overflow: visible;
+    border: 0;
+    border-radius: 0;
+    background: none;
+  }
+  .board-toolbar,
+  .board .pager {
+    position: static;
+  }
+  .board-toolbar {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    margin-bottom: 12px;
+  }
+  .board .pager.bottom {
+    margin-top: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elev);
+  }
+  .board-sort-mobile {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+  }
+  .board-sort-mobile-label {
+    color: var(--text-faint);
+    font: 650 10px/1.2 var(--mono);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .board-sort-select {
+    flex: 1 1 auto;
+    min-width: 0;
+    min-height: 36px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--bg-elev);
+    color: var(--text);
+    font: 650 12px/1.3 var(--sans);
+  }
+  .board #board {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .board #board thead {
+    display: none;
+  }
+  .board #board tbody {
+    display: grid;
+    gap: 10px;
+  }
+  .board #board tbody tr {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px 12px;
+    padding: 13px 14px 14px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elev);
+  }
+  .board #board tbody tr:focus-visible {
+    outline-offset: 2px;
+  }
+  /* The champion card keeps its gold leading rule; the border joins in so
+     the rounded card reads as one gold frame rather than a stray stripe. */
+  .board #board tbody tr.champion {
+    border-color: color-mix(in oklch, var(--gold) 45%, var(--border));
+  }
+  .board #board tbody td {
+    display: block;
+    min-width: 0;
+    padding: 0;
+    border: 0;
+    overflow: visible;
+    text-align: left;
+  }
+  .board #board td.ranked-agent-cell,
+  .board #board td.emissions-cell,
+  .board #board td.scores-cell {
+    grid-column: 1 / -1;
+  }
+  /* A card with no KOTH role would carry a lone dash — drop the line. */
+  .board #board td.emissions-cell:has(> .muted:only-child) {
+    display: none;
+  }
+  .board #board .winner-name {
+    flex-wrap: wrap;
+  }
+  .board #board .chain-weight-note,
+  .board #board .above-champion-note {
+    white-space: normal;
+  }
+  /* Scores keep their row labels on both mounts; the bars span the card. */
+  .overview-main #board .score-stack-label,
+  .board #board .score-stack-label {
+    display: block;
+  }
+  .overview-main #board .score-stack-row,
+  .board #board .score-stack-row {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+  .board #board .score-stack-context {
+    margin-left: 0;
+  }
+  /* The stat cells share one row and regain the labels their hidden
+     headers carried; the overview's column hiding does not apply to cards. */
+  .overview-main #board td.hide-sm {
+    display: block;
+  }
+  .board #board td.run-cost-cell::before {
+    content: "Avg run cost";
+  }
+  .board #board td.lat::before {
+    content: "Latency";
+  }
+  .board #board td.first-seen-cell::before {
+    content: "First seen";
+  }
+  .board #board td.run-cost-cell::before,
+  .board #board td.lat::before,
+  .board #board td.first-seen-cell::before {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--text-faint);
+    font: 650 9.5px/1.2 var(--mono);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+  .board #board td.first-seen-cell {
+    font-size: 12px;
+  }
+  /* Family children read as tucked-under sub-cards of their parent. */
+  .board #board tr.family-child {
+    grid-template-columns: minmax(0, 1fr);
+    margin: -4px 0 0 16px;
+    padding: 10px 12px;
+  }
+  .board #board tr.family-child[hidden] {
+    display: none;
+  }
+  .board #board .family-branch {
+    display: none;
+  }
+  /* The empty/loading row is one full-width card; the sticky viewport
+     hack for scrolling tables (widgets.css) does not apply here. */
+  .board #board td.empty {
+    grid-column: 1 / -1;
+    padding: 0;
+  }
+  .board #board td.empty .empty-msg {
+    position: static;
+    width: auto;
+    padding: 28px 16px;
+  }
+}

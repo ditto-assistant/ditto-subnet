@@ -107,6 +107,23 @@ const BOARD_SORT_LABELS: Record<BoardSortKey, string> = {
   first_seen: "First seen",
 };
 
+// The card layout under 720px hides the sortable column headers, so the
+// toolbar carries this select instead. Every key/direction pair the headers
+// can produce is listed: a sort chosen on a wide window survives a resize
+// with the select still reflecting it.
+const MOBILE_SORT_OPTIONS: { value: string; label: string }[] = [
+  { value: "rank:1", label: "Rank · best first" },
+  { value: "rank:-1", label: "Rank · lowest first" },
+  { value: "composite:-1", label: "Score · high to low" },
+  { value: "composite:1", label: "Score · low to high" },
+  { value: "cost:1", label: "Avg run cost · low to high" },
+  { value: "cost:-1", label: "Avg run cost · high to low" },
+  { value: "latency:1", label: "Latency · fastest first" },
+  { value: "latency:-1", label: "Latency · slowest first" },
+  { value: "first_seen:-1", label: "First seen · newest first" },
+  { value: "first_seen:1", label: "First seen · oldest first" },
+];
+
 function defaultBoardSort(): boolean {
   return boardSort() === "rank" && boardDir() === 1;
 }
@@ -573,7 +590,7 @@ function BoardRow(props: {
             </span>
           </div>
         </td>
-        <td>
+        <td class="emissions-cell">
           <Show when={emission()} fallback={<span class="muted">–</span>}>
             {(recipient) => (
               <span class={"emission-badge " + recipient().role}>
@@ -633,7 +650,7 @@ function BoardRow(props: {
             </Show>
           </td>
         </Show>
-        <td class="num hide-sm muted">{relTime(e().first_seen)}</td>
+        <td class="num hide-sm first-seen-cell muted">{relTime(e().first_seen)}</td>
       </tr>
       <For each={familyMembers()}>
         {(member, familyIndex) => (
@@ -744,6 +761,15 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
     writeBoardPage(false);
   }
 
+  function chooseMobileSort(value: string): void {
+    const [key, dir] = value.split(":");
+    if (!key || !(key in BOARD_SORTS)) return;
+    setBoardSort(key as BoardSortKey);
+    setBoardDir(dir === "-1" ? -1 : 1);
+    setBoardPage(1);
+    writeBoardPage(false);
+  }
+
   function chooseSort(key: BoardSortKey): void {
     if (boardSort() === key) {
       setBoardDir(boardDir() === 1 ? -1 : 1);
@@ -773,7 +799,7 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
       class="board"
       tabindex="0"
       role="region"
-      aria-label="Leaderboard table, horizontally scrollable on small screens"
+      aria-label="Leaderboard table, shown as stacked cards on small screens"
     >
       <div class="board-toolbar">
         <div class="board-tabs activity-filter-list" role="group" aria-label="Leaderboard view">
@@ -794,6 +820,24 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
             )}
           </For>
         </div>
+        <label class="board-sort-mobile">
+          <span class="board-sort-mobile-label" aria-hidden="true">
+            Sort
+          </span>
+          <select
+            class="board-sort-select"
+            aria-label="Sort the leaderboard"
+            onChange={(ev) => chooseMobileSort(ev.currentTarget.value)}
+          >
+            <For each={MOBILE_SORT_OPTIONS}>
+              {(opt) => (
+                <option value={opt.value} selected={opt.value === boardSort() + ":" + boardDir()}>
+                  {opt.label}
+                </option>
+              )}
+            </For>
+          </select>
+        </label>
         <Show when={!defaultBoardSort()}>
           <div class="board-sort-state" role="status" aria-live="polite">
             <span>
