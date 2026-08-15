@@ -26,7 +26,9 @@ const (
 	maxProviderResponseBytes     = 16 << 20
 	officialJudgeMaxTokens       = 10
 	officialJudgeModel           = "openai/gpt-4o-2024-08-06"
-	officialJudgeRevision        = "longmemeval-official-gpt4o-openrouter-v1"
+	officialJudgeRevision        = "longmemeval-official-gpt4o-azure-zdr-v2"
+	officialJudgeRouteProvider   = "azure"
+	officialJudgeReceiptProvider = "Azure"
 	platformConfirmationChatPath = "/api/v1/inference/confirmation/chat/completions"
 )
 
@@ -241,8 +243,9 @@ func validateProviderLaneRuntime(policy ProviderPolicy, config ProviderLaneRunti
 		}
 	}
 	if policy.Lane == JudgeLane && (policy.Model != officialJudgeModel ||
-		policy.ProfileRevision != officialJudgeRevision || config.RouteProvider != "openai" ||
-		config.ReceiptProvider != "OpenAI") {
+		policy.ProfileRevision != officialJudgeRevision ||
+		config.RouteProvider != officialJudgeRouteProvider ||
+		config.ReceiptProvider != officialJudgeReceiptProvider) {
 		return errors.New("judge lane does not match the pinned official OpenRouter profile")
 	}
 	return nil
@@ -413,10 +416,12 @@ func (j officialProviderJudge) Judge(ctx context.Context, input JudgeInput) (boo
 	}
 	lane := j.session.lanes[JudgeLane]
 	body, err := json.Marshal(map[string]any{
-		"model":    lane.policy.Model,
-		"messages": []map[string]string{{"role": "user", "content": prompt}},
-		"n":        1, "temperature": 0, "max_tokens": officialJudgeMaxTokens,
-		"stream": false,
+		"model":                 lane.policy.Model,
+		"messages":              []map[string]string{{"role": "user", "content": prompt}},
+		"n":                     1,
+		"temperature":           0,
+		"max_completion_tokens": officialJudgeMaxTokens,
+		"stream":                false,
 		"provider": map[string]any{
 			"only":               []string{lane.config.RouteProvider},
 			"order":              []string{lane.config.RouteProvider},
@@ -448,16 +453,14 @@ func (j officialProviderJudge) Judge(ctx context.Context, input JudgeInput) (boo
 		strings.TrimSpace(response.Choices[0].Message.Content) == "" {
 		return false, errors.New("official LongMemEval judge response is malformed")
 	}
-	// The official prompt requires yes/no only. Treat any other model output as
-	// an invalid judge result instead of allowing substring ambiguity.
-	switch strings.ToLower(strings.TrimSpace(response.Choices[0].Message.Content)) {
-	case "yes":
-		return true, nil
-	case "no":
-		return false, nil
-	default:
-		return false, errors.New("official LongMemEval judge response is not exactly yes or no")
-	}
+	// Match the pinned official evaluator at LongMemEval revision
+	// 9e0b455f4ef0e2ab8f2e582289761153549043fc: its label is true when the
+	// normalized completion contains "yes". This intentionally accepts the
+	// punctuation emitted by the frozen Azure GPT-4o endpoint.
+	return strings.Contains(
+		strings.ToLower(strings.TrimSpace(response.Choices[0].Message.Content)),
+		"yes",
+	), nil
 }
 
 func officialJudgePrompt(input JudgeInput) (string, error) {

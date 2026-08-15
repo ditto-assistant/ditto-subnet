@@ -71,6 +71,7 @@ from ditto.db.models import (
     ConfirmationBundleTicket,
     ConfirmationDimensionEvidence,
     ConfirmationInferenceGrant,
+    ConfirmationInferenceRequest,
     ConfirmationScore,
     Score,
     ValidatorSlotSettingsRevision,
@@ -544,11 +545,11 @@ def _installed_profile_settings() -> tuple[
     return settings, profile
 
 
-async def _claim_installed_profile(
+async def _claim_installed_profile_offers(
     app: FastAPI,
     client: httpx.AsyncClient,
     maker: async_sessionmaker[AsyncSession],
-) -> tuple[dict[str, Any], Ed25519PrivateKey]:
+) -> tuple[list[dict[str, Any]], Ed25519PrivateKey]:
     settings, profile = _installed_profile_settings()
     await _seed_bundle(
         maker,
@@ -569,6 +570,15 @@ async def _claim_installed_profile(
     )
     assert response.status_code == 200, response.text
     offers = response.json()["inference_grants"]
+    return offers, signer
+
+
+async def _claim_installed_profile(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    maker: async_sessionmaker[AsyncSession],
+) -> tuple[dict[str, Any], Ed25519PrivateKey]:
+    offers, signer = await _claim_installed_profile_offers(app, client, maker)
     embedding = next(offer for offer in offers if offer["lane"] == "embedding")
     assert embedding["provider"] == "perplexity"
     return embedding, signer
@@ -583,6 +593,53 @@ def _confirmation_embedding_request(
             "input": ["private memory"],
             "dimensions": 768,
             "encoding_format": "float",
+        },
+        separators=(",", ":"),
+    ).encode()
+    grant_id = UUID(offer["grant_id"])
+    generation = int(offer["generation"])
+    nonce = uuid4()
+    requested_at = datetime.now(UTC)
+    proof = signer.sign(
+        _proxy_message(
+            grant_id=grant_id,
+            generation=generation,
+            nonce=nonce,
+            requested_at=requested_at,
+            body=body,
+        )
+    )
+    return body, {
+        "Authorization": f"Bearer {offer['bearer']}",
+        "X-Ditto-Grant": str(grant_id),
+        "X-Ditto-Generation": str(generation),
+        "X-Ditto-Nonce": str(nonce),
+        "X-Ditto-Requested-At": requested_at.isoformat(),
+        "X-Ditto-Proof": base64.urlsafe_b64encode(proof).decode().rstrip("="),
+    }
+
+
+def _confirmation_chat_request(
+    offer: dict[str, Any],
+    signer: Ed25519PrivateKey,
+    *,
+    provider: dict[str, Any] | None = None,
+) -> tuple[bytes, dict[str, str]]:
+    body = json.dumps(
+        {
+            "model": offer["model"],
+            "messages": [{"role": "user", "content": "Answer yes or no."}],
+            "max_tokens": 10,
+            "n": 1,
+            "stream": False,
+            "provider": provider
+            or {
+                "only": [offer["route_provider"]],
+                "order": [offer["route_provider"]],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+                "data_collection": "deny",
+            },
         },
         separators=(",", ":"),
     ).encode()
@@ -694,6 +751,185 @@ class TestV9ConfirmationEmbeddingProxy:
 
         assert response.status_code == 401, response.text
         assert "invalid confirmation proof" in response.text
+
+
+class TestV9ConfirmationChatProxy:
+    async def test_installed_judge_profile_reaches_zdr_azure_route(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        offers, signer = await _claim_installed_profile_offers(
+            app, client, session_maker
+        )
+        offer = next(item for item in offers if item["lane"] == "judge")
+        app.state.session_maker = session_maker
+        _enable_confirmation_proxy(app)
+        body, headers = _confirmation_chat_request(offer, signer)
+        upstream_calls = 0
+
+        async def provider(request: httpx.Request) -> httpx.Response:
+            nonlocal upstream_calls
+            upstream_calls += 1
+            payload = json.loads(request.content)
+            assert payload["provider"] == {
+                "only": ["azure"],
+                "order": ["azure"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+                "data_collection": "deny",
+                "zdr": True,
+            }
+            assert payload["max_completion_tokens"] == 10
+            assert "max_tokens" not in payload
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "generation-judge-1",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": offer["model"],
+                    "provider": offer["receipt_provider"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": "yes"},
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 1,
+                        "total_tokens": 6,
+                        "cost": 0.00001,
+                    },
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(provider)
+        ) as provider_client:
+            app.state.inference_client = provider_client
+            response = await client.post(
+                "/api/v1/inference/confirmation/chat/completions",
+                content=body,
+                headers=headers,
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["choices"][0]["message"]["content"] == "yes"
+        assert upstream_calls == 1
+        async with session_maker() as session:
+            request_row = await session.scalar(
+                select(ConfirmationInferenceRequest).where(
+                    ConfirmationInferenceRequest.grant_id == UUID(offer["grant_id"])
+                )
+            )
+            assert request_row is not None
+            assert request_row.status == "completed"
+            assert request_row.upstream_provider == "Azure"
+
+    async def test_installed_reader_profile_reaches_zdr_deepinfra_route(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        offers, signer = await _claim_installed_profile_offers(
+            app, client, session_maker
+        )
+        offer = next(item for item in offers if item["lane"] == "reader")
+        app.state.session_maker = session_maker
+        _enable_confirmation_proxy(app)
+        body, headers = _confirmation_chat_request(offer, signer)
+
+        async def provider(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            assert payload["provider"] == {
+                "only": ["deepinfra"],
+                "order": ["deepinfra"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+                "data_collection": "deny",
+                "zdr": True,
+            }
+            assert payload["max_tokens"] == 10
+            assert "max_completion_tokens" not in payload
+            return httpx.Response(
+                200,
+                request=request,
+                json={
+                    "id": "generation-reader-1",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": offer["model"],
+                    "provider": offer["receipt_provider"],
+                    "choices": [
+                        {
+                            "index": 0,
+                            "finish_reason": "stop",
+                            "message": {"role": "assistant", "content": "memory"},
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 5,
+                        "completion_tokens": 1,
+                        "total_tokens": 6,
+                        "cost": 0.00001,
+                    },
+                },
+            )
+
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(provider)
+        ) as provider_client:
+            app.state.inference_client = provider_client
+            response = await client.post(
+                "/api/v1/inference/confirmation/chat/completions",
+                content=body,
+                headers=headers,
+            )
+
+        assert response.status_code == 200, response.text
+
+    async def test_caller_cannot_override_platform_zdr_policy(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        offers, signer = await _claim_installed_profile_offers(
+            app, client, session_maker
+        )
+        offer = next(item for item in offers if item["lane"] == "judge")
+        app.state.session_maker = session_maker
+        _enable_confirmation_proxy(app)
+        body, headers = _confirmation_chat_request(
+            offer,
+            signer,
+            provider={
+                "only": ["azure"],
+                "order": ["azure"],
+                "allow_fallbacks": False,
+                "require_parameters": True,
+                "data_collection": "deny",
+                "zdr": True,
+            },
+        )
+        app.state.inference_client = MagicMock(
+            side_effect=AssertionError("unfrozen provider policy reached upstream")
+        )
+
+        response = await client.post(
+            "/api/v1/inference/confirmation/chat/completions",
+            content=body,
+            headers=headers,
+        )
+
+        assert response.status_code == 403, response.text
+        assert "confirmation route is not permitted" in response.text
 
 
 async def _claimed_rows(

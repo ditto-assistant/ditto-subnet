@@ -2,11 +2,11 @@
   {
     "seeds": [
       {
-        "user_id": "938fd4fd-7026-4126-b84d-5f2ef7e88656",
+        "user_id": "441424bd-ab23-4090-9583-30afe57df53e",
         "pairs": [
           {
-            "pair_id": "0ee9007f-546a-4b1b-afa6-82e9a039b069",
-            "session_id": "104d0687-d5e3-468c-8aa7-4e8a73efd426",
+            "pair_id": "1935f1bc-1235-4435-9494-fb824ffd43ed",
+            "session_id": "6a1b6d45-0fb9-4c0e-9a05-34324cf3d6df",
             "timestamp": "2025-01-01T10:00:00Z",
             "prompt": "Remember passphrase passphrase-05-01",
             "response": "I stored it."
@@ -15,7 +15,7 @@
       }
     ],
     "run": {
-      "case_id": "cdb823cc-7a00-4532-ab18-bf3f6c98cceb",
+      "case_id": "1f0acfae-45e9-4e41-a772-32f21da2cfbe",
       "system_prompt": "Answer the question using the user's stored conversation memory. The current date is 2026/01/02 (Fri) 12:00. Use the available native memory tools as needed to search, scope, and fetch the relevant stored conversations before answering. Give a concise, direct answer. If the stored conversations do not contain enough information, explicitly say that the question cannot be answered from memory. Do not use external knowledge.",
       "user_input": "What passphrase did I ask you to remember?",
       "tools": [
@@ -106,7 +106,7 @@
         }
       ],
       "bench_version": 9,
-      "user_id": "938fd4fd-7026-4126-b84d-5f2ef7e88656"
+      "user_id": "441424bd-ab23-4090-9583-30afe57df53e"
     }
   }
 ]

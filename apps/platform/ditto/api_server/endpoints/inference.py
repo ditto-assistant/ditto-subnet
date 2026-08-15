@@ -2211,8 +2211,12 @@ def _locked_confirmation_chat_payload(
     max_tokens = _output_token_limit(without_provider, max_output_tokens)
     upstream = dict(without_provider)
     upstream["model"] = grant.model
-    upstream["max_tokens"] = max_tokens
-    upstream.pop("max_completion_tokens", None)
+    if grant.lane == "judge":
+        upstream["max_completion_tokens"] = max_tokens
+        upstream.pop("max_tokens", None)
+    else:
+        upstream["max_tokens"] = max_tokens
+        upstream.pop("max_completion_tokens", None)
     upstream["n"] = 1
     upstream["stream"] = False
     upstream["provider"] = {**expected_provider, "zdr": True}

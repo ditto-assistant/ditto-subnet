@@ -53,8 +53,8 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-13"
-LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-12-v1"
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-15-zdr-v2"
+LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-12-zdr-v2"
 ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-4-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
 
@@ -108,10 +108,10 @@ def _outputs() -> dict[Path, bytes]:
             ProviderLanePolicy(
                 lane="reader",
                 provider="openrouter",
-                route_provider="openai",
-                receipt_provider="OpenAI",
+                route_provider="deepinfra",
+                receipt_provider="DeepInfra",
                 profile_revision=(
-                    "longmemeval-openrouter-gpt-oss-20b-no-fallback-shadow-v1"
+                    "longmemeval-openrouter-gpt-oss-20b-deepinfra-zdr-shadow-v2"
                 ),
                 model="openai/gpt-oss-20b",
                 max_requests=48,
@@ -123,9 +123,9 @@ def _outputs() -> dict[Path, bytes]:
             ProviderLanePolicy(
                 lane="judge",
                 provider="openrouter",
-                route_provider="openai",
-                receipt_provider="OpenAI",
-                profile_revision="longmemeval-official-gpt4o-openrouter-v1",
+                route_provider="azure",
+                receipt_provider="Azure",
+                profile_revision="longmemeval-official-gpt4o-azure-zdr-v2",
                 model="openai/gpt-4o-2024-08-06",
                 max_requests=12,
                 max_prompt_tokens=20_000,
@@ -203,7 +203,7 @@ def _outputs() -> dict[Path, bytes]:
 
     launch = {
         "schema_version": 1,
-        "revision": "v9-confirmation-shadow-launch-2026-08-13",
+        "revision": "v9-confirmation-shadow-launch-2026-08-15-zdr-v2",
         "mode": "shadow",
         "execution_profile_revision": profile.revision,
         "execution_profile_checksum": profile.checksum(),

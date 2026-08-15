@@ -11,7 +11,7 @@
     {
       "lane": "reader",
       "provider": "openrouter",
-      "profile_revision": "longmemeval-openrouter-gpt-oss-20b-no-fallback-shadow-v1",
+      "profile_revision": "longmemeval-openrouter-gpt-oss-20b-deepinfra-zdr-shadow-v2",
       "model": "openai/gpt-oss-20b",
       "max_requests": 180,
       "max_prompt_tokens": 1500000,
@@ -22,7 +22,7 @@
     {
       "lane": "judge",
       "provider": "openrouter",
-      "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
+      "profile_revision": "longmemeval-official-gpt4o-azure-zdr-v2",
       "model": "openai/gpt-4o-2024-08-06",
       "max_requests": 60,
       "max_prompt_tokens": 30000,

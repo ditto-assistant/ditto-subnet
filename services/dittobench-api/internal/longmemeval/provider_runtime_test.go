@@ -66,12 +66,14 @@ func newRuntimeUpstream(t *testing.T) *runtimeUpstream {
 	upstream.next = func(index int, body map[string]any) (int, string) {
 		model, _ := body["model"].(string)
 		content := "reader answer"
+		provider := "DeepInfra"
 		if model == officialJudgeModel {
 			content = "yes"
+			provider = officialJudgeReceiptProvider
 		}
 		return http.StatusOK, fmt.Sprintf(
-			`{"id":"receipt-%d","model":%q,"provider":"OpenAI","choices":[{"message":{"content":%q}}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14,"cost":0.00000125}}`,
-			index, model, content,
+			`{"id":"receipt-%d","model":%q,"provider":%q,"choices":[{"message":{"content":%q}}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14,"cost":0.00000125}}`,
+			index, model, provider, content,
 		)
 	}
 	upstream.server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
@@ -115,12 +117,12 @@ func runtimeProviderConfig(upstream *runtimeUpstream, authorizer RequestAuthoriz
 		Lanes: []ProviderLaneRuntimeConfig{
 			{
 				Lane: ReaderLane, UpstreamURL: upstream.server.URL + "/v1/chat/completions",
-				RouteProvider: "openai", ReceiptProvider: "OpenAI",
+				RouteProvider: "deepinfra", ReceiptProvider: "DeepInfra",
 				RequestTimeout: time.Second,
 			},
 			{
 				Lane: JudgeLane, UpstreamURL: upstream.server.URL + "/v1/chat/completions",
-				RouteProvider: "openai", ReceiptProvider: "OpenAI",
+				RouteProvider: officialJudgeRouteProvider, ReceiptProvider: officialJudgeReceiptProvider,
 				RequestTimeout: time.Second,
 			},
 		},
@@ -212,8 +214,8 @@ func TestReaderRelayPinsFrozenIdentityAndRecordsAuthoritativeReceipt(t *testing.
 	}
 	routing, ok := body["provider"].(map[string]any)
 	if !ok || routing["allow_fallbacks"] != false || routing["data_collection"] != "deny" ||
-		routing["require_parameters"] != true || !reflect.DeepEqual(routing["only"], []any{"openai"}) ||
-		!reflect.DeepEqual(routing["order"], []any{"openai"}) {
+		routing["require_parameters"] != true || !reflect.DeepEqual(routing["only"], []any{"deepinfra"}) ||
+		!reflect.DeepEqual(routing["order"], []any{"deepinfra"}) {
 		t.Fatalf("reader routing=%#v", routing)
 	}
 	if header.Get("Authorization") != "Bearer "+authorizer.credential ||
@@ -392,11 +394,11 @@ func TestProviderSessionAcceptsTicketScopedPlatformProxyRoute(t *testing.T) {
 		Lanes: []ProviderLaneRuntimeConfig{
 			{
 				Lane: ReaderLane, UpstreamURL: "https://platform.test" + platformConfirmationChatPath,
-				RouteProvider: "openai", ReceiptProvider: "OpenAI", RequestTimeout: time.Second,
+				RouteProvider: "deepinfra", ReceiptProvider: "DeepInfra", RequestTimeout: time.Second,
 			},
 			{
 				Lane: JudgeLane, UpstreamURL: "https://platform.test" + platformConfirmationChatPath,
-				RouteProvider: "openai", ReceiptProvider: "OpenAI", RequestTimeout: time.Second,
+				RouteProvider: officialJudgeRouteProvider, ReceiptProvider: officialJudgeReceiptProvider, RequestTimeout: time.Second,
 			},
 		},
 	}
@@ -430,11 +432,11 @@ func TestProviderSessionRejectsPlatformProxyNearMisses(t *testing.T) {
 				Lanes: []ProviderLaneRuntimeConfig{
 					{
 						Lane: ReaderLane, UpstreamURL: upstreamURL,
-						RouteProvider: "openai", ReceiptProvider: "OpenAI", RequestTimeout: time.Second,
+						RouteProvider: "deepinfra", ReceiptProvider: "DeepInfra", RequestTimeout: time.Second,
 					},
 					{
 						Lane: JudgeLane, UpstreamURL: base,
-						RouteProvider: "openai", ReceiptProvider: "OpenAI", RequestTimeout: time.Second,
+						RouteProvider: officialJudgeRouteProvider, ReceiptProvider: officialJudgeReceiptProvider, RequestTimeout: time.Second,
 					},
 				},
 			}
@@ -461,12 +463,12 @@ func TestValidateProviderRuntimeConfigIsSideEffectFree(t *testing.T) {
 func TestProviderReceiptValidationRejectsEveryMissingOrDriftingField(t *testing.T) {
 	profile := runtimeProviderProfile(t)
 	upstream := newRuntimeUpstream(t)
-	valid := `{"id":"receipt-x","model":"openai/gpt-oss-20b","provider":"OpenAI","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3,"cost":0.000001}}`
+	valid := `{"id":"receipt-x","model":"openai/gpt-oss-20b","provider":"DeepInfra","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3,"cost":0.000001}}`
 	tests := map[string]string{
 		"missing id":            strings.Replace(valid, `"id":"receipt-x",`, "", 1),
 		"missing usage":         strings.Replace(valid, `,"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3,"cost":0.000001}`, "", 1),
 		"wrong model":           strings.Replace(valid, "openai/gpt-oss-20b", "other/model", 1),
-		"wrong provider":        strings.Replace(valid, `"provider":"OpenAI"`, `"provider":"Other"`, 1),
+		"wrong provider":        strings.Replace(valid, `"provider":"DeepInfra"`, `"provider":"Other"`, 1),
 		"missing prompt":        strings.Replace(valid, `"prompt_tokens":2,`, "", 1),
 		"negative prompt":       strings.Replace(valid, `"prompt_tokens":2`, `"prompt_tokens":-1`, 1),
 		"fraction prompt":       strings.Replace(valid, `"prompt_tokens":2`, `"prompt_tokens":2.5`, 1),
@@ -500,7 +502,7 @@ func TestProviderSessionRejectsDuplicateReceiptAndCannotRecover(t *testing.T) {
 	profile := runtimeProviderProfile(t)
 	upstream := newRuntimeUpstream(t)
 	upstream.next = func(_ int, body map[string]any) (int, string) {
-		return http.StatusOK, fmt.Sprintf(`{"id":"same","model":%q,"provider":"OpenAI","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`, body["model"])
+		return http.StatusOK, fmt.Sprintf(`{"id":"same","model":%q,"provider":"DeepInfra","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`, body["model"])
 	}
 	session, _ := newRuntimeProviderSession(t, profile, upstream)
 	if got := readerRequest(t, session, `{"model":"openai/gpt-oss-20b"}`); got.Code != http.StatusOK {
@@ -525,7 +527,11 @@ func TestProviderSessionRejectsReceiptIdentityReusedAcrossLanes(t *testing.T) {
 	profile := runtimeProviderProfile(t)
 	upstream := newRuntimeUpstream(t)
 	upstream.next = func(_ int, body map[string]any) (int, string) {
-		return http.StatusOK, fmt.Sprintf(`{"id":"cross-lane-replay","model":%q,"provider":"OpenAI","choices":[{"message":{"content":"yes"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`, body["model"])
+		provider := "DeepInfra"
+		if body["model"] == officialJudgeModel {
+			provider = officialJudgeReceiptProvider
+		}
+		return http.StatusOK, fmt.Sprintf(`{"id":"cross-lane-replay","model":%q,"provider":%q,"choices":[{"message":{"content":"yes"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`, body["model"], provider)
 	}
 	session, _ := newRuntimeProviderSession(t, profile, upstream)
 	if response := readerRequest(t, session, `{"model":"openai/gpt-oss-20b"}`); response.Code != http.StatusOK {
@@ -546,7 +552,7 @@ func TestProviderSessionCountsReceiptedHTTPFailuresWithoutCallingThemSuccess(t *
 	profile := runtimeProviderProfile(t)
 	upstream := newRuntimeUpstream(t)
 	upstream.next = func(index int, body map[string]any) (int, string) {
-		return http.StatusTooManyRequests, fmt.Sprintf(`{"id":"failed-%d","model":%q,"provider":"OpenAI","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0.0000001},"error":{"message":"limited"}}`, index, body["model"])
+		return http.StatusTooManyRequests, fmt.Sprintf(`{"id":"failed-%d","model":%q,"provider":"DeepInfra","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0.0000001},"error":{"message":"limited"}}`, index, body["model"])
 	}
 	session, _ := newRuntimeProviderSession(t, profile, upstream)
 	response := readerRequest(t, session, `{"model":"openai/gpt-oss-20b"}`)
@@ -574,7 +580,7 @@ func TestProviderSessionPoisonsReceiptThatViolatesReservedTokenBounds(t *testing
 		t.Run(testCase.name, func(t *testing.T) {
 			upstream := newRuntimeUpstream(t)
 			upstream.next = func(index int, body map[string]any) (int, string) {
-				return http.StatusOK, fmt.Sprintf(`{"id":"bound-%d","model":%q,"provider":"OpenAI","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d,"cost":0}}`,
+				return http.StatusOK, fmt.Sprintf(`{"id":"bound-%d","model":%q,"provider":"DeepInfra","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":%d,"completion_tokens":%d,"total_tokens":%d,"cost":0}}`,
 					index, body["model"], testCase.prompt, testCase.completion, testCase.total)
 			}
 			session, _ := newRuntimeProviderSession(t, profile, upstream)
@@ -696,7 +702,7 @@ func TestOfficialJudgePreservesPinnedPromptAndRouting(t *testing.T) {
 	profile := runtimeProviderProfile(t)
 	upstream := newRuntimeUpstream(t)
 	upstream.next = func(index int, body map[string]any) (int, string) {
-		return http.StatusOK, fmt.Sprintf(`{"id":"judge-%d","model":"%s","provider":"OpenAI","choices":[{"message":{"content":"YES"}}],"usage":{"prompt_tokens":20,"completion_tokens":1,"total_tokens":21,"cost":0.000002}}`, index, officialJudgeModel)
+		return http.StatusOK, fmt.Sprintf(`{"id":"judge-%d","model":"%s","provider":"%s","choices":[{"message":{"content":"YES."}}],"usage":{"prompt_tokens":20,"completion_tokens":1,"total_tokens":21,"cost":0.000002}}`, index, officialJudgeModel, officialJudgeReceiptProvider)
 	}
 	session, authorizer := newRuntimeProviderSession(t, profile, upstream)
 	input := JudgeInput{Reference: DatasetCase{
@@ -711,12 +717,15 @@ func TestOfficialJudgePreservesPinnedPromptAndRouting(t *testing.T) {
 	header := upstream.header[0]
 	upstream.mu.Unlock()
 	if body["model"] != officialJudgeModel || body["temperature"] != float64(0) ||
-		body["max_tokens"] != float64(officialJudgeMaxTokens) || body["n"] != float64(1) || body["stream"] != false {
+		body["max_completion_tokens"] != float64(officialJudgeMaxTokens) || body["n"] != float64(1) || body["stream"] != false {
 		t.Fatalf("official judge request=%#v", body)
 	}
+	if _, exists := body["max_tokens"]; exists {
+		t.Fatalf("official judge retained unsupported max_tokens alias: %#v", body)
+	}
 	routing := body["provider"].(map[string]any)
-	if routing["allow_fallbacks"] != false || !reflect.DeepEqual(routing["only"], []any{"openai"}) ||
-		!reflect.DeepEqual(routing["order"], []any{"openai"}) {
+	if routing["allow_fallbacks"] != false || !reflect.DeepEqual(routing["only"], []any{officialJudgeRouteProvider}) ||
+		!reflect.DeepEqual(routing["order"], []any{officialJudgeRouteProvider}) {
 		t.Fatalf("official judge routing=%#v", routing)
 	}
 	messages := body["messages"].([]any)
@@ -793,17 +802,17 @@ func TestOfficialJudgeRejectsUnsupportedAndMalformedInputsBeforeSpend(t *testing
 	}
 }
 
-func TestOfficialJudgeRequiresUnambiguousNormalizedLabel(t *testing.T) {
+func TestOfficialJudgeMatchesPinnedEvaluatorSubstringLabel(t *testing.T) {
 	profile := runtimeProviderProfile(t)
 	for _, testCase := range []struct {
 		response  string
 		correct   bool
 		wantError bool
-	}{{"no", false, false}, {" YES\n", true, false}, {"No.", false, true}, {"yesterday", false, true}, {"yes or no", false, true}} {
+	}{{"no", false, false}, {" YES\n", true, false}, {"No.", false, false}, {"Yes.", true, false}, {"yesterday", true, false}, {"yes or no", true, false}} {
 		t.Run(testCase.response, func(t *testing.T) {
 			upstream := newRuntimeUpstream(t)
 			upstream.next = func(index int, _ map[string]any) (int, string) {
-				return http.StatusOK, fmt.Sprintf(`{"id":"judge-%d","model":"%s","provider":"OpenAI","choices":[{"message":{"content":%q}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`, index, officialJudgeModel, testCase.response)
+				return http.StatusOK, fmt.Sprintf(`{"id":"judge-%d","model":"%s","provider":"%s","choices":[{"message":{"content":%q}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`, index, officialJudgeModel, officialJudgeReceiptProvider, testCase.response)
 			}
 			session, _ := newRuntimeProviderSession(t, profile, upstream)
 			got, err := session.Judge().Judge(context.Background(), JudgeInput{Reference: DatasetCase{
@@ -822,10 +831,10 @@ func TestOfficialJudgeRejectsMalformedProviderResponses(t *testing.T) {
 		status int
 		body   string
 	}{
-		"HTTP failure":  {http.StatusServiceUnavailable, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"OpenAI","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0}}`},
-		"no choices":    {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"OpenAI","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
-		"two choices":   {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"OpenAI","choices":[{"message":{"content":"yes"}},{"message":{"content":"no"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
-		"empty content": {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"OpenAI","choices":[{"message":{"content":" "}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"HTTP failure":  {http.StatusServiceUnavailable, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0}}`},
+		"no choices":    {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"two choices":   {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[{"message":{"content":"yes"}},{"message":{"content":"no"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
+		"empty content": {http.StatusOK, `{"id":"j1","model":"openai/gpt-4o-2024-08-06","provider":"Azure","choices":[{"message":{"content":" "}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`},
 	}
 	for name, testCase := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -849,7 +858,7 @@ func TestProviderSessionCancellationDeadlineAndClosePreventUnboundedSpend(t *tes
 	upstream.next = func(_ int, body map[string]any) (int, string) {
 		entered <- struct{}{}
 		time.Sleep(250 * time.Millisecond)
-		return http.StatusOK, fmt.Sprintf(`{"id":"late","model":%q,"provider":"OpenAI","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`, body["model"])
+		return http.StatusOK, fmt.Sprintf(`{"id":"late","model":%q,"provider":"DeepInfra","choices":[{"message":{"content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2,"cost":0}}`, body["model"])
 	}
 	config := runtimeProviderConfig(upstream, &recordingAuthorizer{credential: "private"})
 	config.Lanes[0].RequestTimeout = 20 * time.Millisecond

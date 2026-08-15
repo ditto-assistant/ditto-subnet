@@ -296,7 +296,7 @@ func TestEvidenceHasFrozenGoldenDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const want = "a68f2913ac1a4c8348e82d5851008ccccc5a3ba3599bf101947f6281c8ac39e9"
+	const want = "7194baa74fcd68d6ea3466b95ba2b9f5e995e0138151b57697382f009b4b6197"
 	if got != want {
 		t.Fatalf("canonical evidence digest changed: got %s want %s", got, want)
 	}

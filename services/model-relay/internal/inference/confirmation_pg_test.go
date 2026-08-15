@@ -131,6 +131,41 @@ func confirmationChatBody() string {
 		`"allow_fallbacks":false,"require_parameters":true,"data_collection":"deny"}}`
 }
 
+func TestLockedConfirmationChatPayloadPreservesLaneTokenField(t *testing.T) {
+	provider := confirmationProviderPreferences(confirmationTestProvider)
+	payload := map[string]any{
+		"model":      confirmationTestModel,
+		"messages":   []any{map[string]any{"role": "user", "content": "memory"}},
+		"max_tokens": json.Number("64"),
+		"provider":   provider,
+	}
+	for _, testCase := range []struct {
+		lane    string
+		present string
+		absent  string
+	}{
+		{lane: "judge", present: "max_completion_tokens", absent: "max_tokens"},
+		{lane: "reader", present: "max_tokens", absent: "max_completion_tokens"},
+	} {
+		t.Run(testCase.lane, func(t *testing.T) {
+			grant := postgres.ConfirmationInferenceGrant{
+				Lane: testCase.lane, Model: confirmationTestModel, RouteProvider: confirmationTestProvider,
+			}
+			upstream, maxTokens, herr := lockedConfirmationChatPayload(payload, &grant, 128)
+			if herr != nil || maxTokens != 64 || upstream[testCase.present] != 64 {
+				t.Fatalf("locked payload=%v max=%d err=%v", upstream, maxTokens, herr)
+			}
+			if _, found := upstream[testCase.absent]; found {
+				t.Fatalf("%s retained forbidden %s: %v", testCase.lane, testCase.absent, upstream)
+			}
+			lockedProvider, _ := upstream["provider"].(map[string]any)
+			if lockedProvider["zdr"] != true {
+				t.Fatalf("%s lost ZDR: %v", testCase.lane, lockedProvider)
+			}
+		})
+	}
+}
+
 // fakeConfirmationUpstream returns a valid completion for the confirmation
 // model and records the last upstream request payload.
 func fakeConfirmationUpstream(t *testing.T, captured *map[string]any) *httptest.Server {
@@ -194,8 +229,11 @@ func TestConfirmationChatFullFlow(t *testing.T) {
 	if usage["include"] != true {
 		t.Fatalf("upstream usage include: %v", captured["usage"])
 	}
-	if captured["n"] != float64(1) || captured["stream"] != false || captured["max_tokens"] != float64(64) {
-		t.Fatalf("upstream n/stream/max_tokens: %v %v %v", captured["n"], captured["stream"], captured["max_tokens"])
+	if captured["n"] != float64(1) || captured["stream"] != false || captured["max_completion_tokens"] != float64(64) {
+		t.Fatalf("upstream n/stream/max_completion_tokens: %v %v %v", captured["n"], captured["stream"], captured["max_completion_tokens"])
+	}
+	if _, found := captured["max_tokens"]; found {
+		t.Fatalf("judge request retained max_tokens: %v", captured)
 	}
 	if captured["model"] != confirmationTestModel {
 		t.Fatalf("upstream model: %v", captured["model"])
@@ -504,7 +542,7 @@ func TestConfirmationEmbeddingsFullFlow(t *testing.T) {
 		"DITTO_INFERENCE_TIMEOUT_SECONDS": "5",
 	})
 	cfg.Inference.EmbeddingFallbackURL = pplx.URL
-	f := newConfirmationFixture(t, cfg, "embedding", config.PinnedEmbeddingModel, config.PinnedEmbeddingProvider)
+	f := newConfirmationFixture(t, cfg, "embedding", config.PinnedEmbeddingModel, strings.ToLower(config.PinnedEmbeddingProvider))
 
 	nonce := uuid.New()
 	// A body large enough that the provider's 500-token usage stays under the

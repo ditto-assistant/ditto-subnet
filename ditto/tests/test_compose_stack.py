@@ -177,7 +177,7 @@ def test_confirmation_runtime_uses_only_exact_public_release_assets() -> None:
         "/opt/ditto/confirmation/confirmation_installation_v9_shadow.json"
     )
     assert environment["DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256"] == (
-        "9c7ffa352e37b758b8d2ceae08cafd6e311cb874b20d96eb658fb27f344076ac"
+        "6cd2f94f73471ba83c3b9d35837b004bba591f3652157e0be2984d2e442db9ef"
     )
     assert environment["DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON"] == "true"
     serialized = yaml.safe_dump(environment).lower()

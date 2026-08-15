@@ -370,7 +370,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	const installationSHA = "9c7ffa352e37b758b8d2ceae08cafd6e311cb874b20d96eb658fb27f344076ac"
+	const installationSHA = "6cd2f94f73471ba83c3b9d35837b004bba591f3652157e0be2984d2e442db9ef"
 	if digestBytes(installationRaw) != installationSHA {
 		t.Fatalf("installation digest = %s", digestBytes(installationRaw))
 	}
@@ -382,7 +382,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-13" ||
+	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-15-zdr-v2" ||
 		profile.LongMemCasesPerCapability != 2 || profile.AblationCoordinatorPolicy.SampleSize != 4 ||
 		profile.Composite.BaseWeightBPS != 7000 || profile.Composite.LongMemWeightBPS != 3000 {
 		t.Fatalf("unexpected bounded profile: %+v", profile)
@@ -529,8 +529,8 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 	profile.LongMemProjectionKeySHA256 = digestBytes(longMemKey)
 	profile.ProviderLanes = []confirmationProviderLaneProfile{
 		{
-			Lane: longmemeval.JudgeLane, Provider: "openrouter", RouteProvider: "openai", ReceiptProvider: "OpenAI",
-			ProfileRevision: "longmemeval-official-gpt4o-openrouter-v1", Model: "openai/gpt-4o-2024-08-06",
+			Lane: longmemeval.JudgeLane, Provider: "openrouter", RouteProvider: "azure", ReceiptProvider: "Azure",
+			ProfileRevision: "longmemeval-official-gpt4o-azure-zdr-v2", Model: "openai/gpt-4o-2024-08-06",
 			MaxRequests: 10, MaxPromptTokens: 100, MaxCompletionTokens: 100, MaxTotalTokens: 200, MaxCostUSDmicros: 10_000,
 		},
 		{
@@ -590,8 +590,8 @@ func newConfirmationFactoryFixture(t *testing.T, healthy bool) confirmationFacto
 				"fixture-reader-v1", llm.HarnessModelForVersion(9),
 			),
 			longmemeval.JudgeLane: grant(
-				longmemeval.JudgeLane, provider.URL+"/api/v1/chat/completions", "openrouter", "openai", "OpenAI",
-				"longmemeval-official-gpt4o-openrouter-v1", "openai/gpt-4o-2024-08-06",
+				longmemeval.JudgeLane, provider.URL+"/api/v1/chat/completions", "openrouter", "azure", "Azure",
+				"longmemeval-official-gpt4o-azure-zdr-v2", "openai/gpt-4o-2024-08-06",
 			),
 			"embedding": grant(
 				"embedding", embedding.URL, profile.EmbeddingLane.Provider, profile.EmbeddingLane.Provider,

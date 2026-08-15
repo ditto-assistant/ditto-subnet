@@ -14,7 +14,7 @@
     "ablation_projection_key_sha256": "8a00a865d6d36f3e92f39a138ac6eabc627d4d9915440e589805a3d2677b668f",
     "ablation_selection_key_sha256": "2744541342deb53d3504556838313ba27d3bfca625db939054043f5e495b3831",
     "ablation_threshold_manifest_sha256": "6ec695b93cd953909fd583158cf9577425aa1830e3b93a79162ce9fb9fa0e9d5",
-    "checksum": "640d450bb4ac0a17eb6d837c3de9f4a43c03ce7d8a6e8d66fc0c05de61844d4b",
+    "checksum": "a55112852fd68d7d79c5acd792062e9455a70c66056bf5f8889a917c8b601ea6",
     "composite": {
       "base_weight_bps": 7000,
       "checksum": "1ce77c31a1b6f146c4eb79c2422f066441c0eaff6cf3ca67fa13989a87c8101f",
@@ -60,8 +60,8 @@
     "longmem_cases_per_capability": 2,
     "longmem_dataset_revision": "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc",
     "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
-    "longmem_profile_checksum": "f6bcee564dfece9027440f82be05fe6b9c6aeddec5bab96cbc0f082108a8561d",
-    "longmem_profile_revision": "longmemeval-s-v9-shadow-12-v1",
+    "longmem_profile_checksum": "ad6fa0825635bd22671bb81e7fdb87cf92efe97d98414352be6844819e0f8c4a",
+    "longmem_profile_revision": "longmemeval-s-v9-shadow-12-zdr-v2",
     "longmem_projection_key_sha256": "8b228aa55a4d37004649554158309f3526b8a0c4454d96cd49ed1b5cc2fec09b",
     "longmem_seed_batch_pairs": 32,
     "longmem_selection_seed": 17,
@@ -75,10 +75,10 @@
         "max_requests": 12,
         "max_total_tokens": 26000,
         "model": "openai/gpt-4o-2024-08-06",
-        "profile_revision": "longmemeval-official-gpt4o-openrouter-v1",
+        "profile_revision": "longmemeval-official-gpt4o-azure-zdr-v2",
         "provider": "openrouter",
-        "receipt_provider": "OpenAI",
-        "route_provider": "openai"
+        "receipt_provider": "Azure",
+        "route_provider": "azure"
       },
       {
         "lane": "reader",
@@ -88,17 +88,17 @@
         "max_requests": 48,
         "max_total_tokens": 696000,
         "model": "openai/gpt-oss-20b",
-        "profile_revision": "longmemeval-openrouter-gpt-oss-20b-no-fallback-shadow-v1",
+        "profile_revision": "longmemeval-openrouter-gpt-oss-20b-deepinfra-zdr-shadow-v2",
         "provider": "openrouter",
-        "receipt_provider": "OpenAI",
-        "route_provider": "openai"
+        "receipt_provider": "DeepInfra",
+        "route_provider": "deepinfra"
       }
     ],
-    "revision": "v9-confirmation-shadow-bounded-2026-08-13",
+    "revision": "v9-confirmation-shadow-bounded-2026-08-15-zdr-v2",
     "schema_version": 1
   },
   "launch_manifest_path": "/opt/ditto/confirmation/confirmation_launch_manifest_v9_shadow.json",
-  "launch_manifest_sha256": "9a38e4eb65714efb4d069d7f36049510375647cc8a7d3ca75c065de7a9aa8652",
+  "launch_manifest_sha256": "dcccf09dc2113df7037039d99fa127221d1d9818991f307a355d07c047d1b925",
   "longmem_dataset_path": "/opt/ditto/confirmation/longmemeval_s_cleaned.json",
   "sandbox_health_timeout_ms": 180000,
   "schema_version": 1

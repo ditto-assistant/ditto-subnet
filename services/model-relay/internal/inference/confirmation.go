@@ -172,8 +172,13 @@ func lockedConfirmationChatPayload(decoded any, grant *postgres.ConfirmationInfe
 		upstream[key] = value
 	}
 	upstream["model"] = grant.Model
-	upstream["max_tokens"] = maxTokens
-	delete(upstream, "max_completion_tokens")
+	if grant.Lane == "judge" {
+		upstream["max_completion_tokens"] = maxTokens
+		delete(upstream, "max_tokens")
+	} else {
+		upstream["max_tokens"] = maxTokens
+		delete(upstream, "max_completion_tokens")
+	}
 	upstream["n"] = 1
 	upstream["stream"] = false
 	pinned := make(map[string]any, len(expectedProvider)+1)
@@ -814,7 +819,7 @@ func (d *Deps) handleConfirmationEmbeddings(w http.ResponseWriter, r *http.Reque
 	if err != nil ||
 		grantSnapshot.Lane != "embedding" ||
 		grantSnapshot.Model != cfg.EmbeddingModel ||
-		grantSnapshot.Provider != cfg.EmbeddingProvider {
+		!strings.EqualFold(grantSnapshot.Provider, cfg.EmbeddingProvider) {
 		relayhttp.WriteHTTPError(w, r, http.StatusUnauthorized, "invalid confirmation proof", nil)
 		return
 	}

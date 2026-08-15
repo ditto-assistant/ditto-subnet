@@ -5,8 +5,8 @@
     "minimum_base_score_micros": 950000,
     "mode": "score_threshold"
   },
-  "execution_profile_checksum": "640d450bb4ac0a17eb6d837c3de9f4a43c03ce7d8a6e8d66fc0c05de61844d4b",
-  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-13",
+  "execution_profile_checksum": "a55112852fd68d7d79c5acd792062e9455a70c66056bf5f8889a917c8b601ea6",
+  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-15-zdr-v2",
   "guarantees": {
     "changes_canonical_scores": false,
     "changes_rewards": false,
@@ -22,6 +22,6 @@
   },
   "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
   "mode": "shadow",
-  "revision": "v9-confirmation-shadow-launch-2026-08-13",
+  "revision": "v9-confirmation-shadow-launch-2026-08-15-zdr-v2",
   "schema_version": 1
 }
