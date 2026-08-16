@@ -23,6 +23,7 @@ improving the best artifact, not for serving live inference.
 - [Scoring and emissions](#scoring-and-emissions)
 - [What counts as cheating](#what-counts-as-cheating)
 - [Link a rotated hotkey](#link-a-rotated-hotkey)
+- [Claim a public handle](#claim-a-public-handle)
 - [Common questions](#common-questions)
 
 ## Build and practice locally
@@ -539,6 +540,52 @@ curl --fail-with-body \
 ```
 
 Minted attestations expire, so submit it the same day or mint a fresh one.
+
+## Claim a public handle
+
+Anyone can upload an agent named `Jupiter-ditto-v10`. If that is *your* handle,
+you can now reserve the stem with a signed hotkey claim instead of asking in
+Discord.
+
+The platform collapses version and filler tokens, so `Jupiter`,
+`Jupiter-ditto-v10`, and `jupiter_v2` are the same handle: `jupiter`. You can
+only claim a stem you have already used on a submission.
+
+A claim starts `pending`. It becomes `upheld` after **three** distinct
+entrenched miner families endorse it. Entrenched means the endorser already
+has a full-benchmark scored agent family whose earliest upload is at least
+seven days old — not a brand-new hotkey. Your own family cannot endorse
+yourself.
+
+An upheld claim:
+
+- rejects later uploads of a colliding name from other owner families
+- marks existing collisions `name disputed` on the public leaderboard
+- marks your family's matching name `handle reserved`
+
+It does **not** change scores or emission slots. Signing does not transfer
+TAO.
+
+```sh
+# Claim a handle you already use.
+uv run ditto --network finney name claim --name Jupiter \
+  --coldkey miner --hotkey default
+
+# List live claims (claim id + endorsement count).
+uv run ditto --network finney name list
+
+# Endorse someone else's claim. Only entrenched families are accepted.
+uv run ditto --network finney name endorse \
+  --claim-id <uuid> --stem jupiter \
+  --coldkey miner --hotkey default
+
+# Release a handle you previously claimed.
+uv run ditto --network finney name withdraw --claim-id <uuid> \
+  --coldkey miner --hotkey default
+```
+
+Add `-y` to skip the confirmation prompt, or `--print-only` to print the
+signed JSON and submit nothing.
 
 ## Common questions
 

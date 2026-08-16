@@ -1,4 +1,500 @@
 {
+  "name_claim.NameClaimEndorsementView": {
+    "properties": {
+      "created_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "endorsement_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "endorser_hotkey": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "endorsement_id",
+      "endorser_hotkey",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "name_claim.NameClaimListResponse": {
+    "$defs": {
+      "NameClaimEndorsementView": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "endorsement_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "endorser_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "endorsement_id",
+          "endorser_hotkey",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "NameClaimResponse": {
+        "properties": {
+          "claim_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "claimant_hotkey": {
+            "type": "string"
+          },
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "endorsement_count": {
+            "minimum": 0,
+            "type": "integer"
+          },
+          "endorsement_threshold": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "endorsements": {
+            "items": {
+              "$ref": "#/$defs/NameClaimEndorsementView"
+            },
+            "type": "array"
+          },
+          "name_stem": {
+            "type": "string"
+          },
+          "netuid": {
+            "type": "integer"
+          },
+          "scope": {
+            "const": "public-handle-only",
+            "default": "public-handle-only",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "upheld",
+              "withdrawn"
+            ],
+            "type": "string"
+          },
+          "upheld_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "withdrawn_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          }
+        },
+        "required": [
+          "claim_id",
+          "netuid",
+          "name_stem",
+          "claimant_hotkey",
+          "status",
+          "endorsement_count",
+          "endorsement_threshold",
+          "created_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "claims": {
+        "items": {
+          "$ref": "#/$defs/NameClaimResponse"
+        },
+        "type": "array"
+      },
+      "endorsement_threshold": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "generated_at": {
+        "format": "date-time",
+        "type": "string"
+      }
+    },
+    "required": [
+      "generated_at",
+      "endorsement_threshold",
+      "claims"
+    ],
+    "type": "object"
+  },
+  "name_claim.NameClaimProof": {
+    "properties": {
+      "key_kind": {
+        "enum": [
+          "hotkey",
+          "coldkey"
+        ],
+        "type": "string"
+      },
+      "signature": {
+        "pattern": "^[0-9a-fA-F]{128}$",
+        "type": "string"
+      },
+      "signer": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      }
+    },
+    "required": [
+      "key_kind",
+      "signer",
+      "signature"
+    ],
+    "type": "object"
+  },
+  "name_claim.NameClaimRequest": {
+    "$defs": {
+      "NameClaimProof": {
+        "properties": {
+          "key_kind": {
+            "enum": [
+              "hotkey",
+              "coldkey"
+            ],
+            "type": "string"
+          },
+          "signature": {
+            "pattern": "^[0-9a-fA-F]{128}$",
+            "type": "string"
+          },
+          "signer": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key_kind",
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "claimant_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      },
+      "issued_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "name": {
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      },
+      "netuid": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "proof": {
+        "$ref": "#/$defs/NameClaimProof"
+      }
+    },
+    "required": [
+      "netuid",
+      "name",
+      "claimant_hotkey",
+      "nonce",
+      "issued_at",
+      "proof"
+    ],
+    "type": "object"
+  },
+  "name_claim.NameClaimResponse": {
+    "$defs": {
+      "NameClaimEndorsementView": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "endorsement_id": {
+            "format": "uuid",
+            "type": "string"
+          },
+          "endorser_hotkey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "endorsement_id",
+          "endorser_hotkey",
+          "created_at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "claim_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "claimant_hotkey": {
+        "type": "string"
+      },
+      "created_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "endorsement_count": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "endorsement_threshold": {
+        "minimum": 1,
+        "type": "integer"
+      },
+      "endorsements": {
+        "items": {
+          "$ref": "#/$defs/NameClaimEndorsementView"
+        },
+        "type": "array"
+      },
+      "name_stem": {
+        "type": "string"
+      },
+      "netuid": {
+        "type": "integer"
+      },
+      "scope": {
+        "const": "public-handle-only",
+        "default": "public-handle-only",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "pending",
+          "upheld",
+          "withdrawn"
+        ],
+        "type": "string"
+      },
+      "upheld_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "withdrawn_at": {
+        "anyOf": [
+          {
+            "format": "date-time",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      }
+    },
+    "required": [
+      "claim_id",
+      "netuid",
+      "name_stem",
+      "claimant_hotkey",
+      "status",
+      "endorsement_count",
+      "endorsement_threshold",
+      "created_at"
+    ],
+    "type": "object"
+  },
+  "name_claim.NameEndorseRequest": {
+    "$defs": {
+      "NameClaimProof": {
+        "properties": {
+          "key_kind": {
+            "enum": [
+              "hotkey",
+              "coldkey"
+            ],
+            "type": "string"
+          },
+          "signature": {
+            "pattern": "^[0-9a-fA-F]{128}$",
+            "type": "string"
+          },
+          "signer": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key_kind",
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "endorser_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      },
+      "issued_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "name_stem": {
+        "maxLength": 64,
+        "minLength": 3,
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+        "type": "string"
+      },
+      "netuid": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "proof": {
+        "$ref": "#/$defs/NameClaimProof"
+      }
+    },
+    "required": [
+      "netuid",
+      "name_stem",
+      "endorser_hotkey",
+      "nonce",
+      "issued_at",
+      "proof"
+    ],
+    "type": "object"
+  },
+  "name_claim.NameWithdrawRequest": {
+    "$defs": {
+      "NameClaimProof": {
+        "properties": {
+          "key_kind": {
+            "enum": [
+              "hotkey",
+              "coldkey"
+            ],
+            "type": "string"
+          },
+          "signature": {
+            "pattern": "^[0-9a-fA-F]{128}$",
+            "type": "string"
+          },
+          "signer": {
+            "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key_kind",
+          "signer",
+          "signature"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "claimant_hotkey": {
+        "pattern": "^[1-9A-HJ-NP-Za-km-z]{47,48}$",
+        "type": "string"
+      },
+      "issued_at": {
+        "format": "date-time",
+        "type": "string"
+      },
+      "netuid": {
+        "minimum": 0,
+        "type": "integer"
+      },
+      "nonce": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "proof": {
+        "$ref": "#/$defs/NameClaimProof"
+      }
+    },
+    "required": [
+      "netuid",
+      "claimant_hotkey",
+      "nonce",
+      "issued_at",
+      "proof"
+    ],
+    "type": "object"
+  },
+  "name_claim.PublicNameHandle": {
+    "properties": {
+      "claim_id": {
+        "format": "uuid",
+        "type": "string"
+      },
+      "status": {
+        "enum": [
+          "reserved",
+          "disputed",
+          "pending"
+        ],
+        "type": "string"
+      },
+      "stem": {
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+      }
+    },
+    "required": [
+      "stem",
+      "status",
+      "claim_id"
+    ],
+    "type": "object"
+  },
   "retrieval.AgentResponse": {
     "$defs": {
       "AgentStatus": {

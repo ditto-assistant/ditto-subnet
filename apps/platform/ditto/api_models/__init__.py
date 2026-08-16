@@ -23,6 +23,16 @@ from ditto.api_models.benchmark_capacity import (
 )
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.health import HealthResponse
+from ditto.api_models.name_claim import (
+    NameClaimEndorsementView,
+    NameClaimListResponse,
+    NameClaimProof,
+    NameClaimRequest,
+    NameClaimResponse,
+    NameEndorseRequest,
+    NameWithdrawRequest,
+    PublicNameHandle,
+)
 from ditto.api_models.public import (
     BenchDatasetConfig,
     BenchGradingConfig,
@@ -258,6 +268,14 @@ __all__ = [
     "PublicRunModels",
     "PublicTokenEfficiency",
     "PublicModelUse",
+    "PublicNameHandle",
+    "NameClaimEndorsementView",
+    "NameClaimListResponse",
+    "NameClaimProof",
+    "NameClaimRequest",
+    "NameClaimResponse",
+    "NameEndorseRequest",
+    "NameWithdrawRequest",
     "PublicTokenUsage",
     "PublicScreenerHeartbeat",
     "PublicScreenerHeartbeatsResponse",

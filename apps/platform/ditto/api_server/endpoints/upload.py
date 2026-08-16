@@ -68,6 +68,7 @@ from ditto.db.queries.agents import (
     insert_agent,
 )
 from ditto.db.queries.bans import is_hotkey_banned
+from ditto.db.queries.name_claims import upload_name_is_reserved
 from ditto.db.queries.payments import (
     consume_evaluation_credit,
     get_agent_for_payment_proof,
@@ -746,6 +747,15 @@ async def upload_agent(
                 admission_token=admission_token,
                 settings=settings,
             )
+            reserved = await upload_name_is_reserved(
+                session,
+                netuid=netuid,
+                agent_name=name,
+                miner_hotkey=hotkey,
+                miner_coldkey=owner_coldkey,
+            )
+            if reserved is not None:
+                raise HTTPException(status_code=409, detail=reserved)
             version = await insert_agent(
                 session,
                 agent_id=agent_id,

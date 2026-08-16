@@ -434,6 +434,35 @@ describe("board filter (row 4)", () => {
     await waitFor(() => expect(document.querySelectorAll("#rows tr[data-i]").length).toBe(1));
   });
 
+  it("renders reserved handle badges from the public payload", async () => {
+    const target = ranked[0] as LeaderboardEntry;
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry) =>
+            String(entry.agent_id) === String(target.agent_id)
+              ? {
+                  ...entry,
+                  name_handle: {
+                    stem: "jupiter",
+                    status: "reserved",
+                    claim_id: "11111111-1111-1111-1111-111111111111",
+                  },
+                }
+              : entry,
+          ),
+        };
+      },
+    });
+    await waitFor(() => {
+      const badge = document.querySelector(".handle-badge.reserved");
+      expect(badge?.textContent).toContain("handle reserved");
+    });
+  });
+
   it("states when no miner matches and Escape clears back to the full board", async () => {
     renderPage();
     await waitForBoard();

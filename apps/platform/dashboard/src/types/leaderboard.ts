@@ -132,10 +132,18 @@ export interface LeaderboardFamily {
   members: LeaderboardFamilyMember[];
 }
 
+export interface NameHandle {
+  stem: string;
+  /** "reserved" | "disputed" | "pending" */
+  status: "reserved" | "disputed" | "pending" | string;
+  claim_id: string;
+}
+
 export interface LeaderboardEntry {
   miner_hotkey: string;
   agent_id?: string;
   agent_name?: string | null;
+  name_handle?: NameHandle | null;
   agent_version?: number | null;
   /** Minimal children for the expandable owner-family grouping. */
   submission_family?: LeaderboardFamily | null;

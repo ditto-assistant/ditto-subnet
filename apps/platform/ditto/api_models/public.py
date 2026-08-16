@@ -30,6 +30,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
 )
+from ditto.api_models.name_claim import PublicNameHandle
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 
@@ -660,6 +661,15 @@ class PublicLeaderboardEntry(BaseModel):
         str,
         Field(description="Human-friendly name of the miner's winning agent."),
     ]
+    name_handle: PublicNameHandle | None = Field(
+        default=None,
+        description=(
+            "Signed handle reservation touching this name, when one exists. "
+            "``reserved`` means this owner family holds the stem; ``disputed`` "
+            "means an upheld reservation belongs to someone else; ``pending`` "
+            "means a claim is awaiting entrenched-miner endorsements."
+        ),
+    )
     agent_version: Annotated[
         int | None,
         Field(

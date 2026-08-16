@@ -71,6 +71,16 @@ MINER_MODELS = {
         "AgentResponse",
         "AgentStatusResponse",
     ],
+    "ditto.api_models.name_claim": [
+        "NameClaimProof",
+        "NameClaimRequest",
+        "NameEndorseRequest",
+        "NameWithdrawRequest",
+        "NameClaimEndorsementView",
+        "NameClaimResponse",
+        "NameClaimListResponse",
+        "PublicNameHandle",
+    ],
 }
 
 # Cosmetic JSON-Schema keys that carry prose/illustration, not structure.

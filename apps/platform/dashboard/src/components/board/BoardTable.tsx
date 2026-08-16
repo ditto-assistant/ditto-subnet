@@ -522,6 +522,42 @@ function BoardRow(props: {
             <span class="winner-identity">
               <span class="winner-name">
                 <EntityButton kind="agent" id={e().agent_id} label={displayName()} />
+                <Show when={e().name_handle?.status === "reserved"}>
+                  <ChipTip
+                    class="handle-badge reserved tip-chip"
+                    text={
+                      "This payment-owner family holds a signed, endorsed reservation for handle “" +
+                      (e().name_handle?.stem ?? "") +
+                      "”. Other families cannot upload a colliding name."
+                    }
+                  >
+                    handle reserved
+                  </ChipTip>
+                </Show>
+                <Show when={e().name_handle?.status === "disputed"}>
+                  <ChipTip
+                    class="handle-badge disputed tip-chip"
+                    text={
+                      "Handle “" +
+                      (e().name_handle?.stem ?? "") +
+                      "” is reserved to another miner family after a signed, endorsed claim."
+                    }
+                  >
+                    name disputed
+                  </ChipTip>
+                </Show>
+                <Show when={e().name_handle?.status === "pending"}>
+                  <ChipTip
+                    class="handle-badge pending tip-chip"
+                    text={
+                      "A signed claim for handle “" +
+                      (e().name_handle?.stem ?? "") +
+                      "” is waiting on endorsements from entrenched miner families."
+                    }
+                  >
+                    handle pending
+                  </ChipTip>
+                </Show>
                 <Show when={kind() === "zero"}>
                   <ChipTip
                     class="prov tip-chip"

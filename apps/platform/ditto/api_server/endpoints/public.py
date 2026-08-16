@@ -57,6 +57,7 @@ from ditto.api_models import (
     BenchHarnessConfig,
     CreateScreeningDisputeRequest,
     CreateScreeningDisputeResponse,
+    NameClaimListResponse,
     PublicActivityEntry,
     PublicActivityResponse,
     PublicAgentSummary,
@@ -100,6 +101,7 @@ from ditto.api_models import (
     PublicLeaderboardResponse,
     PublicMetricDoc,
     PublicModelUse,
+    PublicNameHandle,
     PublicOperationsResponse,
     PublicOrphanedSlot,
     PublicProvisionalScore,
@@ -1820,6 +1822,30 @@ def _composite_breakdown(
         return None
 
 
+def _public_name_handle(
+    agent_name: str,
+    owner_root: str | None,
+    claims: dict[str, Any],
+) -> PublicNameHandle | None:
+    """Project a live name claim onto one leaderboard row."""
+    if not claims:
+        return None
+    from ditto.api_server.name_claim import handle_status_for, normalize_name_stem
+
+    stem = normalize_name_stem(agent_name)
+    claim = claims.get(stem)
+    if claim is None:
+        return None
+    status = handle_status_for(
+        agent_name=agent_name,
+        owner_root=owner_root,
+        claims={stem: (claim.status, claim.claimant_owner_root)},
+    )
+    if status is None:
+        return None
+    return PublicNameHandle(stem=stem, status=status, claim_id=claim.claim_id)
+
+
 def _public_entry(
     rank: int,
     r: LedgerRow,
@@ -1854,6 +1880,7 @@ def _public_entry(
     average_run_cost_microusd: int | None = None,
     inference_run_count: int = 0,
     v9_confirmation: V9ConfirmationPublicProjection | None = None,
+    name_handle: PublicNameHandle | None = None,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -1939,6 +1966,7 @@ def _public_entry(
         score_quorum=SCORING_QUORUM,
         agent_id=r.agent_id,
         agent_name=agent_name,
+        name_handle=name_handle,
         agent_version=agent_version,
         artifact_release=artifact_release,
         submission_family=submission_family,
@@ -2940,6 +2968,10 @@ async def leaderboard(
     agent_metadata = {
         agent_id: (name, version) for agent_id, name, version in agent_rows
     }
+    from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
+    from ditto.db.queries.name_claims import active_handle_claims
+
+    handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(
@@ -2969,6 +3001,11 @@ async def leaderboard(
                 i,
                 row,
                 *agent_metadata[row.agent_id],
+                name_handle=_public_name_handle(
+                    agent_metadata[row.agent_id][0],
+                    row.emission_owner_root,
+                    handle_claims,
+                ),
                 finalized=True,
                 score_count=score_counts.get(row.agent_id, SCORING_QUORUM),
                 settled_composite=settled,
@@ -3059,6 +3096,11 @@ async def leaderboard(
                 len(entries) + 1,
                 row,
                 *agent_metadata[row.agent_id],
+                name_handle=_public_name_handle(
+                    agent_metadata[row.agent_id][0],
+                    row.emission_owner_root,
+                    handle_claims,
+                ),
                 finalized=False,
                 score_count=count,
                 settled_composite=settled,
@@ -3799,6 +3841,18 @@ async def validator_names(
             if hotkey in reporter_hotkeys
         ],
     )
+
+
+@router.get("/name-claims", response_model=NameClaimListResponse)
+async def public_name_claims(
+    response: Response,
+    session: SessionDep,
+) -> NameClaimListResponse:
+    """Live signed handle reservations. Cacheable; signatures stay off this list."""
+    from ditto.api_server.endpoints.name_claims import list_claims
+
+    response.headers["Cache-Control"] = _CACHE_CONTROL
+    return await list_claims(session)
 
 
 @router.get("/screeners", response_model=PublicScreenerHeartbeatsResponse)

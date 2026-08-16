@@ -4579,6 +4579,147 @@ class OwnerAttestation(Base):
     )
 
 
+class NameClaim(Base):
+    """One signed reservation of a public miner handle.
+
+    Rows live on the ``name_claims`` table.
+
+    A miner signs a claim over a normalized name stem (``jupiter`` covers
+    ``Jupiter-ditto-v10``). Other miners who already have a scored
+    payment-owner family endorse it. Once the endorsement threshold is
+    met the stem is reserved to the claimant's owner family: new uploads
+    that collide are rejected, and existing collisions are marked
+    disputed on the public board.
+
+    This table is **not** an input to emission-slot allocation. The
+    reservation is a public-name control only.
+    """
+
+    __tablename__ = "name_claims"
+
+    claim_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    netuid: Mapped[int] = mapped_column(Integer, nullable=False)
+    name_stem: Mapped[str] = mapped_column(Text, nullable=False)
+    claimant_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    claimant_key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    claimant_signer: Mapped[str] = mapped_column(Text, nullable=False)
+    claimant_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+    upheld_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    withdrawn_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    withdrawn_signer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    withdrawn_signature: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("nonce", name="name_claims_nonce_key"),
+        CheckConstraint(
+            "status IN ('pending', 'upheld', 'withdrawn')",
+            name="name_claims_status_check",
+        ),
+        CheckConstraint(
+            "claimant_key_kind IN ('hotkey', 'coldkey')",
+            name="name_claims_key_kind_check",
+        ),
+        CheckConstraint(
+            "length(claimant_signature) = 128",
+            name="name_claims_signature_check",
+        ),
+        CheckConstraint(
+            "length(name_stem) BETWEEN 3 AND 64",
+            name="name_claims_stem_length_check",
+        ),
+        CheckConstraint(
+            "name_stem ~ '^[a-z0-9]+(-[a-z0-9]+)*$'",
+            name="name_claims_stem_charset_check",
+        ),
+        CheckConstraint(
+            "(status = 'upheld') = (upheld_at IS NOT NULL)",
+            name="name_claims_upheld_pair",
+        ),
+        CheckConstraint(
+            "(status = 'withdrawn') = (withdrawn_at IS NOT NULL)",
+            name="name_claims_withdrawn_pair",
+        ),
+        Index(
+            "name_claims_active_stem_idx",
+            "netuid",
+            "name_stem",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'upheld')"),
+        ),
+        Index("name_claims_status_idx", "netuid", "status"),
+        Index("name_claims_claimant_idx", "netuid", "claimant_hotkey"),
+    )
+
+
+class NameClaimEndorsement(Base):
+    """One entrenched-miner endorsement of a handle claim."""
+
+    __tablename__ = "name_claim_endorsements"
+
+    endorsement_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    claim_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    endorser_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    endorser_owner_root: Mapped[str] = mapped_column(Text, nullable=False)
+    endorser_key_kind: Mapped[str] = mapped_column(Text, nullable=False)
+    endorser_signer: Mapped[str] = mapped_column(Text, nullable=False)
+    endorser_signature: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=func.now(),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["claim_id"],
+            ["name_claims.claim_id"],
+            ondelete="CASCADE",
+            name="name_claim_endorsements_claim_id_fkey",
+        ),
+        UniqueConstraint("nonce", name="name_claim_endorsements_nonce_key"),
+        UniqueConstraint(
+            "claim_id",
+            "endorser_owner_root",
+            name="name_claim_endorsements_owner_key",
+        ),
+        CheckConstraint(
+            "endorser_key_kind IN ('hotkey', 'coldkey')",
+            name="name_claim_endorsements_key_kind_check",
+        ),
+        CheckConstraint(
+            "length(endorser_signature) = 128",
+            name="name_claim_endorsements_signature_check",
+        ),
+        Index(
+            "name_claim_endorsements_claim_idx",
+            "claim_id",
+            "created_at",
+        ),
+    )
+
+
 class ConfirmationBundleSettingsRevision(Base):
     """Append-only global policy for the bounded v9 confirmation lane."""
 

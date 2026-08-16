@@ -30,6 +30,11 @@ from ditto.api_models import (
     AgentResponse,
     AgentStatusResponse,
     EvalPricingResponse,
+    NameClaimListResponse,
+    NameClaimRequest,
+    NameClaimResponse,
+    NameEndorseRequest,
+    NameWithdrawRequest,
     OwnerLinkRequest,
     OwnerLinkResponse,
     UploadAgentResponse,
@@ -41,6 +46,7 @@ from ditto.miner_cli.errors import (
     ApiResponseError,
     AttestationRejectedError,
     HotkeyAgentNotFoundError,
+    NameClaimRejectedError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
     PreCheckRejectedError,
@@ -303,6 +309,56 @@ class ApiClient:
         if response.status_code not in (200, 201):
             raise AttestationRejectedError(_format_error(response, prefix="owner-link"))
         return OwnerLinkResponse.model_validate(response.json())
+
+    # ---- /name-claims ---------------------------------------------------
+
+    def list_name_claims(self) -> NameClaimListResponse:
+        response = self._request("GET", "/api/v1/name-claims")
+        if response.status_code != 200:
+            raise NameClaimRejectedError(_format_error(response, prefix="name-claims"))
+        return NameClaimListResponse.model_validate(response.json())
+
+    def get_name_claim(self, claim_id: UUID) -> NameClaimResponse:
+        response = self._request("GET", f"/api/v1/name-claims/{claim_id}")
+        if response.status_code != 200:
+            raise NameClaimRejectedError(_format_error(response, prefix="name-claim"))
+        return NameClaimResponse.model_validate(response.json())
+
+    def post_name_claim(self, body: NameClaimRequest) -> NameClaimResponse:
+        response = self._request(
+            "POST",
+            "/api/v1/name-claims",
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code not in (200, 201):
+            raise NameClaimRejectedError(_format_error(response, prefix="name-claim"))
+        return NameClaimResponse.model_validate(response.json())
+
+    def post_name_endorsement(
+        self, claim_id: UUID, body: NameEndorseRequest
+    ) -> NameClaimResponse:
+        response = self._request(
+            "POST",
+            f"/api/v1/name-claims/{claim_id}/endorsements",
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code not in (200, 201):
+            raise NameClaimRejectedError(_format_error(response, prefix="name-endorse"))
+        return NameClaimResponse.model_validate(response.json())
+
+    def post_name_withdraw(
+        self, claim_id: UUID, body: NameWithdrawRequest
+    ) -> NameClaimResponse:
+        response = self._request(
+            "POST",
+            f"/api/v1/name-claims/{claim_id}/withdraw",
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code not in (200, 201):
+            raise NameClaimRejectedError(
+                _format_error(response, prefix="name-withdraw")
+            )
+        return NameClaimResponse.model_validate(response.json())
 
     # ---- /retrieval/agent/{id}/status -----------------------------------
 

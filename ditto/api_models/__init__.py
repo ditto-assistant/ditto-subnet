@@ -23,6 +23,16 @@ from ditto.api_models.attestation import (
     OwnerLinkResponse,
 )
 from ditto.api_models.health import HealthResponse
+from ditto.api_models.name_claim import (
+    NameClaimEndorsementView,
+    NameClaimListResponse,
+    NameClaimProof,
+    NameClaimRequest,
+    NameClaimResponse,
+    NameEndorseRequest,
+    NameWithdrawRequest,
+    PublicNameHandle,
+)
 from ditto.api_models.retrieval import AgentResponse, AgentStatusResponse
 from ditto.api_models.upload import (
     EvalPricingResponse,
@@ -36,9 +46,17 @@ __all__ = [
     "AgentStatusResponse",
     "EvalPricingResponse",
     "HealthResponse",
+    "NameClaimEndorsementView",
+    "NameClaimListResponse",
+    "NameClaimProof",
+    "NameClaimRequest",
+    "NameClaimResponse",
+    "NameEndorseRequest",
+    "NameWithdrawRequest",
     "OwnerLinkProof",
     "OwnerLinkRequest",
     "OwnerLinkResponse",
+    "PublicNameHandle",
     "UploadAgentResponse",
     "UploadCheckRequest",
     "UploadCheckResponse",

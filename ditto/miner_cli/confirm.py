@@ -26,6 +26,7 @@ from decimal import Decimal
 
 from ditto.miner_cli.errors import (
     AttestationCancelledError,
+    NameClaimCancelledError,
     PaymentCancelledError,
     RegistrationCancelledError,
 )
@@ -220,3 +221,42 @@ def confirm_attestation(
         )
 
     print("attestation confirmed", file=sys.stderr)
+
+
+def confirm_name_action(
+    *,
+    action: str,
+    name: str,
+    hotkey_ss58: str,
+    skip: bool,
+) -> None:
+    """Preview a handle claim / endorsement / withdrawal before signing."""
+    print()
+    print(f"Name {action} preview")
+    print(f"  Name:    {name}")
+    print(f"  Hotkey:  {hotkey_ss58}")
+    print()
+    print("Signing does NOT transfer any TAO. The signature is over a text")
+    print("message, not a transaction.")
+    print("An upheld claim reserves the handle for new uploads by other")
+    print("families and marks colliding leaderboard names as disputed. It")
+    print("does not change scores or emission slots.")
+    print("Endorsements are only accepted from miners who already have a")
+    print("scored agent family at least 7 days old.")
+    print()
+
+    if skip:
+        logger.debug("name-claim confirmation bypassed via --yes")
+        return
+
+    try:
+        response = input(f"Submit this name {action}? [y/N]: ").strip().lower()
+    except EOFError as e:
+        raise NameClaimCancelledError(f"name {action} cancelled: EOF on stdin") from e
+
+    if response != "y":
+        raise NameClaimCancelledError(
+            f"name {action} cancelled (response={response!r})"
+        )
+
+    print(f"name {action} confirmed", file=sys.stderr)

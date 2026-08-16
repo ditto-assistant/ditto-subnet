@@ -305,6 +305,14 @@ class UploadAgentRejectedError(ApiResponseError):
     pass
 
 
+class NameClaimCancelledError(MinerCliError):
+    """Raised when the miner declines a name-claim confirmation prompt."""
+
+
+class NameClaimRejectedError(ApiResponseError):
+    """Raised when a name-claim / endorse / withdraw request is rejected."""
+
+
 class AttestationRejectedError(ApiResponseError):
     """Raised when ``/attestations/owner-link`` returns a non-2xx status.
 

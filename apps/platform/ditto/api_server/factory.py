@@ -64,6 +64,7 @@ from ditto.api_server.endpoints import (
     health_router,
     inference_router,
     metrics_router,
+    name_claims_router,
     public_router,
     retrieval_router,
     scoring_router,
@@ -354,6 +355,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         app.include_router(inference_router, prefix="/api/v1")
         return app
     app.include_router(attestation_router, prefix="/api/v1")
+    app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
