@@ -1,8 +1,13 @@
 // Fleet table rendering (monolith renderFleet 8922–9114, renderRetiredFleetRow
-// 8886–8920, renderFleetMetricCells 8346–8361, fleetMeter 8340–8344, slot cell
-// 9030–9070, updateFleetLedger/resetFleetLedger 8845–8869, row activation
-// 9116–9137). Every number here comes off the one shared operations snapshot
-// (or the screener feed) handed down by the page — no panel refetches.
+// 8886–8920, host telemetry 8346–8361, slot cell 9030–9070,
+// updateFleetLedger/resetFleetLedger 8845–8869, row activation 9116–9137).
+// Every number here comes off the one shared operations snapshot (or the
+// screener feed) handed down by the page — no panel refetches.
+//
+// Three columns, not ten: who the node is and whether it can take work; what
+// it is working on; what it is running on. Everything the fleet view does not
+// route on — first seen, heartbeat protocol, container counts, updater
+// history — lives one click deep in the validator drill-down.
 import { For, Show, createMemo } from "solid-js";
 import type { JSX } from "solid-js";
 
@@ -73,7 +78,11 @@ function stageClass(tone: string): string {
 }
 
 function SlotLabel(props: { slotId: string }): JSX.Element {
-  return <span class="fleet-protocol">{props.slotId}</span>;
+  return (
+    <span class="fleet-slot-id" title={props.slotId}>
+      {slotIndexLabel(props.slotId)}
+    </span>
+  );
 }
 
 function confirmationSubjectLabel(work: ConfirmationProgress): string {
@@ -107,16 +116,13 @@ function versionLabel(entry: FleetEntryExt): string {
   return version;
 }
 
-function protocolLine(entry: FleetEntryExt, singular: FleetSingular): string {
-  if (singular === "screener") {
-    return "Protocol " + entry.protocol_version + " · Policy " + entry.policy_version;
-  }
-  // Slots read "funded of advertised", not "healthy of advertised": the
-  // operator cap is the number that decides whether a slot can be given work.
+/** What the node can be given, in the terms that decide it: slots read
+ * "funded of advertised", not "healthy of advertised", because the operator
+ * cap is the number that gates a lease. Heartbeat protocol lives in the
+ * drill-down — it settles a support question, never a dispatch one. */
+function capacityLine(entry: FleetEntryExt, singular: FleetSingular): string {
+  if (singular === "screener") return "Policy " + entry.policy_version;
   return (
-    "Protocol " +
-    entry.protocol_version +
-    " · " +
     String(fundedSlotCount(entry)) +
     " of " +
     String(entry.configured_slots || 1) +
@@ -125,30 +131,28 @@ function protocolLine(entry: FleetEntryExt, singular: FleetSingular): string {
   );
 }
 
-/** Retired rows keep the plain protocol line — the slot economy is meaningless
- * on a host the platform leases nothing to (8902–8904). */
-function retiredProtocolLine(entry: FleetEntryExt, singular: FleetSingular): string {
-  return singular === "screener"
-    ? "Protocol " + entry.protocol_version + " · Policy " + entry.policy_version
-    : "Protocol " + entry.protocol_version;
-}
-
-/** The identity cell: optional display-name decoration above the hotkey
- * anchor + copy control; the hotkey stays the anchor identity either way. */
+/** The identity cell, which now also carries the fleet verdict: a toned dot
+ * beside the name answers "can this node take work" at a glance, and the
+ * spelled status keeps that answer readable without color. Heartbeat age
+ * rides the same line — it qualifies the verdict rather than standing alone
+ * in a column of its own. */
 function FleetIdentity(props: {
   entry: FleetEntryExt;
   singular: FleetSingular;
   names: Record<string, string>;
+  status: [string, string];
   /** Retired screeners name themselves "Unknown screener" (8890). */
   screenerFallback?: string;
 }): JSX.Element {
   const hotkey = () => hotkeyOf(props.entry, props.singular);
+  const reportedAt = () => props.entry.seen_at || props.entry.reported_at;
   // Validators are keyed by a distinct hotkey; the screener fleet shares one
   // hotkey, so each worker is distinguished by its instance_id.
   const displayName = () =>
     props.singular === "validator"
       ? props.names[hotkey()] || ""
       : props.entry.instance_id || props.screenerFallback || "";
+  const tone = () => props.status[1] || "unknown";
   const keyNode = (): JSX.Element => (
     <>
       <span>
@@ -159,91 +163,112 @@ function FleetIdentity(props: {
   );
   return (
     <span class="fleet-node-wrap">
-      <Show
-        when={displayName()}
-        fallback={
-          <span class="fleet-node copyable" title={hotkey()}>
-            {keyNode()}
-          </span>
-        }
-      >
-        {(name) => (
-          <span class="fleet-node-identity">
+      <span class={"fleet-node-dot " + tone()} aria-hidden="true" />
+      <span class="fleet-node-identity">
+        <Show when={displayName()}>
+          {(name) => (
             <span class="fleet-node-name" title={name()}>
               <Show when={props.singular === "validator"} fallback={name()}>
                 <EntityButton kind="validator" id={hotkey()} label={name()} />
               </Show>
             </span>
-            <span class="fleet-node fleet-node-key copyable" title={hotkey()}>
-              {keyNode()}
-            </span>
+          )}
+        </Show>
+        <span class="fleet-node fleet-node-key copyable" title={hotkey()}>
+          {keyNode()}
+        </span>
+        <span class="fleet-node-state">
+          <span class={"fleet-node-status " + tone()}>{props.status[0]}</span>
+          <span class="fleet-node-state-sep" aria-hidden="true">
+            ·
           </span>
-        )}
-      </Show>
-    </span>
-  );
-}
-
-function FleetMeter(props: { value: number; tone: string }): JSX.Element {
-  return (
-    <span class={"fleet-meter" + (props.tone ? " " + props.tone : "")}>
-      <span class="fleet-meter-track" aria-hidden="true">
-        <i style={{ "--value": String(props.value) }} />
+          <span class="fleet-time" title={reportedAt() || ""}>
+            {relTime(reportedAt())}
+          </span>
+        </span>
       </span>
-      <span class="fleet-meter-value">{props.value}%</span>
     </span>
   );
 }
 
-/** The four telemetry cells; a missing report is one explicit statement, not
- * four fabricated zeros. Only memory ≥ 90 and disk ≥ 95 warn — CPU saturation
- * during a benchmark is normal work, not an incident (8346–8361). */
-export function FleetMetricCells(props: {
-  metrics: SystemMetrics | null | undefined;
+/**
+ * Host load as one small column chart rather than three columns of the
+ * table: CPU, memory and disk share a baseline and a ceiling, so the tallest
+ * bar is the answer to "what is this host short of" without reading a single
+ * number. Only memory ≥ 90 and disk ≥ 95 warn — CPU saturation during a
+ * benchmark is the machine doing its job, not an incident (8346–8361).
+ */
+function ResourceChart(props: { metrics: SystemMetrics }): JSX.Element {
+  const clamp = (value: number): number =>
+    Math.max(0, Math.min(100, Math.round(Number(value) || 0)));
+  const bars = createMemo(() => [
+    { label: "CPU", value: clamp(props.metrics.cpu_percent), warn: false },
+    {
+      label: "MEM",
+      value: clamp(props.metrics.memory_percent),
+      warn: props.metrics.memory_percent >= 90,
+    },
+    {
+      label: "DISK",
+      value: clamp(props.metrics.disk_percent),
+      warn: props.metrics.disk_percent >= 95,
+    },
+  ]);
+  const sentence = () =>
+    "Host load · " +
+    bars()
+      .map((bar) => bar.label + " " + bar.value + "%")
+      .join(" · ");
+  return (
+    <div class="fleet-resources" role="img" aria-label={sentence()} title={sentence()}>
+      <For each={bars()}>
+        {(bar) => (
+          <div class={"fleet-resource" + (bar.warn ? " warn" : "")}>
+            <span class="fleet-resource-value">{bar.value}%</span>
+            <span class="fleet-resource-track" aria-hidden="true">
+              <i style={{ "--value": String(bar.value) }} />
+            </span>
+            <span class="fleet-resource-label">{bar.label}</span>
+          </div>
+        )}
+      </For>
+    </div>
+  );
+}
+
+/** The host cell: what this node is running, what it may be given, and what
+ * it has left. Container counts and heartbeat protocol are in the drill-down
+ * — neither changes what the fleet does next. */
+export function FleetHostCell(props: {
+  entry: FleetEntryExt;
+  singular: FleetSingular;
+  slotPolicy: SlotPolicy | null;
 }): JSX.Element {
   return (
-    <Show
-      when={props.metrics}
-      fallback={
-        <td class="fleet-unreported" colspan="4">
-          System metrics unavailable
-        </td>
-      }
-    >
-      {(metrics) => {
-        const docker = () => {
-          if (metrics().docker_status === "healthy")
-            return { value: metrics().running_containers + " running", tone: "" };
-          if (metrics().docker_status === "degraded")
-            return { value: metrics().unhealthy_containers + " unhealthy", tone: "bad" };
-          return { value: "Not reported", tone: "" };
-        };
-        return (
-          <>
-            <td class="fleet-cpu-cell">
-              <FleetMeter value={metrics().cpu_percent} tone="" />
-            </td>
-            <td class="fleet-mem-cell">
-              <FleetMeter
-                value={metrics().memory_percent}
-                tone={metrics().memory_percent >= 90 ? "warn" : ""}
-              />
-            </td>
-            <td class="fleet-disk-cell">
-              <FleetMeter
-                value={metrics().disk_percent}
-                tone={metrics().disk_percent >= 95 ? "warn" : ""}
-              />
-            </td>
-            <td class="fleet-docker-cell">
-              <span class={"fleet-container-health" + (docker().tone ? " " + docker().tone : "")}>
-                {docker().value}
-              </span>
-            </td>
-          </>
-        );
-      }}
-    </Show>
+    <td class="fleet-host-cell">
+      <div class="fleet-host">
+        <span class="fleet-version">{versionLabel(props.entry)}</span>
+        <span
+          class="fleet-protocol"
+          title={
+            props.singular === "validator"
+              ? slotCapacityTitle(props.entry, props.slotPolicy)
+              : "Screening policy version"
+          }
+        >
+          {capacityLine(props.entry, props.singular)}
+        </span>
+        <Show when={props.singular === "validator" ? updaterModeLine(props.entry) : null}>
+          {(mode) => <span class="fleet-updater-mode">{mode()}</span>}
+        </Show>
+        <Show
+          when={props.entry.system_metrics}
+          fallback={<span class="fleet-unreported">Host load not reported</span>}
+        >
+          {(metrics) => <ResourceChart metrics={metrics()} />}
+        </Show>
+      </div>
+    </td>
   );
 }
 
@@ -293,12 +318,21 @@ const SLOT_STAGE_SHORT: Record<string, string> = {
   waiting_for_relay: "waiting for relay",
 };
 
+/** `slot-3` → `3`. The ordinal is the only part an operator reads; the full
+ * id stays on the tooltip and on data-slot for anything that keys off it. */
+function slotIndexLabel(slotId: string): string {
+  const ordinal = /(\d+)\s*$/.exec(slotId);
+  return ordinal ? ordinal[1]! : slotId;
+}
+
 /**
- * One running slot as a single dense line: slot id, bench chip, agent link,
- * live bar, and the numbers (`47% · 132/281 · 15m 0s`). Nothing is dropped —
- * the full progress sentence (stage label, stall reason, delayed-telemetry
- * note) rides on the line's tooltip and the bar's accessible label, so eight
- * busy slots read as eight rows of a ledger instead of eight stacked cards.
+ * One running slot as a single ledger line: ordinal, bench chip, agent, live
+ * bar, then the numbers. Every line shares one set of grid tracks with its
+ * siblings, so a long agent name lengthens no bar and shifts no column — the
+ * eight bars of a busy validator read as one chart, not eight. Nothing is
+ * dropped: the full progress sentence (stage label, stall reason,
+ * delayed-telemetry note) rides on the line's tooltip and the bar's
+ * accessible label, and the agent's identifier on the agent's own tooltip.
  */
 function SlotLine(props: { slotId: string; progress: BenchmarkProgress }): JSX.Element {
   const p = () => props.progress;
@@ -318,19 +352,17 @@ function SlotLine(props: { slotId: string; progress: BenchmarkProgress }): JSX.E
     benchmarkStageLabel(p().stage) +
     ". " +
     benchmarkProgressText(p());
-  const numbers = createMemo(() => {
-    const parts: string[] = [];
-    if (delayed()) parts.push("update delayed");
-    if (failed()) parts.push("failed · retrying");
-    else if (stalled()) parts.push("stalled");
-    else if (p().stage && p().stage !== "running_benchmark") {
-      parts.push(SLOT_STAGE_SHORT[p().stage as string] || "working");
-    } else if (!p().stage && !delayed()) {
-      parts.push("awaiting progress");
+  // Only what the bar itself cannot say. A running benchmark is silent here:
+  // the fill and the counts already state it.
+  const note = createMemo(() => {
+    if (delayed()) return "update delayed";
+    if (failed()) return "failed · retrying";
+    if (stalled()) return "stalled";
+    if (p().stage && p().stage !== "running_benchmark") {
+      return SLOT_STAGE_SHORT[p().stage as string] || "working";
     }
-    if (p().percent != null) parts.push(String(p().percent) + "%");
-    if (counts()) parts.push(counts());
-    return parts.join(" · ");
+    if (!p().stage) return "awaiting progress";
+    return "";
   });
   return (
     <div
@@ -339,47 +371,44 @@ function SlotLine(props: { slotId: string; progress: BenchmarkProgress }): JSX.E
       title={sentence()}
       data-slot={props.slotId}
     >
-      <span class="fleet-slot-id">{props.slotId}</span>
-      <Show when={p().bench_version}>
-        {(version) => (
-          <span class="benchmark-version-chip" title={"Bench v" + version()}>
-            v{version()}
-          </span>
-        )}
-      </Show>
-      <span class="fleet-slot-agent" title={String(p().agent_id || "")}>
-        <EntityButton
-          kind="agent"
-          id={p().agent_id}
-          label={
-            (p().agent_name || "Unnamed agent") + " · " + String(p().agent_id || "").slice(0, 8)
-          }
-        />
+      <span class="fleet-slot-id" title={props.slotId}>
+        {slotIndexLabel(props.slotId)}
       </span>
-      <Show
-        when={determinate()}
-        fallback={
-          <span
-            class="bench-bar"
-            classList={{ indeterminate: !stalled() && !failed() && !delayed() }}
-            role="img"
-            aria-label={sentence()}
-          >
-            <i />
-          </span>
-        }
-      >
-        <progress max="100" value={value()} aria-label={sentence()} />
-      </Show>
-      <span class="fleet-slot-status">
-        {numbers()}
-        <Show when={p().started_at}>
-          {(startedAt) => (
-            <>
-              {numbers() ? " · " : ""}
-              <ElapsedTime class="fleet-slot-elapsed" startedAt={startedAt()} />
-            </>
+      <span class="fleet-slot-bench">
+        <Show when={p().bench_version}>
+          {(version) => (
+            <span class="benchmark-version-chip" title={"Bench v" + version()}>
+              v{version()}
+            </span>
           )}
+        </Show>
+      </span>
+      <span class="fleet-slot-agent" title={String(p().agent_id || "")}>
+        <EntityButton kind="agent" id={p().agent_id} label={p().agent_name || "Unnamed agent"} />
+      </span>
+      <span class="fleet-slot-bar">
+        <Show
+          when={determinate()}
+          fallback={
+            <span
+              class="bench-bar"
+              classList={{ indeterminate: !stalled() && !failed() && !delayed() }}
+              role="img"
+              aria-label={sentence()}
+            >
+              <i />
+            </span>
+          }
+        >
+          <progress max="100" value={value()} aria-label={sentence()} />
+        </Show>
+      </span>
+      <span class="fleet-slot-note">{note()}</span>
+      <span class="fleet-slot-pct">{p().percent != null ? String(p().percent) + "%" : ""}</span>
+      <span class="fleet-slot-count">{counts()}</span>
+      <span class="fleet-slot-elapsed-cell">
+        <Show when={p().started_at}>
+          {(startedAt) => <ElapsedTime class="fleet-slot-elapsed" startedAt={startedAt()} />}
         </Show>
       </span>
     </div>
@@ -535,7 +564,7 @@ function ConfirmationRows(props: { entry: FleetEntryExt }): JSX.Element {
         <For each={rows()}>
           {(work) => (
             <div class="fleet-confirmation-work" title={work.profile_revision}>
-              <span class="fleet-protocol">{work.slot_id}</span>
+              <SlotLabel slotId={work.slot_id} />
               <span class={stageClass(work.mode === "enforce" ? "warn" : "success")}>
                 {work.mode === "enforce" ? "Enforce" : "Shadow"}
               </span>
@@ -719,7 +748,6 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
     const base = fleetWork(props.entry.state, props.singular);
     return props.entry.availability === "stale" ? ["Last reported · " + base[0], "warn"] : base;
   });
-  const reportedAt = () => props.entry.seen_at || props.entry.reported_at;
   // A plain worker-state chip only when nothing more granular is available:
   // assignment skew, any slot's live benchmark stage, a screening stage.
   const hasGranularProgress = () =>
@@ -741,20 +769,12 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
       onKeyDown={activation.onKeyDown}
     >
       <td class="fleet-id-cell">
-        <FleetIdentity entry={props.entry} singular={props.singular} names={props.names} />
-      </td>
-      <td class="fleet-status-cell">
-        <span class={stageClass(status()[1])}>{status()[0]}</span>
-      </td>
-      <td class="fleet-first-seen-cell">
-        <span class="fleet-time" title={props.entry.first_seen_at || ""}>
-          {props.entry.first_seen_at ? relTime(props.entry.first_seen_at) : "–"}
-        </span>
-      </td>
-      <td class="fleet-heartbeat-cell">
-        <span class="fleet-time" title={reportedAt() || ""}>
-          {relTime(reportedAt())}
-        </span>
+        <FleetIdentity
+          entry={props.entry}
+          singular={props.singular}
+          names={props.names}
+          status={status()}
+        />
       </td>
       <td class="fleet-work-col">
         <Show when={!hasGranularProgress()}>
@@ -797,34 +817,7 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
           </Show>
         </Show>
       </td>
-      <td class="fleet-version-cell">
-        <span class="fleet-version">{versionLabel(props.entry)}</span>
-        <span
-          class="fleet-protocol"
-          title={
-            props.singular === "validator" ? slotCapacityTitle(props.entry, props.slotPolicy) : ""
-          }
-        >
-          {protocolLine(props.entry, props.singular)}
-        </span>
-        <Show when={props.singular === "validator" ? updaterModeLine(props.entry) : null}>
-          {(mode) => <span class="fleet-updater-mode">{mode()}</span>}
-        </Show>
-        <Show when={props.singular === "validator" && props.entry.updater_status?.last_success_at}>
-          <span
-            class="fleet-updater-success"
-            title={new Date(
-              (props.entry.updater_status?.last_success_at || 0) * 1000,
-            ).toISOString()}
-          >
-            Updated{" "}
-            {relTime(
-              new Date((props.entry.updater_status?.last_success_at || 0) * 1000).toISOString(),
-            )}
-          </span>
-        </Show>
-      </td>
-      <FleetMetricCells metrics={props.entry.system_metrics} />
+      <FleetHostCell entry={props.entry} singular={props.singular} slotPolicy={props.slotPolicy} />
     </tr>
   );
 }
@@ -849,7 +842,6 @@ export function RetiredFleetRow(props: RetiredFleetRowProps): JSX.Element {
   const hotkey = () => hotkeyOf(props.entry, props.singular);
   const status = () => offlineAwareFleetStatusFor(props.entry, props.benchVersion);
   const work = () => fleetWork(props.entry.state, props.singular);
-  const reportedAt = () => props.entry.seen_at || props.entry.reported_at;
   const highlighted = () =>
     props.singular === "validator" && props.highlightId != null && props.highlightId === hotkey();
   const activation = rowActivation(props.singular, hotkey);
@@ -860,23 +852,20 @@ export function RetiredFleetRow(props: RetiredFleetRowProps): JSX.Element {
           entry={props.entry}
           singular={props.singular}
           names={props.names}
+          status={status()}
           screenerFallback="Unknown screener"
         />
-      </td>
-      <td class="fleet-status-cell">
-        <span class={stageClass(status()[1])}>{status()[0]}</span>
-      </td>
-      <td class="fleet-heartbeat-cell">
-        <span class="fleet-time" title={reportedAt() || ""}>
-          {relTime(reportedAt())}
-        </span>
       </td>
       <td class="fleet-state-cell">
         <span class="stage unknown">{work()[0]}</span>
       </td>
-      <td class="fleet-version-cell">
-        <span class="fleet-version">{versionLabel(props.entry)}</span>
-        <span class="fleet-protocol">{retiredProtocolLine(props.entry, props.singular)}</span>
+      <td class="fleet-host-cell">
+        <div class="fleet-host">
+          <span class="fleet-version">{versionLabel(props.entry)}</span>
+          <Show when={props.singular === "screener"}>
+            <span class="fleet-protocol">{"Policy " + props.entry.policy_version}</span>
+          </Show>
+        </div>
       </td>
     </>
   );

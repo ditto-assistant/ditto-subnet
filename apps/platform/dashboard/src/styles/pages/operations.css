@@ -292,27 +292,24 @@
 }
 .fleet-version {
   display: block;
-  font-family: var(--mono);
-  font-size: 12px;
+  font: 650 13px/1.1 var(--mono);
   color: var(--text);
 }
 .fleet-protocol {
   display: block;
   margin-top: 3px;
   font-size: 11px;
+  line-height: 1.4;
   color: var(--text-faint);
 }
-.fleet-updater-mode,
-.fleet-updater-success {
+.fleet-updater-mode {
   display: block;
   margin-top: 5px;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
   color: var(--text-dim);
   font: 650 9.5px/1.35 var(--mono);
-}
-.fleet-updater-success {
-  margin-top: 2px;
-  color: var(--text-faint);
-  font-weight: 500;
 }
 .fleet-time {
   display: block;
@@ -978,18 +975,56 @@
   min-width: 760px;
 }
 .fleet-table {
-  min-width: 1220px;
+  min-width: 920px;
   table-layout: fixed;
 }
 .fleet-table thead th,
 .fleet-table tbody td {
-  padding-inline: 12px;
+  padding-inline: 14px;
 }
+/* Top-aligned: on an eight-slot validator a vertically centred name drifts
+   half a row away from the work it labels. */
 .fleet-table tbody td {
-  padding-block: 8px;
+  padding-block: 12px;
+  vertical-align: top;
 }
+/* Identity, verdict and liveness in one cell: the toned dot answers the
+   routing question at a glance, the spelled status answers it without
+   colour, and heartbeat age qualifies both. */
 .fleet-node-wrap {
-  display: block;
+  display: grid;
+  grid-template-columns: 8px minmax(0, 1fr);
+  column-gap: 9px;
+  align-items: start;
+  min-width: 0;
+}
+.fleet-node-dot {
+  width: 8px;
+  height: 8px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+.fleet-node-dot.good {
+  background: var(--good);
+}
+.fleet-node-dot.progress {
+  background: var(--accent-2);
+}
+.fleet-node-dot.warn {
+  background: var(--warn);
+}
+.fleet-node-dot.bad {
+  background: var(--danger);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--danger) 22%, transparent);
+}
+.fleet-node-dot.paused {
+  background: var(--accent-2);
+  opacity: 0.75;
+}
+.fleet-node-identity {
+  display: grid;
+  gap: 2px;
   min-width: 0;
 }
 .fleet-node-name {
@@ -1008,6 +1043,43 @@
 .fleet-node {
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-node-state {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-top: 3px;
+  min-width: 0;
+}
+.fleet-node-status {
+  color: var(--text-dim);
+  font: 700 10px/1.4 var(--mono);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.fleet-node-status.good {
+  color: var(--good);
+}
+.fleet-node-status.progress {
+  color: var(--accent-2);
+}
+.fleet-node-status.warn {
+  color: var(--warn);
+}
+.fleet-node-status.bad {
+  color: var(--danger);
+}
+.fleet-node-status.paused {
+  color: var(--accent-2);
+}
+.fleet-node-state-sep {
+  color: var(--text-faint);
+}
+.fleet-node-state .fleet-time {
+  color: var(--text-dim);
+  font-size: 10px;
   white-space: nowrap;
 }
 .fleet-time {
@@ -1051,37 +1123,100 @@
   border-color: var(--border);
   background: var(--bg-elev-2);
 }
-.fleet-meter {
+/* The host card: build, capacity, release ownership, load. One block per
+   node so the right edge of the table reads as a specification, not as four
+   unrelated columns. */
+.fleet-host {
   display: grid;
-  grid-template-columns: minmax(32px, 1fr) auto;
-  align-items: center;
-  gap: 6px;
+  gap: 3px;
+  justify-items: start;
+  padding: 9px 11px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--bg-elev-2) 46%, transparent);
+}
+.fleet-host .fleet-unreported {
+  margin-top: 5px;
+}
+/* Load as a three-column chart on one baseline and one ceiling: the tallest
+   bar is the answer before any number is read. */
+.fleet-resources {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0 10px;
+  width: 100%;
+  margin-top: 8px;
+  padding-top: 9px;
+  border-top: 1px solid var(--border);
+}
+.fleet-resource {
+  display: grid;
+  grid-template-rows: auto 34px auto;
+  gap: 4px;
+  justify-items: center;
   min-width: 0;
 }
-.fleet-meter-track {
-  display: block;
-  height: 6px;
+.fleet-resource-value {
+  color: var(--text);
+  font: 650 10px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.fleet-resource-track {
+  position: relative;
+  width: 100%;
+  max-width: 30px;
+  height: 100%;
   border: 1px solid var(--border);
+  border-radius: 2px;
   background: var(--bg-elev-2);
   overflow: hidden;
 }
-.fleet-meter-track i {
-  display: block;
-  width: calc(var(--value) * 1%);
-  height: 100%;
+/* The half-scale rule: without it a column chart this small only ranks, it
+   does not measure. */
+.fleet-resource-track::before {
+  content: "";
+  position: absolute;
+  right: 0;
+  bottom: 50%;
+  left: 0;
+  height: 1px;
+  background: color-mix(in oklab, var(--border) 70%, transparent);
+}
+.fleet-resource-track i {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: calc(var(--value) * 1%);
   background: var(--good);
 }
-.fleet-meter.warn .fleet-meter-track i {
+.fleet-resource.warn .fleet-resource-value {
+  color: var(--warn);
+}
+.fleet-resource.warn .fleet-resource-track i {
   background: var(--warn);
 }
-.fleet-meter-value {
-  color: var(--text);
-  font: 10px/1 var(--mono);
-  font-variant-numeric: tabular-nums;
+.fleet-resource-label {
+  color: var(--text-dim);
+  font: 650 9.5px/1 var(--mono);
+  letter-spacing: 0.06em;
 }
 /* Active work stays visible; routine free-slot state folds into one compact
-   capacity summary so an eight-slot validator does not become eight rows. */
+   capacity summary so an eight-slot validator does not become eight rows.
+   The overview owns the slot-line tracks and every line borrows them through
+   subgrid, so one long agent name can never shorten or shift a neighbour's
+   bar: eight slots read as one chart with a shared axis. */
 .fleet-slot-overview {
+  display: grid;
+  grid-template-columns:
+    auto auto minmax(142px, 0.5fr) minmax(110px, 1fr)
+    auto auto auto auto;
+  column-gap: 8px;
+  row-gap: 4px;
+  min-width: 0;
+}
+.fleet-slot-overview > * {
+  grid-column: 1 / -1;
   min-width: 0;
 }
 
@@ -1190,45 +1325,97 @@
   line-height: 1.45;
   text-wrap: pretty;
 }
-/* One running slot per line: id · bench chip · agent · bar · numbers. The
-   full progress sentence rides on the tooltip and the bar's accessible
+/* One running slot per line: ordinal · bench chip · agent · bar · numbers.
+   The full progress sentence rides on the tooltip and the bar's accessible
    label, so a busy eight-slot validator reads as a ledger, not a card
    stack. */
 .fleet-slot-line {
   display: grid;
-  /* The agent is the identity of the work: it may truncate but never
-     collapse, so it keeps a floor while the bar flexes within its band. */
-  grid-template-columns: auto auto minmax(64px, 1fr) minmax(40px, 80px) auto;
+  /* Fallback tracks first; where subgrid lands the parent's tracks win and
+     the whole group aligns to one axis. */
+  grid-template-columns:
+    auto auto minmax(142px, 0.5fr) minmax(110px, 1fr)
+    auto auto auto auto;
+  grid-template-columns: subgrid;
   align-items: center;
-  gap: 6px;
   min-width: 0;
-  padding-block: 2px;
+  padding-block: 3px;
 }
-.fleet-slot-line + .fleet-slot-line {
-  margin-top: 2px;
-}
-.fleet-slot-line + .fleet-slot {
-  margin-top: var(--ops-space-sm);
+.fleet-slot-line > * {
+  min-width: 0;
 }
 .fleet-slot-id {
+  grid-column: 1;
   color: var(--text-faint);
-  font: 650 10px/1 var(--mono);
+  font: 650 11px/1 var(--mono);
   font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
 }
+.fleet-slot-bench {
+  grid-column: 2;
+}
 .fleet-slot-agent {
-  min-width: 0;
+  grid-column: 3;
   overflow: hidden;
   color: var(--accent-2);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: 11.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.fleet-slot-bar {
+  grid-column: 4;
+}
+.fleet-slot-note {
+  grid-column: 5;
+  overflow: hidden;
+  color: var(--text-dim);
+  font: 400 10px/1.3 var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-slot-pct {
+  grid-column: 6;
+}
+.fleet-slot-count {
+  grid-column: 7;
+}
+.fleet-slot-elapsed-cell {
+  grid-column: 8;
+}
+/* Widths in ch, so the numeric tracks measure the same on every validator
+   and the whole table — not just one row group — shares an axis. */
+.fleet-slot-pct,
+.fleet-slot-count,
+.fleet-slot-elapsed-cell {
+  color: var(--text-dim);
+  font: 400 10.5px/1.3 var(--mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.fleet-slot-pct {
+  min-width: 4ch;
+}
+.fleet-slot-count {
+  min-width: 7ch;
+}
+.fleet-slot-elapsed-cell {
+  min-width: 8ch;
+}
+.fleet-slot-pct {
+  color: var(--text);
+  font-weight: 650;
+}
+.fleet-slot-line.warn .fleet-slot-note,
+.fleet-slot-line.warn .fleet-slot-pct {
+  color: var(--warn);
 }
 .fleet-slot-line progress {
   display: block;
   width: 100%;
-  height: 5px;
+  height: 10px;
   border: 0;
   border-radius: 999px;
   overflow: hidden;
@@ -1251,7 +1438,7 @@
 .fleet-slot-line .bench-bar {
   display: block;
   width: 100%;
-  height: 5px;
+  height: 10px;
   border-radius: 999px;
   overflow: hidden;
   background: var(--bg-elev-2);
@@ -1272,16 +1459,6 @@
 .fleet-slot-line.warn progress::-moz-progress-bar {
   background: var(--warn);
 }
-.fleet-slot-status {
-  justify-self: end;
-  color: var(--text-dim);
-  font: 400 10px/1.3 var(--mono);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.fleet-slot-line.warn .fleet-slot-status {
-  color: var(--warn);
-}
 @media (prefers-reduced-motion: reduce) {
   .fleet-slot-line .bench-bar.indeterminate > i {
     width: 100%;
@@ -1300,7 +1477,10 @@
   }
   .fleet-slot-id,
   .fleet-slot-agent,
-  .fleet-slot-status {
+  .fleet-slot-note,
+  .fleet-slot-pct,
+  .fleet-slot-count,
+  .fleet-slot-elapsed-cell {
     color: CanvasText;
   }
 }
@@ -1315,9 +1495,9 @@
   padding-top: var(--ops-space-sm);
   border-top: 1px solid var(--border);
 }
-.fleet-slot > .fleet-protocol {
+.fleet-slot > .fleet-slot-id {
   flex: none;
-  font-variant-numeric: tabular-nums;
+  min-width: 10px;
 }
 .fleet-slot-summary,
 .fleet-slot-disclosure summary {
@@ -1350,14 +1530,6 @@
 }
 .fleet-slot-inactive {
   justify-content: space-between;
-}
-.fleet-container-health {
-  color: var(--text);
-  font: 10px/1.35 var(--mono);
-  white-space: nowrap;
-}
-.fleet-container-health.bad {
-  color: var(--danger);
 }
 .fleet-unreported {
   color: var(--text-faint);
@@ -1763,8 +1935,7 @@
   }
   .fleet-table tbody tr {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 10px 12px;
+    gap: 12px;
     padding: 13px 14px;
     border: 1px solid var(--border);
     border-radius: 10px;
@@ -1776,18 +1947,7 @@
     padding: 0;
     border: 0;
   }
-  .fleet-table td.fleet-id-cell,
-  .fleet-table td.fleet-work-col,
-  .fleet-table td.fleet-version-cell,
-  .fleet-table td.fleet-docker-cell,
-  .fleet-table td.fleet-unreported,
-  .fleet-retired-table td.fleet-state-cell {
-    grid-column: 1 / -1;
-  }
-  /* The active table's state cell keeps its 3-up slot; only the retired
-     table's longer "last reported" line spans (the rule above). */
   .fleet-table td.empty {
-    grid-column: 1 / -1;
     padding: 0;
   }
   .fleet-table td.empty .empty-msg {
@@ -1795,53 +1955,72 @@
     width: auto;
     padding: 28px 16px;
   }
-  /* Labels stand in for the hidden column headers. */
-  .fleet-table td.fleet-status-cell::before {
-    content: "Status";
-  }
-  .fleet-table td.fleet-first-seen-cell::before {
-    content: "First seen";
-  }
-  .fleet-table td.fleet-heartbeat-cell::before {
-    content: "Last heartbeat";
-  }
+  /* Labels stand in for the hidden column headers. The identity cell needs
+     none — it names itself. */
   .fleet-table td.fleet-work-col::before {
     content: "Current work";
   }
-  .fleet-table td.fleet-version-cell::before {
-    content: "Version";
-  }
-  .fleet-table td.fleet-cpu-cell::before {
-    content: "CPU";
-  }
-  .fleet-table td.fleet-mem-cell::before {
-    content: "Memory";
-  }
-  .fleet-table td.fleet-disk-cell::before {
-    content: "Disk";
-  }
-  .fleet-table td.fleet-docker-cell::before {
-    content: "Containers";
+  .fleet-table td.fleet-host-cell::before {
+    content: "Host";
   }
   .fleet-retired-table td.fleet-state-cell::before {
     content: "Last reported";
   }
-  .fleet-table td.fleet-status-cell::before,
-  .fleet-table td.fleet-first-seen-cell::before,
-  .fleet-table td.fleet-heartbeat-cell::before,
   .fleet-table td.fleet-work-col::before,
-  .fleet-table td.fleet-version-cell::before,
-  .fleet-table td.fleet-cpu-cell::before,
-  .fleet-table td.fleet-mem-cell::before,
-  .fleet-table td.fleet-disk-cell::before,
-  .fleet-table td.fleet-docker-cell::before,
+  .fleet-table td.fleet-host-cell::before,
   .fleet-retired-table td.fleet-state-cell::before {
     display: block;
-    margin-bottom: 3px;
+    margin-bottom: 5px;
     color: var(--text-faint);
     font: 650 9.5px/1.2 var(--mono);
     letter-spacing: 0.05em;
     text-transform: uppercase;
+  }
+  /* Narrow screens cannot hold eight tracks; the slot line stacks its
+     identity above a full-width bar and its numbers, still on one shared
+     axis per group. */
+  .fleet-slot-overview {
+    grid-template-columns: auto auto minmax(0, 1fr) auto;
+    row-gap: 9px;
+  }
+  .fleet-slot-line {
+    grid-template-columns: subgrid;
+    row-gap: 4px;
+    padding-block: 0;
+  }
+  .fleet-slot-line + .fleet-slot-line {
+    padding-top: 9px;
+    border-top: 1px solid var(--border);
+  }
+  .fleet-slot-id,
+  .fleet-slot-bench {
+    grid-row: 1;
+  }
+  .fleet-slot-agent {
+    grid-row: 1;
+    grid-column: 3 / -1;
+  }
+  .fleet-slot-bar {
+    grid-row: 2;
+    grid-column: 1 / -1;
+  }
+  .fleet-slot-pct {
+    grid-row: 3;
+    grid-column: 1;
+    text-align: left;
+  }
+  .fleet-slot-count {
+    grid-row: 3;
+    grid-column: 2;
+    text-align: left;
+  }
+  .fleet-slot-note {
+    grid-row: 3;
+    grid-column: 3;
+  }
+  .fleet-slot-elapsed-cell {
+    grid-row: 3;
+    grid-column: 4;
   }
   .fleet-unreported {
     color: var(--text-faint);

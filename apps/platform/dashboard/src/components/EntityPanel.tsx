@@ -1192,6 +1192,28 @@ function ValidatorSummary(props: {
             </>
           )}
         </Show>
+        {/* Release ownership in full. The fleet table carries only the mode —
+            who updates this host — because that is the part that changes how
+            an operator acts on it; channel, attempt history and the last
+            successful replacement settle questions asked here. */}
+        <Show when={e().updater_status}>
+          {(updater) => (
+            <>
+              <Stat k="Updater channel" v={updater().channel || "Not reported"} />
+              <Stat k="Updater state" v={updater().state.replace(/_/g, " ")} />
+              <Stat
+                k="Last successful update"
+                v={<UnixTime seconds={updater().last_success_at} />}
+              />
+              <Show when={updater().failed_candidate_count}>
+                {(count) => <Stat k="Failed attempts" v={String(count())} />}
+              </Show>
+              <Show when={updater().last_failure_reason}>
+                {(reason) => <Stat k="Last failure" v={reason()} />}
+              </Show>
+            </>
+          )}
+        </Show>
       </Section>
       {/* Open by default: an operator who reaches this modal is usually asking
           which part of the stack is broken, and the answer is one click deep. */}

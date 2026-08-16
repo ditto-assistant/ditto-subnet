@@ -412,7 +412,19 @@ describe("slot fan-out in the fleet table", () => {
     // The disclosure still preserves all eight exact slot states in numeric
     // order; they simply do not make the default table row eight times taller.
     expect(rows.length).toBe(8);
-    expect(rows.map((row) => row.querySelector(".fleet-protocol")?.textContent)).toEqual([
+    // The label is the ordinal alone — the full slot id stays addressable on
+    // both the row's title and the label's own.
+    expect(rows.map((row) => row.querySelector(".fleet-slot-id")?.textContent)).toEqual([
+      "0",
+      "1",
+      "2",
+      "3",
+      "4",
+      "5",
+      "6",
+      "7",
+    ]);
+    expect(rows.map((row) => row.getAttribute("title"))).toEqual([
       "slot-0",
       "slot-1",
       "slot-2",
@@ -422,8 +434,8 @@ describe("slot fan-out in the fleet table", () => {
       "slot-6",
       "slot-7",
     ]);
-    expect(rows.map((row) => row.getAttribute("title"))).toEqual(
-      rows.map((row) => row.querySelector(".fleet-protocol")?.textContent),
+    expect(rows.map((row) => row.querySelector(".fleet-slot-id")?.getAttribute("title"))).toEqual(
+      rows.map((row) => row.getAttribute("title")),
     );
     expect(rows.every((row) => row.classList.contains("fleet-slot-inactive"))).toBe(true);
     expect(OPERATIONS_CSS).toContain(".fleet-slot {");
@@ -452,12 +464,14 @@ describe("slot fan-out in the fleet table", () => {
   it("reports funded capacity in the row, not advertised or healthy", async () => {
     await renderFleet();
     const protocol = document.querySelector(
-      `#fleet-rows tr[data-entity-id="${DITTO}"] td:nth-child(6) .fleet-protocol`,
+      `#fleet-rows tr[data-entity-id="${DITTO}"] td.fleet-host-cell .fleet-protocol`,
     );
     // The numerator is what dispatch funds. Ditto is 8 healthy of 8 advertised
     // under a cap of 6, so the old "healthy of advertised" phrasing would have
     // read "8 of 8" — a validator with two unusable slots reported as full.
-    expect(protocol?.textContent).toBe("Protocol 18 · 6 of 8 slots · accepting");
+    // Heartbeat protocol is drill-down detail and no longer rides this line.
+    expect(protocol?.textContent).toBe("6 of 8 slots · accepting");
+    expect(protocol?.textContent).not.toContain("Protocol");
     expect(protocol?.textContent).not.toContain("8 of 8");
     expect(protocol?.textContent).not.toContain("8/8");
     // The breakdown behind the number lives in the tooltip (the string itself
@@ -491,10 +505,11 @@ describe("slot fan-out in the fleet table", () => {
       overflowCell.querySelectorAll<HTMLElement>(".fleet-slot-inactive"),
     );
     expect(visibleRows.map((row) => row.querySelector(".fleet-slot-id")?.textContent)).toEqual([
-      "slot-3",
+      "3",
     ]);
-    expect(foldedRows.map((row) => row.querySelector(".fleet-protocol")?.textContent)).toEqual([
-      "slot-0",
+    expect(visibleRows.map((row) => row.getAttribute("data-slot"))).toEqual(["slot-3"]);
+    expect(foldedRows.map((row) => row.querySelector(".fleet-slot-id")?.textContent)).toEqual([
+      "0",
     ]);
     // The out-of-range slot is where the work is; it must be the row that
     // stays visible and shows a running benchmark.

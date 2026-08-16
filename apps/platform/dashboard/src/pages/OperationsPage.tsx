@@ -399,47 +399,26 @@ export function OperationsPage(
                 >
                   <thead>
                     <tr>
-                      <th scope="col" id="fleet-node-heading" style="width:190px">
+                      <th scope="col" id="fleet-node-heading" style="width:214px">
                         {fleet().Kind}
-                      </th>
-                      <th scope="col" style="width:84px">
-                        Status
-                      </th>
-                      <th scope="col" style="width:74px">
-                        First seen
-                      </th>
-                      <th scope="col" style="width:84px">
-                        Last heartbeat
                       </th>
                       <th scope="col" class="fleet-work-col">
                         Current work
                       </th>
-                      <th scope="col" style="width:104px">
-                        Version
-                      </th>
-                      <th scope="col" style="width:80px">
-                        CPU
-                      </th>
-                      <th scope="col" style="width:80px">
-                        Memory
-                      </th>
-                      <th scope="col" style="width:80px">
-                        Disk
-                      </th>
-                      <th scope="col" style="width:72px">
-                        Containers
+                      <th scope="col" style="width:176px">
+                        Host
                       </th>
                     </tr>
                   </thead>
                   <tbody id="fleet-rows">
                     {fleet().unavailable ? (
-                      <EmptyRow colspan={10}>
+                      <EmptyRow colspan={3}>
                         {fleet().Kind + " status is temporarily unavailable."}
                       </EmptyRow>
                     ) : fleet().loading ? (
-                      <EmptyRow colspan={10}>{"Loading " + fleet().kind + "…"}</EmptyRow>
+                      <EmptyRow colspan={3}>{"Loading " + fleet().kind + "…"}</EmptyRow>
                     ) : !fleet().entries.length ? (
-                      <EmptyRow colspan={10}>
+                      <EmptyRow colspan={3}>
                         {"No active " + fleet().singular + " software reports."}
                       </EmptyRow>
                     ) : (
@@ -487,20 +466,12 @@ export function OperationsPage(
                   >
                     <thead>
                       <tr>
-                        <th scope="col" id="fleet-retired-node-heading" style="width:240px">
+                        <th scope="col" id="fleet-retired-node-heading" style="width:280px">
                           {fleet().Kind}
                         </th>
-                        <th scope="col" style="width:100px">
-                          Status
-                        </th>
-                        <th scope="col" style="width:130px">
-                          Last heartbeat
-                        </th>
-                        <th scope="col" style="width:180px">
-                          Last reported state
-                        </th>
-                        <th scope="col" style="width:108px">
-                          Version
+                        <th scope="col">Last reported state</th>
+                        <th scope="col" style="width:150px">
+                          Host
                         </th>
                       </tr>
                     </thead>

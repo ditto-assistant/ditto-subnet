@@ -92,18 +92,13 @@ describe("accessible fleet status (row 15)", () => {
       document.querySelectorAll("#fleet-table thead th"),
       (th) => th.textContent,
     );
-    expect(headings).toEqual([
-      "Validator",
-      "Status",
-      "First seen",
-      "Last heartbeat",
-      "Current work",
-      "Version",
-      "CPU",
-      "Memory",
-      "Disk",
-      "Containers",
-    ]);
+    // Three columns, not ten: identity + verdict, live work, host. First
+    // seen, heartbeat protocol and container counts moved to the drill-down;
+    // status and heartbeat age fold into the identity cell.
+    expect(headings).toEqual(["Validator", "Current work", "Host"]);
+    expect(headings).not.toContain("Status");
+    expect(headings).not.toContain("First seen");
+    expect(headings).not.toContain("Containers");
     expect(document.getElementById("fleet-rows")).toBeTruthy();
     expect(document.getElementById("fleet-retired-rows")).toBeTruthy();
   });
@@ -220,15 +215,19 @@ describe("accessible fleet status (row 15)", () => {
     );
 
     const row = document.querySelector(`#fleet-rows tr[data-entity-id="${hotkey}"]`);
-    const status = row?.querySelector("td:nth-child(2) .stage");
+    const status = row?.querySelector(".fleet-node-status");
     expect(status?.textContent).toBe("Paused");
     expect(status?.classList.contains("paused")).toBe(true);
+    // The same verdict drives the dot beside the name.
+    expect(row?.querySelector(".fleet-node-dot")?.classList.contains("paused")).toBe(true);
     expect(text("fleet-count-paused")).toBe("1");
     expect(text("fleet-count-critical")).toBe("0");
-    expect(row?.querySelector("td:nth-child(6) .fleet-protocol")?.textContent).toContain(
+    expect(row?.querySelector("td.fleet-host-cell .fleet-protocol")?.textContent).toContain(
       "0 of 2 slots",
     );
-    expect(row?.querySelector(".fleet-slot-line")?.textContent).toContain("47% · 132/281");
+    const line = row?.querySelector(".fleet-slot-line");
+    expect(line?.querySelector(".fleet-slot-pct")?.textContent).toBe("47%");
+    expect(line?.querySelector(".fleet-slot-count")?.textContent).toBe("132/281");
     expect(row?.querySelector(".stage.capped")?.textContent).toBe("Capped");
   });
 
@@ -238,11 +237,18 @@ describe("accessible fleet status (row 15)", () => {
     expect(body).not.toContain("allowlisted");
     expect(document.querySelector(".privacy-note")).toBeNull();
     expect(document.querySelector(".fleet-health-note")).toBeNull();
-    // Meters carry the value; only memory>=90 / disk>=95 warn (no CPU rule).
+    // Host load is one three-bar chart, not three columns; only memory>=90 /
+    // disk>=95 warn (no CPU rule). Container counts left for the drill-down.
     const dittoRow = document.querySelector(`#fleet-rows tr[data-entity-id="${DITTO}"]`);
-    const meters = Array.from(dittoRow?.querySelectorAll(".fleet-meter") ?? []);
-    expect(meters.length).toBe(3);
-    expect(meters.every((m) => !m.classList.contains("warn"))).toBe(true);
+    const bars = Array.from(dittoRow?.querySelectorAll(".fleet-resource") ?? []);
+    expect(bars.length).toBe(3);
+    expect(bars.map((bar) => bar.querySelector(".fleet-resource-label")?.textContent)).toEqual([
+      "CPU",
+      "MEM",
+      "DISK",
+    ]);
+    expect(bars.every((bar) => !bar.classList.contains("warn"))).toBe(true);
+    expect(dittoRow?.querySelector(".fleet-container-health")).toBeNull();
   });
 });
 
@@ -280,10 +286,10 @@ describe("inoperative fold (row 16)", () => {
     expect(tao).toHaveAttribute("data-entity-kind", "validator");
     // The reason survives the fold: a dead scorer is not flattened to
     // "offline" (offlineAwareFleetStatus only renames non-bad statuses).
-    expect(tao?.querySelector(".stage")?.textContent).toBe("Scorer down");
+    expect(tao?.querySelector(".fleet-node-status")?.textContent).toBe("Scorer down");
     const yuma = document.querySelector(`#fleet-retired-rows tr[data-entity-id="${YUMA}"]`);
-    expect(yuma?.querySelector(".stage")?.textContent).toBe("Offline");
-    expect(yuma?.querySelector(".stage")?.classList.contains("bad")).toBe(true);
+    expect(yuma?.querySelector(".fleet-node-status")?.textContent).toBe("Offline");
+    expect(yuma?.querySelector(".fleet-node-status")?.classList.contains("bad")).toBe(true);
   });
 
   it("unfolds and highlights a deep-linked inoperative validator", async () => {
@@ -314,7 +320,7 @@ describe("bench serviceability gate (row 17)", () => {
     await renderPage();
     const row = document.querySelector(`#fleet-retired-rows tr[data-entity-id="${OBSOLETE}"]`);
     expect(row).toBeTruthy();
-    expect(row?.querySelector(".stage")?.textContent).toBe("Obsolete build");
+    expect(row?.querySelector(".fleet-node-status")?.textContent).toBe("Obsolete build");
     expect(document.querySelector(`#fleet-rows tr[data-entity-id="${OBSOLETE}"]`)).toBeNull();
   });
 
@@ -355,7 +361,7 @@ describe("bench serviceability gate (row 17)", () => {
       expect(document.querySelectorAll("#fleet-rows tr[data-entity-id]").length).toBe(1),
     );
     const row = document.querySelector("#fleet-rows tr[data-entity-id]");
-    expect(row?.querySelector(".stage")?.textContent).toBe("Scorer down");
+    expect(row?.querySelector(".fleet-node-status")?.textContent).toBe("Scorer down");
     expect((document.getElementById("fleet-retired") as HTMLDetailsElement).hidden).toBe(true);
   });
 
@@ -456,7 +462,7 @@ describe("one shared snapshot + skew (row 18)", () => {
       expect(document.querySelectorAll("#fleet-rows tr[data-entity-id]").length).toBe(2),
     );
     const stages = Array.from(
-      document.querySelectorAll("#fleet-rows td:nth-child(2) .stage"),
+      document.querySelectorAll("#fleet-rows .fleet-node-status"),
       (el) => el.textContent,
     );
     expect(stages).toEqual(["Mismatch", "Heartbeat stale"]);
@@ -541,7 +547,17 @@ describe("accessible benchmark progress (row 22)", () => {
     expect(bar.getAttribute("aria-label")).toContain("Running benchmark");
     expect(bar.getAttribute("aria-label")).toContain("132 of 281 checks");
     expect(line.getAttribute("title")).toContain("Running benchmark");
-    expect(line.textContent).toContain("47% · 132/281");
+    // The numbers sit in their own aligned tracks rather than one run-on
+    // string, so every row's digits line up under each other.
+    expect(line.querySelector(".fleet-slot-pct")?.textContent).toBe("47%");
+    expect(line.querySelector(".fleet-slot-count")?.textContent).toBe("132/281");
+    expect(line.querySelector(".fleet-slot-note")?.textContent).toBe("");
+    // The agent reads by name; its identifier stays on the tooltip.
+    expect(line.querySelector(".fleet-slot-agent")?.textContent).toBe("UnderTest");
+    expect(line.querySelector(".fleet-slot-agent")).toHaveAttribute("title", "agent-under-test");
+    // The slot ordinal alone, with the full id still addressable.
+    expect(line.querySelector(".fleet-slot-id")?.textContent).toBe("0");
+    expect(line).toHaveAttribute("data-slot", "slot-0");
     // Per-second elapsed timer node, driven from progress.started_at.
     const time = line.querySelector(".fleet-slot-elapsed");
     expect(time).toHaveAttribute("data-started-at", "2026-07-31T13:00:00Z");
@@ -632,7 +648,9 @@ describe("accessible benchmark progress (row 22)", () => {
     expect(notice?.textContent).toContain("Target a62c6be5…");
     expect(notice?.textContent).toContain("Finishing 2 active runs before restart · no new work.");
     expect(row?.querySelector(".fleet-updater-mode")?.textContent).toBe("Managed · compat-2");
-    expect(row?.querySelector(".fleet-updater-success")?.textContent).toContain("Updated");
+    // Who owns updates stays in the row; when it last succeeded is drill-down
+    // detail and no longer competes with live work for the reader's eye.
+    expect(row?.querySelector(".fleet-updater-success")).toBeNull();
   });
 
   it("shows the screener stage vocabulary on the screener fleet", async () => {
@@ -736,7 +754,8 @@ describe("accessible benchmark progress (row 22)", () => {
     const lane = document.querySelector(".fleet-confirmation-lane") as HTMLElement;
     expect(lane.textContent).toContain("LongMemEval");
     expect(lane.textContent).toContain("Independent confirmation lane · ablations included");
-    expect(lane.textContent).toContain("longmem-0");
+    expect(lane.querySelector(".fleet-slot-id")?.textContent).toBe("0");
+    expect(lane.querySelector(".fleet-slot-id")).toHaveAttribute("title", "longmem-0");
     expect(lane.textContent).toContain("Shadow");
     expect(lane.textContent).toContain("Running LongMemEval");
     expect(lane.textContent).toContain("117/500");
