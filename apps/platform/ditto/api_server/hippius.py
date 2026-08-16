@@ -1,12 +1,17 @@
 """Hippius S3-compatible client for miner profile pictures.
 
-Hippius rejects SDK-direct PutObject/GetObject with SignatureDoesNotMatch
-even when the same credentials can presign. Uploads and downloads go through
-a presigned URL over plain HTTP, matching the ditto-assistant backend.
+Hippius rejects SDK-direct PutObject/GetObject/HeadObject/DeleteObject
+with SignatureDoesNotMatch even when the same credentials can presign
+(same class of bug as ditto-assistant/backend#1078 / #1088). Uploads
+and downloads go through a presigned URL over plain HTTP.
+
+The avatar bucket stays private. Dashboard clients never hit Hippius
+directly; they load ``/api/v1/public/miners/{hotkey}/avatar``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
@@ -26,6 +31,8 @@ if TYPE_CHECKING:
 DEFAULT_ENDPOINT = "https://s3.hippius.com"
 DEFAULT_REGION = "decentralized"
 _PRESIGN_TTL_SECONDS = 300
+_RETRY_ATTEMPTS = 4
+_RETRY_STATUSES = {429, 500, 502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -36,6 +43,24 @@ class HippiusConfig:
     secret_key: str
     region: str = DEFAULT_REGION
     public_prefix: str | None = None
+
+
+def ensure_https(endpoint: str) -> str:
+    value = endpoint.strip()
+    if value.startswith("http://"):
+        value = "https://" + value[len("http://") :]
+    elif not value.startswith("https://"):
+        value = "https://" + value
+    return value.rstrip("/")
+
+
+def normalize_object_key(key: str) -> str:
+    parts = [
+        part
+        for part in key.strip().lstrip("/").split("/")
+        if part and part not in {".", ".."}
+    ]
+    return "/".join(parts)
 
 
 def parse_hippius_config_from_env() -> HippiusConfig | None:
@@ -49,12 +74,12 @@ def parse_hippius_config_from_env() -> HippiusConfig | None:
     if not bucket or not access_key or not secret_key:
         return None
     if not access_key.startswith("hip_"):
-        raise StorageConfigurationError(
-            "HIPPIUS_ACCESS_KEY_ID must start with hip_"
-        )
+        raise StorageConfigurationError("HIPPIUS_ACCESS_KEY_ID must start with hip_")
     return HippiusConfig(
-        endpoint_url=os.environ.get("HIPPIUS_ENDPOINT", DEFAULT_ENDPOINT).strip()
-        or DEFAULT_ENDPOINT,
+        endpoint_url=ensure_https(
+            os.environ.get("HIPPIUS_ENDPOINT", DEFAULT_ENDPOINT).strip()
+            or DEFAULT_ENDPOINT
+        ),
         bucket=bucket,
         access_key=access_key,
         secret_key=secret_key,
@@ -80,9 +105,10 @@ class HippiusClient:
         self._client_config = Config(
             s3={"addressing_style": "path"},
             request_checksum_calculation="when_required",
+            response_checksum_validation="when_required",
             signature_version="s3v4",
         )
-        self._http = httpx.AsyncClient(timeout=30.0)
+        self._http = httpx.AsyncClient(timeout=90.0)
 
     async def aclose(self) -> None:
         await self._http.aclose()
@@ -99,6 +125,7 @@ class HippiusClient:
         await self.aclose()
 
     def public_url(self, key: str) -> str:
+        key = normalize_object_key(key)
         if self._config.public_prefix:
             return f"{self._config.public_prefix.rstrip('/')}/{key}"
         return (
@@ -107,15 +134,17 @@ class HippiusClient:
         )
 
     async def put_object(self, *, key: str, body: bytes, content_type: str) -> str:
+        key = normalize_object_key(key)
         url = await self._presign("put_object", key, content_type=content_type)
-        try:
-            response = await self._http.put(
-                url, content=body, headers={"Content-Type": content_type}
-            )
-        except httpx.HTTPError as exc:
-            raise ObjectUploadFailedError(
-                f"hippius put {key!r} failed: {exc}"
-            ) from exc
+        response = await self._request_with_retry(
+            "PUT",
+            url,
+            content=body,
+            headers={"Content-Type": content_type},
+            error_cls=ObjectUploadFailedError,
+            op="put",
+            key=key,
+        )
         if response.status_code >= 300:
             raise ObjectUploadFailedError(
                 f"hippius put {key!r}: http {response.status_code}"
@@ -123,13 +152,15 @@ class HippiusClient:
         return self.public_url(key)
 
     async def get_object(self, *, key: str) -> bytes:
+        key = normalize_object_key(key)
         url = await self._presign("get_object", key)
-        try:
-            response = await self._http.get(url)
-        except httpx.HTTPError as exc:
-            raise ObjectDownloadFailedError(
-                f"hippius get {key!r} failed: {exc}"
-            ) from exc
+        response = await self._request_with_retry(
+            "GET",
+            url,
+            error_cls=ObjectDownloadFailedError,
+            op="get",
+            key=key,
+        )
         if response.status_code == 404:
             raise ObjectNotFoundError(f"hippius object {key!r} not found")
         if response.status_code >= 300:
@@ -139,17 +170,53 @@ class HippiusClient:
         return response.content
 
     async def delete_object(self, *, key: str) -> None:
+        key = normalize_object_key(key)
         url = await self._presign("delete_object", key)
-        try:
-            response = await self._http.request("DELETE", url)
-        except httpx.HTTPError as exc:
-            raise ObjectUploadFailedError(
-                f"hippius delete {key!r} failed: {exc}"
-            ) from exc
+        response = await self._request_with_retry(
+            "DELETE",
+            url,
+            error_cls=ObjectUploadFailedError,
+            op="delete",
+            key=key,
+        )
         if response.status_code not in {200, 204, 404}:
             raise ObjectUploadFailedError(
                 f"hippius delete {key!r}: http {response.status_code}"
             )
+
+    async def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        error_cls: type[Exception],
+        op: str,
+        key: str,
+        content: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> httpx.Response:
+        last_error: Exception | None = None
+        for attempt in range(_RETRY_ATTEMPTS):
+            try:
+                response = await self._http.request(
+                    method, url, content=content, headers=headers
+                )
+            except httpx.HTTPError as exc:
+                last_error = exc
+            else:
+                if not _should_retry(response.status_code, response.text):
+                    return response
+                last_error = error_cls(
+                    f"hippius {op} {key!r}: http {response.status_code}"
+                )
+            if attempt + 1 >= _RETRY_ATTEMPTS:
+                break
+            await asyncio.sleep(min(0.25 * (2**attempt), 2.0))
+        if last_error is None:
+            raise error_cls(f"hippius {op} {key!r} failed")
+        if isinstance(last_error, error_cls):
+            raise last_error
+        raise error_cls(f"hippius {op} {key!r} failed: {last_error}") from last_error
 
     async def _presign(
         self, operation: str, key: str, *, content_type: str | None = None
@@ -163,12 +230,24 @@ class HippiusClient:
         async with self._session.client(
             "s3",
             endpoint_url=self._config.endpoint_url,
-            use_ssl=self._config.endpoint_url.startswith("https"),
+            use_ssl=True,
             config=self._client_config,
         ) as s3:
             return await s3.generate_presigned_url(
                 operation, Params=params, ExpiresIn=_PRESIGN_TTL_SECONDS
             )
+
+
+def _should_retry(status: int, body: str) -> bool:
+    if status in _RETRY_STATUSES:
+        return True
+    if status == 402:
+        lowered = body.lower()
+        return (
+            "uploadnotpermitted" in lowered
+            and "failed to fetch billing balance" in lowered
+        )
+    return False
 
 
 def create_hippius_client(

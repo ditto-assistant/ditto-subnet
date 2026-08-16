@@ -338,8 +338,9 @@ import {
 
 # Optional Hippius S3 credentials for miner profile pictures. CONTAINER ONLY:
 # operators add versions out of band so the access key never enters Terraform
-# state. Empty versions leave avatar upload/clear returning 503 without
-# affecting the rest of Platform boot.
+# state. The live bucket is the private Hippius bucket `ditto-subnet` (Ansible
+# host_vars). Empty versions leave avatar upload/clear returning 503 without
+# affecting the rest of Platform boot. Access keys must start with hip_.
 resource "google_secret_manager_secret" "hippius_access_key_id" {
   project   = var.project
   secret_id = "platform-hippius-access-key-id"

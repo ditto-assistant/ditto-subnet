@@ -116,10 +116,12 @@ platform_pg_pool_max_size: 30
 platform_storage_endpoint: "https://storage.googleapis.com"
 platform_storage_region: auto
 
-# Optional Hippius bucket for miner profile pictures. Empty bucket disables
-# the feature (set/clear return 503; the rest of Platform boots). Create the
-# bucket in Hippius, then set platform_hippius_bucket in host_vars and add
-# versions to platform-hippius-access-key-id / platform-hippius-secret-access-key.
+# Optional private Hippius bucket for miner profile pictures. Empty bucket
+# disables the feature (set/clear return 503; the rest of Platform boots).
+# Do not make this bucket public: Hippius SDK-direct PUT/GET fail
+# SignatureDoesNotMatch, and avatars are served through Platform.
+# Host vars pin the live bucket name and the regional cache closest to the
+# Platform VMs. Access keys must start with hip_.
 platform_hippius_endpoint: "https://s3.hippius.com"
 platform_hippius_region: decentralized
 platform_hippius_bucket: ""

@@ -26,10 +26,13 @@ platform_alias_domains:
 platform_db_name: ditto_platform_prod
 platform_bucket: ditto-platform-agents-prod
 
-# Optional Hippius bucket for miner profile pictures. Leave empty until the
-# bucket exists and Secret Manager versions have been added for
-# platform-hippius-access-key-id and platform-hippius-secret-access-key.
-platform_hippius_bucket: ""
+# Private Hippius bucket for miner profile pictures. Keep it private — the
+# dashboard loads /api/v1/public/miners/{hotkey}/avatar, not a world-readable
+# s3.hippius.com URL. US cache is closest to the us-central1 Platform VMs.
+# Still needs Secret Manager versions for platform-hippius-access-key-id and
+# platform-hippius-secret-access-key before converge can enable uploads.
+platform_hippius_bucket: ditto-subnet
+platform_hippius_endpoint: "https://us-east-1.hippius.com"
 
 # Route /api/v1/inference/* to the ditto-api-relay-{1,2} pm2 processes instead
 # of the single-core `ditto-api` event loop. These ports mirror RELAY_PORTS in

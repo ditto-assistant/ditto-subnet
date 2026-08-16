@@ -607,8 +607,9 @@ uv run ditto --network finney avatar clear \
 ```
 
 The dashboard loads the picture from
-`/api/v1/public/miners/<hotkey>/avatar`. If Hippius is not configured on
-the Platform, set/clear return 503 and no picture is shown.
+`/api/v1/public/miners/<hotkey>/avatar`. The Hippius bucket stays private;
+clients never need a world-readable Hippius URL. If Hippius is not
+configured on the Platform, set/clear return 503 and no picture is shown.
 
 ## Common questions
 
