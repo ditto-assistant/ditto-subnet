@@ -68,6 +68,7 @@ import {
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
 import type { ChainWeightInfo } from "../../types/leaderboard";
 import { HandleBadge } from "../ui/HandleBadge";
+import { MinerAvatar } from "../ui/MinerAvatar";
 import { ChainWeightsPanel } from "./ChainWeightsPanel";
 
 // Matching agent name, UID, and hotkey covers how people actually look a
@@ -524,6 +525,7 @@ function BoardRow(props: {
             </div>
             <span class="winner-identity">
               <span class="winner-name">
+                <MinerAvatar url={e().avatar_url} />
                 <EntityButton kind="agent" id={e().agent_id} label={displayName()} />
                 <HandleBadge handle={e().name_handle} />
                 <Show when={kind() === "zero"}>
@@ -725,6 +727,7 @@ function BoardRow(props: {
             <td colspan="5">
               <div class="family-member">
                 <span class="family-member-name">
+                  <MinerAvatar url={e().avatar_url} />
                   <EntityButton
                     kind="agent"
                     id={member.agent_id}

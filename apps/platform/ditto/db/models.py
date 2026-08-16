@@ -4720,6 +4720,42 @@ class NameClaimEndorsement(Base):
     )
 
 
+class MinerAvatar(Base):
+    """One current profile picture per miner hotkey."""
+
+    __tablename__ = "miner_avatars"
+
+    miner_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(Text, nullable=False)
+    sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("nonce", name="miner_avatars_nonce_key"),
+        CheckConstraint("length(sha256) = 64", name="miner_avatars_sha256_check"),
+        CheckConstraint(
+            "content_type IN ('image/png', 'image/jpeg', 'image/webp')",
+            name="miner_avatars_content_type_check",
+        ),
+    )
+
+
+class MinerAvatarNonce(Base):
+    """Replay log for signed avatar set/clear nonces."""
+
+    __tablename__ = "miner_avatar_nonces"
+
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    used_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class ConfirmationBundleSettingsRevision(Base):
     """Append-only global policy for the bounded v9 confirmation lane."""
 

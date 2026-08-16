@@ -661,6 +661,10 @@ class PublicLeaderboardEntry(BaseModel):
         str,
         Field(description="Human-friendly name of the miner's winning agent."),
     ]
+    avatar_url: str | None = Field(
+        default=None,
+        description="Public URL for this miner's signed profile picture, if set.",
+    )
     name_handle: PublicNameHandle | None = Field(
         default=None,
         description=(
@@ -2268,6 +2272,10 @@ class PublicActivityEntry(BaseModel):
             "Same semantics as the public leaderboard annotation."
         ),
     )
+    avatar_url: str | None = Field(
+        default=None,
+        description="Public URL for this miner's signed profile picture, if set.",
+    )
     version: Annotated[
         int | None,
         Field(
@@ -2886,6 +2894,10 @@ class PublicAgentSummary(BaseModel):
             "Signed handle reservation touching this name, when one exists. "
             "Same semantics as the public leaderboard annotation."
         ),
+    )
+    avatar_url: str | None = Field(
+        default=None,
+        description="Public URL for this miner's signed profile picture, if set.",
     )
     version: Annotated[int | None, Field(default=None, ge=1)] = None
     status: Annotated[str, Field(description="Current public lifecycle stage.")]

@@ -590,6 +590,26 @@ uv run ditto --network finney name withdraw --claim-id <uuid> \
 Add `-y` to skip the confirmation prompt, or `--print-only` to print the
 signed JSON and submit nothing.
 
+## Set a profile picture
+
+Miners can attach a PNG, JPEG, or WebP image to their hotkey. The image is
+stored in a Hippius bucket and shown on the public dashboard next to the
+hotkey. Signing does not transfer TAO. Maximum size is 512 KiB.
+
+```sh
+# Upload a picture signed by this hotkey.
+uv run ditto --network finney avatar set --file ./pfp.png \
+  --coldkey miner --hotkey default
+
+# Remove the current picture.
+uv run ditto --network finney avatar clear \
+  --coldkey miner --hotkey default
+```
+
+The dashboard loads the picture from
+`/api/v1/public/miners/<hotkey>/avatar`. If Hippius is not configured on
+the Platform, set/clear return 503 and no picture is shown.
+
 ## Common questions
 
 **How much does evaluation cost?** The Backroom-controlled fee is denominated in

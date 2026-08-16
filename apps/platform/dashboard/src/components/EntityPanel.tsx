@@ -90,6 +90,7 @@ import { BenchmarkProgressView } from "./operations/progress";
 import { CopyButton } from "./shell/CopyButton";
 import { EntityButton } from "./ui/EntityButton";
 import { HandleBadge } from "./ui/HandleBadge";
+import { MinerAvatar } from "./ui/MinerAvatar";
 import { StatusChip } from "./ui/StatusChip";
 
 type RankedEntry = LeaderboardEntry & { rank?: number | null };
@@ -457,6 +458,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
   interface HeaderState {
     title: string;
     handle?: NameHandle | null;
+    avatarUrl?: string | null;
     chip: { text: string; class: string; title: string };
     dkLabel: string;
     hotkey: string | null;
@@ -482,6 +484,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       return {
         title,
         handle: e.name_handle,
+        avatarUrl: e.avatar_url,
         chip: minerBenchChip(e, props.currentBench()),
         dkLabel: "Miner",
         hotkey: e.miner_hotkey,
@@ -506,6 +509,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       return {
         title: publicDisplayName(e.name, e.name_handle),
         handle: e.name_handle,
+        avatarUrl: e.avatar_url,
         chip: {
           text: stage[0] as string,
           class: stage[1] as string,
@@ -600,6 +604,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
           </button>
         </div>
         <div class="dhead">
+          <MinerAvatar url={header()?.avatarUrl} size="lg" />
           <h3 id="d-title">{header()?.title ?? "Miner"}</h3>
           <HandleBadge handle={header()?.handle} />
           <span id="d-bench" class={header()?.chip.class ?? ""} title={header()?.chip.title ?? ""}>

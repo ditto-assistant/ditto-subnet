@@ -30,6 +30,9 @@ from ditto.api_models import (
     AgentResponse,
     AgentStatusResponse,
     EvalPricingResponse,
+    MinerAvatarClearRequest,
+    MinerAvatarResponse,
+    MinerAvatarSetRequest,
     NameClaimListResponse,
     NameClaimRequest,
     NameClaimResponse,
@@ -45,6 +48,7 @@ from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
     AttestationRejectedError,
+    AvatarRejectedError,
     HotkeyAgentNotFoundError,
     NameClaimRejectedError,
     PaymentAmountMismatchError,
@@ -359,6 +363,35 @@ class ApiClient:
                 _format_error(response, prefix="name-withdraw")
             )
         return NameClaimResponse.model_validate(response.json())
+
+    # ---- /miner-avatars -------------------------------------------------
+
+    def post_miner_avatar(
+        self,
+        *,
+        body: MinerAvatarSetRequest,
+        image: bytes,
+        filename: str,
+    ) -> MinerAvatarResponse:
+        response = self._request(
+            "POST",
+            "/api/v1/miner-avatars",
+            data={"payload": body.model_dump_json()},
+            files={"file": (filename, image)},
+        )
+        if response.status_code not in (200, 201):
+            raise AvatarRejectedError(_format_error(response, prefix="avatar-set"))
+        return MinerAvatarResponse.model_validate(response.json())
+
+    def clear_miner_avatar(self, body: MinerAvatarClearRequest) -> MinerAvatarResponse:
+        response = self._request(
+            "POST",
+            "/api/v1/miner-avatars/clear",
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code not in (200, 201):
+            raise AvatarRejectedError(_format_error(response, prefix="avatar-clear"))
+        return MinerAvatarResponse.model_validate(response.json())
 
     # ---- /retrieval/agent/{id}/status -----------------------------------
 

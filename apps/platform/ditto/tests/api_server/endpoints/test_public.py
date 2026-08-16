@@ -5330,6 +5330,7 @@ class TestPublicActivity:
             "miner_hotkey": _MINER_A,
             "name": "hot-path-agent",
             "name_handle": None,
+            "avatar_url": None,
             "version": None,
             "status": "waiting_screening",
             "submitted_at": body["submitted_at"],
@@ -5461,7 +5462,8 @@ class TestPublicActivity:
         # Includes one bounded query for the independent live LongMem lane
         # and one for live handle-claim reservations plus attested owner roots
         # so operations badges classify family children correctly.
-        assert len(statements) <= 36
+        # Plus one bounded miner-avatar lookup for the page's hotkeys.
+        assert len(statements) <= 37
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA
@@ -5674,6 +5676,7 @@ class TestPublicActivity:
             "miner_hotkey",
             "name",
             "name_handle",
+            "avatar_url",
             "version",
             "status",
             "artifact_release",
@@ -8105,7 +8108,8 @@ class TestPublicActivity:
         # that a currently available validator can actually consume, plus
         # one live handle-claim reservation read and one attested-owner fold
         # so family children keep a reserved handle.
-        assert len(statements) <= 20
+        # Plus one bounded miner-avatar lookup for the page's hotkeys.
+        assert len(statements) <= 21
         assert body["count"] == 1
         assert body["total"] == 2
         assert body["total_pages"] == 2

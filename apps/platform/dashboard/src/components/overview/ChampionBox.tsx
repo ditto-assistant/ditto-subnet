@@ -12,6 +12,7 @@ import { ChipTip } from "../board/chips";
 import { leaderboardVersionView } from "../board/board-state";
 import { EntityButton } from "../ui/EntityButton";
 import { HandleBadge } from "../ui/HandleBadge";
+import { MinerAvatar } from "../ui/MinerAvatar";
 import type { BoardEntry, LeaderboardStore } from "../board/leaderboard-data";
 
 export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
@@ -94,6 +95,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                 <Show when={championEntry()} fallback={name()}>
                   {(entry) => (
                     <>
+                      <MinerAvatar url={entry().avatar_url} size="lg" />
                       <EntityButton kind="agent" id={entry().agent_id} label={name()} />
                       <HandleBadge handle={entry().name_handle} />
                     </>

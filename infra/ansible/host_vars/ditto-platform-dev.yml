@@ -12,6 +12,11 @@ platform_inference_public_base_url: https://platform-api-dev.heyditto.ai
 platform_db_name: ditto_platform_dev
 platform_bucket: ditto-platform-agents-dev
 
+# Optional Hippius bucket for miner profile pictures. Leave empty until the
+# bucket exists and Secret Manager versions have been added for
+# platform-hippius-access-key-id and platform-hippius-secret-access-key.
+platform_hippius_bucket: ""
+
 # Per-env Secret Manager secret ids (shared ones are in the platform_app role).
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
 secret_pylon_token: platform-dev-pylon-open-access-token

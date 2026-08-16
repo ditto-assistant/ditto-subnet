@@ -23,6 +23,11 @@ from ditto.api_models.attestation import (
     OwnerLinkResponse,
 )
 from ditto.api_models.health import HealthResponse
+from ditto.api_models.miner_avatar import (
+    MinerAvatarClearRequest,
+    MinerAvatarResponse,
+    MinerAvatarSetRequest,
+)
 from ditto.api_models.name_claim import (
     NameClaimEndorsementView,
     NameClaimListResponse,
@@ -46,6 +51,9 @@ __all__ = [
     "AgentStatusResponse",
     "EvalPricingResponse",
     "HealthResponse",
+    "MinerAvatarClearRequest",
+    "MinerAvatarResponse",
+    "MinerAvatarSetRequest",
     "NameClaimEndorsementView",
     "NameClaimListResponse",
     "NameClaimProof",

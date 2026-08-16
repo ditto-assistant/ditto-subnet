@@ -16,6 +16,7 @@ import type { AthReview, AthSnapshot } from "../../types/pipeline";
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
 import { HandleBadge } from "../ui/HandleBadge";
+import { MinerAvatar } from "../ui/MinerAvatar";
 import { athReviewSnapshot, athSnapshotLabel } from "./ath";
 
 interface QueueState {
@@ -56,6 +57,7 @@ function ReviewCard(props: { entry: AthReviewEntry }): JSX.Element {
       <div class="ath-review-main">
         <div>
           <div class="ath-agent-name">
+            <MinerAvatar url={e().avatar_url} />
             <EntityButton kind="agent" id={agentId()} label={agentLabel(e().name, e().version)} />
             <HandleBadge handle={e().name_handle} />
           </div>

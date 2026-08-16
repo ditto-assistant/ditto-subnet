@@ -214,8 +214,9 @@ from ditto.api_server.koth import (
     emission_allocation,
     project_koth,
 )
+from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.model_use import model_use_factor, model_use_policy
-from ditto.api_server.storage import ObjectDownloadFailedError
+from ditto.api_server.storage import ObjectDownloadFailedError, ObjectNotFoundError
 from ditto.api_server.validator_slot_settings import (
     HostResourceSample,
     allowed_slot_count,
@@ -293,6 +294,7 @@ from ditto.db.queries.heartbeats import (
 )
 from ditto.db.queries.inference import USAGE_ACCOUNTING_VERSION
 from ditto.db.queries.king_reign import KingReveal, get_king_reveal
+from ditto.db.queries.miner_avatars import get_miner_avatar, list_miner_avatars
 from ditto.db.queries.orphaned_leases import OrphanedLease, list_orphaned_leases
 from ditto.db.queries.queue_order import (
     QueueGate,
@@ -1955,6 +1957,7 @@ def _public_entry(
     inference_run_count: int = 0,
     v9_confirmation: V9ConfirmationPublicProjection | None = None,
     name_handle: PublicNameHandle | None = None,
+    avatar_url: str | None = None,
 ) -> PublicLeaderboardEntry:
     """Map a ledger row to the public entry, exposing only the safe subset of
     ``details`` (never ``per_case``, which carries the answer key)."""
@@ -2040,6 +2043,7 @@ def _public_entry(
         score_quorum=SCORING_QUORUM,
         agent_id=r.agent_id,
         agent_name=agent_name,
+        avatar_url=avatar_url,
         name_handle=name_handle,
         agent_version=agent_version,
         artifact_release=artifact_release,
@@ -3075,6 +3079,11 @@ async def build_public_leaderboard(
     from ditto.db.queries.name_claims import active_handle_claims
 
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    avatar_hotkeys = {row.miner_hotkey for row in rows}
+    avatar_rows = await list_miner_avatars(session, hotkeys=avatar_hotkeys)
+    avatar_urls = {
+        hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows
+    }
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(
@@ -3113,6 +3122,7 @@ async def build_public_leaderboard(
                 display_name,
                 stored_version,
                 name_handle=name_handle,
+                avatar_url=avatar_urls.get(row.miner_hotkey),
                 finalized=True,
                 score_count=score_counts.get(row.agent_id, SCORING_QUORUM),
                 settled_composite=settled,
@@ -3215,6 +3225,7 @@ async def build_public_leaderboard(
                 display_name,
                 stored_version,
                 name_handle=name_handle,
+                avatar_url=avatar_urls.get(row.miner_hotkey),
                 finalized=False,
                 score_count=count,
                 settled_composite=settled,
@@ -3993,6 +4004,45 @@ async def public_name_claims(
     return await list_claims(session)
 
 
+@router.get("/miners/{hotkey}/avatar")
+async def public_miner_avatar(
+    hotkey: str,
+    request: Request,
+    session: SessionDep,
+) -> Response:
+    """Proxy the miner's current profile picture from Hippius.
+
+    The dashboard uses this path so clients never need a world-readable
+    Hippius URL. Missing avatars are 404; an unconfigured store is 503.
+    """
+    row = await get_miner_avatar(session, hotkey=hotkey)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no avatar for this hotkey")
+    etag = f'"{row.sha256}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    hippius = getattr(request.app.state, "hippius", None)
+    if hippius is None:
+        raise HTTPException(
+            status_code=503,
+            detail="miner avatars are not configured on this deployment",
+        )
+    try:
+        body = await hippius.get_object(key=row.object_key)
+    except ObjectNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="avatar object is missing") from exc
+    except ObjectDownloadFailedError as exc:
+        raise HTTPException(status_code=502, detail="failed to load avatar") from exc
+    return Response(
+        content=body,
+        media_type=row.content_type,
+        headers={
+            "ETag": etag,
+            "Cache-Control": "public, max-age=300",
+        },
+    )
+
+
 @router.get("/screeners", response_model=PublicScreenerHeartbeatsResponse)
 async def screeners(
     response: Response,
@@ -4496,6 +4546,7 @@ def _public_activity_response(
     handle_claims: dict[str, Any] | None = None,
     owner_roots: dict[UUID, str] | None = None,
     strike_colliding_names: bool = True,
+    avatar_urls: dict[str, str] | None = None,
 ) -> PublicActivityResponse:
     """Project activity from the same validated work set used by fleet health."""
     claims = handle_claims or {}
@@ -4633,6 +4684,7 @@ def _public_activity_response(
         )
         for row, _row_status in page_rows
     }
+    avatars = avatar_urls or {}
     return PublicActivityResponse(
         generated_at=now,
         count=len(page_rows),
@@ -4648,6 +4700,7 @@ def _public_activity_response(
                 miner_hotkey=row.agent.miner_hotkey,
                 name=displayed[row.agent.agent_id][0],
                 name_handle=displayed[row.agent.agent_id][1],
+                avatar_url=avatars.get(row.agent.miner_hotkey),
                 version=row.agent.version,
                 status=row_status,
                 artifact_release=artifact_releases[row.agent.agent_id],
@@ -5071,6 +5124,9 @@ async def activity(
         rollout=activity_page.admission_rollout,
         waiting_agent_ids=activity_page.waiting_agent_ids,
     )
+    avatar_rows = await list_miner_avatars(
+        session, hotkeys={row.agent.miner_hotkey for row in rows}
+    )
     return _public_activity_response(
         rows=rows,
         active_work=active_work,
@@ -5104,6 +5160,7 @@ async def activity(
         handle_claims=handle_claims,
         owner_roots=await _attested_owner_roots_for_rows(session, rows),
         strike_colliding_names=True,
+        avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
     )
 
 
@@ -5321,6 +5378,9 @@ async def operations(
 
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
     owner_roots = await _attested_owner_roots_for_rows(session, activity_rows)
+    avatar_rows = await list_miner_avatars(
+        session, hotkeys={row.agent.miner_hotkey for row in activity_rows}
+    )
     activity_snapshot = _public_activity_response(
         rows=activity_rows,
         active_work=active_work,
@@ -5362,6 +5422,7 @@ async def operations(
         handle_claims=handle_claims,
         owner_roots=owner_roots,
         strike_colliding_names=False,
+        avatar_urls={hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows},
     )
     validator_snapshot = _validator_heartbeats_response(
         rows=heartbeat_rows,
@@ -5636,12 +5697,16 @@ async def agent_summary(
         ),
     )
     display_name, name_handle = _public_named(row.agent.name, owner_root, handle_claims)
+    avatar = await get_miner_avatar(session, hotkey=row.agent.miner_hotkey)
     return PublicAgentSummary(
         generated_at=now,
         agent_id=agent_id,
         miner_hotkey=row.agent.miner_hotkey,
         name=display_name,
         name_handle=name_handle,
+        avatar_url=(
+            public_avatar_path(row.agent.miner_hotkey) if avatar is not None else None
+        ),
         version=row.agent.version,
         status=status,
         submitted_at=row.agent.created_at,

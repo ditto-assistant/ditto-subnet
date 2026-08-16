@@ -65,6 +65,7 @@ from ditto.api_server.endpoints import (
     health_router,
     inference_router,
     metrics_router,
+    miner_avatars_router,
     name_claims_router,
     public_router,
     retrieval_router,
@@ -207,6 +208,13 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 create_storage_client(config.storage)
             )
             app.state.storage = storage
+
+            from ditto.api_server.hippius import create_hippius_client
+
+            hippius = create_hippius_client()
+            if hippius is not None:
+                stack.push_async_callback(hippius.aclose)
+            app.state.hippius = hippius
 
             embedder = create_embedder(config.embedding)
             stack.push_async_callback(embedder.aclose)
@@ -357,6 +365,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
         return app
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
+    app.include_router(miner_avatars_router, prefix="/api/v1")
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")

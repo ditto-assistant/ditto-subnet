@@ -247,6 +247,26 @@
   no_log: true
   when: secret_screener_controller_api_token | length > 0
 
+- name: Read Hippius access key id when miner avatars are configured
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_hippius_access_key_id }} --project={{ gcp_project }}"
+  register: platform_hippius_access_key_read
+  changed_when: false
+  no_log: true
+  when: platform_hippius_bucket | default('') | length > 0
+
+- name: Read Hippius secret access key when miner avatars are configured
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_hippius_secret_access_key }} --project={{ gcp_project }}"
+  register: platform_hippius_secret_key_read
+  changed_when: false
+  no_log: true
+  when: platform_hippius_bucket | default('') | length > 0
+
+- name: Fold Hippius credentials into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'hippius_access_key_id': platform_hippius_access_key_read.stdout, 'hippius_secret_access_key': platform_hippius_secret_key_read.stdout}) }}"
+  no_log: true
+  when: platform_hippius_bucket | default('') | length > 0
+
 - name: Render .env
   ansible.builtin.template:
     src: platform.env.j2

@@ -2010,6 +2010,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/miner-avatars": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set Miner Avatar */
+        post: operations["set_miner_avatar_api_v1_miner_avatars_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/miner-avatars/clear": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Clear Miner Avatar */
+        post: operations["clear_miner_avatar_api_v1_miner_avatars_clear_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/name-claims": {
         parameters: {
             query?: never;
@@ -2509,6 +2543,29 @@ export interface paths {
          * @description Best score per payment-time coldkey, with colliding handles stricken.
          */
         get: operations["leaderboard_api_v1_public_leaderboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/miners/{hotkey}/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Miner Avatar
+         * @description Proxy the miner's current profile picture from Hippius.
+         *
+         *     The dashboard uses this path so clients never need a world-readable
+         *     Hippius URL. Missing avatars are 404; an unconfigured store is 503.
+         */
+        get: operations["public_miner_avatar_api_v1_public_miners__hotkey__avatar_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -8085,6 +8142,13 @@ export interface components {
              */
             relay_delay_fingerprint_mode: "off" | "shadow";
         };
+        /** Body_set_miner_avatar_api_v1_miner_avatars_post */
+        Body_set_miner_avatar_api_v1_miner_avatars_post: {
+            /** File */
+            file: string;
+            /** Payload */
+            payload: string;
+        };
         /** Body_upload_agent_api_v1_upload_agent_post */
         Body_upload_agent_api_v1_upload_agent_post: {
             /** Admission Token */
@@ -10610,6 +10674,37 @@ export interface components {
             /** Per Capability */
             per_capability: components["schemas"]["LongMemCapabilityScore"][];
         };
+        /** MinerAvatarClearRequest */
+        MinerAvatarClearRequest: {
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            proof: components["schemas"]["NameClaimProof"];
+        };
+        /** MinerAvatarResponse */
+        MinerAvatarResponse: {
+            /** Avatar Url */
+            avatar_url: string | null;
+            /** Content Type */
+            content_type?: string | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Sha256 */
+            sha256?: string | null;
+            /** Updated At */
+            updated_at?: string | null;
+        };
         /** MinerFeeDay */
         MinerFeeDay: {
             /**
@@ -11036,6 +11131,11 @@ export interface components {
             agent_id: string;
             artifact_release: components["schemas"]["PublicArtifactRelease"];
             /**
+             * Avatar Url
+             * @description Public URL for this miner's signed profile picture, if set.
+             */
+            avatar_url?: string | null;
+            /**
              * Duplicate Name
              * @description Name of the matched submission.
              */
@@ -11266,6 +11366,11 @@ export interface components {
              * Format: uuid
              */
             agent_id: string;
+            /**
+             * Avatar Url
+             * @description Public URL for this miner's signed profile picture, if set.
+             */
+            avatar_url?: string | null;
             /** Duplicate Name */
             duplicate_name?: string | null;
             /** Duplicate Of */
@@ -12949,6 +13054,11 @@ export interface components {
              */
             aggregate_sample_count: number;
             artifact_release?: components["schemas"]["PublicArtifactRelease"] | null;
+            /**
+             * Avatar Url
+             * @description Public URL for this miner's signed profile picture, if set.
+             */
+            avatar_url?: string | null;
             /**
              * Average Run Cost Microusd
              * @description Mean platform-metered chat plus embedding spend for this agent's completed, non-empty validator leases on the displayed benchmark version. A lease counts only once the validator holding it posted a score, so a run a stalled validator abandoned is excluded rather than averaged in as cheap work. Restricted to the current metering contract, since totals are not comparable across a meter change. Null when the retained run ledger holds no completed samples -- which is normal for an agent whose quorum has not finished scoring yet.
@@ -22092,6 +22202,72 @@ export interface operations {
             };
         };
     };
+    set_miner_avatar_api_v1_miner_avatars_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_set_miner_avatar_api_v1_miner_avatars_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerAvatarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_miner_avatar_api_v1_miner_avatars_clear_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MinerAvatarClearRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerAvatarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     list_claims_api_v1_name_claims_get: {
         parameters: {
             query?: never;
@@ -22727,6 +22903,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicLeaderboardResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_miner_avatar_api_v1_public_miners__hotkey__avatar_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                hotkey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

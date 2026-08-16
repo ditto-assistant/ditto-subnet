@@ -144,6 +144,7 @@ export interface LeaderboardEntry {
   agent_id?: string;
   agent_name?: string | null;
   name_handle?: NameHandle | null;
+  avatar_url?: string | null;
   agent_version?: number | null;
   /** Minimal children for the expandable owner-family grouping. */
   submission_family?: LeaderboardFamily | null;

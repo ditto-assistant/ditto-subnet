@@ -1409,6 +1409,33 @@ CREATE TABLE public.inference_routing_policies (
 
 
 --
+-- Name: miner_avatar_nonces; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_avatar_nonces (
+    nonce uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    used_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: miner_avatars; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_avatars (
+    miner_hotkey text NOT NULL,
+    object_key text NOT NULL,
+    content_type text NOT NULL,
+    sha256 text NOT NULL,
+    nonce uuid NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_miner_avatars_miner_avatars_content_type_check CHECK ((content_type = ANY (ARRAY['image/png'::text, 'image/jpeg'::text, 'image/webp'::text]))),
+    CONSTRAINT ck_miner_avatars_miner_avatars_sha256_check CHECK ((length(sha256) = 64))
+);
+
+
+--
 -- Name: name_claim_endorsements; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2857,6 +2884,30 @@ ALTER TABLE ONLY public.inference_provider_routes
 
 
 --
+-- Name: miner_avatar_nonces miner_avatar_nonces_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_avatar_nonces
+    ADD CONSTRAINT miner_avatar_nonces_pkey PRIMARY KEY (nonce);
+
+
+--
+-- Name: miner_avatars miner_avatars_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_avatars
+    ADD CONSTRAINT miner_avatars_nonce_key UNIQUE (nonce);
+
+
+--
+-- Name: miner_avatars miner_avatars_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_avatars
+    ADD CONSTRAINT miner_avatars_pkey PRIMARY KEY (miner_hotkey);
+
+
+--
 -- Name: name_claim_endorsements name_claim_endorsements_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3846,6 +3897,13 @@ CREATE INDEX inference_requests_started_idx ON public.inference_requests USING b
 --
 
 CREATE INDEX inference_routing_audit_history_idx ON public.inference_routing_audit USING btree (recorded_at);
+
+
+--
+-- Name: miner_avatar_nonces_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_avatar_nonces_hotkey_idx ON public.miner_avatar_nonces USING btree (miner_hotkey);
 
 
 --

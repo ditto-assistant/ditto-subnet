@@ -18,6 +18,7 @@ import { pushEntityRoute } from "../../stores/routeStore";
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
 import { HandleBadge } from "../ui/HandleBadge";
+import { MinerAvatar } from "../ui/MinerAvatar";
 import { Pager } from "../ui/Pager";
 import { StatusChip } from "../ui/StatusChip";
 import { artifactReleaseCopy, artifactReleaseNote } from "./artifact-release";
@@ -246,6 +247,7 @@ export function ActivityBoard(props: { store: ActivityStore }): JSX.Element {
                     >
                       <td>
                         <span class="agent-name">
+                          <MinerAvatar url={e.avatar_url} />
                           {agentName(e.name)}
                           <HandleBadge handle={e.name_handle} />
                         </span>

@@ -313,6 +313,14 @@ class NameClaimRejectedError(ApiResponseError):
     """Raised when a name-claim / endorse / withdraw request is rejected."""
 
 
+class AvatarCancelledError(MinerCliError):
+    """Raised when the miner declines an avatar confirmation prompt."""
+
+
+class AvatarRejectedError(ApiResponseError):
+    """Raised when a profile-picture set or clear request is rejected."""
+
+
 class AttestationRejectedError(ApiResponseError):
     """Raised when ``/attestations/owner-link`` returns a non-2xx status.
 

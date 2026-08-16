@@ -38,6 +38,7 @@ import type {
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
 import { HandleBadge } from "../ui/HandleBadge";
+import { MinerAvatar } from "../ui/MinerAvatar";
 import { StatusChip } from "../ui/StatusChip";
 import { BenchmarkProgressView } from "../operations/progress";
 import type { ArtifactRelease } from "../pipeline/artifact-release";
@@ -1071,6 +1072,7 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
               <div>
                 <dt>Agent</dt>
                 <dd>
+                  <MinerAvatar url={props.entry.avatar_url} />
                   {agentName(props.entry.name)}
                   <HandleBadge handle={props.entry.name_handle} />
                 </dd>

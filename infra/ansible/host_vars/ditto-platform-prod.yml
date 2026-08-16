@@ -26,6 +26,11 @@ platform_alias_domains:
 platform_db_name: ditto_platform_prod
 platform_bucket: ditto-platform-agents-prod
 
+# Optional Hippius bucket for miner profile pictures. Leave empty until the
+# bucket exists and Secret Manager versions have been added for
+# platform-hippius-access-key-id and platform-hippius-secret-access-key.
+platform_hippius_bucket: ""
+
 # Route /api/v1/inference/* to the ditto-api-relay-{1,2} pm2 processes instead
 # of the single-core `ditto-api` event loop. These ports mirror RELAY_PORTS in
 # ditto-platform scripts/ecosystem.config.js; the relays are already running and

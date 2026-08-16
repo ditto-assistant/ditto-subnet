@@ -17,6 +17,7 @@ import os
 import sys
 
 from ditto.miner_cli.commands import attest as attest_cmd
+from ditto.miner_cli.commands import avatar as avatar_cmd
 from ditto.miner_cli.commands import name_claim as name_claim_cmd
 from ditto.miner_cli.commands import practice as practice_cmd
 from ditto.miner_cli.commands import status as status_cmd
@@ -135,6 +136,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify_cmd.add_subparser(subparsers, parents=[sub_parent])
     attest_cmd.add_subparser(subparsers, parents=[sub_parent])
     name_claim_cmd.add_subparser(subparsers, parents=[sub_parent])
+    avatar_cmd.add_subparser(subparsers, parents=[sub_parent])
 
     return parser
 

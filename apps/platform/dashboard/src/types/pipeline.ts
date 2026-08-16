@@ -11,6 +11,7 @@ export interface ActivityEntry {
   agent_id?: string;
   name?: string | null;
   name_handle?: NameHandle | null;
+  avatar_url?: string | null;
   version?: number | null;
   miner_hotkey?: string;
   /** Submission status slug, e.g. "waiting_screening" | "scored" | "rejected". */

@@ -26,6 +26,7 @@ from decimal import Decimal
 
 from ditto.miner_cli.errors import (
     AttestationCancelledError,
+    AvatarCancelledError,
     NameClaimCancelledError,
     PaymentCancelledError,
     RegistrationCancelledError,
@@ -260,3 +261,39 @@ def confirm_name_action(
         )
 
     print(f"name {action} confirmed", file=sys.stderr)
+
+
+def confirm_avatar_action(
+    *,
+    action: str,
+    hotkey_ss58: str,
+    detail: str | None,
+    skip: bool,
+) -> None:
+    """Preview a profile-picture set or clear before signing."""
+    print()
+    print(f"Avatar {action} preview")
+    print(f"  Hotkey:  {hotkey_ss58}")
+    if detail:
+        print(f"  File:    {detail}")
+    print()
+    print("Signing does NOT transfer any TAO. The signature is over a text")
+    print("message, not a transaction. The image is stored on Hippius and")
+    print("shown on the public dashboard next to this hotkey.")
+    print()
+
+    if skip:
+        logger.debug("avatar confirmation bypassed via --yes")
+        return
+
+    try:
+        response = input(f"Submit this avatar {action}? [y/N]: ").strip().lower()
+    except EOFError as e:
+        raise AvatarCancelledError(f"avatar {action} cancelled: EOF on stdin") from e
+
+    if response != "y":
+        raise AvatarCancelledError(
+            f"avatar {action} cancelled (response={response!r})"
+        )
+
+    print(f"avatar {action} confirmed", file=sys.stderr)

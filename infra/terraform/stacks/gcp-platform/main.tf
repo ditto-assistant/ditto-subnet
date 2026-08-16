@@ -49,6 +49,8 @@ locals {
       google_secret_manager_secret.hmac_secret.secret_id,
       google_secret_manager_secret.github_deploy_key.secret_id,
       google_secret_manager_secret.taostats_api_key.secret_id,
+      google_secret_manager_secret.hippius_access_key_id.secret_id,
+      google_secret_manager_secret.hippius_secret_access_key.secret_id,
     ],
     [for s in google_secret_manager_secret.pylon_open_access_token : s.secret_id],
   )
@@ -332,6 +334,32 @@ resource "google_secret_manager_secret" "taostats_api_key" {
 import {
   to = google_secret_manager_secret.taostats_api_key
   id = "projects/${var.project}/secrets/platform-taostats-api-key"
+}
+
+# Optional Hippius S3 credentials for miner profile pictures. CONTAINER ONLY:
+# operators add versions out of band so the access key never enters Terraform
+# state. Empty versions leave avatar upload/clear returning 503 without
+# affecting the rest of Platform boot.
+resource "google_secret_manager_secret" "hippius_access_key_id" {
+  project   = var.project
+  secret_id = "platform-hippius-access-key-id"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret" "hippius_secret_access_key" {
+  project   = var.project
+  secret_id = "platform-hippius-secret-access-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Let the runtime SA read every platform secret above.

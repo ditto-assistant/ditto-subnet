@@ -857,7 +857,8 @@ tbody tr:focus-visible {
 .winner-name .badge,
 .winner-name .prov,
 .winner-name .quorum-badge,
-.winner-name .handle-badge {
+.winner-name .handle-badge,
+.winner-name .miner-avatar {
   flex: none;
   margin-left: 0;
 }
