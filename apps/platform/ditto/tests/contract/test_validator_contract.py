@@ -14,6 +14,7 @@ On an intentional contract change, regenerate the golden with
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import ditto.api_models.validator as validator_models
@@ -28,6 +29,12 @@ from ditto.tests.contract._schema import (
     compute_confirmation_contract,
     compute_contract,
 )
+
+# ``scripts/`` is not an importable package; the freshness helper is shared
+# with the generators rather than duplicated into each contract test copy.
+sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "scripts"))
+
+from screening_protocol_freshness import hint as stale_install_hint  # noqa: E402
 
 _GOLDEN = Path(__file__).parent / "validator_contract.json"
 _CONFIRMATION_GOLDEN = Path(__file__).parent / "confirmation_contract.json"
@@ -119,6 +126,7 @@ def test_monorepo_validator_goldens_match_validator_byte_for_byte() -> None:
         assert local == validator, (
             f"{filename} diverged inside the monorepo; regenerate once from "
             "Platform and commit the same artifact to both contract directories"
+            f"{stale_install_hint()}"
         )
 
 
@@ -135,6 +143,7 @@ def test_validator_models_match_committed_contract() -> None:
         f"contract. If intended, regenerate ditto/tests/contract/"
         f"validator_contract.json via scripts/gen_validator_contract.py and "
         f"commit it with the change (and sync ditto-subnet's copy)."
+        f"{stale_install_hint()}"
     )
 
 
@@ -146,6 +155,7 @@ def test_v9_confirmation_models_match_committed_contract() -> None:
     assert not mismatched, (
         f"v9 confirmation wire model(s) {mismatched} drifted from the committed "
         "contract; regenerate confirmation_contract.json"
+        f"{stale_install_hint()}"
     )
 
 

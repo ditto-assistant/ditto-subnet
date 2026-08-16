@@ -25,8 +25,13 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import sys
 from pathlib import Path
 from types import ModuleType
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from screening_protocol_freshness import assert_fresh  # noqa: E402
 
 
 def _load_contract_schema() -> ModuleType:
@@ -81,6 +86,10 @@ def main() -> None:
         help="destination miner golden path (default: the committed one)",
     )
     args = parser.parse_args()
+    # A stale built copy of ditto-screening-protocol makes every model below
+    # describe an older contract, so the goldens this writes would be a
+    # regression wearing a clean diff. Refuse rather than emit one.
+    assert_fresh()
     schema = _load_contract_schema()
     for compute, out in (
         (schema.compute_contract, args.out),

@@ -11,6 +11,7 @@ against the live API.
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import ditto.api_models.validator as validator_models
@@ -26,6 +27,12 @@ from ditto.tests.contract._schema import (
     compute_contract,
     compute_miner_contract,
 )
+
+# ``scripts/`` is not an importable package; the freshness helper is shared
+# with the generators rather than duplicated into each contract test copy.
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "scripts"))
+
+from screening_protocol_freshness import hint as stale_install_hint  # noqa: E402
 
 _GOLDEN = Path(__file__).parent / "validator_contract.json"
 _MINER_GOLDEN = Path(__file__).parent / "miner_contract.json"
@@ -118,6 +125,7 @@ def test_monorepo_validator_goldens_match_platform_byte_for_byte() -> None:
         assert local == platform, (
             f"{filename} diverged inside the monorepo; regenerate once from "
             "Platform and commit the same artifact to both contract directories"
+            f"{stale_install_hint()}"
         )
 
 
@@ -136,6 +144,7 @@ def test_validator_models_match_platform_contract() -> None:
         f"contract. If intended, regenerate ditto/tests/contract/"
         f"validator_contract.json from ditto-platform via "
         f"scripts/gen_validator_contract.py and commit it with the change."
+        f"{stale_install_hint()}"
     )
 
 
@@ -182,5 +191,5 @@ def test_miner_models_match_platform_contract() -> None:
         f"miner wire model(s) {mismatched} drifted from the platform contract. "
         f"If intended, regenerate ditto/tests/contract/miner_contract.json from "
         f"ditto-platform via scripts/gen_validator_contract.py and commit it "
-        f"with the change."
+        f"with the change.{stale_install_hint()}"
     )

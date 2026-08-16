@@ -10,6 +10,15 @@ mkdir -p src/generated .contract-sync
 
 (
   cd "$PLATFORM_DIR"
+  # ditto-screening-protocol is a path dependency installed as a BUILT copy, so
+  # plain `uv sync` reports "Audited" and leaves the previously-built copy in
+  # place after its source changes. Dumping the schema against that stale copy
+  # does not fail -- it emits a schema for the older models, so the regenerated
+  # client silently LOSES whatever the package gained. That is how a v11
+  # rollout regenerated `bench_version: 9 | 10` back down to `9` in a diff that
+  # otherwise read as a clean additive change. Deployment already reinstalls for
+  # this same reason (apps/platform/scripts/update.sh, workers/screener/scripts).
+  uv sync --reinstall-package ditto-screening-protocol >/dev/null
   uv run python - <<'PY' > "${OLDPWD}/.contract-sync/platform-openapi.json"
 import json
 
