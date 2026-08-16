@@ -3699,6 +3699,18 @@
         "minimum": 0,
         "type": "integer"
       },
+      "dethrone_band_mode": {
+        "anyOf": [
+          {
+            "const": "headroom_capped",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "entries": {
         "items": {
           "$ref": "#/$defs/LedgerEntry"

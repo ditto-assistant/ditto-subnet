@@ -10048,6 +10048,11 @@ export interface components {
              */
             count: number;
             /**
+             * Dethrone Band Mode
+             * @description Consensus activation marker for the ceiling-aware dethrone band. When set to headroom_capped, the KOTH indifference band is capped at a fixed share of the score the challenger can still gain, so a near-perfect incumbent can never require more than the benchmark can deliver. Absent keeps the uncapped decayed band.
+             */
+            dethrone_band_mode?: "headroom_capped" | null;
+            /**
              * Entries
              * @description Best eligible score per payment-time coldkey, highest composite first; the selected generation's hotkey is the weight destination.
              */
@@ -12220,6 +12225,24 @@ export interface components {
              * @description Incumbent composite above which the band begins shrinking.
              */
             band_decay_start_composite: number;
+            /**
+             * Ceiling Band Clamp Active
+             * @description Whether the displayed dethrone band is capped by the challenger's remaining headroom.
+             * @default false
+             */
+            ceiling_band_clamp_active: boolean;
+            /**
+             * Ceiling Band Clamp Required Protocol
+             * @description Minimum fleet heartbeat protocol for the ceiling-aware band cap.
+             * @default 24
+             */
+            ceiling_band_clamp_required_protocol: number;
+            /**
+             * Ceiling Headroom Share
+             * @description Largest share of the challenger's remaining headroom the dethrone band may consume once the ceiling-aware cap is active, so a perfect run always clears the crown.
+             * @default 0.5
+             */
+            ceiling_headroom_share: number;
             /**
              * Champion Agent Id
              * Format: uuid

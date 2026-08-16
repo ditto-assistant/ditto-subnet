@@ -28,6 +28,7 @@ from ditto.validator.config import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
     KOTH_BAND_DECAY_START_COMPOSITE,
+    KOTH_CEILING_HEADROOM_SHARE,
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
 from ditto.validator.crn import confirmation_seeds
@@ -171,6 +172,47 @@ def _dethrone_band_scale(
     )
 
 
+def _ceiling_capped_band(
+    band: float,
+    challenger: LedgerEntry,
+    champion: LedgerEntry,
+    champion_score: float,
+    *,
+    active: bool,
+) -> float:
+    """Cap the dethrone band at the share of the score still left to win.
+
+    :func:`_dethrone_band_scale` decays the band against an assumed perfect
+    score of 1.0, which is open-loop: it never reads what the challenger can
+    actually reach.  On a saturated benchmark the decayed band therefore still
+    exceeds the whole attainable remainder, and the required dethrone score
+    lands at or above the challenger's ceiling -- the crown becomes unwinnable
+    at any level of skill rather than merely hard to take.
+
+    Capping at ``KOTH_CEILING_HEADROOM_SHARE`` of the remaining headroom makes
+    the required score strictly lower than the ceiling whenever any headroom
+    exists, so a perfect run always dethrones.  A champion already at or above
+    the challenger's ceiling keeps a zero band: no positive band is clearable
+    there, and the honest remedy for an indistinguishable top is
+    :func:`_score_ceiling_cohort`, not a band this side can shrink further.
+
+    The cap only ever lowers a band, and rides the same v6+ opt-in as the decay
+    it corrects, so legacy and mixed-version comparisons stay byte-identical.
+    ``active`` is the platform's fleet-synchronized activation marker
+    (``LedgerResponse.dethrone_band_mode``): every validator must switch on the
+    same fold in the same epoch or the fleet submits two different crowns.
+    """
+    if not active:
+        return band
+    comparison_version = min(_entry_version(challenger), _entry_version(champion))
+    if comparison_version < KOTH_BAND_DECAY_MIN_BENCH_VERSION:
+        return band
+    headroom = _effective_score_ceiling(challenger) - champion_score
+    if headroom <= 0.0:
+        return 0.0
+    return min(band, KOTH_CEILING_HEADROOM_SHARE * headroom)
+
+
 def max_bench_version(entries: Sequence[LedgerEntry]) -> int:
     """The newest bench_version present in the ledger."""
     return max((_entry_version(e) for e in entries), default=DEFAULT_BENCH_VERSION)
@@ -245,6 +287,7 @@ def compute_weights(
     rank_shares: Sequence[float],
     dethrone_z: float = 0.0,
     tie_pooling: bool = False,
+    ceiling_band_clamp: bool = False,
 ) -> dict[str, float]:
     """Return ``{miner_hotkey: weight}`` for the KOTH+ATH mechanism.
 
@@ -260,7 +303,10 @@ def compute_weights(
     ledger surfaces per-entry ``composite_stderr`` and ``dethrone_z > 0``, the
     statistical band ``dethrone_z * sqrt(se_c² + se_champ²)`` — so a challenger
     inside the measurement noise cannot flip the crown. With no stderr the
-    band is exactly ``margin`` composite points. The champion and next
+    band is exactly ``margin`` composite points. When ``ceiling_band_clamp`` is
+    active the band is additionally capped at a share of the score the
+    challenger can still gain, so a saturated benchmark cannot leave the crown
+    mathematically unreachable (:func:`_ceiling_capped_band`). The champion and next
     ``tail_size`` miners receive the corresponding frozen
     ``rank_shares`` in order. When ``tie_pooling`` is active, contiguous
     recipients that the evidence cannot distinguish pool the shares of the slots
@@ -305,7 +351,9 @@ def compute_weights(
     # champion by the fixed composite-point margin to take the crown.
     # Order-independent of when each agent happened to be scored — only creation
     # order matters.
-    champion = _champion(scored, margin, dethrone_z)
+    champion = _champion(
+        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+    )
     if len(rank_shares) != tail_size + 1:
         raise ValueError("rank_shares must contain champion plus tail_size entries")
     if any(not math.isfinite(share) or share <= 0.0 for share in rank_shares):
@@ -319,6 +367,7 @@ def compute_weights(
             champion,
             margin=margin,
             dethrone_z=dethrone_z,
+            ceiling_band_clamp=ceiling_band_clamp,
         )
         if tie_pooling
         else []
@@ -404,6 +453,7 @@ def _score_ceiling_cohort(
     *,
     margin: float,
     dethrone_z: float,
+    ceiling_band_clamp: bool = False,
 ) -> list[LedgerEntry]:
     """Return the uncapped best-score cohort when KOTH cannot be dethroned.
 
@@ -420,7 +470,11 @@ def _score_ceiling_cohort(
         None,
     )
     if challenger is None or not _score_ceiling_deadlocked(
-        challenger, champion, margin=margin, dethrone_z=dethrone_z
+        challenger,
+        champion,
+        margin=margin,
+        dethrone_z=dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
     ):
         return []
 
@@ -451,11 +505,19 @@ def _distinct_ranked(entries: Sequence[LedgerEntry]) -> list[LedgerEntry]:
 
 
 def select_champion(
-    entries: Sequence[LedgerEntry], *, margin: float, dethrone_z: float = 0.0
+    entries: Sequence[LedgerEntry],
+    *,
+    margin: float,
+    dethrone_z: float = 0.0,
+    ceiling_band_clamp: bool = False,
 ) -> LedgerEntry | None:
     """Return the deterministic KOTH champion, or ``None`` for an empty pool."""
     scored = [e for e in filter_eligible(entries) if _effective_composite(e) > 0.0]
-    return _champion(scored, margin, dethrone_z) if scored else None
+    return (
+        _champion(scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp)
+        if scored
+        else None
+    )
 
 
 def _entry_confirmations(entry: LedgerEntry) -> list[float] | None:
@@ -816,6 +878,7 @@ def top5_confirmation_set(
     catch_up_rate: int = 2,
     cohort_size: int | None = None,
     max_cohort_size: int = 25,
+    ceiling_band_clamp: bool = False,
 ) -> Top5ConfirmationPlan | None:
     """Plan one continual champion-anchored shared-seed round.
 
@@ -843,7 +906,9 @@ def top5_confirmation_set(
     ]
     if not scored:
         return None
-    champion = _champion(scored, margin, dethrone_z)
+    champion = _champion(
+        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+    )
     # Never below the emission set, never above the cap: a platform that
     # reported something absurd (or a hostile one) cannot make this validator
     # spend its whole cycle on rescores, and cannot shrink the round below the
@@ -945,7 +1010,12 @@ def _paired_dethrone(
 
 
 def _beats(
-    challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
+    challenger: LedgerEntry,
+    champion: LedgerEntry,
+    margin: float,
+    dethrone_z: float,
+    *,
+    ceiling_band_clamp: bool = False,
 ) -> bool:
     """Whether ``challenger`` dethrones ``champion``. The lead must exceed the
     **indifference band** = max(fixed composite-point margin, statistical band).
@@ -966,15 +1036,28 @@ def _beats(
     ``composite_stderr`` and ``dethrone_z > 0``; with no stderr (or z=0) the band
     is exactly the fixed composite-point margin. Both sides use
     :func:`_effective_composite` (the MEDIAN over confirmation seeds when present,
-    else the raw composite). Pure and deterministic (consensus-safe)."""
+    else the raw composite). Pure and deterministic (consensus-safe).
+
+    Either band is finally capped by :func:`_ceiling_capped_band` when the
+    platform has activated ``ceiling_band_clamp`` for the whole fleet, so a
+    near-perfect incumbent cannot demand more than the challenger can win."""
     observed_score, required_score = _dethrone_scores(
-        challenger, champion, margin, dethrone_z
+        challenger,
+        champion,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
     )
     return observed_score > required_score
 
 
 def _dethrone_scores(
-    challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
+    challenger: LedgerEntry,
+    champion: LedgerEntry,
+    margin: float,
+    dethrone_z: float,
+    *,
+    ceiling_band_clamp: bool = False,
 ) -> tuple[float, float]:
     """Return the observed and strictly-exceeded required challenger scores."""
     paired = _paired_dethrone(challenger, champion, dethrone_z)
@@ -982,6 +1065,9 @@ def _dethrone_scores(
         mean_diff, champ_ref, se_diff = paired
         base_band = max(margin, dethrone_z * se_diff)
         band = base_band * _dethrone_band_scale(challenger, champion, champ_ref)
+        band = _ceiling_capped_band(
+            band, challenger, champion, champ_ref, active=ceiling_band_clamp
+        )
         return champ_ref + mean_diff, champ_ref + band
 
     chall = _effective_composite(challenger)
@@ -997,6 +1083,9 @@ def _dethrone_scores(
             if stat_band > band:
                 band = stat_band
     band *= _dethrone_band_scale(challenger, champion, champ)
+    band = _ceiling_capped_band(
+        band, challenger, champion, champ, active=ceiling_band_clamp
+    )
     # Compare scores against the threshold rather than subtracting first. For
     # decimal wire values such as 0.935 and 0.930, subtraction can round an exact
     # 0.005 boundary infinitesimally upward and incorrectly defeat first-seen.
@@ -1009,10 +1098,15 @@ def _score_ceiling_deadlocked(
     *,
     margin: float,
     dethrone_z: float,
+    ceiling_band_clamp: bool = False,
 ) -> bool:
     """Whether even the challenger's maximum score cannot clear the crown."""
     observed_score, required_score = _dethrone_scores(
-        challenger, champion, margin, dethrone_z
+        challenger,
+        champion,
+        margin,
+        dethrone_z,
+        ceiling_band_clamp=ceiling_band_clamp,
     )
     return (
         observed_score <= required_score
@@ -1021,7 +1115,11 @@ def _score_ceiling_deadlocked(
 
 
 def _champion(
-    entries: Sequence[LedgerEntry], margin: float, dethrone_z: float = 0.0
+    entries: Sequence[LedgerEntry],
+    margin: float,
+    dethrone_z: float = 0.0,
+    *,
+    ceiling_band_clamp: bool = False,
 ) -> LedgerEntry:
     """The KOTH champion of a positive-composite entry set: fold in first-seen
     order, dethroning only when a later entry clears the indifference band
@@ -1042,7 +1140,7 @@ def _champion(
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
     champ = ordered[0]
     for e in ordered[1:]:
-        if _beats(e, champ, margin, dethrone_z):
+        if _beats(e, champ, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp):
             champ = e
     return champ
 
@@ -1089,6 +1187,7 @@ def agents_needing_rescore(
     margin: float,
     tail_size: int,
     dethrone_z: float = 0.0,
+    ceiling_band_clamp: bool = False,
 ) -> list[LedgerEntry]:
     """The champion + participation-tail entries scored under an **older**
     bench_version than ``current_version`` — they must be re-evaluated before the
@@ -1104,13 +1203,20 @@ def agents_needing_rescore(
     scored = [e for e in entries if _effective_composite(e) > 0.0]
     if not scored:
         return []
-    champion = _champion(scored, margin, dethrone_z)
+    champion = _champion(
+        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+    )
     rewarded = [champion, *_tail(scored, champion, tail_size)]
     return [e for e in rewarded if _entry_version(e) < current_version]
 
 
 def _unpaired_band(
-    challenger: LedgerEntry, champion: LedgerEntry, margin: float, dethrone_z: float
+    challenger: LedgerEntry,
+    champion: LedgerEntry,
+    margin: float,
+    dethrone_z: float,
+    *,
+    ceiling_band_clamp: bool = False,
 ) -> float:
     """The unpaired indifference band :func:`_beats` applies to this pair:
     ``max(margin, dethrone_z * sqrt(se_c² + se_champ²))``, the
@@ -1130,8 +1236,13 @@ def _unpaired_band(
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
-    return band * _dethrone_band_scale(
-        challenger, champion, _effective_composite(champion)
+    champ = _effective_composite(champion)
+    return _ceiling_capped_band(
+        band * _dethrone_band_scale(challenger, champion, champ),
+        challenger,
+        champion,
+        champ,
+        active=ceiling_band_clamp,
     )
 
 
@@ -1163,6 +1274,7 @@ def contested_confirmation_set(
     current_version: int,
     margin: float,
     dethrone_z: float = 0.0,
+    ceiling_band_clamp: bool = False,
 ) -> list[LedgerEntry]:
     """The champion plus the current-version challengers whose crown decision
     sits INSIDE the unpaired indifference band (the seed-luck zone) and cannot
@@ -1201,7 +1313,9 @@ def contested_confirmation_set(
     scored = [e for e in entries if _effective_composite(e) > 0.0]
     if len(scored) < 2:
         return []
-    champion = _champion(scored, margin, dethrone_z)
+    champion = _champion(
+        scored, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+    )
     if _entry_version(champion) != current_version:
         return []
     contested = [
@@ -1210,7 +1324,9 @@ def contested_confirmation_set(
         if e.agent_id != champion.agent_id
         and _entry_version(e) == current_version
         and abs(_effective_composite(e) - _effective_composite(champion))
-        <= _unpaired_band(e, champion, margin, dethrone_z)
+        <= _unpaired_band(
+            e, champion, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
+        )
         and not _shares_confirmation_seeds(e, champion)
     ]
     if not contested:

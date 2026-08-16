@@ -153,6 +153,16 @@ def _supports_bench_version(bench_version: int | None) -> bool:
     return bench_version in SUPPORTED_BENCH_VERSIONS
 
 
+def _ledger_ceiling_band_clamp(ledger: LedgerResponse) -> bool:
+    """Whether Platform has activated the ceiling-aware dethrone band fleet-wide.
+
+    Absent on an older Platform, and withheld until every recently-live weight
+    setter reports protocol 24, so the whole fleet folds the same band in the
+    same epoch. Fails closed to the historical uncapped band.
+    """
+    return getattr(ledger, "dethrone_band_mode", None) == "headroom_capped"
+
+
 def _ledger_active_bench_version(ledger: LedgerResponse) -> int | None:
     """Return Platform's rollout authority, or fail closed for retest work.
 
@@ -1642,6 +1652,7 @@ class ValidatorWorker:
             rank_shares=self._config.koth_rank_shares,
             dethrone_z=self._config.koth_dethrone_z,
             tie_pooling=ledger.tie_weighting_mode == "pool",
+            ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
         )
         # The burn is operator policy served on the ledger, not a compiled-in
         # constant; the config value is the fallback for a platform that does not
@@ -1665,6 +1676,7 @@ class ValidatorWorker:
             registered_entries,
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
+            ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
         )
         king_fingerprint = self._king_fingerprint(champion)
         if not miner_weights:
@@ -1718,6 +1730,7 @@ class ValidatorWorker:
             ),
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
+            ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
         )
         return True, self._king_fingerprint(champion)
 
@@ -2380,6 +2393,7 @@ class ValidatorWorker:
             margin=self._config.koth_margin,
             tail_size=self._config.koth_tail_size,
             dethrone_z=self._config.koth_dethrone_z,
+            ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
         )
         if not stale:
             return ledger
@@ -2469,6 +2483,7 @@ class ValidatorWorker:
             current_version=current_version,
             margin=self._config.koth_margin,
             dethrone_z=self._config.koth_dethrone_z,
+            ceiling_band_clamp=_ledger_ceiling_band_clamp(ledger),
         )
         if not contested:
             return

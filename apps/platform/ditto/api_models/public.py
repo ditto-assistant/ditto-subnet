@@ -1330,6 +1330,39 @@ class PublicKothEmissions(BaseModel):
             description="Minimum fleet heartbeat protocol for tie pooling.",
         ),
     ] = 20
+    ceiling_headroom_share: Annotated[
+        float,
+        Field(
+            default=0.5,
+            gt=0.0,
+            le=1.0,
+            description=(
+                "Largest share of the challenger's remaining headroom the "
+                "dethrone band may consume once the ceiling-aware cap is "
+                "active, so a perfect run always clears the crown."
+            ),
+        ),
+    ] = 0.5
+    ceiling_band_clamp_active: Annotated[
+        bool,
+        Field(
+            default=False,
+            description=(
+                "Whether the displayed dethrone band is capped by the "
+                "challenger's remaining headroom."
+            ),
+        ),
+    ] = False
+    ceiling_band_clamp_required_protocol: Annotated[
+        int,
+        Field(
+            default=24,
+            ge=1,
+            description=(
+                "Minimum fleet heartbeat protocol for the ceiling-aware band cap."
+            ),
+        ),
+    ] = 24
     allocation_mode: Annotated[
         Literal["ranked", "score_ceiling_pool"],
         Field(

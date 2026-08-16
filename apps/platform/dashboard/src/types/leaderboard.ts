@@ -47,6 +47,11 @@ export interface EmissionsFold {
   rank_shares?: number[];
   tie_weighting_active?: boolean;
   tie_weighting_required_protocol?: number;
+  /** Protocol 24: cap on how much of the remaining headroom the dethrone band
+   * may consume, and whether the fleet has activated it. */
+  ceiling_headroom_share?: number;
+  ceiling_band_clamp_active?: boolean;
+  ceiling_band_clamp_required_protocol?: number;
   champion_miner_hotkey?: string | null;
   champion_agent_id?: string | null;
   raw_leader_agent_id?: string | null;

@@ -200,6 +200,7 @@ from ditto.api_server.koth import (
     KOTH_BAND_DECAY_MIN_BENCH_VERSION,
     KOTH_BAND_DECAY_RATE,
     KOTH_BAND_DECAY_START_COMPOSITE,
+    KOTH_CEILING_HEADROOM_SHARE,
     KOTH_CHAMPION_SHARE,
     KOTH_DETHRONE_Z,
     KOTH_MARGIN,
@@ -452,6 +453,9 @@ _VALIDATOR_ONLINE_WINDOW = timedelta(minutes=5)
 _VALIDATOR_STALE_WINDOW = timedelta(minutes=15)
 _CONTINUAL_MEAN_PROTOCOL = 14
 _TIE_WEIGHTING_PROTOCOL = 20
+# Protocol 24 caps the KOTH dethrone band at a share of the score a challenger
+# can still gain, so a saturated benchmark cannot freeze the crown.
+_DETHRONE_BAND_CLAMP_PROTOCOL = 24
 # Grace after a lease is issued before the validator is expected to report (in a
 # heartbeat) that it has picked the agent up. Within this window an assigned-but-
 # not-yet-reported validator reads as "assigning" rather than a mismatch, so the
@@ -2091,6 +2095,7 @@ def _public_koth_emissions(
     efficiency_bonuses: dict[UUID, float] | None = None,
     efficiency_factors: dict[UUID, float] | None = None,
     tie_weighting_active: bool = False,
+    ceiling_band_clamp: bool = False,
 ) -> PublicKothEmissions | None:
     """Project the caller's finalized, registration-eligible score pool."""
     quorum_values = quorum_by_agent or {}
@@ -2168,11 +2173,18 @@ def _public_koth_emissions(
             )
         )
 
-    projection = project_koth(fold_entries, distinct_hotkeys=tie_weighting_active)
+    projection = project_koth(
+        fold_entries,
+        distinct_hotkeys=tie_weighting_active,
+        ceiling_band_clamp=ceiling_band_clamp,
+    )
     if projection is None:
         return None
     allocation = emission_allocation(
-        fold_entries, projection, tie_pooling=tie_weighting_active
+        fold_entries,
+        projection,
+        tie_pooling=tie_weighting_active,
+        ceiling_band_clamp=ceiling_band_clamp,
     )
     share_total = sum(allocation.shares)
     normalized_shares = tuple(share / share_total for share in allocation.shares)
@@ -2194,7 +2206,9 @@ def _public_koth_emissions(
         for index, entry in enumerate(allocation.members)
     ]
     decision = projection.raw_leader_decision
-    defense = champion_defense(fold_entries, projection)
+    defense = champion_defense(
+        fold_entries, projection, ceiling_band_clamp=ceiling_band_clamp
+    )
     return PublicKothEmissions(
         margin=KOTH_MARGIN,
         dethrone_z=KOTH_DETHRONE_Z,
@@ -2205,6 +2219,9 @@ def _public_koth_emissions(
         rank_shares=KOTH_RANK_SHARES,
         tie_weighting_active=tie_weighting_active,
         tie_weighting_required_protocol=_TIE_WEIGHTING_PROTOCOL,
+        ceiling_headroom_share=KOTH_CEILING_HEADROOM_SHARE,
+        ceiling_band_clamp_active=ceiling_band_clamp,
+        ceiling_band_clamp_required_protocol=_DETHRONE_BAND_CLAMP_PROTOCOL,
         allocation_mode=allocation.mode,
         score_ceiling_pool_size=(
             len(allocation.members) if allocation.mode == "score_ceiling_pool" else 0
@@ -2560,6 +2577,17 @@ async def leaderboard(
     )
     tie_weighting_active = bench_version is None and tie_weighting_is_active(
         continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
+    )
+    # No operator switch, matching the ledger: the cap only ever narrows a band
+    # the benchmark has already made unwinnable, so fleet readiness is the gate.
+    ceiling_band_clamp_active = bench_version is None and (
+        await live_validator_fleet_supports_protocol(
+            session,
+            minimum_protocol=_DETHRONE_BAND_CLAMP_PROTOCOL,
+            bench_version=active_version,
+            now=now,
+            freshness=_VALIDATOR_STALE_WINDOW,
+        )
     )
     efficiency_view: EfficiencyBoardView | None = None
     if finalized_rows:
@@ -3069,6 +3097,7 @@ async def leaderboard(
                 efficiency_bonuses=efficiency_bonuses,
                 efficiency_factors=efficiency_factors,
                 tie_weighting_active=tie_weighting_active,
+                ceiling_band_clamp=ceiling_band_clamp_active,
             )
         ),
         efficiency=_efficiency_status(efficiency_view),

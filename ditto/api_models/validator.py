@@ -1549,6 +1549,21 @@ class LedgerResponse(BaseModel):
             ),
         ),
     ] = None
+    dethrone_band_mode: Annotated[
+        Literal["headroom_capped"] | None,
+        Field(
+            default=None,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Consensus activation marker for the ceiling-aware dethrone "
+                "band. When set to headroom_capped, the KOTH indifference band "
+                "is capped at a fixed share of the score the challenger can "
+                "still gain, so a near-perfect incumbent can never require more "
+                "than the benchmark can deliver. Absent keeps the uncapped "
+                "decayed band."
+            ),
+        ),
+    ] = None
     count: Annotated[int, Field(ge=0, description="Number of entries returned.")]
     generated_at: Annotated[
         datetime | None,

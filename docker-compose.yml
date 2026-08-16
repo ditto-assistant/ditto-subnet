@@ -245,7 +245,7 @@ services:
       args:
         DITTO_REVISION: ${DITTO_SOURCE_REVISION:-local}
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
-        VALIDATOR_HEARTBEAT_PROTOCOL: "23"
+        VALIDATOR_HEARTBEAT_PROTOCOL: "24"
     restart: unless-stopped
     # One full 120-minute ticket plus five minutes for a signed final report.
     # This must remain above the productive-run cap and aligned with both

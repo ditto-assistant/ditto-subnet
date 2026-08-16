@@ -19,7 +19,9 @@ from ditto.validator.crn import confirmation_seeds
 from ditto.validator.weights import (
     _beats,
     _dethrone_band_scale,
+    _dethrone_scores,
     _effective_composite,
+    _effective_score_ceiling,
     _efficiency_stderr_scale,
     _elastic_confirmation_seed_ceiling,
     _entry_confirmations,
@@ -29,6 +31,7 @@ from ditto.validator.weights import (
     _unpaired_band,
     compute_weights,
     contested_confirmation_set,
+    select_champion,
     top5_confirmation_set,
 )
 
@@ -1102,3 +1105,176 @@ class TestContestedConfirmationSet:
 
     def test_single_entry_ledger_has_no_contest(self) -> None:
         assert contested_confirmation_set([_e("5A" + "a" * 44, 0.8)], **self._KW) == []
+
+
+class TestCeilingCappedBand:
+    """The band must never ask for more score than the challenger can reach.
+
+    The exponential decay is open-loop: it shrinks the band toward an assumed
+    perfect 1.0 without reading the challenger's actual ceiling, so on a
+    saturated benchmark it can require a score above the maximum and freeze the
+    crown for good. These lock the closed-loop cap that fixes that.
+    """
+
+    # Bench v9/v10 memory scores in half-point steps over 251 cases, so the
+    # smallest possible composite change is 0.25/251 -- one "score step".
+    _STEP = 0.25 / 251
+    _SATURATED = 0.997012  # the live plateau: 1.5 memory misses
+
+    @staticmethod
+    def _required(challenger: Any, champion: Any, *, clamp: bool) -> float:
+        _observed, required = _dethrone_scores(
+            challenger, champion, 0.007, 1.64, ceiling_band_clamp=clamp
+        )
+        return required
+
+    def test_saturated_crown_is_unreachable_without_the_cap(self) -> None:
+        champ = _e("5A" + "a" * 44, self._SATURATED, bench_version=9)
+        chall = _e("5B" + "b" * 44, self._SATURATED, bench_version=9, minutes=1)
+        # 0.007 * exp(-2 * (0.997012 - 0.60)) = 0.003164, but only 0.002988 of
+        # score exists above the incumbent. A perfect 1.0 still loses.
+        assert self._required(chall, champ, clamp=False) > 1.0
+
+    def test_cap_keeps_the_required_score_below_the_ceiling(self) -> None:
+        champ = _e("5A" + "a" * 44, self._SATURATED, bench_version=9)
+        chall = _e("5B" + "b" * 44, self._SATURATED, bench_version=9, minutes=1)
+        required = self._required(chall, champ, clamp=True)
+        assert required == pytest.approx(
+            self._SATURATED + 0.5 * (1.0 - self._SATURATED)
+        )
+        assert required < 1.0
+
+    def test_perfect_score_always_dethrones_a_saturated_incumbent(self) -> None:
+        champ = _e("5A" + "a" * 44, self._SATURATED, bench_version=9)
+        perfect = _e("5B" + "b" * 44, 1.0, bench_version=9, minutes=1)
+        assert not _beats(perfect, champ, 0.007, 1.64)
+        assert _beats(perfect, champ, 0.007, 1.64, ceiling_band_clamp=True)
+
+    def test_cap_still_absorbs_a_single_score_step(self) -> None:
+        # Relief, not a hair trigger: the smallest measurable gain must still
+        # lose, or the crown churns on one flipped memory case.
+        champ = _e("5A" + "a" * 44, self._SATURATED, bench_version=9)
+        chall = _e(
+            "5B" + "b" * 44, self._SATURATED + self._STEP, bench_version=9, minutes=1
+        )
+        assert not _beats(chall, champ, 0.007, 1.64, ceiling_band_clamp=True)
+
+    def test_cap_is_inert_away_from_the_ceiling(self) -> None:
+        champ = _e("5A" + "a" * 44, 0.85, bench_version=9)
+        chall = _e("5B" + "b" * 44, 0.86, bench_version=9, minutes=1)
+        assert self._required(chall, champ, clamp=True) == self._required(
+            chall, champ, clamp=False
+        )
+
+    def test_cap_never_widens_a_band(self) -> None:
+        for champion_composite in (0.60, 0.75, 0.90, 0.95, 0.99, 0.999):
+            champ = _e("5A" + "a" * 44, champion_composite, bench_version=9)
+            chall = _e("5B" + "b" * 44, champion_composite, bench_version=9, minutes=1)
+            assert self._required(chall, champ, clamp=True) <= self._required(
+                chall, champ, clamp=False
+            )
+
+    def test_legacy_and_mixed_version_folds_are_byte_identical(self) -> None:
+        # The cap rides the same v6+ opt-in as the decay it corrects.
+        for challenger_version, champion_version in ((5, 5), (5, 9), (9, 5)):
+            champ = _e("5A" + "a" * 44, self._SATURATED, bench_version=champion_version)
+            chall = _e(
+                "5B" + "b" * 44,
+                self._SATURATED,
+                bench_version=challenger_version,
+                minutes=1,
+            )
+            assert self._required(chall, champ, clamp=True) == self._required(
+                chall, champ, clamp=False
+            )
+
+    def test_efficiency_ceiling_sets_the_headroom(self) -> None:
+        # Headroom is measured against the challenger's OWN score ceiling --
+        # the live board runs on legacy bonuses, where that is 1 + bonus.
+        champ = _e(
+            "5A" + "a" * 44, self._SATURATED, bench_version=9, efficiency_bonus=0.10
+        )
+        chall = _e(
+            "5B" + "b" * 44,
+            self._SATURATED,
+            bench_version=9,
+            efficiency_bonus=0.02,
+            minutes=1,
+        )
+        assert _effective_score_ceiling(chall) == pytest.approx(1.02)
+        # The incumbent already scores above everything this challenger can
+        # reach, so no positive band is clearable and none is charged.
+        assert self._required(chall, champ, clamp=True) == pytest.approx(
+            _effective_composite(champ)
+        )
+        assert not _beats(chall, champ, 0.007, 1.64, ceiling_band_clamp=True)
+
+    def test_max_efficiency_challenger_can_still_take_a_top_crown(self) -> None:
+        # The live shape on 2026-08-16: quality is pinned at the plateau for
+        # everyone at the top, so only the bonus separates them. Capping the
+        # band must not make that contest unwinnable either.
+        champ = _e(
+            "5A" + "a" * 44, self._SATURATED, bench_version=9, efficiency_bonus=0.096
+        )
+        chall = _e(
+            "5B" + "b" * 44,
+            self._SATURATED,
+            bench_version=9,
+            efficiency_bonus=0.10,
+            minutes=1,
+        )
+        assert _beats(chall, champ, 0.007, 1.64, ceiling_band_clamp=True)
+
+    def test_paired_comparison_is_capped_too(self) -> None:
+        champ = _e(
+            "5A" + "a" * 44,
+            self._SATURATED,
+            bench_version=9,
+            confirmations=[self._SATURATED] * 3,
+            seeds=[1, 2, 3],
+        )
+        chall = _e(
+            "5B" + "b" * 44,
+            1.0,
+            bench_version=9,
+            confirmations=[1.0] * 3,
+            seeds=[1, 2, 3],
+            minutes=1,
+        )
+        assert _paired_dethrone(chall, champ, 1.64) is not None
+        assert not _beats(chall, champ, 0.007, 1.64)
+        assert _beats(chall, champ, 0.007, 1.64, ceiling_band_clamp=True)
+
+    def test_clamp_is_off_by_default_everywhere(self) -> None:
+        # A platform that has not activated the marker -- or a fleet that is not
+        # ready -- must fold exactly as it does today.
+        champ = _e("5A" + "a" * 44, self._SATURATED, bench_version=9)
+        perfect = _e("5B" + "b" * 44, 1.0, bench_version=9, minutes=1)
+        entries = [champ, perfect]
+        held = select_champion(entries, margin=0.007, dethrone_z=1.64)
+        moved = select_champion(
+            entries, margin=0.007, dethrone_z=1.64, ceiling_band_clamp=True
+        )
+        assert held is not None and held.agent_id == champ.agent_id
+        assert moved is not None and moved.agent_id == perfect.agent_id
+
+    def test_weight_fold_moves_the_crown_once_activated(self) -> None:
+        champ = _e("5A" + "a" * 44, self._SATURATED, bench_version=9)
+        perfect = _e("5B" + "b" * 44, 1.0, bench_version=9, minutes=1)
+        held = compute_weights(
+            [champ, perfect],
+            margin=0.007,
+            tail_size=4,
+            rank_shares=(0.65, 0.14, 0.10, 0.07, 0.04),
+            dethrone_z=1.64,
+        )
+        assert held[champ.miner_hotkey] == pytest.approx(0.65)
+        moved = compute_weights(
+            [champ, perfect],
+            margin=0.007,
+            tail_size=4,
+            rank_shares=(0.65, 0.14, 0.10, 0.07, 0.04),
+            dethrone_z=1.64,
+            ceiling_band_clamp=True,
+        )
+        assert moved[perfect.miner_hotkey] == pytest.approx(0.65)

@@ -276,6 +276,10 @@ export interface BandDecayParams {
   band_decay_min_bench_version?: number | null;
   band_decay_start_composite?: number | null;
   band_decay_rate?: number | null;
+  /** Protocol 24: largest share of the remaining headroom the band may take. */
+  ceiling_headroom_share?: number | null;
+  /** Whether the fleet has activated that cap; absent/false keeps the old band. */
+  ceiling_band_clamp_active?: boolean | null;
 }
 
 export interface BenchVersioned {
@@ -316,6 +320,29 @@ export function dethroneBandScale(
     return 1;
   const boundedChampion = Math.min(Math.max(championComposite, start), 1);
   return Math.exp(-rate * (boundedChampion - start));
+}
+
+/**
+ * Protocol 24: the band never asks for more than `ceiling_headroom_share` of
+ * what is left above the incumbent, so the published floor stays below a
+ * perfect score instead of climbing past it on a saturated benchmark. Mirrors
+ * `_ceiling_capped_band` in ditto/validator/weights.py; inert (returns the
+ * band unchanged) until the fleet activates the cap.
+ *
+ * The displayed floor is a quality composite, so the ceiling here is 1 — the
+ * efficiency-adjusted ceiling the fold uses is not part of this copy.
+ */
+export function ceilingCappedMargin(
+  emissions: BandDecayParams | null | undefined,
+  band: number,
+  championComposite: number,
+): number {
+  if (!emissions || emissions.ceiling_band_clamp_active !== true) return band;
+  const share = Number(emissions.ceiling_headroom_share);
+  if (!Number.isFinite(share) || share <= 0) return band;
+  const headroom = 1 - championComposite;
+  if (!(headroom > 0)) return 0;
+  return Math.min(band, share * headroom);
 }
 
 export interface DethroneFloor {
@@ -360,7 +387,7 @@ export function dethroneFloor(
   if (!Number.isFinite(champComposite) || typeof margin !== "number" || !Number.isFinite(margin))
     return null;
   const scale = dethroneBandScale(emissions, championEntry, champComposite);
-  const effectiveMargin = margin * scale;
+  const effectiveMargin = ceilingCappedMargin(emissions, margin * scale, champComposite);
   const floor = champComposite + effectiveMargin;
   const z = emissions.dethrone_z;
   return {

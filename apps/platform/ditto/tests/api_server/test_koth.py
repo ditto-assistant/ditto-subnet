@@ -958,3 +958,73 @@ def test_champion_defense_matches_the_fold_when_a_rival_does_lead() -> None:
     assert defense is not None
     assert defense == _dethrone_decision(champion, challenger)
     assert defense.dethrones is False
+
+
+class TestCeilingCappedBand:
+    """The projection must mirror the validator's ceiling-aware band cap.
+
+    This is the number the board shows a miner as "what you need to score", so
+    a projection that disagrees with the fold is worse than no explanation.
+    """
+
+    _SATURATED = 0.997012
+
+    def _pair(self) -> tuple[KothEntry, KothEntry]:
+        champion = _entry(1, self._SATURATED, minutes=0, bench_version=9)
+        challenger = _entry(2, self._SATURATED, minutes=1, bench_version=9)
+        return challenger, champion
+
+    def test_uncapped_band_can_demand_more_than_the_ceiling(self) -> None:
+        challenger, champion = self._pair()
+        decision = _dethrone_decision(challenger, champion)
+        assert decision.required_score > decision.score_ceiling
+        assert decision.ceiling_deadlocked
+
+    def test_cap_clears_the_deadlock(self) -> None:
+        challenger, champion = self._pair()
+        decision = _dethrone_decision(challenger, champion, ceiling_band_clamp=True)
+        assert decision.required_score == pytest.approx(
+            self._SATURATED + 0.5 * (1.0 - self._SATURATED)
+        )
+        assert decision.required_score < decision.score_ceiling
+        assert not decision.ceiling_deadlocked
+
+    def test_cap_is_inert_away_from_the_ceiling(self) -> None:
+        champion = _entry(1, 0.85, minutes=0, bench_version=9)
+        challenger = _entry(2, 0.86, minutes=1, bench_version=9)
+        assert (
+            _dethrone_decision(
+                challenger, champion, ceiling_band_clamp=True
+            ).required_lead
+            == _dethrone_decision(challenger, champion).required_lead
+        )
+
+    def test_legacy_comparisons_are_byte_identical(self) -> None:
+        champion = _entry(1, self._SATURATED, minutes=0, bench_version=5)
+        challenger = _entry(2, self._SATURATED, minutes=1, bench_version=5)
+        assert (
+            _dethrone_decision(
+                challenger, champion, ceiling_band_clamp=True
+            ).required_lead
+            == _dethrone_decision(challenger, champion).required_lead
+        )
+
+    def test_projection_moves_the_crown_once_activated(self) -> None:
+        champion = _entry(1, self._SATURATED, minutes=0, bench_version=9)
+        perfect = _entry(2, 1.0, minutes=1, bench_version=9)
+        entries = [champion, perfect]
+        held = project_koth(entries)
+        assert held is not None
+        assert held.champion.agent_id == champion.agent_id
+        moved = project_koth(entries, ceiling_band_clamp=True)
+        assert moved is not None
+        assert moved.champion.agent_id == perfect.agent_id
+
+    def test_champion_defense_reports_the_capped_requirement(self) -> None:
+        champion = _entry(1, self._SATURATED, minutes=0, bench_version=9)
+        rival = _entry(2, self._SATURATED, minutes=1, bench_version=9)
+        entries = [champion, rival]
+        projection = project_koth(entries, ceiling_band_clamp=True)
+        defense = champion_defense(entries, projection, ceiling_band_clamp=True)
+        assert defense is not None
+        assert defense.required_score < defense.score_ceiling

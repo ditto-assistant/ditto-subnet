@@ -295,8 +295,15 @@ result.
   the incumbent only after clearing the greater of a fixed 0.007 composite-point
   hysteresis and the statistical error band. From Bench v6 onward, that whole
   band shrinks smoothly once the incumbent exceeds 0.60, keeping the crown
-  contestable as scores approach the benchmark ceiling. A near-miss is settled
-  by re-scoring both agents on shared seeds rather than dataset luck.
+  contestable as scores approach the benchmark ceiling. That smooth decay is
+  measured against a perfect score rather than against what is actually left,
+  so on a saturated benchmark it could still ask for more than the maximum: a
+  0.997012 incumbent required 1.000176. The band is therefore also capped at
+  half of the score you still have left to gain, which keeps the requirement
+  strictly below the ceiling — a perfect run always takes the crown. The cap
+  only ever lowers the bar, never raises it, and the leaderboard's "beat this
+  to contend" figure already includes it. A near-miss is settled by re-scoring
+  both agents on shared seeds rather than dataset luck.
 - Competitive weight is distributed 65% / 14% / 10% / 7% / 4% to the champion
   and next four distinct miners, respectively. Evidence-tied occupied positions
   pool their shares. If at least two highest-scoring miners are evidence-tied and

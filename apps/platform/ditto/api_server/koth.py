@@ -25,6 +25,11 @@ KOTH_MARGIN = 0.007
 KOTH_BAND_DECAY_MIN_BENCH_VERSION = 6
 KOTH_BAND_DECAY_START_COMPOSITE = 0.60
 KOTH_BAND_DECAY_RATE = 2.0
+# Protocol 24: the decay above is open-loop and, on a saturated benchmark, can
+# require more score than the challenger can attain at all. The band is then
+# also capped at this share of the remaining headroom, keeping the required
+# dethrone score strictly below the challenger's ceiling.
+KOTH_CEILING_HEADROOM_SHARE = 0.5
 KOTH_TAIL_SIZE = 4
 KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_CHAMPION_SHARE = KOTH_RANK_SHARES[0]
@@ -109,6 +114,26 @@ def _dethrone_band_scale(
     )
 
 
+def _ceiling_capped_band(
+    band: float,
+    challenger: KothEntry,
+    champion: KothEntry,
+    champion_score: float,
+    *,
+    active: bool,
+) -> float:
+    """Mirror the validator's ceiling-aware cap on the dethrone band."""
+    if not active:
+        return band
+    comparison_version = min(challenger.bench_version, champion.bench_version)
+    if comparison_version < KOTH_BAND_DECAY_MIN_BENCH_VERSION:
+        return band
+    headroom = _effective_score_ceiling(challenger) - champion_score
+    if headroom <= 0.0:
+        return 0.0
+    return min(band, KOTH_CEILING_HEADROOM_SHARE * headroom)
+
+
 def emission_set(projection: KothProjection | None) -> tuple[KothEntry, ...]:
     """Return the emission set (champion + up to 4 distinct-miner tail = top 5).
 
@@ -161,6 +186,7 @@ def emission_allocation(
     projection: KothProjection | None,
     *,
     tie_pooling: bool = False,
+    ceiling_band_clamp: bool = False,
 ) -> EmissionAllocation:
     """Return the exact validator payout mode, membership, and shares.
 
@@ -173,7 +199,9 @@ def emission_allocation(
     if projection is None:
         return EmissionAllocation(mode="ranked", members=(), shares=())
     if tie_pooling:
-        ceiling_cohort = _score_ceiling_cohort(entries, projection)
+        ceiling_cohort = _score_ceiling_cohort(
+            entries, projection, ceiling_band_clamp=ceiling_band_clamp
+        )
         if ceiling_cohort:
             share = 1.0 / len(ceiling_cohort)
             return EmissionAllocation(
@@ -189,7 +217,10 @@ def emission_allocation(
 
 
 def _score_ceiling_cohort(
-    entries: Sequence[KothEntry], projection: KothProjection
+    entries: Sequence[KothEntry],
+    projection: KothProjection,
+    *,
+    ceiling_band_clamp: bool = False,
 ) -> tuple[KothEntry, ...]:
     # Curve-v3 protocol 21 has no continuous adjusted-score ceiling: quality is
     # the primary order and efficiency only breaks an exact quality tie.
@@ -206,7 +237,9 @@ def _score_ceiling_cohort(
     )
     if challenger is None:
         return ()
-    decision = _dethrone_decision(challenger, projection.champion)
+    decision = _dethrone_decision(
+        challenger, projection.champion, ceiling_band_clamp=ceiling_band_clamp
+    )
     if not decision.ceiling_deadlocked:
         return ()
 
@@ -220,7 +253,10 @@ def _score_ceiling_cohort(
 
 
 def champion_defense(
-    entries: Sequence[KothEntry], projection: KothProjection | None
+    entries: Sequence[KothEntry],
+    projection: KothProjection | None,
+    *,
+    ceiling_band_clamp: bool = False,
 ) -> DethroneDecision | None:
     """What the best rival miner currently needs to take the crown.
 
@@ -248,7 +284,9 @@ def champion_defense(
     )
     if challenger is None:
         return None
-    return _dethrone_decision(challenger, projection.champion)
+    return _dethrone_decision(
+        challenger, projection.champion, ceiling_band_clamp=ceiling_band_clamp
+    )
 
 
 def _distinct_ranked(entries: Sequence[KothEntry]) -> tuple[KothEntry, ...]:
@@ -447,7 +485,10 @@ def _ranked_entries(entries: Iterable[KothEntry]) -> list[KothEntry]:
 
 
 def project_koth(
-    entries: Sequence[KothEntry], *, distinct_hotkeys: bool = False
+    entries: Sequence[KothEntry],
+    *,
+    distinct_hotkeys: bool = False,
+    ceiling_band_clamp: bool = False,
 ) -> KothProjection | None:
     """Return the champion and participation tail for an eligible score pool.
 
@@ -475,7 +516,9 @@ def project_koth(
         ordered = sorted(scored, key=lambda entry: (entry.first_seen, entry.agent_id))
         champion = ordered[0]
         for challenger in ordered[1:]:
-            if _dethrone_decision(challenger, champion).dethrones:
+            if _dethrone_decision(
+                challenger, champion, ceiling_band_clamp=ceiling_band_clamp
+            ).dethrones:
                 champion = challenger
 
     ranked_tail = [
@@ -498,7 +541,9 @@ def project_koth(
     decision = (
         None
         if raw_leader.agent_id == champion.agent_id
-        else _dethrone_decision(raw_leader, champion)
+        else _dethrone_decision(
+            raw_leader, champion, ceiling_band_clamp=ceiling_band_clamp
+        )
     )
     return KothProjection(
         champion=champion,
@@ -729,7 +774,12 @@ def _weight_tied(candidate: KothEntry, anchor: KothEntry) -> bool:
     return abs(mean_difference) <= KOTH_DETHRONE_Z * standard_error
 
 
-def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDecision:
+def _dethrone_decision(
+    challenger: KothEntry,
+    champion: KothEntry,
+    *,
+    ceiling_band_clamp: bool = False,
+) -> DethroneDecision:
     score_ceiling = _effective_score_ceiling(challenger)
     paired = _paired_statistic(challenger, champion)
     if paired is not None:
@@ -738,6 +788,13 @@ def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDe
         paired_statistical_lead = KOTH_DETHRONE_Z * standard_error
         required = max(margin_lead, paired_statistical_lead) * _dethrone_band_scale(
             challenger, champion, champion_reference
+        )
+        required = _ceiling_capped_band(
+            required,
+            challenger,
+            champion,
+            champion_reference,
+            active=ceiling_band_clamp,
         )
         observed_score = champion_reference + lead
         required_score = champion_reference + required
@@ -773,6 +830,13 @@ def _dethrone_decision(challenger: KothEntry, champion: KothEntry) -> DethroneDe
         margin_lead,
         statistical_lead if statistical_lead is not None else margin_lead,
     ) * _dethrone_band_scale(challenger, champion, champion_composite)
+    required = _ceiling_capped_band(
+        required,
+        challenger,
+        champion,
+        champion_composite,
+        active=ceiling_band_clamp,
+    )
     required_score = champion_composite + required
     dethrones = challenger_composite > required_score
     return DethroneDecision(

@@ -38,6 +38,17 @@ KOTH_MARGIN = 0.007  # absolute composite-point dethrone hysteresis
 KOTH_BAND_DECAY_MIN_BENCH_VERSION = 6
 KOTH_BAND_DECAY_START_COMPOSITE = 0.60
 KOTH_BAND_DECAY_RATE = 2.0
+# That decay is open-loop: it shrinks the band against an assumed perfect score
+# of 1.0 without knowing what the challenger can actually reach. On a saturated
+# benchmark it therefore still asks for more than the whole attainable
+# remainder -- at a 0.997012 incumbent the decayed band is 0.00315 while only
+# 0.00299 of score exists above it, so no agent can dethrone at any skill. From
+# protocol 24 the band is additionally capped at this share of the score the
+# challenger has left to gain, which keeps the required dethrone score strictly
+# below the challenger's ceiling and the crown reachable by a perfect run.
+# Half is the conservative choice: it binds only inside two band widths of the
+# ceiling and never widens a band.
+KOTH_CEILING_HEADROOM_SHARE = 0.5
 KOTH_TAIL_SIZE = 4  # ranked runners-up after the champion
 KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)

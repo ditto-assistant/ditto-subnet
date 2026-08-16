@@ -178,6 +178,52 @@ describe("dethroneFloor", () => {
     expect(result?.floor).toBeCloseTo(0.9 + 0.02 * scale, 12);
   });
 
+  it("caps the margin at half the remaining headroom once the fleet activates it", () => {
+    // The live saturated plateau: 0.007 * exp(-2 * (0.997012 - 0.6)) = 0.003164
+    // published a floor of 1.000176, i.e. above a perfect score. The published
+    // number has to match the fold, or the board tells miners to reach a score
+    // the benchmark cannot express.
+    const base = {
+      margin: 0.007,
+      band_decay_min_bench_version: 6,
+      band_decay_start_composite: 0.6,
+      band_decay_rate: 2,
+      ceiling_headroom_share: 0.5,
+    };
+    const champion = { composite: 0.997012, bench_version: 9 };
+
+    const uncapped = dethroneFloor(base, champion);
+    expect(uncapped?.floor).toBeGreaterThan(1);
+
+    const capped = dethroneFloor({ ...base, ceiling_band_clamp_active: true }, champion);
+    expect(capped?.effectiveMargin).toBeCloseTo(0.5 * (1 - 0.997012), 12);
+    expect(capped?.floor).toBeCloseTo(0.997012 + 0.5 * (1 - 0.997012), 12);
+    expect(capped?.floor).toBeLessThan(1);
+  });
+
+  it("leaves the floor untouched away from the ceiling, and never raises it", () => {
+    const base = {
+      margin: 0.007,
+      band_decay_min_bench_version: 6,
+      band_decay_start_composite: 0.6,
+      band_decay_rate: 2,
+      ceiling_headroom_share: 0.5,
+      ceiling_band_clamp_active: true,
+    };
+    for (const composite of [0.6, 0.75, 0.85, 0.95, 0.99]) {
+      const champion = { composite, bench_version: 9 };
+      const capped = dethroneFloor(base, champion);
+      const uncapped = dethroneFloor({ ...base, ceiling_band_clamp_active: false }, champion);
+      expect(capped!.floor).toBeLessThanOrEqual(uncapped!.floor);
+    }
+    // Two band widths below the ceiling the cap cannot bind at all.
+    const champion = { composite: 0.85, bench_version: 9 };
+    expect(dethroneFloor(base, champion)!.floor).toBeCloseTo(
+      dethroneFloor({ ...base, ceiling_band_clamp_active: false }, champion)!.floor,
+      12,
+    );
+  });
+
   it("returns null without emissions, a champion, or a finite margin", () => {
     expect(dethroneFloor(null, { composite: 0.9 })).toBeNull();
     expect(dethroneFloor({ margin: 0.02 }, null)).toBeNull();

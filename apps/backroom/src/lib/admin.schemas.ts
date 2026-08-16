@@ -5100,6 +5100,12 @@ export const publicKothEmissionsSchema = z.object({
   band_decay_min_bench_version: z.number().int().positive(),
   band_decay_start_composite: z.number().min(0).max(1),
   band_decay_rate: z.number().positive(),
+  // Protocol 24. Without these a replay of the fold from this payload
+  // reconstructs the uncapped band and reports a dethrone requirement the
+  // validators are not actually enforcing.
+  ceiling_headroom_share: z.number().positive().max(1).optional(),
+  ceiling_band_clamp_active: z.boolean().optional(),
+  ceiling_band_clamp_required_protocol: z.number().int().positive().optional(),
   champion_share: z.number().positive().max(1),
   rank_shares: z.array(z.number().positive().max(1)),
   tail_size: z.number().int().nonnegative(),

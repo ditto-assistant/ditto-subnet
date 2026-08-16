@@ -109,6 +109,11 @@ _TIE_WEIGHTING_PROTOCOL = 20
 # factor.  Older validators ignore the additive field, so exposing it to a
 # mixed active-benchmark fleet would produce different KOTH/weight folds.
 _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 21
+# The first validator protocol that caps the KOTH indifference band at a share
+# of the score a challenger can still gain. Older validators ignore the additive
+# marker and would keep defending the crown with the uncapped decayed band, so a
+# mixed fleet would fold two different champions and submit two weight vectors.
+_DETHRONE_BAND_CLAMP_PROTOCOL = 24
 
 
 def _fleet_safe_efficiency_adjustments(
@@ -146,6 +151,7 @@ class _LedgerSnapshot:
     emissions because of a database problem."""
     v9_confirmation_mode: Literal["enforce"] | None = None
     tie_weighting_mode: Literal["pool"] | None = None
+    dethrone_band_mode: Literal["headroom_capped"] | None = None
     continual_retest_cohort_size: int = 5
     requesting_validator_hotkey: str | None = None
     context: _LedgerContext | None = None
@@ -169,6 +175,7 @@ class _LedgerContext:
     continual_fleet_ready: bool
     tie_weighting_fleet_ready: bool
     factor_fleet_ready: bool
+    dethrone_band_clamp_fleet_ready: bool = False
 
 
 def _composite_stderr(details: dict | None) -> float | None:
@@ -339,12 +346,19 @@ async def _resolve_ledger_context(
         bench_version=bench_version,
         now=now,
     )
+    dethrone_band_clamp_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_DETHRONE_BAND_CLAMP_PROTOCOL,
+        bench_version=bench_version,
+        now=now,
+    )
     return _LedgerContext(
         policy=policy,
         active_bench_version=bench_version,
         continual_fleet_ready=continual_fleet_ready,
         tie_weighting_fleet_ready=tie_weighting_fleet_ready,
         factor_fleet_ready=factor_fleet_ready,
+        dethrone_band_clamp_fleet_ready=dethrone_band_clamp_fleet_ready,
     )
 
 
@@ -405,6 +419,7 @@ def _fresh_response_from_snapshot(snapshot: _LedgerSnapshot) -> LedgerResponse:
         active_bench_version=snapshot.active_bench_version,
         v9_confirmation_mode=snapshot.v9_confirmation_mode,
         tie_weighting_mode=snapshot.tie_weighting_mode,
+        dethrone_band_mode=snapshot.dethrone_band_mode,
         count=len(snapshot.entries),
         generated_at=snapshot.generated_at,
         stale=False,
@@ -645,6 +660,11 @@ async def scores(
         tie_weighting_active = tie_weighting_is_active(
             continual_settings, fleet_protocol_ready=tie_weighting_fleet_ready
         )
+        # The ceiling-aware dethrone band needs no operator switch: it only ever
+        # narrows a band that the benchmark has already made unwinnable, and
+        # leaving it off is the state miners are complaining about. Fleet
+        # readiness is the whole gate, exactly as it is for curve-v3 factors.
+        dethrone_band_clamp_active = ledger_context.dethrone_band_clamp_fleet_ready
         # Frozen relative token-efficiency bonuses (bench_version >= 7) are
         # surfaced to validators only behind the fold flag; with it off the
         # ledger is byte-identical to the pre-bonus wire shape, and the
@@ -769,6 +789,9 @@ async def scores(
             burn_share=burn_settings.burn_share,
             v9_confirmation_mode=v9_confirmation_mode,
             tie_weighting_mode="pool" if tie_weighting_active else None,
+            dethrone_band_mode=(
+                "headroom_capped" if dethrone_band_clamp_active else None
+            ),
             continual_retest_cohort_size=continual_settings.retest_cohort_size,
             requesting_validator_hotkey=x_validator_hotkey,
             context=ledger_context,
@@ -784,6 +807,7 @@ async def scores(
         active_bench_version=canonical_version,
         v9_confirmation_mode=v9_confirmation_mode,
         tie_weighting_mode="pool" if tie_weighting_active else None,
+        dethrone_band_mode="headroom_capped" if dethrone_band_clamp_active else None,
         count=len(entries),
         generated_at=generated_at,
         stale=False,
@@ -868,6 +892,7 @@ def _serve_last_known(
         active_bench_version=snapshot.active_bench_version,
         v9_confirmation_mode=snapshot.v9_confirmation_mode,
         tie_weighting_mode=snapshot.tie_weighting_mode,
+        dethrone_band_mode=snapshot.dethrone_band_mode,
         count=len(entries),
         generated_at=snapshot.generated_at,
         stale=True,

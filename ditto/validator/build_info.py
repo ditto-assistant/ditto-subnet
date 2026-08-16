@@ -76,7 +76,15 @@ from ditto import __version__
 # access, W&B credentials, host paths, logs, environment values, or arbitrary
 # error strings. The signing domain advances to v23 because the request gains a
 # new signed token. Platform must ship the matching parser before validators.
-HEARTBEAT_PROTOCOL_VERSION = 23
+#
+# v24 consumes ``LedgerResponse.dethrone_band_mode=headroom_capped`` and caps the
+# KOTH indifference band at ``KOTH_CEILING_HEADROOM_SHARE`` of the score the
+# challenger can still gain. The heartbeat request and signing bytes are
+# unchanged; this is a capability-negotiation bump. Platform must not expose the
+# marker until every recently-live weight setter reports v24+, because a v23
+# validator ignores the additive field and would keep defending the crown with
+# the uncapped band -- a different champion, and so a different weight vector.
+HEARTBEAT_PROTOCOL_VERSION = 24
 
 
 @dataclass(frozen=True)
