@@ -32,7 +32,6 @@ import { operationsResource } from "../data/operations";
 import { useEndpoint } from "../data/useEndpoint";
 import type { ResourceState } from "../data/useEndpoint";
 import { REFRESH_MS } from "../lib/config";
-import { relTime } from "../lib/format";
 import { validatorWeightViews } from "../lib/scoring";
 import type { ValidatorWeightView } from "../lib/scoring";
 import { entityRoute } from "../stores/routeStore";
@@ -187,20 +186,24 @@ export function OperationsPage(
     };
   });
 
+  /** Exception-only: the head speaks when the reader cannot trust the table,
+   * and is silent otherwise. Everything the old summary line stated is on the
+   * page already — each node's own verdict in its identity cell, the
+   * inoperative count on the fold that holds those rows, and the snapshot age
+   * in the header pill, which reads the same generated_at this did. */
   const fleetSummary = createMemo(() => {
     const view = fleet();
     if (view.unavailable) return view.Kind + " status unavailable";
     if (view.loading) return "Loading " + view.singular + " status…";
-    const available = view.entries.filter((entry) => entry.availability === "available").length;
-    const snapshot = view.generatedAt ? " · snapshot " + relTime(view.generatedAt) : "";
-    return (
-      (view.entries.length
-        ? available + " of " + view.entries.length + " active " + view.kind + " available"
-        : "No active " + view.kind + " reporting") +
-      (view.retired.length ? " · " + view.retired.length + " inoperative" : "") +
-      snapshot
-    );
+    if (!view.entries.length) return "No active " + view.kind + " reporting";
+    return "";
   });
+
+  /** The healthy provenance note restates the header pill; only its degraded
+   * branches carry something the pill cannot say, since the pill tracks the
+   * leaderboard feed rather than this snapshot. */
+  const snapshotAlert = () =>
+    snap.opsUnavailable() || snap.refreshDelayed() || snap.opsLoading() ? snap.snapshotNote() : "";
 
   const retiredSummary = createMemo(() => {
     const view = fleet();
@@ -323,14 +326,12 @@ export function OperationsPage(
     >
       <section class="operations" aria-labelledby="page-title">
         <div class="operations-workspace">
+          {/* The page title and its subtitle name this surface one line above;
+              a second heading and a second explainer only said it again. The
+              tab bar is the head now, and the snapshot note joins it only when
+              the shared feed is degraded (it stays mounted so its live region
+              can announce into it). */}
           <div class="operations-head">
-            <div>
-              <h2>Operational capacity</h2>
-              <p>Live worker capacity and trusted miner-image builds.</p>
-              <p class="hint" id="operations-snapshot" aria-live="polite">
-                {snap.snapshotNote()}
-              </p>
-            </div>
             <div class="operations-tabs" role="tablist" aria-label="Operational capacity views">
               <For each={OPERATIONS_VIEWS}>
                 {(view) => (
@@ -350,6 +351,9 @@ export function OperationsPage(
                 )}
               </For>
             </div>
+            <p class="hint" id="operations-snapshot" aria-live="polite">
+              {snapshotAlert()}
+            </p>
           </div>
 
           <Show
@@ -377,13 +381,13 @@ export function OperationsPage(
               aria-labelledby={"operations-tab-" + operationsView()}
               tabindex="0"
             >
+              {/* The selected tab names the panel and the table names itself,
+                  so the head holds no heading — only the two exception
+                  channels, and the rule that separates tabs from table. */}
               <div class="fleet-table-head">
-                <div>
-                  <h2>{fleet().Kind} fleet</h2>
-                  <span class="hint" id="fleet-summary" aria-live="polite">
-                    {fleetSummary()}
-                  </span>
-                </div>
+                <span class="hint" id="fleet-summary" aria-live="polite">
+                  {fleetSummary()}
+                </span>
                 <FleetLedger counts={fleet().counts} />
               </div>
               <div

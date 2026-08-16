@@ -19,7 +19,6 @@ import type { BenchmarkProgress } from "../../types/pipeline";
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
 import {
-  FLEET_LEDGER_KEYS,
   anyBenchmarkStage,
   cappedSlotIds,
   fleetStatusFor,
@@ -51,26 +50,44 @@ const LEDGER_LABELS: Record<FleetLedgerKey, string> = {
   unknown: "Not reported",
 };
 
-/** Fleet status summary rail. Null counts render dashes (resetFleetLedger). */
+/** Faults only. Healthy and operator-paused are the two states that mean
+ * "nothing to answer for here", and every row spells its own verdict beside
+ * its name — an aggregate that can only ever confirm the table underneath it
+ * is noise. */
+const LEDGER_ALARM_KEYS = ["critical", "warning", "stale", "offline", "unknown"] as const;
+
+/** The two counts a name alone gets wrong. Both are rare, so the explanation
+ * rides the count it explains instead of standing in the head as prose read
+ * once and scanned past forever after. */
+const LEDGER_NOTES: Partial<Record<FleetLedgerKey, string>> = {
+  critical:
+    "Software that cannot serve the scored benchmark counts as critical: the platform leases it no work.",
+  unknown: "Missing optional telemetry is not an outage.",
+};
+
+/** Fleet fault rail: nothing at all while the fleet is sound, one count per
+ * fault the moment there is one. Null counts (resetFleetLedger) say nothing
+ * either — an unloaded snapshot is reported by the summary beside it. */
 export function FleetLedger(props: { counts: Record<FleetLedgerKey, number> | null }): JSX.Element {
+  const alarms = createMemo<FleetLedgerKey[]>(() => {
+    const counts = props.counts;
+    if (!counts) return [];
+    return LEDGER_ALARM_KEYS.filter((key) => counts[key] > 0);
+  });
   return (
-    <aside class="fleet-ledger" aria-label="Fleet status summary">
-      <For each={FLEET_LEDGER_KEYS as readonly FleetLedgerKey[]}>
-        {(key) => (
-          <div class={"fleet-ledger-row " + key}>
-            <span class="fleet-ledger-dot" aria-hidden="true" />
-            <strong id={"fleet-count-" + key}>
-              {props.counts ? String(props.counts[key]) : "–"}
-            </strong>
-            <span>{LEDGER_LABELS[key]}</span>
-          </div>
-        )}
-      </For>
-      <p>
-        Missing optional telemetry is not an outage. Software that cannot serve the scored benchmark
-        counts as critical: the platform leases it no work.
-      </p>
-    </aside>
+    <Show when={alarms().length}>
+      <aside class="fleet-ledger" aria-label="Fleet faults">
+        <For each={alarms()}>
+          {(key) => (
+            <div class={"fleet-ledger-row " + key} title={LEDGER_NOTES[key]}>
+              <span class="fleet-ledger-dot" aria-hidden="true" />
+              <strong id={"fleet-count-" + key}>{String(props.counts?.[key] ?? 0)}</strong>
+              <span>{LEDGER_LABELS[key]}</span>
+            </div>
+          )}
+        </For>
+      </aside>
+    </Show>
   );
 }
 

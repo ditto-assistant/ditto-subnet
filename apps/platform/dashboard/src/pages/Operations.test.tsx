@@ -62,7 +62,7 @@ function fetchedPaths(): string[] {
 async function renderPage(): Promise<void> {
   render(() => <OperationsPage />);
   await waitFor(() =>
-    expect(document.getElementById("fleet-summary")?.textContent).toContain("active validators"),
+    expect(document.querySelector("#fleet-rows tr[data-entity-id]")).toBeTruthy(),
   );
 }
 
@@ -74,19 +74,21 @@ function text(id: string): string {
 // Guards the fleet health table (headings, screener toggle, offline/retired
 // split) and the removal of privacy-leaking / hardcoded-threshold copy.
 describe("accessible fleet status (row 15)", () => {
-  it("renders the fleet table with its headings and summary from the three feeds", async () => {
+  it("renders the fleet table with its headings from the three feeds", async () => {
     await renderPage();
     // Endpoints: the page consumes exactly the three public feeds.
     expect(fetchedPaths().some((u) => u.includes("/public/operations"))).toBe(true);
     expect(fetchedPaths().some((u) => u.includes("/public/validator-names"))).toBe(true);
     expect(fetchedPaths().some((u) => u.includes("/public/screeners"))).toBe(true);
 
-    expect(document.querySelector(".fleet-table-head h2")?.textContent).toBe("Validator fleet");
-    // available + " of " + entries.length + " active " + kind — never the
-    // removed '" reporting " + kind' phrasing.
-    expect(text("fleet-summary")).toContain("3 of 3 active validators available");
-    expect(text("fleet-summary")).toContain("· 3 inoperative");
-    expect(text("fleet-summary")).toContain("snapshot 2h ago");
+    // One heading owns this page: the h1. The tabpanel is named by its tab and
+    // the table by its own aria-label, so neither head restates the surface.
+    // A reporting fleet states no counts, no retired total and no snapshot age
+    // either — the header pill reads the same generated_at this line did.
+    expect(document.querySelector(".operations-head h2")).toBeNull();
+    expect(document.querySelector(".fleet-table-head h2")).toBeNull();
+    expect(text("fleet-summary")).toBe("");
+    expect(text("operations-snapshot")).toBe("");
 
     const headings = Array.from(
       document.querySelectorAll("#fleet-table thead th"),
@@ -123,7 +125,6 @@ describe("accessible fleet status (row 15)", () => {
       "aria-selected",
       "true",
     );
-    expect(text("fleet-summary")).toContain("2 of 2 active screeners available");
     expect(document.getElementById("fleet-table")).toHaveAttribute(
       "aria-label",
       "Screener fleet health",
@@ -148,14 +149,20 @@ describe("accessible fleet status (row 15)", () => {
     );
   });
 
-  it("fills the ledger (unknown bucket included) and explains missing telemetry", async () => {
+  it("raises faults in the head and stays silent about sound nodes", async () => {
     await renderPage();
-    expect(text("fleet-count-healthy")).toBe("3");
+    // The fixture's inoperative nodes are the faults; they get a count each.
     expect(text("fleet-count-critical")).toBe("2");
     expect(text("fleet-count-offline")).toBe("1");
-    expect(text("fleet-count-unknown")).toBe("0");
-    expect(document.querySelector(".fleet-ledger p")?.textContent).toContain(
-      "Missing optional telemetry is not an outage.",
+    expect(document.querySelector(".fleet-ledger")).toHaveAttribute("aria-label", "Fleet faults");
+    // Healthy and operator-paused answer for nothing, and an empty bucket is
+    // not a fault — each row already spells its own verdict beside its name.
+    expect(document.getElementById("fleet-count-healthy")).toBeNull();
+    expect(document.getElementById("fleet-count-paused")).toBeNull();
+    expect(document.getElementById("fleet-count-unknown")).toBeNull();
+    expect(document.getElementById("fleet-count-stale")).toBeNull();
+    expect(document.querySelector(".fleet-ledger-row.critical")?.getAttribute("title")).toContain(
+      "the platform leases it no work",
     );
   });
 
@@ -220,8 +227,9 @@ describe("accessible fleet status (row 15)", () => {
     expect(status?.classList.contains("paused")).toBe(true);
     // The same verdict drives the dot beside the name.
     expect(row?.querySelector(".fleet-node-dot")?.classList.contains("paused")).toBe(true);
-    expect(text("fleet-count-paused")).toBe("1");
-    expect(text("fleet-count-critical")).toBe("0");
+    // An operator pause outranks the failing health underneath it, and a pause
+    // is not a fault: the head raises nothing for this fleet.
+    expect(document.querySelector(".fleet-ledger")).toBeNull();
     expect(row?.querySelector("td.fleet-host-cell .fleet-protocol")?.textContent).toContain(
       "0 of 2 slots",
     );
@@ -465,13 +473,16 @@ describe("one shared snapshot + skew (row 18)", () => {
     expect(fetchedPaths().some((u) => u.includes("/public/activity?page=1&limit=200"))).toBe(false);
   });
 
-  it("stamps the shared snapshot note with reconciliation + age", async () => {
+  it("keeps the snapshot note mounted and mute while the feed is sound", async () => {
     await renderPage();
+    // The note's live region has to exist before it has something to announce.
+    // A reconciled snapshot is not that: its age is the header pill's own
+    // number, and its history pointer belongs to the page that shows history,
+    // where Pipeline.test.tsx asserts the full stamp.
     const note = document.getElementById("operations-snapshot");
+    expect(note).toBeTruthy();
     expect(note).toHaveAttribute("aria-live", "polite");
-    expect(note?.textContent).toBe(
-      "Pipeline and fleet reconciled · recent history shown; full history in Activity · 2h ago",
-    );
+    expect(note?.textContent).toBe("");
   });
 
   it("states absence when the snapshot fetch fails", async () => {
@@ -482,7 +493,8 @@ describe("one shared snapshot + skew (row 18)", () => {
       expect(text("operations-snapshot")).toBe("Shared operations snapshot unavailable"),
     );
     expect(text("fleet-summary")).toBe("Validator status unavailable");
-    expect(text("fleet-count-healthy")).toBe("–");
+    // Nothing to count, so no counts — absence is stated once, not twice.
+    expect(document.querySelector(".fleet-ledger")).toBeNull();
     expect(document.querySelector("#fleet-rows .empty-msg")?.textContent).toBe(
       "Validator status is temporarily unavailable.",
     );
@@ -542,11 +554,11 @@ describe("one shared snapshot + skew (row 18)", () => {
       (el) => el.textContent,
     );
     expect(stages).toEqual(["Mismatch", "Heartbeat stale"]);
-    // A mismatch counts warning in the ledger, not healthy; a merely-stale
-    // heartbeat is not a fault, so that node stays healthy (updateFleetLedger
+    // A mismatch is a fault and reaches the head; a merely-stale heartbeat is
+    // not, so that node counts healthy and stays out of it (updateFleetLedger
     // 8845–8859 has no heartbeat_stale bucket).
     expect(text("fleet-count-warning")).toBe("1");
-    expect(text("fleet-count-healthy")).toBe("1");
+    expect(document.querySelectorAll(".fleet-ledger-row").length).toBe(1);
   });
 });
 
@@ -761,7 +773,7 @@ describe("accessible benchmark progress (row 22)", () => {
     }) as typeof fetch;
     render(() => <OperationsPage />);
     await waitFor(() =>
-      expect(document.getElementById("fleet-summary")?.textContent).toContain("active validators"),
+      expect(document.querySelector("#fleet-rows tr[data-entity-id]")).toBeTruthy(),
     );
     fireEvent.click(document.getElementById("operations-tab-screeners") as HTMLButtonElement);
     await waitFor(() =>
@@ -915,9 +927,7 @@ describe("validator names are untrusted decoration (row 26)", () => {
     restoreFetch = fixtures;
     render(() => <OperationsPage />);
     await waitFor(() =>
-      expect(document.getElementById("fleet-summary")?.textContent).toContain(
-        "active validators available",
-      ),
+      expect(document.querySelector(`#fleet-rows tr[data-entity-id="${DITTO}"]`)).toBeTruthy(),
     );
     // No decoration: the hotkey-only identity renders instead of a name.
     const ditto = document.querySelector(`#fleet-rows tr[data-entity-id="${DITTO}"]`);
@@ -999,9 +1009,11 @@ describe("Targon submission build provenance", () => {
 describe("refresh resilience", () => {
   it("keeps the last reconciled snapshot when a refresh fails", async () => {
     const { container } = render(() => <OperationsPage />);
-    await waitFor(() => {
-      expect(text("operations-snapshot")).toContain("Pipeline and fleet reconciled");
-    });
+    await waitFor(() =>
+      expect(container.querySelector("#fleet-rows tr[data-entity-id]")).toBeTruthy(),
+    );
+    // Sound feed, silent note — this is the state the delay has to break.
+    expect(text("operations-snapshot")).toBe("");
     const rowsBefore = container.querySelectorAll("#fleet-rows tr").length;
     expect(rowsBefore).toBeGreaterThan(0);
 

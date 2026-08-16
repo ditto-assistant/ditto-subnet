@@ -557,24 +557,14 @@
   --ops-space-3xl: 48px;
   margin: 30px 0 44px;
 }
+/* The tab bar leads this row; the snapshot note trails it only on a degraded
+   feed, taking the space the row already has rather than adding a line. */
 .operations-head {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: space-between;
   gap: var(--ops-space-xl);
   margin-bottom: var(--ops-space-lg);
-}
-.operations-head h2 {
-  margin: 0;
-  font-family: var(--display);
-  font-size: 22px;
-  font-weight: 400;
-  line-height: 1.1;
-}
-.operations-head p {
-  margin: var(--ops-space-xs) 0 0;
-  color: var(--text-dim);
-  font-size: 11px;
 }
 /* The workspace opens the fleet page now that the pipeline atlas lives on
    its own page — no stacked-section offset. */
@@ -582,9 +572,10 @@
   margin-top: 0;
 }
 .operations-head .hint {
-  margin: 4px 0 0;
+  margin: 0;
   color: var(--text-dim);
   font: 400 10px/1.4 var(--mono);
+  text-align: right;
 }
 .operations-tabs {
   display: flex;
@@ -846,7 +837,7 @@
 
 .fleet-ledger {
   display: flex;
-  flex: 1 1 640px;
+  flex: 0 1 auto;
   flex-wrap: wrap;
   align-items: center;
   justify-content: flex-end;
@@ -878,9 +869,6 @@
   font: 650 10px/1.2 var(--mono);
   text-transform: uppercase;
 }
-.fleet-ledger-row.healthy .fleet-ledger-dot {
-  background: var(--good);
-}
 .fleet-ledger-row.critical .fleet-ledger-dot {
   background: var(--danger);
 }
@@ -893,39 +881,23 @@
 .fleet-ledger-row.offline .fleet-ledger-dot {
   background: var(--danger);
 }
-.fleet-ledger-row.paused .fleet-ledger-dot {
-  background: var(--accent-2);
-}
 .fleet-ledger-row.unknown .fleet-ledger-dot {
   background: var(--text-faint);
 }
-.fleet-ledger p {
-  max-width: 260px;
-  margin: 0;
-  color: var(--text-dim);
-  font-size: 10px;
-  line-height: 1.45;
-}
-
+/* Holds only exceptions, so it is usually empty: what is left is the rule and
+   the breathing room between the tab bar and the table, which the row owes
+   whether or not it has anything to say. */
 .fleet-table-head {
   display: flex;
-  align-items: flex-end;
+  align-items: baseline;
   justify-content: space-between;
   gap: 18px;
   margin: 0 0 var(--ops-space-md);
   padding-top: var(--ops-space-lg);
   border-top: 1px solid var(--border);
 }
-.fleet-table-head h2 {
-  margin: 0;
-  font-family: var(--display);
-  font-size: 22px;
-  font-weight: 400;
-  line-height: 1.1;
-}
 .fleet-table-head .hint {
-  display: block;
-  margin-top: 5px;
+  margin: 0;
   color: var(--text-dim);
   font: 400 10px/1.4 var(--mono);
 }
@@ -1703,9 +1675,6 @@
   .fleet-ledger {
     justify-content: flex-start;
   }
-  .fleet-ledger p {
-    flex-basis: 100%;
-  }
 }
 @media (max-width: 720px) {
   .operations {
@@ -1738,19 +1707,13 @@
     width: 28px;
     height: 28px;
   }
-  /* The ledger is a flex child of the now-column table head: its 640px
-     flex-basis would become HEIGHT and stretch the wrapped rows across it.
-     A compact grid states the seven counts in two tidy rows instead. */
+  /* The ledger is a flex child of the now-column table head, where a
+     shrink-to-fit width would resolve to max-content and push the counts off
+     screen. Full width wraps them instead. */
   .fleet-ledger {
-    display: grid;
-    flex-basis: auto;
-    grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+    justify-content: flex-start;
     gap: 8px 14px;
     width: 100%;
-  }
-  .fleet-ledger p {
-    max-width: none;
-    grid-column: 1 / -1;
   }
   .fleet-table-head {
     align-items: flex-start;
