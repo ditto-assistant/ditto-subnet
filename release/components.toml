@@ -26,6 +26,7 @@ ignored_paths = [
   "scripts/gen_validator_contract.py",
   "scripts/generate_confirmation_installation.py",
   "scripts/run-validator.sh",
+  "scripts/screening_protocol_freshness.py",
   "services/dittobench-api/docs/**",
   "services/dittobench-api/*.md",
   "services/dittobench-api/.gitignore",
