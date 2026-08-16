@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   startBenchmarkRollout,
   expandBenchmarkRollout,
@@ -2829,6 +2829,10 @@ describe('copy review admin service', () => {
 })
 
 describe('production score reads', () => {
+  beforeEach(() => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+  })
+
   const topAgentId = '11111111-1111-4111-8111-111111111111'
   const provisionalAgentId = '22222222-2222-4222-8222-222222222222'
   const supersededAgentId = '33333333-3333-4333-8333-333333333333'
@@ -2999,7 +3003,7 @@ describe('production score reads', () => {
     generated_at: '2026-07-23T00:00:00Z',
   }
 
-  it('reads the authoritative leaderboard without the admin token', async () => {
+  it('reads the public leaderboard when no admin token is configured', async () => {
     delete process.env.DITTO_ADMIN_API_TOKEN
     const fetchMock = vi.fn().mockResolvedValue(Response.json(leaderboard))
     vi.stubGlobal('fetch', fetchMock)
@@ -3030,6 +3034,7 @@ describe('production score reads', () => {
   })
 
   it('filters provisional entries and forwards a historical bench version', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const historical = {
       ...leaderboard,
       selection_mode: 'historical',
@@ -3042,7 +3047,7 @@ describe('production score reads', () => {
     const page = await fetchScoreLeaderboard({ benchVersion: 6, status: 'provisional' })
 
     expect(fetchMock).toHaveBeenCalledWith(
-      'https://platform-api.heyditto.ai/api/v1/public/leaderboard?bench_version=6',
+      'https://platform-api.heyditto.ai/api/v1/admin/leaderboard?bench_version=6',
       expect.objectContaining({ method: 'GET' }),
     )
     expect(page.count).toBe(1)
@@ -3050,7 +3055,22 @@ describe('production score reads', () => {
     expect(page.emissions).toBeNull()
   })
 
+  it('reads stored names from the admin leaderboard when a token is configured', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(leaderboard))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await fetchScoreLeaderboard({ status: 'all', limit: 1, offset: 0 })
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/leaderboard',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    const headers = (fetchMock.mock.calls[0]?.[1] as { headers: Record<string, string> }).headers
+    expect(headers.Authorization).toBe('Bearer platform-admin-token')
+  })
+
   it('resolves a miner hotkey to its leaderboard submission with rank context', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(Response.json(leaderboard))
@@ -3158,16 +3178,21 @@ describe('production score reads', () => {
     const detail = await fetchAgentScores({ agentId: provisionalAgentId })
 
     expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      'https://platform-api.heyditto.ai/api/v1/admin/leaderboard',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
       3,
       `https://platform-api.heyditto.ai/api/v1/public/agent/${provisionalAgentId}/pipeline`,
       expect.objectContaining({ method: 'GET' }),
     )
-    // The read path stays a read: three GETs against the credential-free public
-    // ledger, no admin token, nothing written.
+    // Board names use the admin projection; scores/pipeline stay public GETs.
     const headers = fetchMock.mock.calls.map(
       (call) => (call[1] as { headers: Record<string, string> }).headers,
     )
-    expect(headers.every((header) => !('Authorization' in header))).toBe(true)
+    expect(headers[0]).toMatchObject({ Authorization: 'Bearer platform-admin-token' })
+    expect(headers.slice(1).every((header) => !('Authorization' in header))).toBe(true)
     expect(fetchMock.mock.calls.every((call) => call[1].method === 'GET')).toBe(true)
 
     expect(detail).toMatchObject({
@@ -4119,7 +4144,8 @@ describe('owner footprint', () => {
 
     const detail = await fetchOwnerFootprint({ key: '5TopMiner' })
 
-    // Linkage comes from the admin ledger; standings from the public board.
+    // Linkage comes from the admin owner ledger; standings from the admin
+    // leaderboard so reserved-handle collisions keep their stored names.
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
       'https://platform-api.heyditto.ai/api/v1/admin/miner-owners/5TopMiner?depth=1&agents_per_hotkey=10',
@@ -4127,13 +4153,13 @@ describe('owner footprint', () => {
     )
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
-      'https://platform-api.heyditto.ai/api/v1/public/leaderboard',
+      'https://platform-api.heyditto.ai/api/v1/admin/leaderboard',
       expect.objectContaining({ method: 'GET' }),
     )
-    const publicHeaders = (
+    const boardHeaders = (
       fetchMock.mock.calls[1]?.[1] as { headers: Record<string, string> }
     ).headers
-    expect(publicHeaders).not.toHaveProperty('Authorization')
+    expect(boardHeaders.Authorization).toBe('Bearer platform-admin-token')
 
     expect(detail.hotkey_count).toBe(2)
     expect(detail.ranked_hotkey_count).toBe(1)

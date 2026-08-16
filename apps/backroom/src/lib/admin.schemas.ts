@@ -5061,13 +5061,13 @@ export type BenchmarkRolloutControl = z.infer<typeof benchmarkRolloutControlSche
 
 // --- Production score reads (public score ledger) -------------------------
 //
-// These schemas parse the platform's public transparency endpoints
-// (/api/v1/public/leaderboard and /api/v1/public/agent/{id}/scores): the same
-// authoritative ledger the validators fold into weights and dittobench.ai
-// renders. They deliberately pick the aggregate fields an operator review
-// needs and drop the heavyweight per-case payloads (case_results,
-// per_category, token_usage) so MCP responses stay compact; zod strips the
-// unlisted keys.
+// These schemas parse the platform score ledger. Rank and composite still
+// match /api/v1/public/leaderboard and /api/v1/public/agent/{id}/scores;
+// operator name reads go through /api/v1/admin/leaderboard so reserved-handle
+// collisions stay visible. They deliberately pick the aggregate fields an
+// operator review needs and drop the heavyweight per-case payloads
+// (case_results, per_category, token_usage) so MCP responses stay compact;
+// zod strips the unlisted keys.
 
 export const agentScoresLookupInputSchema = z
   .object({

@@ -76,6 +76,10 @@ async def claimant_has_used_stem(
 ) -> bool:
     """True iff the claimant's owner family already uploaded that stem."""
     owner_root = await owner_root_for_hotkey(session, hotkey=claimant_hotkey)
+    # Stem tokens survive in the stored name after filler/version stripping, so
+    # a case-insensitive LIKE on those tokens is a sound prefilter. The
+    # attested-root check below is still authoritative.
+    like_pattern = f"%{name_stem.replace('-', '%')}%"
     rows = (
         (
             await session.execute(
@@ -84,6 +88,7 @@ async def claimant_has_used_stem(
                 .outerjoin(
                     EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id
                 )
+                .where(func.lower(Agent.name).like(like_pattern))
             )
         )
         .tuples()

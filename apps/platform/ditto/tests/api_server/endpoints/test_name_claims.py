@@ -48,7 +48,7 @@ async def _seed_family(
     coldkey: str,
     name: str,
     age: timedelta = timedelta(days=10),
-) -> None:
+) -> UUID:
     created = datetime.now(UTC) - age
     agent_id = uuid4()
     async with maker() as session, session.begin():
@@ -90,6 +90,7 @@ async def _seed_family(
             generated_at=created,
             bench_version=MIN_SCOREABLE_BENCH_VERSION,
         )
+    return agent_id
 
 
 def _claim_body(
@@ -337,3 +338,114 @@ async def test_withdraw_releases_stem(
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "withdrawn"
     assert normalize_name_stem("Jupiter-ditto-v10") == "jupiter"
+
+
+async def _uphold_jupiter(
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    alice: bittensor.Keypair,
+) -> UUID:
+    await _seed_family(
+        session_maker,
+        hotkey=alice.ss58_address,
+        coldkey=_kp("//Alice//stash").ss58_address,
+        name="Jupiter-ditto-v1",
+    )
+    for name in ("Bob", "Charlie", "Dave"):
+        endorser = _kp(f"//{name}")
+        await _seed_family(
+            session_maker,
+            hotkey=endorser.ss58_address,
+            coldkey=_kp(f"//{name}//stash").ss58_address,
+            name=f"family-{name.lower()}",
+        )
+    created = await client.post(_URL, json=_claim_body(alice, name="Jupiter-ditto-v10"))
+    assert created.status_code == 201, created.text
+    claim_id = UUID(created.json()["claim_id"])
+    for name in ("Bob", "Charlie", "Dave"):
+        endorser = _kp(f"//{name}")
+        response = await client.post(
+            f"{_URL}/{claim_id}/endorsements",
+            json=_endorse_body(endorser, claim_id=claim_id, name_stem="jupiter"),
+        )
+        assert response.status_code == 201, response.text
+    return claim_id
+
+
+async def test_activity_keeps_attested_child_name_and_strikes_copycat(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from dataclasses import replace
+
+    from ditto.api_server.attestation import expected_netuid
+    from ditto.api_server.name_claim import STRICKEN_PUBLIC_NAME
+    from ditto.db.models import OwnerAttestation
+
+    _install(app, session_maker)
+    app.state.config = replace(
+        app.state.config, admin_api_token="test-admin-token-at-least-32-characters"
+    )
+    alice = _kp("//Alice")
+    await _uphold_jupiter(client, session_maker, alice)
+
+    child = _kp("//Eve")
+    child_id = await _seed_family(
+        session_maker,
+        hotkey=child.ss58_address,
+        coldkey=_kp("//Eve//stash").ss58_address,
+        name="Jupiter-child",
+    )
+    thief = _kp("//Ferdie")
+    thief_id = await _seed_family(
+        session_maker,
+        hotkey=thief.ss58_address,
+        coldkey=_kp("//Ferdie//stash").ss58_address,
+        name="Jupiter-ditto-v10",
+    )
+    async with session_maker() as session, session.begin():
+        lo, hi = sorted((alice.ss58_address, child.ss58_address))
+        session.add(
+            OwnerAttestation(
+                netuid=expected_netuid(),
+                hotkey_lo=lo,
+                hotkey_hi=hi,
+                nonce=uuid4(),
+                issued_at=datetime.now(UTC),
+                lo_key_kind="hotkey",
+                lo_signer=lo,
+                lo_signature="a" * 128,
+                hi_key_kind="hotkey",
+                hi_signer=hi,
+                hi_signature="b" * 128,
+            )
+        )
+
+    child_summary = await client.get(f"/api/v1/public/agent/{child_id}/summary")
+    assert child_summary.status_code == 200, child_summary.text
+    assert child_summary.json()["name"] == "Jupiter-child"
+
+    thief_summary = await client.get(f"/api/v1/public/agent/{thief_id}/summary")
+    assert thief_summary.status_code == 200, thief_summary.text
+    assert thief_summary.json()["name"] == STRICKEN_PUBLIC_NAME
+
+    stolen = await client.get("/api/v1/public/activity?q=jupiter")
+    assert stolen.status_code == 200, stolen.text
+    stolen_ids = {entry["agent_id"] for entry in stolen.json()["entries"]}
+    assert str(thief_id) not in stolen_ids
+    assert all(
+        entry["name"] != "Jupiter-ditto-v10" for entry in stolen.json()["entries"]
+    )
+
+    unnamed = await client.get("/api/v1/public/activity?q=Unnamed+submission")
+    assert unnamed.status_code == 200, unnamed.text
+    unnamed_by_id = {entry["agent_id"]: entry for entry in unnamed.json()["entries"]}
+    assert unnamed_by_id[str(thief_id)]["name"] == STRICKEN_PUBLIC_NAME
+
+    assert (await client.get("/api/v1/admin/leaderboard")).status_code == 401
+    admin = await client.get(
+        "/api/v1/admin/leaderboard",
+        headers={"Authorization": "Bearer test-admin-token-at-least-32-characters"},
+    )
+    assert admin.status_code == 200, admin.text

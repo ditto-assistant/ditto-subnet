@@ -1859,17 +1859,21 @@ export async function fetchCopyReviewSourceDiffFile(rawInput: unknown, actor: st
   return sourceDiffFileDetailSchema.parse(payload)
 }
 
-// --- Production score reads (public score ledger) -------------------------
+// --- Production score reads ----------------------------------------------
 //
-// The platform's score ledger is published, credential-free, at
-// /api/v1/public/*: the exact rows validators fold into weights and the
-// dittobench.ai dashboard renders. Backroom reads it through
-// platformPublicRequest (never the admin token) so these operations are
-// read-only by construction.
+// Rank and composite match the public score ledger. Names do not: the public
+// board strikes colliding handles after an upheld claim. When an admin token
+// is configured, operators read GET /admin/leaderboard so stored names stay
+// visible. Read-only MCP grants without that token still use the public board.
 
 async function fetchLeaderboardSnapshot(benchVersion?: number) {
   const suffix = benchVersion === undefined ? '' : `?bench_version=${benchVersion}`
-  const payload = await platformPublicRequest(`/api/v1/public/leaderboard${suffix}`)
+  const hasAdminToken = Boolean(
+    process.env.DITTO_ADMIN_API_TOKEN ?? process.env.DITTO_PLATFORM_ADMIN_TOKEN,
+  )
+  const payload = hasAdminToken
+    ? await platformAdminRequest(`/api/v1/admin/leaderboard${suffix}`)
+    : await platformPublicRequest(`/api/v1/public/leaderboard${suffix}`)
   return publicLeaderboardSchema.parse(payload)
 }
 
@@ -2074,7 +2078,8 @@ export async function fetchOwnerFootprint(rawInput: unknown) {
   const footprint = ownerFootprintSchema.parse(payload)
 
   // One board snapshot serves every linked hotkey; the leaderboard is already
-  // one best submission per miner, so a hotkey has at most one row.
+  // one best submission per miner, so a hotkey has at most one row. Names
+  // come from the admin projection so reserved-handle collisions stay readable.
   const board = await fetchLeaderboardSnapshot()
   const standings = new Map(
     board.entries.map((entry) => [entry.miner_hotkey, entry] as const),

@@ -5303,7 +5303,7 @@ describe('Backroom MCP tools', () => {
     const fetchMock = vi.fn((url: string, init?: RequestInit) => {
       void init
       return Promise.resolve(
-        String(url).includes('/public/leaderboard')
+        String(url).includes('/admin/leaderboard')
           ? Response.json(leaderboard)
           : Response.json(footprint),
       )
@@ -5330,7 +5330,8 @@ describe('Backroom MCP tools', () => {
       ],
     })
 
-    // Linkage rides the admin token; standings stay on the public ledger.
+    // Linkage and standings both ride the admin token so reserved-handle
+    // collisions keep their stored names.
     const [linkageUrl, linkageInit] = fetchMock.mock.calls.find((call) =>
       String(call[0]).includes('/admin/miner-owners/'),
     )!
@@ -5339,11 +5340,11 @@ describe('Backroom MCP tools', () => {
       (linkageInit as { headers: Record<string, string> }).headers,
     ).toHaveProperty('Authorization')
     const boardCall = fetchMock.mock.calls.find((call) =>
-      String(call[0]).includes('/public/leaderboard'),
+      String(call[0]).includes('/admin/leaderboard'),
     )!
     expect(
       (boardCall[1] as { headers: Record<string, string> }).headers,
-    ).not.toHaveProperty('Authorization')
+    ).toHaveProperty('Authorization')
 
     await client.close()
     await server.close()

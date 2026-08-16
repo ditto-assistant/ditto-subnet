@@ -35,6 +35,9 @@ from ditto.api_server.endpoints.admin_inference_observability import (
 from ditto.api_server.endpoints.admin_inference_routes import (
     router as admin_inference_routes_router,
 )
+from ditto.api_server.endpoints.admin_leaderboard import (
+    router as admin_leaderboard_router,
+)
 from ditto.api_server.endpoints.admin_lease_revocations import (
     router as admin_lease_revocations_router,
 )
@@ -101,6 +104,7 @@ __all__ = [
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",
     "admin_inference_routes_router",
+    "admin_leaderboard_router",
     "admin_lease_revocations_router",
     "admin_copy_review_router",
     "admin_confirmation_bundles_router",

@@ -352,6 +352,7 @@ async def query_public_activity_page(
     downloadable_only: bool,
     downloadable_agent_ids: set[UUID],
     query: str | None,
+    reserved_name_stems: set[str] | None = None,
     ath_only: bool,
     active_validation_agent_ids: set[UUID],
     active_assignment_agent_ids: set[UUID],
@@ -472,17 +473,32 @@ async def query_public_activity_page(
         base_filters.append(Agent.status == AgentStatus.ATH_PENDING_REVIEW)
     normalized_query = query.strip().casefold() if query else ""
     if normalized_query:
-        base_filters.append(
-            func.lower(
-                func.concat_ws(
-                    " ",
-                    Agent.name,
-                    cast(Agent.agent_id, Text),
-                    Agent.miner_hotkey,
-                    projected.c.public_status,
-                )
-            ).contains(normalized_query)
+        from ditto.api_server.name_claim import STRICKEN_PUBLIC_NAME
+
+        stems = reserved_name_stems or set()
+        query_hits_reserved_stem = any(
+            stem in normalized_query or normalized_query in stem for stem in stems
         )
+        query_hits_stricken = normalized_query in STRICKEN_PUBLIC_NAME.casefold()
+        search_name = (
+            literal("")
+            if query_hits_reserved_stem and not query_hits_stricken
+            else Agent.name
+        )
+        haystack = func.lower(
+            func.concat_ws(
+                " ",
+                search_name,
+                cast(Agent.agent_id, Text),
+                Agent.miner_hotkey,
+                projected.c.public_status,
+            )
+        ).contains(normalized_query)
+        if query_hits_stricken and stems:
+            stem_match = or_(*[func.lower(Agent.name).contains(stem) for stem in stems])
+            base_filters.append(haystack | stem_match)
+        else:
+            base_filters.append(haystack)
 
     base = (
         select(projected)

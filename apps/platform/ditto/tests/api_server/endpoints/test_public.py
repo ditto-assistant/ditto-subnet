@@ -8100,8 +8100,9 @@ class TestPublicActivity:
         # preview, retry state and ATH metadata around the page query itself.
         # Includes one bounded heartbeat query so retry labels only count work
         # that a currently available validator can actually consume, plus
-        # one live handle-claim reservation read.
-        assert len(statements) <= 19
+        # one live handle-claim reservation read and one attested-owner fold
+        # so family children keep a reserved handle.
+        assert len(statements) <= 20
         assert body["count"] == 1
         assert body["total"] == 2
         assert body["total_pages"] == 2

@@ -575,6 +575,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/leaderboard": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Admin Leaderboard
+         * @description Same ledger as the public board, with stored agent names.
+         */
+        get: operations["admin_leaderboard_api_v1_admin_leaderboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/lease-revocations": {
         parameters: {
             query?: never;
@@ -2486,10 +2506,7 @@ export interface paths {
         };
         /**
          * Leaderboard
-         * @description Best score per payment-time coldkey, with registration eligibility.
-         *
-         *     The selected generation's hotkey remains the on-chain weight destination.
-         *     Legacy rows without payment provenance fall back to one position per hotkey.
+         * @description Best score per payment-time coldkey, with colliding handles stricken.
          */
         get: operations["leaderboard_api_v1_public_leaderboard_get"];
         put?: never;
@@ -19452,6 +19469,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["InferenceRuntimeMetrics"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    admin_leaderboard_api_v1_admin_leaderboard_get: {
+        parameters: {
+            query?: {
+                bench_version?: number | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicLeaderboardResponse"];
                 };
             };
             /** @description Validation Error */
