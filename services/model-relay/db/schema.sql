@@ -1613,7 +1613,9 @@ CREATE TABLE public.screener_capacity_snapshots (
     last_provider_error_code text,
     last_provider_error_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    provider_settings_revision integer DEFAULT 0 NOT NULL,
     CONSTRAINT ck_screener_capacity_snapshots_screener_capacity_snapsh_00c6 CHECK (((targon_available >= 0) AND (targon_healthy >= 0) AND (targon_pending >= 0) AND (targon_draining >= 0))),
+    CONSTRAINT ck_screener_capacity_snapshots_screener_capacity_snapsh_0e9b CHECK ((provider_settings_revision >= 0)),
     CONSTRAINT ck_screener_capacity_snapshots_screener_capacity_snapsh_2185 CHECK (((gce_target >= 0) AND (gce_healthy >= 0) AND (gce_pending >= 0) AND (gce_draining >= 0))),
     CONSTRAINT ck_screener_capacity_snapshots_screener_capacity_snapsh_b27a CHECK ((controller_source_sha ~ '^[0-9a-f]{40}$'::text)),
     CONSTRAINT ck_screener_capacity_snapshots_screener_capacity_snapsh_d0c8 CHECK (((runnable_backlog >= 0) AND (active_leases >= 0) AND (desired_slots >= 0) AND (global_cap >= 0))),
@@ -1703,6 +1705,45 @@ CREATE TABLE public.screener_nodes (
     CONSTRAINT ck_screener_nodes_screener_nodes_status_check CHECK ((status = ANY (ARRAY['active'::text, 'draining'::text, 'quarantined'::text, 'revoked'::text]))),
     CONSTRAINT ck_screener_nodes_screener_nodes_token_hash_check CHECK ((length(token_hash) = 64))
 );
+
+
+--
+-- Name: screener_provider_settings_revisions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.screener_provider_settings_revisions (
+    revision integer NOT NULL,
+    environment text NOT NULL,
+    parent_revision integer NOT NULL,
+    settings jsonb NOT NULL,
+    reason text NOT NULL,
+    actor text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_screener_provider_settings_revisions_screener_provid_0f8e CHECK ((parent_revision >= 0)),
+    CONSTRAINT ck_screener_provider_settings_revisions_screener_provid_30df CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
+    CONSTRAINT ck_screener_provider_settings_revisions_screener_provid_549a CHECK ((length(TRIM(BOTH FROM reason)) >= 8)),
+    CONSTRAINT ck_screener_provider_settings_revisions_screener_provid_8eaa CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120)))
+);
+
+
+--
+-- Name: screener_provider_settings_revisions_revision_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.screener_provider_settings_revisions_revision_seq
+    AS integer
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: screener_provider_settings_revisions_revision_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.screener_provider_settings_revisions_revision_seq OWNED BY public.screener_provider_settings_revisions.revision;
 
 
 --
@@ -1965,6 +2006,11 @@ CREATE TABLE public.submission_image_builds (
     completed_at timestamp with time zone,
     consumed_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    runtime_status text DEFAULT 'skipped'::text NOT NULL,
+    runtime_provider_resource_id text,
+    runtime_image_reference text,
+    runtime_error_code text,
+    runtime_completed_at timestamp with time zone,
     CONSTRAINT ck_submission_image_builds_submission_image_builds_arti_3065 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_atte_e3c5 CHECK (((attempt_count >= 0) AND (attempt_count <= 3))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_envi_043b CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
@@ -1972,6 +2018,8 @@ CREATE TABLE public.submission_image_builds (
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_270a CHECK (((output_size_bytes IS NULL) OR ((output_size_bytes >= 1) AND (output_size_bytes <= '4294967296'::bigint)))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_4205 CHECK (((output_sha256 IS NULL) OR (output_sha256 ~ '^[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_prov_dba8 CHECK (((provider IS NULL) OR (provider = 'targon'::text))),
+    CONSTRAINT ck_submission_image_builds_submission_image_builds_runt_165c CHECK ((runtime_status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'skipped'::text]))),
+    CONSTRAINT ck_submission_image_builds_submission_image_builds_runt_7180 CHECK (((runtime_image_reference IS NULL) OR (runtime_image_reference ~ '^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_toke_4f4a CHECK (((job_token_hash IS NULL) OR (job_token_hash ~ '^[0-9a-f]{64}$'::text)))
 );
@@ -2038,6 +2086,40 @@ CREATE SEQUENCE public.submission_settings_revisions_revision_seq
 --
 
 ALTER SEQUENCE public.submission_settings_revisions_revision_seq OWNED BY public.submission_settings_revisions.revision;
+
+
+--
+-- Name: submission_source_reviews; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.submission_source_reviews (
+    review_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    attempt_id uuid NOT NULL,
+    environment text NOT NULL,
+    artifact_sha256 text NOT NULL,
+    status text DEFAULT 'queued'::text NOT NULL,
+    provider text,
+    provider_resource_id text,
+    observation jsonb,
+    error_code text,
+    attempt_count integer DEFAULT 0 NOT NULL,
+    controller_epoch text,
+    lease_expires_at timestamp with time zone,
+    job_token_hash text,
+    job_token_expires_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    started_at timestamp with time zone,
+    completed_at timestamp with time zone,
+    consumed_at timestamp with time zone,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__14fa CHECK (((job_token_hash IS NULL) OR (job_token_hash ~ '^[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__43cb CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__4bdc CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__8b37 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__f22b CHECK (((provider IS NULL) OR (provider = 'targon'::text))),
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__fa74 CHECK (((attempt_count >= 0) AND (attempt_count <= 3)))
+);
 
 
 --
@@ -2389,6 +2471,13 @@ ALTER TABLE ONLY public.queue_policy_settings_revisions ALTER COLUMN revision SE
 --
 
 ALTER TABLE ONLY public.score_audit_log ALTER COLUMN seq SET DEFAULT nextval('public.score_audit_log_seq_seq'::regclass);
+
+
+--
+-- Name: screener_provider_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_provider_settings_revisions ALTER COLUMN revision SET DEFAULT nextval('public.screener_provider_settings_revisions_revision_seq'::regclass);
 
 
 --
@@ -2980,6 +3069,14 @@ ALTER TABLE ONLY public.screener_nodes
 
 
 --
+-- Name: screener_provider_settings_revisions pk_screener_provider_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_provider_settings_revisions
+    ADD CONSTRAINT pk_screener_provider_settings_revisions PRIMARY KEY (revision);
+
+
+--
 -- Name: screener_review_settings_revisions pk_screener_review_settings_revisions; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3025,6 +3122,14 @@ ALTER TABLE ONLY public.submission_retirements
 
 ALTER TABLE ONLY public.submission_settings_revisions
     ADD CONSTRAINT pk_submission_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: submission_source_reviews pk_submission_source_reviews; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.submission_source_reviews
+    ADD CONSTRAINT pk_submission_source_reviews PRIMARY KEY (review_id);
 
 
 --
@@ -3140,6 +3245,14 @@ ALTER TABLE ONLY public.screener_nodes
 
 
 --
+-- Name: screener_provider_settings_revisions screener_provider_settings_environment_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.screener_provider_settings_revisions
+    ADD CONSTRAINT screener_provider_settings_environment_parent_key UNIQUE (environment, parent_revision);
+
+
+--
 -- Name: screener_review_settings_revisions screener_review_settings_scope_parent_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3249,6 +3362,14 @@ ALTER TABLE ONLY public.submission_retirements
 
 ALTER TABLE ONLY public.submission_settings_revisions
     ADD CONSTRAINT submission_settings_parent_revision_key UNIQUE (parent_revision);
+
+
+--
+-- Name: submission_source_reviews submission_source_reviews_attempt_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.submission_source_reviews
+    ADD CONSTRAINT submission_source_reviews_attempt_key UNIQUE (attempt_id);
 
 
 --
@@ -3741,6 +3862,13 @@ CREATE INDEX screener_nodes_provider_status_idx ON public.screener_nodes USING b
 
 
 --
+-- Name: screener_provider_settings_environment_revision_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX screener_provider_settings_environment_revision_idx ON public.screener_provider_settings_revisions USING btree (environment, revision);
+
+
+--
 -- Name: screener_review_settings_scope_revision_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -3829,6 +3957,13 @@ CREATE INDEX submission_image_builds_queue_idx ON public.submission_image_builds
 --
 
 CREATE INDEX submission_retirements_created_idx ON public.submission_retirements USING btree (created_at, retirement_id);
+
+
+--
+-- Name: submission_source_reviews_queue_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX submission_source_reviews_queue_idx ON public.submission_source_reviews USING btree (environment, status, created_at);
 
 
 --
@@ -4399,6 +4534,22 @@ ALTER TABLE ONLY public.submission_image_builds
 
 ALTER TABLE ONLY public.submission_retirements
     ADD CONSTRAINT submission_retirements_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: submission_source_reviews submission_source_reviews_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.submission_source_reviews
+    ADD CONSTRAINT submission_source_reviews_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
+
+
+--
+-- Name: submission_source_reviews submission_source_reviews_attempt_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.submission_source_reviews
+    ADD CONSTRAINT submission_source_reviews_attempt_id_fkey FOREIGN KEY (attempt_id) REFERENCES public.screening_attempts(attempt_id) ON DELETE CASCADE;
 
 
 --
