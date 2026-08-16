@@ -292,8 +292,6 @@ def confirm_avatar_action(
         raise AvatarCancelledError(f"avatar {action} cancelled: EOF on stdin") from e
 
     if response != "y":
-        raise AvatarCancelledError(
-            f"avatar {action} cancelled (response={response!r})"
-        )
+        raise AvatarCancelledError(f"avatar {action} cancelled (response={response!r})")
 
     print(f"avatar {action} confirmed", file=sys.stderr)

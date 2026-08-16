@@ -54,8 +54,7 @@ def clear_message(
 ) -> bytes:
     issued = _issued_stamp(issued_at)
     return (
-        f"{CLEAR_DOMAIN}:{netuid}:{miner_hotkey}:{nonce}:{issued}"
-        f":{key_kind}:{signer}"
+        f"{CLEAR_DOMAIN}:{netuid}:{miner_hotkey}:{nonce}:{issued}:{key_kind}:{signer}"
     ).encode()
 
 
