@@ -55,6 +55,13 @@ resolved_revision="$(git -C /opt/ditto/bootstrap-src rev-parse FETCH_HEAD)"
 test "$resolved_revision" = "${git_revision}"
 git -C /opt/ditto/bootstrap-src checkout --detach "$resolved_revision"
 
+# The root clone above is finished, and everything past this point runs as the
+# unprivileged screener user. Drop the root-only ssh settings rather than
+# letting them leak across the handoff: bootstrap-screener.sh clones via
+# `runuser -u deploy`, which preserves the environment, so an inherited
+# GIT_SSH_COMMAND pointed at /root/.ssh/* makes that clone fail closed.
+unset GIT_SSH_COMMAND
+
 exec env \
   SCREENER_GCP_PROJECT="${project}" \
   SCREENER_PLATFORM_API_URL="${platform_api_url}" \

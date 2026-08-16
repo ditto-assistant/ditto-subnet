@@ -219,6 +219,17 @@ chmod 0644 "$ssh_dir/known_hosts"
 if [[ "$SCREENER_BAKE_ONLY" != "1" ]]; then
   install -o "$SCREENER_USER" -g "$SCREENER_GROUP" -m 0600 \
     "$SCREENER_DEPLOY_KEY_FILE" "$ssh_dir/id_ed25519"
+
+  # Every networked git command below runs as the deploy user, so ssh must be
+  # pointed at the deploy-owned key and pinned known_hosts installed above.
+  # State that explicitly rather than inheriting it: `runuser -u` preserves the
+  # environment, so a caller that exported GIT_SSH_COMMAND for its own root
+  # clone would otherwise hand the deploy user root-only paths. That is not
+  # hypothetical — the fleet startup script did exactly that, and the clone
+  # failed with "Identity file /root/.ssh/screener_deploy_key not accessible:
+  # Permission denied" then "Host key verification failed", leaving every
+  # autoscaled node without a checkout and unable to ever become healthy.
+  export GIT_SSH_COMMAND="ssh -i $ssh_dir/id_ed25519 -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts"
 fi
 
 # --- Checkout ----------------------------------------------------------------
