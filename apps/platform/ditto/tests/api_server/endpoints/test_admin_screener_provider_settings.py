@@ -126,3 +126,215 @@ async def test_provider_settings_retain_gcp_and_exact_confirmation(
         ),
     )
     assert wrong_confirmation.status_code == 409
+
+
+async def test_unknown_fields_ignored_and_gcp_first_disables_targon() -> None:
+    from ditto.api_models.screener_provider_settings import (
+        ScreenerProviderSettings,
+        ScreenerProviderSettingsWriteRequest,
+    )
+
+    settings = ScreenerProviderSettings.model_validate(
+        {
+            "runtime_provider_priority": ["gcp", "targon"],
+            "source_review_provider_priority": ["gcp"],
+            "build_provider_priority": ["gcp", "targon"],
+            "future_flag": True,
+        }
+    )
+    assert settings.runtime_provider_priority == ("gcp", "targon")
+    assert settings.targon_runtime_enabled() is False
+    assert settings.targon_source_review_enabled() is False
+    assert settings.targon_builders_enabled() is False
+    assert settings.all_lanes_gcp_only() is True
+    assert settings.all_lanes_targon_first() is False
+
+    payload = ScreenerProviderSettingsWriteRequest.model_validate(
+        {
+            "expected_revision": 0,
+            "settings": settings.model_dump(mode="json"),
+            "reason": "Cut over every lane to the old GCE path",
+            "confirmation": (
+                "APPLY SCREENER PROVIDERS BUILDS=gcp>targon RUNTIME=gcp>targon "
+                "SOURCE_REVIEW=gcp"
+            ),
+            "unknown_operator_hint": "ignored",
+        }
+    )
+    assert "unknown_operator_hint" not in payload.model_dump()
+
+    targon_first = ScreenerProviderSettings()
+    assert targon_first.all_lanes_targon_first() is True
+    assert targon_first.all_lanes_gcp_only() is False
+
+
+async def test_all_lanes_gcp_only_then_restore_targon_claims(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.api_models.agent_status import AgentStatus
+    from ditto.tests.api_server.endpoints.test_screener import (
+        _AUTH_HEADER,
+        _CLAIM_URL,
+        _CONTROLLER_TOKEN,
+        _install_chain,
+        _install_db,
+        _install_storage,
+        _seed_agent,
+    )
+
+    _install(app, session_maker)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    _install_storage(app)
+    app.state.config = replace(
+        app.state.config,
+        screener_auth=replace(
+            app.state.config.screener_auth,
+            controller_api_token=_CONTROLLER_TOKEN,
+        ),
+    )
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+    attempt_id = claim.json()["items"][0]["attempt_id"]
+    controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+
+    cutover = await client.post(
+        _PATH,
+        headers=_HEADERS,
+        json=_payload(
+            expected_revision=0,
+            screening=["gcp"],
+            builds=["gcp"],
+        ),
+    )
+    assert cutover.status_code == 200, cutover.text
+
+    queued_build = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+        headers=_AUTH_HEADER,
+        json={"attempt_id": attempt_id},
+    )
+    assert queued_build.status_code == 200, queued_build.text
+    assert queued_build.json()["status"] == "fallback_required"
+    assert queued_build.json()["error_code"] == (
+        "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
+    )
+    assert queued_build.json()["runtime_status"] == "skipped"
+
+    queued_review = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/submission-source-reviews",
+        headers=_AUTH_HEADER,
+        json={"attempt_id": attempt_id},
+    )
+    assert queued_review.status_code == 200, queued_review.text
+    assert queued_review.json()["status"] == "fallback_required"
+    assert (
+        queued_review.json()["error_code"] == "TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY"
+    )
+
+    build_claim = await client.post(
+        "/api/v1/screener/controller/submission-image-builds/claim",
+        headers=controller_headers,
+        json={"environment": "prod", "controller_epoch": "builder:cutover"},
+    )
+    assert build_claim.status_code == 200, build_claim.text
+    assert build_claim.json()["build"] is None
+
+    runtime_claim = await client.post(
+        "/api/v1/screener/controller/submission-runtime-smokes/claim",
+        headers=controller_headers,
+        json={"environment": "prod", "controller_epoch": "builder:cutover"},
+    )
+    assert runtime_claim.status_code == 200, runtime_claim.text
+    assert runtime_claim.json()["artifact"] is None
+
+    review_claim = await client.post(
+        "/api/v1/screener/controller/submission-source-reviews/claim",
+        headers=controller_headers,
+        json={"environment": "prod", "controller_epoch": "builder:cutover"},
+    )
+    assert review_claim.status_code == 200, review_claim.text
+    assert review_claim.json()["review"] is None
+
+    restored = await client.post(
+        _PATH,
+        headers=_HEADERS,
+        json=_payload(
+            expected_revision=cutover.json()["revision"],
+            screening=["targon", "gcp"],
+            builds=["targon", "gcp"],
+        ),
+    )
+    assert restored.status_code == 200, restored.text
+
+    restore_agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    restore_claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+    restore_attempt_id = restore_claim.json()["items"][0]["attempt_id"]
+    restored_build = await client.post(
+        f"/api/v1/screener/agent/{restore_agent_id}/submission-image-builds",
+        headers=_AUTH_HEADER,
+        json={"attempt_id": restore_attempt_id},
+    )
+    assert restored_build.status_code == 200, restored_build.text
+    assert restored_build.json()["status"] == "queued"
+    leased = await client.post(
+        "/api/v1/screener/controller/submission-image-builds/claim",
+        headers=controller_headers,
+        json={"environment": "prod", "controller_epoch": "builder:restore"},
+    )
+    assert leased.status_code == 200, leased.text
+    assert leased.json()["build"]["build_id"] == restored_build.json()["build_id"]
+
+
+async def test_gcp_then_targon_is_accepted_but_disables_targon(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    from ditto.api_models.agent_status import AgentStatus
+    from ditto.tests.api_server.endpoints.test_screener import (
+        _AUTH_HEADER,
+        _CLAIM_URL,
+        _CONTROLLER_TOKEN,
+        _install_chain,
+        _install_db,
+        _install_storage,
+        _seed_agent,
+    )
+
+    _install(app, session_maker)
+    _install_db(app, session_maker)
+    _install_chain(app)
+    _install_storage(app)
+    app.state.config = replace(
+        app.state.config,
+        screener_auth=replace(
+            app.state.config.screener_auth,
+            controller_api_token=_CONTROLLER_TOKEN,
+        ),
+    )
+    applied = await client.post(
+        _PATH,
+        headers=_HEADERS,
+        json=_payload(
+            expected_revision=0,
+            screening=["gcp", "targon"],
+            builds=["gcp", "targon"],
+        ),
+    )
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["settings"]["runtime_provider_priority"] == ["gcp", "targon"]
+
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+    attempt_id = claim.json()["items"][0]["attempt_id"]
+    queued = await client.post(
+        f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+        headers=_AUTH_HEADER,
+        json={"attempt_id": attempt_id},
+    )
+    assert queued.status_code == 200, queued.text
+    assert queued.json()["status"] == "fallback_required"
+    assert queued.json()["error_code"] == ("TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY")

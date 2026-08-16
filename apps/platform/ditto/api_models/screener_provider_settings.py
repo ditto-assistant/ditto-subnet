@@ -13,7 +13,7 @@ ScreenerCapacityProvider = Literal["targon", "gcp"]
 class ScreenerProviderSettings(BaseModel):
     """Ordered provider lists for build, runtime, and source-review lanes."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     runtime_provider_priority: tuple[ScreenerCapacityProvider, ...] = (
         "targon",
@@ -55,9 +55,23 @@ class ScreenerProviderSettings(BaseModel):
     def targon_builders_enabled(self) -> bool:
         return self.build_provider_priority[0] == "targon"
 
+    def all_lanes_targon_first(self) -> bool:
+        return (
+            self.targon_runtime_enabled()
+            and self.targon_source_review_enabled()
+            and self.targon_builders_enabled()
+        )
+
+    def all_lanes_gcp_only(self) -> bool:
+        return (
+            not self.targon_runtime_enabled()
+            and not self.targon_source_review_enabled()
+            and not self.targon_builders_enabled()
+        )
+
 
 class ScreenerProviderSettingsRevision(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: str
     revision: int
@@ -69,7 +83,7 @@ class ScreenerProviderSettingsRevision(BaseModel):
 
 
 class EffectiveScreenerProviderSettings(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: str
     revision: int
@@ -77,14 +91,14 @@ class EffectiveScreenerProviderSettings(BaseModel):
 
 
 class ScreenerProviderSettingsControl(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     current: ScreenerProviderSettingsRevision
     history: list[ScreenerProviderSettingsRevision]
 
 
 class ScreenerProviderSettingsWriteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", strict=True)
+    model_config = ConfigDict(extra="ignore", strict=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")] = "prod"
     expected_revision: Annotated[int, Field(ge=0)]

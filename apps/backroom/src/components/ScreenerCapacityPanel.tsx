@@ -78,17 +78,49 @@ function capabilityGuidance(reason: string | null) {
   return 'A fresh reviewed hostile-runtime capability is required before full workers can start.'
 }
 
-type ProviderMode = 'targon-first' | 'gcp-first' | 'gcp-only'
+type ProviderMode = 'targon-first' | 'gcp-only'
+type RoutingPosture = 'targon-first' | 'gce-only' | 'mixed'
+
+const TARGON_FIRST_PRIORITY: ('targon' | 'gcp')[] = ['targon', 'gcp']
+const GCE_ONLY_PRIORITY: ('targon' | 'gcp')[] = ['gcp']
 
 function providerMode(priority: ScreenerProviderSettings['runtime_provider_priority']): ProviderMode {
-  if (!priority.includes('targon')) return 'gcp-only'
-  return priority[0] === 'targon' ? 'targon-first' : 'gcp-first'
+  // Legacy ['gcp', 'targon'] is Targon-off / GCE only; first-provider wins.
+  return priority[0] === 'targon' ? 'targon-first' : 'gcp-only'
 }
 
 function priorityForMode(mode: ProviderMode): ('targon' | 'gcp')[] {
-  if (mode === 'targon-first') return ['targon', 'gcp']
-  if (mode === 'gcp-first') return ['gcp', 'targon']
-  return ['gcp']
+  return mode === 'targon-first' ? [...TARGON_FIRST_PRIORITY] : [...GCE_ONLY_PRIORITY]
+}
+
+function routingPosture(settings: ScreenerProviderSettings): RoutingPosture {
+  const modes = [
+    providerMode(settings.build_provider_priority),
+    providerMode(settings.runtime_provider_priority),
+    providerMode(settings.source_review_provider_priority),
+  ]
+  if (modes.every((mode) => mode === 'targon-first')) return 'targon-first'
+  if (modes.every((mode) => mode === 'gcp-only')) return 'gce-only'
+  return 'mixed'
+}
+
+function postureChip(posture: RoutingPosture) {
+  if (posture === 'targon-first') {
+    return {
+      label: 'All lanes Targon-first',
+      className: 'bg-[var(--acid-dim)] text-[var(--acid)]',
+    }
+  }
+  if (posture === 'gce-only') {
+    return {
+      label: 'All lanes GCE only',
+      className: 'bg-[var(--amber-dim)] text-[var(--amber)]',
+    }
+  }
+  return {
+    label: 'Mixed lane routing',
+    className: 'bg-[var(--cyan-dim)] text-[var(--cyan)]',
+  }
 }
 
 function ProviderRoutingControl({
@@ -132,6 +164,18 @@ function ProviderRoutingControl({
     setConfirmation('')
   }
 
+  const draftAllLanes = (priority: ('targon' | 'gcp')[]) => {
+    setSettings({
+      build_provider_priority: priority,
+      runtime_provider_priority: priority,
+      source_review_provider_priority: priority,
+    })
+    setConfirmation('')
+  }
+
+  const posture = routingPosture(settings)
+  const chip = postureChip(posture)
+
   const submit = async () => {
     if (!ready || readOnly) return
     setLoading(true)
@@ -168,15 +212,44 @@ function ProviderRoutingControl({
             <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${caughtUp ? 'bg-[var(--acid-dim)] text-[var(--acid)]' : 'bg-[var(--amber-dim)] text-[var(--amber)]'}`}>
               {caughtUp ? `Applied r${control.current.revision}` : `Awaiting controller r${control.current.revision}`}
             </span>
+            <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${chip.className}`}>
+              {chip.label}
+            </span>
           </div>
           <p className="mt-1 max-w-[78ch] text-xs leading-5 text-[var(--muted)]">
-            Builds, direct-image runtime checks, and bounded source review are independent lanes.
-            GCP remains the mandatory safety path; Targon can be preferred, demoted, or disabled
-            without a deploy.
+            Builds, runtime smoke, and source review are independent lanes. Targon is enabled only
+            when a lane starts with Targon. Any other list, including legacy <code>gcp&gt;targon</code>,
+            is GCE only. GCP VMs stay as the safety path until Targon is validated; then this
+            cutover UI and the GCE MIGs can be removed.
           </p>
         </div>
       </div>
       <div className="space-y-5 p-4 sm:p-5">
+        <div className="rounded-lg border border-[var(--amber)]/40 bg-[var(--amber-dim)] p-4">
+          <p className="text-xs font-semibold text-[var(--amber)]">Emergency cutover</p>
+          <p className="mt-1 max-w-[78ch] text-xs leading-5 text-[var(--muted-strong)]">
+            Restores the old GCE screening path immediately after the existing audited apply; no
+            deploy. Targon rentals stop being claimed; GCE workers remain the authority.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              disabled={readOnly || loading}
+              onClick={() => draftAllLanes(GCE_ONLY_PRIORITY)}
+              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-[var(--amber)] px-3 text-xs font-semibold text-[var(--amber)] disabled:opacity-40"
+            >
+              Cut over to GCE only
+            </button>
+            <button
+              type="button"
+              disabled={readOnly || loading}
+              onClick={() => draftAllLanes(TARGON_FIRST_PRIORITY)}
+              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-[var(--line)] px-3 text-xs font-semibold text-[var(--muted-strong)] hover:bg-white/5 disabled:opacity-40"
+            >
+              Restore Targon-first
+            </button>
+          </div>
+        </div>
         <div className="grid gap-4 lg:grid-cols-3">
           {([
             ['build', 'Remote image builders', settings.build_provider_priority],
@@ -185,11 +258,10 @@ function ProviderRoutingControl({
           ] as const).map(([lane, label, priority]) => (
             <fieldset key={lane} disabled={readOnly || loading} className="rounded-lg border border-[var(--line)] p-4">
               <legend className="px-1 text-xs font-semibold">{label}</legend>
-              <div className="mt-2 grid gap-2 sm:grid-cols-3">
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {([
                   ['targon-first', 'Targon first'],
-                  ['gcp-first', 'GCP first'],
-                  ['gcp-only', 'Targon off'],
+                  ['gcp-only', 'Targon off (GCE only)'],
                 ] as const).map(([mode, modeLabel]) => (
                   <button
                     key={mode}

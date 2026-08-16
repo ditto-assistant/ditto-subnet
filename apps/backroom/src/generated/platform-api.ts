@@ -898,6 +898,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screener-provider-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Screener Provider Settings */
+        get: operations["get_screener_provider_settings_api_v1_admin_screener_provider_settings_get"];
+        put?: never;
+        /** Set Screener Provider Settings */
+        post: operations["set_screener_provider_settings_api_v1_admin_screener_provider_settings_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screener-review-settings": {
         parameters: {
             query?: never;
@@ -2839,6 +2857,44 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/agent/{agent_id}/submission-source-reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Queue Submission Source Review
+         * @description Queue a bounded read-only review alongside the mechanical lane.
+         */
+        post: operations["queue_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/agent/{agent_id}/submission-source-reviews/{review_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Submission Source Review */
+        get: operations["get_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__get"];
+        put?: never;
+        post?: never;
+        /** Consume Submission Source Review */
+        delete: operations["consume_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/claim": {
         parameters: {
             query?: never;
@@ -2959,6 +3015,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/controller/provider-settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Controller Provider Settings
+         * @description Return the routing revision every provider mutator must obey.
+         */
+        get: operations["get_controller_provider_settings_api_v1_screener_controller_provider_settings_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/controller/release": {
         parameters: {
             query?: never;
@@ -3031,6 +3107,109 @@ export interface paths {
          * @description Keep provider deletion failures visible after zero-replica suspension.
          */
         post: operations["record_submission_image_build_cleanup_api_v1_screener_controller_submission_image_builds__build_id__cleanup_required_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-cleanup-required": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Submission Runtime Cleanup Required */
+        post: operations["mark_submission_runtime_cleanup_required_api_v1_screener_controller_submission_image_builds__build_id__runtime_cleanup_required_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete Submission Runtime Smoke */
+        post: operations["complete_submission_runtime_smoke_api_v1_screener_controller_submission_image_builds__build_id__runtime_result_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/submission-runtime-smokes/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Submission Runtime Smoke */
+        post: operations["claim_submission_runtime_smoke_api_v1_screener_controller_submission_runtime_smokes_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/submission-source-reviews/claim": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Submission Source Review */
+        post: operations["claim_submission_source_review_api_v1_screener_controller_submission_source_reviews_claim_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/submission-source-reviews/{review_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Controller Submission Source Review */
+        get: operations["get_controller_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__get"];
+        /** Update Submission Source Review */
+        put: operations["update_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/controller/submission-source-reviews/{review_id}/cleanup-required": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Mark Submission Source Review Cleanup Required */
+        post: operations["mark_submission_source_review_cleanup_required_api_v1_screener_controller_submission_source_reviews__review_id__cleanup_required_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3263,6 +3442,40 @@ export interface paths {
         put?: never;
         /** Mint Submission Build Upload */
         post: operations["mint_submission_build_upload_api_v1_screener_submission_image_builds__build_id__upload_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/submission-source-reviews/{review_id}/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Complete Submission Source Review */
+        post: operations["complete_submission_source_review_api_v1_screener_submission_source_reviews__review_id__complete_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/screener/submission-source-reviews/{review_id}/source": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Submission Source Review Source */
+        get: operations["get_submission_source_review_source_api_v1_screener_submission_source_reviews__review_id__source_get"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -9057,6 +9270,14 @@ export interface components {
              * @enum {string}
              */
             source: "revision" | "default";
+        };
+        /** EffectiveScreenerProviderSettings */
+        EffectiveScreenerProviderSettings: {
+            /** Environment */
+            environment: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["ScreenerProviderSettings"];
         };
         /** EffectiveScreenerReviewSettings */
         EffectiveScreenerReviewSettings: {
@@ -15121,6 +15342,11 @@ export interface components {
             last_provider_success_at?: string | null;
             /** Provider Ready */
             provider_ready: boolean;
+            /**
+             * Provider Settings Revision
+             * @default 0
+             */
+            provider_settings_revision: number;
             /** Runnable Backlog */
             runnable_backlog: number;
             /** Targon Available */
@@ -15184,6 +15410,11 @@ export interface components {
             last_provider_success_at?: string | null;
             /** Provider Ready */
             provider_ready: boolean;
+            /**
+             * Provider Settings Revision
+             * @default 0
+             */
+            provider_settings_revision: number;
             /** Runnable Backlog */
             runnable_backlog: number;
             /** Targon Available */
@@ -15213,6 +15444,9 @@ export interface components {
             events: components["schemas"]["ScreenerCapacityEventView"][];
             /** Nodes */
             nodes: components["schemas"]["ScreenerNodeView"][];
+            provider_control: components["schemas"]["ScreenerProviderSettingsControl"];
+            /** Provider Jobs */
+            provider_jobs?: components["schemas"]["ScreenerProviderJobView"][];
             snapshot: components["schemas"]["ScreenerCapacitySnapshotResponse"] | null;
         };
         /** ScreenerControllerFenceRequest */
@@ -15432,6 +15666,114 @@ export interface components {
             stage: "preparing" | "downloading" | "validating" | "building" | "starting" | "health_check" | "source_review_0" | "source_review_10" | "source_review_20" | "source_review_30" | "source_review_40" | "source_review_50" | "source_review_60" | "source_review_70" | "source_review_80" | "source_review_90" | "source_review_100" | "submitting";
             /** Started At */
             started_at: number;
+        };
+        /**
+         * ScreenerProviderJobView
+         * @description Redacted recent one-shot provider work for operator visibility.
+         */
+        ScreenerProviderJobView: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Image Reference */
+            image_reference?: string | null;
+            /**
+             * Job Id
+             * Format: uuid
+             */
+            job_id: string;
+            /**
+             * Lane
+             * @enum {string}
+             */
+            lane: "build" | "runtime" | "source_review";
+            /** Provider */
+            provider?: "targon" | null;
+            /** Provider Resource Id */
+            provider_resource_id?: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
+        /**
+         * ScreenerProviderSettings
+         * @description Ordered provider lists for build, runtime, and source-review lanes.
+         */
+        ScreenerProviderSettings: {
+            /**
+             * Build Provider Priority
+             * @default [
+             *       "targon",
+             *       "gcp"
+             *     ]
+             */
+            build_provider_priority: ("targon" | "gcp")[];
+            /**
+             * Runtime Provider Priority
+             * @default [
+             *       "targon",
+             *       "gcp"
+             *     ]
+             */
+            runtime_provider_priority: ("targon" | "gcp")[];
+            /**
+             * Source Review Provider Priority
+             * @default [
+             *       "targon",
+             *       "gcp"
+             *     ]
+             */
+            source_review_provider_priority: ("targon" | "gcp")[];
+        };
+        /** ScreenerProviderSettingsControl */
+        ScreenerProviderSettingsControl: {
+            current: components["schemas"]["ScreenerProviderSettingsRevision"];
+            /** History */
+            history: components["schemas"]["ScreenerProviderSettingsRevision"][];
+        };
+        /** ScreenerProviderSettingsRevision */
+        ScreenerProviderSettingsRevision: {
+            /** Actor */
+            actor: string;
+            /** Created At */
+            created_at: string | null;
+            /** Environment */
+            environment: string;
+            /** Parent Revision */
+            parent_revision: number;
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            settings: components["schemas"]["ScreenerProviderSettings"];
+        };
+        /** ScreenerProviderSettingsWriteRequest */
+        ScreenerProviderSettingsWriteRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Environment
+             * @default prod
+             */
+            environment: string;
+            /** Expected Revision */
+            expected_revision: number;
+            /** Reason */
+            reason: string;
+            settings: components["schemas"]["ScreenerProviderSettings"];
         };
         /**
          * ScreenerQueueItem
@@ -15864,6 +16206,35 @@ export interface components {
             summary: string;
         };
         /**
+         * SourceReviewObservationPayload
+         * @description Bounded source-review observation safe to cross provider boundaries.
+         */
+        SourceReviewObservationPayload: {
+            /** Categories */
+            categories?: string[];
+            /**
+             * Clearance Certified
+             * @default false
+             */
+            clearance_certified: boolean;
+            /** Error Code */
+            error_code?: string | null;
+            /**
+             * Failure Disposition
+             * @default retryable_infra
+             * @enum {string}
+             */
+            failure_disposition: "retryable_infra" | "inconclusive" | "pass_inconclusive";
+            finding?: components["schemas"]["SourceReviewFinding"] | null;
+            /** Finding Digest */
+            finding_digest?: string | null;
+            /** Ok */
+            ok: boolean;
+            review_audit?: components["schemas"]["ScreenReviewAudit"] | null;
+            /** Risk Level */
+            risk_level?: ("low" | "medium" | "high") | null;
+        };
+        /**
          * SourceReviewScorerVisibleEffect
          * @description Concrete graded field or validator-owned outcome changed by a transition.
          * @enum {string}
@@ -16049,11 +16420,67 @@ export interface components {
             output_size_bytes?: number | null;
             /** Provider */
             provider?: "targon" | null;
+            /** Runtime Error Code */
+            runtime_error_code?: string | null;
+            /** Runtime Image Reference */
+            runtime_image_reference?: string | null;
+            /** Runtime Provider */
+            runtime_provider?: "targon" | null;
+            /**
+             * Runtime Status
+             * @default skipped
+             * @enum {string}
+             */
+            runtime_status: "pending" | "running" | "succeeded" | "fallback_required" | "skipped";
             /**
              * Status
              * @enum {string}
              */
             status: "queued" | "leased" | "running" | "succeeded" | "fallback_required" | "canceled" | "consumed";
+        };
+        /** SubmissionRuntimeArtifactClaimResponse */
+        SubmissionRuntimeArtifactClaimResponse: {
+            artifact: components["schemas"]["SubmissionRuntimeArtifactResponse"] | null;
+        };
+        /**
+         * SubmissionRuntimeArtifactResponse
+         * @description Verified build archive made available only to the fenced controller.
+         */
+        SubmissionRuntimeArtifactResponse: {
+            /** Archive Url B64 */
+            archive_url_b64: string;
+            /**
+             * Build Id
+             * Format: uuid
+             */
+            build_id: string;
+            /** Destination */
+            destination: string;
+            /** Output Sha256 */
+            output_sha256: string;
+            /** Output Size Bytes */
+            output_size_bytes: number;
+        };
+        /**
+         * SubmissionRuntimeResultRequest
+         * @description Terminal direct-image Rental result, fenced to one build/controller.
+         */
+        SubmissionRuntimeResultRequest: {
+            /** Controller Epoch */
+            controller_epoch: string;
+            /** Environment */
+            environment: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Image Reference */
+            image_reference?: string | null;
+            /** Provider Resource Id */
+            provider_resource_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "succeeded" | "fallback_required";
         };
         /** SubmissionSettingsRevision */
         SubmissionSettingsRevision: {
@@ -16071,6 +16498,141 @@ export interface components {
             reason: string;
             /** Revision */
             revision: number;
+        };
+        /** SubmissionSourceReviewClaimResponse */
+        SubmissionSourceReviewClaimResponse: {
+            review: components["schemas"]["SubmissionSourceReviewClaimView"] | null;
+        };
+        /**
+         * SubmissionSourceReviewClaimView
+         * @description One read-only source review leased to a trusted Targon worker.
+         */
+        SubmissionSourceReviewClaimView: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Image Reference */
+            image_reference: string;
+            /** Job Token */
+            job_token: string;
+            /**
+             * Job Token Expires At
+             * Format: date-time
+             */
+            job_token_expires_at: string;
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+        };
+        /**
+         * SubmissionSourceReviewCleanupRequest
+         * @description Durable notice that a provider Rental still needs deletion.
+         */
+        SubmissionSourceReviewCleanupRequest: {
+            /** Controller Epoch */
+            controller_epoch: string;
+            /** Environment */
+            environment: string;
+            /** Provider Resource Id */
+            provider_resource_id: string;
+        };
+        /** SubmissionSourceReviewCompleteRequest */
+        SubmissionSourceReviewCompleteRequest: {
+            observation: components["schemas"]["SourceReviewObservationPayload"];
+        };
+        /** SubmissionSourceReviewCompleteResponse */
+        SubmissionSourceReviewCompleteResponse: {
+            /**
+             * Verified
+             * @constant
+             */
+            verified: true;
+        };
+        /** SubmissionSourceReviewControllerStatusResponse */
+        SubmissionSourceReviewControllerStatusResponse: {
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "running" | "succeeded" | "fallback_required" | "canceled" | "consumed";
+        };
+        /** SubmissionSourceReviewControllerUpdateRequest */
+        SubmissionSourceReviewControllerUpdateRequest: {
+            /** Controller Epoch */
+            controller_epoch: string;
+            /** Environment */
+            environment: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Provider Resource Id */
+            provider_resource_id?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "running" | "fallback_required";
+        };
+        /**
+         * SubmissionSourceReviewRequest
+         * @description Queue one attempt-bound remote, read-only source review.
+         */
+        SubmissionSourceReviewRequest: {
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+        };
+        /**
+         * SubmissionSourceReviewResponse
+         * @description Status and terminal observation for an attempt-bound remote review.
+         */
+        SubmissionSourceReviewResponse: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /** Error Code */
+            error_code?: string | null;
+            observation?: components["schemas"]["SourceReviewObservationPayload"] | null;
+            /** Provider */
+            provider?: "targon" | null;
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "leased" | "running" | "succeeded" | "fallback_required" | "canceled" | "consumed";
+        };
+        /** SubmissionSourceReviewSourceResponse */
+        SubmissionSourceReviewSourceResponse: {
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Source Url B64 */
+            source_url_b64: string;
         };
         /**
          * SubmitScoreRequest
@@ -19089,6 +19651,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ScreenerCapacityView"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_screener_provider_settings_api_v1_admin_screener_provider_settings_get: {
+        parameters: {
+            query?: {
+                environment?: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreenerProviderSettingsControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_screener_provider_settings_api_v1_admin_screener_provider_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScreenerProviderSettingsWriteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ScreenerProviderSettingsRevision"];
                 };
             };
             /** @description Validation Error */
@@ -22293,6 +22923,116 @@ export interface operations {
             };
         };
     };
+    queue_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionSourceReviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionSourceReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__get: {
+        parameters: {
+            query: {
+                attempt_id: string;
+            };
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionSourceReviewResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    consume_submission_source_review_api_v1_screener_agent__agent_id__submission_source_reviews__review_id__delete: {
+        parameters: {
+            query: {
+                attempt_id: string;
+            };
+            header?: {
+                "x-screener-hotkey"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     claim_api_v1_screener_claim_post: {
         parameters: {
             query: {
@@ -22504,6 +23244,39 @@ export interface operations {
             };
         };
     };
+    get_controller_provider_settings_api_v1_screener_controller_provider_settings_get: {
+        parameters: {
+            query?: {
+                environment?: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["EffectiveScreenerProviderSettings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     release_screener_controller_api_v1_screener_controller_release_post: {
         parameters: {
             query?: never;
@@ -22657,6 +23430,252 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_submission_runtime_cleanup_required_api_v1_screener_controller_submission_image_builds__build_id__runtime_cleanup_required_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_submission_runtime_smoke_api_v1_screener_controller_submission_image_builds__build_id__runtime_result_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionRuntimeResultRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_submission_runtime_smoke_api_v1_screener_controller_submission_runtime_smokes_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionRuntimeArtifactClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    claim_submission_source_review_api_v1_screener_controller_submission_source_reviews_claim_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TrustedImageBuildClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionSourceReviewClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_controller_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__get: {
+        parameters: {
+            query: {
+                environment: string;
+                controller_epoch: string;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionSourceReviewControllerStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_submission_source_review_api_v1_screener_controller_submission_source_reviews__review_id__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionSourceReviewControllerUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    mark_submission_source_review_cleanup_required_api_v1_screener_controller_submission_source_reviews__review_id__cleanup_required_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionSourceReviewCleanupRequest"];
             };
         };
         responses: {
@@ -23145,6 +24164,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmissionBuildUploadResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    complete_submission_source_review_api_v1_screener_submission_source_reviews__review_id__complete_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionSourceReviewCompleteRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionSourceReviewCompleteResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_submission_source_review_source_api_v1_screener_submission_source_reviews__review_id__source_get: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                review_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmissionSourceReviewSourceResponse"];
                 };
             };
             /** @description Validation Error */

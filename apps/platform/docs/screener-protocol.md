@@ -35,12 +35,15 @@ evaluating records continue through the build fallback.
 ## Provider-routed screening jobs
 
 Build, runtime smoke, and source review have independent revisioned provider
-priorities. A remote build is attempt-bound and becomes consumable only after
-Platform verifies the complete image archive. When runtime prefers Targon, the
-trusted controller promotes that exact archive to a private ephemeral registry,
-launches it directly as a Rental, and records digest/workload provenance. The
-remote health result is advisory; the owning GCE screener still runs the
-authoritative isolated fake-gateway smoke before signing a pass.
+lists. Targon is enabled for a lane only when that list starts with `targon`.
+Any other list, including `['gcp', 'targon']`, is the GCE-only cutover: queued
+Targon work is terminalized and GCE workers remain the authority. A remote
+build is attempt-bound and becomes consumable only after Platform verifies the
+complete image archive. When runtime starts with Targon, the trusted controller
+promotes that exact archive to a private ephemeral registry, launches it
+directly as a Rental, and records digest/workload provenance. The remote health
+result is advisory; the owning GCE screener still runs the authoritative
+isolated fake-gateway smoke before signing a pass.
 
 Source review is also attempt-bound. A pinned trusted worker may return a
 bounded L1 observation, but only certified low-risk clearance can avoid a
@@ -48,6 +51,7 @@ duplicate local L1 call. Elevated, suspicious, inconclusive, malformed, or
 unavailable results always fall back to the GCE-owned L2/L3 path. Job tokens are
 stored only as hashes and revoked at terminal completion; provider Rental
 identities and cleanup failures remain durable operator evidence.
+
 ## Quarantine management
 
 A current worker can return a signed, attempt-bound `quarantine` outcome with

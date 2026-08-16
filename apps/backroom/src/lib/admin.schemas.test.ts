@@ -74,6 +74,8 @@ import {
   listLeaseRevocationsInputSchema,
   leaseRevocationsListSchema,
   screenerCapacityViewSchema,
+  screenerProviderSettingsConfirmation,
+  screenerProviderSettingsSchema,
   authorizeConfirmationBundleRetestInputSchema,
   confirmationBundleListInputSchema,
   confirmationBundleListSchema,
@@ -298,6 +300,18 @@ describe('admin API schemas', () => {
       source_review_provider_priority: ['targon', 'gcp'],
       build_provider_priority: ['targon', 'gcp'],
     })
+  })
+
+  it('accepts a gcp-then-targon list but confirms it as an exact first-provider string', () => {
+    const settings = screenerProviderSettingsSchema.parse({
+      runtime_provider_priority: ['gcp', 'targon'],
+      source_review_provider_priority: ['gcp'],
+      build_provider_priority: ['gcp', 'targon'],
+    })
+
+    expect(screenerProviderSettingsConfirmation(settings)).toBe(
+      'APPLY SCREENER PROVIDERS BUILDS=gcp>targon RUNTIME=gcp>targon SOURCE_REVIEW=gcp',
+    )
   })
 
   it('parses aggregate inference controls and rejects unsafe operator input', () => {

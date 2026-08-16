@@ -214,6 +214,7 @@ _INSTANCE_ID_PATTERN = r"^[a-zA-Z0-9._-]{1,63}$"
 
 
 def _targon_first(providers: tuple[str, ...]) -> bool:
+    # A non-leading targon entry is treated as disabled (cutover), not later fallback.
     return bool(providers) and providers[0] == "targon"
 
 

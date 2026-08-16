@@ -1,8 +1,8 @@
 """add audited screener provider routing settings
 
 Revision ID: 8a31d2c7f4be
-Revises: c8a6d1e4f903
-Create Date: 2026-08-13
+Revises: f1a7b3c9d502
+Create Date: 2026-08-16
 """
 
 from collections.abc import Sequence
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "8a31d2c7f4be"
-down_revision: str | None = "c8a6d1e4f903"
+down_revision: str | None = "f1a7b3c9d502"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

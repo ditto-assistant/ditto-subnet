@@ -19,11 +19,24 @@ every active lease. The controller then:
    Platform reports no active screening leases.
 
 Backroom controls build, direct-image runtime smoke, and source review as three
-independent ordered provider lists. Each list always retains GCP as the safety
-fallback. Putting GCP first demotes Targon; removing Targon is the explicit off
-switch. A revisioned write requires compare-and-swap, an audit reason, and an
-exact confirmation string covering all three lists. In-progress one-shot jobs
-finish; new and queued jobs follow the new revision.
+independent provider lists. Each list always retains GCP as the safety fallback.
+Production has two postures, not a working hybrid:
+
+- **Targon-first** (`['targon', 'gcp']`): Targon claims new work for that lane.
+- **GCE-only cutover** (`['gcp']`): Targon is disabled for that lane. Queued
+  Targon work is immediately terminalized as `fallback_required` / runtime
+  `skipped`. This is the old GCE screening path and does not require a deploy.
+
+The first provider wins. A stored `['gcp', 'targon']` list is accepted because
+GCP is present, but it is not a working "GCP first then Targon fallback"; it
+behaves exactly like `['gcp']`. Backroom therefore exposes only Targon-first and
+Targon-off, plus an emergency "Cut over to GCE only" control that drafts all
+three lanes to `['gcp']` for the existing audited apply.
+
+A revisioned write requires compare-and-swap, an audit reason, and an exact
+confirmation string covering all three lists. In-progress one-shot jobs finish;
+new and queued jobs follow the new revision. After Targon is validated, remove
+the cutover UI and delete the GCE VMs/MIG via Terraform. Do not delete them now.
 
 The current Targon Rentals attestation is `nogo`. Live disposable probes found
 that rootful Docker cannot mount its required kernel filesystems, rootless

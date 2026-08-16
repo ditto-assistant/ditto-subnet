@@ -1,10 +1,12 @@
 # Screener orchestrator
 
 This process is the sole normal writer of screener capacity. It reads runnable
-demand from Platform, acquires a fenced controller lease, tries safe Targon
-capacity first, and resizes the GCE managed instance group only for the residual
-deficit. Both providers may return to zero when the queue and active leases are
-empty.
+demand from Platform, acquires a fenced controller lease, and applies the
+audited Backroom revision: Targon-first when a lane starts with `targon`, or
+the old GCE-only path otherwise. A stored `['gcp', 'targon']` list is not a
+working hybrid; first-provider wins, so that list disables Targon for the lane.
+The GCE MIG stays as the safety path until Targon is validated. Both providers
+may return to zero when the queue and active leases are empty.
 
 Targon Rentals have three independently controlled jobs: credential-minimal
 Kaniko builds, direct-image runtime health checks, and bounded read-only L1

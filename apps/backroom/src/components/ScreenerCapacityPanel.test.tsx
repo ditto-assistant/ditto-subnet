@@ -1,20 +1,27 @@
 // @vitest-environment jsdom
 
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ScreenerCapacityView } from '../lib/admin.schemas'
 import { ScreenerCapacityPanel } from './ScreenerCapacityPanel'
+
+const getScreenerCapacity = vi.fn()
+const updateScreenerProviderSettings = vi.fn()
 
 vi.mock('@tanstack/react-start', () => ({
   useServerFn: (serverFn: unknown) => serverFn,
 }))
 
 vi.mock('../server/admin.functions', () => ({
-  getScreenerCapacity: vi.fn(),
-  updateScreenerProviderSettings: vi.fn(),
+  getScreenerCapacity: (...args: unknown[]) => getScreenerCapacity(...args),
+  updateScreenerProviderSettings: (...args: unknown[]) => updateScreenerProviderSettings(...args),
 }))
 
-afterEach(cleanup)
+afterEach(() => {
+  cleanup()
+  getScreenerCapacity.mockReset()
+  updateScreenerProviderSettings.mockReset()
+})
 
 function capacity(overrides: Partial<ScreenerCapacityView> = {}): ScreenerCapacityView {
   return {
@@ -159,5 +166,133 @@ describe('ScreenerCapacityPanel', () => {
     render(<ScreenerCapacityPanel initialState={state} readOnly />)
 
     expect(screen.queryByText('Full Targon worker lane is blocked')).toBeNull()
+  })
+
+  it('offers Targon-first and GCE-only controls without a GCP-first hybrid', () => {
+    render(<ScreenerCapacityPanel initialState={capacity()} readOnly={false} />)
+
+    expect(screen.getAllByRole('button', { name: 'Targon first' })).toHaveLength(3)
+    expect(screen.getAllByRole('button', { name: 'Targon off (GCE only)' })).toHaveLength(3)
+    expect(screen.getByRole('button', { name: 'Cut over to GCE only' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Restore Targon-first' })).toBeTruthy()
+    expect(screen.getByText('All lanes Targon-first')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'GCP first' })).toBeNull()
+    expect(screen.queryByText('GCP first')).toBeNull()
+  })
+
+  it('treats a stored gcp-then-targon revision as GCE only', () => {
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({
+          provider_control: {
+            current: {
+              environment: 'prod',
+              revision: 3,
+              parent_revision: 2,
+              settings: {
+                runtime_provider_priority: ['gcp', 'targon'],
+                source_review_provider_priority: ['gcp', 'targon'],
+                build_provider_priority: ['gcp', 'targon'],
+              },
+              reason: 'legacy gcp-first revision',
+              actor: 'operator@example.com',
+              created_at: '2026-08-13T21:40:00Z',
+            },
+            history: [],
+          },
+        })}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText('All lanes GCE only')).toBeTruthy()
+    expect(screen.getAllByRole('button', { name: 'Targon off (GCE only)' }).every((button) => button.getAttribute('aria-pressed') === 'true')).toBe(true)
+  })
+
+  it('drafts all three lanes to GCE only from the emergency cutover', () => {
+    render(<ScreenerCapacityPanel initialState={capacity()} readOnly={false} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cut over to GCE only' }))
+
+    expect(screen.getByText('All lanes GCE only')).toBeTruthy()
+    expect(screen.getByText('APPLY SCREENER PROVIDERS BUILDS=gcp RUNTIME=gcp SOURCE_REVIEW=gcp')).toBeTruthy()
+  })
+
+  it('drafts targon>gcp on every lane from restore Targon-first', () => {
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({
+          provider_control: {
+            current: {
+              environment: 'prod',
+              revision: 2,
+              parent_revision: 1,
+              settings: {
+                runtime_provider_priority: ['gcp'],
+                source_review_provider_priority: ['gcp'],
+                build_provider_priority: ['gcp'],
+              },
+              reason: 'emergency GCE cutover',
+              actor: 'operator@example.com',
+              created_at: '2026-08-16T12:00:00Z',
+            },
+            history: [],
+          },
+        })}
+        readOnly={false}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Restore Targon-first' }))
+
+    expect(screen.getByText('All lanes Targon-first')).toBeTruthy()
+    expect(
+      screen.getByText('APPLY SCREENER PROVIDERS BUILDS=targon>gcp RUNTIME=targon>gcp SOURCE_REVIEW=targon>gcp'),
+    ).toBeTruthy()
+  })
+
+  it('applies a per-lane GCE-only draft through the existing confirmation flow', async () => {
+    updateScreenerProviderSettings.mockResolvedValue({
+      current: {
+        environment: 'prod',
+        revision: 1,
+        parent_revision: 0,
+        settings: {
+          runtime_provider_priority: ['gcp'],
+          source_review_provider_priority: ['targon', 'gcp'],
+          build_provider_priority: ['targon', 'gcp'],
+        },
+        reason: 'disable Targon runtime smoke only',
+        actor: 'operator@example.com',
+        created_at: '2026-08-16T12:00:00Z',
+      },
+      history: [],
+    })
+
+    render(<ScreenerCapacityPanel initialState={capacity()} readOnly={false} />)
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Targon off (GCE only)' })[1])
+    fireEvent.change(screen.getByLabelText(/Audit reason/), {
+      target: { value: 'disable Targon runtime smoke only' },
+    })
+    fireEvent.change(screen.getByLabelText(/Type to confirm/), {
+      target: { value: 'APPLY SCREENER PROVIDERS BUILDS=targon>gcp RUNTIME=gcp SOURCE_REVIEW=targon>gcp' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Append provider revision' }))
+
+    await waitFor(() => {
+      expect(updateScreenerProviderSettings).toHaveBeenCalledWith({
+        data: {
+          expectedRevision: 0,
+          settings: {
+            runtime_provider_priority: ['gcp'],
+            source_review_provider_priority: ['targon', 'gcp'],
+            build_provider_priority: ['targon', 'gcp'],
+          },
+          reason: 'disable Targon runtime smoke only',
+          confirmation: 'APPLY SCREENER PROVIDERS BUILDS=targon>gcp RUNTIME=gcp SOURCE_REVIEW=targon>gcp',
+        },
+      })
+    })
   })
 })
