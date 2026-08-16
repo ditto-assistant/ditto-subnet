@@ -9,6 +9,7 @@ import bittensor
 import pytest
 
 from ditto.api_server.name_claim import (
+    ClaimStatus,
     NameClaimRejected,
     claim_message,
     handle_status_for,
@@ -93,7 +94,9 @@ def test_claim_signature_rejects_wrong_signer() -> None:
 
 
 def test_handle_status_classifies_reserved_and_disputed() -> None:
-    claims = {"jupiter": ("upheld", "coldkey:owner-a")}
+    claims: dict[str, tuple[ClaimStatus, str]] = {
+        "jupiter": ("upheld", "coldkey:owner-a")
+    }
     assert (
         handle_status_for(
             agent_name="Jupiter-ditto-v10",
