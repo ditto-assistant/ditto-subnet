@@ -57,6 +57,14 @@ _CONTRACTS = {
     # prerequisites. Shipping this contract exposes a guarded rollout target;
     # it does not open a rollout or change active benchmark authority.
     10: BenchmarkContract(10, 9, True, False),
+    # v11 is the anti-template-fitting bump on the v9/v10 evidence stack: it keeps
+    # LongMemEval and the trusted token-efficiency (curve-v3) path while rotating
+    # the generated surface and adding metamorphic groups the champion emulators
+    # cannot fit. It retains the same policy-9 screened-image and post-v7 route
+    # prerequisites as v10. Shipping this contract exposes a guarded operator
+    # rollout target; it does not open a rollout or change active benchmark
+    # authority (activation remains a deliberate POST).
+    11: BenchmarkContract(11, 9, True, False),
 }
 
 
