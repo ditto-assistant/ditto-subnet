@@ -16481,9 +16481,9 @@ export interface components {
             artifact_sha256: string;
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -16978,9 +16978,9 @@ export interface components {
             authoritative_tool: components["schemas"]["V9AuthoritativeToolGate"];
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10;
             model_use: components["schemas"]["V9ModelUseGate"];
             /**
              * Rollout Mode
