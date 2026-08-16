@@ -2938,10 +2938,18 @@ class PublicSubmissionPipeline(BaseModel):
         float,
         Field(
             ge=0.0,
-            le=1.0,
+            # Same scale, and therefore the same bound, as the board's
+            # ``official_composite``: this IS one of those numbers, so it
+            # inherits the historical multiplicative bonus that can carry a
+            # ranking score above raw 1.0. Capping it at 1.0 here did not keep
+            # the floor in range -- it 500'd the whole endpoint for every agent
+            # the moment fifth place crossed, because the floor is global.
+            le=1.1,
             description=(
                 "Current finalized fifth-place score used for safe continuation "
                 "after two scores; 0 when fewer than five ranked miners exist.\n\n"
+                "On the ``official_composite`` scale, so a legacy multiplicative "
+                "bonus can put it above 1.0 while raw composites cannot.\n\n"
                 "This is the fifth-highest finalized ``official_composite`` in "
                 "``active_bench_version`` -- the same score, in the same order, "
                 "that the public leaderboard's ``rank`` and the validator "

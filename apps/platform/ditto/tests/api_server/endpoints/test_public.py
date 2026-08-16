@@ -25,6 +25,7 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 from fastapi import FastAPI
+from pydantic import BaseModel
 from sqlalchemy import event, func, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -40,6 +41,8 @@ from ditto.api_models.confirmation_bundles import (
 )
 from ditto.api_models.public import (
     PublicBenchmarkProgress,
+    PublicLeaderboardEntry,
+    PublicSubmissionPipeline,
     PublicSystemMetrics,
     PublicV9BaseEvidence,
 )
@@ -843,6 +846,40 @@ def test_public_v9_base_projects_every_carried_forward_bench_version() -> None:
         assert projected.bench_version == bench_version
         assert projected.score_gates.model_use.result == "passed"
         assert projected.score_gates.authoritative_tool.result == "passed"
+
+
+def _upper_bound(model: type[BaseModel], field: str) -> float | None:
+    """The declared ``le`` on a model field, or None when it is unbounded."""
+    for meta in model.model_fields[field].metadata:
+        bound = getattr(meta, "le", None)
+        if bound is not None:
+            return float(bound)
+    return None
+
+
+def test_score_floor_shares_the_official_composite_bound() -> None:
+    """Regression: a bonus-inflated fifth place 500'd /pipeline for EVERY agent.
+
+    ``score_floor`` is the fifth-highest finalized ``official_composite``, and
+    that scalar keeps the historical multiplicative bonus, so it can sit above
+    raw 1.0 -- the board's own field allows 1.1 for exactly this reason. The
+    pipeline model capped the same number at 1.0, and because the floor is
+    global rather than per-agent, the moment fifth place crossed (production
+    reached 1.0850433) every single ``/public/agent/{id}/pipeline`` read
+    answered 500, including submissions with no scores at all.
+
+    Asserting the two bounds are equal, rather than restating a literal, is what
+    keeps them from drifting apart again the next time the bonus ceiling moves.
+    """
+    floor = _upper_bound(PublicSubmissionPipeline, "score_floor")
+    official = _upper_bound(PublicLeaderboardEntry, "official_composite")
+
+    assert floor == official, (
+        f"score_floor is capped at {floor} but publishes the same scale as "
+        f"official_composite ({official}); a ranking score between them 500s "
+        "the pipeline endpoint for every agent"
+    )
+    assert floor is not None and floor > 1.0
 
 
 def test_public_v9_base_bench_versions_match_the_shared_contract() -> None:

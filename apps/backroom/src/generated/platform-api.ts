@@ -13496,6 +13496,8 @@ export interface components {
              * Score Floor
              * @description Current finalized fifth-place score used for safe continuation after two scores; 0 when fewer than five ranked miners exist.
              *
+             *     On the ``official_composite`` scale, so a legacy multiplicative bonus can put it above 1.0 while raw composites cannot.
+             *
              *     This is the fifth-highest finalized ``official_composite`` in ``active_bench_version`` -- the same score, in the same order, that the public leaderboard's ``rank`` and the validator weight fold read, so it IS the score of the finalized row the board ranks fifth. ``score_floor_agent_id`` names that row. (The board interleaves pre-quorum provisional entries, which hold no floor, so the fifth row *displayed* need not be the fifth finalized one.)
              */
             score_floor: number;
