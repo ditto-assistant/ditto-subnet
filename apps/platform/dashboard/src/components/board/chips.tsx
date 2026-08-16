@@ -228,7 +228,7 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
     if (adjustment == null) return "";
     if (adjustment.mode === "headroom") {
       return (
-        " Bench v9 applies positive efficiency only to remaining quality headroom: " +
+        " Bench v9+ applies positive efficiency only to remaining quality headroom: " +
         fx(adjustment.quality) +
         " + (" +
         fx(adjustment.factor) +
@@ -240,7 +240,7 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
       );
     }
     return (
-      " Bench v9 multiplies quality by neutral-or-downside efficiency: " +
+      " Bench v9+ multiplies quality by neutral-or-downside efficiency: " +
       fx(adjustment.quality) +
       " × " +
       fx(adjustment.factor) +

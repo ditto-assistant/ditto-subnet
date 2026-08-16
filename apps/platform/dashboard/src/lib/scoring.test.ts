@@ -683,7 +683,7 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     const byKey = Object.fromEntries(
       (compositeCalculationRows(input) ?? []).map((row) => [row.k, row.v]),
     );
-    expect(byKey["Bench v9 efficiency transform"]).toBe(
+    expect(byKey["Bench v9+ efficiency transform"]).toBe(
       "0.950 + (1.100 − 1) × (1 − 0.950) = 0.955",
     );
     expect(byKey["Current quality score"]).toBe("0.950 · primary ranking key");
@@ -749,7 +749,7 @@ describe("composite equations (row 38: quality and token adjustments stay separa
       (compositeCalculationRows(input) ?? []).map((row) => [row.k, row.v]),
     );
     expect(curveV3ScoreAdjustment(input)).toBeNull();
-    expect(byKey["Bench v9 efficiency transform"]).toBeUndefined();
+    expect(byKey["Bench v9+ efficiency transform"]).toBeUndefined();
     expect(byKey["Folded ranking score"]).toBe("1.045 · used for rank, KOTH, and emissions");
   });
 
@@ -832,7 +832,7 @@ describe("composite equations (row 38: quality and token adjustments stay separa
   it("carries the block heading and bounded-adjustment note verbatim", () => {
     expect(COMPOSITE_CALC_HEADING).toBe("Composite calculation");
     expect(COMPOSITE_CALC_NOTE).toContain("Bench v7/v8 relative-efficiency awards are upside");
-    expect(COMPOSITE_CALC_NOTE).toContain("Bench v9 uses a bounded factor");
+    expect(COMPOSITE_CALC_NOTE).toContain("Bench v9+ uses a bounded factor");
     expect(COMPOSITE_CALC_NOTE).toContain("Downside multiplies quality");
     expect(COMPOSITE_CALC_NOTE).toContain("imperfect quality cannot become 1.000");
     expect(COMPOSITE_CALC_NOTE).toContain("audit-only projection is not used");

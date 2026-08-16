@@ -177,12 +177,13 @@ export interface CurveV3ScoreAdjustment {
 export const CURVE_V3_MIN_FACTOR = 0.85;
 export const CURVE_V3_MAX_FACTOR = 1.1;
 
-/** Reproduce Bench-v9 curve-v3's score transform from public provenance.
+/** Reproduce curve-v3's score transform (Bench v9+) from public provenance.
  *
  * This is display-only arithmetic: the API's `effective_composite` is the
  * exact-quality secondary key when the fold is active. Authoritative quality
  * remains primary. Legacy v1/v2 bonuses deliberately do not enter this helper
- * because their historical replay remains unchanged.
+ * because their historical replay remains unchanged. Bench v10 inherits the
+ * v9 transform unchanged, so the gate is a floor, not an exact version.
  */
 export function curveV3ScoreAdjustment(e: {
   bench_version?: number | null;
@@ -190,7 +191,8 @@ export function curveV3ScoreAdjustment(e: {
   efficiency_factor?: number | null;
 }): CurveV3ScoreAdjustment | null {
   if (
-    Number(e.bench_version) !== 9 ||
+    Number(e.bench_version) < 9 ||
+    !Number.isFinite(Number(e.bench_version)) ||
     e.pre_efficiency_composite == null ||
     e.efficiency_factor == null
   ) {
@@ -931,7 +933,7 @@ export const COMPOSITE_CALC_NOTE =
   "The benchmark-quality multiplier combines scorer-owned behavioural and integrity gates " +
   "before token efficiency. It is shown as one audited factor so the platform cannot drift " +
   "from the benchmark scorer. Older benches retain their bounded token penalty; Bench v7/v8 " +
-  "relative-efficiency awards are upside, while Bench v9 uses a bounded factor around a " +
+  "relative-efficiency awards are upside, while Bench v9+ uses a bounded factor around a " +
   "frozen cohort P25 reference. Downside multiplies quality; upside scales only remaining " +
   "quality headroom, so imperfect quality cannot become 1.000. Both are computed after " +
   "authoritative quality aggregation. Curve-v3 is only an exact-quality tie-break; " +
@@ -1050,7 +1052,7 @@ export function compositeCalculationRows(e: {
       });
       if (scoreAdjustment != null) {
         rows.push({
-          k: "Bench v9 efficiency transform",
+          k: "Bench v9+ efficiency transform",
           v:
             scoreAdjustment.mode === "headroom"
               ? fx(scoreAdjustment.quality) +
