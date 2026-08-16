@@ -3606,6 +3606,11 @@ func (b *inferenceBroker) proxy(
 		if rewriteErr != nil {
 			if session.benchVersion >= protocol.BenchVersionV9 {
 				session.agentRequestRejections++
+				if confirmationCase {
+					snapshot := session.caseSnapshots[caseGeneration]
+					snapshot.ReaderAgentRejections++
+					session.caseSnapshots[caseGeneration] = snapshot
+				}
 			}
 			session.mu.Unlock()
 			writeError(w, http.StatusBadRequest, rewriteErr.Error())
@@ -3857,6 +3862,11 @@ func (b *inferenceBroker) proxy(
 		session.mu.Lock()
 		session.usageUnavailable++
 		session.agentRequestRejections++
+		if confirmationCase {
+			snapshot := session.caseSnapshots[caseGeneration]
+			snapshot.ReaderAgentRejections++
+			session.caseSnapshots[caseGeneration] = snapshot
+		}
 		session.providerLatency += totalLatency
 		rejections, runID := session.agentRequestRejections, session.boundRunID
 		session.mu.Unlock()
@@ -4075,6 +4085,7 @@ type brokerCaseSnapshot struct {
 	ReaderAttempts         uint64
 	ReaderDispatches       uint64
 	ReaderReceipted        uint64
+	ReaderAgentRejections  uint64
 	ReaderInFlight         int
 	ReaderCancellations    uint64
 	EmbeddingAttempts      uint64

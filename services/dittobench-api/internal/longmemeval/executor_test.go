@@ -324,6 +324,32 @@ func TestExecutorScoresEmbeddingBackedReceivedRunFailureAsIncorrectAndContinues(
 	}
 }
 
+func TestExecutorScoresEmbeddingBackedRunFailureWithAgentRejectedReaderAsIncorrect(t *testing.T) {
+	profile, raw, _ := runtimeFixture(t)
+	meter := newRecordingMeter(profile)
+	base := newStarterHarness(meter)
+	harness := &trustedEmbeddingFailureHarness{
+		Harness: base,
+		failAt:  4,
+		activity: TrustedCaseInferenceActivity{
+			ReaderAttempts: 1, ReaderDispatches: 1, ReaderAgentRejections: 1,
+			EmbeddingAttempts: 1, EmbeddingDispatches: 1, EmbeddingDelivered: 1,
+		},
+	}
+	judge := &exactJudge{meter: meter}
+	executor := Executor{Harness: harness, Judge: judge, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+	result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Evidence.Score.CaseCount != 12 || result.Evidence.Score.LongMemMean != 0.916667 {
+		t.Fatalf("score=%#v", result.Evidence.Score)
+	}
+	if harness.runCalls != 12 || base.runs != 11 || len(judge.inputs) != 11 {
+		t.Fatalf("runs/base/judges=%d/%d/%d, want 12/11/11", harness.runCalls, base.runs, len(judge.inputs))
+	}
+}
+
 func TestExecutorRejectsAmbiguousEmbeddingBackedRunFailure(t *testing.T) {
 	valid := TrustedCaseInferenceActivity{
 		EmbeddingAttempts: 1, EmbeddingDispatches: 1, EmbeddingDelivered: 1,
@@ -342,6 +368,7 @@ func TestExecutorRejectsAmbiguousEmbeddingBackedRunFailure(t *testing.T) {
 		"reader admitted":      func(value *TrustedCaseInferenceActivity) { value.ReaderAttempts = 1 },
 		"reader dispatched":    func(value *TrustedCaseInferenceActivity) { value.ReaderDispatches = 1 },
 		"reader completed":     func(value *TrustedCaseInferenceActivity) { value.ReaderReceipted = 1 },
+		"orphan rejection":     func(value *TrustedCaseInferenceActivity) { value.ReaderAgentRejections = 1 },
 		"reader in flight":     func(value *TrustedCaseInferenceActivity) { value.ReaderInFlight = 1 },
 		"reader cancelled":     func(value *TrustedCaseInferenceActivity) { value.ReaderCancellations = 1 },
 	}

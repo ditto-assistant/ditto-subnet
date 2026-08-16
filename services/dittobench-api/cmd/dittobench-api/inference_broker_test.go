@@ -220,6 +220,45 @@ func TestConfirmationCaseSnapshotAttributesReaderCallToActiveGeneration(t *testi
 	}
 }
 
+func TestConfirmationCaseSnapshotAttributesAgentReaderRejection(t *testing.T) {
+	broker := newInferenceBroker(1, 1)
+	id, runID := "confirmation-case-reader-rejection", uuid.NewString()
+	model := llm.HarnessModelForVersion(confirmationBenchVersion)
+	session := &brokerSession{
+		id: id, boundRunID: runID, expectedSourceIP: "127.0.0.1", expiresAt: time.Now().Add(time.Hour),
+		benchVersion: confirmationBenchVersion, confirmationSession: true, requestModel: model, model: model,
+		trustedChatHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			writeError(w, http.StatusBadRequest, "invalid reader request")
+		}),
+		cancels: make(map[string]context.CancelFunc),
+	}
+	broker.sessions[id] = session
+	generation, _, err := broker.beginCaseSnapshot(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
+		`{"model":"ignored","messages":[{"role":"user","content":"query"}]}`,
+	))
+	request.RemoteAddr = "127.0.0.1:4321"
+	response := httptest.NewRecorder()
+	broker.handleChat(response, request, brokerSourceLease{
+		session: session, sourceIP: session.expectedSourceIP, epoch: session.sourceEpoch,
+	})
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("response=%d %s", response.Code, response.Body.String())
+	}
+	snapshot, err := broker.endCaseSnapshot(id, generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ReaderAttempts != 1 || snapshot.ReaderDispatches != 1 || snapshot.ReaderReceipted != 0 ||
+		snapshot.ReaderAgentRejections != 1 || snapshot.ReaderInFlight != 0 ||
+		snapshot.ReaderCancellations != 0 {
+		t.Fatalf("reader rejection snapshot=%+v", snapshot)
+	}
+}
+
 func TestConfirmationSourceLeaseRejectsZeroDrainingAndStaleEpochBeforeAttribution(t *testing.T) {
 	broker := newInferenceBroker(1, 1)
 	id, runID, source := "confirmation-source-epoch", uuid.NewString(), "192.0.2.90"

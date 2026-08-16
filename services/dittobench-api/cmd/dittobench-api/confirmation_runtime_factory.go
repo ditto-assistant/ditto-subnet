@@ -352,6 +352,7 @@ func (h *confirmationLongMemHarness) Run(
 		ReaderAttempts:         snapshot.ReaderAttempts,
 		ReaderDispatches:       snapshot.ReaderDispatches,
 		ReaderReceipted:        snapshot.ReaderReceipted,
+		ReaderAgentRejections:  snapshot.ReaderAgentRejections,
 		ReaderInFlight:         snapshot.ReaderInFlight,
 		ReaderCancellations:    snapshot.ReaderCancellations,
 		EmbeddingAttempts:      snapshot.EmbeddingAttempts,

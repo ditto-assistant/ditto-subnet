@@ -327,6 +327,7 @@ type TrustedCaseInferenceActivity struct {
 	ReaderAttempts         uint64
 	ReaderDispatches       uint64
 	ReaderReceipted        uint64
+	ReaderAgentRejections  uint64
 	ReaderInFlight         int
 	ReaderCancellations    uint64
 	EmbeddingAttempts      uint64

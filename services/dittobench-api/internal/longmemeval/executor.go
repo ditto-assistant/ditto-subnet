@@ -261,16 +261,36 @@ func (e Executor) Execute(
 // Reader-backed failures continue through the canonical ProviderMeter path.
 func validEmbeddingOnlyCaseActivity(activity *TrustedCaseInferenceActivity) bool {
 	return activity != nil &&
-		activity.ReaderAttempts == 0 && activity.ReaderDispatches == 0 && activity.ReaderReceipted == 0 &&
-		activity.ReaderInFlight == 0 && activity.ReaderCancellations == 0 &&
+		validReaderCaseActivity(activity, 0) &&
 		validEmbeddingActivity(activity, true)
 }
 
 func validReaderBackedCaseActivity(activity *TrustedCaseInferenceActivity, readerRequests uint64) bool {
 	return activity != nil && readerRequests > 0 &&
-		activity.ReaderAttempts == readerRequests && activity.ReaderDispatches == readerRequests &&
-		activity.ReaderReceipted == readerRequests && activity.ReaderInFlight == 0 &&
-		activity.ReaderCancellations == 0 && validEmbeddingActivity(activity, false)
+		validReaderCaseActivity(activity, readerRequests) && validEmbeddingActivity(activity, false)
+}
+
+// validReaderCaseActivity proves that every reader attempt in the isolated
+// case reached one terminal, agent-attributable outcome. Fully receipted
+// provider work remains canonical evidence. A request rejected before any
+// provider reservation is also terminal agent work, but contributes no
+// provider receipt: it may veto credit, never create credit or a retry.
+func validReaderCaseActivity(activity *TrustedCaseInferenceActivity, receipted uint64) bool {
+	if activity == nil || activity.ReaderReceipted != receipted ||
+		activity.ReaderInFlight != 0 || activity.ReaderCancellations != 0 {
+		return false
+	}
+	if activity.ReaderAgentRejections > activity.ReaderAttempts ||
+		activity.ReaderReceipted > activity.ReaderAttempts ||
+		activity.ReaderAgentRejections+activity.ReaderReceipted != activity.ReaderAttempts {
+		return false
+	}
+	// A local schema rejection occurs before the trusted reader handler, while
+	// a Platform schema rejection occurs after it. Dispatches therefore range
+	// from the receipted count through all admitted attempts; anything outside
+	// that interval is unattributed retry or accounting drift.
+	return activity.ReaderDispatches >= activity.ReaderReceipted &&
+		activity.ReaderDispatches <= activity.ReaderAttempts
 }
 
 func validEmbeddingActivity(activity *TrustedCaseInferenceActivity, required bool) bool {
