@@ -242,9 +242,13 @@ export interface V9AuthoritativeToolGate {
   factor_bps: 0 | 10000;
 }
 
-/** Privacy-safe subset of the signature-bound v9 base evidence. */
+/** Privacy-safe subset of the signature-bound v9 base evidence.
+ *
+ * The evidence stack was carried forward to v10 (#859) and v11 (#861); this
+ * union must track `V9EvidenceBenchVersion` in the shared protocol package.
+ */
 export interface V9BaseEvidence {
-  bench_version: 9;
+  bench_version: 9 | 10 | 11;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;

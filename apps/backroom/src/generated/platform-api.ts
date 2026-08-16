@@ -13817,13 +13817,18 @@ export interface components {
         /**
          * PublicV9BaseEvidence
          * @description Public v9 evidence consumed by the dashboard's score drill-downs.
+         *
+         *     ``bench_version`` pins the shared protocol alias, never its own literal: the
+         *     signed evidence this projects already accepts every epoch the stack was
+         *     carried forward to, so restating the set here is how a v10 score became a
+         *     500 on ``/agent/{id}/scores``.
          */
         PublicV9BaseEvidence: {
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10 | 11;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**

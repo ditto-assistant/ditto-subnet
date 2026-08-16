@@ -104,6 +104,17 @@ V9GateResult = Literal[
     "not_applicable",
 ]
 
+V9EvidenceBenchVersion = Literal[9, 10, 11]
+"""Benchmark epochs whose scores carry the signed v9 base-evidence stack.
+
+Every layer that parses, re-derives, or *projects* that evidence must pin this
+alias rather than restate the versions: the stack was carried forward to v10
+(#859) and v11 (#861) by widening the two models below, while the public
+projection in Platform kept its own ``Literal[9]`` and 500'd on the first v10
+score a carried-forward validator reported. Extend the alias when the evidence
+contract reaches a new epoch, and every consumer moves with it.
+"""
+
 
 class V9ModelUseGate(BaseModel):
     """Trusted relay evidence for the v9 model-use binary gate."""
@@ -248,7 +259,7 @@ class V9ScoreGateEvidence(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     schema_version: Literal[1]
-    bench_version: Literal[9, 10, 11]
+    bench_version: V9EvidenceBenchVersion
     rollout_mode: Literal["shadow", "enforce"]
     threshold_profile: V9ThresholdProfile
     model_use: V9ModelUseGate
@@ -307,7 +318,7 @@ class V9BaseEvidence(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     schema_version: Literal[1]
-    bench_version: Literal[9, 10, 11]
+    bench_version: V9EvidenceBenchVersion
     score_contract: V9ScoreContract
     run_id: Annotated[str, Field(min_length=1)]
     artifact_sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]

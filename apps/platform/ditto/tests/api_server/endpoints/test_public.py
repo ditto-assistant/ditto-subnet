@@ -18,7 +18,7 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from typing import cast
+from typing import Literal, cast, get_args
 from unittest.mock import ANY, AsyncMock
 from uuid import UUID, uuid4
 
@@ -38,7 +38,11 @@ from ditto.api_models.confirmation_bundles import (
     ConfirmationBundleMode,
     ConfirmationBundleSettings,
 )
-from ditto.api_models.public import PublicBenchmarkProgress, PublicSystemMetrics
+from ditto.api_models.public import (
+    PublicBenchmarkProgress,
+    PublicSystemMetrics,
+    PublicV9BaseEvidence,
+)
 from ditto.api_models.screener import (
     SCREENING_POLICY_VERSION,
     SourceReviewEvidenceItem,
@@ -120,6 +124,7 @@ from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
 )
+from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 
 _MINER_A = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"
@@ -787,6 +792,99 @@ def test_public_v9_base_projection_is_typed_and_fails_closed() -> None:
         score.model_dump(mode="json")["v9_base"]["score_gates"]["model_use"]["result"]
         == "passed"
     )
+
+
+def _restamped_v9_base(details: dict, bench_version: int) -> dict:
+    """The same signed root re-derived for another epoch of the same contract.
+
+    The evidence binds ``score_gates.bench_version`` to its own and pins the
+    gate digest, so a bench bump rewrites three fields together -- which is
+    precisely the shape a carried-forward validator reports.
+    """
+    from ditto_screening_protocol.bench_v9 import V9ScoreGateEvidence
+
+    stamped = json.loads(json.dumps(details))
+    stamped["bench_version"] = bench_version
+    stamped["score_gates"]["bench_version"] = bench_version
+    stamped["score_gates_sha256"] = V9ScoreGateEvidence.model_validate(
+        stamped["score_gates"]
+    ).digest_hex()
+    return stamped
+
+
+def test_public_v9_base_projects_every_carried_forward_bench_version() -> None:
+    """Regression: a v10 score 500'd ``/agent/{id}/scores`` and ``/pipeline``.
+
+    #859/#861 carried the signed evidence stack to v10 and v11 and relaxed the
+    call guard to ``>= 9``, but the public projection still pinned
+    ``Literal[9]``. The first score a carried-forward validator reported parsed
+    against the shared contract and then raised out of the request handler, so
+    both public detail endpoints answered 500 for that agent while the
+    leaderboard row stayed healthy. Driving every version in the shared alias
+    keeps the projection moving with the contract instead of one bump behind.
+    """
+    vector_path = (
+        Path(__file__).resolve().parents[6]
+        / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+    )
+    details = json.loads(vector_path.read_text())["vectors"][0]["details"]
+
+    for bench_version in get_args(V9EvidenceBenchVersion):
+        stamped = _restamped_v9_base(details, bench_version)
+
+        # The shared contract accepts it, so the public surface must too.
+        assert public_endpoint._safe_v9_base({"v9_base": stamped}) is not None
+
+        projected = public_endpoint._safe_public_v9_base({"v9_base": stamped})
+        assert projected is not None, (
+            f"bench v{bench_version} evidence is valid under the shared "
+            "contract but the public projection dropped it"
+        )
+        assert projected.bench_version == bench_version
+        assert projected.score_gates.model_use.result == "passed"
+        assert projected.score_gates.authoritative_tool.result == "passed"
+
+
+def test_public_v9_base_bench_versions_match_the_shared_contract() -> None:
+    """The public allowlist may not pin its own copy of the epoch set.
+
+    A narrower public union is not a cosmetic mismatch: it is unservable score
+    evidence. Comparing the two directly names the drift here rather than in a
+    production 500.
+    """
+    public_versions = get_args(
+        PublicV9BaseEvidence.model_fields["bench_version"].annotation
+    )
+    assert public_versions == get_args(V9EvidenceBenchVersion)
+
+
+def test_public_v9_base_projection_degrades_instead_of_raising(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A drift that does slip through must cost a panel, not the endpoint.
+
+    Stands in a public model narrower than the signed contract -- the exact
+    shape of the ``Literal[9]`` regression -- and asserts the projection
+    swallows it. Without this the next carried-forward epoch takes both public
+    detail endpoints down again before anyone reads the contract test above.
+    """
+    vector_path = (
+        Path(__file__).resolve().parents[6]
+        / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+    )
+    details = json.loads(vector_path.read_text())["vectors"][0]["details"]
+
+    class _DriftedPublicV9BaseEvidence(PublicV9BaseEvidence):
+        bench_version: Literal[9999]  # type: ignore[assignment]
+
+    monkeypatch.setattr(
+        public_endpoint, "PublicV9BaseEvidence", _DriftedPublicV9BaseEvidence
+    )
+
+    with caplog.at_level(logging.ERROR):
+        assert public_endpoint._safe_public_v9_base({"v9_base": details}) is None
+    assert "public allowlist has drifted" in caplog.text
 
 
 # The generator release each bench version pins, and the version flag that

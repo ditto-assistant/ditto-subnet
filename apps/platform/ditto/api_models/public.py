@@ -31,6 +31,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
+from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
@@ -317,9 +318,15 @@ class PublicV9ScoreGateEvidence(BaseModel):
 
 
 class PublicV9BaseEvidence(BaseModel):
-    """Public v9 evidence consumed by the dashboard's score drill-downs."""
+    """Public v9 evidence consumed by the dashboard's score drill-downs.
 
-    bench_version: Literal[9]
+    ``bench_version`` pins the shared protocol alias, never its own literal: the
+    signed evidence this projects already accepts every epoch the stack was
+    carried forward to, so restating the set here is how a v10 score became a
+    500 on ``/agent/{id}/scores``.
+    """
+
+    bench_version: V9EvidenceBenchVersion
     score_gates: PublicV9ScoreGateEvidence
 
 

@@ -1590,7 +1590,17 @@ def _safe_v9_base(details: dict) -> V9BaseEvidence | None:
 
 
 def _safe_public_v9_base(details: dict) -> PublicV9BaseEvidence | None:
-    """Project a valid signed v9 root onto the public dashboard allowlist."""
+    """Project a valid signed v9 root onto the public dashboard allowlist.
+
+    Fail-closed on BOTH halves. ``_safe_v9_base`` already tolerates a malformed
+    stored root, but the projection below was raising straight out of the
+    request: a signed root the shared contract accepts and the public allowlist
+    does not is a *drift* between two of our own models, and it took every score
+    and pipeline read for that agent down with a 500 rather than hiding one
+    diagnostic panel. That is exactly how the v10 carry-forward (#859) landed --
+    the public model still pinned ``Literal[9]``. Degrade to ``None`` here and
+    let the contract test below name the mismatch instead.
+    """
 
     evidence = _safe_v9_base(details)
     if evidence is None:
@@ -1598,36 +1608,45 @@ def _safe_public_v9_base(details: dict) -> PublicV9BaseEvidence | None:
     gates = evidence.score_gates
     model = gates.model_use
     tool = gates.authoritative_tool
-    return PublicV9BaseEvidence(
-        bench_version=evidence.bench_version,
-        score_gates=PublicV9ScoreGateEvidence(
-            rollout_mode=gates.rollout_mode,
-            model_use=PublicV9ModelUseGate(
-                administered_cases=model.administered_cases,
-                eligible_cases=model.eligible_cases,
-                successful_inference_cases=model.successful_inference_cases,
-                missing_inference_cases=model.missing_inference_cases,
-                observed_requests=model.observed_requests,
-                successful_requests=model.successful_requests,
-                request_coverage_bps=model.request_coverage_bps,
-                coverage_bps=model.coverage_bps,
-                threshold_bps=model.threshold_bps,
-                result=model.result,
-                factor_bps=model.factor_bps,
+    try:
+        return PublicV9BaseEvidence(
+            bench_version=evidence.bench_version,
+            score_gates=PublicV9ScoreGateEvidence(
+                rollout_mode=gates.rollout_mode,
+                model_use=PublicV9ModelUseGate(
+                    administered_cases=model.administered_cases,
+                    eligible_cases=model.eligible_cases,
+                    successful_inference_cases=model.successful_inference_cases,
+                    missing_inference_cases=model.missing_inference_cases,
+                    observed_requests=model.observed_requests,
+                    successful_requests=model.successful_requests,
+                    request_coverage_bps=model.request_coverage_bps,
+                    coverage_bps=model.coverage_bps,
+                    threshold_bps=model.threshold_bps,
+                    result=model.result,
+                    factor_bps=model.factor_bps,
+                ),
+                authoritative_tool=PublicV9AuthoritativeToolGate(
+                    expected_executions=tool.expected_executions,
+                    matched_executions=tool.matched_executions,
+                    missing_executions=tool.missing_executions,
+                    unexpected_executions=tool.unexpected_executions,
+                    observed_executions=tool.observed_executions,
+                    coverage_bps=tool.coverage_bps,
+                    threshold_bps=tool.threshold_bps,
+                    result=tool.result,
+                    factor_bps=tool.factor_bps,
+                ),
             ),
-            authoritative_tool=PublicV9AuthoritativeToolGate(
-                expected_executions=tool.expected_executions,
-                matched_executions=tool.matched_executions,
-                missing_executions=tool.missing_executions,
-                unexpected_executions=tool.unexpected_executions,
-                observed_executions=tool.observed_executions,
-                coverage_bps=tool.coverage_bps,
-                threshold_bps=tool.threshold_bps,
-                result=tool.result,
-                factor_bps=tool.factor_bps,
-            ),
-        ),
-    )
+        )
+    except ValidationError:
+        logger.exception(
+            "public v9 base projection rejected a valid signed root "
+            "(bench_version=%s): the public allowlist has drifted from the "
+            "shared evidence contract",
+            evidence.bench_version,
+        )
+        return None
 
 
 def _safe_token_efficiency(details: dict) -> PublicTokenEfficiency | None:
