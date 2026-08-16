@@ -203,6 +203,18 @@ export function validatorSlotIds(entry: FleetEntryExt): string[] {
   return Object.keys(seen).sort((a, b) => slotOrdinal(a) - slotOrdinal(b));
 }
 
+/** Whether any slot line will be drawn for this validator — a leased or
+ * assigned benchmark, or an orphaned lease. Read by the work cell's status
+ * rail so "No active work" is stated once, beside the worker state, rather
+ * than a second time from inside the slot list. */
+export function hasVisibleSlotWork(entry: FleetEntryExt): boolean {
+  return Boolean(
+    (entry.active_benchmarks || []).length ||
+    (entry.assigned_benchmarks || []).length ||
+    (entry.orphaned_slots || []).some((orphan) => orphan && orphan.slot_id),
+  );
+}
+
 /** Slot order is numeric, not lexical: "slot-10" comes after "slot-9". An id
  * that carries no ordinal (a missing `slot_id`, a scheme this build does not
  * know) sorts last rather than crashing or claiming slot zero — the wire type

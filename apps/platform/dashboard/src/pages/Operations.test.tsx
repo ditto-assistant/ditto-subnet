@@ -231,6 +231,82 @@ describe("accessible fleet status (row 15)", () => {
     expect(row?.querySelector(".stage.capped")?.textContent).toBe("Capped");
   });
 
+  it("states every cell-level status once, on one rail above the work", async () => {
+    // Three chip families used to sit at three different depths of the work
+    // cell: the worker state as a direct child, "No active work" a level in
+    // from inside the slot list, and the updater notice below the ledger.
+    const hotkey = "5IdleDrainingValidatorHotkey000000000000000000000";
+    const idle = {
+      ...operations,
+      validators: {
+        ...operations.validators,
+        validators: [
+          {
+            validator_hotkey: hotkey,
+            availability: "available",
+            health: "healthy",
+            state: "polling",
+            admission: "accepting",
+            configured_slots: 2,
+            allowed_slots: 2,
+            healthy_slots: ["slot-0", "slot-1"],
+            protocol_version: 23,
+            software_version: "0.78.7",
+            reported_at: "2026-07-31T13:55:00Z",
+            seen_at: "2026-07-31T13:55:00Z",
+            active_benchmarks: [],
+            assigned_benchmarks: [],
+            stack: { mode: "managed" },
+            updater_status: {
+              enabled: true,
+              channel: "compat-2",
+              state: "draining",
+              transaction_phase: "prepared",
+              current_version: "0.78.7",
+              candidate_descriptor: null,
+              candidate_version: "0.78.8",
+              failed_candidate_count: 0,
+              retry_after: null,
+              suppressed: false,
+              last_success_at: null,
+              last_failure_at: null,
+              last_failure_reason: null,
+              observed_at: 1_775_132_100,
+            },
+          },
+        ],
+      },
+    };
+    restoreFetch?.();
+    globalThis.fetch = ((input: RequestInfo | URL) => {
+      if (String(input).includes("/public/operations")) {
+        return Promise.resolve(new Response(JSON.stringify(idle), { status: 200 }));
+      }
+      return Promise.resolve(new Response(JSON.stringify({ validators: [] }), { status: 200 }));
+    }) as typeof fetch;
+    render(() => <OperationsPage />);
+    await waitFor(() => expect(document.querySelector(".fleet-work-status")).toBeTruthy());
+
+    const cell = document.querySelector("td.fleet-work-col") as HTMLElement;
+    const rails = cell.querySelectorAll(".fleet-work-status");
+    expect(rails.length).toBe(1);
+    // Both answers to "what is this cell doing" ride the one rail, in order.
+    expect([...rails[0]!.children].map((chip) => chip.textContent)).toEqual([
+      "Polling",
+      "No active work",
+    ]);
+    // And nowhere else — the slot list no longer restates it.
+    expect(cell.querySelector(".fleet-slot-overview")?.textContent).not.toContain("No active work");
+    // The state block runs rail → updater notice → slot ledger, so a drain is
+    // read before the empty slots it explains.
+    expect([...cell.children].map((child) => child.className)).toEqual([
+      "fleet-work-status",
+      "fleet-updater-notice",
+      "fleet-slot-overview",
+    ]);
+    expect(cell.querySelector(".fleet-updater-notice .stage")?.textContent).toBe("Safe drain");
+  });
+
   it("never leaks the removed privacy note / allowlist / threshold copy", async () => {
     await renderPage();
     const body = document.body.textContent ?? "";

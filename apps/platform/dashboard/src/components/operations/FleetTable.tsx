@@ -25,6 +25,7 @@ import {
   fleetStatusFor,
   fleetWork,
   fundedSlotCount,
+  hasVisibleSlotWork,
   offlineAwareFleetStatusFor,
   orphanedSlotView,
   slotCapacityTitle,
@@ -518,9 +519,6 @@ function SlotRows(props: { entry: FleetEntryExt; slotPolicy: SlotPolicy | null }
           );
         }}
       </For>
-      <Show when={!runningSlots().length && !orphanedSlots().length}>
-        <span class="stage unknown">No active work</span>
-      </Show>
       <Show
         when={inactiveSlots().length > 0}
         fallback={<div class="fleet-slot-summary">{summary()}</div>}
@@ -756,6 +754,9 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
         (validatorAssignmentView(props.entry) || anyBenchmarkStage(props.entry))) ||
       (props.singular === "screener" && props.entry.screening_progress),
     );
+  // "No active work" belongs beside the worker state, not a line below it
+  // inside the slot list: both answer the same question about the same cell.
+  const idleSlots = () => props.singular === "validator" && !hasVisibleSlotWork(props.entry);
   const highlighted = () => props.highlightId != null && props.highlightId === hotkey();
   const activation = rowActivation(props.singular, hotkey);
   return (
@@ -777,8 +778,17 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
         />
       </td>
       <td class="fleet-work-col">
-        <Show when={!hasGranularProgress()}>
-          <span class={stageClass(work()[1])}>{work()[0]}</span>
+        {/* One rail, one place: every chip that describes the state of this
+            cell as a whole sits on this row, above the work it explains. */}
+        <Show when={!hasGranularProgress() || idleSlots()}>
+          <div class="fleet-work-status">
+            <Show when={!hasGranularProgress()}>
+              <span class={stageClass(work()[1])}>{work()[0]}</span>
+            </Show>
+            <Show when={idleSlots()}>
+              <span class="stage unknown">No active work</span>
+            </Show>
+          </div>
         </Show>
         <Show
           when={props.singular === "validator"}
@@ -807,9 +817,11 @@ export function FleetRow(props: FleetRowProps): JSX.Element {
             </Show>
           }
         >
+          {/* Above the slot ledger, with the other state chips: a drain is
+              usually the reason those slots are empty. */}
+          <UpdaterNotice entry={props.entry} />
           <SlotRows entry={props.entry} slotPolicy={props.slotPolicy} />
           <ConfirmationRows entry={props.entry} />
-          <UpdaterNotice entry={props.entry} />
           <Show when={props.chainVectors}>
             {(chainVectors) => (
               <FleetChainWeights hotkey={hotkey()} chainVectors={chainVectors()} />
