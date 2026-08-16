@@ -1,4 +1,0 @@
-interface:
-  display_name: "GitHub for Ditto Subnet"
-  short_description: "Manage monorepo worktrees and PR stacks"
-  default_prompt: "Use $github to create or maintain this ditto-subnet monorepo pull-request stack."
