@@ -2135,7 +2135,7 @@ async def test_v9_poll_rejects_unavailable_transcript_evidence(failure: str) -> 
         client = DittobenchClient(cast(Any, _poll_config()), http)
         with pytest.raises(
             ValidatorInfrastructureError,
-            match="benchmark v9 transcript evidence unavailable",
+            match="benchmark v9\\+ transcript evidence unavailable",
         ):
             await client._poll("private-run-id", expected_bench_version=9)
 

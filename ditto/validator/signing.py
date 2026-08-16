@@ -134,8 +134,13 @@ def score_signing_message(
                 "benchmark v9 score signatures require transcript and "
                 "base evidence digests"
             )
-    elif base_evidence_sha256 is not None:
-        raise ValueError("base evidence digest is only valid for benchmark v9")
+    elif bench_version is None or bench_version < 9:
+        if base_evidence_sha256 is not None:
+            raise ValueError("base evidence digest is only valid for benchmark v9+")
+    elif base_evidence_sha256 is not None and not transcript_sha256:
+        # v10+ evidence binds the transcript digest; signing one without the
+        # other would produce an unverifiable receipt.
+        raise ValueError("base evidence digest requires a transcript digest")
     if transcript_sha256:
         message += f":{transcript_sha256}"
     if base_evidence_sha256:

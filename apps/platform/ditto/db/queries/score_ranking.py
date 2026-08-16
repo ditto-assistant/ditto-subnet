@@ -325,7 +325,7 @@ def official_composites(
             ),
             efficiency_factor=(
                 factors.get(row.agent_id)
-                if efficiency_fold_active and row.bench_version == 9
+                if efficiency_fold_active and row.bench_version >= 9
                 else None
             ),
         )
@@ -334,7 +334,7 @@ def official_composites(
         # Historical v1/v2 bonuses retain their frozen score arithmetic.
         resolved[row.agent_id] = (
             continual_composite(entry)
-            if row.bench_version == 9 and row.agent_id in active_factors
+            if row.bench_version >= 9 and row.agent_id in active_factors
             else effective_composite(entry)
         )
     secondary = efficiency_tiebreak_composites(
@@ -365,7 +365,7 @@ def efficiency_tiebreak_composites(
     for row in rows:
         quality = official.get(row.agent_id, row.composite)
         factor = factors.get(row.agent_id)
-        if row.bench_version == 9 and factor is not None:
+        if row.bench_version >= 9 and factor is not None:
             out[row.agent_id] = bounded_efficiency_adjusted_quality(quality, factor)
     return out
 
@@ -545,7 +545,7 @@ async def resolve_efficiency_adjustments(
         for agent_id, assignment in assignments.items()
         if assignment.factor is not None
         and agent_id in by_id
-        and by_id[agent_id].bench_version == 9
+        and by_id[agent_id].bench_version >= 9
     }
     factors: dict[UUID, float] = {}
     requester_protocol_ready = True
@@ -571,7 +571,9 @@ async def resolve_efficiency_adjustments(
         factor_fleet_ready = await live_validator_fleet_supports_protocol(
             session,
             minimum_protocol=BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
-            bench_version=9,
+            bench_version=max(
+                by_id[agent_id].bench_version for agent_id in factor_candidates
+            ),
             now=resolved_now,
             freshness=VALIDATOR_STALE_WINDOW,
         )

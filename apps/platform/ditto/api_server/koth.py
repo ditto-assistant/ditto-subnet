@@ -532,7 +532,7 @@ def _bounded_efficiency_factor(entry: KothEntry) -> float | None:
     factor = entry.efficiency_factor
     if factor is None:
         return None
-    if entry.bench_version != 9:
+    if entry.bench_version < 9:
         return 1.0
     if (
         isinstance(factor, bool)

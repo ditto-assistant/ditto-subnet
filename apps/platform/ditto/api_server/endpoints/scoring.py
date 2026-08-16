@@ -336,7 +336,7 @@ async def _resolve_ledger_context(
     factor_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
-        bench_version=9,
+        bench_version=bench_version,
         now=now,
     )
     return _LedgerContext(

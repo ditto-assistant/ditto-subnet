@@ -5795,7 +5795,7 @@ async def submit_score(
         )
         model_use_key = (
             "platform_model_use_reconciliation"
-            if ticket.bench_version == 9
+            if ticket.bench_version >= 9
             else "model_use"
         )
         score_details[model_use_key] = model_use.as_public_dict()

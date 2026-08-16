@@ -1065,13 +1065,24 @@ class ScoreReport(BaseModel):
     def _validate_v9_base_evidence(self) -> ScoreReport:
         details = self.details if isinstance(self.details, dict) else {}
         raw_evidence = details.get("v9_base")
-        if self.bench_version != 9:
+        if self.bench_version is None or self.bench_version < 9:
             if self.base_evidence_sha256 is not None or raw_evidence is not None:
-                raise ValueError("v9 base evidence is only valid for benchmark v9")
+                raise ValueError("v9 base evidence is only valid for benchmark v9+")
+            return self
+        if self.bench_version == 9 and (
+            self.base_evidence_sha256 is None or not isinstance(raw_evidence, dict)
+        ):
+            raise ValueError("benchmark v9 requires typed base evidence")
+        if self.base_evidence_sha256 is None and raw_evidence is None:
+            # v10+ transitional: a report from a scorer predating the
+            # carried-forward evidence contract carries no root. It stays
+            # admissible, but no efficiency factor can materialize from it.
             return self
         if self.base_evidence_sha256 is None or not isinstance(raw_evidence, dict):
-            raise ValueError("benchmark v9 requires typed base evidence")
+            raise ValueError("base evidence root and digest must travel together")
         evidence = V9BaseEvidence.model_validate(raw_evidence)
+        if evidence.bench_version != self.bench_version:
+            raise ValueError("base evidence bench version does not match report")
         if evidence.run_id != self.run_id:
             raise ValueError("v9 base evidence run_id does not match report")
         if evidence.dataset_sha256 != details.get("dataset_sha256"):
@@ -1211,11 +1222,15 @@ class LedgerScoreProof(BaseModel):
 
     @model_validator(mode="after")
     def _validate_v9_evidence_identity(self) -> LedgerScoreProof:
-        if self.bench_version == 9:
-            if self.transcript_sha256 is None or self.base_evidence_sha256 is None:
+        if self.bench_version is not None and self.bench_version >= 9:
+            if self.bench_version == 9 and (
+                self.transcript_sha256 is None or self.base_evidence_sha256 is None
+            ):
                 raise ValueError(
                     "benchmark v9 proof requires transcript and base evidence"
                 )
+            if self.base_evidence is not None and self.base_evidence_sha256 is None:
+                raise ValueError("base evidence root requires its digest")
             if self.base_evidence is not None:
                 if self.base_evidence.digest_hex() != self.base_evidence_sha256:
                     raise ValueError("benchmark v9 base evidence digest mismatch")
@@ -1224,9 +1239,9 @@ class LedgerScoreProof(BaseModel):
                 ):
                     raise ValueError("benchmark v9 base evidence contradicts composite")
         elif self.base_evidence_sha256 is not None:
-            raise ValueError("base evidence digest is only valid for benchmark v9")
+            raise ValueError("base evidence digest is only valid for benchmark v9+")
         elif self.base_evidence is not None:
-            raise ValueError("base evidence is only valid for benchmark v9")
+            raise ValueError("base evidence is only valid for benchmark v9+")
         return self
 
 

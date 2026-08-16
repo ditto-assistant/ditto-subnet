@@ -1840,16 +1840,18 @@ def _public_entry(
         ModelUseVerdict(public_model_use.verdict) if public_model_use else None
     )
     bench_version = r.bench_version
-    if bench_version != 9:
-        # Curve v3 is deliberately v9-only. Neutralize a mismatched row rather
+    if (bench_version or 0) < 9:
+        # Curve v3 starts at Bench v9. Neutralize a mismatched row rather
         # than exposing or folding a factor under a legacy scoring contract.
         efficiency_factor = None
         efficiency_factor_preview = None
-    v9_base = _safe_v9_base(details) if bench_version == 9 else None
+    v9_base = _safe_v9_base(details) if (bench_version or 0) >= 9 else None
     # A shadow gate is diagnostic, not score authority. Keep every v9 public
     # projection fail-closed until the signed root itself says the frozen gate
     # is in enforce mode; validators independently impose the same condition on
-    # base-only v9 ledger rows.
+    # base-only v9 ledger rows. v10 rows scored before the evidence contract
+    # carried forward have no signed root; they keep the legacy platform
+    # model-use factor instead of misreporting an enforcement zero.
     platform_model_use_factor = (
         1.0
         if bench_version == 9
@@ -1860,7 +1862,7 @@ def _public_entry(
             if v9_base is not None and v9_base.score_gates.rollout_mode == "enforce"
             else 0.0
         )
-        if bench_version == 9
+        if bench_version == 9 or v9_base is not None
         else model_use_factor(model_use_verdict, mode=model_use_policy().mode)
     )
     dataset_sha256 = details.get("dataset_sha256")
@@ -4001,7 +4003,7 @@ def _public_validator_score(s) -> PublicValidatorScore:
             final_composite=s.composite,
             details=details,
         ),
-        v9_base=(_safe_public_v9_base(details) if bench_version == 9 else None),
+        v9_base=(_safe_public_v9_base(details) if (bench_version or 0) >= 9 else None),
         median_ms=s.median_ms,
         n=s.n,
         bench_version=bench_version,
@@ -5678,7 +5680,7 @@ async def agent_pipeline(
                 ),
                 v9_base=(
                     _safe_public_v9_base(score.details)
-                    if _score_bench_version(score) == 9
+                    if (_score_bench_version(score) or 0) >= 9
                     and isinstance(score.details, dict)
                     else None
                 ),

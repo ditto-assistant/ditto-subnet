@@ -89,9 +89,13 @@ CURVE_VERSION_TWO_TIER = 2
 SATURATES flat below that deep frontier (racing toward zero tokens earns
 nothing extra)."""
 CURVE_VERSION_BOUNDED_FACTOR = 3
-"""Bounded power curve for Bench v9:
+"""Bounded power curve for Bench v9+:
 ``clamp((reference_cost / agent_cost) ** alpha, minimum, maximum)``."""
 BOUNDED_FACTOR_BENCH_VERSION = 9
+"""The first bench version scored by curve v3. Later versions (v10+) inherit the
+same bounded-factor tie-break: the signed v9 base-evidence contract carries
+forward, stamped with the run's actual bench version. The legacy two-tier fold
+never applies above this version."""
 V9_TOKEN_COST_QUORUM = 3
 """Every accepted k=3 score row must carry valid v9 cost evidence."""
 
@@ -626,7 +630,7 @@ def factor_for_submission(
     """
     if (
         reference.curve_version != CURVE_VERSION_BOUNDED_FACTOR
-        or reference.bench_version != BOUNDED_FACTOR_BENCH_VERSION
+        or reference.bench_version < BOUNDED_FACTOR_BENCH_VERSION
     ):
         return None
     if not reference.active or token_total is None:
@@ -1095,7 +1099,7 @@ def _candidates_from_rows(
         # finalized base-only v9 board produce a zero-member efficiency cohort.
         quality = getattr(row, "official_composite", row.composite)
         if (
-            row.bench_version == BOUNDED_FACTOR_BENCH_VERSION
+            row.bench_version >= BOUNDED_FACTOR_BENCH_VERSION
             and isinstance(quality, (int, float))
             and not isinstance(quality, bool)
             and isfinite(quality)
@@ -1233,7 +1237,7 @@ async def _materialize_epoch(
         if snapshot is not None
         else (
             CURVE_VERSION_BOUNDED_FACTOR
-            if bench_version == BOUNDED_FACTOR_BENCH_VERSION
+            if bench_version >= BOUNDED_FACTOR_BENCH_VERSION
             else CURVE_VERSION_TWO_TIER
         )
     )
@@ -1570,7 +1574,7 @@ async def preview_efficiency_board(
     score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
     curve_version = (
         CURVE_VERSION_BOUNDED_FACTOR
-        if bench_version == BOUNDED_FACTOR_BENCH_VERSION
+        if bench_version >= BOUNDED_FACTOR_BENCH_VERSION
         else CURVE_VERSION_TWO_TIER
     )
     if curve_version == CURVE_VERSION_BOUNDED_FACTOR:

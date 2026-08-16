@@ -1368,9 +1368,9 @@ class DittobenchClient:
                     digest = await self._fetch_transcript(
                         run_id, data.get("transcript_sha256")
                     )
-                    if expected_bench_version == 9 and digest is None:
+                    if expected_bench_version >= 9 and digest is None:
                         raise ValidatorInfrastructureError(
-                            "benchmark v9 transcript evidence unavailable"
+                            "benchmark v9+ transcript evidence unavailable"
                         )
                     if digest is not None and isinstance(rep, dict):
                         details = rep.get("details")
@@ -1378,7 +1378,7 @@ class DittobenchClient:
                             details = {}
                         details["transcript_sha256"] = digest
                         rep["details"] = details
-                    if expected_bench_version == 9 and isinstance(rep, dict):
+                    if expected_bench_version >= 9 and isinstance(rep, dict):
                         # Stamp before validation. ``model_copy(update=...)``
                         # deliberately skips validation, which previously let
                         # a V9 report bypass ScoreReport's typed base-evidence
