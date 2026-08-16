@@ -368,9 +368,13 @@ func TestExecutorRejectsAmbiguousEmbeddingBackedRunFailure(t *testing.T) {
 		"reader admitted":      func(value *TrustedCaseInferenceActivity) { value.ReaderAttempts = 1 },
 		"reader dispatched":    func(value *TrustedCaseInferenceActivity) { value.ReaderDispatches = 1 },
 		"reader completed":     func(value *TrustedCaseInferenceActivity) { value.ReaderReceipted = 1 },
-		"orphan rejection":     func(value *TrustedCaseInferenceActivity) { value.ReaderAgentRejections = 1 },
-		"reader in flight":     func(value *TrustedCaseInferenceActivity) { value.ReaderInFlight = 1 },
-		"reader cancelled":     func(value *TrustedCaseInferenceActivity) { value.ReaderCancellations = 1 },
+		"unattributed reader": func(value *TrustedCaseInferenceActivity) {
+			value.ReaderAttempts = 1
+			value.ReaderDispatches = 1
+		},
+		"orphan rejection": func(value *TrustedCaseInferenceActivity) { value.ReaderAgentRejections = 1 },
+		"reader in flight": func(value *TrustedCaseInferenceActivity) { value.ReaderInFlight = 1 },
+		"reader cancelled": func(value *TrustedCaseInferenceActivity) { value.ReaderCancellations = 1 },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

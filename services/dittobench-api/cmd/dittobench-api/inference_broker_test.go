@@ -20,11 +20,66 @@ import (
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/llm"
+	"github.com/ditto-assistant/dittobench-api/internal/longmemeval"
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
 )
 
 const testBrokerAgentID = "00000000-0000-0000-0000-000000000002"
+
+type brokerTestAuthorizer struct{}
+
+func (brokerTestAuthorizer) Authorize(context.Context, string, *http.Request) error { return nil }
+
+func newBrokerTestReaderSession(t *testing.T, upstreamStatus int) (*longmemeval.ProviderSession, string) {
+	t.Helper()
+	profile, _ := validInstalledConfirmationProfile(t)
+	for index := range profile.ProviderLanes {
+		profile.ProviderLanes[index].Provider = "openrouter"
+		profile.ProviderLanes[index].MaxPromptTokens = 10_000
+		profile.ProviderLanes[index].MaxCompletionTokens = 1_000
+		profile.ProviderLanes[index].MaxTotalTokens = 11_000
+		profile.ProviderLanes[index].MaxCostUSDmicros = 100_000
+		if profile.ProviderLanes[index].Lane == longmemeval.ReaderLane {
+			profile.ProviderLanes[index].RouteProvider = "deepinfra"
+			profile.ProviderLanes[index].ReceiptProvider = "DeepInfra"
+			profile.ProviderLanes[index].ProfileRevision = "fixture-reader-v1"
+			profile.ProviderLanes[index].Model = "openai/gpt-oss-20b"
+		} else {
+			profile.ProviderLanes[index].RouteProvider = "azure"
+			profile.ProviderLanes[index].ReceiptProvider = "Azure"
+			profile.ProviderLanes[index].ProfileRevision = "longmemeval-official-gpt4o-azure-zdr-v2"
+			profile.ProviderLanes[index].Model = "openai/gpt-4o-2024-08-06"
+		}
+	}
+	readerModel := ""
+	readerReceiptProvider := ""
+	upstream := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		writer.WriteHeader(upstreamStatus)
+		_, _ = io.WriteString(writer, `{"id":"reader-receipt","model":`+strconv.Quote(readerModel)+`,"provider":`+strconv.Quote(readerReceiptProvider)+`,"usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0.0000001},"error":{"message":"upstream rejected"}}`)
+	}))
+	t.Cleanup(upstream.Close)
+	config := longmemeval.ProviderRuntimeConfig{
+		HTTPClient: upstream.Client(), Authorizer: brokerTestAuthorizer{},
+	}
+	for _, lane := range profile.ProviderLanes {
+		if lane.Lane == longmemeval.ReaderLane {
+			readerModel = lane.Model
+			readerReceiptProvider = lane.ReceiptProvider
+		}
+		config.Lanes = append(config.Lanes, longmemeval.ProviderLaneRuntimeConfig{
+			Lane: lane.Lane, UpstreamURL: upstream.URL + "/v1/chat/completions",
+			RouteProvider: lane.RouteProvider, ReceiptProvider: lane.ReceiptProvider, RequestTimeout: time.Second,
+		})
+	}
+	session, err := longmemeval.NewProviderSession(context.Background(), profile.longMemProfile(), config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session, readerModel
+}
 
 func TestV10CaseCapabilitiesKeepConcurrentLedgersDistinct(t *testing.T) {
 	broker := newInferenceBroker(1)
@@ -223,14 +278,12 @@ func TestConfirmationCaseSnapshotAttributesReaderCallToActiveGeneration(t *testi
 func TestConfirmationCaseSnapshotAttributesAgentReaderRejection(t *testing.T) {
 	broker := newInferenceBroker(1, 1)
 	id, runID := "confirmation-case-reader-rejection", uuid.NewString()
-	model := llm.HarnessModelForVersion(confirmationBenchVersion)
+	providerSession, model := newBrokerTestReaderSession(t, http.StatusInternalServerError)
 	session := &brokerSession{
 		id: id, boundRunID: runID, expectedSourceIP: "127.0.0.1", expiresAt: time.Now().Add(time.Hour),
 		benchVersion: confirmationBenchVersion, confirmationSession: true, requestModel: model, model: model,
-		trustedChatHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			writeError(w, http.StatusBadRequest, "invalid reader request")
-		}),
-		cancels: make(map[string]context.CancelFunc),
+		trustedChatHandler: providerSession.ReaderHandler(),
+		cancels:            make(map[string]context.CancelFunc),
 	}
 	broker.sessions[id] = session
 	generation, _, err := broker.beginCaseSnapshot(id)
@@ -238,7 +291,7 @@ func TestConfirmationCaseSnapshotAttributesAgentReaderRejection(t *testing.T) {
 		t.Fatal(err)
 	}
 	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
-		`{"model":"ignored","messages":[{"role":"user","content":"query"}]}`,
+		`{"model":"ignored","max_tokens":1001,"messages":[{"role":"user","content":"query"}]}`,
 	))
 	request.RemoteAddr = "127.0.0.1:4321"
 	response := httptest.NewRecorder()
@@ -256,6 +309,102 @@ func TestConfirmationCaseSnapshotAttributesAgentReaderRejection(t *testing.T) {
 		snapshot.ReaderAgentRejections != 1 || snapshot.ReaderInFlight != 0 ||
 		snapshot.ReaderCancellations != 0 {
 		t.Fatalf("reader rejection snapshot=%+v", snapshot)
+	}
+}
+
+func TestConfirmationCaseSnapshotRejectsUntrustedReaderFailureStatuses(t *testing.T) {
+	statuses := []int{
+		http.StatusBadRequest,
+		http.StatusRequestEntityTooLarge,
+		http.StatusUnauthorized,
+		http.StatusNotFound,
+		http.StatusRequestTimeout,
+		http.StatusConflict,
+		http.StatusGone,
+		http.StatusUnprocessableEntity,
+		http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+	}
+	for _, status := range statuses {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			broker := newInferenceBroker(1, 1)
+			id, runID := "confirmation-case-reader-failure-"+strconv.Itoa(status), uuid.NewString()
+			model := llm.HarnessModelForVersion(confirmationBenchVersion)
+			session := &brokerSession{
+				id: id, boundRunID: runID, expectedSourceIP: "127.0.0.1", expiresAt: time.Now().Add(time.Hour),
+				benchVersion: confirmationBenchVersion, confirmationSession: true, requestModel: model, model: model,
+				trustedChatHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					writeError(w, status, "reader unavailable")
+				}),
+				cancels: make(map[string]context.CancelFunc),
+			}
+			broker.sessions[id] = session
+			generation, _, err := broker.beginCaseSnapshot(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
+				`{"model":"ignored","messages":[{"role":"user","content":"query"}]}`,
+			))
+			request.RemoteAddr = "127.0.0.1:4321"
+			response := httptest.NewRecorder()
+			broker.handleChat(response, request, brokerSourceLease{
+				session: session, sourceIP: session.expectedSourceIP, epoch: session.sourceEpoch,
+			})
+			snapshot, err := broker.endCaseSnapshot(id, generation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.ReaderAttempts != 1 || snapshot.ReaderDispatches != 1 ||
+				snapshot.ReaderReceipted != 0 || snapshot.ReaderAgentRejections != 0 {
+				t.Fatalf("status %d was attributed as agent rejection: %+v", status, snapshot)
+			}
+		})
+	}
+}
+
+func TestConfirmationCaseSnapshotDoesNotAttributeReceiptedUpstreamReaderFailure(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			broker := newInferenceBroker(1, 1)
+			providerSession, model := newBrokerTestReaderSession(t, status)
+			id := "confirmation-case-upstream-reader-" + strconv.Itoa(status)
+			session := &brokerSession{
+				id: id, boundRunID: uuid.NewString(), expectedSourceIP: "127.0.0.1", expiresAt: time.Now().Add(time.Hour),
+				benchVersion: confirmationBenchVersion, confirmationSession: true, requestModel: model, model: model,
+				trustedChatHandler: providerSession.ReaderHandler(), cancels: make(map[string]context.CancelFunc),
+			}
+			broker.sessions[id] = session
+			generation, _, err := broker.beginCaseSnapshot(id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", bytes.NewBufferString(
+				`{"model":"ignored","max_tokens":1,"messages":[{"role":"user","content":"query"}]}`,
+			))
+			request.RemoteAddr = "127.0.0.1:4321"
+			broker.handleChat(httptest.NewRecorder(), request, brokerSourceLease{
+				session: session, sourceIP: session.expectedSourceIP, epoch: session.sourceEpoch,
+			})
+			snapshot, err := broker.endCaseSnapshot(id, generation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if snapshot.ReaderAttempts != 1 || snapshot.ReaderDispatches != 1 ||
+				snapshot.ReaderReceipted != 0 || snapshot.ReaderAgentRejections != 0 {
+				t.Fatalf("status %d was attributed as agent rejection: %+v", status, snapshot)
+			}
+			provider, err := providerSession.Snapshot(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, lane := range provider {
+				if lane.Lane == longmemeval.ReaderLane &&
+					(lane.Requests != 1 || lane.Successes != 0 || lane.ReceiptedRequests != 1) {
+					t.Fatalf("status %d reader accounting=%+v", status, lane)
+				}
+			}
+		})
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -273,6 +274,11 @@ func TestReaderRelayRejectsUntrustedRequestVariantsBeforeSpend(t *testing.T) {
 			session.ReaderHandler().ServeHTTP(recorder, request)
 			if recorder.Code != testCase.status || strings.Contains(recorder.Body.String(), authorizer.credential) {
 				t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
+			}
+			marked := IsPreReservationReaderRejection(session.ReaderHandler(), recorder.Result())
+			wantMarked := testCase.status == http.StatusBadRequest || testCase.status == http.StatusRequestEntityTooLarge
+			if marked != wantMarked {
+				t.Fatalf("status=%d pre-reservation marker=%t want=%t", recorder.Code, marked, wantMarked)
 			}
 			if values := evidenceByLane(t, session); values[ReaderLane].Requests != 0 {
 				t.Fatal("rejected request reached provider")
@@ -562,6 +568,30 @@ func TestProviderSessionCountsReceiptedHTTPFailuresWithoutCallingThemSuccess(t *
 	reader := evidenceByLane(t, session)[ReaderLane]
 	if reader.Requests != 1 || reader.ReceiptedRequests != 1 || reader.Successes != 0 || reader.CostUSDmicros != 1 {
 		t.Fatalf("failure accounting=%#v", reader)
+	}
+}
+
+func TestProviderSessionDoesNotMarkReceiptedUpstream400Or413AsPreReservation(t *testing.T) {
+	for _, status := range []int{http.StatusBadRequest, http.StatusRequestEntityTooLarge} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			profile := runtimeProviderProfile(t)
+			upstream := newRuntimeUpstream(t)
+			upstream.next = func(index int, body map[string]any) (int, string) {
+				return status, fmt.Sprintf(`{"id":"failed-%d","model":%q,"provider":"DeepInfra","usage":{"prompt_tokens":1,"completion_tokens":0,"total_tokens":1,"cost":0.0000001},"error":{"message":"upstream rejected"}}`, index, body["model"])
+			}
+			session, _ := newRuntimeProviderSession(t, profile, upstream)
+			response := readerRequest(t, session, `{"model":"openai/gpt-oss-20b","max_tokens":1}`)
+			if response.Code != status {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			if IsPreReservationReaderRejection(session.ReaderHandler(), response.Result()) {
+				t.Fatal("receipted upstream response carried pre-reservation provenance")
+			}
+			reader := evidenceByLane(t, session)[ReaderLane]
+			if reader.Requests != 1 || reader.Successes != 0 || reader.ReceiptedRequests != 1 {
+				t.Fatalf("failure accounting=%#v", reader)
+			}
+		})
 	}
 }
 

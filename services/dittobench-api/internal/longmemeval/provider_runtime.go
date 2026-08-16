@@ -22,15 +22,25 @@ import (
 )
 
 const (
-	maxProviderRequestBytes      = 4 << 20
-	maxProviderResponseBytes     = 16 << 20
-	officialJudgeMaxTokens       = 10
-	officialJudgeModel           = "openai/gpt-4o-2024-08-06"
-	officialJudgeRevision        = "longmemeval-official-gpt4o-azure-zdr-v2"
-	officialJudgeRouteProvider   = "azure"
-	officialJudgeReceiptProvider = "Azure"
-	platformConfirmationChatPath = "/api/v1/inference/confirmation/chat/completions"
+	maxProviderRequestBytes         = 4 << 20
+	maxProviderResponseBytes        = 16 << 20
+	readerRejectionProvenanceHeader = "X-Ditto-Reader-Rejection-Provenance"
+	readerRejectionPreReservation   = "pre-reservation"
+	officialJudgeMaxTokens          = 10
+	officialJudgeModel              = "openai/gpt-4o-2024-08-06"
+	officialJudgeRevision           = "longmemeval-official-gpt4o-azure-zdr-v2"
+	officialJudgeRouteProvider      = "azure"
+	officialJudgeReceiptProvider    = "Azure"
+	platformConfirmationChatPath    = "/api/v1/inference/confirmation/chat/completions"
 )
+
+type readerHandler struct {
+	session *ProviderSession
+}
+
+func (h *readerHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	h.session.handleReader(writer, request)
+}
 
 // RequestAuthorizer applies trusted provider authorization to one outbound
 // request. The lane is a public profile identity. The authorizer exchanges the
@@ -263,7 +273,30 @@ func isLoopbackHost(host string) bool {
 // harness's trusted OpenAI-compatible reader endpoint. It exposes no health,
 // stats-reset, credential, or arbitrary proxy route.
 func (s *ProviderSession) ReaderHandler() http.Handler {
-	return http.HandlerFunc(s.handleReader)
+	return &readerHandler{session: s}
+}
+
+// IsPreReservationReaderRejection reports whether response was emitted by the
+// trusted ProviderSession reader while validating the submitted request, before
+// provider budget reservation or transport. The private response marker is not
+// copied from upstream provider headers, and the concrete handler check prevents
+// an arbitrary in-process HTTP handler from minting this provenance.
+func IsPreReservationReaderRejection(handler http.Handler, response *http.Response) bool {
+	if response == nil {
+		return false
+	}
+	if _, ok := handler.(*readerHandler); !ok {
+		return false
+	}
+	if response.StatusCode != http.StatusBadRequest && response.StatusCode != http.StatusRequestEntityTooLarge {
+		return false
+	}
+	return response.Header.Get(readerRejectionProvenanceHeader) == readerRejectionPreReservation
+}
+
+func writePreReservationReaderRejection(writer http.ResponseWriter, status int, message string) {
+	writer.Header().Set(readerRejectionProvenanceHeader, readerRejectionPreReservation)
+	writeProviderError(writer, status, message)
 }
 
 func (s *ProviderSession) handleReader(writer http.ResponseWriter, request *http.Request) {
@@ -276,12 +309,12 @@ func (s *ProviderSession) handleReader(writer http.ResponseWriter, request *http
 	}
 	raw, err := io.ReadAll(io.LimitReader(request.Body, maxProviderRequestBytes+1))
 	if err != nil || len(raw) == 0 || len(raw) > maxProviderRequestBytes {
-		writeProviderError(writer, http.StatusRequestEntityTooLarge, "invalid request size")
+		writePreReservationReaderRejection(writer, http.StatusRequestEntityTooLarge, "invalid request size")
 		return
 	}
 	body, reservation, err := rewriteReaderRequest(raw, s.lanes[ReaderLane].policy, s.lanes[ReaderLane].config.RouteProvider)
 	if err != nil {
-		writeProviderError(writer, http.StatusBadRequest, "invalid reader request")
+		writePreReservationReaderRejection(writer, http.StatusBadRequest, "invalid reader request")
 		return
 	}
 	status, response, err := s.execute(request.Context(), ReaderLane, body, reservation)

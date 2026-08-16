@@ -3709,6 +3709,7 @@ func (b *inferenceBroker) proxy(
 	}
 	var responseBody []byte
 	var responseStatus int
+	var preReservationReaderRejection bool
 	var totalLatency uint64
 	// The platform owns the FIRST line of provider retry for ticket-scoped v7
 	// inference (_PROVIDER_MAX_ATTEMPTS=3 over 408/429/5xx, all under one
@@ -3779,6 +3780,7 @@ func (b *inferenceBroker) proxy(
 		var requestErr error
 		if trustedChatHandler != nil {
 			resp, requestErr = callTrustedChatHandler(requestCtx, trustedChatHandler, body)
+			preReservationReaderRejection = longmemeval.IsPreReservationReaderRejection(trustedChatHandler, resp)
 		} else {
 			resp, requestErr = b.client.Do(req)
 		}
@@ -3850,22 +3852,27 @@ func (b *inferenceBroker) proxy(
 		return
 	}
 	if responseStatus >= 400 && responseStatus < 500 && responseStatus != http.StatusTooManyRequests {
-		// The platform rejected the harness's REQUEST before reserving any
-		// capacity: a body its schema refused, an oversized payload, a model
-		// the grant will not serve. No reservation was made and no provider was
-		// contacted, so nothing here is an upstream fault -- the only thing
-		// that went wrong is the bytes the harness sent.
+		// An ordinary Platform route owns its established 4xx attribution. The
+		// in-process confirmation reader is stricter: only its private
+		// pre-reservation provenance marker proves that the harness request was
+		// rejected before provider accounting. A provider-returned receipted
+		// 400/413 has the same status but must remain unattributed here.
 		//
 		// usageUnavailable is still incremented, unchanged, so the run fails
 		// exactly as before via requireCompleteV7Usage. The new counter is
 		// purely attributive.
+		agentAttributedRejection := trustedChatHandler == nil || preReservationReaderRejection
 		session.mu.Lock()
 		session.usageUnavailable++
-		session.agentRequestRejections++
-		if confirmationCase {
-			snapshot := session.caseSnapshots[caseGeneration]
-			snapshot.ReaderAgentRejections++
-			session.caseSnapshots[caseGeneration] = snapshot
+		if agentAttributedRejection {
+			session.agentRequestRejections++
+			if confirmationCase && preReservationReaderRejection {
+				snapshot := session.caseSnapshots[caseGeneration]
+				snapshot.ReaderAgentRejections++
+				session.caseSnapshots[caseGeneration] = snapshot
+			}
+		} else {
+			session.failures++
 		}
 		session.providerLatency += totalLatency
 		rejections, runID := session.agentRequestRejections, session.boundRunID
@@ -3879,10 +3886,17 @@ func (b *inferenceBroker) proxy(
 		if detail == "" {
 			detail = "inference request denied"
 		}
-		log.Printf(
-			"run %s: platform rejected the harness's inference request with %d before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
-			runID, responseStatus, rejections, detail,
-		)
+		if agentAttributedRejection {
+			log.Printf(
+				"run %s: platform rejected the harness's inference request with %d before any reservation -- AGENT fault, no provider was contacted (rejection #%d): %s",
+				runID, responseStatus, rejections, detail,
+			)
+		} else {
+			log.Printf(
+				"run %s: trusted reader returned receipted or otherwise unattributed status %d; preserving provider/accounting failure semantics: %s",
+				runID, responseStatus, detail,
+			)
+		}
 		writeError(w, responseStatus, detail)
 		return
 	}
