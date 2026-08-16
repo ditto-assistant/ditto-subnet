@@ -5329,6 +5329,7 @@ class TestPublicActivity:
             "agent_id": agent_id,
             "miner_hotkey": _MINER_A,
             "name": "hot-path-agent",
+            "name_handle": None,
             "version": None,
             "status": "waiting_screening",
             "submitted_at": body["submitted_at"],
@@ -5458,8 +5459,9 @@ class TestPublicActivity:
         # This fixture exercises an open rollout, validator assignments, retry
         # classification, fleet/orphan snapshots, and build telemetry.
         # Includes one bounded query for the independent live LongMem lane
-        # and one for live handle-claim reservations.
-        assert len(statements) <= 35
+        # and one for live handle-claim reservations plus attested owner roots
+        # so operations badges classify family children correctly.
+        assert len(statements) <= 36
         body = response.json()
         assert body["active_bench_version"] == _ERA
         assert body["desired_bench_version"] == _NEXT_ERA
@@ -5671,6 +5673,7 @@ class TestPublicActivity:
             "agent_id",
             "miner_hotkey",
             "name",
+            "name_handle",
             "version",
             "status",
             "artifact_release",

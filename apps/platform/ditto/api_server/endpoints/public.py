@@ -2157,17 +2157,25 @@ def _public_submission_family(
         "best_official_score_per_payment_owner",
         "best_canonical_score_per_payment_owner",
     ] = "best_official_score_per_payment_owner",
+    handle_claims: dict[str, Any] | None = None,
+    strike: bool = True,
 ) -> PublicSubmissionFamily | None:
     """Project a payment-owner family without exposing its coldkey."""
     if not members:
         return None
+    claims = handle_claims or {}
     return PublicSubmissionFamily(
         member_count=len(members),
         selection_rule=selection_rule,
         members=[
             PublicSubmissionFamilyMember(
                 agent_id=member.agent_id,
-                agent_name=member.agent_name,
+                agent_name=_public_named(
+                    member.agent_name,
+                    getattr(member, "owner", None),
+                    claims,
+                    strike=strike,
+                )[0],
                 agent_version=member.agent_version,
                 miner_hotkey=member.miner_hotkey,
                 canonical_composite=member.canonical_composite,
@@ -2483,6 +2491,20 @@ async def benchmark_timeline(
         bench_versions=[entry.bench_version for entry in releases],
         not_before_by_version=released_at,
     )
+    from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
+    from ditto.db.queries.name_claims import active_handle_claims
+
+    handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    identities = [
+        (
+            point.miner_hotkey,
+            emission_owner(miner_hotkey=point.miner_hotkey, miner_coldkey=None),
+        )
+        for point in points
+    ]
+    timeline_roots = (
+        await attested_emission_owner_roots(session, identities) if points else []
+    )
     return PublicBenchmarkTimelineResponse(
         generated_at=datetime.now(UTC),
         score_quorum=SCORING_QUORUM,
@@ -2492,14 +2514,15 @@ async def benchmark_timeline(
                 recorded_at=point.recorded_at,
                 bench_version=point.bench_version,
                 agent_id=point.agent_id,
-                # Historical timeline is operator-adjacent; keep stored names.
-                agent_name=point.agent_name,
+                agent_name=_public_named(
+                    point.agent_name, root, handle_claims, strike=True
+                )[0],
                 miner_hotkey=point.miner_hotkey,
                 memory_mean=point.memory_mean,
                 composite=point.composite,
                 score_count=point.score_count,
             )
-            for point in points
+            for point, root in zip(points, timeline_roots, strict=True)
         ],
     )
 
@@ -5297,6 +5320,7 @@ async def operations(
     from ditto.db.queries.name_claims import active_handle_claims
 
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
+    owner_roots = await _attested_owner_roots_for_rows(session, activity_rows)
     activity_snapshot = _public_activity_response(
         rows=activity_rows,
         active_work=active_work,
@@ -5336,6 +5360,7 @@ async def operations(
         already_paginated=True,
         precomputed_page_size=max(1, len(activity_rows)),
         handle_claims=handle_claims,
+        owner_roots=owner_roots,
         strike_colliding_names=False,
     )
     validator_snapshot = _validator_heartbeats_response(
@@ -5817,9 +5842,15 @@ async def agent_pipeline(
             ),
             agent_family_members[0].agent_id,
         )
+        from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
+        from ditto.db.queries.name_claims import active_handle_claims
+
         submission_family = _public_submission_family(
             agent_family_members,
             representative_agent_id=official_representative_id,
+            handle_claims=await active_handle_claims(
+                session, netuid=_name_claim_netuid()
+            ),
         )
     else:
         submission_family = None

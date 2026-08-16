@@ -218,7 +218,7 @@ async def submit_endorsement(
             f"this deployment serves {expected_netuid()}",
         )
     async with session.begin():
-        claim = await get_name_claim(session, claim_id=claim_id)
+        claim = await get_name_claim(session, claim_id=claim_id, for_update=True)
         if claim is None:
             raise HTTPException(status_code=404, detail="name claim not found")
         if claim.status == "withdrawn":
@@ -309,7 +309,7 @@ async def submit_withdrawal(
             f"this deployment serves {expected_netuid()}",
         )
     async with session.begin():
-        claim = await get_name_claim(session, claim_id=claim_id)
+        claim = await get_name_claim(session, claim_id=claim_id, for_update=True)
         if claim is None:
             raise HTTPException(status_code=404, detail="name claim not found")
         if claim.status == "withdrawn":

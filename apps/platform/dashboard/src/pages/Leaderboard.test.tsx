@@ -491,9 +491,7 @@ describe("board filter (row 4)", () => {
       expect(document.querySelector(".handle-badge.disputed")?.textContent).toContain(
         "name stricken",
       );
-      expect(document.querySelector(".winner-name")?.textContent).toContain(
-        "Unnamed submission",
-      );
+      expect(document.querySelector(".winner-name")?.textContent).toContain("Unnamed submission");
     });
   });
 

@@ -192,8 +192,16 @@ async def record_name_claim(
     return row
 
 
-async def get_name_claim(session: AsyncSession, *, claim_id: UUID) -> NameClaim | None:
-    return await session.get(NameClaim, claim_id)
+async def get_name_claim(
+    session: AsyncSession, *, claim_id: UUID, for_update: bool = False
+) -> NameClaim | None:
+    if not for_update:
+        return await session.get(NameClaim, claim_id)
+    return (
+        await session.execute(
+            select(NameClaim).where(NameClaim.claim_id == claim_id).with_for_update()
+        )
+    ).scalar_one_or_none()
 
 
 async def list_name_claims(

@@ -476,19 +476,11 @@ async def query_public_activity_page(
         from ditto.api_server.name_claim import STRICKEN_PUBLIC_NAME
 
         stems = reserved_name_stems or set()
-        query_hits_reserved_stem = any(
-            stem in normalized_query or normalized_query in stem for stem in stems
-        )
         query_hits_stricken = normalized_query in STRICKEN_PUBLIC_NAME.casefold()
-        search_name = (
-            literal("")
-            if query_hits_reserved_stem and not query_hits_stricken
-            else Agent.name
-        )
         haystack = func.lower(
             func.concat_ws(
                 " ",
-                search_name,
+                Agent.name,
                 cast(Agent.agent_id, Text),
                 Agent.miner_hotkey,
                 projected.c.public_status,

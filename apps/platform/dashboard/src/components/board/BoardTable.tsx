@@ -10,6 +10,7 @@ import type { JSX } from "solid-js";
 
 import {
   agentLabel,
+  agentName,
   publicDisplayName,
   agentVersionLabel,
   fmtMs,
@@ -727,9 +728,8 @@ function BoardRow(props: {
                   <EntityButton
                     kind="agent"
                     id={member.agent_id}
-                    label={publicDisplayName(member.agent_name, e().name_handle)}
+                    label={agentName(member.agent_name)}
                   />
-                  <HandleBadge handle={e().name_handle} />
                   <span class="submission-version">{agentVersionLabel(member.agent_version)}</span>
                 </span>
                 <span class="family-member-score" title="Canonical three-validator median">
