@@ -363,6 +363,18 @@ resource "google_secret_manager_secret" "hippius_secret_access_key" {
   }
 }
 
+# Operators may create these containers out of band when adding the first
+# version. Adopt them on the next gcp-platform apply.
+import {
+  to = google_secret_manager_secret.hippius_access_key_id
+  id = "projects/${var.project}/secrets/platform-hippius-access-key-id"
+}
+
+import {
+  to = google_secret_manager_secret.hippius_secret_access_key
+  id = "projects/${var.project}/secrets/platform-hippius-secret-access-key"
+}
+
 # Let the runtime SA read every platform secret above.
 resource "google_secret_manager_secret_iam_member" "platform_access" {
   for_each  = toset(local.platform_secret_ids)

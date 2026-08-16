@@ -13,9 +13,9 @@ platform_db_name: ditto_platform_dev
 platform_bucket: ditto-platform-agents-dev
 
 # Same private Hippius bucket as prod. Keep it private; Platform proxies GETs.
-# US cache is closest to the us-central1 Platform VMs.
+# EU cache matches the upcoming EU Platform infra.
 platform_hippius_bucket: ditto-subnet
-platform_hippius_endpoint: "https://us-east-1.hippius.com"
+platform_hippius_endpoint: "https://eu-central-1.hippius.com"
 
 # Per-env Secret Manager secret ids (shared ones are in the platform_app role).
 # Deploy-owned runtime values live separately in /opt/ditto-platform/.env.deploy.
