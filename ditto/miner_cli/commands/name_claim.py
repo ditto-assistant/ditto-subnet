@@ -246,7 +246,7 @@ def run(args: argparse.Namespace) -> int:
                 live_wallet=wallet, key_kind=key_kind, payload=payload
             ),
         )
-        body = NameEndorseRequest(
+        endorse_body = NameEndorseRequest(
             netuid=args.netuid,
             name_stem=args.name_stem,
             endorser_hotkey=handle.hotkey_ss58,
@@ -255,10 +255,10 @@ def run(args: argparse.Namespace) -> int:
             proof=proof,
         )
         if args.print_only:
-            print(body.model_dump_json(indent=2))
+            print(endorse_body.model_dump_json(indent=2))
             return 0
         with ApiClient(base_url=network.api_url) as client:
-            result = client.post_name_endorsement(claim_id, body)
+            result = client.post_name_endorsement(claim_id, endorse_body)
         print(result.claim_id)
         print(
             f"claim {result.status}: "
@@ -296,7 +296,7 @@ def run(args: argparse.Namespace) -> int:
                     live_wallet=wallet, key_kind=key_kind, payload=payload
                 ),
             )
-            body = NameWithdrawRequest(
+            withdraw_body = NameWithdrawRequest(
                 netuid=args.netuid,
                 claimant_hotkey=handle.hotkey_ss58,
                 nonce=nonce,
@@ -304,9 +304,9 @@ def run(args: argparse.Namespace) -> int:
                 proof=proof,
             )
             if args.print_only:
-                print(body.model_dump_json(indent=2))
+                print(withdraw_body.model_dump_json(indent=2))
                 return 0
-            result = client.post_name_withdraw(claim_id, body)
+            result = client.post_name_withdraw(claim_id, withdraw_body)
         print(result.claim_id)
         print(f"claim {result.status} for handle {result.name_stem!r}", file=sys.stderr)
         return 0
