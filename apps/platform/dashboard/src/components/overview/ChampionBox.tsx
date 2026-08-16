@@ -6,11 +6,12 @@
 import { Show } from "solid-js";
 import type { JSX } from "solid-js";
 
-import { agentName, fx, pct, relTime, shortKey } from "../../lib/format";
+import { fx, pct, publicDisplayName, relTime, shortKey } from "../../lib/format";
 import { displayComposite } from "../../lib/scoring";
 import { ChipTip } from "../board/chips";
 import { leaderboardVersionView } from "../board/board-state";
 import { EntityButton } from "../ui/EntityButton";
+import { HandleBadge } from "../ui/HandleBadge";
 import type { BoardEntry, LeaderboardStore } from "../board/leaderboard-data";
 
 export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
@@ -31,8 +32,9 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
   const name = (): string => {
     const entry = championEntry();
     return (
-      (entry ? agentName(entry.agent_name) : shortKey(emissions()?.champion_miner_hotkey)) ||
-      "Unidentified champion"
+      (entry
+        ? publicDisplayName(entry.agent_name, entry.name_handle)
+        : shortKey(emissions()?.champion_miner_hotkey)) || "Unidentified champion"
     );
   };
   const share = (): number | undefined => {
@@ -90,7 +92,12 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                 fallback={jointChampions().length + " evidence-tied agents"}
               >
                 <Show when={championEntry()} fallback={name()}>
-                  {(entry) => <EntityButton kind="agent" id={entry().agent_id} label={name()} />}
+                  {(entry) => (
+                    <>
+                      <EntityButton kind="agent" id={entry().agent_id} label={name()} />
+                      <HandleBadge handle={entry().name_handle} />
+                    </>
+                  )}
                 </Show>
               </Show>
             </div>

@@ -8,6 +8,7 @@ import type { JSX } from "solid-js";
 import { agentName, agentVersionLabel, fx, relTime } from "../../lib/format";
 import { entityHref } from "../../lib/router";
 import { pushEntityRoute } from "../../stores/routeStore";
+import { HandleBadge } from "../ui/HandleBadge";
 import { policyScreeningLabel } from "../pipeline/status";
 import type { FleetReport } from "../../types/fleet";
 import type { BenchmarkProgress } from "../../types/pipeline";
@@ -186,7 +187,10 @@ function PipelineCard(props: {
     >
       <span class="pipeline-item-heading">
         <span class="pipeline-item-identity">
-          <span class="pipeline-item-name">{agentName(entry().name)}</span>
+          <span class="pipeline-item-name">
+            {agentName(entry().name)}
+            <HandleBadge handle={entry().name_handle} />
+          </span>
           <span class="pipeline-item-version">{pipelineAgentVersionLabel(entry().version)}</span>
         </span>
         <span class="pipeline-item-meta">{meta()}</span>

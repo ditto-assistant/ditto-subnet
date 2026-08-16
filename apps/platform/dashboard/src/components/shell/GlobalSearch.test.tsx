@@ -165,4 +165,26 @@ describe("GlobalSearch accessibility (row 32)", () => {
     const titles = options().map((opt) => opt.querySelector(".search-result-title")?.textContent);
     expect(new Set(titles).size).toBe(titles.length);
   });
+
+  it("does not recover a stricken handle from the operations corpus", () => {
+    const stolen: PipelineEntry = {
+      agent_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      name: "Jupiter-ditto-v10",
+      name_handle: {
+        stem: "jupiter",
+        status: "disputed",
+        claim_id: "11111111-1111-1111-1111-111111111111",
+      },
+      version: 1,
+      status: "scored",
+      miner_hotkey: "5StolenHandleHotkeyXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    };
+    render(() => <GlobalSearch miners={() => []} submissions={() => [stolen]} />);
+    type("jupiter");
+    expect(options()).toHaveLength(0);
+    type("Unnamed submission");
+    expect(options()[0]?.querySelector(".search-result-title")?.textContent).toContain(
+      "Unnamed submission",
+    );
+  });
 });

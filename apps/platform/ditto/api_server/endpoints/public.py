@@ -4595,6 +4595,21 @@ def _public_activity_response(
             terminal_history_limit=terminal_history_limit,
         )
         page_size = max(1, len(page_rows))
+    displayed = {
+        row.agent.agent_id: _public_named(
+            row.agent.name,
+            roots.get(
+                row.agent.agent_id,
+                emission_owner(
+                    miner_hotkey=row.agent.miner_hotkey,
+                    miner_coldkey=row.miner_coldkey,
+                ),
+            ),
+            claims,
+            strike=strike_colliding_names,
+        )
+        for row, _row_status in page_rows
+    }
     return PublicActivityResponse(
         generated_at=now,
         count=len(page_rows),
@@ -4608,18 +4623,8 @@ def _public_activity_response(
             PublicActivityEntry(
                 agent_id=row.agent.agent_id,
                 miner_hotkey=row.agent.miner_hotkey,
-                name=_public_named(
-                    row.agent.name,
-                    roots.get(
-                        row.agent.agent_id,
-                        emission_owner(
-                            miner_hotkey=row.agent.miner_hotkey,
-                            miner_coldkey=row.miner_coldkey,
-                        ),
-                    ),
-                    claims,
-                    strike=strike_colliding_names,
-                )[0],
+                name=displayed[row.agent.agent_id][0],
+                name_handle=displayed[row.agent.agent_id][1],
                 version=row.agent.version,
                 status=row_status,
                 artifact_release=artifact_releases[row.agent.agent_id],
@@ -5286,7 +5291,12 @@ async def operations(
     ath_reviews, ath_composite = await _ath_review_public_snapshot(
         session, activity_rows
     )
-    # Operations is the operator pipeline board: keep stored agents.name.
+    # Operations keeps stored agents.name; handle annotations still travel so
+    # the operator board can mark a reserved or stricken stem.
+    from ditto.api_server.name_claim import expected_netuid as _name_claim_netuid
+    from ditto.db.queries.name_claims import active_handle_claims
+
+    handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
     activity_snapshot = _public_activity_response(
         rows=activity_rows,
         active_work=active_work,
@@ -5325,6 +5335,7 @@ async def operations(
         precomputed_total=activity_page.total,
         already_paginated=True,
         precomputed_page_size=max(1, len(activity_rows)),
+        handle_claims=handle_claims,
         strike_colliding_names=False,
     )
     validator_snapshot = _validator_heartbeats_response(
@@ -5599,11 +5610,13 @@ async def agent_summary(
             miner_coldkey=row.miner_coldkey,
         ),
     )
+    display_name, name_handle = _public_named(row.agent.name, owner_root, handle_claims)
     return PublicAgentSummary(
         generated_at=now,
         agent_id=agent_id,
         miner_hotkey=row.agent.miner_hotkey,
-        name=_public_named(row.agent.name, owner_root, handle_claims)[0],
+        name=display_name,
+        name_handle=name_handle,
         version=row.agent.version,
         status=status,
         submitted_at=row.agent.created_at,

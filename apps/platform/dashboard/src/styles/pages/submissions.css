@@ -12,7 +12,10 @@
   cursor: pointer;
 }
 .agent-name {
-  display: block;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
   font-weight: 650;
   color: var(--text);
 }

@@ -8,7 +8,14 @@
 import { For, Show, createSignal, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
-import { agentLabel, agentVersionLabel, fx, relTime, shortKey } from "../../lib/format";
+import {
+  agentLabel,
+  agentVersionLabel,
+  fx,
+  publicDisplayName,
+  relTime,
+  shortKey,
+} from "../../lib/format";
 import { dashboardHref } from "../../lib/router";
 import { pushEntityRoute, syncFromLocation } from "../../stores/routeStore";
 import { activityStage } from "../pipeline/status";
@@ -69,7 +76,9 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
         title: shortKey(entry.miner_hotkey),
         detail:
           (entry.rank ? "Rank #" + entry.rank : "Unranked") + " · composite " + fx(entry.composite),
-        text: [entry.miner_hotkey, model, entry.bench_version].map(searchText).join(" "),
+        text: [entry.miner_hotkey, entry.agent_name, model, entry.bench_version]
+          .map(searchText)
+          .join(" "),
       };
     });
     const seen: Record<string, boolean> = {};
@@ -79,10 +88,11 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
       seen[key] = true;
       const stage = stageLabel(entry.status);
       const preserved = (entry as { preserved_composite?: number | null }).preserved_composite;
+      const display = publicDisplayName(entry.name, entry.name_handle);
       items.push({
         type: "submission",
         submission: entry,
-        title: agentLabel(entry.name, entry.version),
+        title: agentLabel(display, entry.version),
         detail:
           String(entry.agent_id || "").slice(0, 8) +
           " · " +
@@ -95,7 +105,8 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
           " · " +
           relTime(entry.submitted_at),
         text: [
-          entry.name,
+          display,
+          entry.name_handle?.status === "disputed" ? "" : entry.name,
           agentVersionLabel(entry.version),
           entry.agent_id,
           entry.miner_hotkey,
@@ -104,7 +115,7 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
           entry.review_reason,
           entry.screening_reason,
           entry.duplicate_of,
-          entry.duplicate_name,
+          entry.name_handle?.status === "disputed" ? "" : entry.duplicate_name,
           agentVersionLabel(entry.duplicate_version),
         ]
           .map(searchText)

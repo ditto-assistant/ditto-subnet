@@ -395,7 +395,7 @@ async def test_activity_keeps_attested_child_name_and_strikes_copycat(
         session_maker,
         hotkey=child.ss58_address,
         coldkey=_kp("//Eve//stash").ss58_address,
-        name="Jupiter-child",
+        name="Jupiter_v2",
     )
     thief = _kp("//Ferdie")
     thief_id = await _seed_family(
@@ -424,11 +424,14 @@ async def test_activity_keeps_attested_child_name_and_strikes_copycat(
 
     child_summary = await client.get(f"/api/v1/public/agent/{child_id}/summary")
     assert child_summary.status_code == 200, child_summary.text
-    assert child_summary.json()["name"] == "Jupiter-child"
+    assert child_summary.json()["name"] == "Jupiter_v2"
+    assert child_summary.json()["name_handle"]["status"] == "reserved"
 
     thief_summary = await client.get(f"/api/v1/public/agent/{thief_id}/summary")
     assert thief_summary.status_code == 200, thief_summary.text
     assert thief_summary.json()["name"] == STRICKEN_PUBLIC_NAME
+    assert thief_summary.json()["name_handle"]["status"] == "disputed"
+    assert thief_summary.json()["name_handle"]["stem"] == "jupiter"
 
     stolen = await client.get("/api/v1/public/activity?q=jupiter")
     assert stolen.status_code == 200, stolen.text
@@ -442,6 +445,7 @@ async def test_activity_keeps_attested_child_name_and_strikes_copycat(
     assert unnamed.status_code == 200, unnamed.text
     unnamed_by_id = {entry["agent_id"]: entry for entry in unnamed.json()["entries"]}
     assert unnamed_by_id[str(thief_id)]["name"] == STRICKEN_PUBLIC_NAME
+    assert unnamed_by_id[str(thief_id)]["name_handle"]["status"] == "disputed"
 
     assert (await client.get("/api/v1/admin/leaderboard")).status_code == 401
     admin = await client.get(

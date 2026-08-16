@@ -119,6 +119,18 @@ export function agentName(name: string | null | undefined): string {
   return name || "Unnamed agent";
 }
 
+/** Public stand-in after an upheld handle claim strikes a colliding name. */
+export const STRICKEN_PUBLIC_NAME = "Unnamed submission";
+
+/** Public identity for a stored name plus its optional handle annotation. */
+export function publicDisplayName(
+  stored: string | null | undefined,
+  handle?: { status?: string | null } | null,
+): string {
+  if (handle?.status === "disputed") return STRICKEN_PUBLIC_NAME;
+  return agentName(stored);
+}
+
 /** "Submission vN"; a missing version reads "Legacy submission". */
 export function agentVersionLabel(version: number | null | undefined): string {
   return version == null ? "Legacy submission" : "Submission v" + version;

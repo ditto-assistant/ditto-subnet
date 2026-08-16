@@ -11065,6 +11065,8 @@ export interface components {
              * @description Miner-provided agent display name.
              */
             name: string;
+            /** @description Signed handle reservation touching this name, when one exists. Same semantics as the public leaderboard annotation. */
+            name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /**
              * Preserved Composite
              * @description Median composite preserved while an ATH review is active.
@@ -11287,6 +11289,8 @@ export interface components {
              * @description Miner-provided agent display name.
              */
             name: string;
+            /** @description Signed handle reservation touching this name, when one exists. Same semantics as the public leaderboard annotation. */
+            name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /** Preserved Composite */
             preserved_composite?: number | null;
             /** Quorum */

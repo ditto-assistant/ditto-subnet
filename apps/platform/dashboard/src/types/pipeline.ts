@@ -3,13 +3,14 @@
 // /public/agent/{id}/pipeline, and the digest-verified transcript telemetry
 // sidecar).
 
-import type { CaseResult, V9BaseEvidence } from "./leaderboard";
+import type { CaseResult, NameHandle, V9BaseEvidence } from "./leaderboard";
 
 // ── Activity / submissions (/public/activity) ────────────────
 
 export interface ActivityEntry {
   agent_id?: string;
   name?: string | null;
+  name_handle?: NameHandle | null;
   version?: number | null;
   miner_hotkey?: string;
   /** Submission status slug, e.g. "waiting_screening" | "scored" | "rejected". */

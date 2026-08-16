@@ -10,7 +10,7 @@ import type { JSX } from "solid-js";
 
 import {
   agentLabel,
-  agentName,
+  publicDisplayName,
   agentVersionLabel,
   fmtMs,
   fx,
@@ -66,6 +66,7 @@ import {
 } from "./chips";
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
 import type { ChainWeightInfo } from "../../types/leaderboard";
+import { HandleBadge } from "../ui/HandleBadge";
 import { ChainWeightsPanel } from "./ChainWeightsPanel";
 
 // Matching agent name, UID, and hotkey covers how people actually look a
@@ -75,6 +76,7 @@ import { ChainWeightsPanel } from "./ChainWeightsPanel";
 export function boardMatches(entry: BoardEntry, needle: string): boolean {
   if (!needle) return true;
   const fields: unknown[] = [
+    publicDisplayName(entry.agent_name, entry.name_handle),
     entry.agent_name,
     entry.miner_hotkey,
     entry.miner_uid == null ? "" : "uid " + entry.miner_uid,
@@ -418,10 +420,7 @@ function BoardRow(props: {
       ? " r" + e().rank
       : "";
   const kind = (): "zero" | "provisional" | null => unrankedKind(e());
-  const displayName = (): string =>
-    e().name_handle?.status === "disputed"
-      ? "Unnamed submission"
-      : agentName(e().agent_name);
+  const displayName = (): string => publicDisplayName(e().agent_name, e().name_handle);
   const rowLabel = (): string =>
     (elig()
       ? (finalizedEntry() ? "Rank " : "Provisional rank ") + e().rank
@@ -525,40 +524,7 @@ function BoardRow(props: {
             <span class="winner-identity">
               <span class="winner-name">
                 <EntityButton kind="agent" id={e().agent_id} label={displayName()} />
-                <Show when={e().name_handle?.status === "reserved"}>
-                  <ChipTip
-                    class="handle-badge reserved tip-chip"
-                    text={
-                      "This payment-owner family holds a signed, endorsed reservation for handle “" +
-                      (e().name_handle?.stem ?? "") +
-                      "”. Other families cannot upload a colliding name."
-                    }
-                  >
-                    handle reserved
-                  </ChipTip>
-                </Show>
-                <Show when={e().name_handle?.status === "disputed"}>
-                  <ChipTip
-                    class="handle-badge disputed tip-chip"
-                    text={
-                      "This name was stricken after three entrenched miner families endorsed a handle claim. Upload again under a different name."
-                    }
-                  >
-                    name stricken
-                  </ChipTip>
-                </Show>
-                <Show when={e().name_handle?.status === "pending"}>
-                  <ChipTip
-                    class="handle-badge pending tip-chip"
-                    text={
-                      "A signed claim for handle “" +
-                      (e().name_handle?.stem ?? "") +
-                      "” is waiting on endorsements from entrenched miner families."
-                    }
-                  >
-                    handle pending
-                  </ChipTip>
-                </Show>
+                <HandleBadge handle={e().name_handle} />
                 <Show when={kind() === "zero"}>
                   <ChipTip
                     class="prov tip-chip"
@@ -761,8 +727,9 @@ function BoardRow(props: {
                   <EntityButton
                     kind="agent"
                     id={member.agent_id}
-                    label={agentName(member.agent_name)}
+                    label={publicDisplayName(member.agent_name, e().name_handle)}
                   />
+                  <HandleBadge handle={e().name_handle} />
                   <span class="submission-version">{agentVersionLabel(member.agent_version)}</span>
                 </span>
                 <span class="family-member-score" title="Canonical three-validator median">

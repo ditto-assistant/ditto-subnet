@@ -32,11 +32,13 @@ import {
   fx,
   monoDisplay,
   pct,
+  publicDisplayName,
   relTime,
   relTimeUntil,
 } from "../lib/format";
 import { entityHref } from "../lib/router";
 import type { EntityKind, EntityRoute } from "../lib/router";
+import type { NameHandle } from "../types/leaderboard";
 import {
   COMPOSITE_CALC_NOTE,
   compositeCalculationHeading,
@@ -87,6 +89,7 @@ import { AssignmentDetail } from "./operations/FleetTable";
 import { BenchmarkProgressView } from "./operations/progress";
 import { CopyButton } from "./shell/CopyButton";
 import { EntityButton } from "./ui/EntityButton";
+import { HandleBadge } from "./ui/HandleBadge";
 import { StatusChip } from "./ui/StatusChip";
 
 type RankedEntry = LeaderboardEntry & { rank?: number | null };
@@ -453,6 +456,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
 
   interface HeaderState {
     title: string;
+    handle?: NameHandle | null;
     chip: { text: string; class: string; title: string };
     dkLabel: string;
     hotkey: string | null;
@@ -477,6 +481,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
           " scores";
       return {
         title,
+        handle: e.name_handle,
         chip: minerBenchChip(e, props.currentBench()),
         dkLabel: "Miner",
         hotkey: e.miner_hotkey,
@@ -499,7 +504,8 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       const e = current.entry;
       const stage = activityStage(e.status);
       return {
-        title: agentName(e.name),
+        title: publicDisplayName(e.name, e.name_handle),
+        handle: e.name_handle,
         chip: {
           text: stage[0] as string,
           class: stage[1] as string,
@@ -595,6 +601,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
         </div>
         <div class="dhead">
           <h3 id="d-title">{header()?.title ?? "Miner"}</h3>
+          <HandleBadge handle={header()?.handle} />
           <span id="d-bench" class={header()?.chip.class ?? ""} title={header()?.chip.title ?? ""}>
             {header()?.chip.text ?? ""}
           </span>

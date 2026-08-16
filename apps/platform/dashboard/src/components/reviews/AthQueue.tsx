@@ -15,6 +15,7 @@ import { agentLabel, athDate, fx, relTime, shortKey } from "../../lib/format";
 import type { AthReview, AthSnapshot } from "../../types/pipeline";
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
+import { HandleBadge } from "../ui/HandleBadge";
 import { athReviewSnapshot, athSnapshotLabel } from "./ath";
 
 interface QueueState {
@@ -56,6 +57,7 @@ function ReviewCard(props: { entry: AthReviewEntry }): JSX.Element {
         <div>
           <div class="ath-agent-name">
             <EntityButton kind="agent" id={agentId()} label={agentLabel(e().name, e().version)} />
+            <HandleBadge handle={e().name_handle} />
           </div>
           <div class="ath-id-line">
             <code>{agentId()}</code>

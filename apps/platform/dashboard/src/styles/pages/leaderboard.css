@@ -861,30 +861,7 @@ tbody tr:focus-visible {
   flex: none;
   margin-left: 0;
 }
-.handle-badge {
-  font-family: var(--sans);
-  font-size: 10.5px;
-  font-weight: 700;
-  letter-spacing: 0.25px;
-  text-transform: uppercase;
-  border-radius: 5px;
-  padding: 1px 6px;
-}
-.handle-badge.reserved {
-  color: var(--accent);
-  border: 1px solid color-mix(in oklab, var(--accent) 48%, transparent);
-  background: color-mix(in oklab, var(--accent) 12%, transparent);
-}
-.handle-badge.disputed {
-  color: var(--bad);
-  border: 1px solid color-mix(in oklab, var(--bad) 48%, transparent);
-  background: color-mix(in oklab, var(--bad) 12%, transparent);
-}
-.handle-badge.pending {
-  color: var(--warn);
-  border: 1px solid color-mix(in oklab, var(--warn) 48%, transparent);
-  background: color-mix(in oklab, var(--warn) 12%, transparent);
-}
+
 .family-toggle {
   display: inline-flex;
   align-items: center;

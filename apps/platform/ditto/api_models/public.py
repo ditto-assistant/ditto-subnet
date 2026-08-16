@@ -2261,6 +2261,13 @@ class PublicActivityEntry(BaseModel):
         str, Field(pattern=_SS58_PATTERN, description="Submitting miner's SS58 hotkey.")
     ]
     name: Annotated[str, Field(description="Miner-provided agent display name.")]
+    name_handle: PublicNameHandle | None = Field(
+        default=None,
+        description=(
+            "Signed handle reservation touching this name, when one exists. "
+            "Same semantics as the public leaderboard annotation."
+        ),
+    )
     version: Annotated[
         int | None,
         Field(
@@ -2873,6 +2880,13 @@ class PublicAgentSummary(BaseModel):
         str, Field(pattern=_SS58_PATTERN, description="Submitting miner's SS58 hotkey.")
     ]
     name: Annotated[str, Field(description="Miner-provided agent display name.")]
+    name_handle: PublicNameHandle | None = Field(
+        default=None,
+        description=(
+            "Signed handle reservation touching this name, when one exists. "
+            "Same semantics as the public leaderboard annotation."
+        ),
+    )
     version: Annotated[int | None, Field(default=None, ge=1)] = None
     status: Annotated[str, Field(description="Current public lifecycle stage.")]
     submitted_at: datetime

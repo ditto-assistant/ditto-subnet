@@ -37,6 +37,7 @@ import type {
 } from "../../types/pipeline";
 import { CopyButton } from "../shell/CopyButton";
 import { EntityButton } from "../ui/EntityButton";
+import { HandleBadge } from "../ui/HandleBadge";
 import { StatusChip } from "../ui/StatusChip";
 import { BenchmarkProgressView } from "../operations/progress";
 import type { ArtifactRelease } from "../pipeline/artifact-release";
@@ -1069,7 +1070,10 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
             <dl class="pipeline-meta-list">
               <div>
                 <dt>Agent</dt>
-                <dd>{agentName(props.entry.name)}</dd>
+                <dd>
+                  {agentName(props.entry.name)}
+                  <HandleBadge handle={props.entry.name_handle} />
+                </dd>
               </div>
               <div>
                 <dt>Submission</dt>

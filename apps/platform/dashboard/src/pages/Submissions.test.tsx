@@ -250,6 +250,35 @@ describe("server-backed quick filters (row 10)", () => {
 // module in src/components/pipeline/status.test.ts; this file keeps the
 // page wiring under test via the table rows above.
 
+describe("handle claim annotations", () => {
+  it("renders a stricken name with the disputed badge", async () => {
+    const first = activity.entries?.[0];
+    stubActivityFetch(() => ({
+      ...activity,
+      entries: first
+        ? [
+            {
+              ...first,
+              name: "Unnamed submission",
+              name_handle: {
+                stem: "jupiter",
+                status: "disputed",
+                claim_id: "11111111-1111-1111-1111-111111111111",
+              },
+            },
+          ]
+        : [],
+    }));
+    render(() => <SubmissionsPage />);
+    await waitFor(() => {
+      expect(document.querySelector(".agent-name")?.textContent).toContain("Unnamed submission");
+      expect(document.querySelector(".handle-badge.disputed")?.textContent).toContain(
+        "name stricken",
+      );
+    });
+  });
+});
+
 // ── Row 12: test_submission_filters_and_page_restore_and_sanitize_the_url ───
 // Activity filter/page state lives in the hash query; legacy real-query
 // filters are honored once and normalized; page numbers are validated

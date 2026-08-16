@@ -15,6 +15,7 @@ import {
   median,
   num,
   pct,
+  publicDisplayName,
   relDuration,
   relTime,
   relTimeUntil,
@@ -212,6 +213,13 @@ describe("agent naming", () => {
     expect(agentName("My agent")).toBe("My agent");
     expect(agentName(null)).toBe("Unnamed agent");
     expect(agentName("")).toBe("Unnamed agent");
+    expect(publicDisplayName("Jupiter-ditto-v10", { status: "disputed" })).toBe(
+      "Unnamed submission",
+    );
+    expect(publicDisplayName("Jupiter-ditto-v10", { status: "reserved" })).toBe(
+      "Jupiter-ditto-v10",
+    );
+    expect(publicDisplayName(null, null)).toBe("Unnamed agent");
   });
 
   it("reads a missing version as a legacy submission (v0 is a real version)", () => {
