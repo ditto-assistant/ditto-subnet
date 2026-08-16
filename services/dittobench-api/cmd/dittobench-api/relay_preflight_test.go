@@ -549,6 +549,14 @@ func TestV8RejectsACompleteUnusedChatLaneAsAgentFailure(t *testing.T) {
 	}
 }
 
+// gatedZeroUseVersions are the bench versions whose zero-use interval is
+// settled by the signed route proof rather than rejected outright.
+var gatedZeroUseVersions = []int{
+	protocol.BenchVersionV9,
+	protocol.BenchVersionV10,
+	protocol.BenchVersionV11,
+}
+
 func TestV9RequiresSignedRouteProofForACompleteUnusedChatLane(t *testing.T) {
 	unused := protocol.TokenUsage{
 		Status:            "complete",
@@ -557,8 +565,11 @@ func TestV9RequiresSignedRouteProofForACompleteUnusedChatLane(t *testing.T) {
 		ProfileRevision:   "openrouter-route-0123456789abcdef-v1",
 		Model:             llm.V7HarnessModel,
 	}
-	if err := requireCompleteV7Usage(protocol.BenchVersionV9, unused, relayExecutionSummary{}); !errors.Is(err, errAgentModelUseMissing) {
-		t.Fatalf("v9 unproven zero use error = %v, want model-use sentinel", err)
+	for _, version := range gatedZeroUseVersions {
+		err := requireCompleteV7Usage(version, unused, relayExecutionSummary{})
+		if !errors.Is(err, errAgentModelUseMissing) {
+			t.Fatalf("v%d unproven zero use error = %v, want model-use sentinel", version, err)
+		}
 	}
 	if err := requireCompleteV7Usage(protocol.BenchVersionV8, unused, relayExecutionSummary{}); !errors.Is(err, errAgentModelUseMissing) {
 		t.Fatalf("v8 behavior changed: %v", err)
@@ -590,12 +601,14 @@ func TestV9SignedRouteProofDistinguishesGenuineZeroUse(t *testing.T) {
 			if got := test.execution.provesV9RouteDisposition(); got != test.wantProof {
 				t.Fatalf("provesV9RouteDisposition() = %t, want %t", got, test.wantProof)
 			}
-			err := requireCompleteV7Usage(protocol.BenchVersionV9, unused, test.execution)
-			if test.wantProof && err != nil {
-				t.Fatalf("proved v9 zero rejected: %v", err)
-			}
-			if !test.wantProof && !errors.Is(err, errAgentModelUseMissing) {
-				t.Fatalf("unproved v9 zero error = %v, want model-use sentinel", err)
+			for _, version := range gatedZeroUseVersions {
+				err := requireCompleteV7Usage(version, unused, test.execution)
+				if test.wantProof && err != nil {
+					t.Fatalf("proved v%d zero rejected: %v", version, err)
+				}
+				if !test.wantProof && !errors.Is(err, errAgentModelUseMissing) {
+					t.Fatalf("unproved v%d zero error = %v, want model-use sentinel", version, err)
+				}
 			}
 		})
 	}
@@ -606,6 +619,43 @@ func TestV9SignedRouteProofDistinguishesGenuineZeroUse(t *testing.T) {
 		relayExecutionSummary{RouteProbeAttempts: 2},
 	); !errors.Is(err, errAgentModelUseMissing) {
 		t.Fatalf("v8 zero unexpectedly accepted by v9 proof: %v", err)
+	}
+}
+
+// A `== BenchVersionV9` pin on the proven-zero branch meant every v10/v11
+// zero-inference run ended as sandbox_failure / model_inference_required /
+// retryable:false instead of an accepted 0.00. The submission then never
+// finalized a v11 row, so the single-version ledger kept ranking the agent on
+// its saturated v10 composite and the anti-template-fitting bench never
+// measured it. Observed 2026-08-16 on three unrelated hotkeys, all holding an
+// identical 0.997012 v10 score.
+func TestProvenZeroInferenceIsAcceptedOnEveryGatedBenchVersion(t *testing.T) {
+	unused := protocol.TokenUsage{
+		Status:            "complete",
+		AccountingVersion: 2,
+		Provider:          "openrouter",
+		ProfileRevision:   "openrouter-route-0123456789abcdef-v1",
+		Model:             llm.V7HarnessModel,
+	}
+	proven := relayExecutionSummary{RouteProbeAttempts: 2, RouteProbeRouted: 1}
+	for _, version := range gatedZeroUseVersions {
+		if err := requireCompleteV7Usage(version, unused, proven); err != nil {
+			t.Fatalf("v%d proven zero inference not accepted for scoring: %v", version, err)
+		}
+	}
+
+	// The proof requirement itself must not have been dropped along the way: an
+	// unproven zero is an adapter mismatch we cannot rule out, and scoring it
+	// 0.00 would charge the miner for a platform fault.
+	for _, version := range gatedZeroUseVersions {
+		err := requireCompleteV7Usage(version, unused, relayExecutionSummary{RouteProbeAttempts: 1})
+		if !errors.Is(err, errAgentModelUseMissing) {
+			t.Fatalf("v%d unproven zero was widened into an accepted score: %v", version, err)
+		}
+		failure := relayFinalizeFailure(err)
+		if failure.Kind != "sandbox_failure" || failure.Code != "model_inference_required" || failure.Retryable {
+			t.Fatalf("v%d unproven zero classification = %+v", version, failure)
+		}
 	}
 }
 

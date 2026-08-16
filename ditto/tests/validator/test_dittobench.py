@@ -1760,7 +1760,10 @@ async def test_agent_attributable_inference_failures_stay_the_agents(
     or token allowance its own ticket granted, or sent one request too large to
     reserve (platform decline codes 4102/4104/4109). The lease was alive and the
     platform healthy throughout. ``model_inference_required`` means the broker
-    was healthy but the harness made no authoritative chat request.
+    was healthy, the harness made no authoritative chat request, AND the scorer
+    could not prove the harness was able to reach the broker at all -- a PROVEN
+    zero-inference run is not a failure and never reaches this path (see
+    ``test_proven_zero_inference_polls_back_as_an_ordinary_score``).
 
     ``infrastructure`` mints a retry grant, RAISES the attempt cap, and
     re-leases, so an agent that reliably exhausts its own allowance would
@@ -2015,6 +2018,103 @@ def _done_v9_job(*, declare_transcript: bool = True) -> dict[str, object]:
         }
     )
     return job
+
+
+def _done_zero_inference_job(bench_version: int) -> dict[str, object]:
+    """The signed report a PROVEN zero-inference run now returns on v9/v10/v11.
+
+    The model-use gate reads ``zero_inference`` with factor ``0``, the enforce
+    multiplier collapses the effective composite to ``0``, and the root is
+    signed exactly like any other score.
+    """
+    from ditto_screening_protocol.bench_v9 import V9ScoreGateEvidence
+
+    declared = hashlib.sha256(_TRANSCRIPT).hexdigest()
+    evidence = json.loads(_V9_CONTRACT_VECTOR.read_text())["vectors"][0]["details"]
+    evidence["run_id"] = "private-run-id"
+    evidence["transcript_sha256"] = declared
+    evidence["bench_version"] = bench_version
+    evidence["score_gates"]["bench_version"] = bench_version
+    model_use = evidence["score_gates"]["model_use"]
+    model_use.update(
+        successful_inference_cases=0,
+        missing_inference_cases=model_use["eligible_cases"],
+        observed_requests=0,
+        successful_requests=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        request_coverage_bps=0,
+        coverage_bps=0,
+        result="zero_inference",
+        factor_bps=0,
+    )
+    evidence["score_gates_sha256"] = V9ScoreGateEvidence.model_validate(
+        evidence["score_gates"]
+    ).digest_hex()
+    evidence["semantic_gate_factor_bps"] = 0
+    evidence["applied_gate_factor_bps"] = 0
+    evidence["effective_composite_micros"] = 0
+    evidence["effective_stderr_micros"] = 0
+    validated = V9BaseEvidence.model_validate(evidence)
+
+    job = _done_job()
+    job["bench_version"] = bench_version
+    job["transcript_sha256"] = declared
+    report = cast(dict[str, object], job["report"])
+    report.update(
+        {
+            "composite": 0.0,
+            "composite_stderr": 0.0,
+            "tool_mean": 0.0,
+            "memory_mean": 0.0,
+            "base_evidence_sha256": validated.digest_hex(),
+            "details": {
+                "bench_version": bench_version,
+                "dataset_sha256": validated.dataset_sha256,
+                "transcript_sha256": declared,
+                "v9_base": evidence,
+            },
+        }
+    )
+    return job
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bench_version", [9, 10, 11])
+async def test_proven_zero_inference_polls_back_as_an_ordinary_score(
+    bench_version: int,
+) -> None:
+    """A composite of exactly 0.00 is a score, and the validator submits it.
+
+    The scorer used to terminate a v10/v11 zero-inference run as
+    ``model_inference_required`` because its proven-zero branch was pinned to
+    ``== 9``. The submission then produced no row at that version, and the
+    single-version ledger went on ranking the agent on its saturated v10
+    composite -- so the anti-template-fitting bench could never touch it.
+
+    Now the run comes back ``done`` with a signed composite of ``0.0``. There
+    must be no zero-composite special case anywhere on this path: no error, no
+    retry, no infrastructure reclassification. Just a score.
+    """
+    job = _done_zero_inference_job(bench_version)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/transcript"):
+            return httpx.Response(200, content=_TRANSCRIPT)
+        return httpx.Response(200, json=job)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, _poll_config()), http)
+        report = await client._poll(
+            "private-run-id", expected_bench_version=bench_version
+        )
+
+    assert report.composite == 0.0
+    assert report.bench_version == bench_version
+    assert report.base_evidence_sha256
+    v9_base = cast(dict[str, Any], (report.details or {})["v9_base"])
+    assert v9_base["score_gates"]["model_use"]["result"] == "zero_inference"
+    assert v9_base["applied_gate_factor_bps"] == 0
 
 
 def _transcript_handler(declared: str, body: bytes) -> httpx.MockTransport:

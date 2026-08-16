@@ -277,25 +277,37 @@ func TestApplyV9BaseEvidencePublishesTypedSignedRoot(t *testing.T) {
 	}
 }
 
+// Every gated version must turn a proven zero-inference run into the SAME
+// signed, finalizable 0.00. v10/v11 matter as much as v9 here: v10 is saturated
+// at the 0.997012 ceiling, so a zero-inference agent that fails to produce a
+// v11 row keeps that ceiling by carry-forward. The score has to exist for the
+// ledger to move off it.
 func TestApplyV9BaseEvidenceAcceptsHealthyZeroInferenceAsFactorZero(t *testing.T) {
-	report := sampleV9Report()
-	perCase := []protocol.CaseScore{{CaseID: "memory"}}
-	got, err := applyV9BaseEvidence(
-		report,
-		submitRequest{BenchVersion: protocol.BenchVersionV9, TarballSHA256: v9ArtifactSHA},
-		perCase,
-		completeModelTranscripts(perCase, false),
-		completeUsage(0, 0, 0, 0), relayExecutionSummary{}, v9TranscriptSHA,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	base := got.Details.V9Base
-	if base.ScoreGates.ModelUse.Result != string(scoregates.ResultZeroInference) || base.SemanticGateFactorBPS != 0 {
-		t.Fatalf("zero inference did not become valid zero-factor evidence: %+v", base)
-	}
-	if got.Composite != 0 || got.CompositeStderr != 0 || base.AppliedGateFactorBPS != 0 {
-		t.Fatalf("enforce zero-inference did not zero score: %+v", got)
+	for _, version := range gatedZeroUseVersions {
+		report := sampleV9Report()
+		perCase := []protocol.CaseScore{{CaseID: "memory"}}
+		got, err := applyV9BaseEvidence(
+			report,
+			submitRequest{BenchVersion: version, TarballSHA256: v9ArtifactSHA},
+			perCase,
+			completeModelTranscripts(perCase, false),
+			completeUsage(0, 0, 0, 0),
+			relayExecutionSummary{RouteProbeAttempts: 2, RouteProbeRouted: 1},
+			v9TranscriptSHA,
+		)
+		if err != nil {
+			t.Fatalf("v%d: %v", version, err)
+		}
+		base := got.Details.V9Base
+		if base.ScoreGates.ModelUse.Result != string(scoregates.ResultZeroInference) || base.SemanticGateFactorBPS != 0 {
+			t.Fatalf("v%d zero inference did not become valid zero-factor evidence: %+v", version, base)
+		}
+		if got.Composite != 0 || got.CompositeStderr != 0 || base.AppliedGateFactorBPS != 0 {
+			t.Fatalf("v%d enforce zero-inference did not zero score: %+v", version, got)
+		}
+		if base.BenchVersion != version {
+			t.Fatalf("v%d signed root carries bench version %d", version, base.BenchVersion)
+		}
 	}
 }
 

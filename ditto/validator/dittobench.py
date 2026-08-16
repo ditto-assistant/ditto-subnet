@@ -253,10 +253,27 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
 #   or token allowance its own ticket granted, or sent one request too large to
 #   reserve (platform decline codes 4102/4104/4109).
 # - ``model_inference_required`` when the broker stayed healthy but observed no
-#   authoritative chat request during the scored interval.
+#   authoritative chat request during the scored interval AND the scorer could
+#   not prove the harness was able to reach the broker at all.
 #
 # The lease and broker were healthy in both cases. A fresh grant therefore
 # cannot repair the same harness behaviour.
+#
+# Read the second one carefully, because it no longer means "the agent ran no
+# inference". On every gated version (v9, v10, v11) a zero-inference run whose
+# route disposition the scorer DID prove -- one routed discarded challenge, or
+# both supported selectors challenged and missed -- is not a failure at all. It
+# comes back through the ordinary ``/score`` path as an accepted, signed
+# composite of 0.00 with the model-use gate reading ``zero_inference``, and this
+# validator submits it like any other score. Nothing here special-cases it, and
+# nothing should: a 0.00 is a score, and the ledger needs it to exist so the
+# agent stops being ranked on its previous bench version's composite.
+#
+# ``model_inference_required`` is therefore now the strictly narrower residue:
+# a zero-chat interval the scorer could not distinguish from an inference-adapter
+# mismatch. That ambiguity is exactly why it must not be scored 0.00 -- and also
+# why it must not become retryable, since re-leasing re-runs the same image
+# against the same selectors.
 #
 # It MUST NOT be added to ``_SANDBOX_INFRASTRUCTURE_CODES``. Every code in that
 # set is no-fault: it mints a retry grant, RAISES the attempt cap, and

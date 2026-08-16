@@ -112,6 +112,10 @@ type relayExecutionSummary struct {
 // can reach the ticket broker but chose not to during the scored cases. If the
 // preferred selector misses, both supported selectors must be challenged
 // before a zero can be signed.
+//
+// Named for the v9 contract that introduced it, but the counters it reads are
+// populated for every version >= v8 and requireCompleteV7Usage consults it for
+// every version >= v9. Nothing here is v9-specific.
 func (s relayExecutionSummary) provesV9RouteDisposition() bool {
 	return (s.RouteProbeAttempts > 0 &&
 		s.RouteProbeRouted > 0 &&
@@ -287,7 +291,38 @@ func requireTokenAccounting(snapshot relayHealthSnapshot, benchVersion int, runS
 }
 
 // requireCompleteV7Usage accepts efficiency.ValidUsage and the one explicitly
-// proven v9 zero-use shape. Every other incomplete interval fails closed.
+// proven zero-use shape. Every other incomplete interval fails closed.
+//
+// The proven zero-use branch is pinned to `>= BenchVersionV9`, not `== 9`, and
+// that is the whole point of it. A `== 9` pin meant a v10/v11 agent that ran
+// zero inference got errAgentModelUseMissing -- sandbox_failure /
+// model_inference_required / retryable:false -- so the submission never
+// received a v11 score at all. The ledger is single-version by construction
+// (see the authority filter in ditto/db/queries/scores.py), so an agent with no
+// v11 quorum simply keeps being ranked on its last authoritative version. With
+// v10 saturated at the 0.997012 ceiling, a zero-inference template-fitter was
+// therefore holding a near-perfect composite that the anti-template-fitting
+// bench could never measure -- the exact inversion of what v11 exists to do.
+//
+// Everything the accepted branch needs already carries forward to v10/v11 and
+// is NOT v9-only: the discarded route probe runs for `>= BenchVersionV8`
+// (main.go), scoregates.SupportedVersion spans 9..11, and applyV9BaseEvidence
+// assembles the signed root for every version >= 9 (#877). So returning nil
+// here lands the run on the ordinary scoring path, where the model-use gate
+// publishes `zero_inference` with factor 0 and the enforce multiplier makes the
+// composite exactly 0.00 -- an accepted, signed, finalizable score rather than
+// a terminal error. That is the outcome the fold needs: a real v11 row, ranked
+// ineligible (ranking_composite > 0.0 fails), which stops the stale v10
+// ceiling from being carried forward once the pool flips to v11.
+//
+// What deliberately does NOT change: the proof requirement itself. An
+// UNPROVEN zero-use interval stays errAgentModelUseMissing on v10/v11 exactly
+// as it does on v9. Scoring an unproven zero as 0.00 would charge a miner the
+// worst possible score for a platform-side adapter mismatch -- precisely the
+// confusion the discarded route challenge exists to rule out. And neither
+// branch may become retryable: minting a grant here is the mnemox unbounded
+// re-lease loop (see relayFinalizeFailure below and
+// ditto/validator/dittobench.py).
 //
 // UsageUnavailable has always had two unrelated causes sharing one counter. One
 // is provider-side: a call succeeded but the provider's response carried no
@@ -306,7 +341,7 @@ func requireCompleteV7Usage(benchVersion int, usage protocol.TokenUsage, executi
 		return nil
 	}
 	if unusedV8ChatLane(benchVersion, usage, execution) {
-		if benchVersion == protocol.BenchVersionV9 {
+		if benchVersion >= protocol.BenchVersionV9 {
 			if execution.provesV9RouteDisposition() {
 				// The transcript commits both the discarded route challenges and
 				// the complete zero-request scored interval. The signed model-use
@@ -315,8 +350,9 @@ func requireCompleteV7Usage(benchVersion int, usage protocol.TokenUsage, executi
 				return nil
 			}
 			return fmt.Errorf(
-				"%w: benchmark v9 zero use lacks a signed model-route proof",
+				"%w: benchmark v%d zero use lacks a signed model-route proof",
 				errAgentModelUseMissing,
+				benchVersion,
 			)
 		}
 		return fmt.Errorf(
@@ -657,6 +693,18 @@ var (
 func relayFinalizeFailure(err error) *store.Failure {
 	switch {
 	case errors.Is(err, errAgentModelUseMissing):
+		// Narrower than it looks, and deliberately so. On v8 this is any
+		// zero-chat run. On v9+ it is ONLY a zero-chat run whose route
+		// disposition could not be proven -- a PROVEN zero-inference run does
+		// not reach here at all, because requireCompleteV7Usage returns nil and
+		// the run is scored as an accepted, signed 0.00 through the
+		// zero_inference model-use gate. So this bin now means "we could not
+		// tell an agent strategy from an adapter mismatch", not "the agent ran
+		// no inference".
+		//
+		// It stays terminal either way. Retrying re-runs the same image against
+		// the same selectors, and making it retryable would mint a grant, raise
+		// the attempt cap, and re-lease without bound.
 		return &store.Failure{
 			Kind:      "sandbox_failure",
 			Code:      "model_inference_required",

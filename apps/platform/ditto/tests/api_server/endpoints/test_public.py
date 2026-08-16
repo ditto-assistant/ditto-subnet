@@ -882,6 +882,80 @@ def test_score_floor_shares_the_official_composite_bound() -> None:
     assert floor is not None and floor > 1.0
 
 
+def _zero_inference_v9_base(details: dict, bench_version: int) -> dict:
+    """The signed root a proven zero-inference run now produces on v9/v10/v11.
+
+    Mirrors what ``applyV9BaseEvidence`` emits once the model-use gate reads
+    ``zero_inference``: every relay counter at zero, factor ``0``, and the
+    enforce multiplier collapsing the effective composite to ``0``.
+    """
+    from ditto_screening_protocol.bench_v9 import V9ScoreGateEvidence
+
+    stamped = _restamped_v9_base(details, bench_version)
+    model_use = stamped["score_gates"]["model_use"]
+    model_use.update(
+        successful_inference_cases=0,
+        missing_inference_cases=model_use["eligible_cases"],
+        observed_requests=0,
+        successful_requests=0,
+        prompt_tokens=0,
+        completion_tokens=0,
+        request_coverage_bps=0,
+        coverage_bps=0,
+        result="zero_inference",
+        factor_bps=0,
+    )
+    stamped["score_gates_sha256"] = V9ScoreGateEvidence.model_validate(
+        stamped["score_gates"]
+    ).digest_hex()
+    stamped["semantic_gate_factor_bps"] = 0
+    stamped["applied_gate_factor_bps"] = 0
+    stamped["effective_composite_micros"] = 0
+    stamped["effective_stderr_micros"] = 0
+    return stamped
+
+
+def test_public_zero_inference_projects_on_every_carried_forward_bench_version() -> (
+    None
+):
+    """A proven zero-inference run is a SCORE, and the dashboard must say so.
+
+    Until the scorer's ``requireCompleteV7Usage`` proof branch was widened from
+    ``== 9`` to ``>= 9``, a v10/v11 agent that ran no inference never produced a
+    row at all: it terminated as ``model_inference_required`` and the
+    single-version ledger went on ranking it on its saturated v10 composite.
+    Now it finalizes as a signed 0.00, so the public surface has to carry the
+    reason with it -- an unexplained zero on the board is indistinguishable
+    from a scoring bug, and this evidence is the only thing that distinguishes
+    them.
+    """
+    vector_path = (
+        Path(__file__).resolve().parents[6]
+        / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+    )
+    details = json.loads(vector_path.read_text())["vectors"][0]["details"]
+
+    for bench_version in get_args(V9EvidenceBenchVersion):
+        stamped = _zero_inference_v9_base(details, bench_version)
+
+        evidence = public_endpoint._safe_v9_base({"v9_base": stamped})
+        assert evidence is not None, (
+            f"bench v{bench_version} zero-inference evidence failed the shared contract"
+        )
+        assert evidence.applied_gate_factor_bps == 0
+        assert evidence.effective_composite_micros == 0
+
+        projected = public_endpoint._safe_public_v9_base({"v9_base": stamped})
+        assert projected is not None, (
+            f"bench v{bench_version} zero-inference evidence was dropped by the "
+            "public projection, leaving a bare 0.00 on the board"
+        )
+        assert projected.bench_version == bench_version
+        assert projected.score_gates.model_use.result == "zero_inference"
+        assert projected.score_gates.model_use.factor_bps == 0
+        assert projected.score_gates.model_use.successful_requests == 0
+
+
 def test_public_v9_base_bench_versions_match_the_shared_contract() -> None:
     """The public allowlist may not pin its own copy of the epoch set.
 

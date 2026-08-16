@@ -1627,6 +1627,57 @@ class TestThresholdGatedAuthority:
         self._assert_single_version(ledger, _ROLLOUT_FROM)
         assert len(ledger) == MIN_DESIRED_AUTHORITY_AGENTS - 1
 
+    async def test_zero_composite_desired_quorum_ends_the_carry_forward(
+        self, session: AsyncSession
+    ) -> None:
+        """A proven zero-inference agent must lose its old-version ceiling.
+
+        This is the ledger half of the ``model_inference_required`` fix. While
+        the scorer terminated a v10/v11 zero-inference run instead of scoring
+        it, the agent had no desired-version quorum at all, so it kept being
+        ranked on its saturated source-version composite indefinitely -- a
+        template-fitter holding a near-perfect score the newer benchmark was
+        never allowed to measure.
+
+        The repair is that the run now finalizes at 0.00, and the invariant that
+        makes it work is here: version authority is selected on quorum SIZE, not
+        on composite. Adding an eligibility or ``composite > 0`` filter to
+        ``desired_at_quorum`` would silently restore the carry-forward, because
+        a zero row would stop counting as a desired-version quorum and the
+        source-version row would win again.
+        """
+        from ditto.db.queries.benchmark_rollout import MIN_DESIRED_AUTHORITY_AGENTS
+
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        await _open_rollout(session)
+        for index in range(MIN_DESIRED_AUTHORITY_AGENTS):
+            await _seed_versioned_agent(
+                session,
+                miner=_miner(index),
+                created_at=t0,
+                source_composite=0.50,
+                desired_composite=0.70,
+            )
+        ceiling = 0.997012
+        zero_inference = await _seed_versioned_agent(
+            session,
+            miner=_miner(99),
+            created_at=t0,
+            source_composite=ceiling,
+            desired_composite=0.0,
+        )
+
+        ledger = await list_eligible_ledger(session)
+
+        self._assert_single_version(ledger, _ROLLOUT_DESIRED)
+        assert ceiling not in {row.composite for row in ledger}
+        carried = [row for row in ledger if row.agent_id == zero_inference.agent_id]
+        # Either shape is correct; what must never happen is the saturated
+        # source-version composite surviving the flip.
+        assert not carried or (
+            carried[0].composite == pytest.approx(0.0) and not carried[0].eligible
+        )
+
     async def test_agent_without_desired_quorum_drops_out_after_flip(
         self, session: AsyncSession
     ) -> None:

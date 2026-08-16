@@ -1897,6 +1897,18 @@ async def list_eligible_ledger(
         version_priority: ColumnElement[Any] = per_agent.c.bench_version
     else:
         assert rollout is not None
+        # Quorum SIZE only. Never add an eligibility or ``composite > 0`` term
+        # here: a proven zero-inference run finalizes at exactly 0.00 (the
+        # model-use gate reads ``zero_inference`` and the enforce multiplier
+        # zeroes the composite), and filtering it out would leave that agent
+        # with no desired-version quorum -- which puts it straight back on its
+        # previous-version composite by carry-forward. With v10 saturated at the
+        # 0.997012 ceiling, that is precisely how a template-fitter kept a
+        # near-perfect score the anti-template-fitting bench never measured.
+        # The row is still ranked ineligible downstream (``ranking_composite >
+        # 0.0``), so it earns nothing; it just has to EXIST to displace the old
+        # version. Pinned by
+        # ``test_zero_composite_desired_quorum_ends_the_carry_forward``.
         desired_at_quorum = and_(
             per_agent.c.bench_version == desired_version,
             per_agent.c.cnt >= SCORING_QUORUM,
