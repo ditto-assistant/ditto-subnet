@@ -1776,6 +1776,11 @@ class TestHeartbeat:
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
         _install_db(app, session_maker)
+        # A real agent row: the accepted heartbeat below persists
+        # ``active_agent_id``, which is a foreign key onto ``agents``.
+        agent_id = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="tamper-agent"
+        )
         timestamp = int(datetime.now(UTC).timestamp())
         metrics = {
             "collected_at": timestamp,
@@ -1814,12 +1819,16 @@ class TestHeartbeat:
         )
         assert response.status_code == 401
 
-        now = int(datetime.now(UTC).timestamp())
+        # Strictly newer than the accepted heartbeat above, not a fresh clock
+        # read: a same-second read makes the upsert a no-op (so the private-field
+        # assertion below passes vacuously), and a read that happens to tick over
+        # makes it a real write. Same convention as the other tests here.
+        now = timestamp + 1
         progress = {"stage": "building", "started_at": now - 30}
         tampered_progress = _heartbeat_payload(
             timestamp=now,
             state="screening",
-            active_agent_id=uuid4(),
+            active_agent_id=agent_id,
             protocol_version=2,
             progress=progress,
         )
@@ -1832,7 +1841,7 @@ class TestHeartbeat:
         private_field = _heartbeat_payload(
             timestamp=now,
             state="screening",
-            active_agent_id=uuid4(),
+            active_agent_id=agent_id,
             protocol_version=2,
             progress={"stage": "building", "started_at": now - 30},
         )
@@ -1849,9 +1858,9 @@ class TestHeartbeat:
             assert "private-package" not in json.dumps(heartbeat.system_metrics)
 
         invalid_stage = _heartbeat_payload(
-            timestamp=now,
+            timestamp=now + 1,
             state="screening",
-            active_agent_id=uuid4(),
+            active_agent_id=agent_id,
             protocol_version=2,
             progress={"stage": "docker_layer", "started_at": now - 30},
         )
