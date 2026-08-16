@@ -171,7 +171,15 @@ func applyV9BaseEvidence(
 	execution relayExecutionSummary,
 	transcriptSHA256 string,
 ) (protocol.ScoreReport, error) {
-	if req.BenchVersion < protocol.BenchVersionV9 {
+	// Bench v10+ carries the v9 evidence, gate, and curve-v3 stack forward,
+	// but the v10 case-scoped inference path does not yet produce the complete
+	// per-case model attribution the guard below demands. Enforcing it against
+	// v10 failed every run closed and stopped subnet scoring outright, so only
+	// v9 assembles base evidence until v10 attribution is fixed forward. A
+	// v10+ report carrying no root stays admissible under the transitional
+	// rule in ScoreReport._validate_v9_base_evidence; it simply carries no
+	// efficiency factor, which is the behaviour v10 already shipped with.
+	if req.BenchVersion != protocol.BenchVersionV9 {
 		return report, nil
 	}
 	if report.Details == nil {

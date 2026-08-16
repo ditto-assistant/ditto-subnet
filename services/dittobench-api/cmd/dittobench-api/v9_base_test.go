@@ -299,6 +299,40 @@ func TestApplyV9BaseEvidenceAcceptsHealthyZeroInferenceAsFactorZero(t *testing.T
 	}
 }
 
+func TestApplyV9BaseEvidenceSkipsV10UntilAttributionIsFixedForward(t *testing.T) {
+	// The live v10 inference path can return transcripts whose per-case model
+	// attribution never settles. Routing those through the v9 evidence stack
+	// makes the case-attribution guard fail the whole run closed, which took
+	// every v10 validator ticket down at once. v10 must skip the stack until
+	// its attribution is fixed forward; flip this test when that lands.
+	report := sampleV9Report()
+	report.Details.BenchVersion = protocol.BenchVersionV10
+	req := submitRequest{
+		BenchVersion: protocol.BenchVersionV10, TarballSHA256: v9ArtifactSHA,
+	}
+	perCase := []protocol.CaseScore{{CaseID: "memory"}}
+	// Attribution deliberately absent: the exact transcript shape that failed
+	// closed in production.
+	transcripts := []transcriptCase{{CaseID: "memory"}}
+
+	got, err := applyV9BaseEvidence(
+		report, req, perCase, transcripts,
+		completeUsage(0, 0, 0, 0), relayExecutionSummary{}, v9TranscriptSHA,
+	)
+	if err != nil {
+		t.Fatalf("v10 must not fail closed on v9 case attribution: %v", err)
+	}
+	if got.Details.V9Base != nil || got.BaseEvidenceSHA256 != "" {
+		t.Fatalf("v10 must not carry a base evidence root yet: %+v", got)
+	}
+	if got.Composite != report.Composite || got.CompositeStderr != report.CompositeStderr {
+		t.Fatalf(
+			"v10 score must pass through untouched: got %v/%v want %v/%v",
+			got.Composite, got.CompositeStderr, report.Composite, report.CompositeStderr,
+		)
+	}
+}
+
 func TestApplyV9BaseEvidenceRejectsIncompleteCaseAttribution(t *testing.T) {
 	perCase := []protocol.CaseScore{{CaseID: "memory"}}
 	tests := []struct {
