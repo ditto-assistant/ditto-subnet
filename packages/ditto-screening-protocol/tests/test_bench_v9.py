@@ -255,3 +255,45 @@ def test_dump_and_reload_preserve_signature_bound_identity() -> None:
     assert reloaded == evidence
     assert reloaded.canonical_bytes() == evidence.canonical_bytes()
     assert reloaded.digest_hex() == evidence.digest_hex()
+
+
+def test_v10_base_evidence_validates_with_matching_gate_version() -> None:
+    base = _base()
+    gates = copy.deepcopy(base["score_gates"])
+    assert isinstance(gates, dict)
+    gates["bench_version"] = 10
+    evidence = V9ScoreGateEvidence.model_validate(gates)
+    base.update(
+        bench_version=10,
+        score_gates=gates,
+        score_gates_sha256=evidence.digest_hex(),
+    )
+
+    parsed = V9BaseEvidence.model_validate(base)
+
+    assert parsed.bench_version == 10
+    assert parsed.score_gates.bench_version == 10
+    assert b"bench_version=10\n" in parsed.canonical_bytes()
+
+    v9 = V9BaseEvidence.model_validate(_base())
+    assert parsed.digest_hex() != v9.digest_hex()
+
+
+def test_base_evidence_rejects_gate_bench_version_mismatch() -> None:
+    base = _base()
+    base["bench_version"] = 10
+
+    with pytest.raises(ValidationError, match="bench_version"):
+        V9BaseEvidence.model_validate(base)
+
+
+def test_omitempty_normalization_covers_v10_reports() -> None:
+    raw = {
+        "bench_version": 10,
+        "details": {"v9_base": {"effective_stderr_micros": 0}},
+    }
+
+    assert normalize_v9_score_report_omitempty(raw) == {
+        **raw,
+        "composite_stderr": 0.0,
+    }

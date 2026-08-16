@@ -3,6 +3,10 @@
 These models define signature-bound wire semantics. Keeping one implementation in
 this monorepo prevents the validator and Platform from accepting different gate
 derivations while retaining their existing public import paths.
+
+The v9 gate contract carries forward unchanged to bench v10: the evidence keeps
+the frozen v9 contract identity while ``bench_version`` records the run's actual
+version, so digests remain version-bound.
 """
 
 from __future__ import annotations
@@ -44,7 +48,7 @@ def normalize_v9_score_report_omitempty(value: object) -> object:
 
     if not isinstance(value, Mapping):
         return value
-    if value.get("bench_version") != 9 or "composite_stderr" in value:
+    if value.get("bench_version") not in (9, 10) or "composite_stderr" in value:
         return value
     details = value.get("details")
     if not isinstance(details, Mapping):
@@ -244,7 +248,7 @@ class V9ScoreGateEvidence(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     schema_version: Literal[1]
-    bench_version: Literal[9]
+    bench_version: Literal[9, 10]
     rollout_mode: Literal["shadow", "enforce"]
     threshold_profile: V9ThresholdProfile
     model_use: V9ModelUseGate
@@ -303,7 +307,7 @@ class V9BaseEvidence(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     schema_version: Literal[1]
-    bench_version: Literal[9]
+    bench_version: Literal[9, 10]
     score_contract: V9ScoreContract
     run_id: Annotated[str, Field(min_length=1)]
     artifact_sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]
@@ -320,6 +324,8 @@ class V9BaseEvidence(BaseModel):
 
     @model_validator(mode="after")
     def _validate_derived_evidence(self) -> V9BaseEvidence:
+        if self.bench_version != self.score_gates.bench_version:
+            raise ValueError("score_gates bench_version does not match base evidence")
         if self.score_gates_sha256 != self.score_gates.digest_hex():
             raise ValueError("score_gates_sha256 does not match score_gates")
         semantic = (
