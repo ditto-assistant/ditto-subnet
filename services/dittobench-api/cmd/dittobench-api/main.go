@@ -381,8 +381,8 @@ func supportedBenchVersions() []int {
 	if !efficiency.ValidV8Readiness(efficiency.V8Readiness()) {
 		return nil
 	}
-	versions := make([]int, 0, 3)
-	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10} {
+	versions := make([]int, 0, 4)
+	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11} {
 		if protocol.SupportedBenchVersion(version) && efficiency.ProductionReadyForVersion(version) {
 			versions = append(versions, version)
 		}
@@ -1090,14 +1090,14 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 
 func requestedBenchVersion(requested int) (int, string) {
 	if requested == 0 {
-		return 0, "bench_version is required (supported: 8, 9, 10)"
+		return 0, "bench_version is required (supported: 8, 9, 10, 11)"
 	}
 	for _, version := range supportedBenchVersions() {
 		if requested == version {
 			return requested, ""
 		}
 	}
-	return 0, "unsupported bench_version (supported: 8, 9, 10)"
+	return 0, "unsupported bench_version (supported: 8, 9, 10, 11)"
 }
 
 func toolPrerequisiteWave(toolCases []protocol.ToolCase) (protocol.SeedRequest, error) {

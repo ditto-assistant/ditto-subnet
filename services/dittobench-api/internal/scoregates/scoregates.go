@@ -19,16 +19,17 @@ const (
 	SchemaVersion   = 1
 	BenchVersionV9  = 9
 	BenchVersionV10 = 10
+	BenchVersionV11 = 11
 	BasisPointScale = 10_000
 	MaxCaseCount    = 10_000_000
 	MaxUsageCount   = uint64(9_007_199_254_740_991)
 )
 
 // SupportedBenchVersion reports whether the gate contract applies to a bench
-// version. The v9 contract carries forward unchanged to v10; the evidence
-// records the run's actual version so digests stay version-bound.
+// version. The v9 contract carries forward unchanged to v10 and v11; the
+// evidence records the run's actual version so digests stay version-bound.
 func SupportedBenchVersion(benchVersion int) bool {
-	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV10
+	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV11
 }
 
 var (

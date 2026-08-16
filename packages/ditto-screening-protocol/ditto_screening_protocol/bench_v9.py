@@ -4,9 +4,9 @@ These models define signature-bound wire semantics. Keeping one implementation i
 this monorepo prevents the validator and Platform from accepting different gate
 derivations while retaining their existing public import paths.
 
-The v9 gate contract carries forward unchanged to bench v10: the evidence keeps
-the frozen v9 contract identity while ``bench_version`` records the run's actual
-version, so digests remain version-bound.
+The v9 gate contract carries forward unchanged to bench v10 and v11: the
+evidence keeps the frozen v9 contract identity while ``bench_version`` records
+the run's actual version, so digests remain version-bound.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ def normalize_v9_score_report_omitempty(value: object) -> object:
 
     if not isinstance(value, Mapping):
         return value
-    if value.get("bench_version") not in (9, 10) or "composite_stderr" in value:
+    if value.get("bench_version") not in (9, 10, 11) or "composite_stderr" in value:
         return value
     details = value.get("details")
     if not isinstance(details, Mapping):
@@ -248,7 +248,7 @@ class V9ScoreGateEvidence(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     schema_version: Literal[1]
-    bench_version: Literal[9, 10]
+    bench_version: Literal[9, 10, 11]
     rollout_mode: Literal["shadow", "enforce"]
     threshold_profile: V9ThresholdProfile
     model_use: V9ModelUseGate
@@ -307,7 +307,7 @@ class V9BaseEvidence(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     schema_version: Literal[1]
-    bench_version: Literal[9, 10]
+    bench_version: Literal[9, 10, 11]
     score_contract: V9ScoreContract
     run_id: Annotated[str, Field(min_length=1)]
     artifact_sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]

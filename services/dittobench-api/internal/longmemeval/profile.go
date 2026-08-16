@@ -85,8 +85,8 @@ func (p Profile) Validate() error {
 	if strings.TrimSpace(p.Revision) == "" || strings.TrimSpace(p.DatasetRevision) == "" {
 		return errors.New("profile revision and dataset revision are required")
 	}
-	if p.BenchVersion != 9 && p.BenchVersion != 10 {
-		return errors.New("LongMemEval confirmation profile must select bench_version 9 or 10")
+	if p.BenchVersion != 9 && p.BenchVersion != 10 && p.BenchVersion != 11 {
+		return errors.New("LongMemEval confirmation profile must select bench_version 9, 10, or 11")
 	}
 	if !validSHA256(p.DatasetSHA256) {
 		return errors.New("dataset_sha256 must be 64 lowercase hexadecimal characters")
@@ -100,9 +100,9 @@ func (p Profile) Validate() error {
 	if p.BenchVersion == 9 && (p.MinHistorySessions != 0 || p.MinHistoryBytes != 0) {
 		return errors.New("bench_version 9 does not define deep-history floors")
 	}
-	if p.BenchVersion == 10 && (p.CasesPerCapability < V10MinCasesPerCapability ||
+	if p.BenchVersion >= 10 && (p.CasesPerCapability < V10MinCasesPerCapability ||
 		p.MinHistorySessions < V10MinHistorySessions || p.MinHistoryBytes < V10MinHistoryBytes) {
-		return errors.New("bench_version 10 profile is below the deep-history case or history floor")
+		return errors.New("bench_version 10+ profile is below the deep-history case or history floor")
 	}
 	if len(p.Providers) == 0 {
 		return errors.New("at least one provider policy is required")
