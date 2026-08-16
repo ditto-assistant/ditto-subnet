@@ -1204,6 +1204,47 @@ async def update_trusted_image_build(
 
 
 @router.post(
+    "/controller/trusted-image-builds/{build_id}/cleanup-required",
+    response_model=None,
+    status_code=204,
+)
+async def record_trusted_image_build_cleanup(
+    build_id: UUID,
+    payload: SubmissionImageBuildCleanupRequest,
+    _controller: ControllerDep,
+    session: SessionDep,
+) -> None:
+    """Keep trusted Kaniko deletion failures visible after zero-replica suspension."""
+    async with session.begin():
+        row = await session.get(TrustedImageBuild, build_id)
+        if row is None:
+            raise HTTPException(status_code=404, detail="trusted image build not found")
+        if (
+            row.environment != payload.environment
+            or row.controller_epoch != payload.controller_epoch
+            or row.provider_resource_id != payload.provider_resource_id
+        ):
+            raise HTTPException(
+                status_code=409, detail="trusted build cleanup lease is stale"
+            )
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment=payload.environment,
+                event_type="provider_cleanup_required",
+                provider="targon",
+                node_id=None,
+                detail=(
+                    "A suspended zero-replica trusted Kaniko rental requires "
+                    "provider deletion retry."
+                ),
+                controller_epoch=payload.controller_epoch,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+
+@router.post(
     "/agent/{agent_id}/submission-image-builds",
     response_model=SubmissionImageBuildResponse,
 )

@@ -3297,6 +3297,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/screener/controller/trusted-image-builds/{build_id}/cleanup-required": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Record Trusted Image Build Cleanup
+         * @description Keep trusted Kaniko deletion failures visible after zero-replica suspension.
+         */
+        post: operations["record_trusted_image_build_cleanup_api_v1_screener_controller_trusted_image_builds__build_id__cleanup_required_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/screener/heartbeat": {
         parameters: {
             query?: never;
@@ -23858,6 +23878,41 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["TrustedImageBuildView"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    record_trusted_image_build_cleanup_api_v1_screener_controller_trusted_image_builds__build_id__cleanup_required_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                build_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmissionImageBuildCleanupRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

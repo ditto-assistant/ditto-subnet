@@ -108,9 +108,11 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
   bound to an attempt, source object, and temporary output object. It cannot
   push registry images or read Secret Manager.
 - The trusted controller promotes a Platform-verified archive to the private
-  `ditto-screening-candidates` repository with a writer token that never crosses
-  the provider boundary. Targon receives a separate 30-minute candidates-only
-  reader token as pull auth; neither identity uses a service-account key.
+  `ditto-screening-candidates` repository by impersonating
+  `ditto-screening-candidate-push`. That writer token stays on the host and
+  never crosses the provider boundary. Targon receives a separate 30-minute
+  `ditto-screening-candidate-pull` reader token as pull auth. `ditto-image-builder`
+  can write only `ditto-public-runtime` and is never granted candidates write.
 - Source-review jobs receive one attempt token and one 30-minute bootstrap token
   for the source-review secret. They read but never execute submitted source.
 - Trusted release builds run in the separate `ditto-image-builder` service.

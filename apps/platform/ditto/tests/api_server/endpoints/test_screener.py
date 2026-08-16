@@ -1332,6 +1332,90 @@ class TestFederatedScreenerNodes:
         )
         assert overwritten.status_code == 409
 
+    async def test_trusted_build_cleanup_required_records_event_without_clobber(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        build_id = uuid4()
+        async with session_maker() as session, session.begin():
+            session.add(
+                TrustedImageBuild(
+                    build_id=build_id,
+                    environment="prod",
+                    component="screener",
+                    source_repository=(
+                        "https://github.com/ditto-assistant/ditto-subnet.git"
+                    ),
+                    source_sha="f" * 40,
+                    context_path=".",
+                    dockerfile_path="workers/screener/Dockerfile",
+                    destination=(
+                        "us-central1-docker.pkg.dev/ditto-app-dev/"
+                        "ditto-public-runtime/screener:sha-cleanup"
+                    ),
+                    status="succeeded",
+                    provider="targon",
+                    provider_resource_id="wrk-trusted-cleanup",
+                    image_digest="sha256:" + "c" * 64,
+                    controller_epoch="builder:cleanup",
+                    created_by="release-test",
+                    reason="prove trusted Kaniko cleanup is durable",
+                    completed_at=datetime.now(UTC),
+                )
+            )
+        headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        cleanup = await client.post(
+            f"/api/v1/screener/controller/trusted-image-builds/{build_id}"
+            "/cleanup-required",
+            headers=headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:cleanup",
+                "provider_resource_id": "wrk-trusted-cleanup",
+            },
+        )
+        assert cleanup.status_code == 204, cleanup.text
+        stale = await client.post(
+            f"/api/v1/screener/controller/trusted-image-builds/{build_id}"
+            "/cleanup-required",
+            headers=headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:other",
+                "provider_resource_id": "wrk-trusted-cleanup",
+            },
+        )
+        assert stale.status_code == 409
+        detail = await client.get(
+            f"/api/v1/screener/controller/trusted-image-builds/{build_id}",
+            headers=headers,
+        )
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["status"] == "succeeded"
+        assert detail.json()["error_code"] is None
+        assert detail.json()["image_digest"] == "sha256:" + "c" * 64
+        async with session_maker() as session:
+            events = list(
+                await session.scalars(
+                    select(ScreenerCapacityEvent).where(
+                        ScreenerCapacityEvent.event_type == "provider_cleanup_required"
+                    )
+                )
+            )
+            assert len(events) == 1
+            assert events[0].provider == "targon"
+            assert "trusted Kaniko" in events[0].detail
+
     async def test_current_controller_can_release_lease_for_graceful_handoff(
         self,
         app: FastAPI,

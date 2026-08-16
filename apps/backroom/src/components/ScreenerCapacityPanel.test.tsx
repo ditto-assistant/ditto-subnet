@@ -159,6 +159,45 @@ describe('ScreenerCapacityPanel', () => {
     expect(screen.getByText('fallback required').className).toContain('text-[var(--amber)]')
   })
 
+  it('omits skipped runtime jobs so GCE-only cutover does not look live', () => {
+    const providerJob = {
+      job_id: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
+      lane: 'source_review' as const,
+      status: 'succeeded',
+      provider: 'targon' as const,
+      provider_resource_id: 'wrk-source-review',
+      image_reference: 'sha256:source-review',
+      error_code: null,
+      created_at: '2026-08-14T13:49:00Z',
+      updated_at: '2026-08-14T13:50:00Z',
+    }
+
+    render(
+      <ScreenerCapacityPanel
+        initialState={capacity({
+          provider_jobs: [
+            providerJob,
+            {
+              ...providerJob,
+              job_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+              lane: 'runtime',
+              status: 'skipped',
+              provider: null,
+              provider_resource_id: null,
+              image_reference: null,
+              error_code: 'TARGON_RUNTIME_DISABLED_BY_POLICY',
+            },
+          ],
+        })}
+        readOnly
+      />,
+    )
+
+    expect(screen.getByText('source review')).toBeTruthy()
+    expect(screen.queryByText('skipped')).toBeNull()
+    expect(screen.queryByText('runtime')).toBeNull()
+  })
+
   it('does not show the blocked-worker banner for a GO capability', () => {
     const state = capacity()
     state.snapshot = state.snapshot ? { ...state.snapshot, targon_capability: 'go', fallback_reason: null } : null

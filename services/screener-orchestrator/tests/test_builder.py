@@ -9,6 +9,7 @@ from screener_capacity.builder import (
     _delete_rental,
     _docker_config,
     _kaniko_script,
+    run_one,
     run_one_runtime_smoke,
     run_one_source_review,
     run_one_submission,
@@ -92,6 +93,7 @@ class _Targon:
         self.suspended: list[str] = []
         self.deleted: list[str] = []
         self.updated: list[tuple[str, dict[str, Any]]] = []
+        self.log_text = "DITTO_BUILD_DIGEST=sha256:" + "b" * 64
 
     def inventory(self) -> list[dict[str, Any]]:
         return [{"name": "cpu-small", "available": self.available}]
@@ -129,6 +131,10 @@ class _Targon:
         if self.delete_fails:
             raise TargonAPIError(operation="DELETE", status=500, reason="HTTP error")
 
+    def logs(self, _uid: str, tail: int = 160) -> str:
+        del tail
+        return self.log_text
+
 
 def _settings() -> Settings:
     return Settings(
@@ -146,7 +152,8 @@ def _settings() -> Settings:
         gcp_bootstrap_delegate_service_account=None,
         source_review_secret_resource="projects/test/secrets/reviewer",
         source_review_timeout_seconds=1,
-        candidate_registry_service_account="candidate@example.test",
+        candidate_registry_service_account="candidate-pull@example.test",
+        candidate_registry_writer_service_account="candidate-push@example.test",
         runtime_timeout_seconds=1,
     )
 
@@ -278,10 +285,15 @@ def test_runtime_smoke_launches_promoted_image_directly(monkeypatch) -> None:
     assert targon.created["ports"] == [
         {"port": 8080, "protocol": "TCP", "routing": "PROXIED"}
     ]
-    assert minted_accounts == ["builder@example.test", "candidate@example.test"]
-    assert promotion["access_token"] == ("registry-builder@example.test-" + "x" * 120)
+    assert minted_accounts == [
+        "candidate-push@example.test",
+        "candidate-pull@example.test",
+    ]
+    assert promotion["access_token"] == (
+        "registry-candidate-push@example.test-" + "x" * 120
+    )
     assert targon.created["registry_auth"]["password"] == (
-        "registry-candidate@example.test-" + "x" * 120
+        "registry-candidate-pull@example.test-" + "x" * 120
     )
     assert control.updates[-1][1]["status"] == "succeeded"
     assert control.updates[-1][1]["image_reference"] == image
@@ -474,3 +486,58 @@ def test_submission_update_reconciles_a_lost_platform_response(monkeypatch) -> N
     )
 
     assert requests == ["PUT", "GET"]
+
+
+def _trusted_build() -> dict[str, Any]:
+    return {
+        "build_id": "550e8400-e29b-41d4-a716-446655440000",
+        "source_repository": "https://github.com/ditto-assistant/ditto-subnet.git",
+        "source_sha": "a" * 40,
+        "dockerfile_path": "workers/screener/Dockerfile",
+        "destination": "us-central1-docker.pkg.dev/p/r/screener:sha-a",
+    }
+
+
+def test_trusted_kaniko_rental_uses_public_runtime_writer_only(monkeypatch) -> None:
+    minted_accounts: list[str] = []
+    monkeypatch.setattr(
+        "screener_capacity.builder._mint_access_token",
+        lambda service_account: (
+            minted_accounts.append(service_account) or ("registry-" + service_account)
+        ),
+    )
+    control = _SubmissionControl(_trusted_build())
+    targon = _Targon()
+
+    assert run_one(_settings(), targon, control)
+
+    assert minted_accounts == ["builder@example.test"]
+    assert targon.created is not None
+    encoded = next(
+        row["value"]
+        for row in targon.created["envs"]
+        if row["name"] == "DITTO_DOCKER_CONFIG_B64"
+    )
+    config = json.loads(base64.b64decode(encoded))
+    assert config["auths"]["us-central1-docker.pkg.dev"]["password"] == (
+        "registry-builder@example.test"
+    )
+    assert control.updates[-1][1]["status"] == "succeeded"
+    assert control.cleanup == []
+
+
+def test_trusted_kaniko_delete_failure_is_suspended_and_audited(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "screener_capacity.builder._mint_access_token",
+        lambda _service_account: "registry-builder@example.test",
+    )
+    control = _SubmissionControl(_trusted_build())
+    targon = _Targon(delete_fails=True)
+
+    assert run_one(_settings(), targon, control)
+
+    assert targon.deleted == ["wrk-build-1"]
+    assert targon.suspended == ["wrk-build-1"]
+    assert control.cleanup == [(_trusted_build()["build_id"], "wrk-build-1")]

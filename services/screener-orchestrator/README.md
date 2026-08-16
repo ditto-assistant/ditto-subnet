@@ -72,14 +72,16 @@ imports the archive, applies the existing gates, then deletes the temporary
 object. Rental deletion failure is recorded after suspension as an operator
 cleanup event; zero replicas is the cost-safety boundary.
 
-After Platform verifies every archive byte, the trusted controller promotes the
-exact archive into the private one-day candidate registry with a short-lived
-writer token held only in a mode-0600 auth file. Targon receives a distinct
-30-minute candidates-only reader token, launches that digest as the Rental
-itself, and probes its proxied `/health`; no nested Docker is used. This result
-is advisory until provider egress containment is qualified. Failure or operator
-disablement releases the same verified archive to the GCE worker, which
-performs the authoritative isolated runtime gate.
+After Platform verifies every archive byte, the trusted controller impersonates
+`ditto-screening-candidate-push` and promotes the exact archive into the private
+one-day candidate registry with a short-lived writer token held only in a
+mode-0600 auth file. Targon receives a distinct 30-minute
+`ditto-screening-candidate-pull` reader token, launches that digest as the
+Rental itself, and probes its proxied `/health`; no nested Docker is used. This
+result is advisory until provider egress containment is qualified. Failure or
+operator disablement releases the same verified archive to the GCE worker, which
+performs the authoritative isolated runtime gate. Trusted Kaniko rentals still
+use `ditto-image-builder`, which can write only `ditto-public-runtime`.
 
 A source-review Rental uses the pinned reviewed screener image, one
 attempt-bound Platform capability, and a short-lived bootstrap token for the

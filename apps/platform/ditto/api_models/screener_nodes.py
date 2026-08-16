@@ -334,7 +334,7 @@ class SubmissionImageBuildControllerStatusResponse(BaseModel):
 class SubmissionRuntimeArtifactResponse(BaseModel):
     """Verified build archive made available only to the fenced controller."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     build_id: UUID
     archive_url_b64: str
@@ -347,7 +347,7 @@ class SubmissionRuntimeArtifactResponse(BaseModel):
 
 
 class SubmissionRuntimeArtifactClaimResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     artifact: SubmissionRuntimeArtifactResponse | None
 
@@ -355,7 +355,7 @@ class SubmissionRuntimeArtifactClaimResponse(BaseModel):
 class SubmissionRuntimeResultRequest(BaseModel):
     """Terminal direct-image Rental result, fenced to one build/controller."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
@@ -382,7 +382,7 @@ class SubmissionRuntimeResultRequest(BaseModel):
 class SubmissionSourceReviewClaimView(BaseModel):
     """One read-only source review leased to a trusted Targon worker."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     review_id: UUID
     agent_id: UUID
@@ -394,13 +394,13 @@ class SubmissionSourceReviewClaimView(BaseModel):
 
 
 class SubmissionSourceReviewClaimResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     review: SubmissionSourceReviewClaimView | None
 
 
 class SubmissionSourceReviewControllerUpdateRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
@@ -420,7 +420,7 @@ class SubmissionSourceReviewControllerUpdateRequest(BaseModel):
 
 
 class SubmissionSourceReviewControllerStatusResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     review_id: UUID
     status: Literal[
@@ -437,7 +437,7 @@ class SubmissionSourceReviewControllerStatusResponse(BaseModel):
 class SubmissionSourceReviewCleanupRequest(BaseModel):
     """Durable notice that a provider Rental still needs deletion."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     environment: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,31}$")]
     controller_epoch: Annotated[str, Field(pattern=_EPOCH)]
@@ -445,20 +445,20 @@ class SubmissionSourceReviewCleanupRequest(BaseModel):
 
 
 class SubmissionSourceReviewSourceResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     source_url_b64: str
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 class SubmissionSourceReviewCompleteRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     observation: SourceReviewObservationPayload
 
 
 class SubmissionSourceReviewCompleteResponse(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     verified: Literal[True]
 
@@ -502,7 +502,7 @@ class SubmissionBuildCompleteResponse(BaseModel):
 class ScreenerProviderJobView(BaseModel):
     """Redacted recent one-shot provider work for operator visibility."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     job_id: UUID
     lane: Literal["build", "runtime", "source_review"]

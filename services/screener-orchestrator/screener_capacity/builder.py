@@ -140,6 +140,19 @@ class BuildControl:
             },
         )
 
+    def cleanup_required(self, build_id: str, *, provider_resource_id: str) -> None:
+        _request(
+            "POST",
+            f"{self.base}/api/v1/screener/controller/"
+            f"trusted-image-builds/{build_id}/cleanup-required",
+            token=self.token,
+            payload={
+                "environment": self.environment,
+                "controller_epoch": self.epoch,
+                "provider_resource_id": provider_resource_id,
+            },
+        )
+
 
 class SubmissionBuildControl:
     def __init__(self, *, platform_url: str, token: str, environment: str, epoch: str):
@@ -500,6 +513,7 @@ class Settings:
     source_review_secret_resource: str
     source_review_timeout_seconds: int
     candidate_registry_service_account: str
+    candidate_registry_writer_service_account: str
     runtime_timeout_seconds: int
 
 
@@ -623,7 +637,9 @@ def run_one_runtime_smoke(
         os.unlink(raw_path)
         archive = Path(raw_path)
         _download_runtime_archive(artifact, archive)
-        promotion_token = _mint_access_token(settings.registry_service_account)
+        promotion_token = _mint_access_token(
+            settings.candidate_registry_writer_service_account
+        )
         image_reference = _promote_runtime_archive(
             archive=archive, destination=destination, access_token=promotion_token
         )
@@ -884,8 +900,9 @@ def run_one(settings: Settings, client: TargonClient, control: BuildControl) -> 
             )
         return True
     finally:
-        if uid is not None:
-            _delete_rental(client, uid)
+        if uid is not None and not _delete_rental(client, uid):
+            with contextlib.suppress(ControllerError):
+                control.cleanup_required(build_id, provider_resource_id=uid)
 
 
 def run_one_submission(
@@ -1037,6 +1054,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--source-review-secret-resource", required=True)
     parser.add_argument("--source-review-timeout-seconds", type=int, default=180)
     parser.add_argument("--candidate-registry-service-account", required=True)
+    parser.add_argument("--candidate-registry-writer-service-account", required=True)
     parser.add_argument("--runtime-timeout-seconds", type=int, default=180)
     parser.add_argument("--provision-timeout-seconds", type=int, default=600)
     parser.add_argument("--build-timeout-seconds", type=int, default=1800)
@@ -1069,6 +1087,9 @@ def main() -> int:
         source_review_secret_resource=args.source_review_secret_resource,
         source_review_timeout_seconds=args.source_review_timeout_seconds,
         candidate_registry_service_account=args.candidate_registry_service_account,
+        candidate_registry_writer_service_account=(
+            args.candidate_registry_writer_service_account
+        ),
         runtime_timeout_seconds=args.runtime_timeout_seconds,
     )
     control = BuildControl(

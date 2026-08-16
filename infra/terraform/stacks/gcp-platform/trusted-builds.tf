@@ -1,10 +1,12 @@
 ###############################################################################
 # Trusted monorepo image-build and hosted DittoBench release identities.
 #
-# The trusted controller impersonates ditto-image-builder only while promoting
-# a verified runtime archive. The Targon runtime rental gets a separate
-# 30-minute reader token scoped to the private candidate repository. It never
-# receives a registry writer, GCP key, controller identity, or Secret Manager
+# The trusted controller impersonates ditto-screening-candidate-push only
+# while promoting a verified runtime archive to the private candidate
+# repository. The Targon runtime rental gets a separate 30-minute reader
+# token from ditto-screening-candidate-pull. Kaniko rentals receive only a
+# ditto-image-builder token that can write ditto-public-runtime. None of
+# those identities receive a GCP key, controller identity, or Secret Manager
 # authority. GitHub's release fallback is a separate prod-env WIF principal.
 # The two public repositories are readable without credentials so Targon can
 # pull the reviewed Kaniko executor and released screener image.
@@ -90,12 +92,18 @@ resource "google_artifact_registry_repository_iam_member" "image_builder_runtime
   member     = "serviceAccount:${google_service_account.image_builder.email}"
 }
 
-resource "google_artifact_registry_repository_iam_member" "image_builder_candidates_writer" {
+resource "google_service_account" "screening_candidate_push" {
+  project      = var.project
+  account_id   = "ditto-screening-candidate-push"
+  display_name = "Ditto Screening Candidate Push"
+}
+
+resource "google_artifact_registry_repository_iam_member" "screening_candidate_writer" {
   project    = var.project
   location   = var.region
   repository = google_artifact_registry_repository.screening_candidates.repository_id
   role       = "roles/artifactregistry.writer"
-  member     = "serviceAccount:${google_service_account.image_builder.email}"
+  member     = "serviceAccount:${google_service_account.screening_candidate_push.email}"
 }
 
 resource "google_service_account" "screening_candidate_pull" {
@@ -115,6 +123,13 @@ resource "google_artifact_registry_repository_iam_member" "screening_candidate_r
 resource "google_service_account_iam_member" "screener_controller_mint_builder_tokens" {
   count              = local.screener_capacity_controller_count
   service_account_id = google_service_account.image_builder.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
+}
+
+resource "google_service_account_iam_member" "screener_controller_mint_candidate_push_tokens" {
+  count              = local.screener_capacity_controller_count
+  service_account_id = google_service_account.screening_candidate_push.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
@@ -211,8 +226,13 @@ output "subnet_build_sa_email" {
 }
 
 output "image_builder_sa_email" {
-  description = "Trusted controller identity for registry promotion and release builds."
+  description = "Trusted Kaniko identity that can write only ditto-public-runtime."
   value       = google_service_account.image_builder.email
+}
+
+output "screening_candidate_push_sa_email" {
+  description = "Host-side identity impersonated to promote verified miner archives."
+  value       = google_service_account.screening_candidate_push.email
 }
 
 output "screening_candidate_pull_sa_email" {

@@ -33,6 +33,7 @@ screener_capacity_builder_interval_seconds: 15
 screener_capacity_builder_timeout_seconds: 1800
 screener_capacity_source_review_timeout_seconds: 180
 screener_capacity_candidate_registry_service_account: ""
+screener_capacity_candidate_registry_writer_service_account: ""
 screener_capacity_runtime_timeout_seconds: 180
 
 screener_capacity_targon_api_key_secret: TARGON_API_KEY

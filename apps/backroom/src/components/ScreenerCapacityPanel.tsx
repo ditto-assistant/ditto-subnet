@@ -59,6 +59,9 @@ function providerJobTone(status: string) {
   if (status === 'succeeded' || status === 'consumed') {
     return 'bg-[var(--acid-dim)] text-[var(--acid)]'
   }
+  if (status === 'skipped') {
+    return 'bg-white/[0.05] text-[var(--muted)]'
+  }
   if (status === 'fallback_required' || status === 'cleanup_required') {
     return 'bg-[var(--amber-dim)] text-[var(--amber)]'
   }
@@ -334,6 +337,9 @@ export function ScreenerCapacityPanel({
     (event) => event.provider === 'targon' && event.event_type === 'provider_cleanup_required',
   )
   const latestCleanup = cleanupEvents[0]
+  const visibleProviderJobs = state.provider_jobs.filter(
+    (job) => !(job.lane === 'runtime' && job.status === 'skipped'),
+  )
   const runtimeMode = providerMode(
     state.provider_control.current.settings.runtime_provider_priority,
   )
@@ -510,7 +516,7 @@ export function ScreenerCapacityPanel({
             runtime result remains advisory until the GCE isolated smoke also passes.
           </p>
         </div>
-        {state.provider_jobs.length === 0 ? (
+        {visibleProviderJobs.length === 0 ? (
           <p className="p-5 text-sm text-[var(--muted)]">No one-shot provider job has been recorded.</p>
         ) : (
           <div className="overflow-x-auto">
@@ -525,7 +531,7 @@ export function ScreenerCapacityPanel({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--line)]">
-                {state.provider_jobs.slice(0, 30).map((job) => (
+                {visibleProviderJobs.slice(0, 30).map((job) => (
                   <tr key={`${job.lane}-${job.job_id}`}>
                     <td className="px-4 py-3.5 font-medium capitalize sm:px-5">
                       {job.lane.replaceAll('_', ' ')}

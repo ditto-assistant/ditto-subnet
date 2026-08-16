@@ -725,7 +725,7 @@ SubmissionSourceReviewStatus = Literal[
 class SubmissionSourceReviewRequest(BaseModel):
     """Queue one attempt-bound remote, read-only source review."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     attempt_id: UUID
 
@@ -733,7 +733,7 @@ class SubmissionSourceReviewRequest(BaseModel):
 class SourceReviewObservationPayload(BaseModel):
     """Bounded source-review observation safe to cross provider boundaries."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     ok: bool
     risk_level: Literal["low", "medium", "high"] | None = None
@@ -767,7 +767,7 @@ class SourceReviewObservationPayload(BaseModel):
 class SubmissionSourceReviewResponse(BaseModel):
     """Status and terminal observation for an attempt-bound remote review."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     review_id: UUID
     attempt_id: UUID
