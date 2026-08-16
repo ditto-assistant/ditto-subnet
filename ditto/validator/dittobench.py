@@ -170,7 +170,14 @@ _SOFTWARE_VERSION = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._+/-]{0,63}$")
 # Executable scorer contracts. This is deliberately separate from the
 # platform-selected active benchmark: validators can advertise and execute v9
 # before the rollout control plane starts issuing v9 tickets.
-SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = (8, 9, 10)
+#
+# This list is intersected with what the scorer advertises
+# (``scorer_benchmark_capability``), so a version the scorer supports is dropped
+# from the validator's signed heartbeat unless it also appears here. It must
+# track the dittobench-api ``supportedBenchVersions`` set: v11 shipped there and
+# in the Platform, but was omitted here, so validators advertised only [8, 9, 10]
+# and the Platform counted zero v11-capable validators while v8/9/10 kept working.
+SUPPORTED_BENCH_VERSIONS: tuple[int, ...] = (8, 9, 10, 11)
 
 
 # Scorer identity faults. Both stop benchmark advertisement and both
