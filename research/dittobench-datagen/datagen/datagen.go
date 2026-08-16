@@ -1314,7 +1314,7 @@ func applyV9WorldActions(seed int64, cases []protocol.ToolCase) {
 // of an existing workflow. The same prompt surface therefore maps to different
 // correct tool outcomes across seeds while every answer remains deterministically
 // recoverable from ordinary harness-visible state.
-func applyV10StateDependentActions(seed int64, cases []protocol.ToolCase) {
+func applyV10StateDependentActions(seed int64, benchVersion int, cases []protocol.ToolCase) {
 	if len(cases) == 0 {
 		return
 	}
@@ -1336,20 +1336,39 @@ func applyV10StateDependentActions(seed int64, cases []protocol.ToolCase) {
 		pairID := protocol.OpaqueCaseID(seed, "v10-tool-route", i)
 		planningPrompt := fmt.Sprintf("Planning decision for dependency-risk work on %q at %s.", project.Alias, project.Client)
 		prompt := fmt.Sprintf("Handle the dependency-risk review for %q using the operating choice I approved in our planning note. Start that work now.", project.Alias)
+		routePrefix := "Approved route: "
+		if benchVersion >= protocol.BenchVersionV11 {
+			// v11 rotates every literal cue the measured rule engines matched
+			// ("planning note", "operating choice", "Approved route:"). The
+			// decision's semantics and the expected tool outcome are untouched.
+			planningPrompt = fmt.Sprintf(v11ToolPick(seed, i, "plan", []string{
+				"Decision log for the dependency-risk effort on %q at %s.",
+				"Where we landed on the %q risk review for %s.",
+				"Outcome of our scoping chat about %q (%s).",
+			}), project.Alias, project.Client)
+			prompt = fmt.Sprintf(v11ToolPick(seed, i, "ask", []string{
+				"Kick off the dependency-risk review for %q the way we already agreed. Go ahead now.",
+				"Time to start the risk review on %q — proceed exactly as we settled earlier. Begin now.",
+				"Please begin the dependency-risk pass for %q following what we decided together. Start it.",
+			}), project.Alias)
+			routePrefix = v11ToolPick(seed, i, "route", []string{
+				"What we settled on: ", "Agreed path — ", "Our decision stands: ", "Going with this: ",
+			})
+		}
 
 		var planningResponse, behavior string
 		var expected []protocol.ToolSpec
 		switch routes.Intn(3) {
 		case 0:
-			planningResponse = "Approved route: dispatch one one-off Ditto Code job. Do not create or run a reusable workflow."
+			planningResponse = routePrefix + "dispatch one one-off Ditto Code job. Do not create or run a reusable workflow."
 			expected = []protocol.ToolSpec{{Name: "execute_agent_job"}}
 			behavior = "resolve the planning decision and dispatch the approved one-off Ditto Code job for user approval"
 		case 1:
-			planningResponse = fmt.Sprintf("Approved route: create a new reusable workflow named %q. Do not dispatch a one-off job or run an existing workflow.", project.Name)
+			planningResponse = fmt.Sprintf(routePrefix+"create a new reusable workflow named %q. Do not dispatch a one-off job or run an existing workflow.", project.Name)
 			expected = []protocol.ToolSpec{{Name: "create_workflow", RequiredArgs: map[string]string{"name": project.Name}}}
 			behavior = "resolve the planning decision and create the approved reusable workflow under its canonical name"
 		case 2:
-			planningResponse = fmt.Sprintf("Approved route: run the existing workflow named %q. List saved workflows first; do not create a replacement or dispatch a one-off job.", project.Name)
+			planningResponse = fmt.Sprintf(routePrefix+"run the existing workflow named %q. List saved workflows first; do not create a replacement or dispatch a one-off job.", project.Name)
 			expected = []protocol.ToolSpec{{Name: "list_workflows"}, {Name: "run_workflow", RequiredArgs: map[string]string{"name": project.Name}}}
 			behavior = "resolve the planning decision, list saved workflows, and run the approved existing workflow"
 		}
@@ -2029,7 +2048,7 @@ func GenerateCasesWithFillersForVersion(r *rand.Rand, seed int64, n, benchVersio
 		applyV8WorldActions(seed, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV10 {
-		applyV10StateDependentActions(seed, cases)
+		applyV10StateDependentActions(seed, benchVersion, cases)
 	}
 	if benchVersion >= protocol.BenchVersionV8 {
 		applyV8WritingNoise(seed, cases)
@@ -2088,4 +2107,13 @@ func applyV8CapabilityResolution(tc *protocol.ToolCase, value string, salt int) 
 	tc.Unordered = false
 	tc.FuzzyTrajectory = true
 	tc.ExpectedBehavior = "resolve the user's approximate choice against current capabilities and apply the canonical setting; exploratory order is not prescribed"
+}
+
+// v11ToolPick is the seeded per-case surface chooser for the v11 rotation of
+// the state-dependent routing family. It hashes outside the shared toolMixRNG
+// stream so route outcomes stay byte-identical to v10.
+func v11ToolPick(seed int64, index int, salt string, bank []string) string {
+	h := fnv.New64a()
+	_, _ = fmt.Fprintf(h, "dittobench-v11-tool:%d:%d:%s", seed, index, salt)
+	return bank[h.Sum64()%uint64(len(bank))]
 }

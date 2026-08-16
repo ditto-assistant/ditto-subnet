@@ -379,6 +379,43 @@ the bytes or the score of an already-published run.** The known-vector tests in
 `gen/publicvector_test.go` enforce the byte half in CI. Anything that would
 change a score is, by definition, a new contract and a new major.
 
+## Bench v11 (private, anti-template-fitting)
+
+v11 is designed against the two harness archetypes measured at the top of the
+v10 board: deterministic rule engines that prefix-match the generator's fixed
+surface templates, hardcode the single v10 balance program, resolve entities
+only through literal alias echo, and model only the public single-edit typo
+projector. Every lever is gated on `bench_version >= 11`, so v10 regenerates
+byte-identically:
+
+- **Sampled program shapes.** Each metamorphic group draws one of four query
+  programs (subtract, adjust-then-subtract, latest-of-two-corrections,
+  larger-minus-settled). The v10 formula's result is planted as a distractor
+  whenever it differs, so a harness replaying approved-minus-paid selects a
+  wrong answer rather than a near miss.
+- **Compositional surface grammar.** Glossaries, questions, and assistant
+  acknowledgements are assembled from seeded component banks; no complete
+  sentence is stored anywhere, so no literal prefix survives two seeds.
+- **Descriptive entity binding.** Even-numbered groups reference the subject by
+  a unique evidence-derived description (its recorded draft amount) instead of
+  its alias.
+- **Multi-edit surface noise.** `V11ApplyArtifactSurfaceNoise` runs inside the
+  shared artifact assembly and applies seeded interior edits to a fixed
+  safelist of framing words across seeded history, staged questions, and tool
+  prompts. Values, labels, names, numbers, and expected tool specs stay
+  byte-exact.
+- **Composed injection markers.** The fixed stored-directive markers
+  (`[SYNC]`, "The verified value is", ...) are rewritten per seed, so a finite
+  marker list no longer recognizes a planted directive while the attack (and
+  its grading) is unchanged.
+- **Routing cue rotation.** The v10 state-dependent tool-routing family keeps
+  its route outcomes byte-identical but rotates the "planning note" /
+  "operating choice" / "Approved route:" cue surfaces per seed.
+
+Run sizes, the deterministic grader, the inference boundary, LongMemEval
+deep-history floors, and the v9 signed-evidence/score-gate/curve-v3 efficiency
+stack all carry forward unchanged.
+
 ## Auditing an old score
 
 Pin two things: the `bench_version` published with the score, and the **module

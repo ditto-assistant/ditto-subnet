@@ -311,6 +311,27 @@ func EvaluateV10Program(node V10QueryNode, state map[string]int) (int, error) {
 			return 0, err
 		}
 		return left - right, nil
+	case "add", "max":
+		// Additive v11 ops. No frozen v10 program uses them, so supporting
+		// them here cannot disturb v10 bytes or replayed provenance.
+		if len(node.Children) != 2 {
+			return 0, fmt.Errorf("program op %q expects two children", node.Op)
+		}
+		left, err := EvaluateV10Program(node.Children[0], state)
+		if err != nil {
+			return 0, err
+		}
+		right, err := EvaluateV10Program(node.Children[1], state)
+		if err != nil {
+			return 0, err
+		}
+		if node.Op == "add" {
+			return left + right, nil
+		}
+		if left > right {
+			return left, nil
+		}
+		return right, nil
 	case "convert_minor_units":
 		if len(node.Children) != 1 {
 			return 0, fmt.Errorf("v10 conversion expects one child")

@@ -80,6 +80,28 @@ import (
 // and schema labels, recursive query programs, independent renderers, and
 // first-class metamorphic/counterfactual provenance. It is generation-only
 // until the private qualification stack proves durable headroom.
+//
+// v11 is the ANTI-TEMPLATE-FITTING release, designed against the two harness
+// archetypes measured at the top of the v10 board: deterministic rule engines
+// that (a) prefix-match the generator's fixed surface templates, (b) hardcode
+// the single v10 balance program, (c) resolve entities only through literal
+// alias echo, and (d) assume the v9 single-edit noise projector. All levers are
+// gated on bench_version >= 11 so v10 regenerates byte-identically:
+//   - varied recursive program shapes per metamorphic group (subtract,
+//     adjust-then-subtract, latest-of-two-corrections, larger-minus-settled)
+//     instead of one fixed balance formula;
+//   - compositional surface grammar for glossaries, questions, and assistant
+//     acknowledgements (seeded recombination, no stable literal prefixes);
+//   - descriptive entity binding: half the groups reference the subject by a
+//     unique evidence-derived description rather than by its alias;
+//   - a multi-edit surface-noise projector applied to non-critical tokens of
+//     seeded history and questions (answers and schema labels stay verbatim);
+//   - per-seed composed stored-instruction injection markers instead of the
+//     fixed marker list.
+//
+// The deterministic grader, run sizes, inference boundary, LongMemEval
+// deep-history floors, and the v9 signed-evidence/score-gate/curve-v3
+// efficiency stack all carry forward unchanged.
 const (
 	BenchVersionV2      = 2
 	BenchVersionV3      = 3
@@ -90,6 +112,7 @@ const (
 	BenchVersionV8      = 8
 	BenchVersionV9      = 9
 	BenchVersionV10     = 10
+	BenchVersionV11     = 11
 	CurrentBenchVersion = BenchVersionV8
 
 	// BenchVersion is retained as a source-compatible alias for consumers that
@@ -108,6 +131,7 @@ var (
 	datasetEpochV8  = time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV9  = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV10 = time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV11 = time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
 
 	// DatasetEpoch and DatasetEpochRFC3339 retain the v2 values for legacy
 	// package callers. Canonical versioned generation uses DatasetEpochForVersion.
@@ -121,7 +145,7 @@ func SupportedBenchVersion(version int) bool {
 		version == BenchVersionV4 || version == BenchVersionV5 ||
 		version == BenchVersionV6 || version == BenchVersionV7 ||
 		version == BenchVersionV8 || version == BenchVersionV9 ||
-		version == BenchVersionV10
+		version == BenchVersionV10 || version == BenchVersionV11
 }
 
 // DatasetEpochForVersion returns the immutable reference instant for version.
@@ -145,8 +169,10 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 		return datasetEpochV9, nil
 	case BenchVersionV10:
 		return datasetEpochV10, nil
+	case BenchVersionV11:
+		return datasetEpochV11, nil
 	default:
-		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10)", version)
+		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)", version)
 	}
 }
 
@@ -154,7 +180,7 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 // It is deterministic and retains the exact historical v2 mixing function.
 func RotateSeedForVersion(seed int64, version int) (int64, error) {
 	if !SupportedBenchVersion(version) {
-		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10)", version)
+		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)", version)
 	}
 	v := uint64(version)
 	x := uint64(seed) ^ (v * 0x9E3779B97F4A7C15)

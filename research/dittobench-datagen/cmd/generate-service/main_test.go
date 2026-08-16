@@ -9,7 +9,7 @@ import (
 
 func TestHandleGenerateRequiresSupportedVersion(t *testing.T) {
 	for _, path := range []string{
-		"/generate?seed=42&run_size=small&bench_version=11",
+		"/generate?seed=42&run_size=small&bench_version=12",
 		"/generate?seed=42&run_size=small&bench_version=garbage",
 	} {
 		rr := httptest.NewRecorder()
@@ -17,7 +17,7 @@ func TestHandleGenerateRequiresSupportedVersion(t *testing.T) {
 		if rr.Code != http.StatusBadRequest {
 			t.Errorf("%s: got %d, want 400", path, rr.Code)
 		}
-		if !strings.Contains(rr.Body.String(), "supported: 2, 3, 4, 5, 6, 7, 8, 9, 10") {
+		if !strings.Contains(rr.Body.String(), "supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11") {
 			t.Errorf("%s: stale supported-version response: %q", path, rr.Body.String())
 		}
 	}

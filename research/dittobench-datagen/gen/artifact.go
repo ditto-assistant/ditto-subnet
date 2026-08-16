@@ -159,6 +159,7 @@ func BuildArtifactForVersion(seed int64, benchVersion int, toolCases []protocol.
 			return DatasetArtifact{}, err
 		}
 	}
+	V11ApplyArtifactSurfaceNoise(seed, benchVersion, &artifact)
 	return artifact, nil
 }
 

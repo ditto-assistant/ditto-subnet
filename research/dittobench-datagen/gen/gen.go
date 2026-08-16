@@ -156,7 +156,9 @@ func ProfileForVersion(runSize string, benchVersion int) (Profile, bool) {
 		profiles = profilesV8
 	case protocol.BenchVersionV9:
 		profiles = profilesV9
-	case protocol.BenchVersionV10:
+	case protocol.BenchVersionV10, protocol.BenchVersionV11:
+		// v11 keeps v10's run-size envelopes; its difficulty comes from the
+		// generator contract, not from scale.
 		profiles = profilesV10
 	default:
 		return Profile{}, false

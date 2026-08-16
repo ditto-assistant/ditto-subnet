@@ -661,9 +661,19 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 	}
 	var v10Programs []universe.V10GeneratedCase
 	if v10Count > 0 {
-		v10Programs, err = universe.GenerateV10Programs(seed, v10Count)
-		if err != nil {
-			return MemorySuite{}, fmt.Errorf("v10 open programs: %w", err)
+		if benchVersion >= protocol.BenchVersionV11 {
+			// The v11 contract replaces the single fixed balance program with
+			// sampled program shapes and a compositional surface grammar. The
+			// case budget and metamorphic-group structure are unchanged.
+			v10Programs, err = universe.GenerateV11Programs(seed, v10Count)
+			if err != nil {
+				return MemorySuite{}, fmt.Errorf("v11 open programs: %w", err)
+			}
+		} else {
+			v10Programs, err = universe.GenerateV10Programs(seed, v10Count)
+			if err != nil {
+				return MemorySuite{}, fmt.Errorf("v10 open programs: %w", err)
+			}
 		}
 	}
 
