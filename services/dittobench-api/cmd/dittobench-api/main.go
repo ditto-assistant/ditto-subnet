@@ -1300,7 +1300,7 @@ func requestedPracticeBenchVersion(version int) (int, string) {
 // v9 dataset and grader still run; only the activation/confirmation evidence is
 // intentionally absent.
 func requiresV9BaseEvidence(req submitRequest) bool {
-	return req.BenchVersion == protocol.BenchVersionV9 && runScope(req) == scorer.ScopeScored
+	return req.BenchVersion >= protocol.BenchVersionV9 && runScope(req) == scorer.ScopeScored
 }
 
 // runSizeJob is the full SN118 pipeline: building → generating → seeding →

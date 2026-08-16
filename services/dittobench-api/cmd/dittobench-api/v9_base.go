@@ -171,7 +171,7 @@ func applyV9BaseEvidence(
 	execution relayExecutionSummary,
 	transcriptSHA256 string,
 ) (protocol.ScoreReport, error) {
-	if req.BenchVersion != protocol.BenchVersionV9 {
+	if req.BenchVersion < protocol.BenchVersionV9 {
 		return report, nil
 	}
 	if report.Details == nil {
@@ -198,12 +198,12 @@ func applyV9BaseEvidence(
 			"v9 case attribution unavailable: trusted relay windows did not settle",
 		)
 	}
-	gates, err := v9base.BuildGateEvidence(perCase, model, true)
+	gates, err := v9base.BuildGateEvidence(req.BenchVersion, perCase, model, true)
 	if err != nil {
 		return protocol.ScoreReport{}, fmt.Errorf("build v9 score-gate evidence: %w", err)
 	}
 	details, digest, effective, err := v9base.Build(v9base.Inputs{
-		RunID: report.RunID, ArtifactSHA256: artifactSHA256,
+		RunID: report.RunID, BenchVersion: req.BenchVersion, ArtifactSHA256: artifactSHA256,
 		DatasetSHA256: report.Details.DatasetSHA256, TranscriptSHA256: transcriptSHA256,
 		Ordinary: scoregates.Score{Composite: report.Composite, CompositeStderr: report.CompositeStderr},
 		Gates:    gates,

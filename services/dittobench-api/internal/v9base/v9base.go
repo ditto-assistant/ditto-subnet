@@ -33,6 +33,7 @@ var ErrInvalidEvidence = errors.New("invalid v9 base evidence")
 // Inputs are all trusted identities and observations needed to build one root.
 type Inputs struct {
 	RunID            string
+	BenchVersion     int
 	ArtifactSHA256   string
 	DatasetSHA256    string
 	TranscriptSHA256 string
@@ -73,6 +74,9 @@ func Build(input Inputs) (protocol.V9BaseDetails, string, scoregates.Score, erro
 	if strings.TrimSpace(input.RunID) == "" || len(input.RunID) > 256 {
 		return protocol.V9BaseDetails{}, "", scoregates.Score{}, invalid("run_id is required and bounded")
 	}
+	if !scoregates.SupportedBenchVersion(input.BenchVersion) {
+		return protocol.V9BaseDetails{}, "", scoregates.Score{}, invalid("unsupported bench version %d", input.BenchVersion)
+	}
 	for name, value := range map[string]string{
 		"artifact_sha256": input.ArtifactSHA256, "dataset_sha256": input.DatasetSHA256,
 		"transcript_sha256": input.TranscriptSHA256,
@@ -92,7 +96,7 @@ func Build(input Inputs) (protocol.V9BaseDetails, string, scoregates.Score, erro
 	if err != nil {
 		return protocol.V9BaseDetails{}, "", scoregates.Score{}, err
 	}
-	effective, err := scoregates.ApplyForVersion(protocol.BenchVersionV9, input.Ordinary, &input.Gates)
+	effective, err := scoregates.ApplyForVersion(input.BenchVersion, input.Ordinary, &input.Gates)
 	if err != nil {
 		return protocol.V9BaseDetails{}, "", scoregates.Score{}, err
 	}
@@ -105,7 +109,7 @@ func Build(input Inputs) (protocol.V9BaseDetails, string, scoregates.Score, erro
 		applied = scoregates.BasisPointScale
 	}
 	details := protocol.V9BaseDetails{
-		SchemaVersion: SchemaVersion, BenchVersion: protocol.BenchVersionV9,
+		SchemaVersion: SchemaVersion, BenchVersion: input.BenchVersion,
 		ScoreContract: protocol.V9ScoreContractIdentity{Revision: ContractRevision, ManifestSHA256: ContractManifestSHA256},
 		RunID:         input.RunID, ArtifactSHA256: input.ArtifactSHA256,
 		DatasetSHA256: input.DatasetSHA256, TranscriptSHA256: input.TranscriptSHA256,
@@ -128,7 +132,7 @@ func Build(input Inputs) (protocol.V9BaseDetails, string, scoregates.Score, erro
 // Validate reconstructs every derived value and rejects identity or evidence
 // tampering before a consumer trusts a root digest.
 func Validate(details protocol.V9BaseDetails) error {
-	if details.SchemaVersion != SchemaVersion || details.BenchVersion != protocol.BenchVersionV9 {
+	if details.SchemaVersion != SchemaVersion || !scoregates.SupportedBenchVersion(details.BenchVersion) {
 		return invalid("unsupported schema or bench version")
 	}
 	if details.ScoreContract != (protocol.V9ScoreContractIdentity{Revision: ContractRevision, ManifestSHA256: ContractManifestSHA256}) {
@@ -143,7 +147,7 @@ func Validate(details protocol.V9BaseDetails) error {
 		CompositeStderr: float64(details.OrdinaryStderrMicros) / float64(MicrosScale),
 	}
 	rebuilt, digest, _, err := Build(Inputs{
-		RunID: details.RunID, ArtifactSHA256: details.ArtifactSHA256,
+		RunID: details.RunID, BenchVersion: details.BenchVersion, ArtifactSHA256: details.ArtifactSHA256,
 		DatasetSHA256: details.DatasetSHA256, TranscriptSHA256: details.TranscriptSHA256,
 		Ordinary: ordinary, Gates: gates,
 	})
@@ -173,7 +177,7 @@ func CanonicalBytes(details protocol.V9BaseDetails) ([]byte, error) {
 
 // ValidateWithoutDigestRecursion checks every field used by canonicalization.
 func ValidateWithoutDigestRecursion(details protocol.V9BaseDetails) error {
-	if details.SchemaVersion != SchemaVersion || details.BenchVersion != protocol.BenchVersionV9 {
+	if details.SchemaVersion != SchemaVersion || !scoregates.SupportedBenchVersion(details.BenchVersion) {
 		return invalid("unsupported schema or bench version")
 	}
 	if details.ScoreContract != (protocol.V9ScoreContractIdentity{Revision: ContractRevision, ManifestSHA256: ContractManifestSHA256}) {

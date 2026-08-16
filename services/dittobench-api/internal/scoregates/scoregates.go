@@ -18,10 +18,18 @@ import (
 const (
 	SchemaVersion   = 1
 	BenchVersionV9  = 9
+	BenchVersionV10 = 10
 	BasisPointScale = 10_000
 	MaxCaseCount    = 10_000_000
 	MaxUsageCount   = uint64(9_007_199_254_740_991)
 )
+
+// SupportedBenchVersion reports whether the gate contract applies to a bench
+// version. The v9 contract carries forward unchanged to v10; the evidence
+// records the run's actual version so digests stay version-bound.
+func SupportedBenchVersion(benchVersion int) bool {
+	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV10
+}
 
 var (
 	ErrUnsupportedVersion   = errors.New("unsupported score-gate version")
@@ -136,7 +144,10 @@ type Score struct {
 	CompositeStderr float64
 }
 
-func Build(model ModelUseInput, tool AuthoritativeToolInput, thresholds Thresholds, mode RolloutMode) (Evidence, error) {
+func Build(benchVersion int, model ModelUseInput, tool AuthoritativeToolInput, thresholds Thresholds, mode RolloutMode) (Evidence, error) {
+	if !SupportedBenchVersion(benchVersion) {
+		return Evidence{}, fmt.Errorf("%w: bench=%d", ErrUnsupportedVersion, benchVersion)
+	}
 	if err := validateThresholds(thresholds); err != nil {
 		return Evidence{}, err
 	}
@@ -152,7 +163,7 @@ func Build(model ModelUseInput, tool AuthoritativeToolInput, thresholds Threshol
 		return Evidence{}, err
 	}
 	return Evidence{
-		SchemaVersion: SchemaVersion, BenchVersion: BenchVersionV9,
+		SchemaVersion: SchemaVersion, BenchVersion: benchVersion,
 		RolloutMode: mode, ThresholdProfile: thresholds.Profile,
 		ModelUse: modelEvidence, AuthoritativeTool: toolEvidence,
 	}, nil
@@ -273,10 +284,11 @@ func buildAuthoritativeTool(in AuthoritativeToolInput, threshold int) (Authorita
 }
 
 func (e Evidence) Validate() error {
-	if e.SchemaVersion != SchemaVersion || e.BenchVersion != BenchVersionV9 {
+	if e.SchemaVersion != SchemaVersion || !SupportedBenchVersion(e.BenchVersion) {
 		return fmt.Errorf("%w: schema=%d bench=%d", ErrUnsupportedVersion, e.SchemaVersion, e.BenchVersion)
 	}
 	want, err := Build(
+		e.BenchVersion,
 		ModelUseInput{
 			AdministeredCases: e.ModelUse.AdministeredCases, EligibleCases: e.ModelUse.EligibleCases,
 			SuccessfulInferenceCases: e.ModelUse.SuccessfulInferenceCases,
@@ -327,11 +339,14 @@ func ApplyForVersion(benchVersion int, score Score, evidence *Evidence) (Score, 
 		}
 		return score, nil
 	}
-	if benchVersion != BenchVersionV9 {
+	if !SupportedBenchVersion(benchVersion) {
 		return Score{}, fmt.Errorf("%w: bench=%d", ErrUnsupportedVersion, benchVersion)
 	}
 	if evidence == nil {
-		return Score{}, invalid("v9 score requires gate evidence")
+		return Score{}, invalid("v9+ score requires gate evidence")
+	}
+	if evidence.BenchVersion != benchVersion {
+		return Score{}, invalid("gate evidence bench version %d does not match score bench version %d", evidence.BenchVersion, benchVersion)
 	}
 	factor, err := evidence.CombinedFactorBPS()
 	if err != nil {

@@ -21,6 +21,7 @@ const (
 func attributedGateEvidence(t *testing.T) scoregates.Evidence {
 	t.Helper()
 	gates, err := scoregates.Build(
+		scoregates.BenchVersionV9,
 		scoregates.ModelUseInput{
 			AdministeredCases: 4, EligibleCases: 3, SuccessfulInferenceCases: 2,
 			ObservedRequests: 5, SuccessfulRequests: 4, PromptTokens: 1200, CompletionTokens: 240,
@@ -40,7 +41,7 @@ func attributedGateEvidence(t *testing.T) scoregates.Evidence {
 
 func validInput(t *testing.T) Inputs {
 	return Inputs{
-		RunID: "run-v9-vector", ArtifactSHA256: testArtifact,
+		RunID: "run-v9-vector", BenchVersion: scoregates.BenchVersionV9, ArtifactSHA256: testArtifact,
 		DatasetSHA256: testDataset, TranscriptSHA256: testTranscript,
 		Ordinary: scoregates.Score{Composite: 0.812345, CompositeStderr: 0.023456},
 		Gates:    attributedGateEvidence(t),
@@ -170,7 +171,7 @@ func TestEnforceInsufficientAttributionPublishesAndAppliesZero(t *testing.T) {
 		{CaseID: "a", Expected: []string{"search"}, Called: []string{"search"}},
 		{CaseID: "b"}, {CaseID: "c"},
 	}
-	gates, err := BuildGateEvidence(perCase, AggregateModelTelemetry{
+	gates, err := BuildGateEvidence(scoregates.BenchVersionV9, perCase, AggregateModelTelemetry{
 		ObservedRequests: 100, SuccessfulRequests: 100, PromptTokens: 20_000,
 		TelemetryComplete: true,
 	}, true)
@@ -195,7 +196,7 @@ func TestEnforceInsufficientAttributionPublishesAndAppliesZero(t *testing.T) {
 
 func TestZeroInferenceIsValidSignedEvidence(t *testing.T) {
 	perCase := []protocol.CaseScore{{CaseID: "a"}, {CaseID: "b"}}
-	gates, err := BuildGateEvidence(perCase, AggregateModelTelemetry{TelemetryComplete: true}, true)
+	gates, err := BuildGateEvidence(scoregates.BenchVersionV9, perCase, AggregateModelTelemetry{TelemetryComplete: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,11 +311,11 @@ func TestPreV9ScoreReportJSONOmitsAllV9Fields(t *testing.T) {
 }
 
 func TestBuildGateEvidenceFailsClosedOnMissingTelemetry(t *testing.T) {
-	_, err := BuildGateEvidence([]protocol.CaseScore{{CaseID: "a"}}, AggregateModelTelemetry{}, true)
+	_, err := BuildGateEvidence(scoregates.BenchVersionV9, []protocol.CaseScore{{CaseID: "a"}}, AggregateModelTelemetry{}, true)
 	if !errors.Is(err, scoregates.ErrTelemetryUnavailable) {
 		t.Fatalf("error = %v, want telemetry unavailable", err)
 	}
-	_, err = BuildGateEvidence([]protocol.CaseScore{{CaseID: "a"}}, AggregateModelTelemetry{TelemetryComplete: true}, false)
+	_, err = BuildGateEvidence(scoregates.BenchVersionV9, []protocol.CaseScore{{CaseID: "a"}}, AggregateModelTelemetry{TelemetryComplete: true}, false)
 	if !errors.Is(err, scoregates.ErrTelemetryUnavailable) {
 		t.Fatalf("tool error = %v, want telemetry unavailable", err)
 	}
@@ -329,7 +330,7 @@ func TestPopulationExclusionsAndAuthoritativeMultisetCounts(t *testing.T) {
 		{CaseID: "ablation:inference", Expected: []string{"ignored"}, Called: []string{"ignored"}},
 		{CaseID: "validator-fault", ValidatorFault: true, Expected: []string{"ignored"}, Called: []string{"ignored"}},
 	}
-	gates, err := BuildGateEvidence(perCase, AggregateModelTelemetry{TelemetryComplete: true}, true)
+	gates, err := BuildGateEvidence(scoregates.BenchVersionV9, perCase, AggregateModelTelemetry{TelemetryComplete: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +352,7 @@ func TestSelfReportedExpectedToolCallGetsZeroAuthoritativeCredit(t *testing.T) {
 		CaseID: "self-report-only", Observed: false,
 		Expected: []string{"search_web"}, Called: []string{"search_web"},
 	}}
-	gates, err := BuildGateEvidence(perCase, AggregateModelTelemetry{TelemetryComplete: true}, true)
+	gates, err := BuildGateEvidence(scoregates.BenchVersionV9, perCase, AggregateModelTelemetry{TelemetryComplete: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -361,5 +362,46 @@ func TestSelfReportedExpectedToolCallGetsZeroAuthoritativeCredit(t *testing.T) {
 	}
 	if tool.FactorBPS != 0 {
 		t.Fatalf("self-report passed authoritative gate: %+v", tool)
+	}
+}
+
+func TestBuildCarriesBenchV10ThroughEvidenceAndDigest(t *testing.T) {
+	gatesV10, err := scoregates.Build(
+		scoregates.BenchVersionV10,
+		scoregates.ModelUseInput{
+			AdministeredCases: 4, EligibleCases: 3, SuccessfulInferenceCases: 2,
+			ObservedRequests: 5, SuccessfulRequests: 4, PromptTokens: 1200, CompletionTokens: 240,
+			Excluded:          scoregates.ExclusionCounts{Undelivered: 1},
+			TelemetryComplete: true, CaseAttributionComplete: true,
+		},
+		scoregates.AuthoritativeToolInput{
+			ExpectedExecutions: 3, MatchedExecutions: 2, UnexpectedExecutions: 1, TelemetryComplete: true,
+		},
+		ContractThresholds(), scoregates.RolloutEnforce,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := validInput(t)
+	input.BenchVersion = scoregates.BenchVersionV10
+	input.Gates = gatesV10
+	details, digest, _, err := Build(input)
+	if err != nil {
+		t.Fatalf("Build() error = %v", err)
+	}
+	if details.BenchVersion != scoregates.BenchVersionV10 || details.ScoreGates.BenchVersion != scoregates.BenchVersionV10 {
+		t.Fatalf("details carry bench versions %d/%d, want 10/10", details.BenchVersion, details.ScoreGates.BenchVersion)
+	}
+	if err := Validate(details); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+	_, v9Digest := mustBuild(t)
+	if digest == v9Digest {
+		t.Fatal("v10 evidence digest must differ from the v9 digest")
+	}
+	mismatched := validInput(t)
+	mismatched.BenchVersion = scoregates.BenchVersionV10
+	if _, _, _, err := Build(mismatched); err == nil {
+		t.Fatal("Build() must reject v9-stamped gates on a v10 run")
 	}
 }

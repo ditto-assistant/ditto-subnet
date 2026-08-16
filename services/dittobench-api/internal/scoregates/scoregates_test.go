@@ -48,7 +48,7 @@ func validThresholds() Thresholds {
 
 func mustEvidence(t *testing.T) Evidence {
 	t.Helper()
-	e, err := Build(validModelInput(), validToolInput(), validThresholds(), RolloutEnforce)
+	e, err := Build(BenchVersionV9, validModelInput(), validToolInput(), validThresholds(), RolloutEnforce)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestModelUseCoverageUsesDistinctCasesNotRequests(t *testing.T) {
 	in.SuccessfulRequests = 9_999
 	in.PromptTokens = 1_000_000
 
-	e, err := Build(in, validToolInput(), validThresholds(), RolloutEnforce)
+	e, err := Build(BenchVersionV9, in, validToolInput(), validThresholds(), RolloutEnforce)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -130,7 +130,7 @@ func TestAggregateRequestsCannotMasqueradeAsDistinctCaseCoverage(t *testing.T) {
 	in.SuccessfulRequests = 9_999
 	in.PromptTokens = 1_000_000
 
-	e, err := Build(in, validToolInput(), validThresholds(), RolloutShadow)
+	e, err := Build(BenchVersionV9, in, validToolInput(), validThresholds(), RolloutShadow)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -148,7 +148,7 @@ func TestAggregateRequestsCannotMasqueradeAsDistinctCaseCoverage(t *testing.T) {
 func TestUnattributedAggregateCannotClaimSuccessfulCases(t *testing.T) {
 	in := validModelInput()
 	in.CaseAttributionComplete = false
-	_, err := Build(in, validToolInput(), validThresholds(), RolloutShadow)
+	_, err := Build(BenchVersionV9, in, validToolInput(), validThresholds(), RolloutShadow)
 	if !errors.Is(err, ErrInvalidEvidence) || !strings.Contains(err.Error(), "distinct-case attribution") {
 		t.Fatalf("Build() error = %v, want distinct-case attribution rejection", err)
 	}
@@ -175,7 +175,7 @@ func TestModelUseThresholdBoundaryIsInclusive(t *testing.T) {
 			in.SuccessfulInferenceCases = tt.successful
 			thresholds := validThresholds()
 			thresholds.ModelUseCoverageBPS = tt.threshold
-			e, err := Build(in, validToolInput(), thresholds, RolloutEnforce)
+			e, err := Build(BenchVersionV9, in, validToolInput(), thresholds, RolloutEnforce)
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
@@ -197,7 +197,7 @@ func TestZeroInferenceIsCompletedEvidenceWithZeroFactor(t *testing.T) {
 	in.PromptTokens = 0
 	in.CompletionTokens = 0
 
-	e, err := Build(in, validToolInput(), validThresholds(), RolloutEnforce)
+	e, err := Build(BenchVersionV9, in, validToolInput(), validThresholds(), RolloutEnforce)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -233,7 +233,7 @@ func TestAttemptedButUnsuccessfulInferenceIsBelowThreshold(t *testing.T) {
 	in.PromptTokens = 0
 	in.CompletionTokens = 0
 
-	e, err := Build(in, validToolInput(), validThresholds(), RolloutEnforce)
+	e, err := Build(BenchVersionV9, in, validToolInput(), validThresholds(), RolloutEnforce)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -257,7 +257,7 @@ func TestNoEligibleModelCasesIsNotApplicable(t *testing.T) {
 		TelemetryComplete: true,
 	}
 
-	e, err := Build(in, validToolInput(), validThresholds(), RolloutEnforce)
+	e, err := Build(BenchVersionV9, in, validToolInput(), validThresholds(), RolloutEnforce)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -287,7 +287,7 @@ func TestEveryExclusionCategoryParticipatesInPartition(t *testing.T) {
 			in.Excluded = tt.excluded
 			total := tt.excluded.Preflight + tt.excluded.Ablation + tt.excluded.Undelivered + tt.excluded.ValidatorFault
 			in.AdministeredCases = in.EligibleCases + total
-			e, err := Build(in, validToolInput(), validThresholds(), RolloutEnforce)
+			e, err := Build(BenchVersionV9, in, validToolInput(), validThresholds(), RolloutEnforce)
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
@@ -333,7 +333,7 @@ func TestRejectsInvalidModelInputs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			in := validModelInput()
 			tt.mutate(&in)
-			_, err := Build(in, validToolInput(), validThresholds(), RolloutEnforce)
+			_, err := Build(BenchVersionV9, in, validToolInput(), validThresholds(), RolloutEnforce)
 			if !errors.Is(err, tt.is) {
 				t.Fatalf("Build() error = %v, want errors.Is(%v)", err, tt.is)
 			}
@@ -371,7 +371,7 @@ func TestRejectsInvalidThresholds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			thresholds := validThresholds()
 			tt.mutate(&thresholds)
-			_, err := Build(validModelInput(), validToolInput(), thresholds, RolloutEnforce)
+			_, err := Build(BenchVersionV9, validModelInput(), validToolInput(), thresholds, RolloutEnforce)
 			if !errors.Is(err, ErrInvalidEvidence) {
 				t.Fatalf("Build() error = %v, want ErrInvalidEvidence", err)
 			}
@@ -385,7 +385,7 @@ func TestRejectsInvalidThresholds(t *testing.T) {
 func TestRejectsInvalidRolloutMode(t *testing.T) {
 	for _, mode := range []RolloutMode{"", "off", "ENFORCE", "shadow\nforged"} {
 		t.Run(string(mode), func(t *testing.T) {
-			_, err := Build(validModelInput(), validToolInput(), validThresholds(), mode)
+			_, err := Build(BenchVersionV9, validModelInput(), validToolInput(), validThresholds(), mode)
 			if !errors.Is(err, ErrInvalidEvidence) {
 				t.Fatalf("Build() error = %v, want ErrInvalidEvidence", err)
 			}
@@ -421,7 +421,7 @@ func TestAuthoritativeToolGate(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			thresholds := validThresholds()
 			thresholds.AuthoritativeToolCoverageBPS = tt.threshold
-			e, err := Build(validModelInput(), tt.input, thresholds, RolloutEnforce)
+			e, err := Build(BenchVersionV9, validModelInput(), tt.input, thresholds, RolloutEnforce)
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
@@ -441,7 +441,7 @@ func TestOptionalExtraToolExecutionCannotEraseCompleteCoverage(t *testing.T) {
 	in.MatchedExecutions = in.ExpectedExecutions
 	in.UnexpectedExecutions = 5
 
-	e, err := Build(validModelInput(), in, validThresholds(), RolloutEnforce)
+	e, err := Build(BenchVersionV9, validModelInput(), in, validThresholds(), RolloutEnforce)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -469,7 +469,7 @@ func TestSelfReportedToolCallsCannotCreateAuthoritativeCredit(t *testing.T) {
 		TelemetryComplete:  true,
 	}
 
-	e, err := Build(validModelInput(), in, validThresholds(), RolloutEnforce)
+	e, err := Build(BenchVersionV9, validModelInput(), in, validThresholds(), RolloutEnforce)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -510,7 +510,7 @@ func TestRejectsInvalidToolInputs(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			in := validToolInput()
 			tt.mutate(&in)
-			_, err := Build(validModelInput(), in, validThresholds(), RolloutEnforce)
+			_, err := Build(BenchVersionV9, validModelInput(), in, validThresholds(), RolloutEnforce)
 			if !errors.Is(err, tt.is) {
 				t.Fatalf("Build() error = %v, want errors.Is(%v)", err, tt.is)
 			}
@@ -572,7 +572,7 @@ func TestValidateRejectsUnsupportedEvidenceVersions(t *testing.T) {
 		{name: "zero schema", mutate: func(e *Evidence) { e.SchemaVersion = 0 }},
 		{name: "future schema", mutate: func(e *Evidence) { e.SchemaVersion++ }},
 		{name: "v8", mutate: func(e *Evidence) { e.BenchVersion = 8 }},
-		{name: "future bench", mutate: func(e *Evidence) { e.BenchVersion = 10 }},
+		{name: "future bench", mutate: func(e *Evidence) { e.BenchVersion = 11 }},
 	}
 
 	for _, tt := range tests {
@@ -718,7 +718,7 @@ func TestCanonicalDigestChangesForEveryTrustedInputFamily(t *testing.T) {
 			if tt.mode != "" {
 				mode = tt.mode
 			}
-			e, err := Build(model, tool, thresholds, mode)
+			e, err := Build(BenchVersionV9, model, tool, thresholds, mode)
 			if err != nil {
 				t.Fatalf("Build() error = %v", err)
 			}
@@ -816,7 +816,7 @@ func TestApplyForVersionPreservesPreV9ScoreExactly(t *testing.T) {
 func TestShadowPublishesFailureWithoutApplyingIt(t *testing.T) {
 	model := validModelInput()
 	model.SuccessfulInferenceCases = 8
-	e, err := Build(model, validToolInput(), validThresholds(), RolloutShadow)
+	e, err := Build(BenchVersionV9, model, validToolInput(), validThresholds(), RolloutShadow)
 	if err != nil {
 		t.Fatalf("Build() error = %v", err)
 	}
@@ -850,6 +850,8 @@ func TestApplyForVersionContracts(t *testing.T) {
 	failing.ModelUse.FactorBPS = 0
 	shadowFailing := failing
 	shadowFailing.RolloutMode = RolloutShadow
+	passingV10 := passing
+	passingV10.BenchVersion = BenchVersionV10
 	score := Score{Composite: 0.75, CompositeStderr: 0.125}
 
 	tests := []struct {
@@ -864,7 +866,10 @@ func TestApplyForVersionContracts(t *testing.T) {
 		{name: "v9 passing exact", version: 9, evidence: &passing, want: score},
 		{name: "v9 enforce failing zero", version: 9, evidence: &failing, want: Score{}},
 		{name: "v9 shadow publishes failure but preserves score", version: 9, evidence: &shadowFailing, want: score},
-		{name: "future version rejected", version: 10, evidence: &passing, is: ErrUnsupportedVersion},
+		{name: "v10 passing exact", version: 10, evidence: &passingV10, want: score},
+		{name: "v10 rejects v9-stamped evidence", version: 10, evidence: &passing, is: ErrInvalidEvidence},
+		{name: "v9 rejects v10-stamped evidence", version: 9, evidence: &passingV10, is: ErrInvalidEvidence},
+		{name: "future version rejected", version: 11, evidence: &passingV10, is: ErrUnsupportedVersion},
 	}
 
 	for _, tt := range tests {
