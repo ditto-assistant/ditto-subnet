@@ -112,7 +112,17 @@ func v9GenerationCaseDelta(
 	beforeErr error,
 	afterErr error,
 ) (observed bool, complete bool) {
-	if beforeErr != nil || afterErr != nil || before != (brokerCaseSnapshot{}) || after.InFlight < 0 ||
+	// A fresh v10+ case window opens with ToolEvidenceComplete already true --
+	// the per-case tool-evidence ledger is clean until a call invalidates it --
+	// whereas a v9 window opens it false. That one bit is initial metadata, not
+	// accrued request/success/delay activity, so normalize it away before
+	// demanding the window start otherwise empty. Requiring the raw struct to
+	// equal the zero value rejected every v10 case (its opening snapshot is
+	// non-zero), which is why base evidence had to be skipped for v10+; the
+	// empty-window invariant on the real counters is preserved exactly.
+	freshBefore := before
+	freshBefore.ToolEvidenceComplete = false
+	if beforeErr != nil || afterErr != nil || freshBefore != (brokerCaseSnapshot{}) || after.InFlight < 0 ||
 		after.Requests < before.Requests || after.Successes < before.Successes ||
 		after.DelayedRequests < before.DelayedRequests ||
 		after.InjectedDelayMS < before.InjectedDelayMS ||
@@ -171,15 +181,15 @@ func applyV9BaseEvidence(
 	execution relayExecutionSummary,
 	transcriptSHA256 string,
 ) (protocol.ScoreReport, error) {
-	// Bench v10+ carries the v9 evidence, gate, and curve-v3 stack forward,
-	// but the v10 case-scoped inference path does not yet produce the complete
-	// per-case model attribution the guard below demands. Enforcing it against
-	// v10 failed every run closed and stopped subnet scoring outright, so only
-	// v9 assembles base evidence until v10 attribution is fixed forward. A
-	// v10+ report carrying no root stays admissible under the transitional
-	// rule in ScoreReport._validate_v9_base_evidence; it simply carries no
-	// efficiency factor, which is the behaviour v10 already shipped with.
-	if req.BenchVersion != protocol.BenchVersionV9 {
+	// Bench v10+ carries the v9 evidence, gate, and curve-v3 stack forward. The
+	// v10 case-scoped inference path now settles complete per-case attribution:
+	// v9GenerationCaseDelta no longer rejects the non-zero opening snapshot every
+	// v10 window carries (ToolEvidenceComplete starts true), which was the sole
+	// reason enforcing the guard failed every v10 run closed and forced the
+	// transitional skip. Base evidence is assembled for every version >= 9 again,
+	// so v10/v11 regain the signed root, score gates, and curve-v3 efficiency
+	// factor that v9 has.
+	if req.BenchVersion < protocol.BenchVersionV9 {
 		return report, nil
 	}
 	if report.Details == nil {

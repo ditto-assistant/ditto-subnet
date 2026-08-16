@@ -119,6 +119,31 @@ func TestV9GenerationCaseDeltaRejectsDelayRegression(t *testing.T) {
 	}
 }
 
+func TestV9GenerationCaseDeltaAcceptsV10OpeningSnapshot(t *testing.T) {
+	// A v10+ case window opens with ToolEvidenceComplete already true (see
+	// beginCaseCapability / the v10 beginCaseSnapshot branch). That bit is
+	// initial metadata, not accrued activity, so an otherwise-empty opening
+	// snapshot must settle attribution -- requiring the raw zero value rejected
+	// every v10 case and forced the transitional base-evidence skip.
+	before := brokerCaseSnapshot{ToolEvidenceComplete: true}
+	after := brokerCaseSnapshot{ToolEvidenceComplete: true, Requests: 3, Successes: 3}
+	observed, complete := v9GenerationCaseDelta(before, after, nil, nil)
+	if !complete || !observed {
+		t.Fatalf("v10 opening snapshot must settle complete attribution, got observed=%v complete=%v", observed, complete)
+	}
+
+	// The empty-window invariant on real counters is preserved: a window that
+	// opens with carried-over request/success/in-flight activity still fails.
+	dirty := brokerCaseSnapshot{ToolEvidenceComplete: true, Requests: 1}
+	if _, complete := v9GenerationCaseDelta(dirty, after, nil, nil); complete {
+		t.Fatal("a non-empty opening counter must still fail attribution closed")
+	}
+	inflight := brokerCaseSnapshot{ToolEvidenceComplete: true, InFlight: 1}
+	if _, complete := v9GenerationCaseDelta(inflight, after, nil, nil); complete {
+		t.Fatal("carried-over in-flight activity must still fail attribution closed")
+	}
+}
+
 func TestV9RelayDelayEvidence(t *testing.T) {
 	before := brokerCaseSnapshot{}
 	noDelay := brokerCaseSnapshot{Requests: 1, Successes: 1}

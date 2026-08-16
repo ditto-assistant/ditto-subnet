@@ -299,37 +299,54 @@ func TestApplyV9BaseEvidenceAcceptsHealthyZeroInferenceAsFactorZero(t *testing.T
 	}
 }
 
-func TestApplyV9BaseEvidenceSkipsV10UntilAttributionIsFixedForward(t *testing.T) {
-	// The live v10 inference path can return transcripts whose per-case model
-	// attribution never settles. Routing those through the v9 evidence stack
-	// makes the case-attribution guard fail the whole run closed, which took
-	// every v10 validator ticket down at once. v10 must skip the stack until
-	// its attribution is fixed forward; flip this test when that lands.
+func TestApplyV9BaseEvidenceAssemblesV10RootWithSettledAttribution(t *testing.T) {
+	// The flip of the transitional v10 skip. The v10 case-scoped inference path
+	// now settles complete per-case attribution -- v9GenerationCaseDelta accepts
+	// the non-zero ToolEvidenceComplete opening snapshot every v10 window carries
+	// (see TestV9GenerationCaseDeltaAcceptsV10OpeningSnapshot) -- so a healthy
+	// v10 run assembles the same signed base-evidence root v9 does, restoring the
+	// score gates and the curve-v3 efficiency factor for v10/v11.
 	report := sampleV9Report()
 	report.Details.BenchVersion = protocol.BenchVersionV10
 	req := submitRequest{
-		BenchVersion: protocol.BenchVersionV10, TarballSHA256: v9ArtifactSHA,
+		BenchVersion:        protocol.BenchVersionV10,
+		TarballSHA256:       v9ArtifactSHA,
+		ScreenedImageSHA256: strings.Repeat("e", 64),
 	}
-	perCase := []protocol.CaseScore{{CaseID: "memory"}}
-	// Attribution deliberately absent: the exact transcript shape that failed
-	// closed in production.
-	transcripts := []transcriptCase{{CaseID: "memory"}}
+	perCase := []protocol.CaseScore{
+		{CaseID: "tool", Observed: true, Expected: []string{"search_web"}, Called: []string{"search_web"}},
+		{CaseID: "memory"},
+	}
+	usage := completeUsage(20, 20, 2_000, 400)
+	execution := relayExecutionSummary{Requests: 20, Successes: 20}
 
 	got, err := applyV9BaseEvidence(
-		report, req, perCase, transcripts,
-		completeUsage(0, 0, 0, 0), relayExecutionSummary{}, v9TranscriptSHA,
+		report, req, perCase, completeModelTranscripts(perCase, true, true), usage, execution, v9TranscriptSHA,
 	)
 	if err != nil {
-		t.Fatalf("v10 must not fail closed on v9 case attribution: %v", err)
+		t.Fatalf("v10 attribution settled but base evidence failed: %v", err)
 	}
-	if got.Details.V9Base != nil || got.BaseEvidenceSHA256 != "" {
-		t.Fatalf("v10 must not carry a base evidence root yet: %+v", got)
+	base := got.Details.V9Base
+	if base == nil || len(got.BaseEvidenceSHA256) != 64 {
+		t.Fatalf("v10 must now carry a signed base evidence root: %+v", got)
+	}
+	if base.BenchVersion != protocol.BenchVersionV10 {
+		t.Fatalf("root must bind the submitted v10 bench version, got %d", base.BenchVersion)
+	}
+	if !base.ScoreGates.ModelUse.CaseAttributionComplete ||
+		base.ScoreGates.ModelUse.Result != string(scoregates.ResultPassed) {
+		t.Fatalf("v10 distinct-case coverage missing: %+v", base.ScoreGates.ModelUse)
 	}
 	if got.Composite != report.Composite || got.CompositeStderr != report.CompositeStderr {
-		t.Fatalf(
-			"v10 score must pass through untouched: got %v/%v want %v/%v",
-			got.Composite, got.CompositeStderr, report.Composite, report.CompositeStderr,
-		)
+		t.Fatalf("passing enforce gate changed v10 score: got %v/%v want %v/%v",
+			got.Composite, got.CompositeStderr, report.Composite, report.CompositeStderr)
+	}
+	if err := v9base.Validate(*base); err != nil {
+		t.Fatal(err)
+	}
+	digest, err := v9base.DigestHex(*base)
+	if err != nil || digest != got.BaseEvidenceSHA256 {
+		t.Fatalf("root digest = %s, %v; report = %s", digest, err, got.BaseEvidenceSHA256)
 	}
 }
 
