@@ -304,15 +304,14 @@ async def reserved_stem_owner_root(
     session: AsyncSession, *, netuid: int, name_stem: str
 ) -> str | None:
     """Owner root that currently holds an upheld reservation for ``name_stem``."""
-    claim = (
-        await session.execute(
-            select(NameClaim).where(
-                NameClaim.netuid == netuid,
-                NameClaim.name_stem == name_stem,
-                NameClaim.status == "upheld",
-            )
+    result = await session.execute(
+        select(NameClaim).where(
+            NameClaim.netuid == netuid,
+            NameClaim.name_stem == name_stem,
+            NameClaim.status == "upheld",
         )
-    ).scalar_one_or_none()
+    )
+    claim = result.scalar_one_or_none() if result is not None else None
     if claim is None:
         return None
     return await owner_root_for_hotkey(session, hotkey=claim.claimant_hotkey)
