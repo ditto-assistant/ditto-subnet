@@ -333,9 +333,11 @@ CREATE FUNCTION public.guard_efficiency_snapshot_curve() RETURNS trigger
                     'curve-v3 efficiency snapshots are immutable'
                     USING ERRCODE = '23514';
             END IF;
-            IF NEW.bench_version = 9 AND NEW.curve_version < 3 THEN
+            IF TG_OP = 'INSERT'
+               AND NEW.bench_version >= 9
+               AND NEW.curve_version < 3 THEN
                 RAISE EXCEPTION
-                    'new bench-v9 efficiency snapshots require curve v3'
+                    'new bench-v9+ efficiency snapshots require curve v3'
                     USING ERRCODE = '23514';
             END IF;
             RETURN NEW;
@@ -1128,7 +1130,7 @@ CREATE TABLE public.efficiency_bonuses (
     CONSTRAINT ck_efficiency_bonuses_efficiency_bonuses_bench_version_check CHECK ((bench_version >= 7)),
     CONSTRAINT ck_efficiency_bonuses_efficiency_bonuses_bonus_range_check CHECK (((bonus >= (0)::double precision) AND (bonus <= (0.1)::double precision))),
     CONSTRAINT ck_efficiency_bonuses_efficiency_bonuses_epoch_index_check CHECK ((epoch_index >= 0)),
-    CONSTRAINT ck_efficiency_bonuses_efficiency_bonuses_factor_range_check CHECK (((factor IS NULL) OR ((bench_version = 9) AND (bonus = (0)::double precision) AND (token_total IS NOT NULL) AND (token_total > (0)::double precision) AND (token_total < 'Infinity'::double precision) AND (factor >= (0.85)::double precision) AND (factor <= (1.1)::double precision))))
+    CONSTRAINT ck_efficiency_bonuses_efficiency_bonuses_factor_range_check CHECK (((factor IS NULL) OR ((bench_version >= 9) AND (bonus = (0)::double precision) AND (token_total IS NOT NULL) AND (token_total > (0)::double precision) AND (token_total < 'Infinity'::double precision) AND (factor >= (0.85)::double precision) AND (factor <= (1.1)::double precision))))
 );
 
 
@@ -1161,7 +1163,7 @@ CREATE TABLE public.efficiency_cohort_snapshots (
     CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_3665 CHECK (((deep_frontier_ratio IS NULL) OR ((deep_frontier_ratio > (0)::double precision) AND (deep_frontier_ratio < (1)::double precision)))),
     CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_5810 CHECK ((curve_version >= 1)),
     CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_67e6 CHECK ((n_min >= 2)),
-    CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_9a1e CHECK ((((curve_version = ANY (ARRAY[1, 2])) AND (factor_alpha IS NULL) AND (minimum_factor IS NULL) AND (maximum_factor IS NULL)) OR ((curve_version = 3) AND (bench_version = 9) AND (deep_bonus_cap IS NULL) AND (deep_frontier_ratio IS NULL) AND (factor_alpha > (0)::double precision) AND (factor_alpha <= (1)::double precision) AND (minimum_factor >= (0.85)::double precision) AND (minimum_factor <= (1)::double precision) AND (maximum_factor >= (1)::double precision) AND (maximum_factor <= (1.1)::double precision)))),
+    CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_9a1e CHECK ((((curve_version = ANY (ARRAY[1, 2])) AND (factor_alpha IS NULL) AND (minimum_factor IS NULL) AND (maximum_factor IS NULL)) OR ((curve_version = 3) AND (bench_version >= 9) AND (deep_bonus_cap IS NULL) AND (deep_frontier_ratio IS NULL) AND (factor_alpha > (0)::double precision) AND (factor_alpha <= (1)::double precision) AND (minimum_factor >= (0.85)::double precision) AND (minimum_factor <= (1)::double precision) AND (maximum_factor >= (1)::double precision) AND (maximum_factor <= (1.1)::double precision)))),
     CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_a080 CHECK ((bench_version >= 7)),
     CONSTRAINT ck_efficiency_cohort_snapshots_efficiency_cohort_snapsh_a86c CHECK (((bonus_cap > (0)::double precision) AND (bonus_cap <= (0.1)::double precision)))
 );

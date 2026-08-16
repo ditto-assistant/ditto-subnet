@@ -385,6 +385,70 @@ class TestSnapshots:
             is None
         )
 
+    @pytest.mark.parametrize("bench_version", [9, 10, 11])
+    async def test_curve_v3_snapshot_freezes_for_every_bench_at_or_above_9(
+        self, session: AsyncSession, bench_version: int
+    ) -> None:
+        """Curve v3 is not pinned to bench 9 — v10/v11 inherit the same curve.
+
+        The schema originally required ``bench_version = 9``, so the first
+        cohort freeze above v9 raised a ``CheckViolation``. Because
+        ``/api/v1/public/activity`` materializes efficiency state on its read
+        path, that turned the whole public activity feed into a 500.
+        """
+        reference = CohortReference(
+            bench_version=bench_version,
+            run_size="full",
+            epoch_index=20681,
+            active=True,
+            cohort_limit=25,
+            n_min=8,
+            bonus_cap=0.05,
+            quality_floor=0.0,
+            memory_floor=0.0,
+            reference_p25_tokens=100.0,
+            reference_median_tokens=200.0,
+            members=(_member(1), _member(2)),
+            curve_version=CURVE_VERSION_BOUNDED_FACTOR,
+            factor_alpha=0.25,
+            minimum_factor=0.85,
+            maximum_factor=1.1,
+        )
+        async with session.begin():
+            snapshot = await insert_snapshot(session, reference)
+
+        assert snapshot.curve_version == CURVE_VERSION_BOUNDED_FACTOR
+        assert snapshot.bench_version == bench_version
+
+    async def test_legacy_curve_v2_snapshot_above_bench_9_is_still_refused(
+        self, session: AsyncSession
+    ) -> None:
+        """Relaxing the bench pin must not let the legacy curve back in.
+
+        The write guard is the reason bench-v9+ cannot silently freeze a
+        two-tier snapshot; widening it to ``>= 9`` has to keep refusing that.
+        """
+        reference = CohortReference(
+            bench_version=10,
+            run_size="full",
+            epoch_index=20682,
+            active=True,
+            cohort_limit=25,
+            n_min=8,
+            bonus_cap=0.05,
+            quality_floor=0.0,
+            memory_floor=0.0,
+            reference_p25_tokens=100.0,
+            reference_median_tokens=200.0,
+            members=(_member(1),),
+            curve_version=2,
+            deep_bonus_cap=0.10,
+            deep_frontier_ratio=0.5,
+        )
+        with pytest.raises(SAIntegrityError):
+            async with session.begin():
+                await insert_snapshot(session, reference)
+
 
 class TestBonuses:
     async def test_insert_once_and_read_back(self, session: AsyncSession):

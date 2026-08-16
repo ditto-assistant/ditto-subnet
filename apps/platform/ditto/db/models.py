@@ -1324,7 +1324,7 @@ class EfficiencyCohortSnapshot(Base):
         CheckConstraint(
             "(curve_version IN (1, 2) AND factor_alpha IS NULL "
             "AND minimum_factor IS NULL AND maximum_factor IS NULL) OR "
-            "(curve_version = 3 AND bench_version = 9 "
+            "(curve_version = 3 AND bench_version >= 9 "
             "AND deep_bonus_cap IS NULL AND deep_frontier_ratio IS NULL "
             "AND factor_alpha > 0 AND factor_alpha <= 1 "
             "AND minimum_factor >= 0.85 AND minimum_factor <= 1 "
@@ -1449,7 +1449,7 @@ class EfficiencyBonus(Base):
             "bonus >= 0 AND bonus <= 0.1", name="efficiency_bonuses_bonus_range_check"
         ),
         CheckConstraint(
-            "factor IS NULL OR (bench_version = 9 "
+            "factor IS NULL OR (bench_version >= 9 "
             "AND bonus = 0 AND token_total IS NOT NULL AND token_total > 0 "
             "AND token_total < 'Infinity'::double precision "
             "AND factor >= 0.85 AND factor <= 1.1)",
