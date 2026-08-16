@@ -8,8 +8,8 @@ A miner signs a claim over a **name stem**. Other miners who already have a
 scored payment-owner family -- entrenched operators, not a fresh hotkey --
 endorse that claim. Once enough distinct families have signed, the stem is
 reserved to the claimant's owner family: new uploads that collide are
-rejected, and existing collisions are marked ``disputed`` on the public
-board.
+rejected, and existing collisions are stricken from public display as
+``Unnamed submission``.
 
 What is a stem
 --------------
@@ -35,7 +35,9 @@ a full-benchmark scored submission whose earliest upload is older than
 own family cannot endorse itself. Brand-new miners cannot manufacture a
 quorum.
 
-The claim does not move emissions. It only governs the public name.
+The claim does not move emissions or rewrite ``agents.name``. It only
+governs the public name: an upheld reservation hides colliding names
+and blocks later uploads of that stem.
 """
 
 from __future__ import annotations
@@ -70,6 +72,13 @@ ENTRENCHMENT_AGE: Final = timedelta(days=7)
 
 MIN_STEM_LENGTH: Final = 3
 MAX_STEM_LENGTH: Final = 64
+
+STRICKEN_PUBLIC_NAME: Final = "Unnamed submission"
+"""Public display name for a colliding upload after an upheld claim.
+
+The stored ``agents.name`` is left intact for operators and audit. Public
+surfaces must use this stand-in so the stolen handle is no longer shown.
+"""
 
 _FILLER_TOKENS: Final = frozenset({"ditto", "sn118", "subnet", "miner", "agent"})
 _VERSION_TOKEN: Final = re.compile(r"^v?\d+$")
@@ -257,3 +266,10 @@ def handle_status_for(
     if owner_root is not None and owner_root == claimant_root:
         return "reserved"
     return "disputed"
+
+
+def public_display_name(*, stored_name: str, status: HandleStatus | None) -> str:
+    """Return the public name, striking a disputed handle."""
+    if status == "disputed":
+        return STRICKEN_PUBLIC_NAME
+    return stored_name

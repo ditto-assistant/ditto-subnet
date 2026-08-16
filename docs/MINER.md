@@ -557,14 +557,17 @@ has a full-benchmark scored agent family whose earliest upload is at least
 seven days old — not a brand-new hotkey. Your own family cannot endorse
 yourself.
 
-An upheld claim:
+An upheld claim is a strong action, so it requires those three distinct
+families. Once upheld it:
 
 - rejects later uploads of a colliding name from other owner families
-- marks existing collisions `name disputed` on the public leaderboard
+- strikes existing collisions on public surfaces to `Unnamed submission`
 - marks your family's matching name `handle reserved`
 
-It does **not** change scores or emission slots. Signing does not transfer
-TAO.
+The stored submission name is left intact for operators. Scores and emission
+slots do not change. Signing does not transfer TAO. To appear under a real
+name again, upload a new version that does not collide with the reserved
+handle.
 
 ```sh
 # Claim a handle you already use.

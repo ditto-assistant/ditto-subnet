@@ -135,8 +135,9 @@ class NameClaimResponse(BaseModel):
     """What the claim does. Stated on the wire so nobody has to infer it.
 
     An upheld claim reserves the stem to the claimant's payment-owner family
-    for new uploads and marks colliding leaderboard names as disputed. It
-    does **not** touch emission-slot allocation, screening, or scores.
+    for new uploads and strikes colliding public names to
+    ``Unnamed submission``. It does **not** touch emission-slot allocation,
+    screening, scores, or the stored ``agents.name`` audit value.
     """
 
 

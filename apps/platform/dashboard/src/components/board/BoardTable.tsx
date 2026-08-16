@@ -418,7 +418,10 @@ function BoardRow(props: {
       ? " r" + e().rank
       : "";
   const kind = (): "zero" | "provisional" | null => unrankedKind(e());
-  const displayName = (): string => agentName(e().agent_name);
+  const displayName = (): string =>
+    e().name_handle?.status === "disputed"
+      ? "Unnamed submission"
+      : agentName(e().agent_name);
   const rowLabel = (): string =>
     (elig()
       ? (finalizedEntry() ? "Rank " : "Provisional rank ") + e().rank
@@ -538,12 +541,10 @@ function BoardRow(props: {
                   <ChipTip
                     class="handle-badge disputed tip-chip"
                     text={
-                      "Handle “" +
-                      (e().name_handle?.stem ?? "") +
-                      "” is reserved to another miner family after a signed, endorsed claim."
+                      "This name was stricken after three entrenched miner families endorsed a handle claim. Upload again under a different name."
                     }
                   >
-                    name disputed
+                    name stricken
                   </ChipTip>
                 </Show>
                 <Show when={e().name_handle?.status === "pending"}>

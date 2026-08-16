@@ -463,6 +463,40 @@ describe("board filter (row 4)", () => {
     });
   });
 
+  it("strikes a disputed handle to Unnamed submission", async () => {
+    const target = ranked[0] as LeaderboardEntry;
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry) =>
+            String(entry.agent_id) === String(target.agent_id)
+              ? {
+                  ...entry,
+                  agent_name: "Unnamed submission",
+                  name_handle: {
+                    stem: "jupiter",
+                    status: "disputed",
+                    claim_id: "11111111-1111-1111-1111-111111111111",
+                  },
+                }
+              : entry,
+          ),
+        };
+      },
+    });
+    await waitFor(() => {
+      expect(document.querySelector(".handle-badge.disputed")?.textContent).toContain(
+        "name stricken",
+      );
+      expect(document.querySelector(".winner-name")?.textContent).toContain(
+        "Unnamed submission",
+      );
+    });
+  });
+
   it("states when no miner matches and Escape clears back to the full board", async () => {
     renderPage();
     await waitForBoard();

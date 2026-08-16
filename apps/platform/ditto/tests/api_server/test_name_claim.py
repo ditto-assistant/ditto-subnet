@@ -9,11 +9,13 @@ import bittensor
 import pytest
 
 from ditto.api_server.name_claim import (
+    STRICKEN_PUBLIC_NAME,
     ClaimStatus,
     NameClaimRejected,
     claim_message,
     handle_status_for,
     normalize_name_stem,
+    public_display_name,
     require_name_stem,
     verify_signed_action,
 )
@@ -120,4 +122,12 @@ def test_handle_status_classifies_reserved_and_disputed() -> None:
             claims=claims,
         )
         is None
+    )
+    assert (
+        public_display_name(stored_name="Jupiter-ditto-v10", status="disputed")
+        == STRICKEN_PUBLIC_NAME
+    )
+    assert (
+        public_display_name(stored_name="Jupiter-ditto-v10", status="reserved")
+        == "Jupiter-ditto-v10"
     )
