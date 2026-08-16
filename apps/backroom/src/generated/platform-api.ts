@@ -1990,6 +1990,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/name-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Claims
+         * @description List live handle claims for this deployment.
+         */
+        get: operations["list_claims_api_v1_name_claims_get"];
+        put?: never;
+        /**
+         * Submit Claim
+         * @description Record a signed handle claim. Starts ``pending`` until endorsed.
+         */
+        post: operations["submit_claim_api_v1_name_claims_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/name-claims/{claim_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Claim */
+        get: operations["get_claim_api_v1_name_claims__claim_id__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/name-claims/{claim_id}/endorsements": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Endorsement
+         * @description Add an entrenched-miner endorsement. May uphold the claim.
+         */
+        post: operations["submit_endorsement_api_v1_name_claims__claim_id__endorsements_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/name-claims/{claim_id}/withdraw": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Withdrawal
+         * @description Release a reserved or pending stem. Must be signed by the claimant.
+         */
+        post: operations["submit_withdrawal_api_v1_name_claims__claim_id__withdraw_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/public/activity": {
         parameters: {
             query?: never;
@@ -2411,6 +2492,26 @@ export interface paths {
          *     Legacy rows without payment provenance fall back to one position per hotkey.
          */
         get: operations["leaderboard_api_v1_public_leaderboard_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/name-claims": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Name Claims
+         * @description Live signed handle reservations. Cacheable; signatures stay off this list.
+         */
+        get: operations["public_name_claims_api_v1_public_name_claims_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10509,6 +10610,184 @@ export interface components {
             priced_submissions: number;
         };
         /**
+         * NameClaimEndorsementView
+         * @description One recorded endorsement, minus the raw signature.
+         */
+        NameClaimEndorsementView: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Endorsement Id
+             * Format: uuid
+             */
+            endorsement_id: string;
+            /** Endorser Hotkey */
+            endorser_hotkey: string;
+        };
+        /**
+         * NameClaimListResponse
+         * @description Returned by ``GET /name-claims`` and ``GET /public/name-claims``.
+         */
+        NameClaimListResponse: {
+            /** Claims */
+            claims: components["schemas"]["NameClaimResponse"][];
+            /** Endorsement Threshold */
+            endorsement_threshold: number;
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+        };
+        /**
+         * NameClaimProof
+         * @description One sr25519 proof of a name-claim action.
+         *
+         *     The signed bytes are documented on the request that carries the proof
+         *     (:class:`NameClaimRequest`, :class:`NameEndorseRequest`,
+         *     :class:`NameWithdrawRequest`).
+         */
+        NameClaimProof: {
+            /**
+             * Key Kind
+             * @enum {string}
+             */
+            key_kind: "hotkey" | "coldkey";
+            /** Signature */
+            signature: string;
+            /** Signer */
+            signer: string;
+        };
+        /**
+         * NameClaimRequest
+         * @description Body of ``POST /name-claims``.
+         *
+         *     Signature is over the UTF-8 bytes of::
+         *
+         *         ditto-name-claim:v1:{netuid}:{name_stem}:{claimant_hotkey}:{nonce}:{issued_at}:{key_kind}:{signer}
+         *
+         *     ``name_stem`` is the normalized handle. Clients may send a display name
+         *     in ``name`` instead; the server normalizes it and the signed stem must
+         *     match that result.
+         */
+        NameClaimRequest: {
+            /** Claimant Hotkey */
+            claimant_hotkey: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Name */
+            name: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            proof: components["schemas"]["NameClaimProof"];
+        };
+        /**
+         * NameClaimResponse
+         * @description Returned by claim / endorse / withdraw / get.
+         */
+        NameClaimResponse: {
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /** Claimant Hotkey */
+            claimant_hotkey: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Endorsement Count */
+            endorsement_count: number;
+            /** Endorsement Threshold */
+            endorsement_threshold: number;
+            /** Endorsements */
+            endorsements?: components["schemas"]["NameClaimEndorsementView"][];
+            /** Name Stem */
+            name_stem: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Scope
+             * @default public-handle-only
+             * @constant
+             */
+            scope: "public-handle-only";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "upheld" | "withdrawn";
+            /** Upheld At */
+            upheld_at?: string | null;
+            /** Withdrawn At */
+            withdrawn_at?: string | null;
+        };
+        /**
+         * NameEndorseRequest
+         * @description Body of ``POST /name-claims/{claim_id}/endorsements``.
+         *
+         *     Signature is over::
+         *
+         *         ditto-name-endorse:v1:{netuid}:{claim_id}:{name_stem}:{endorser_hotkey}:{nonce}:{issued_at}:{key_kind}:{signer}
+         */
+        NameEndorseRequest: {
+            /** Endorser Hotkey */
+            endorser_hotkey: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Name Stem */
+            name_stem: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            proof: components["schemas"]["NameClaimProof"];
+        };
+        /**
+         * NameWithdrawRequest
+         * @description Body of ``POST /name-claims/{claim_id}/withdraw``.
+         *
+         *     Signature is over::
+         *
+         *         ditto-name-withdraw:v1:{netuid}:{claim_id}:{name_stem}:{claimant_hotkey}:{nonce}:{issued_at}:{key_kind}:{signer}
+         */
+        NameWithdrawRequest: {
+            /** Claimant Hotkey */
+            claimant_hotkey: string;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            proof: components["schemas"]["NameClaimProof"];
+        };
+        /**
          * ObservedComponentIdentity
          * @description Identity actually observed from a live component, never a copied pin.
          */
@@ -12818,6 +13097,8 @@ export interface components {
              * @description Number of cases scored.
              */
             n?: number | null;
+            /** @description Signed handle reservation touching this name, when one exists. ``reserved`` means this owner family holds the stem; ``disputed`` means an upheld reservation belongs to someone else; ``pending`` means a claim is awaiting entrenched-miner endorsements. */
+            name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /**
              * Official Composite
              * @description Authoritative quality used as the primary key for the current leaderboard and weight fold. Legacy eras use the canonical median or activated continual mean; full-confirmed Bench v9 uses its verified full quality. Historical bonuses remain in this scalar. A v9 curve-v3 factor does not modify it; its adjusted projection is only an exact-quality secondary key.
@@ -13088,6 +13369,24 @@ export interface components {
             reason?: string | null;
             /** Verdict */
             verdict: string;
+        };
+        /**
+         * PublicNameHandle
+         * @description Optional handle annotation on a public leaderboard entry.
+         */
+        PublicNameHandle: {
+            /**
+             * Claim Id
+             * Format: uuid
+             */
+            claim_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "reserved" | "disputed" | "pending";
+            /** Stem */
+            stem: string;
         };
         /**
          * PublicOperationsResponse
@@ -21739,6 +22038,160 @@ export interface operations {
             };
         };
     };
+    list_claims_api_v1_name_claims_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameClaimListResponse"];
+                };
+            };
+        };
+    };
+    submit_claim_api_v1_name_claims_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NameClaimRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_claim_api_v1_name_claims__claim_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_endorsement_api_v1_name_claims__claim_id__endorsements_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NameEndorseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_withdrawal_api_v1_name_claims__claim_id__withdraw_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                claim_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["NameWithdrawRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     activity_api_v1_public_activity_get: {
         parameters: {
             query?: {
@@ -22229,6 +22682,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_name_claims_api_v1_public_name_claims_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["NameClaimListResponse"];
                 };
             };
         };

@@ -1409,6 +1409,56 @@ CREATE TABLE public.inference_routing_policies (
 
 
 --
+-- Name: name_claim_endorsements; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.name_claim_endorsements (
+    endorsement_id uuid NOT NULL,
+    claim_id uuid NOT NULL,
+    endorser_hotkey text NOT NULL,
+    endorser_owner_root text NOT NULL,
+    endorser_key_kind text NOT NULL,
+    endorser_signer text NOT NULL,
+    endorser_signature text NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_name_claim_endorsements_name_claim_endorsements_key__4d3a CHECK ((endorser_key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text]))),
+    CONSTRAINT ck_name_claim_endorsements_name_claim_endorsements_sign_c955 CHECK ((length(endorser_signature) = 128))
+);
+
+
+--
+-- Name: name_claims; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.name_claims (
+    claim_id uuid NOT NULL,
+    netuid integer NOT NULL,
+    name_stem text NOT NULL,
+    claimant_hotkey text NOT NULL,
+    claimant_key_kind text NOT NULL,
+    claimant_signer text NOT NULL,
+    claimant_signature text NOT NULL,
+    nonce uuid NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    status text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    upheld_at timestamp with time zone,
+    withdrawn_at timestamp with time zone,
+    withdrawn_signer text,
+    withdrawn_signature text,
+    CONSTRAINT ck_name_claims_name_claims_key_kind_check CHECK ((claimant_key_kind = ANY (ARRAY['hotkey'::text, 'coldkey'::text]))),
+    CONSTRAINT ck_name_claims_name_claims_signature_check CHECK ((length(claimant_signature) = 128)),
+    CONSTRAINT ck_name_claims_name_claims_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'upheld'::text, 'withdrawn'::text]))),
+    CONSTRAINT ck_name_claims_name_claims_stem_charset_check CHECK ((name_stem ~ '^[a-z0-9]+(-[a-z0-9]+)*$'::text)),
+    CONSTRAINT ck_name_claims_name_claims_stem_length_check CHECK (((length(name_stem) >= 3) AND (length(name_stem) <= 64))),
+    CONSTRAINT ck_name_claims_name_claims_upheld_pair CHECK (((status = 'upheld'::text) = (upheld_at IS NOT NULL))),
+    CONSTRAINT ck_name_claims_name_claims_withdrawn_pair CHECK (((status = 'withdrawn'::text) = (withdrawn_at IS NOT NULL)))
+);
+
+
+--
 -- Name: owner_attestations; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2807,6 +2857,46 @@ ALTER TABLE ONLY public.inference_provider_routes
 
 
 --
+-- Name: name_claim_endorsements name_claim_endorsements_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_claim_endorsements
+    ADD CONSTRAINT name_claim_endorsements_nonce_key UNIQUE (nonce);
+
+
+--
+-- Name: name_claim_endorsements name_claim_endorsements_owner_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_claim_endorsements
+    ADD CONSTRAINT name_claim_endorsements_owner_key UNIQUE (claim_id, endorser_owner_root);
+
+
+--
+-- Name: name_claim_endorsements name_claim_endorsements_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_claim_endorsements
+    ADD CONSTRAINT name_claim_endorsements_pkey PRIMARY KEY (endorsement_id);
+
+
+--
+-- Name: name_claims name_claims_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_claims
+    ADD CONSTRAINT name_claims_nonce_key UNIQUE (nonce);
+
+
+--
+-- Name: name_claims name_claims_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_claims
+    ADD CONSTRAINT name_claims_pkey PRIMARY KEY (claim_id);
+
+
+--
 -- Name: owner_attestations owner_attestations_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3759,6 +3849,34 @@ CREATE INDEX inference_routing_audit_history_idx ON public.inference_routing_aud
 
 
 --
+-- Name: name_claim_endorsements_claim_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX name_claim_endorsements_claim_idx ON public.name_claim_endorsements USING btree (claim_id, created_at);
+
+
+--
+-- Name: name_claims_active_stem_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX name_claims_active_stem_idx ON public.name_claims USING btree (netuid, name_stem) WHERE (status = ANY (ARRAY['pending'::text, 'upheld'::text]));
+
+
+--
+-- Name: name_claims_claimant_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX name_claims_claimant_idx ON public.name_claims USING btree (netuid, claimant_hotkey);
+
+
+--
+-- Name: name_claims_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX name_claims_status_idx ON public.name_claims USING btree (netuid, status);
+
+
+--
 -- Name: owner_attestations_active_pair_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4384,6 +4502,14 @@ ALTER TABLE ONLY public.inference_grants
 
 ALTER TABLE ONLY public.inference_requests
     ADD CONSTRAINT fk_inference_requests_grant_id_inference_grants FOREIGN KEY (grant_id) REFERENCES public.inference_grants(grant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: name_claim_endorsements name_claim_endorsements_claim_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.name_claim_endorsements
+    ADD CONSTRAINT name_claim_endorsements_claim_id_fkey FOREIGN KEY (claim_id) REFERENCES public.name_claims(claim_id) ON DELETE CASCADE;
 
 
 --
