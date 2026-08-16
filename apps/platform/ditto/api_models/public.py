@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from ditto.api_models.benchmark_capacity import BenchmarkAdmission
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
 from ditto.api_models.confirmation_progress import ConfirmationProgressStage
+from ditto.api_models.name_claim import PublicNameHandle
 from ditto.api_models.retry_state import RetryState
 from ditto.api_models.screener import ScreenerProgressStage, ScreenerRuntimeState
 from ditto.api_models.stack_health import ValidatorStackHealth
@@ -30,7 +31,6 @@ from ditto.api_models.validator_capabilities import (
     ValidatorCapabilities,
     ValidatorStackIdentity,
 )
-from ditto.api_models.name_claim import PublicNameHandle
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 

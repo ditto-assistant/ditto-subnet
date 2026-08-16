@@ -76,9 +76,9 @@ from ditto.api_server.endpoints.admin_validator_slot_settings import (
 )
 from ditto.api_server.endpoints.attestation import router as attestation_router
 from ditto.api_server.endpoints.health import router as health_router
-from ditto.api_server.endpoints.name_claims import router as name_claims_router
 from ditto.api_server.endpoints.inference import router as inference_router
 from ditto.api_server.endpoints.metrics import router as metrics_router
+from ditto.api_server.endpoints.name_claims import router as name_claims_router
 from ditto.api_server.endpoints.public import router as public_router
 from ditto.api_server.endpoints.retrieval import router as retrieval_router
 from ditto.api_server.endpoints.scoring import router as scoring_router
