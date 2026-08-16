@@ -1,0 +1,4 @@
+interface:
+  display_name: "LongMem Confirmation Rollout"
+  short_description: "Drive LongMem confirmation to verified evidence"
+  default_prompt: "Use $longmem-confirmation-rollout to diagnose, implement, independently review, release, adopt, and verify one bounded LongMem confirmation."
