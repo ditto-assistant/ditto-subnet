@@ -78,28 +78,28 @@ async def set_miner_avatar(
     except MinerAvatarRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     digest = hashlib.sha256(raw).hexdigest()
-    bound = await get_bound_coldkey_for_hotkey(session, hotkey=body.miner_hotkey)
-    try:
-        verify_signed_action(
-            payload=set_message(
-                netuid=body.netuid,
-                miner_hotkey=body.miner_hotkey,
-                content_sha256=digest,
-                nonce=body.nonce,
-                issued_at=body.issued_at,
-                key_kind=body.proof.key_kind,
-                signer=body.proof.signer,
-            ),
-            hotkey=body.miner_hotkey,
-            key_kind=body.proof.key_kind,
-            signer=body.proof.signer,
-            signature=body.proof.signature,
-            bound_coldkey=bound,
-        )
-    except MinerAvatarRejected as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
     object_key = f"avatars/{body.miner_hotkey}.{ext}"
     async with session.begin():
+        bound = await get_bound_coldkey_for_hotkey(session, hotkey=body.miner_hotkey)
+        try:
+            verify_signed_action(
+                payload=set_message(
+                    netuid=body.netuid,
+                    miner_hotkey=body.miner_hotkey,
+                    content_sha256=digest,
+                    nonce=body.nonce,
+                    issued_at=body.issued_at,
+                    key_kind=body.proof.key_kind,
+                    signer=body.proof.signer,
+                ),
+                hotkey=body.miner_hotkey,
+                key_kind=body.proof.key_kind,
+                signer=body.proof.signer,
+                signature=body.proof.signature,
+                bound_coldkey=bound,
+            )
+        except MinerAvatarRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         existing = await get_miner_avatar(session, hotkey=body.miner_hotkey)
         try:
             await record_avatar_nonce(
@@ -155,27 +155,28 @@ async def clear_miner_avatar(
         check_freshness(issued_at=body.issued_at, now=now)
     except MinerAvatarRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    bound = await get_bound_coldkey_for_hotkey(session, hotkey=body.miner_hotkey)
-    try:
-        verify_signed_action(
-            payload=clear_message(
-                netuid=body.netuid,
-                miner_hotkey=body.miner_hotkey,
-                nonce=body.nonce,
-                issued_at=body.issued_at,
+    deleted_key: str | None = None
+    row = None
+    async with session.begin():
+        bound = await get_bound_coldkey_for_hotkey(session, hotkey=body.miner_hotkey)
+        try:
+            verify_signed_action(
+                payload=clear_message(
+                    netuid=body.netuid,
+                    miner_hotkey=body.miner_hotkey,
+                    nonce=body.nonce,
+                    issued_at=body.issued_at,
+                    key_kind=body.proof.key_kind,
+                    signer=body.proof.signer,
+                ),
+                hotkey=body.miner_hotkey,
                 key_kind=body.proof.key_kind,
                 signer=body.proof.signer,
-            ),
-            hotkey=body.miner_hotkey,
-            key_kind=body.proof.key_kind,
-            signer=body.proof.signer,
-            signature=body.proof.signature,
-            bound_coldkey=bound,
-        )
-    except MinerAvatarRejected as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    deleted_key: str | None = None
-    async with session.begin():
+                signature=body.proof.signature,
+                bound_coldkey=bound,
+            )
+        except MinerAvatarRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         try:
             await record_avatar_nonce(
                 session, nonce=body.nonce, miner_hotkey=body.miner_hotkey, now=now
