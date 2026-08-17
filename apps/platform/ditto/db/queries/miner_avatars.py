@@ -59,7 +59,7 @@ async def upsert_miner_avatar(
     nonce: UUID,
     now: datetime,
 ) -> MinerAvatar:
-    stmt = insert(MinerAvatar).values(
+    insert_stmt = insert(MinerAvatar).values(
         miner_hotkey=miner_hotkey,
         object_key=object_key,
         content_type=content_type,
@@ -67,17 +67,17 @@ async def upsert_miner_avatar(
         nonce=nonce,
         updated_at=now,
     )
-    stmt = stmt.on_conflict_do_update(
+    upsert_stmt = insert_stmt.on_conflict_do_update(
         index_elements=[MinerAvatar.miner_hotkey],
         set_={
-            "object_key": stmt.excluded.object_key,
-            "content_type": stmt.excluded.content_type,
-            "sha256": stmt.excluded.sha256,
-            "nonce": stmt.excluded.nonce,
-            "updated_at": stmt.excluded.updated_at,
+            "object_key": insert_stmt.excluded.object_key,
+            "content_type": insert_stmt.excluded.content_type,
+            "sha256": insert_stmt.excluded.sha256,
+            "nonce": insert_stmt.excluded.nonce,
+            "updated_at": insert_stmt.excluded.updated_at,
         },
     ).returning(MinerAvatar)
-    return (await session.execute(stmt)).scalar_one()
+    return (await session.execute(upsert_stmt)).scalar_one()
 
 
 async def delete_miner_avatar(
