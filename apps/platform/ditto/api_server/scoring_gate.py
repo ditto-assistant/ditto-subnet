@@ -93,6 +93,32 @@ _DEFAULT_SIZE_TOL = 8192
 # (see the subnet's KOTH-parameter validation task).
 _DEFAULT_JACCARD_TOL = 0.75
 _DEFAULT_CONTAINMENT_TOL = 0.95
+# Resubmission thresholds (:func:`evaluate_rejected_resubmission`). Deliberately
+# NOT the copy thresholds above, which is the one thing the rule got wrong when
+# it shipped: it reused them "so one lexical bar governs the codebase", but the
+# two rules ask their question of different populations. The copy bar is set
+# against *independent miners*, whose reference-subtracted residuals overlap at a
+# 99.9th percentile of 0.625 Jaccard (see the measured distributions in
+# :mod:`ditto.db.queries.similarity_grouping`), so 0.75 there means "this
+# artifact carries somebody else's custom surface" and is genuinely rare. The
+# resubmission rule compares an artifact against *the same owner's own rejected
+# version*, where near-total overlap is the definition of the population rather
+# than evidence about it: a miner who deletes the cited code and re-uploads is
+# still ~95% their own prior artifact. At 0.75 the rule therefore fires on every
+# remediation attempt, which is what production showed — see the corpus in
+# :func:`evaluate_rejected_resubmission`.
+#
+# 0.98 is the near-identity bar the rule's actual question wants ("is this the
+# artifact we rejected, re-uploaded with cosmetic edits") and it is set from the
+# 2026-08-17 corpus: every hold an operator cleared measured at or below 0.977
+# Jaccard, and the two that were materially unchanged measured 0.992 and 1.000.
+_DEFAULT_RESUBMISSION_JACCARD_TOL = 0.98
+# Containment sits at the same bar rather than above it, unlike the copy pair.
+# The copy rule keeps containment looser because there it is the weaker of the
+# two measures; here it is direction-guarded (see
+# :func:`_resubmission_lexical_match`) so only the padding direction reaches it,
+# and that direction should be near-total to mean anything.
+_DEFAULT_RESUBMISSION_CONTAINMENT_TOL = 0.98
 # Structural (AST) thresholds gate the ADVISORY structural annotation on a hold
 # (see _structural_note): higher than the lexical ones because the structural
 # sketch discards identifiers + formatting, so two independent crates built on the
@@ -295,6 +321,71 @@ def _lexical_strength(
     """
     j, c = content_similarity(a, b)
     return max(j / jaccard_tol, c / containment_tol)
+
+
+def _residual_cardinality(sketch: dict | None) -> int | None:
+    """True residual shingle count a lexical sketch reports, or ``None``.
+
+    ``compute_content_fingerprint`` stores the exact post-reference cardinality
+    alongside the bottom-``k`` sample precisely so a consumer can reason about
+    the two sets' *sizes* without the sketch's estimation error — the sample is
+    an estimate, ``card`` is not.
+    """
+    if not sketch:
+        return None
+    card = sketch.get("card")
+    if card is None:
+        return None
+    return int(card)
+
+
+def _resubmission_lexical_match(
+    candidate: dict | None,
+    rejected: dict | None,
+    *,
+    jaccard_tol: float,
+    containment_tol: float,
+) -> tuple[float, float] | None:
+    """``(jaccard, containment)`` when the resubmission rule's lexical channel fires.
+
+    Returns ``None`` when it does not, so the caller never has to re-derive which
+    channel spoke.
+
+    Two things separate this from :func:`_lexical_strength`, and both come from
+    the resubmission question being asked of a different population — the same
+    owner's own rejected artifact — than the copy question.
+
+    **Near-identity, not overlap.** See ``_DEFAULT_RESUBMISSION_JACCARD_TOL``.
+
+    **Containment is direction-guarded.** Containment is ``|A n B| / min(|A|,
+    |B|)``, i.e. "is the smaller residual a subset of the larger". In the copy
+    gate the smaller side is the *original* and the larger is a copy padded with
+    junk to dilute Jaccard, so containment catches an attack. Here the direction
+    inverts and takes the meaning with it: an honest remediation *removes* the
+    cited code, which makes the candidate the smaller residual and a near-subset
+    of the artifact it was cut from — so containment goes to ~1.0 *because* the
+    miner complied. It is not weak evidence in that direction, it is evidence
+    pointing backwards, and it produced the rule's worst false positives
+    (Crown-v11-v3 measured containment 0.996 on a 574-line deletion an operator
+    then cleared as a textbook remediation). So containment may fire only when
+    the candidate is the same size or larger — the padded-re-upload direction,
+    where every shingle of the rejected artifact survived and bulk was added on
+    top. When either sketch omits ``card`` the direction is unknown and the
+    channel stays silent; Jaccard still covers the pair.
+    """
+    j, c = content_similarity(candidate, rejected)
+    if j >= jaccard_tol:
+        return (j, c)
+    candidate_card = _residual_cardinality(candidate)
+    rejected_card = _residual_cardinality(rejected)
+    if (
+        candidate_card is not None
+        and rejected_card is not None
+        and candidate_card >= rejected_card
+        and c >= containment_tol
+    ):
+        return (j, c)
+    return None
 
 
 def _size_proximity(a: int | None, b: int | None, *, size_tol: int) -> float:
@@ -1039,8 +1130,8 @@ def evaluate_rejected_resubmission(
     normalized_source_hash: str | None = None,
     content_fingerprint: dict | None = None,
     rejected: Sequence[RejectedArtifact] = (),
-    jaccard_tol: float = _DEFAULT_JACCARD_TOL,
-    containment_tol: float = _DEFAULT_CONTAINMENT_TOL,
+    jaccard_tol: float = _DEFAULT_RESUBMISSION_JACCARD_TOL,
+    containment_tol: float = _DEFAULT_RESUBMISSION_CONTAINMENT_TOL,
 ) -> ReviewDecision:
     """Hold an artifact that re-uploads one an operator already rejected.
 
@@ -1054,16 +1145,81 @@ def evaluate_rejected_resubmission(
     an exemption.
 
     Three signals, in descending strength, mirroring rules 1 / 1b / 2 of the
-    copy gate and reusing their thresholds so one lexical bar governs the
-    codebase:
+    copy gate:
 
     1. **Exact match** — same ``sha256`` as a rejected artifact.
     2. **Exact repack** — same ``normalized_source_hash``: reformatted,
        re-commented, or files renamed and reordered, but the same source.
     3. **Near-duplicate lexical fingerprint** — reference-aware
-       ``content_fingerprint`` at or above ``jaccard_tol`` Jaccard or
-       ``containment_tol`` containment, which survives re-indentation and
-       localized edits.
+       ``content_fingerprint`` at or above ``jaccard_tol`` Jaccard, or at or
+       above ``containment_tol`` containment *in the padding direction only*
+       (see :func:`_resubmission_lexical_match`), which survives re-indentation
+       and localized edits.
+
+    Where rule 3's thresholds come from
+    ==================================
+
+    Measured, not guessed, against every hold the rule opened in its first nine
+    hours live (2026-08-17T02:00Z–11:00Z, 34 submissions, screening policy 9).
+    It shipped reusing the copy gate's 0.75 / 0.95 and that was too sensitive by
+    an order of magnitude: it opened 7 holds, 6 of them on artifacts an operator
+    then read at source and found to be real revisions rather than re-uploads.
+    All 7 have since been adjudicated.
+
+        Jaccard / containment, held artifact vs the rejected one, outcome
+
+        0.809 / 0.879   Crown-v11-Champion   evasion: engine renamed off the
+                                             citation, ``derive::render(...)``
+                                             substitution intact — the LOWEST
+                                             pair in the corpus
+        0.941 / 0.992   Crown-v11-v5         CLEARED: every cited ground
+                                             deleted, composite paid to 0.688
+        0.945 / 0.996   Crown-v11-v3         CLEARED: 574-line deletion of
+                                             exactly the cited behaviour
+        0.969 /     -   luffy11 v3           CLEARED: cited resolver compiled
+                                             out under ``#[cfg(test)]``
+        0.977 /     -   Aceron_v2            CLEARED: net −96 lines, both
+                                             cited call sites deleted
+        0.992 / 1.000   poor-miner v2        held: nothing remediated, every
+                                             cited site still live pre-model
+        1.000 / 1.000   Hannibal-v11-compl.  held: emission sites removed,
+                                             template-keyed retrieval retained
+
+    The distributions do not merely overlap, they are **inverted**: the single
+    evasion in the corpus is the least similar pair in it, because routing
+    around a reject reason means rewriting more code than complying with it
+    does. No threshold on this axis separates the two classes, so raising the
+    bar cannot be justified as "catching the same holds with fewer misses" —
+    it is a decision to stop paying for a channel that was not discriminating.
+    What the bar *can* do is confine the rule to its own stated question. At
+    0.98 the rule holds exactly the two artifacts an operator found had
+    remediated nothing, and releases all four it cleared by hand — 7 holds
+    become 2, with no clear retained and no hand-cleared artifact stopped.
+
+    One further contributor to the false-positive rate is *not* fixed here and
+    is worth knowing about when these numbers are next re-cut: the residual
+    still contains a miner's own vendored fixtures, which the reference corpus
+    does not subtract because they are not starter-kit scaffolding. Crown-v11-v5
+    carried a 30,522-line vendored vocabulary file among 27 byte-identical
+    files, which pins Jaccard high regardless of what the miner changed in
+    source. Excluding vendored/fixture paths from the lexical sketch would
+    sharpen every consumer of this channel, but it changes the sketch for all
+    agents and needs a fingerprint version bump plus a recompute, so it is its
+    own change rather than a threshold move.
+
+    That trade is explicit: **Crown-v11-Champion would not be held by this
+    version of the rule.** It was a real catch and it is not recoverable here,
+    because holding a 0.809 pair means holding every remediation any miner ever
+    submits. An artifact whose engine was rewritten to evade a citation is a
+    source-review finding — screening policy v9's job — and leaning on a
+    duplicate-detection rule to catch it, at ~6 false holds per true one, buys
+    that catch with the throughput of every honest miner recovering from a
+    rejection.
+
+    Rules 1 and 2 are untouched and stay exact. They cover the attack this rule
+    was written for — re-uploading rejected code under a fresh agent row, plain
+    or reformatted — and they produced no false positives in the corpus because
+    a hash match is not an inference.
 
     No score proximity anywhere: a resubmission that scores differently is still
     the rejected artifact, and one that scores identically is no more guilty for
@@ -1100,14 +1256,14 @@ def evaluate_rejected_resubmission(
         ):
             candidates.append((row, "the same canonicalized source as"))
             continue
-        strength = _lexical_strength(
+        fired = _resubmission_lexical_match(
             content_fingerprint,
             row.content_fingerprint,
             jaccard_tol=jaccard_tol,
             containment_tol=containment_tol,
         )
-        if strength >= 1.0:
-            j, c = content_similarity(content_fingerprint, row.content_fingerprint)
+        if fired is not None:
+            j, c = fired
             candidates.append(
                 (
                     row,

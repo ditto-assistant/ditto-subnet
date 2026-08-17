@@ -96,7 +96,8 @@ def test_same_owner_resubmission_is_held() -> None:
 
 
 def test_lexical_near_duplicate_is_held() -> None:
-    shared = {f"h{i}" for i in range(40)}
+    """A cosmetically-edited re-upload: one shingle differs out of ~200."""
+    shared = {f"h{i}" for i in range(200)}
     decision = evaluate_rejected_resubmission(
         agent_id=_CANDIDATE,
         submitted_at=_NOW,
@@ -108,6 +109,93 @@ def test_lexical_near_duplicate_is_held() -> None:
     assert decision.held is True
     assert decision.reason is not None
     assert "near-duplicate" in decision.reason
+
+
+def test_remediated_descendant_is_not_held() -> None:
+    """The regression this rule's thresholds were re-cut for.
+
+    A miner who deletes the cited code and resubmits is still overwhelmingly
+    their own prior artifact — Crown-v11-v3 measured 0.945 Jaccard against the
+    version it was cut from, on a 574-line deletion an operator then cleared as
+    a textbook remediation. Overlap at that level is the population's baseline,
+    not evidence, so the rule must sit above it.
+    """
+    kept = {f"h{i}" for i in range(190)}
+    removed = {f"cited{i}" for i in range(20)}
+    decision = evaluate_rejected_resubmission(
+        agent_id=_CANDIDATE,
+        submitted_at=_NOW,
+        sha256="different-sha",
+        normalized_source_hash="different-normalized",
+        content_fingerprint=_fp(kept),
+        rejected=[_rejected(content_fingerprint=_fp(kept | removed))],
+    )
+    assert decision.held is False
+
+
+def test_padded_reupload_is_held_on_containment() -> None:
+    """Containment still catches the attack it exists for.
+
+    Every shingle of the rejected artifact survives and junk is bolted on to
+    dilute Jaccard (here to 0.870, well under the bar) — so the candidate is the
+    *larger* residual and the padding direction fires.
+    """
+    rejected_shingles = {f"h{i}" for i in range(200)}
+    padding = {f"junk{i}" for i in range(30)}
+    decision = evaluate_rejected_resubmission(
+        agent_id=_CANDIDATE,
+        submitted_at=_NOW,
+        sha256="different-sha",
+        normalized_source_hash="different-normalized",
+        content_fingerprint=_fp(rejected_shingles | padding),
+        rejected=[_rejected(content_fingerprint=_fp(rejected_shingles))],
+    )
+    assert decision.held is True
+    assert decision.reason is not None
+    assert "near-duplicate" in decision.reason
+
+
+def test_containment_is_silent_when_direction_is_unknown() -> None:
+    """No ``card`` on one side means the subset direction cannot be established.
+
+    The same pair as the padded-re-upload test — containment is a full 1.0 — but
+    with the rejected sketch's cardinality missing, so the rule cannot tell a
+    padded copy from a deletion and must not spend a hold guessing. Jaccard
+    (0.870) still had its say.
+    """
+    rejected_shingles = {f"h{i}" for i in range(200)}
+    padding = {f"junk{i}" for i in range(30)}
+    uncounted = _fp(rejected_shingles)
+    del uncounted["card"]
+    decision = evaluate_rejected_resubmission(
+        agent_id=_CANDIDATE,
+        submitted_at=_NOW,
+        sha256="different-sha",
+        normalized_source_hash="different-normalized",
+        content_fingerprint=_fp(rejected_shingles | padding),
+        rejected=[_rejected(content_fingerprint=uncounted)],
+    )
+    assert decision.held is False
+
+
+def test_exact_rules_still_hold_a_remediated_looking_repack() -> None:
+    """Raising rule 3's bar did not soften rules 1 and 2.
+
+    A resubmission whose lexical distance now clears the rule — the deletion
+    shape above — is still held when the canonicalized source is byte-for-byte
+    the rejected one, because a hash match is not an inference.
+    """
+    kept = {f"h{i}" for i in range(190)}
+    removed = {f"cited{i}" for i in range(20)}
+    decision = evaluate_rejected_resubmission(
+        agent_id=_CANDIDATE,
+        submitted_at=_NOW,
+        sha256="different-sha",
+        normalized_source_hash="rejected-normalized",
+        content_fingerprint=_fp(kept),
+        rejected=[_rejected(content_fingerprint=_fp(kept | removed))],
+    )
+    assert decision.held is True
 
 
 def test_unrelated_artifact_is_not_held() -> None:
