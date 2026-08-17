@@ -175,6 +175,7 @@ from ditto.api_server.queue_policy_settings import (
 from ditto.api_server.scoring_gate import (
     PublicSourceRelease,
     evaluate_duplicate_signals,
+    evaluate_rejected_resubmission,
 )
 from ditto.api_server.storage import S3StorageClient
 from ditto.api_server.validator_slot_settings import (
@@ -280,6 +281,7 @@ from ditto.db.queries.scores import (
     get_score_for_validator,
     list_anti_copy_history,
     list_eligible_ledger,
+    list_rejected_artifacts,
     list_scores_for_agent,
     quorum_composites,
     upsert_score,
@@ -6016,6 +6018,29 @@ async def submit_score(
                     eligible=eligible,
                     eligible_history=eligible_history,
                 )
+                if not decision.held:
+                    # An artifact an operator already rejected, re-uploaded as a
+                    # fresh agent row. This is deliberately a *second* gate
+                    # rather than another rule inside the first: every copy rule
+                    # skips the candidate's own owner, and here same-owner
+                    # resubmission is the case we are looking for.
+                    resubmission = evaluate_rejected_resubmission(
+                        agent_id=agent_id,
+                        submitted_at=agent.created_at,
+                        sha256=agent.sha256,
+                        normalized_source_hash=agent.normalized_source_hash,
+                        content_fingerprint=agent.content_fingerprint,
+                        rejected=await list_rejected_artifacts(
+                            session, before=submitted_at_utc
+                        ),
+                    )
+                    # Only *replace* the copy verdict when this gate actually
+                    # holds. A not-held decision still carries the copy gate's
+                    # `no_copy_opportunity` withdrawal, which the `else` branch
+                    # below writes to the immutable audit chain; overwriting it
+                    # with a bare not-held would silently drop that record.
+                    if resubmission.held:
+                        decision = resubmission
                 if decision.held:
                     reference_provenance = reference_corpus_provenance()
                     agent.status = AgentStatus.ATH_PENDING_REVIEW

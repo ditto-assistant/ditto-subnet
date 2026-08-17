@@ -8582,6 +8582,92 @@ class TestAntiCopyGate:
                 "opened_at_source": "agent_finalized_audit",
             }
 
+    async def test_resubmission_of_a_rejected_artifact_is_held(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A rejected artifact re-uploaded by its own owner is held again.
+
+        Every anti-copy rule skips the candidate's own owner, so before the
+        rejected-resubmission gate this path was wide open: reject an artifact
+        and the same miner re-uploads it minutes later as a fresh agent row,
+        which screens, scores and ranks with nothing to match it against.
+        """
+        _install_db(app, session_maker)
+        _install_chain(app)
+        rejected = await _seed_agent(
+            session_maker, status=AgentStatus.EVALUATING, sha256="ce" * 32
+        )
+        await self._score(
+            client, rejected, maker=session_maker, run_id="run_rej", composite=0.80
+        )
+        # The operator adjudicates against it: `reject` lands as BANNED.
+        async with session_maker() as s, s.begin():
+            banned = await s.get(Agent, rejected)
+            assert banned is not None
+            banned.status = AgentStatus.BANNED
+        # The same miner re-uploads the same bytes under a new agent row.
+        again = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="ce" * 32,
+        )
+        await self._score(
+            client, again, maker=session_maker, run_id="run_again", composite=0.80
+        )
+        async with session_maker() as s:
+            held = await s.get(Agent, again)
+            review = await s.scalar(
+                select(AthReview).where(AthReview.agent_id == again)
+            )
+            assert held is not None
+            assert review is not None
+            assert held.status == AgentStatus.ATH_PENDING_REVIEW
+            assert held.duplicate_of == rejected
+            assert "rejected artifact" in (held.review_reason or "")
+
+    async def test_upload_predating_the_rejection_is_not_held(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The gate is prospective: it never reaches back past its own decision.
+
+        `Crown-v11-v2` was uploaded fourteen minutes before its predecessor was
+        held, so an in-flight submission must not inherit a rejection that did
+        not exist when it arrived. The operator still reviews it on the merits;
+        it just is not held automatically by this gate.
+        """
+        _install_db(app, session_maker)
+        _install_chain(app)
+        rejected = await _seed_agent(
+            session_maker, status=AgentStatus.EVALUATING, sha256="cf" * 32
+        )
+        await self._score(
+            client, rejected, maker=session_maker, run_id="run_rej2", composite=0.80
+        )
+        # The resubmission arrives BEFORE the artifact it resembles was uploaded.
+        async with session_maker() as s, s.begin():
+            ancestor = await s.get(Agent, rejected)
+            assert ancestor is not None
+            ancestor.status = AgentStatus.BANNED
+            ancestor.created_at = datetime.now(UTC) + timedelta(hours=1)
+        early = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="cf" * 32,
+        )
+        await self._score(
+            client, early, maker=session_maker, run_id="run_early", composite=0.80
+        )
+        async with session_maker() as s:
+            agent = await s.get(Agent, early)
+            assert agent is not None
+            assert agent.status == AgentStatus.SCORED
+
     async def test_exact_copy_is_still_held_with_source_review_bypassed(
         self,
         app: FastAPI,

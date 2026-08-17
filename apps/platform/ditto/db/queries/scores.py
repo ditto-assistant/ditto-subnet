@@ -2843,3 +2843,84 @@ async def get_score_counts(
         for agent_id, score_version, count in rows
         if versions.get(agent_id) == score_version
     }
+
+
+@dataclass(frozen=True)
+class RejectedArtifact:
+    """One artifact an operator has already rejected, for resubmission matching.
+
+    Deliberately not a :class:`LedgerRow`: a rejected agent has no ranking
+    identity and must never be reachable from anything that builds a board, a
+    weight, or a copy *alibi*. This carries only the columns needed to answer
+    "is the artifact in front of us the one we already threw out".
+    """
+
+    agent_id: UUID
+    miner_hotkey: str
+    first_seen: datetime
+    sha256: str
+    normalized_source_hash: str | None
+    content_fingerprint: dict | None
+
+
+async def list_rejected_artifacts(
+    session: AsyncSession,
+    *,
+    before: datetime,
+) -> list[RejectedArtifact]:
+    """Every artifact rejected by an operator before ``before``.
+
+    :func:`list_anti_copy_history` reads the ``scored`` population only, and its
+    contract is that a wider row set there "can only ever withdraw or re-point a
+    hold, never create one" — it feeds copy *attribution* and same-owner alibis.
+    Rejected artifacts are the exact inverse: they must be able to create a
+    hold, and they must do so *especially* for the same owner, because the
+    resubmission we care about is a miner re-uploading their own rejected code.
+    Mixing the two populations would silently turn a rejected ancestor into an
+    alibi, so this is a separate read with a separate consumer.
+
+    ``AgentStatus.BANNED`` is the terminal state
+    :func:`ditto.api_server.endpoints.admin_copy_review.resolve_copy_review`
+    writes for a ``reject`` resolution, so this is precisely the set of
+    artifacts an operator has adjudicated against. Agents merely *held*
+    (``ath_pending_review``) are excluded on purpose: a hold is a question, not
+    an answer, and holding a resubmission on the strength of an unresolved hold
+    would multiply one operator's open question across a miner's whole history.
+
+    ``before`` bounds the read to rejections that already existed when this
+    artifact was uploaded. A miner cannot be expected to avoid a decision the
+    subnet had not yet made, and this keeps the gate prospective in the same way
+    the copy rules compare against strictly earlier uploads.
+    """
+    rows = (
+        await session.execute(
+            select(
+                Agent.agent_id,
+                Agent.miner_hotkey,
+                Agent.created_at,
+                Agent.sha256,
+                Agent.normalized_source_hash,
+                Agent.content_fingerprint,
+            )
+            .where(
+                Agent.status == AgentStatus.BANNED,
+                Agent.created_at <= before,
+            )
+            .order_by(Agent.created_at.asc(), Agent.agent_id.asc())
+        )
+    ).all()
+    return [
+        RejectedArtifact(
+            agent_id=row.agent_id,
+            miner_hotkey=row.miner_hotkey,
+            first_seen=(
+                row.created_at.replace(tzinfo=UTC)
+                if row.created_at.tzinfo is None
+                else row.created_at
+            ),
+            sha256=row.sha256,
+            normalized_source_hash=row.normalized_source_hash,
+            content_fingerprint=row.content_fingerprint,
+        )
+        for row in rows
+    ]

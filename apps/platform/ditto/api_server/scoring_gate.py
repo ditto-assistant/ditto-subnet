@@ -54,7 +54,7 @@ from ditto.api_server.fingerprint import content_similarity
 if TYPE_CHECKING:
     from uuid import UUID
 
-    from ditto.db.queries.scores import LedgerRow
+    from ditto.db.queries.scores import LedgerRow, RejectedArtifact
 
 # Score-proximity tolerance for the two rules that still use one: the
 # *inconclusive* branch of rule 2 and the legacy size fallback (rule 3). It is
@@ -1029,3 +1029,107 @@ def evaluate_duplicate_signals(
     if withdrawn is not None:
         return ReviewDecision(held=False, no_copy_opportunity=withdrawn)
     return _NOT_HELD
+
+
+def evaluate_rejected_resubmission(
+    *,
+    agent_id: UUID,
+    submitted_at: datetime,
+    sha256: str,
+    normalized_source_hash: str | None = None,
+    content_fingerprint: dict | None = None,
+    rejected: Sequence[RejectedArtifact] = (),
+    jaccard_tol: float = _DEFAULT_JACCARD_TOL,
+    containment_tol: float = _DEFAULT_CONTAINMENT_TOL,
+) -> ReviewDecision:
+    """Hold an artifact that re-uploads one an operator already rejected.
+
+    :func:`evaluate_duplicate_signals` answers "did this miner take *another*
+    owner's work", so every rule there deliberately skips the candidate's own
+    submissions and its coldkey siblings. That exclusion is correct for copy
+    moderation and exactly wrong here. A rejection is a decision about an
+    *artifact*, and the cheapest way to defeat it is to re-upload the same code
+    under a new agent row — same owner, same hotkey, minutes later. So this rule
+    inverts the ownership test: same-owner resubmission is the primary case, not
+    an exemption.
+
+    Three signals, in descending strength, mirroring rules 1 / 1b / 2 of the
+    copy gate and reusing their thresholds so one lexical bar governs the
+    codebase:
+
+    1. **Exact match** — same ``sha256`` as a rejected artifact.
+    2. **Exact repack** — same ``normalized_source_hash``: reformatted,
+       re-commented, or files renamed and reordered, but the same source.
+    3. **Near-duplicate lexical fingerprint** — reference-aware
+       ``content_fingerprint`` at or above ``jaccard_tol`` Jaccard or
+       ``containment_tol`` containment, which survives re-indentation and
+       localized edits.
+
+    No score proximity anywhere: a resubmission that scores differently is still
+    the rejected artifact, and one that scores identically is no more guilty for
+    it. When several rejected artifacts match, the earliest is named, so the
+    audit trail points at the decision that was actually made first.
+
+    Only ``before``-bounded rejections reach this function (see
+    :func:`ditto.db.queries.scores.list_rejected_artifacts`), which keeps the
+    rule prospective: an artifact uploaded before the rejection existed is not
+    held by it.
+
+    This is a *hold*, not a rejection. It routes to ``ath_pending_review`` with
+    the matched ancestor named, and an operator decides whether the resemblance
+    is a genuine re-upload or an honest descendant that shares scaffolding. The
+    lexical channel cannot tell those apart — its own documentation notes it
+    does not defeat identifier renaming or statement reordering — so it must not
+    be wired to anything terminal.
+    """
+    if not rejected:
+        return _NOT_HELD
+
+    candidates: list[tuple[RejectedArtifact, str]] = []
+    for row in rejected:
+        if row.agent_id == agent_id:
+            continue
+        if _utc(row.first_seen) > _utc(submitted_at):
+            continue
+        if row.sha256 == sha256:
+            candidates.append((row, "byte-identical to"))
+            continue
+        if (
+            normalized_source_hash is not None
+            and row.normalized_source_hash == normalized_source_hash
+        ):
+            candidates.append((row, "the same canonicalized source as"))
+            continue
+        strength = _lexical_strength(
+            content_fingerprint,
+            row.content_fingerprint,
+            jaccard_tol=jaccard_tol,
+            containment_tol=containment_tol,
+        )
+        if strength >= 1.0:
+            j, c = content_similarity(content_fingerprint, row.content_fingerprint)
+            candidates.append(
+                (
+                    row,
+                    "a lexical near-duplicate of "
+                    f"(jaccard {j:.3f}, containment {c:.3f})",
+                )
+            )
+    if not candidates:
+        return _NOT_HELD
+
+    match, relation = min(
+        candidates, key=lambda pair: (_utc(pair[0].first_seen), pair[0].agent_id)
+    )
+    return ReviewDecision(
+        held=True,
+        duplicate_of=match.agent_id,
+        reason=(
+            f"Resubmission of a rejected artifact: this upload is {relation} "
+            f"agent {match.agent_id} (hotkey {match.miner_hotkey}, uploaded "
+            f"{_utc(match.first_seen).isoformat()}), which an operator rejected "
+            "before this artifact was uploaded. Held for operator review; the "
+            "lexical channel cannot distinguish a re-upload from an honest "
+            "descendant that shares scaffolding."
+        ),
+    )
