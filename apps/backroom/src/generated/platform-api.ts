@@ -2267,10 +2267,10 @@ export interface paths {
             cookie?: never;
         };
         /** Poll Device */
-        get: operations["poll_device_api_v1_miner_auth_device__user_code__status_post"];
+        get: operations["poll_device_api_v1_miner_auth_device__user_code__status_get"];
         put?: never;
-        /** Poll Device */
-        post: operations["poll_device_api_v1_miner_auth_device__user_code__status_post"];
+        /** Poll Device Post */
+        post: operations["poll_device_post_api_v1_miner_auth_device__user_code__status_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -4402,8 +4402,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Miner Mcp */
-        get: operations["miner_mcp_mcp_post"];
+        /** Miner Mcp Probe */
+        get: operations["miner_mcp_probe_mcp_get"];
         put?: never;
         /** Miner Mcp */
         post: operations["miner_mcp_mcp_post"];
@@ -23347,7 +23347,7 @@ export interface operations {
             };
         };
     };
-    poll_device_api_v1_miner_auth_device__user_code__status_post: {
+    poll_device_api_v1_miner_auth_device__user_code__status_get: {
         parameters: {
             query?: {
                 poll_token?: string | null;
@@ -23380,11 +23380,9 @@ export interface operations {
             };
         };
     };
-    poll_device_api_v1_miner_auth_device__user_code__status_post: {
+    poll_device_post_api_v1_miner_auth_device__user_code__status_post: {
         parameters: {
-            query?: {
-                poll_token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 user_code: string;
@@ -27065,7 +27063,7 @@ export interface operations {
             };
         };
     };
-    miner_mcp_mcp_post: {
+    miner_mcp_probe_mcp_get: {
         parameters: {
             query?: never;
             header?: never;

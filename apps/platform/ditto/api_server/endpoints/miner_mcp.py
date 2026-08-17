@@ -525,10 +525,13 @@ async def _call_tool(
     raise HTTPException(status_code=404, detail=f"unknown tool {name}")
 
 
-@router.api_route("/mcp", methods=["GET", "POST"])
+@router.get("/mcp")
+async def miner_mcp_probe() -> Response:
+    return Response(status_code=405, headers={"Cache-Control": "no-store"})
+
+
+@router.post("/mcp")
 async def miner_mcp(request: Request, session: SessionDep) -> Response:
-    if request.method == "GET":
-        return Response(status_code=405, headers={"Cache-Control": "no-store"})
     if not (request.headers.get("authorization") or "").lower().startswith("bearer "):
         return Response(
             status_code=401,

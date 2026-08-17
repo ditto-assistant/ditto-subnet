@@ -322,16 +322,41 @@ async def approve_device(
     )
 
 
-@router.api_route(
-    "/device/{user_code}/status",
-    methods=["GET", "POST"],
-    response_model=MinerDeviceStatusResponse,
-)
+@router.get("/device/{user_code}/status", response_model=MinerDeviceStatusResponse)
 async def poll_device(
     user_code: str,
     request: Request,
     session: SessionDep,
     poll_token: str | None = Query(default=None),
+) -> MinerDeviceStatusResponse:
+    return await _poll_device(
+        user_code=user_code,
+        request=request,
+        session=session,
+        poll_token=poll_token,
+    )
+
+
+@router.post("/device/{user_code}/status", response_model=MinerDeviceStatusResponse)
+async def poll_device_post(
+    user_code: str,
+    request: Request,
+    session: SessionDep,
+) -> MinerDeviceStatusResponse:
+    return await _poll_device(
+        user_code=user_code,
+        request=request,
+        session=session,
+        poll_token=None,
+    )
+
+
+async def _poll_device(
+    *,
+    user_code: str,
+    request: Request,
+    session: AsyncSession,
+    poll_token: str | None,
 ) -> MinerDeviceStatusResponse:
     now = datetime.now(UTC)
     try:
