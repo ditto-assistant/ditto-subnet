@@ -1,6 +1,9 @@
 from argparse import Namespace
 from datetime import UTC, datetime
 
+import pytest
+
+import screener_capacity.oneshot as oneshot_mod
 from screener_capacity.oneshot import (
     HOLD_COMMANDS,
     HOLD_IMAGE,
@@ -11,6 +14,11 @@ from screener_capacity.oneshot import (
 )
 from screener_capacity.targon import TargonAPIError
 from screener_capacity.targon_cli import command_sweep_oneshots
+
+
+@pytest.fixture(autouse=True)
+def _fast_delete_settle(monkeypatch) -> None:
+    monkeypatch.setattr(oneshot_mod, "DELETED_SETTLE_SECONDS", 0)
 
 
 class _Targon:
@@ -174,6 +182,30 @@ def test_delete_replaces_leftover_image_before_waking() -> None:
             },
         )
     ]
+
+
+def test_delete_is_not_done_when_deleted_status_bounces_to_error(monkeypatch) -> None:
+    monkeypatch.setattr(oneshot_mod, "DELETED_SETTLE_SECONDS", 15)
+    clock = {"now": 0.0}
+    monkeypatch.setattr(oneshot_mod.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(
+        oneshot_mod.time,
+        "sleep",
+        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
+    )
+    client = _Targon([])
+    client.status_by_uid["wrk-1"] = "suspended"
+    original_delete = client.delete
+
+    def _delete(uid: str) -> None:
+        original_delete(uid)
+        client.status_by_uid[uid] = "error"
+
+    client.delete = _delete  # type: ignore[method-assign]
+
+    assert not delete_oneshot_rental(client, "wrk-1")
+    assert client.deployed == ["wrk-1"]
+    assert client.updated
 
 
 def test_delete_does_not_wake_leftover_when_image_replace_fails() -> None:

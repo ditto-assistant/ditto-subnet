@@ -35,6 +35,7 @@ SWEEPABLE_STATUSES = frozenset({"suspended", "error", "registered", "deleted"})
 DEFAULT_REGISTERED_GRACE_SECONDS = 1200
 DEFAULT_INFLIGHT_GRACE_SECONDS = 2700
 RUNNING_WAIT_SECONDS = 180.0
+DELETED_SETTLE_SECONDS = 15.0
 # Public image used only to make leftover DELETE legal. Never resume the
 # original crashing job — that crash-loops and keeps the billing meter on.
 HOLD_IMAGE = "busybox:1.37.0"
@@ -111,6 +112,24 @@ def _try_delete(client: TargonClient, uid: str) -> bool:
             return False
 
 
+def _still_deleted(
+    client: TargonClient,
+    uid: str,
+    *,
+    settle_seconds: float = DELETED_SETTLE_SECONDS,
+) -> bool:
+    """Targon can report `deleted` while stopping, then bounce to `error`."""
+    deadline = time.monotonic() + settle_seconds
+    while True:
+        status = _current_status(client, uid)
+        if status not in {"", "deleted"}:
+            return False
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return True
+        time.sleep(min(5.0, remaining))
+
+
 def _replace_with_hold_image(client: TargonClient, uid: str) -> bool:
     """Swap a leftover onto a cheap sleep image before waking it.
 
@@ -162,7 +181,9 @@ def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
             return False
         status = "running"
     if status == "running":
-        return _try_delete(client, uid)
+        if not _try_delete(client, uid):
+            return False
+        return _still_deleted(client, uid)
     return False
 
 
