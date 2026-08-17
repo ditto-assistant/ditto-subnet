@@ -715,7 +715,8 @@ def run_one_runtime_smoke(
             error_code="TARGON_RUNTIME_HEALTH_FAILED",
         )
         return True
-    except (ControllerError, TargonAPIError, KeyError, ValueError):
+    except (ControllerError, TargonAPIError, KeyError, ValueError) as error:
+        print(f"runtime smoke failed: {type(error).__name__}: {error}", file=sys.stderr)
         with contextlib.suppress(ControllerError):
             control.update(
                 build_id,

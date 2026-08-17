@@ -1387,7 +1387,8 @@ async def consume_submission_image_build(
             raise AgentNotScreenableError("remote build is not discardable")
         output_key = row.output_key
         now = datetime.now(UTC)
-        if row.runtime_status in {"pending", "running"}:
+        runtime_in_flight = row.runtime_status == "running"
+        if row.runtime_status == "pending":
             row.runtime_status = "skipped"
             row.runtime_error_code = (
                 "TARGON_RUNTIME_SKIPPED_BUILD_CANCELED"
@@ -1403,7 +1404,9 @@ async def consume_submission_image_build(
             row.job_token_hash = None
             row.job_token_expires_at = None
             row.updated_at = now
-    if await storage.object_exists(key=output_key):
+    # A claimed runtime smoke still needs the verified archive. Deleting it
+    # here makes the in-flight download 403 and reports a fake provider error.
+    if not runtime_in_flight and await storage.object_exists(key=output_key):
         await storage.delete_object(key=output_key)
     async with session.begin():
         stored = await session.get(SubmissionImageBuild, build_id, with_for_update=True)
@@ -1690,8 +1693,10 @@ async def complete_submission_runtime_smoke(
     payload: SubmissionRuntimeResultRequest,
     _controller: ControllerDep,
     session: SessionDep,
+    storage: StorageDep,
 ) -> None:
     now = datetime.now(UTC)
+    output_key: str | None = None
     async with session.begin():
         row = await session.scalar(
             select(SubmissionImageBuild)
@@ -1707,7 +1712,7 @@ async def complete_submission_runtime_smoke(
             or row.controller_epoch != payload.controller_epoch
         ):
             raise HTTPException(status_code=409, detail="runtime smoke fence is stale")
-        if row.status != "succeeded" or row.runtime_status not in {
+        if row.status not in {"succeeded", "consumed"} or row.runtime_status not in {
             "pending",
             "running",
         }:
@@ -1719,6 +1724,10 @@ async def complete_submission_runtime_smoke(
         row.updated_at = now
         if payload.status in {"succeeded", "fallback_required"}:
             row.runtime_completed_at = now
+            if row.consumed_at is not None:
+                output_key = row.output_key
+    if output_key is not None and await storage.object_exists(key=output_key):
+        await storage.delete_object(key=output_key)
 
 
 @router.post(

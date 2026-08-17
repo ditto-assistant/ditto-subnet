@@ -1061,6 +1061,72 @@ class TestFederatedScreenerNodes:
             assert row.runtime_error_code == "TARGON_RUNTIME_SKIPPED_BUILD_CONSUMED"
             assert row.runtime_completed_at is not None
 
+    async def test_consuming_succeeded_build_keeps_in_flight_runtime_archive(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        attempt_id = claim.json()["items"][0]["attempt_id"]
+        queued = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+            headers=_AUTH_HEADER,
+            json={"attempt_id": attempt_id},
+        )
+        assert queued.status_code == 200, queued.text
+        build_id = queued.json()["build_id"]
+        async with session_maker() as session, session.begin():
+            row = await session.get(SubmissionImageBuild, UUID(build_id))
+            assert row is not None
+            row.status = "succeeded"
+            row.output_sha256 = "12" * 32
+            row.output_size_bytes = 123
+            row.runtime_status = "running"
+            row.controller_epoch = "prod:epoch"
+            row.completed_at = datetime.now(UTC)
+
+        consumed = await client.delete(
+            f"/api/v1/screener/agent/{agent_id}/submission-image-builds/{build_id}",
+            headers=_AUTH_HEADER,
+            params={"attempt_id": attempt_id},
+        )
+
+        assert consumed.status_code == 204, consumed.text
+        storage.delete_object.assert_not_awaited()
+        async with session_maker() as session:
+            row = await session.get(SubmissionImageBuild, UUID(build_id))
+            assert row is not None
+            assert row.status == "consumed"
+            assert row.runtime_status == "running"
+            assert row.runtime_error_code is None
+
+        finished = await client.post(
+            f"/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={
+                "environment": "prod",
+                "controller_epoch": "prod:epoch",
+                "status": "fallback_required",
+                "error_code": "TARGON_RUNTIME_PROVIDER_ERROR",
+            },
+        )
+        assert finished.status_code == 204, finished.text
+        storage.delete_object.assert_awaited_with(
+            key=f"remote-builds/{build_id}/image.tar"
+        )
+
     async def test_submission_build_rejects_wrong_attempt_and_job_token(
         self,
         app: FastAPI,
