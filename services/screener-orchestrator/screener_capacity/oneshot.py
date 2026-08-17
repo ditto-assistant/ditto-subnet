@@ -113,8 +113,6 @@ def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
     `registered` records. Redeploy so the provider has a live runtime, then
     DELETE immediately. Soft-deleted state counts as success.
     """
-    if _try_delete(client, uid):
-        return True
     status = _current_status(client, uid)
     if status == "deleted":
         return True
