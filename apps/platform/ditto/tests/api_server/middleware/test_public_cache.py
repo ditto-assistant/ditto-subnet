@@ -18,8 +18,32 @@ class _Clock:
         return self.value
 
 
+class _RefreshGate:
+    """Hold a background refresh until the test releases it.
+
+    Wall-clock sleeps made stale-while-revalidate assertions flake under CI
+    load (the 40ms "immediate" bound lost to scheduling). The gate makes
+    "returned before refresh finished" a happens-before, not a timeout.
+    """
+
+    def __init__(self) -> None:
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+        self.done = asyncio.Event()
+
+    async def hold(self) -> None:
+        self.started.set()
+        await self.release.wait()
+        self.done.set()
+
+
 def _build(
-    clock: _Clock, *, disabled: bool = False, gzip: bool = False
+    clock: _Clock,
+    *,
+    disabled: bool = False,
+    gzip: bool = False,
+    stale_gate: _RefreshGate | None = None,
+    stale_fail_gate: _RefreshGate | None = None,
 ) -> tuple[FastAPI, dict[str, int]]:
     app = FastAPI()
     calls = {
@@ -68,7 +92,8 @@ def _build(
     @app.get("/api/v1/public/stale")
     async def stale(response: Response) -> dict:
         calls["stale"] += 1
-        await asyncio.sleep(0.05)
+        if calls["stale"] > 1 and stale_gate is not None:
+            await stale_gate.hold()
         response.headers["Cache-Control"] = (
             "public, max-age=10, stale-while-revalidate=30"
         )
@@ -81,6 +106,8 @@ def _build(
             "public, max-age=10, stale-while-revalidate=30"
         )
         if calls["stale_fail"] > 1:
+            if stale_fail_gate is not None:
+                await stale_fail_gate.hold()
             response.status_code = 503
         return {"n": calls["stale_fail"]}
 
@@ -135,22 +162,25 @@ async def test_entry_expires_after_declared_max_age(clock: _Clock) -> None:
 async def test_stale_hit_returns_immediately_while_one_refresh_runs(
     clock: _Clock,
 ) -> None:
-    app, calls = _build(clock)
+    gate = _RefreshGate()
+    app, calls = _build(clock, stale_gate=gate)
     async with _client(app) as client:
         first = await client.get("/api/v1/public/stale")
         clock.value += 11
-        started = asyncio.get_running_loop().time()
         stale_responses = await asyncio.gather(
             *(client.get("/api/v1/public/stale") for _ in range(6))
         )
-        elapsed = asyncio.get_running_loop().time() - started
         assert first.json() == {"n": 1}
         assert {response.json()["n"] for response in stale_responses} == {1}
         assert {response.headers["X-Public-Cache"] for response in stale_responses} == {
             "STALE"
         }
-        assert elapsed < 0.04
-        await asyncio.sleep(0.08)
+        # The six pollers already returned. The refresh is still parked on the
+        # gate, so this is a happens-before, not a 40ms race against CI load.
+        await asyncio.wait_for(gate.started.wait(), timeout=1)
+        assert not gate.done.is_set()
+        gate.release.set()
+        await asyncio.wait_for(gate.done.wait(), timeout=1)
         refreshed = await client.get("/api/v1/public/stale")
     assert refreshed.json() == {"n": 2}
     assert refreshed.headers["X-Public-Cache"] == "HIT"
@@ -160,12 +190,15 @@ async def test_stale_hit_returns_immediately_while_one_refresh_runs(
 async def test_failed_background_refresh_backs_off_incoming_pollers(
     clock: _Clock,
 ) -> None:
-    app, calls = _build(clock)
+    gate = _RefreshGate()
+    app, calls = _build(clock, stale_fail_gate=gate)
     async with _client(app) as client:
         seeded = await client.get("/api/v1/public/stale-fail")
         clock.value += 11
         stale = await client.get("/api/v1/public/stale-fail")
-        await asyncio.sleep(0.02)
+        await asyncio.wait_for(gate.started.wait(), timeout=1)
+        gate.release.set()
+        await asyncio.wait_for(gate.done.wait(), timeout=1)
         retries = await asyncio.gather(
             *(client.get("/api/v1/public/stale-fail") for _ in range(6))
         )
