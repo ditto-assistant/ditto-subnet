@@ -33,6 +33,11 @@ from ditto.api_models import (
     MinerAvatarClearRequest,
     MinerAvatarResponse,
     MinerAvatarSetRequest,
+    MinerDevicePublicResponse,
+    MinerDeviceStartRequest,
+    MinerDeviceStartResponse,
+    MinerDeviceStatusResponse,
+    MinerLoginApproveRequest,
     NameClaimListResponse,
     NameClaimRequest,
     NameClaimResponse,
@@ -50,6 +55,7 @@ from ditto.miner_cli.errors import (
     AttestationRejectedError,
     AvatarRejectedError,
     HotkeyAgentNotFoundError,
+    LoginRejectedError,
     NameClaimRejectedError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
@@ -382,6 +388,36 @@ class ApiClient:
         if response.status_code not in (200, 201):
             raise AvatarRejectedError(_format_error(response, prefix="avatar-set"))
         return MinerAvatarResponse.model_validate(response.json())
+
+    def start_miner_device(
+        self, body: MinerDeviceStartRequest
+    ) -> MinerDeviceStartResponse:
+        response = self._request(
+            "POST",
+            "/api/v1/miner-auth/device",
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code not in (200, 201):
+            raise LoginRejectedError(_format_error(response, prefix="miner-login"))
+        return MinerDeviceStartResponse.model_validate(response.json())
+
+    def get_miner_device(self, user_code: str) -> MinerDevicePublicResponse:
+        response = self._request("GET", f"/api/v1/miner-auth/device/{user_code}")
+        if response.status_code != 200:
+            raise LoginRejectedError(_format_error(response, prefix="miner-login"))
+        return MinerDevicePublicResponse.model_validate(response.json())
+
+    def approve_miner_device(
+        self, user_code: str, body: MinerLoginApproveRequest
+    ) -> MinerDeviceStatusResponse:
+        response = self._request(
+            "POST",
+            f"/api/v1/miner-auth/device/{user_code}/approve",
+            json=body.model_dump(mode="json"),
+        )
+        if response.status_code not in (200, 201):
+            raise LoginRejectedError(_format_error(response, prefix="miner-login"))
+        return MinerDeviceStatusResponse.model_validate(response.json())
 
     def clear_miner_avatar(self, body: MinerAvatarClearRequest) -> MinerAvatarResponse:
         response = self._request(

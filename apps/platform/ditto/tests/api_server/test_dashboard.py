@@ -150,6 +150,7 @@ class TestDashboard:
             "/miner/5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
             "/agents/6c10d0df-fc93-4903-a939-147d51cea1cc",
             "/miners/5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+            "/h/jupiter",
             "/validators/5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
             "/screeners/5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
         ],

@@ -81,7 +81,10 @@ from ditto.api_server.endpoints.attestation import router as attestation_router
 from ditto.api_server.endpoints.health import router as health_router
 from ditto.api_server.endpoints.inference import router as inference_router
 from ditto.api_server.endpoints.metrics import router as metrics_router
+from ditto.api_server.endpoints.miner_auth import router as miner_auth_router
 from ditto.api_server.endpoints.miner_avatars import router as miner_avatars_router
+from ditto.api_server.endpoints.miner_mcp import router as miner_mcp_router
+from ditto.api_server.endpoints.miner_me import router as miner_me_router
 from ditto.api_server.endpoints.name_claims import router as name_claims_router
 from ditto.api_server.endpoints.public import router as public_router
 from ditto.api_server.endpoints.retrieval import router as retrieval_router
@@ -122,7 +125,10 @@ __all__ = [
     "admin_validation_retry_router",
     "admin_validator_slot_settings_router",
     "metrics_router",
+    "miner_auth_router",
     "miner_avatars_router",
+    "miner_mcp_router",
+    "miner_me_router",
     "public_router",
     "retrieval_router",
     "scoring_router",

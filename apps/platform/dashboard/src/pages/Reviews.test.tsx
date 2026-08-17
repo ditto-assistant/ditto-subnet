@@ -14,7 +14,7 @@ import { REFRESH_MS } from "../lib/config";
 import { syncFromLocation } from "../stores/routeStore";
 import { installFixtureFetch, loadFixture } from "../test-fixtures";
 import type { AthSnapshot } from "../types/pipeline";
-import { ReviewsPage } from "./ReviewsPage";
+import { AthPage } from "./AthPage";
 
 const athFixture = loadFixture<AthSnapshot>("activity-ath");
 const firstEntry = (athFixture.entries ?? [])[0] as NonNullable<
@@ -27,7 +27,7 @@ let fetchSpy: ReturnType<typeof vi.spyOn> | null = null;
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-07-31T14:00:00Z"));
-  history.replaceState(null, "", "/#/reviews");
+  history.replaceState(null, "", "/#/ath");
   syncFromLocation();
   restoreFetch = installFixtureFetch();
   fetchSpy = vi.spyOn(globalThis, "fetch");
@@ -69,7 +69,7 @@ function stubAthFetch(responder: (page: number) => AthSnapshot): void {
 }
 
 async function renderPage(): Promise<void> {
-  render(() => <ReviewsPage />);
+  render(() => <AthPage />);
   await waitFor(() => expect(document.getElementById("ath-count")?.textContent).toBe("50"));
 }
 
@@ -77,7 +77,7 @@ async function renderPage(): Promise<void> {
 describe("public miner-facing ATH review queue (row 9)", () => {
   it("routes as its own page and explains holds without discarding work", async () => {
     await renderPage();
-    expect(document.querySelector('section.page[data-page="reviews"]')).toBeTruthy();
+    expect(document.querySelector('section.page[data-page="ath"]')).toBeTruthy();
     const text = document.body.textContent ?? "";
     expect(text).toContain("High scores get a second look.");
     expect(text).toContain("Recorded scores stay preserved");
@@ -173,7 +173,7 @@ describe("public miner-facing ATH review queue (row 9)", () => {
             generated_at: "2026-07-31T13:59:30Z",
           },
     );
-    render(() => <ReviewsPage />);
+    render(() => <AthPage />);
     await waitFor(() => expect(document.getElementById("ath-count")?.textContent).toBe("4"));
     const pages = fetchedPaths()
       .filter((path) => path.includes("review=ath"))
@@ -187,7 +187,7 @@ describe("public miner-facing ATH review queue (row 9)", () => {
 
   it("shows empty and failed states in honest words — no example data", async () => {
     stubAthFetch(() => ({ entries: [], total_pages: 1, generated_at: "2026-07-31T13:59:59Z" }));
-    render(() => <ReviewsPage />);
+    render(() => <AthPage />);
     await waitFor(() =>
       expect(document.getElementById("ath-review-state")?.textContent).toContain(
         "No active ATH reviews.",
@@ -200,7 +200,7 @@ describe("public miner-facing ATH review queue (row 9)", () => {
     fetchSpy?.mockRestore();
     globalThis.fetch = (() => Promise.reject(new Error("down"))) as typeof fetch;
     fetchSpy = vi.spyOn(globalThis, "fetch");
-    render(() => <ReviewsPage />);
+    render(() => <AthPage />);
     await waitFor(() =>
       expect(document.getElementById("ath-review-state")?.textContent).toContain(
         "Could not load active reviews.",
@@ -264,7 +264,7 @@ describe("current ATH review reason (#622)", () => {
       total_pages: 1,
       generated_at: "2026-07-31T13:59:59Z",
     }));
-    render(() => <ReviewsPage />);
+    render(() => <AthPage />);
     await waitFor(() => expect(document.querySelector(".ath-review-card")).toBeTruthy());
     const card = document.querySelector(".ath-review-card") as HTMLElement;
     expect(card.querySelector(".ath-review-status")?.textContent).toBe("ATH review reopened");
@@ -291,7 +291,7 @@ describe("current ATH review reason (#622)", () => {
       total_pages: 1,
       generated_at: "2026-07-31T13:59:59Z",
     }));
-    render(() => <ReviewsPage />);
+    render(() => <AthPage />);
     await waitFor(() => expect(document.querySelector(".ath-review-card")).toBeTruthy());
     const card = document.querySelector(".ath-review-card") as HTMLElement;
     expect(card.querySelector(".ath-review-status")?.textContent).toBe("ATH review pending");

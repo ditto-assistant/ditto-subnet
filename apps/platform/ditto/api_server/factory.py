@@ -65,7 +65,10 @@ from ditto.api_server.endpoints import (
     health_router,
     inference_router,
     metrics_router,
+    miner_auth_router,
     miner_avatars_router,
+    miner_mcp_router,
+    miner_me_router,
     name_claims_router,
     public_router,
     retrieval_router,
@@ -366,6 +369,9 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(attestation_router, prefix="/api/v1")
     app.include_router(name_claims_router, prefix="/api/v1")
     app.include_router(miner_avatars_router, prefix="/api/v1")
+    app.include_router(miner_auth_router, prefix="/api/v1")
+    app.include_router(miner_me_router, prefix="/api/v1")
+    app.include_router(miner_mcp_router)
     app.include_router(upload_router, prefix="/api/v1")
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
@@ -458,6 +464,14 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
                     response_class=HTMLResponse,
                     name=f"dashboard_{entity_kind}",
                 )
+            app.add_api_route(
+                "/h/{handle}",
+                dashboard_response,
+                methods=["GET"],
+                include_in_schema=False,
+                response_class=HTMLResponse,
+                name="dashboard_miner_handle",
+            )
 
             if _DASHBOARD_ASSETS.is_dir():
                 # Vite emits content-hashed bundles under dist/assets/ (safe to

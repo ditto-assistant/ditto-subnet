@@ -61,6 +61,10 @@ describe("PAGES registry", () => {
       sub: "Screening evidence and validator quorum progress · select a row for history",
     });
     expect(PAGES.reviews).toEqual({
+      title: "Miner sign-in",
+      sub: "Sign in with your hotkey · manage your profile, submissions, and MCP",
+    });
+    expect(PAGES.ath).toEqual({
       title: "ATH reviews",
       sub: "Public queue of held high-score submissions · scores preserved, emissions paused",
     });
@@ -92,7 +96,14 @@ describe("PAGES registry", () => {
     expect(ENTITY_PAGES.miner).toBe("overview");
     expect(ENTITY_PAGES.validator).toBe("operations");
     expect(ENTITY_PAGES.screener).toBe("operations");
-    expect(PAGE_SCOPED_PARAMS).toEqual(["status", "downloadable", "q", "page"]);
+    expect(PAGE_SCOPED_PARAMS).toEqual([
+      "status",
+      "downloadable",
+      "q",
+      "page",
+      "code",
+      "login",
+    ]);
   });
 });
 
@@ -210,6 +221,19 @@ describe("currentPageName", () => {
   it("returns null on a dedicated entity page", () => {
     setLocation("/agent/a1");
     expect(currentPageName()).toBeNull();
+  });
+});
+
+describe("handle profile path", () => {
+  it("treats /h/{stem} as a full miner profile route", () => {
+    setLocation("/h/jupiter");
+    expect(readEntityRoute()).toEqual({
+      kind: "miner",
+      id: "jupiter",
+      key: "miner:jupiter",
+      full: true,
+      legacy: false,
+    });
   });
 });
 

@@ -28,6 +28,14 @@ from ditto.api_models.miner_avatar import (
     MinerAvatarResponse,
     MinerAvatarSetRequest,
 )
+from ditto.api_models.miner_session import (
+    MinerDevicePublicResponse,
+    MinerDeviceStartRequest,
+    MinerDeviceStartResponse,
+    MinerDeviceStatusResponse,
+    MinerLoginApproveRequest,
+    MinerSessionView,
+)
 from ditto.api_models.name_claim import (
     NameClaimEndorsementView,
     NameClaimListResponse,
@@ -54,6 +62,12 @@ __all__ = [
     "MinerAvatarClearRequest",
     "MinerAvatarResponse",
     "MinerAvatarSetRequest",
+    "MinerDevicePublicResponse",
+    "MinerDeviceStartRequest",
+    "MinerDeviceStartResponse",
+    "MinerDeviceStatusResponse",
+    "MinerLoginApproveRequest",
+    "MinerSessionView",
     "NameClaimEndorsementView",
     "NameClaimListResponse",
     "NameClaimProof",

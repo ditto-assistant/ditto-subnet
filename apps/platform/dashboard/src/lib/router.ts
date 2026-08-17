@@ -15,6 +15,7 @@ export type PageName =
   | "operations"
   | "submissions"
   | "reviews"
+  | "ath"
   | "benchmark";
 
 // Sidebar pages (title, subtitle) in sidebar order. Deliberately mutable: the
@@ -42,6 +43,10 @@ export const PAGES: Record<PageName, { title: string; sub: string }> = {
     sub: "Screening evidence and validator quorum progress · select a row for history",
   },
   reviews: {
+    title: "Miner sign-in",
+    sub: "Sign in with your hotkey · manage your profile, submissions, and MCP",
+  },
+  ath: {
     title: "ATH reviews",
     sub: "Public queue of held high-score submissions · scores preserved, emissions paused",
   },
@@ -89,7 +94,14 @@ export const ENTITY_PAGES: Record<string, PageName> = {
 
 // Per-page view state (submissions filters + either pager's "page"). It is
 // scoped to the page that owns it, so it must not ride along to another page.
-export const PAGE_SCOPED_PARAMS: string[] = ["status", "downloadable", "q", "page"];
+export const PAGE_SCOPED_PARAMS: string[] = [
+  "status",
+  "downloadable",
+  "q",
+  "page",
+  "code",
+  "login",
+];
 
 // The config knobs allowed to appear in the real query string.
 const CONFIG_KEYS = ["api", "wandb"] as const;
@@ -220,6 +232,16 @@ export function readEntityRoute(): EntityRoute | null {
       const kind: EntityKind = match[1] === "agent" ? "agent" : "miner";
       const id = decodeURIComponent(match[2] ?? "");
       return { kind, id, key: kind + ":" + id, full: true, legacy: false };
+    } catch {
+      return null;
+    }
+  }
+
+  match = /^\/h\/([^/]+)\/?$/.exec(location.pathname);
+  if (match) {
+    try {
+      const id = decodeURIComponent(match[1] ?? "");
+      return { kind: "miner", id, key: "miner:" + id, full: true, legacy: false };
     } catch {
       return null;
     }

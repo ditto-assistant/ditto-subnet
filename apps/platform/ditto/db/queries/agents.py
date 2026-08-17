@@ -353,6 +353,7 @@ async def query_public_activity_page(
     downloadable_agent_ids: set[UUID],
     query: str | None,
     reserved_name_stems: set[str] | None = None,
+    miner_hotkey: str | None = None,
     ath_only: bool,
     active_validation_agent_ids: set[UUID],
     active_assignment_agent_ids: set[UUID],
@@ -469,6 +470,8 @@ async def query_public_activity_page(
     )
 
     base_filters = []
+    if miner_hotkey:
+        base_filters.append(Agent.miner_hotkey == miner_hotkey)
     if ath_only:
         base_filters.append(Agent.status == AgentStatus.ATH_PENDING_REVIEW)
     normalized_query = query.strip().casefold() if query else ""

@@ -38,6 +38,7 @@ describe("Sidebar routes every section (row 28)", () => {
       "operations",
       "submissions",
       "reviews",
+      "ath",
       "benchmark",
     ];
     pages.forEach((page) => {
@@ -77,6 +78,7 @@ describe("Sidebar routes every section (row 28)", () => {
       "Pipeline",
       "Fleet",
       "Submissions",
+      "Sign in",
       "ATH reviews",
       "Benchmark",
     ]);

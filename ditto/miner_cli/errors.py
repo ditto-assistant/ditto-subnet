@@ -321,6 +321,14 @@ class AvatarRejectedError(ApiResponseError):
     """Raised when a profile-picture set or clear request is rejected."""
 
 
+class LoginCancelledError(MinerCliError):
+    """Raised when the miner declines a dashboard login confirmation."""
+
+
+class LoginRejectedError(ApiResponseError):
+    """Raised when a miner device-code login is rejected."""
+
+
 class AttestationRejectedError(ApiResponseError):
     """Raised when ``/attestations/owner-link`` returns a non-2xx status.
 

@@ -10,6 +10,7 @@ import type { JSX } from "solid-js";
 
 import { WANDB_URL } from "../../lib/config";
 import type { PageName } from "../../lib/router";
+import { minerSession } from "../../stores/sessionStore";
 import { currentPage, navigateToPage } from "../../stores/routeStore";
 import { BenchBadge } from "./BenchBadge";
 import type { BenchBadgeProps } from "./BenchBadge";
@@ -17,7 +18,7 @@ import { ThemeSwitcher } from "./ThemeSwitcher";
 
 interface NavItem {
   page: PageName;
-  label: string;
+  label: string | (() => string);
   desc: (benchVersion: number | null) => string;
   icon: () => JSX.Element;
 }
@@ -88,6 +89,17 @@ const NAV_ITEMS: NavItem[] = [
   },
   {
     page: "reviews",
+    label: () => (minerSession() ? "Account" : "Sign in"),
+    desc: () => (minerSession() ? "Your miner console" : "Miner profile & MCP"),
+    icon: () => (
+      <svg class="ic" viewBox="0 0 24 24">
+        <path d="M12 3 3.6 7.2v5.6c0 4.7 3.6 7.2 8.4 8.2 4.8-1 8.4-3.5 8.4-8.2V7.2Z" />
+        <path d="M9 12h6M12 9v6" />
+      </svg>
+    ),
+  },
+  {
+    page: "ath",
     label: "ATH reviews",
     desc: () => "Active public holds",
     icon: () => (
@@ -176,7 +188,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
                 {item.icon()}
               </span>
               <span class="ni-text">
-                <span class="ni-label">{item.label}</span>
+                <span class="ni-label">{typeof item.label === "function" ? item.label() : item.label}</span>
                 <span class="ni-desc">{item.desc(props.displayVersion)}</span>
               </span>
             </a>

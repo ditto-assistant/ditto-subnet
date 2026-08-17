@@ -4031,6 +4031,82 @@ async def public_name_claims(
     return await list_claims(session)
 
 
+@router.get("/miners/{miner_id}", response_model=None)
+async def public_miner_profile(
+    miner_id: str,
+    response: Response,
+    session: SessionDep,
+) -> Any:
+    """Public miner profile: handle, avatar, socials, recent submissions."""
+    from ditto.api_models.miner_session import (
+        MinerProfileLinks,
+        PublicMinerProfileResponse,
+        PublicMinerSubmission,
+    )
+    from ditto.api_server.miner_avatar import public_avatar_path
+    from ditto.api_server.name_claim import expected_netuid, normalize_name_stem
+    from ditto.db.queries.miner_sessions import get_profile, list_recent_agents_for_hotkey
+    from ditto.db.queries.name_claims import active_handle_claims
+
+    response.headers["Cache-Control"] = "public, max-age=30"
+    now = datetime.now(UTC)
+    claims = await active_handle_claims(session, netuid=expected_netuid())
+    hotkey = miner_id
+    handle = None
+    if len(miner_id) < 47:
+        stem = normalize_name_stem(miner_id) or miner_id.casefold()
+        claim = claims.get(stem)
+        if claim is None:
+            raise HTTPException(status_code=404, detail="unknown miner handle")
+        hotkey = claim.claimant_hotkey
+        handle = PublicNameHandle(
+            stem=claim.name_stem,
+            status="reserved" if claim.status == "upheld" else claim.status,
+            claim_id=claim.claim_id,
+        )
+    else:
+        for claim in claims.values():
+            if claim.claimant_hotkey == hotkey:
+                handle = PublicNameHandle(
+                    stem=claim.name_stem,
+                    status="reserved" if claim.status == "upheld" else claim.status,
+                    claim_id=claim.claim_id,
+                )
+                break
+    profile = await get_profile(session, hotkey=hotkey)
+    avatar = await get_miner_avatar(session, hotkey=hotkey)
+    agents = await list_recent_agents_for_hotkey(session, hotkey=hotkey, limit=25)
+    if (
+        profile is None
+        and avatar is None
+        and handle is None
+        and not agents
+    ):
+        raise HTTPException(status_code=404, detail="unknown miner")
+    return PublicMinerProfileResponse(
+        miner_hotkey=hotkey,
+        name_handle=handle,
+        avatar_url=public_avatar_path(hotkey) if avatar else None,
+        profile=MinerProfileLinks(
+            x_url=None if profile is None else profile.x_url,
+            github_url=None if profile is None else profile.github_url,
+            discord_handle=None if profile is None else profile.discord_handle,
+        ),
+        profile_url=f"/miner/{hotkey}",
+        submissions=[
+            PublicMinerSubmission(
+                agent_id=agent.agent_id,
+                name=_public_named(agent.name, None, claims, strike=True)[0],
+                status=str(agent.status),
+                created_at=agent.created_at,
+                avatar_url=public_avatar_path(hotkey) if avatar else None,
+            )
+            for agent in agents
+        ],
+        generated_at=now,
+    )
+
+
 @router.get("/miners/{hotkey}/avatar")
 async def public_miner_avatar(
     hotkey: str,
@@ -5049,6 +5125,7 @@ async def activity(
     downloadable: bool = Query(default=False),
     review: Literal["ath"] | None = Query(default=None),
     q: str | None = Query(default=None, min_length=1, max_length=200),
+    miner: str | None = Query(default=None, min_length=47, max_length=48),
 ) -> PublicActivityResponse:
     """Recent submissions and their safe public pipeline stage, newest first.
 
@@ -5126,6 +5203,7 @@ async def activity(
         reserved_name_stems={
             stem for stem, claim in handle_claims.items() if claim.status == "upheld"
         },
+        miner_hotkey=miner,
         ath_only=review == "ath",
         active_validation_agent_ids=active_validation_agent_ids,
         active_assignment_agent_ids=active_assignment_agent_ids,

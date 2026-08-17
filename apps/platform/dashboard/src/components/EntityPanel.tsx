@@ -16,6 +16,7 @@ import {
   Show,
   Switch,
   createEffect,
+  createResource,
   createSignal,
   onCleanup,
   onMount,
@@ -218,6 +219,7 @@ function Section(props: { title: string; open?: boolean; children: JSX.Element }
 
 type PanelView =
   | { tenant: "miner"; key: string; entry: RankedEntry }
+  | { tenant: "miner-profile"; key: string; id: string }
   | { tenant: "validator"; key: string; hotkey: string; entry: ValidatorEntry }
   | { tenant: "agent"; key: string; entry: AgentEvidenceEntry }
   | { tenant: "agent-state"; key: string; id: string; message: string; state: "loading" | "error" };
@@ -366,8 +368,13 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       return;
     }
     if (route.kind === "miner") {
-      const entry = props.entries().find((item) => item.miner_hotkey === route.id);
+      const entry = props.entries().find(
+        (item) =>
+          item.miner_hotkey === route.id ||
+          item.name_handle?.stem === route.id.toLowerCase(),
+      );
       if (entry) setView({ tenant: "miner", key: route.key, entry });
+      else setView({ tenant: "miner-profile", key: route.key, id: route.id });
       return;
     }
     resolveAgent(route);
@@ -438,7 +445,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
   const actionKind = (): EntityKind | null => {
     const current = view();
     if (!current) return null;
-    if (current.tenant === "miner") return "miner";
+    if (current.tenant === "miner" || current.tenant === "miner-profile") return "miner";
     if (current.tenant === "validator") return "validator";
     return "agent";
   };
@@ -446,6 +453,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     const current = view();
     if (!current) return "";
     if (current.tenant === "miner") return current.entry.miner_hotkey;
+    if (current.tenant === "miner-profile") return current.id;
     if (current.tenant === "validator") return current.hotkey;
     if (current.tenant === "agent") return String(current.entry.agent_id || "");
     return current.id;
@@ -468,6 +476,15 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
   const header = (): HeaderState | null => {
     const current = view();
     if (!current) return null;
+    if (current.tenant === "miner-profile") {
+      return {
+        title: "Miner profile",
+        chip: { text: "profile", class: "", title: "Public miner profile" },
+        dkLabel: "Miner",
+        hotkey: current.id,
+        hotkeyKind: "miner",
+      };
+    }
     if (current.tenant === "miner") {
       const e = current.entry;
       const title = isFinalized(e)
@@ -658,6 +675,9 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
           </div>
         </div>
         <div id="d-stats" classList={{ "pipeline-mode": view()?.tenant !== "miner" }}>
+          <Show when={entityRoute()?.kind === "miner" && entityRoute()?.id}>
+            {(id) => <MinerProfileCard id={id()} />}
+          </Show>
           <Switch>
             <Match when={minerEntry()}>
               {(entry) => (
@@ -736,6 +756,64 @@ function minerBenchChip(
         "."
       : "Scored on DittoBench v" + e.bench_version + ".",
   };
+}
+
+interface PublicMinerProfile {
+  miner_hotkey: string;
+  name_handle?: NameHandle | null;
+  avatar_url?: string | null;
+  profile: { x_url?: string | null; github_url?: string | null; discord_handle?: string | null };
+  submissions: Array<{ agent_id: string; name: string; status: string; created_at: string }>;
+}
+
+function MinerProfileCard(props: { id: string }): JSX.Element {
+  const [profile] = createResource(
+    () => props.id,
+    async (id) => {
+      try {
+        return await getJSON<PublicMinerProfile>("/public/miners/" + encodeURIComponent(id));
+      } catch {
+        return undefined;
+      }
+    },
+  );
+  return (
+    <Show when={profile()}>
+      {(profile) => (
+        <div class="miner-profile">
+          <div class="stat-head">Public profile</div>
+          <div class="miner-profile-links">
+            <Show when={profile().profile.x_url}>
+              <a href={profile().profile.x_url ?? undefined} target="_blank" rel="noopener">
+                X
+              </a>
+            </Show>
+            <Show when={profile().profile.github_url}>
+              <a href={profile().profile.github_url ?? undefined} target="_blank" rel="noopener">
+                GitHub
+              </a>
+            </Show>
+            <Show when={profile().profile.discord_handle}>
+              <span>Discord @{profile().profile.discord_handle}</span>
+            </Show>
+          </div>
+          <Show when={profile().submissions.length}>
+            <div class="stat-head">Submissions</div>
+            <ul class="account-list">
+              <For each={profile().submissions}>
+                {(item) => (
+                  <li>
+                    <a href={"/agent/" + item.agent_id}>{item.name}</a>
+                    <span class="muted">{item.status}</span>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </div>
+      )}
+    </Show>
+  );
 }
 
 function MinerSummary(props: { entry: RankedEntry; settled: boolean; total: number }): JSX.Element {

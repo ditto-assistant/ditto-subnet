@@ -255,6 +255,55 @@ def save_pending_payment(
     return _save_preferences(raw)
 
 
+def load_miner_session(*, network: str) -> dict | None:
+    raw = _load_preferences()
+    sessions = raw.get("miner_sessions")
+    if not isinstance(sessions, dict):
+        return None
+    value = sessions.get(network)
+    if not isinstance(value, dict):
+        return None
+    token = value.get("token")
+    hotkey = value.get("hotkey")
+    if not isinstance(token, str) or not token.startswith("ditto_ms_"):
+        return None
+    if not isinstance(hotkey, str) or not hotkey:
+        return None
+    return value
+
+
+def save_miner_session(
+    *,
+    network: str,
+    token: str,
+    hotkey: str,
+    scopes: list[str],
+    expires_at: str,
+) -> bool:
+    raw = _load_preferences()
+    sessions = raw.get("miner_sessions")
+    if not isinstance(sessions, dict):
+        sessions = {}
+    sessions[network] = {
+        "token": token,
+        "hotkey": hotkey,
+        "scopes": scopes,
+        "expires_at": expires_at,
+    }
+    raw["miner_sessions"] = sessions
+    return _save_preferences(raw)
+
+
+def clear_miner_session(*, network: str) -> bool:
+    raw = _load_preferences()
+    sessions = raw.get("miner_sessions")
+    if not isinstance(sessions, dict) or network not in sessions:
+        return True
+    del sessions[network]
+    raw["miner_sessions"] = sessions
+    return _save_preferences(raw)
+
+
 def clear_pending_payment(
     *,
     network: str,

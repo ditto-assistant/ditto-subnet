@@ -63,6 +63,31 @@ function errorDetail(data: unknown, status: number): string {
 /** POST a JSON body to API_BASE+path. The response body is parsed even on
  * error responses (tolerating non-JSON bodies) so the API's `detail` message
  * can surface to the caller. */
+export async function authJSON<T>(
+  path: string,
+  init: RequestInit & { timeoutMs?: number } = {},
+): Promise<T> {
+  const ctrl = new AbortController();
+  const to = setTimeout(() => {
+    ctrl.abort();
+  }, init.timeoutMs ?? TIMEOUT_MS);
+  let response: Response;
+  try {
+    const headers = new Headers(init.headers);
+    if (!headers.has("accept")) headers.set("accept", "application/json");
+    response = await fetch(API_BASE + path, {
+      ...init,
+      signal: ctrl.signal,
+      headers,
+    });
+  } finally {
+    clearTimeout(to);
+  }
+  const data: unknown = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(errorDetail(data, response.status));
+  return data as T;
+}
+
 export async function postJSON<T>(path: string, body: unknown): Promise<T> {
   const ctrl = new AbortController();
   const to = setTimeout(() => {

@@ -1,0 +1,109 @@
+.account-page {
+  display: grid;
+  gap: 18px;
+}
+.account-hero,
+.account-card,
+.account-command,
+.account-console {
+  padding: 20px;
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+}
+.account-hero h2,
+.account-head h2 {
+  margin: 4px 0 8px;
+  font-family: var(--display);
+  font-size: 28px;
+  font-weight: 400;
+}
+.account-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 14px;
+}
+.account-scope {
+  display: grid;
+  grid-template-columns: 18px 1fr;
+  gap: 10px;
+  align-items: start;
+  margin: 10px 0;
+  font-size: 13px;
+}
+.account-scope em {
+  display: block;
+  color: var(--text-dim);
+  font-style: normal;
+}
+.account-hours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0 16px;
+}
+.account-hours .btn.active,
+.account-tabs .btn.active {
+  border-color: var(--accent);
+  color: var(--text);
+}
+.account-command {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: start;
+}
+.account-command pre,
+.account-list pre {
+  margin: 8px 0;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+.account-error {
+  color: var(--danger);
+}
+.account-head,
+.account-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+.account-head-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.account-field {
+  display: grid;
+  gap: 6px;
+  margin: 12px 0;
+  font-size: 13px;
+}
+.account-field input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+}
+.account-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+.account-list li {
+  display: grid;
+  gap: 2px;
+}
+.miner-profile-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 10px 0 16px;
+}
+.miner-profile-links a {
+  color: var(--accent);
+}

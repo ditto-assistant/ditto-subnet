@@ -4762,6 +4762,244 @@ class MinerAvatarNonce(Base):
     )
 
 
+class MinerProfile(Base):
+    """Optional public miner profile fields (socials). Identity is the hotkey."""
+
+    __tablename__ = "miner_profiles"
+
+    miner_hotkey: Mapped[str] = mapped_column(Text, primary_key=True)
+    x_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    github_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    discord_handle: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "x_url IS NULL OR length(x_url) BETWEEN 8 AND 200",
+            name="miner_profiles_x_url_len",
+        ),
+        CheckConstraint(
+            "github_url IS NULL OR length(github_url) BETWEEN 8 AND 200",
+            name="miner_profiles_github_url_len",
+        ),
+        CheckConstraint(
+            "discord_handle IS NULL OR length(discord_handle) BETWEEN 2 AND 32",
+            name="miner_profiles_discord_len",
+        ),
+        CheckConstraint(
+            "discord_handle IS NULL OR discord_handle ~ '^[A-Za-z0-9._]{2,32}$'",
+            name="miner_profiles_discord_charset",
+        ),
+    )
+
+
+class MinerSession(Base):
+    """One signed-in miner capability grant (dashboard, MCP, or CLI)."""
+
+    __tablename__ = "miner_sessions"
+
+    session_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "label IN ('dashboard', 'mcp', 'cli')",
+            name="miner_sessions_label_check",
+        ),
+        CheckConstraint(
+            "length(scopes) BETWEEN 1 AND 200",
+            name="miner_sessions_scopes_len",
+        ),
+        CheckConstraint(
+            "length(miner_hotkey) BETWEEN 47 AND 48",
+            name="miner_sessions_hotkey_len",
+        ),
+        Index("miner_sessions_hotkey_idx", "miner_hotkey", "expires_at"),
+    )
+
+
+class MinerSessionToken(Base):
+    """One issued bearer for a miner session. Hash only; never the raw token."""
+
+    __tablename__ = "miner_session_tokens"
+
+    token_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    session_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["session_id"],
+            ["miner_sessions.session_id"],
+            ondelete="CASCADE",
+            name="miner_session_tokens_session_id_fkey",
+        ),
+        CheckConstraint(
+            "length(token_hash) = 64",
+            name="miner_session_tokens_hash_len",
+        ),
+        Index("miner_session_tokens_session_idx", "session_id"),
+    )
+
+
+class MinerOauthClient(Base):
+    """Dynamically registered public MCP OAuth client (PKCE, no secret)."""
+
+    __tablename__ = "miner_oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(Text, primary_key=True)
+    client_name: Mapped[str] = mapped_column(Text, nullable=False)
+    redirect_uris: Mapped[list[str]] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "length(client_id) BETWEEN 16 AND 80",
+            name="miner_oauth_clients_id_len",
+        ),
+        CheckConstraint(
+            "length(client_name) BETWEEN 1 AND 120",
+            name="miner_oauth_clients_name_len",
+        ),
+    )
+
+
+class MinerDeviceGrant(Base):
+    """One device-authorization / MCP consent grant awaiting a hotkey signature."""
+
+    __tablename__ = "miner_device_grants"
+
+    grant_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    user_code: Mapped[str] = mapped_column(Text, nullable=False)
+    poll_token_hash: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    scopes: Mapped[str] = mapped_column(Text, nullable=False)
+    ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    miner_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
+    session_id: Mapped[UUID | None] = mapped_column(
+        SaUUID(as_uuid=True), nullable=True
+    )
+    oauth_client_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    redirect_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    state: Mapped[str | None] = mapped_column(Text, nullable=True)
+    code_challenge: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    approved_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint("user_code", name="miner_device_grants_user_code_key"),
+        UniqueConstraint("poll_token_hash", name="miner_device_grants_poll_token_key"),
+        ForeignKeyConstraint(
+            ["session_id"],
+            ["miner_sessions.session_id"],
+            ondelete="SET NULL",
+            name="miner_device_grants_session_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["oauth_client_id"],
+            ["miner_oauth_clients.client_id"],
+            ondelete="SET NULL",
+            name="miner_device_grants_client_id_fkey",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'approved', 'expired', 'denied', 'consumed')",
+            name="miner_device_grants_status_check",
+        ),
+        CheckConstraint(
+            "user_code ~ '^[A-Z0-9]{4}-[A-Z0-9]{4}$'",
+            name="miner_device_grants_user_code_fmt",
+        ),
+        CheckConstraint(
+            "ttl_seconds BETWEEN 3600 AND 2592000",
+            name="miner_device_grants_ttl_range",
+        ),
+        CheckConstraint(
+            "poll_token_hash IS NULL OR length(poll_token_hash) = 64",
+            name="miner_device_grants_poll_hash_len",
+        ),
+        Index("miner_device_grants_status_idx", "status", "expires_at"),
+    )
+
+
+class MinerOauthCode(Base):
+    """One-time OAuth authorization code that exchanges for a session token."""
+
+    __tablename__ = "miner_oauth_codes"
+
+    code_hash: Mapped[str] = mapped_column(Text, primary_key=True)
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    session_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    redirect_uri: Mapped[str] = mapped_column(Text, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["grant_id"],
+            ["miner_device_grants.grant_id"],
+            ondelete="CASCADE",
+            name="miner_oauth_codes_grant_id_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["session_id"],
+            ["miner_sessions.session_id"],
+            ondelete="CASCADE",
+            name="miner_oauth_codes_session_id_fkey",
+        ),
+        CheckConstraint(
+            "length(code_hash) = 64",
+            name="miner_oauth_codes_hash_len",
+        ),
+    )
+
+
+class MinerLoginNonce(Base):
+    """Replay log for signed miner login approvals."""
+
+    __tablename__ = "miner_login_nonces"
+
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    miner_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    used_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+
 class ConfirmationBundleSettingsRevision(Base):
     """Append-only global policy for the bounded v9 confirmation lane."""
 

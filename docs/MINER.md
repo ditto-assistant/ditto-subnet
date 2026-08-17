@@ -611,6 +611,39 @@ The dashboard loads the picture from
 clients never need a world-readable Hippius URL. If Hippius is not
 configured on the Platform, set/clear return 503 and no picture is shown.
 
+## Sign in to the public miner console
+
+`https://dittobench.ai/#/reviews` is the miner sign-in page. It is not the
+ATH queue — that public hold list now lives at
+[`#/ath`](https://dittobench.ai/#/ath). After you sign in, the same page
+becomes your private console: profile picture and socials, every submission
+from this hotkey, your ATH holds and disputes, and the hosted miner MCP.
+
+The login is a device-authorization flow. The page prints a command; you
+run it against the wallet that owns your SN118 hotkey. Signing does not
+transfer TAO. You choose the session lifetime (1 hour to 30 days) and the
+scopes: read, profile, download, upload, handle, and challenges.
+
+```sh
+# Approve the code shown on dittobench.ai/#/reviews
+uv run ditto --network finney login --code ABCD-EFGH \
+  --coldkey miner --hotkey default
+
+# Start a CLI-only session and print the matching dashboard URL
+uv run ditto --network finney login --hours 24 \
+  --scopes read,profile,download
+```
+
+While that session is live, the dashboard can update your picture and
+social links without asking you to sign again. Upload, handle reservation,
+and other one-shot signed actions still happen in the CLI. The hosted MCP
+at `https://dittobench.ai/mcp` returns those `ditto` commands instead of
+signing remotely.
+
+Public miner profiles are `/miner/<hotkey>` and `/h/<handle>`. X, GitHub,
+and Discord are optional. Connecting a Ditto product account is reserved
+for a later sign-in-with-Ditto step.
+
 ## Common questions
 
 **How much does evaluation cost?** The Backroom-controlled fee is denominated in

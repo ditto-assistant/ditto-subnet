@@ -27,6 +27,7 @@ from decimal import Decimal
 from ditto.miner_cli.errors import (
     AttestationCancelledError,
     AvatarCancelledError,
+    LoginCancelledError,
     NameClaimCancelledError,
     PaymentCancelledError,
     RegistrationCancelledError,
@@ -295,3 +296,38 @@ def confirm_avatar_action(
         raise AvatarCancelledError(f"avatar {action} cancelled (response={response!r})")
 
     print(f"avatar {action} confirmed", file=sys.stderr)
+
+
+def confirm_login_action(
+    *,
+    user_code: str,
+    hotkey_ss58: str,
+    scopes: str,
+    hours: int,
+    skip: bool,
+) -> None:
+    """Preview a dashboard/MCP login before signing."""
+    print()
+    print("Miner login preview")
+    print(f"  Code:    {user_code}")
+    print(f"  Hotkey:  {hotkey_ss58}")
+    print(f"  Scopes:  {scopes}")
+    print(f"  Hours:   {hours}")
+    print()
+    print("Signing does NOT transfer any TAO. The signature authorizes a")
+    print("short-lived session on dittobench.ai / the miner MCP.")
+    print()
+
+    if skip:
+        logger.debug("login confirmation bypassed via --yes")
+        return
+
+    try:
+        response = input("Approve this login? [y/N]: ").strip().lower()
+    except EOFError as e:
+        raise LoginCancelledError("login cancelled: EOF on stdin") from e
+
+    if response != "y":
+        raise LoginCancelledError(f"login cancelled (response={response!r})")
+
+    print("login confirmed", file=sys.stderr)
