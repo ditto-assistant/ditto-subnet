@@ -69,6 +69,7 @@ from ditto.validator.resource_gate import (
 )
 from ditto.validator.stack_health import fallback_stack_health
 from ditto.validator.weights import (
+    RECEIPT_CONTRACT_VERSIONS,
     apply_miner_emission_cap,
     compute_weights,
     filter_weight_confirmed,
@@ -236,6 +237,23 @@ class TestComputeWeights:
         """
         entry = _entry("m", 0.9, bench_version=bench_version)
         assert filter_weight_confirmed([entry], enforce=False) == [entry]
+
+    def test_receipt_contract_versions_gate_withholding_not_payability(self) -> None:
+        """Adding a version to RECEIPT_CONTRACT_VERSIONS must withhold, not drop.
+
+        This is the seam the confirmation system returns through at v12: a
+        version listed there is withheld under enforce when its receipt is
+        missing, and pays normally the moment the receipt arrives. A version
+        *not* listed is always payable. Enumerating withholding is safe because
+        it fails open; enumerating payability is what froze the fleet at v11.
+        """
+        assert 9 in RECEIPT_CONTRACT_VERSIONS
+        assert not RECEIPT_CONTRACT_VERSIONS & {10, 11}
+        v9 = _entry("v9", 0.9, bench_version=9)
+        assert filter_weight_confirmed([v9], enforce=True) == []
+        assert filter_weight_confirmed([v9], enforce=False) == [v9]
+        with_receipt = v9.model_copy(update={"v9_confirmation": object()})
+        assert filter_weight_confirmed([with_receipt], enforce=True) == [with_receipt]
 
     def test_future_version_is_payable_on_ordinary_quorum(self) -> None:
         """A version newer than this binary must not be dropped.
