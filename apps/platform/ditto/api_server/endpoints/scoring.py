@@ -418,8 +418,8 @@ async def _snapshot_can_be_shared(
     required_protocol = (
         _UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL
         if any(
-            getattr(entry, "efficiency_curve_version", None) is not None
-            and entry.efficiency_curve_version >= 4
+            (version := getattr(entry, "efficiency_curve_version", None)) is not None
+            and version >= 4
             for entry in snapshot.entries
         )
         else _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
@@ -691,14 +691,16 @@ async def scores(
         # read at compute time from the hot-swappable policy (latest revision,
         # short TTL) so a backroom flip lands here with no restart; the
         # `fold requires enabled` invariant is enforced by the resolver.
-        efficiency_bonuses, efficiency_factors, efficiency_curve_versions = (
-            await resolve_efficiency_adjustments(
-                session,
-                rows=rows,
-                efficiency_config=efficiency_config,
-                now=auth_now,
-                requesting_validator_hotkey=x_validator_hotkey,
-            )
+        (
+            efficiency_bonuses,
+            efficiency_factors,
+            efficiency_curve_versions,
+        ) = await resolve_efficiency_adjustments(
+            session,
+            rows=rows,
+            efficiency_config=efficiency_config,
+            now=auth_now,
+            requesting_validator_hotkey=x_validator_hotkey,
         )
         ranking_scores = official_composites(
             rows,

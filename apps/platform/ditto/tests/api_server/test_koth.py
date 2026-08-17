@@ -257,9 +257,7 @@ def test_curve_v4_does_not_retie_at_the_old_cap() -> None:
 
 
 def test_curve_v3_still_neutralizes_a_factor_above_the_old_cap() -> None:
-    entry = _entry(
-        1, 0.8, minutes=0, bench_version=9, efficiency_factor=1.5
-    )
+    entry = _entry(1, 0.8, minutes=0, bench_version=9, efficiency_factor=1.5)
 
     assert effective_composite(entry) == pytest.approx(0.8)
 

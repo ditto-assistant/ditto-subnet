@@ -3589,13 +3589,15 @@ async def _current_koth_entries(
         agent_ids=[row.agent_id for row in rows],
         bench_version=canonical_version,
     )
-    efficiency_bonuses, efficiency_factors, efficiency_curve_versions = (
-        await resolve_efficiency_adjustments(
-            session,
-            rows=rows,
-            efficiency_config=efficiency_config,
-            now=now,
-        )
+    (
+        efficiency_bonuses,
+        efficiency_factors,
+        efficiency_curve_versions,
+    ) = await resolve_efficiency_adjustments(
+        session,
+        rows=rows,
+        efficiency_config=efficiency_config,
+        now=now,
     )
     raw_scores = {
         row.agent_id: (

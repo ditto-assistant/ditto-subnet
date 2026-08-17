@@ -1012,6 +1012,7 @@ export function compositeCalculationRows(e: {
   pre_efficiency_composite?: number | null;
   efficiency_bonus?: number | null;
   efficiency_factor?: number | null;
+  efficiency_curve_version?: number | null;
   efficiency_fold_applied?: boolean;
   effective_composite?: number | null;
   official_composite?: number | null;
