@@ -35,6 +35,7 @@ class WorkloadSummary:
     resource_name: str | None
     status: str | None
     created_at: str | None
+    message: str | None = None
 
 
 class TargonClient:
@@ -363,7 +364,13 @@ class TargonClient:
             state = self.state(uid)
         except TargonAPIError as error:
             return error.status == 404
-        return str(state.get("status", "")).casefold() == "deleted"
+        status = str(state.get("status", "")).casefold()
+        if status == "deleted":
+            return True
+        # Targon DELETE of a running rental 204s, then flips to error 137
+        # (SIGKILL). That is the completed teardown, not a live leftover.
+        message = str(state.get("message") or "")
+        return status == "error" and is_post_delete_error(message)
 
     def delete(self, uid: str) -> None:
         # Teardown can exceed the default 15s client timeout. Do not retry
@@ -409,4 +416,15 @@ def workload_summary(workload: dict[str, Any]) -> WorkloadSummary:
         created_at=(
             str(workload.get("created_at")) if workload.get("created_at") else None
         ),
+        message=(
+            str(state.get("message"))
+            if isinstance(state, dict) and state.get("message")
+            else None
+        ),
     )
+
+
+def is_post_delete_error(message: str | None) -> bool:
+    """True when Targon is showing SIGKILL after a successful running DELETE."""
+    text = (message or "").casefold()
+    return "stopping container" in text or "exit code 137" in text

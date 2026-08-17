@@ -8,7 +8,7 @@ import urllib.request
 from typing import Any
 from unittest.mock import patch
 
-from screener_capacity.targon import TargonAPIError, TargonClient
+from screener_capacity.targon import TargonAPIError, TargonClient, is_post_delete_error
 
 
 class _Response:
@@ -140,6 +140,16 @@ class TargonClientTests(unittest.TestCase):
                 base + "/rental-1",
             ],
         )
+
+    def test_post_delete_error_is_sigkill_teardown(self) -> None:
+        self.assertTrue(is_post_delete_error("Container failed (Error) — exit code 137"))
+        self.assertTrue(
+            is_post_delete_error(
+                "Stopping container — Stopping container ditto-miner-build-1"
+            )
+        )
+        self.assertFalse(is_post_delete_error("Container failed (Error) — exit code 71"))
+        self.assertFalse(is_post_delete_error(None))
 
     @patch("screener_capacity.targon.urllib.request.urlopen")
     def test_update_can_replace_image_and_command(self, urlopen: object) -> None:

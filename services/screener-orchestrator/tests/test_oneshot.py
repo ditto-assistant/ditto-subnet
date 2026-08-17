@@ -43,13 +43,20 @@ class _Targon:
             str(row["uid"]): str((row.get("state") or {}).get("status") or "")
             for row in rows
         }
+        self.message_by_uid = {
+            str(row["uid"]): str((row.get("state") or {}).get("message") or "")
+            for row in rows
+        }
 
     def list_workloads(self, *, name: str | None = None) -> list[dict[str, object]]:
         del name
         return self.rows
 
     def state(self, uid: str) -> dict[str, object]:
-        return {"status": self.status_by_uid.get(uid, "")}
+        return {
+            "status": self.status_by_uid.get(uid, ""),
+            "message": self.message_by_uid.get(uid, ""),
+        }
 
     def suspend(self, uid: str) -> dict[str, object]:
         self.suspended.append(uid)
@@ -98,12 +105,16 @@ def _row(
     name: str,
     status: str,
     created_at: str | None = "2026-08-16T00:00:00Z",
+    message: str | None = None,
 ) -> dict[str, object]:
+    state: dict[str, object] = {"status": status}
+    if message is not None:
+        state["message"] = message
     return {
         "uid": uid,
         "name": name,
         "created_at": created_at,
-        "state": {"status": status},
+        "state": state,
     }
 
 
@@ -161,6 +172,29 @@ def test_should_sweep_skips_inflight_and_fresh_registered() -> None:
         now=now,
         registered_grace_seconds=1200,
     )
+    assert not should_sweep(
+        name="ditto-miner-build-abc",
+        status="deleted",
+        created_at="2026-08-16T00:00:00Z",
+        now=now,
+        registered_grace_seconds=1200,
+    )
+    assert not should_sweep(
+        name="ditto-miner-build-abc",
+        status="error",
+        created_at="2026-08-16T00:00:00Z",
+        now=now,
+        registered_grace_seconds=1200,
+        message="Container failed (Error) — exit code 137",
+    )
+    assert should_sweep(
+        name="ditto-miner-build-abc",
+        status="error",
+        created_at="2026-08-16T00:00:00Z",
+        now=now,
+        registered_grace_seconds=1200,
+        message="Container failed (Error) — exit code 71",
+    )
 
 
 def test_delete_replaces_leftover_image_before_waking() -> None:
@@ -184,15 +218,7 @@ def test_delete_replaces_leftover_image_before_waking() -> None:
     ]
 
 
-def test_delete_is_not_done_when_deleted_status_bounces_to_error(monkeypatch) -> None:
-    monkeypatch.setattr(oneshot_mod, "DELETED_SETTLE_SECONDS", 15)
-    clock = {"now": 0.0}
-    monkeypatch.setattr(oneshot_mod.time, "monotonic", lambda: clock["now"])
-    monkeypatch.setattr(
-        oneshot_mod.time,
-        "sleep",
-        lambda seconds: clock.__setitem__("now", clock["now"] + seconds),
-    )
+def test_delete_treats_sigkill_error_after_delete_as_done() -> None:
     client = _Targon([])
     client.status_by_uid["wrk-1"] = "suspended"
     original_delete = client.delete
@@ -200,11 +226,12 @@ def test_delete_is_not_done_when_deleted_status_bounces_to_error(monkeypatch) ->
     def _delete(uid: str) -> None:
         original_delete(uid)
         client.status_by_uid[uid] = "error"
+        client.message_by_uid[uid] = "Container failed (Error) — exit code 137"
 
     client.delete = _delete  # type: ignore[method-assign]
 
-    assert not delete_oneshot_rental(client, "wrk-1")
-    assert client.deployed == ["wrk-1"] * oneshot_mod.DELETE_ATTEMPTS
+    assert delete_oneshot_rental(client, "wrk-1")
+    assert client.deployed == ["wrk-1"]
     assert client.updated
 
 
@@ -246,6 +273,38 @@ def test_sweep_deletes_terminal_oneshots_and_skips_inflight() -> None:
         "wrk-hold",
         "wrk-err",
     }
+
+
+def test_sweep_skips_post_delete_tombstones() -> None:
+    client = _Targon(
+        [
+            _row(uid="wrk-gone", name="ditto-miner-build-aaa", status="deleted"),
+            _row(
+                uid="wrk-sigkill",
+                name="ditto-miner-build-bbb",
+                status="error",
+                message="Stopping container — Stopping container ditto-miner-build-bbb",
+            ),
+            _row(
+                uid="wrk-crash",
+                name="ditto-miner-build-ccc",
+                status="error",
+                message="Container failed (Error) — exit code 71",
+            ),
+        ]
+    )
+
+    result = sweep_oneshot_rentals(client)
+
+    assert result["oneshot"] == 3
+    assert result["deleted"] == 1
+    assert {item["uid"] for item in result["items"] if item["action"] == "deleted"} == {
+        "wrk-crash"
+    }
+    assert {
+        item["uid"] for item in result["items"] if item["action"] == "skipped-torn-down"
+    } == {"wrk-gone", "wrk-sigkill"}
+    assert client.deployed == ["wrk-crash"]
 
 
 def test_sweep_can_delete_in_parallel() -> None:

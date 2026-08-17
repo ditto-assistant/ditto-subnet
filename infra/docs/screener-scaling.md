@@ -86,18 +86,32 @@ separates rental start, builder runtime, source, Kaniko, archive, upload,
 verification, timeout, and Platform-control failures without copying provider
 responses or untrusted build logs into Platform.
 
-One-shot builder rentals are billed from create until DELETE, including time
-spent `suspended` or crash-looping after PID 1 exits. The builder therefore
-holds the successful process until Targon delivers SIGTERM, DELETEs while the
-rental is still `running`, and never treats suspend as a cost-safe parking
-lot. Targon DELETE returns HTTP 500 for `suspended`/`error`/`registered`
-records, so leftovers in those states are brought back to `running` only long
-enough for DELETE to succeed. Before that wake, the sweeper replaces the
-leftover image and command with a public `busybox` sleep so a crash-looping
-Kaniko or consumed builder is never resumed. One-shot creates do not send
-`experiments.persistent-workload`; that key is config-gated and Targon
-rejects it with HTTP 400. Screener slot rentals stay persistent and are
-never swept.
+One-shot builder rentals use this Targon contract (vendor-confirmed
+2026-08-17, plus our live probes):
+
+- `DELETE` of a **running** rental returns HTTP 204, then the record often
+  flips to `error` / exit 137 within ~30s. That is SIGKILL of the running
+  container. Treat it as teardown complete. Do not redeploy those
+  tombstones. Targon says billing stopped at that `error` in their tests;
+  we have not independently metered that claim against our invoices.
+- `GET /workloads` and the dashboard keep those rows as `deleted` or
+  `error` 137 for a while, then they age out. A second `DELETE` is a no-op
+  204. Soft-delete is not a purge.
+- `DELETE` of `suspended` / `error` / `registered` still returns HTTP 500.
+  Real leftovers (job crash, not post-DELETE 137) are patched onto a public
+  `busybox` sleep image and brought to `running` only long enough for
+  `DELETE`. Never resume the original crashing image.
+- Suspend is not a parking lot. Our Aug 2026 billing table showed
+  multi-hundred-hour charges on old suspended one-shots. Targon has not
+  yet confirmed or denied suspend billing. Keep treating suspend as billed
+  until they do.
+- PID-1 exit can restart a persistent rental. Targon has not reproduced a
+  sustained crash-loop. We still hold the successful builder until
+  SIGTERM/DELETE so a consumed job does not restart.
+- Do not send `experiments.persistent-workload`. That key is config-gated
+  and Targon rejects it with HTTP 400.
+
+Screener slot rentals stay persistent and are never swept.
 
 ```bash
 scripts/targon-smoke.sh sweep-oneshots

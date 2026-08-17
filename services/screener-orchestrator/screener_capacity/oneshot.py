@@ -1,10 +1,11 @@
 """One-shot Targon rental teardown and leftover sweep.
 
-Targon bills a rental from create until DELETE, including `suspended` time.
-DELETE of `suspended`/`error`/`registered` records returns HTTP 500, so those
-leftovers are patched onto a public sleep image and briefly brought to
-`running` only so DELETE can succeed. The original crashing container is
-never resumed. Screener slot rentals are never touched.
+DELETE of a running rental returns 204, then the record often flips to
+`error` / exit 137 (SIGKILL). Targon confirmed that flip is expected.
+Do not redeploy those tombstones. DELETE of `suspended`/`error`/`registered`
+still returns HTTP 500, so real leftovers are patched onto a public sleep
+image and brought to `running` only long enough for DELETE. Screener slot
+rentals are never touched.
 """
 
 from __future__ import annotations
@@ -14,7 +15,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
 
-from screener_capacity.targon import TargonAPIError, TargonClient, workload_summary
+from screener_capacity.targon import (
+    TargonAPIError,
+    TargonClient,
+    is_post_delete_error,
+    workload_summary,
+)
 
 ONESHOT_NAME_PREFIXES = (
     "ditto-miner-build-",
@@ -67,6 +73,7 @@ def should_sweep(
     now: datetime,
     registered_grace_seconds: int,
     inflight_grace_seconds: int = DEFAULT_INFLIGHT_GRACE_SECONDS,
+    message: str | None = None,
 ) -> bool:
     if not is_oneshot_name(name):
         return False
@@ -76,6 +83,10 @@ def should_sweep(
         # created_at is the original record time. A leftover we redeployed
         # stays old even while provisioning; a live job is recent.
         return age is not None and age >= inflight_grace_seconds
+    if normalized == "deleted":
+        return False
+    if normalized == "error" and is_post_delete_error(message):
+        return False
     if normalized not in SWEEPABLE_STATUSES:
         return False
     if normalized != "registered":
@@ -102,15 +113,22 @@ def _wait_until_running(client: TargonClient, uid: str) -> bool:
     return _current_status(client, uid) == "running"
 
 
+def _state_is_torn_down(state: dict[str, Any]) -> bool:
+    status = str(state.get("status", "")).casefold()
+    if status in {"", "deleted"}:
+        return True
+    return status == "error" and is_post_delete_error(str(state.get("message") or ""))
+
+
 def _try_delete(client: TargonClient, uid: str) -> bool:
     try:
         client.delete(uid)
         return True
     except TargonAPIError:
         try:
-            return str(client.state(uid).get("status", "")).casefold() == "deleted"
-        except TargonAPIError:
-            return False
+            return _state_is_torn_down(client.state(uid))
+        except TargonAPIError as error:
+            return error.status == 404
 
 
 def _still_deleted(
@@ -119,12 +137,17 @@ def _still_deleted(
     *,
     settle_seconds: float | None = None,
 ) -> bool:
-    """Targon can report `deleted` while stopping, then bounce to `error`."""
+    """Accept `deleted` or the confirmed post-DELETE error 137 bounce."""
     wait = DELETED_SETTLE_SECONDS if settle_seconds is None else settle_seconds
     deadline = time.monotonic() + wait
     while True:
-        status = _current_status(client, uid)
-        if status not in {"", "deleted"}:
+        try:
+            state = client.state(uid)
+        except TargonAPIError as error:
+            if error.status == 404:
+                return True
+            return False
+        if not _state_is_torn_down(state):
             return False
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -152,19 +175,22 @@ def _replace_with_hold_image(client: TargonClient, uid: str) -> bool:
 
 
 def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
-    """Delete a disposable rental. Suspended leftovers still accrue charges.
+    """Delete a disposable rental.
 
     Try DELETE first. If Targon 500s because the record is not `running`,
     replace the spec with a public sleep image and deploy only long enough
-    for DELETE. Never treat suspend as terminal, and never resume the
-    original crashing container.
+    for DELETE. A later flip to `error` / exit 137 is the SIGKILL teardown,
+    not a reason to wake the rental again.
     """
     if _try_delete(client, uid):
         return True
     for _attempt in range(DELETE_ATTEMPTS):
-        status = _current_status(client, uid)
-        if status == "deleted" and _still_deleted(client, uid):
-            return True
+        try:
+            if _state_is_torn_down(client.state(uid)):
+                return True
+        except TargonAPIError as error:
+            if error.status == 404:
+                return True
         if not _replace_with_hold_image(client, uid):
             return False
         status = _current_status(client, uid)
@@ -227,10 +253,16 @@ def sweep_oneshot_rentals(
             created_at=summary.created_at,
             now=moment,
             registered_grace_seconds=registered_grace_seconds,
+            message=summary.message,
         ):
             if normalized in INFLIGHT_STATUSES:
                 skipped_inflight += 1
                 action = "skipped-inflight"
+            elif normalized == "deleted" or (
+                normalized == "error" and is_post_delete_error(summary.message)
+            ):
+                skipped_grace += 1
+                action = "skipped-torn-down"
             else:
                 skipped_grace += 1
                 action = "skipped-grace"
