@@ -2165,17 +2165,27 @@ async def rollout_state(
         }
     count_rows = (
         await session.execute(
-            select(BenchmarkRolloutMember.agent_id, func.count(Score.validator_hotkey))
+            select(
+                BenchmarkRolloutMember.agent_id,
+                func.count(Score.validator_hotkey),
+                Agent.status,
+            )
+            .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
             .outerjoin(
                 Score,
                 (Score.agent_id == BenchmarkRolloutMember.agent_id)
                 & (Score.bench_version == rollout.desired_version),
             )
             .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
-            .group_by(BenchmarkRolloutMember.agent_id)
+            .group_by(BenchmarkRolloutMember.agent_id, Agent.status)
         )
     ).all()
-    counts: dict[UUID, int] = {agent_id: int(count) for agent_id, count in count_rows}
+    counts: dict[UUID, int] = {
+        agent_id: int(count) for agent_id, count, _status in count_rows
+    }
+    member_statuses: dict[UUID, AgentStatus] = {
+        agent_id: status for agent_id, _count, status in count_rows
+    }
     members = (
         (
             await session.execute(
@@ -2200,11 +2210,15 @@ async def rollout_state(
     cohort_ready_count = sum(
         counts.get(member.agent_id, 0) >= SCORING_QUORUM for member in members
     )
-    # Same skip-ineligible first-five barrier as authority and activation.
-    priority_complete = await rollout_cohort_score_complete(
-        session,
-        rollout=rollout,
-        cohort_size=priority_target,
+    priority_members = [
+        member for member in members if member.position <= priority_target
+    ]
+    # Same skip-ineligible first-five barrier as rollout_cohort_score_complete,
+    # computed from the member/status rows already loaded above.
+    priority_complete = len(priority_members) == priority_target and all(
+        member_statuses.get(member.agent_id) in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
+        or counts.get(member.agent_id, 0) >= SCORING_QUORUM
+        for member in priority_members
     )
     return {
         "active_version": active_version,
