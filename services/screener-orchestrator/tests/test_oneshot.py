@@ -24,6 +24,7 @@ class _Targon:
         self.delete_fails_until_suspended = delete_fails_until_suspended
         self.deleted: list[str] = []
         self.suspended: list[str] = []
+        self.deployed: list[str] = []
         self.status_by_uid = {
             str(row["uid"]): str((row.get("state") or {}).get("status") or "")
             for row in rows
@@ -41,9 +42,20 @@ class _Targon:
         self.status_by_uid[uid] = "suspended"
         return {}
 
+    def deploy(self, uid: str) -> dict[str, object]:
+        self.deployed.append(uid)
+        self.status_by_uid[uid] = "provisioning"
+        return {}
+
     def delete(self, uid: str) -> None:
         self.deleted.append(uid)
         if self.delete_fails:
+            raise TargonAPIError(operation="DELETE", status=500, reason="HTTP error")
+        if (self.status_by_uid.get(uid) or "").casefold() in {
+            "suspended",
+            "error",
+            "registered",
+        }:
             raise TargonAPIError(operation="DELETE", status=500, reason="HTTP error")
         if self.delete_fails_until_suspended and uid not in self.suspended:
             raise TargonAPIError(operation="DELETE", status=500, reason="HTTP error")
@@ -114,13 +126,14 @@ def test_should_sweep_skips_inflight_and_fresh_registered() -> None:
     )
 
 
-def test_delete_retries_after_suspend() -> None:
-    client = _Targon([], delete_fails_until_suspended=True)
-    client.status_by_uid["wrk-1"] = "running"
+def test_delete_redeploys_suspended_rental_then_deletes() -> None:
+    client = _Targon([])
+    client.status_by_uid["wrk-1"] = "suspended"
 
     assert delete_oneshot_rental(client, "wrk-1")
     assert client.deleted == ["wrk-1", "wrk-1"]
-    assert client.suspended == ["wrk-1"]
+    assert client.deployed == ["wrk-1"]
+    assert client.suspended == []
 
 
 def test_sweep_deletes_terminal_oneshots_and_skips_inflight() -> None:
@@ -139,7 +152,8 @@ def test_sweep_deletes_terminal_oneshots_and_skips_inflight() -> None:
     assert result["skipped_inflight"] == 1
     assert result["deleted"] == 2
     assert result["leftover"] == 0
-    assert client.deleted == ["wrk-hold", "wrk-err"]
+    assert sorted(client.deleted) == ["wrk-err", "wrk-err", "wrk-hold", "wrk-hold"]
+    assert sorted(client.deployed) == ["wrk-err", "wrk-hold"]
     assert {item["uid"] for item in result["items"] if item["action"] == "deleted"} == {
         "wrk-hold",
         "wrk-err",
@@ -157,7 +171,8 @@ def test_sweep_can_delete_in_parallel() -> None:
     result = sweep_oneshot_rentals(client, max_workers=2)
 
     assert result["deleted"] == 2
-    assert sorted(client.deleted) == ["wrk-a", "wrk-b"]
+    assert sorted(client.deleted) == ["wrk-a", "wrk-a", "wrk-b", "wrk-b"]
+    assert sorted(client.deployed) == ["wrk-a", "wrk-b"]
 
 
 def test_sweep_dry_run_does_not_mutate() -> None:

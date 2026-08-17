@@ -352,7 +352,7 @@ def test_runtime_smoke_delete_failure_is_suspended_and_audited(monkeypatch) -> N
     assert run_one_runtime_smoke(_settings(), targon, control)
 
     assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
-    assert targon.suspended == ["wrk-build-1"]
+    assert targon.suspended == []
     assert control.cleanup == [(build_id, "wrk-build-1")]
 
 
@@ -411,19 +411,8 @@ def test_submission_delete_failure_is_suspended_and_audited() -> None:
     assert run_one_submission(_settings(), targon, control)
 
     assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
-    assert targon.suspended == ["wrk-build-1"]
+    assert targon.suspended == []
     assert control.cleanup == [(_submission()["build_id"], "wrk-build-1")]
-
-
-def test_submission_delete_retries_after_suspend() -> None:
-    control = _SubmissionControl(_submission())
-    targon = _Targon(delete_fails_until_suspended=True)
-
-    assert run_one_submission(_settings(), targon, control)
-
-    assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
-    assert targon.suspended == ["wrk-build-1"]
-    assert control.cleanup == []
 
 
 def test_delete_lost_response_reconciles_provider_deleted_state() -> None:
@@ -560,7 +549,7 @@ def test_trusted_kaniko_delete_failure_is_suspended_and_audited(
     assert run_one(_settings(), targon, control)
 
     assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
-    assert targon.suspended == ["wrk-build-1"]
+    assert targon.suspended == []
     assert control.cleanup == [(_trusted_build()["build_id"], "wrk-build-1")]
 
 

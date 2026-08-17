@@ -86,13 +86,14 @@ separates rental start, builder runtime, source, Kaniko, archive, upload,
 verification, timeout, and Platform-control failures without copying provider
 responses or untrusted build logs into Platform.
 
-One-shot builder, runtime, source-review, and probe rentals are deleted when
-the job finishes. DELETE of a still-running rental can time out while Targon
-tears the runtime down; the builder then suspends to drop replicas and retries
-DELETE. The same process sweeps leftover `ditto-miner-build-*`,
+One-shot builder, runtime, source-review, and probe rentals are deleted while
+they are still running. Live Targon DELETE returns HTTP 500 for `suspended`,
+`error`, and `registered` records, so the builder never suspends as a teardown
+fallback. Leftover records in those states are redeployed and deleted
+immediately. The same process sweeps leftover `ditto-miner-build-*`,
 `ditto-build-*`, `ditto-runtime-*`, `ditto-source-*`, and `ditto-*-probe-*`
-records that are already `suspended`, `error`, or stale `registered`. It never
-touches screener slot rentals or in-flight `running`/`provisioning` work.
+names. It never touches screener slot rentals or in-flight
+`running`/`provisioning` work.
 Operators can drain the current pile without waiting for a deploy:
 
 ```bash
@@ -194,7 +195,7 @@ infra stacks merge, use this order:
    Then enqueue one audited miner rebuild. Prove the submission-builder image is
    digest pinned, Platform verifies the complete tar SHA-256, GCE imports and
    finishes the normal screening gates, the temporary object is consumed, and
-   the Targon rental is suspended/deleted (or leaves a cleanup-required event).
+   the Targon rental is deleted (or leaves a cleanup-required event).
    The artifact bucket's `remote-builds/` lifecycle is the final one-day bound
    for a canceled presigned upload that races normal cleanup.
 6. Only after a fresh hostile-runtime probe returns GO may an operator update

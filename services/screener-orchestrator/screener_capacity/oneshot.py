@@ -1,15 +1,13 @@
 """One-shot Targon rental teardown and leftover sweep.
 
 Builder, runtime-smoke, source-review, and operator probes all create disposable
-rentals. DELETE of a still-running rental can time out while Targon tears the
-runtime down; the previous fallback suspended the record and never came back.
-This module deletes first, suspends only to drop leftover runtime, retries
-DELETE, and sweeps terminal leftovers. Screener slot rentals are never touched.
+rentals. Live Targon DELETE returns HTTP 500 for suspended, error, and
+registered records, so leftovers in those states are redeployed and then
+deleted. Screener slot rentals are never touched.
 """
 
 from __future__ import annotations
 
-import contextlib
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
@@ -70,37 +68,39 @@ def should_sweep(
     return age is not None and age >= registered_grace_seconds
 
 
-def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
-    """Delete first; suspend only to drop runtime, then retry DELETE.
-
-    A successful one-shot must not stay billed. Suspend is the zero-replica
-    fallback, not the terminal record. Soft-deleted provider state counts as
-    success so a lost DELETE response is not turned into a leftover.
-    """
-    try:
-        client.delete(uid)
-        return True
-    except TargonAPIError:
-        pass
-    try:
-        state = client.state(uid)
-    except TargonAPIError:
-        state = {}
-    status = str(state.get("status", "")).casefold()
-    if status == "deleted":
-        return True
-    if status != "suspended":
-        with contextlib.suppress(TargonAPIError):
-            client.suspend(uid)
+def _try_delete(client: TargonClient, uid: str) -> bool:
     try:
         client.delete(uid)
         return True
     except TargonAPIError:
         try:
-            status = str(client.state(uid).get("status", "")).casefold()
+            return str(client.state(uid).get("status", "")).casefold() == "deleted"
         except TargonAPIError:
             return False
-        return status == "deleted"
+
+
+def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
+    """Delete a disposable rental. Never suspend as a teardown fallback.
+
+    Live Targon DELETE returns HTTP 500 for `suspended`, `error`, and
+    `registered` records. Redeploy so the provider has a live runtime, then
+    DELETE immediately. Soft-deleted state counts as success.
+    """
+    if _try_delete(client, uid):
+        return True
+    try:
+        status = str(client.state(uid).get("status", "")).casefold()
+    except TargonAPIError:
+        return False
+    if status == "deleted":
+        return True
+    if status in {"suspended", "error", "registered"}:
+        try:
+            client.deploy(uid)
+        except TargonAPIError:
+            return False
+        return _try_delete(client, uid)
+    return _try_delete(client, uid)
 
 
 def sweep_oneshot_rentals(
