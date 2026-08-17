@@ -256,6 +256,35 @@ def test_curve_v4_does_not_retie_at_the_old_cap() -> None:
     assert effective_composite(cheap) > effective_composite(dear)
 
 
+def test_curve_v4_cannot_cross_a_higher_quality_tier() -> None:
+    cheaper_lower = _entry(
+        1,
+        0.99,
+        minutes=0,
+        bench_version=10,
+        efficiency_factor=100.0,
+        efficiency_curve_version=4,
+    )
+    higher = _entry(
+        2,
+        0.997,
+        minutes=5,
+        bench_version=10,
+        efficiency_factor=1.0,
+        efficiency_curve_version=4,
+    )
+
+    projection = project_koth([cheaper_lower, higher])
+
+    assert effective_composite(cheaper_lower) == pytest.approx(
+        0.99 + (1.0 - 0.99) * (1.0 - 1.0 / 100.0)
+    )
+    assert effective_composite(cheaper_lower) > effective_composite(higher)
+    assert projection is not None
+    assert projection.champion == higher
+    assert projection.raw_leader == higher
+
+
 def test_curve_v3_still_neutralizes_a_factor_above_the_old_cap() -> None:
     entry = _entry(1, 0.8, minutes=0, bench_version=9, efficiency_factor=1.5)
 

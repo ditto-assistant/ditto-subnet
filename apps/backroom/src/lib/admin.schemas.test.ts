@@ -1659,7 +1659,7 @@ describe('efficiency bonus settings schemas', () => {
       efficiencyBonusSettingsSchema.parse({ ...settings, factor_alpha: 1.01 }),
     ).toThrow()
     expect(() =>
-      efficiencyBonusSettingsSchema.parse({ ...settings, minimum_factor: 0.84 }),
+      efficiencyBonusSettingsSchema.parse({ ...settings, minimum_factor: 0 }),
     ).toThrow()
     expect(() =>
       efficiencyBonusSettingsSchema.parse({ ...settings, minimum_factor: 1.01 }),
@@ -1668,8 +1668,18 @@ describe('efficiency bonus settings schemas', () => {
       efficiencyBonusSettingsSchema.parse({ ...settings, maximum_factor: 0.99 }),
     ).toThrow()
     expect(() =>
-      efficiencyBonusSettingsSchema.parse({ ...settings, maximum_factor: 1.11 }),
+      efficiencyBonusSettingsSchema.parse({ ...settings, maximum_factor: 100.01 }),
     ).toThrow()
+  })
+
+  it('accepts a widened factor envelope inside the platform check_config range', () => {
+    const parsed = efficiencyBonusSettingsSchema.parse({
+      ...settings,
+      minimum_factor: 0.5,
+      maximum_factor: 50,
+    })
+    expect(parsed.minimum_factor).toBe(0.5)
+    expect(parsed.maximum_factor).toBe(50)
   })
 
   it('rejects a cohort smaller than the activation gate', () => {

@@ -415,13 +415,17 @@ async def _snapshot_can_be_shared(
     seen_at = requester.seen_at
     if seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
+    curve_versions = [
+        getattr(entry, "efficiency_curve_version", None)
+        for entry in snapshot.entries
+        if entry.efficiency_factor is not None
+    ]
+    if any(version is None for version in curve_versions):
+        # Missing curve metadata cannot prove the payload is v3-safe.
+        return False
     required_protocol = (
         _UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL
-        if any(
-            (version := getattr(entry, "efficiency_curve_version", None)) is not None
-            and version >= 4
-            for entry in snapshot.entries
-        )
+        if any(version >= 4 for version in curve_versions)
         else _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
     )
     return (

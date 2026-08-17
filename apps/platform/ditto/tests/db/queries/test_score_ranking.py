@@ -577,6 +577,237 @@ class TestEfficiencyAdjustedFloors:
         assert curve_versions == {}
         fleet_gate.assert_not_awaited()
 
+    def _session_with_snapshots(
+        self,
+        snapshots: dict[UUID, int],
+        *,
+        requester: object | None = None,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            get=AsyncMock(return_value=requester),
+            execute=AsyncMock(
+                return_value=SimpleNamespace(all=lambda: list(snapshots.items()))
+            ),
+        )
+
+    async def test_resolver_withholds_v4_factor_until_protocol_25_fleet(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        snapshot_id = uuid4()
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+        session = self._session_with_snapshots({snapshot_id: 4})
+        monkeypatch.setattr(
+            "ditto.db.queries.efficiency.get_bonus_rows",
+            AsyncMock(
+                return_value={
+                    row.agent_id: SimpleNamespace(
+                        factor=1.5, bonus=0.0, snapshot_id=snapshot_id
+                    )
+                }
+            ),
+        )
+        fleet_gate = AsyncMock(return_value=False)
+        monkeypatch.setattr(
+            "ditto.db.queries.heartbeats.live_validator_fleet_supports_protocol",
+            fleet_gate,
+        )
+
+        bonuses, factors, curve_versions = await resolve_efficiency_adjustments(
+            session,  # type: ignore[arg-type]
+            rows=[row],
+            efficiency_config=config,
+            now=_BASE,
+        )
+
+        assert bonuses == {}
+        assert factors == {}
+        assert curve_versions == {}
+        assert fleet_gate.await_args.kwargs["minimum_protocol"] == 25
+
+    async def test_resolver_serves_v4_factor_when_fleet_reports_protocol_25(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        snapshot_id = uuid4()
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+        session = self._session_with_snapshots({snapshot_id: 4})
+        monkeypatch.setattr(
+            "ditto.db.queries.efficiency.get_bonus_rows",
+            AsyncMock(
+                return_value={
+                    row.agent_id: SimpleNamespace(
+                        factor=1.5, bonus=0.0, snapshot_id=snapshot_id
+                    )
+                }
+            ),
+        )
+        fleet_gate = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ditto.db.queries.heartbeats.live_validator_fleet_supports_protocol",
+            fleet_gate,
+        )
+
+        bonuses, factors, curve_versions = await resolve_efficiency_adjustments(
+            session,  # type: ignore[arg-type]
+            rows=[row],
+            efficiency_config=config,
+            now=_BASE,
+        )
+
+        assert bonuses == {}
+        assert factors == {row.agent_id: pytest.approx(1.5)}
+        assert curve_versions == {row.agent_id: 4}
+        assert fleet_gate.await_args.kwargs["minimum_protocol"] == 25
+
+    async def test_protocol_24_requester_does_not_inherit_a_v4_factor(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        snapshot_id = uuid4()
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+        session = self._session_with_snapshots(
+            {snapshot_id: 4},
+            requester=SimpleNamespace(protocol_version=24, seen_at=_BASE),
+        )
+        monkeypatch.setattr(
+            "ditto.db.queries.efficiency.get_bonus_rows",
+            AsyncMock(
+                return_value={
+                    row.agent_id: SimpleNamespace(
+                        factor=1.5, bonus=0.0, snapshot_id=snapshot_id
+                    )
+                }
+            ),
+        )
+        fleet_gate = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ditto.db.queries.heartbeats.live_validator_fleet_supports_protocol",
+            fleet_gate,
+        )
+
+        bonuses, factors, curve_versions = await resolve_efficiency_adjustments(
+            session,  # type: ignore[arg-type]
+            rows=[row],
+            efficiency_config=config,
+            now=_BASE,
+            requesting_validator_hotkey="5" + "z" * 47,
+        )
+
+        assert bonuses == {}
+        assert factors == {}
+        assert curve_versions == {}
+        fleet_gate.assert_not_awaited()
+
+    async def test_frozen_v3_snapshot_still_activates_on_protocol_21(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        snapshot_id = uuid4()
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+        session = self._session_with_snapshots(
+            {snapshot_id: 3},
+            requester=SimpleNamespace(protocol_version=21, seen_at=_BASE),
+        )
+        monkeypatch.setattr(
+            "ditto.db.queries.efficiency.get_bonus_rows",
+            AsyncMock(
+                return_value={
+                    row.agent_id: SimpleNamespace(
+                        factor=1.10, bonus=0.0, snapshot_id=snapshot_id
+                    )
+                }
+            ),
+        )
+        fleet_gate = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ditto.db.queries.heartbeats.live_validator_fleet_supports_protocol",
+            fleet_gate,
+        )
+
+        bonuses, factors, curve_versions = await resolve_efficiency_adjustments(
+            session,  # type: ignore[arg-type]
+            rows=[row],
+            efficiency_config=config,
+            now=_BASE,
+            requesting_validator_hotkey="5" + "z" * 47,
+        )
+
+        assert bonuses == {}
+        assert factors == {row.agent_id: pytest.approx(1.10)}
+        assert curve_versions == {row.agent_id: 3}
+        assert fleet_gate.await_args.kwargs["minimum_protocol"] == 21
+
+    async def test_resolver_withholds_when_snapshot_curve_metadata_is_missing(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        row = _FinalRow(
+            _uuid("3"),
+            "5" + "a" * 47,
+            _BASE,
+            0.8,
+            bench_version=9,
+            v9_confirmation={"full_effective_micros": 800_000},
+        )
+        snapshot_id = uuid4()
+        config = EfficiencyBonusConfig(enabled=True, fold_enabled=True)
+        session = self._session_with_snapshots({})
+        monkeypatch.setattr(
+            "ditto.db.queries.efficiency.get_bonus_rows",
+            AsyncMock(
+                return_value={
+                    row.agent_id: SimpleNamespace(
+                        factor=1.5, bonus=0.0, snapshot_id=snapshot_id
+                    )
+                }
+            ),
+        )
+        fleet_gate = AsyncMock(return_value=True)
+        monkeypatch.setattr(
+            "ditto.db.queries.heartbeats.live_validator_fleet_supports_protocol",
+            fleet_gate,
+        )
+
+        bonuses, factors, curve_versions = await resolve_efficiency_adjustments(
+            session,  # type: ignore[arg-type]
+            rows=[row],
+            efficiency_config=config,
+            now=_BASE,
+        )
+
+        assert bonuses == {}
+        assert factors == {}
+        assert curve_versions == {}
+        fleet_gate.assert_not_awaited()
+
     async def test_fifth_and_tenth_floors_use_factor_adjusted_order(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

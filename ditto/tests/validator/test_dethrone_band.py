@@ -613,6 +613,36 @@ class TestEffectiveComposite:
 
         assert _effective_composite(cheap) > _effective_composite(dear)
 
+    def test_curve_v4_cannot_cross_a_higher_quality_tier(self) -> None:
+        cheaper_lower = _e(
+            "cheap-lower",
+            0.99,
+            efficiency_factor=100.0,
+            efficiency_curve_version=4,
+            v9_full_composite=0.99,
+            bench_version=10,
+            minutes=0,
+        )
+        higher = _e(
+            "higher",
+            0.997,
+            efficiency_factor=1.0,
+            efficiency_curve_version=4,
+            v9_full_composite=0.997,
+            bench_version=10,
+            minutes=5,
+        )
+
+        assert _effective_composite(cheaper_lower) > _effective_composite(higher)
+        weights = compute_weights(
+            [cheaper_lower, higher],
+            margin=0.007,
+            tail_size=0,
+            rank_shares=(1.0,),
+            dethrone_z=1.64,
+        )
+        assert weights == {"higher": pytest.approx(1.0)}
+
 
 class TestBeatsWithConfirmations:
     def test_a_lucky_single_seed_lead_does_not_dethrone_on_the_median(self) -> None:

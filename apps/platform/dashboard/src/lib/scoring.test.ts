@@ -800,6 +800,28 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     ).toBe("neutral");
   });
 
+  it("does not label an unclamped v4 factor as a v3 floor or cap", () => {
+    expect(
+      efficiencyTieBreakChipLabel(
+        { efficiency_factor: 0.84, efficiency_curve_version: 4 },
+        { applied: true },
+      ),
+    ).toEqual({
+      label: "efficiency tie-break ▼ 16.0%",
+      direction: "down",
+      atBound: false,
+    });
+    expect(
+      efficiencyTieBreakChipLabel(
+        { efficiency_factor: 1.5, efficiency_curve_version: 4 },
+        { applied: true },
+      )?.label,
+    ).toBe("efficiency tie-break ▲ 50.0%");
+    expect(
+      efficiencyTieBreakChipLabel({ efficiency_factor: 0.85 }, { applied: true })?.atBound,
+    ).toBe(true);
+  });
+
   it("has no tie-break chip without a curve-v3 factor", () => {
     expect(efficiencyTieBreakChipLabel({}, { applied: true })).toBeNull();
     expect(efficiencyTieBreakChipLabel({ efficiency_factor: null }, { applied: true })).toBeNull();

@@ -626,11 +626,14 @@ export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControl
 // different database.
 //
 // The bounds below mirror ditto-platform's `check_config` exactly, so operator
-// input the platform would reject never reaches the admin API.
+// input the platform would reject never reaches the admin API. Factor
+// envelopes are `(0, 1]` / `[1, 100]`; 0.85 / 1.10 remain the seed defaults.
 export const EFFICIENCY_BONUS_SCOPE = '*'
 export const EFFICIENCY_BONUS_MAX_CAP = 0.1
-export const EFFICIENCY_FACTOR_MINIMUM = 0.85
-export const EFFICIENCY_FACTOR_MAXIMUM = 1.1
+export const EFFICIENCY_FACTOR_MINIMUM = 0
+export const EFFICIENCY_FACTOR_MAXIMUM = 100
+export const EFFICIENCY_FACTOR_DEFAULT_MINIMUM = 0.85
+export const EFFICIENCY_FACTOR_DEFAULT_MAXIMUM = 1.1
 
 const efficiencyBonusSettingsShape = {
   enabled: z.boolean(),
@@ -642,14 +645,14 @@ const efficiencyBonusSettingsShape = {
   factor_alpha: z.number().gt(0).max(1).default(0.25),
   minimum_factor: z
     .number()
-    .min(EFFICIENCY_FACTOR_MINIMUM)
+    .gt(EFFICIENCY_FACTOR_MINIMUM)
     .max(1)
-    .default(EFFICIENCY_FACTOR_MINIMUM),
+    .default(EFFICIENCY_FACTOR_DEFAULT_MINIMUM),
   maximum_factor: z
     .number()
     .min(1)
     .max(EFFICIENCY_FACTOR_MAXIMUM)
-    .default(EFFICIENCY_FACTOR_MAXIMUM),
+    .default(EFFICIENCY_FACTOR_DEFAULT_MAXIMUM),
   cohort_size: z.number().int().min(2),
   min_cohort: z.number().int().min(2),
   epoch_hours: z.number().int().min(1),
@@ -704,7 +707,7 @@ export const efficiencyBonusSettingsWriteSchema = z
   .object({
     ...efficiencyBonusSettingsShape,
     factor_alpha: z.number().gt(0).max(1),
-    minimum_factor: z.number().min(EFFICIENCY_FACTOR_MINIMUM).max(1),
+    minimum_factor: z.number().gt(EFFICIENCY_FACTOR_MINIMUM).max(1),
     maximum_factor: z.number().min(1).max(EFFICIENCY_FACTOR_MAXIMUM),
   })
   .superRefine(refineEfficiencyBonusSettings)

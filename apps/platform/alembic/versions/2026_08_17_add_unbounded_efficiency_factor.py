@@ -1,7 +1,7 @@
 """allow curve-v4 unclamped efficiency factors
 
 Revision ID: a8c4f1d0e92b
-Revises: c4d9e2f18a67
+Revises: 3f5c81a7d940
 Create Date: 2026-08-16
 
 Curve v3 clamps ``(P25 / cost) ** alpha`` to ``[0.85, 1.10]``. Competitive

@@ -254,7 +254,7 @@ export interface EfficiencyTieBreakChip {
  * precise number is expected and has room to be explained.
  */
 export function efficiencyTieBreakChipLabel(
-  e: { efficiency_factor?: number | null },
+  e: { efficiency_factor?: number | null; efficiency_curve_version?: number | null },
   opts: { applied: boolean },
 ): EfficiencyTieBreakChip | null {
   if (e.efficiency_factor == null) return null;
@@ -268,9 +268,14 @@ export function efficiencyTieBreakChipLabel(
     return { label: prefix + " · neutral", direction: "neutral", atBound: false };
   }
   const up = factor > 1;
+  const curveVersion = Number(e.efficiency_curve_version);
+  const unbounded = Number.isFinite(curveVersion) && curveVersion >= 4;
+  // Curve v4 does not apply the [0.85, 1.10] envelope; only v3 (or an
+  // omitted version, which the board still treats as v3) can sit on a bound.
   const atBound =
-    factor <= CURVE_V3_MIN_FACTOR ||
-    (factor >= CURVE_V3_MAX_FACTOR && factor <= CURVE_V3_MAX_FACTOR + 1e-12);
+    !unbounded &&
+    (factor <= CURVE_V3_MIN_FACTOR ||
+      (factor >= CURVE_V3_MAX_FACTOR && factor <= CURVE_V3_MAX_FACTOR + 1e-12));
   const bound = atBound ? (up ? " (cap)" : " (floor)") : "";
   return {
     label: prefix + " " + (up ? "▲" : "▼") + " " + magnitude.toFixed(1) + "%" + bound,

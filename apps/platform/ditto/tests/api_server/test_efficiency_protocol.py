@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import cast
+from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -100,3 +101,125 @@ def test_stale_cache_strips_v21_factor_but_preserves_legacy_bonus() -> None:
     assert by_id[legacy_id].effective_composite == pytest.approx(0.84)
     assert by_id[factor_id].efficiency_factor is None
     assert by_id[factor_id].effective_composite is None
+
+
+def _factor_entry(
+    agent_id: UUID,
+    *,
+    factor: float,
+    curve_version: int | None,
+    now: datetime,
+) -> LedgerEntry:
+    return LedgerEntry(
+        miner_hotkey=_MINER,
+        agent_id=agent_id,
+        composite=0.8,
+        n=114,
+        first_seen=now,
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id=f"run-{agent_id}",
+        seed=42,
+        validator_hotkey=_VALIDATOR,
+        bench_version=9,
+        signature=None,
+        score_proofs=[],
+        composite_stderr=None,
+        confirmation_composites=None,
+        confirmation_seeds=None,
+        efficiency_bonus=None,
+        efficiency_factor=factor,
+        efficiency_curve_version=curve_version,
+        effective_composite=0.8,
+        status=AgentStatus.SCORED,
+    )
+
+
+def _share_request(requester: object) -> Request:
+    class _SessionCtx:
+        def __init__(self, session: object) -> None:
+            self._session = session
+
+        async def __aenter__(self) -> object:
+            return self._session
+
+        async def __aexit__(self, *_args: object) -> None:
+            return None
+
+    session = SimpleNamespace(get=AsyncMock(return_value=requester))
+    return cast(
+        Request,
+        SimpleNamespace(
+            app=SimpleNamespace(
+                state=SimpleNamespace(session_maker=lambda: _SessionCtx(session))
+            )
+        ),
+    )
+
+
+@pytest.mark.asyncio
+async def test_v4_snapshot_is_not_shared_with_a_protocol_24_requester() -> None:
+    now = datetime.now(UTC)
+    snapshot = scoring_mod._LedgerSnapshot(
+        entries=[
+            _factor_entry(uuid4(), factor=1.5, curve_version=4, now=now),
+        ],
+        generated_at=now,
+        active_bench_version=9,
+    )
+    request = _share_request(SimpleNamespace(protocol_version=24, seen_at=now))
+
+    assert not await scoring_mod._snapshot_can_be_shared(
+        request, snapshot, _VALIDATOR, now=now
+    )
+
+
+@pytest.mark.asyncio
+async def test_v4_snapshot_is_shared_with_a_fresh_protocol_25_requester() -> None:
+    now = datetime.now(UTC)
+    snapshot = scoring_mod._LedgerSnapshot(
+        entries=[
+            _factor_entry(uuid4(), factor=1.5, curve_version=4, now=now),
+        ],
+        generated_at=now,
+        active_bench_version=9,
+    )
+    request = _share_request(SimpleNamespace(protocol_version=25, seen_at=now))
+
+    assert await scoring_mod._snapshot_can_be_shared(
+        request, snapshot, _VALIDATOR, now=now
+    )
+
+
+@pytest.mark.asyncio
+async def test_frozen_v3_snapshot_is_shared_with_a_protocol_21_requester() -> None:
+    now = datetime.now(UTC)
+    snapshot = scoring_mod._LedgerSnapshot(
+        entries=[
+            _factor_entry(uuid4(), factor=1.10, curve_version=3, now=now),
+        ],
+        generated_at=now,
+        active_bench_version=9,
+    )
+    request = _share_request(SimpleNamespace(protocol_version=21, seen_at=now))
+
+    assert await scoring_mod._snapshot_can_be_shared(
+        request, snapshot, _VALIDATOR, now=now
+    )
+
+
+@pytest.mark.asyncio
+async def test_factor_snapshot_without_curve_version_is_not_shared() -> None:
+    now = datetime.now(UTC)
+    snapshot = scoring_mod._LedgerSnapshot(
+        entries=[
+            _factor_entry(uuid4(), factor=1.5, curve_version=None, now=now),
+        ],
+        generated_at=now,
+        active_bench_version=9,
+    )
+    request = _share_request(SimpleNamespace(protocol_version=25, seen_at=now))
+
+    assert not await scoring_mod._snapshot_can_be_shared(
+        request, snapshot, _VALIDATOR, now=now
+    )

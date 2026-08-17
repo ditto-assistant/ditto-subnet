@@ -697,6 +697,55 @@ def test_v9_factor_stays_visible_as_audit_evidence_before_authority(
     assert entry.efficiency_fold_applied is False
 
 
+def test_v4_factor_stays_visible_but_is_not_official_until_protocol_25() -> None:
+    agent_id = UUID(int=91)
+    vector_path = (
+        Path(__file__).resolve().parents[6]
+        / "services/dittobench-api/testdata/v9_base_contract_vectors.json"
+    )
+    details = json.loads(vector_path.read_text())["vectors"][0]["details"]
+    row = LedgerRow(
+        miner_hotkey=_MINER_A,
+        agent_id=agent_id,
+        composite=0.8,
+        tool_mean=0.8,
+        memory_mean=0.8,
+        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id="run-v4",
+        seed=42,
+        validator_hotkey=_VALIDATOR_C,
+        signature=None,
+        status=AgentStatus.SCORED,
+        bench_version=10,
+        n=280,
+        eligible=True,
+        details={"v9_base": details},
+        v9_confirmation=None,
+    )
+    view = cast(
+        public_endpoint.EfficiencyBoardView,
+        SimpleNamespace(
+            preview=False,
+            snapshot=SimpleNamespace(curve_version=4),
+            bonuses={
+                agent_id: SimpleNamespace(factor=1.5, bonus=0.0, snapshot_id=uuid4())
+            },
+        ),
+    )
+
+    displayed = public_endpoint._displayed_efficiency_factors(view, {agent_id: row})
+    _legacy, official = public_endpoint._fleet_safe_efficiency_adjustments(
+        {},
+        displayed,
+        factor_fleet_ready=False,
+    )
+
+    assert displayed == {agent_id: 1.5}
+    assert official == {}
+
+
 @pytest.mark.parametrize(
     ("projection", "expected_status", "expected_full"),
     [

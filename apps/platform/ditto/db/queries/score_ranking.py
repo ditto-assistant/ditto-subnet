@@ -604,6 +604,12 @@ async def resolve_efficiency_adjustments(
         # Unit tests and placeholder rows may omit snapshot identity. Treat
         # those as frozen v3 so existing protocol-21 callers stay byte-identical.
         curve_versions = dict.fromkeys(factor_assignments, 3)
+    if factor_assignments and any(
+        agent_id not in curve_versions for agent_id in factor_assignments
+    ):
+        # A live assignment without resolved curve metadata must not leak an
+        # unclamped multiplier under the v21 parse/transform contract.
+        return bonuses, {}, {}
     required_protocol = (
         UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL
         if any(
