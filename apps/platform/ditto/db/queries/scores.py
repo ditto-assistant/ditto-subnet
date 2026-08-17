@@ -1871,15 +1871,19 @@ async def list_eligible_ledger(
     # During a collecting rollout the ledger is on exactly ONE benchmark version
     # at a time, chosen by a threshold rule evaluated on each read:
     #
-    #   fewer than MIN_DESIRED_AUTHORITY_AGENTS frozen priority members hold a
+    #   fewer than MIN_DESIRED_AUTHORITY_AGENTS owner families hold a
     #   complete, ranked desired-version quorum  ->  the ACTIVE version stays
     #   authoritative for every agent (desired-version medians are collected
     #   and visible as rollout progress only);
-    #   all priority members ready  ->  the DESIRED version becomes authoritative
-    #   for the whole pool, and an agent without a desired-version quorum has no
+    #   the frozen priority prefix has raw 3/3 (skipping permanently
+    #   ineligible members) AND five ranked families exist anywhere on the
+    #   desired ledger  ->  the DESIRED version becomes authoritative for the
+    #   whole pool, and an agent without a desired-version quorum has no
     #   authoritative row at all and drops out. That drop-out is the point of the
     #   threshold: it only happens once enough agents have crossed to still fill
     #   the KOTH emission set (see MIN_DESIRED_AUTHORITY_AGENTS).
+    #   Banning a frozen inherited cheat must not yank that authority backward
+    #   when five other families already hold ranked desired-version quorums.
     #
     # Deliberately NOT a per-agent switch. Ranking a v_next composite against a
     # v_active composite inside one KOTH fold compares incomparable scales — a
@@ -1917,13 +1921,14 @@ async def list_eligible_ledger(
             per_agent.c.cnt >= SCORING_QUORUM,
         )
         on_canonical = per_agent.c.bench_version == canonical_version
-        # The frozen priority prefix is the authority gate. The wider rescore
-        # cohort remains in this open rollout and continues in the background;
-        # an unfinished tail member must not hold the whole subnet on the old
-        # benchmark. Authority additionally requires a full five-member
-        # emission set of semantic-pass agents anywhere in the frozen cohort.
-        # This preserves the no-mixed-version and no-shadow guarantees without
-        # requiring an agent that v9 correctly rejected to somehow pass v9.
+        # The frozen priority prefix is the inherited-rescore barrier. The
+        # wider rescore cohort remains in this open rollout and continues in
+        # the background; an unfinished tail member must not hold the whole
+        # subnet on the old benchmark. Authority additionally requires a full
+        # five-member emission set of semantic-pass agents on the desired
+        # ledger — not only inside the inherited snapshot — so banning a
+        # frozen cheat cannot revert weights while honest desired-version
+        # families already fill the emission set.
         member_ids = set(
             await session.scalars(
                 select(BenchmarkRolloutMember.agent_id).where(
@@ -1939,7 +1944,6 @@ async def list_eligible_ledger(
         desired_ready_agents = await count_ranked_quorum_agents(
             session,
             bench_version=desired_version,
-            agent_ids=member_ids,
             require_v9_semantic_pass=desired_version == 9,
         )
         if (

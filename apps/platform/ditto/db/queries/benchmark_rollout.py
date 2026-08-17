@@ -132,6 +132,18 @@ _V9_MINIMUM_SCORER_VERSION = (0, 53, 10)
 # from it here is a cycle; ``test_min_desired_authority_matches_koth_recipients``
 # asserts the equality, so resizing the tail without resizing this fails CI.
 MIN_DESIRED_AUTHORITY_AGENTS = 5
+# Frozen membership is append-only. These statuses drop a member from ranking
+# and from remaining rollout work, but they must not deadlock the transition
+# or yank desired-version authority backward. ATH holds stay off this set:
+# they are temporary and still block activation until resolved.
+PERMANENTLY_INELIGIBLE_MEMBER_STATUSES = frozenset(
+    {
+        AgentStatus.SCREENING_FAILED,
+        AgentStatus.QUARANTINED,
+        AgentStatus.REJECTED,
+        AgentStatus.BANNED,
+    }
+)
 
 
 class RolloutConflictError(RuntimeError):
@@ -684,14 +696,16 @@ async def active_bench_version(
         ready = await count_ranked_quorum_agents(
             session,
             bench_version=open_transition.desired_version,
-            agent_ids=member_ids,
             require_v9_semantic_pass=open_transition.desired_version == 9,
         )
         # MIN_DESIRED_AUTHORITY_AGENTS stays a constant on purpose. It is the
         # KOTH emission-set size, so it is a consensus quantity, not queue
         # policy: below it the ledger flip would have fewer recipients than the
-        # emission split expects. ``maybe_activate_rollout`` separately closes
-        # the durable rollout only after the wider rescore cohort finishes.
+        # emission split expects. Count it on the desired ledger, not only
+        # inside the inherited snapshot, so source-review bans cannot revert
+        # an already-qualified desired bench. ``maybe_activate_rollout``
+        # separately closes the durable rollout only after the wider rescore
+        # cohort finishes.
         if (
             len(member_ids) == open_transition.cohort_size
             and priority_complete
@@ -988,7 +1002,15 @@ async def authority_selection_state(
             )
         )
     )
-    if eligible_ids != priority_ids:
+    permanently_ineligible_ids = set(
+        await session.scalars(
+            select(Agent.agent_id).where(
+                Agent.agent_id.in_(priority_ids),
+                Agent.status.in_(tuple(PERMANENTLY_INELIGIBLE_MEMBER_STATUSES)),
+            )
+        )
+    )
+    if eligible_ids | permanently_ineligible_ids != priority_ids:
         return {
             "version": bench_version,
             "ready": False,
@@ -998,9 +1020,7 @@ async def authority_selection_state(
         }
     from ditto.db.queries.scores import count_ranked_quorum_agents
 
-    ranked = await count_ranked_quorum_agents(
-        session, bench_version=bench_version, agent_ids=priority_ids
-    )
+    ranked = await count_ranked_quorum_agents(session, bench_version=bench_version)
     ready = ranked >= MIN_DESIRED_AUTHORITY_AGENTS
     return {
         "version": bench_version,
@@ -1249,23 +1269,12 @@ async def _validate_frozen_members(
             .order_by(BenchmarkRolloutMember.position)
         )
     ).all()
-    permanently_ineligible = {
-        AgentStatus.SCREENING_FAILED,
-        AgentStatus.QUARANTINED,
-        AgentStatus.REJECTED,
-        AgentStatus.BANNED,
-    }
-    invalid = [
-        str(member.agent_id)
-        for member, agent in rows
-        if agent.status in permanently_ineligible
-    ]
-    if len(rows) != rollout.cohort_size or invalid:
-        reason = (
-            "frozen cohort is incomplete"
-            if len(rows) != rollout.cohort_size
-            else "ineligible frozen members: " + ",".join(invalid)
-        )
+    # Membership stays append-only. Banned/rejected/quarantined members remain
+    # on the snapshot so the frozen set is explainable, but they are already
+    # unrankable and must not freeze the transition. Only a missing row is a
+    # real integrity failure.
+    if len(rows) != rollout.cohort_size:
+        reason = "frozen cohort is incomplete"
         if rollout.status != "blocked_ineligible" or rollout.blocked_reason != reason:
             rollout.status = "blocked_ineligible"
             rollout.blocked_reason = reason
@@ -1572,8 +1581,24 @@ async def rollout_cohort_score_complete(
             .group_by(BenchmarkRolloutMember.agent_id)
         )
     ).all()
-    return len(count_rows) == cohort_size and all(
-        int(count) >= SCORING_QUORUM for _, count in count_rows
+    if len(count_rows) != cohort_size:
+        return False
+    statuses = dict(
+        (
+            await session.execute(
+                select(BenchmarkRolloutMember.agent_id, Agent.status)
+                .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
+                .where(
+                    BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
+                    BenchmarkRolloutMember.position <= cohort_size,
+                )
+            )
+        ).all()
+    )
+    return all(
+        statuses.get(agent_id) in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
+        or int(count) >= SCORING_QUORUM
+        for agent_id, count in count_rows
     )
 
 
@@ -1962,17 +1987,24 @@ async def maybe_activate_rollout(
     ).all()
     if len(member_rows) != rollout.cohort_size:
         return False
+    eligible_rows = [
+        (member, agent)
+        for member, agent in member_rows
+        if agent.status not in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
+    ]
     if any(
         agent.status not in (AgentStatus.SCORED, AgentStatus.LIVE)
-        for _member, agent in member_rows
+        for _member, agent in eligible_rows
     ):
         return False
-    member_ids = {member.agent_id for member, _agent in member_rows}
+    eligible_ids = {member.agent_id for member, _agent in eligible_rows}
     member_positions = {
         member.agent_id: member.position for member, _agent in member_rows
     }
     incomplete_ids = {
-        agent_id for agent_id in member_ids if counts.get(agent_id, 0) < SCORING_QUORUM
+        agent_id
+        for agent_id in eligible_ids
+        if counts.get(agent_id, 0) < SCORING_QUORUM
     }
     suppressed_tail_ids: set[UUID] = set()
     if incomplete_ids:
@@ -2003,7 +2035,6 @@ async def maybe_activate_rollout(
     ranked_cohort_agents = await count_ranked_quorum_agents(
         session,
         bench_version=rollout.desired_version,
-        agent_ids=member_ids,
         require_v9_semantic_pass=rollout.desired_version == 9,
     )
     if ranked_cohort_agents < MIN_DESIRED_AUTHORITY_AGENTS:
@@ -2165,7 +2196,6 @@ async def rollout_state(
     ranked_quorum_agents = await count_ranked_quorum_agents(
         session,
         bench_version=rollout.desired_version,
-        agent_ids={member.agent_id for member in members},
         require_v9_semantic_pass=rollout.desired_version == 9,
     )
     cohort_ready_count = sum(

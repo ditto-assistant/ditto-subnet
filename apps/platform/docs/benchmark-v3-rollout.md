@@ -123,10 +123,17 @@ new validators retain it for audit and re-score scheduling but deliberately fold
 the same pool. This keeps on-chain weights identical during asynchronous
 validator upgrades.
 
-If a frozen member becomes banned, held, or otherwise ineligible, the rollout
-changes to `blocked_ineligible`. It neither replaces nor drops that member. It
-resumes with the same snapshot only if eligibility is restored. An operator may
-instead explicitly supersede the unactivated rollout with a recorded reason.
+If a frozen member becomes banned, rejected, quarantined, or screening-failed,
+it stays on the append-only snapshot so the freeze remains explainable, but it
+is suppressed from remaining rollout work and from the authority numerator.
+`blocked_ineligible` is reserved for an incomplete frozen membership, not for
+source-review enforcement. Desired-version authority still requires the
+inherited priority prefix to have raw 3/3 (skipping those permanently
+ineligible members) and at least `MIN_DESIRED_AUTHORITY_AGENTS` ranked owner
+families anywhere on the desired ledger, so banning an inherited cheat cannot
+revert weights while honest desired-version families already fill the emission
+set. An operator may still explicitly supersede the unactivated rollout with a
+recorded reason.
 
 ## Observation and recovery
 

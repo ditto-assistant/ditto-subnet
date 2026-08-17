@@ -3272,6 +3272,53 @@ async def _seed_desired_quorum_cohort(
     return agent_ids, rollout
 
 
+async def _seed_non_member_ranked_agent(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    desired_version: int,
+) -> UUID:
+    """A scored desired-version family that is not in the frozen snapshot."""
+    agent_id = uuid4()
+    session.add(
+        Agent(
+            agent_id=agent_id,
+            miner_hotkey="miner-outsider-ranked",
+            name="outsider",
+            sha256="f" * 64,
+            status=AgentStatus.SCORED,
+            screening_policy_version=9,
+            screened_image_sha256="f" * 64,
+            screened_image_size_bytes=1024,
+            screened_image_id="sha256:" + "f" * 64,
+            screened_image_ref=f"ditto-screen/{agent_id}:latest",
+            screened_image_upload_id=uuid4(),
+            screened_image_verified_at=now,
+            created_at=now + timedelta(hours=1),
+        )
+    )
+    for validator in range(3):
+        session.add(
+            Score(
+                agent_id=agent_id,
+                bench_version=desired_version,
+                validator_hotkey=f"outsider-validator-{validator}",
+                run_id=f"outsider-{validator}",
+                signature="cc",
+                seed=900 + validator,
+                composite=0.81,
+                tool_mean=0.8,
+                memory_mean=0.8,
+                median_ms=1,
+                n=114,
+                details={"bench_version": desired_version},
+                generated_at=now,
+            )
+        )
+    await session.flush()
+    return agent_id
+
+
 async def _append_scoreless_rollout_tail(
     session: AsyncSession,
     *,
@@ -4045,41 +4092,57 @@ async def test_post_v7_top_five_authority_requires_live_inference_route(
         assert await persisted_active_bench_version(session) == 2
 
 
-async def test_activation_persists_and_audits_frozen_member_ineligibility(
+async def test_activation_skips_permanently_ineligible_frozen_members(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     now = datetime.now(UTC).replace(microsecond=0)
     async with _seeded_session(
         session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
     ) as (session, (agent_ids, rollout)):
+        outsider = await _seed_non_member_ranked_agent(
+            session, now=now, desired_version=rollout.desired_version
+        )
         agent = await session.get(Agent, agent_ids[0])
         assert agent is not None
-        agent.status = AgentStatus.QUARANTINED
+        agent.status = AgentStatus.BANNED
 
-        assert not await maybe_activate_rollout(
+        assert await maybe_activate_rollout(
             session,
             rollout,
             now=now,
             inference_requirements=_activation_requirements(),
         )
-        assert rollout.status == "blocked_ineligible"
-        assert rollout.blocked_reason == f"ineligible frozen members: {agent.agent_id}"
-        audit = await session.scalar(
-            select(BenchmarkRolloutAudit).where(
-                BenchmarkRolloutAudit.rollout_id == rollout.rollout_id,
-                BenchmarkRolloutAudit.event == "cohort_blocked",
-            )
-        )
-        assert audit is not None
+        assert rollout.status == "activated"
+        assert rollout.blocked_reason is None
+        assert await session.get(Agent, outsider) is not None
 
-        agent.status = AgentStatus.SCORED
+
+async def test_banning_frozen_member_does_not_revert_desired_authority(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (agent_ids, rollout)):
+        await _seed_non_member_ranked_agent(
+            session, now=now, desired_version=rollout.desired_version
+        )
+        assert await active_bench_version(session) == rollout.desired_version
+
+        agent = await session.get(Agent, agent_ids[0])
+        assert agent is not None
+        agent.status = AgentStatus.BANNED
+        await session.flush()
+
+        assert await active_bench_version(session) == rollout.desired_version
         assert await maybe_activate_rollout(
             session,
             rollout,
-            now=now + timedelta(seconds=1),
+            now=now,
             inference_requirements=_activation_requirements(),
         )
         assert rollout.status == "activated"
+        assert rollout.blocked_reason is None
 
 
 async def test_rollout_state_active_version_matches_start_guard_authority(

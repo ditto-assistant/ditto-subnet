@@ -1730,6 +1730,42 @@ class TestThresholdGatedAuthority:
         self._assert_single_version(ledger, _ROLLOUT_FROM)
         assert all(row.composite == pytest.approx(0.50) for row in ledger)
 
+    async def test_non_member_ranked_family_can_tip_desired_authority(
+        self, session: AsyncSession
+    ) -> None:
+        from ditto.db.queries.benchmark_rollout import MIN_DESIRED_AUTHORITY_AGENTS
+
+        t0 = datetime(2026, 6, 8, 12, 0, 0, tzinfo=UTC)
+        await _open_rollout(session)
+        for index in range(MIN_DESIRED_AUTHORITY_AGENTS - 1):
+            await _seed_versioned_agent(
+                session,
+                miner=_miner(index),
+                created_at=t0,
+                source_composite=0.50,
+                desired_composite=0.70,
+            )
+        unranked_member = await _seed_versioned_agent(
+            session,
+            miner=_miner(4),
+            created_at=t0,
+            source_composite=0.50,
+            desired_composite=0.0,
+        )
+        outsider = await _seed_versioned_agent(
+            session,
+            miner=_miner(80),
+            created_at=t0,
+            source_composite=0.40,
+            desired_composite=0.88,
+        )
+        ledger = await list_eligible_ledger(session)
+        self._assert_single_version(ledger, _ROLLOUT_DESIRED)
+        assert outsider.agent_id in {row.agent_id for row in ledger}
+        assert unranked_member.agent_id not in {
+            row.agent_id for row in ledger if row.eligible
+        }
+
     async def test_ineligible_desired_run_does_not_count_toward_threshold(
         self, session: AsyncSession
     ) -> None:
