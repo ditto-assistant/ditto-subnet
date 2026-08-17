@@ -43,7 +43,6 @@ from ditto.api_models.confirmation_bundles import (
 from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
-    BenchmarkRolloutMember,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleSubject,
@@ -1738,11 +1737,9 @@ async def list_eligible_ledger(
     represents the agent.
     """
     from ditto.db.queries.benchmark_rollout import (
-        MIN_DESIRED_AUTHORITY_AGENTS,
         SCORING_QUORUM,
         active_bench_version,
         open_rollout,
-        rollout_cohort_score_complete,
     )
 
     canonical_version = (
@@ -1869,30 +1866,18 @@ async def list_eligible_ledger(
         .subquery()
     )
     # During a collecting rollout the ledger is on exactly ONE benchmark version
-    # at a time, chosen by a threshold rule evaluated on each read:
-    #
-    #   fewer than MIN_DESIRED_AUTHORITY_AGENTS owner families hold a
-    #   complete, ranked desired-version quorum  ->  the ACTIVE version stays
-    #   authoritative for every agent (desired-version medians are collected
-    #   and visible as rollout progress only);
-    #   the frozen priority prefix has raw 3/3 (skipping permanently
-    #   ineligible members) AND five ranked families exist anywhere on the
-    #   desired ledger  ->  the DESIRED version becomes authoritative for the
-    #   whole pool, and an agent without a desired-version quorum has no
-    #   authoritative row at all and drops out. That drop-out is the point of the
-    #   threshold: it only happens once enough agents have crossed to still fill
-    #   the KOTH emission set (see MIN_DESIRED_AUTHORITY_AGENTS).
+    # at a time. ``active_bench_version`` is the single authority decision:
+    # first flip requires a finished priority prefix (skipping permanently
+    # ineligible members) plus MIN_DESIRED_AUTHORITY_AGENTS ranked desired
+    # families; after that flip is earned, a later reject cannot yank the pool
+    # back to the previous version. Desired-only submissions stay rollout
+    # progress until that decision names the desired era.
     #
     # Deliberately NOT a per-agent switch. Ranking a v_next composite against a
     # v_active composite inside one KOTH fold compares incomparable scales — a
     # newer benchmark applies gates the older one does not, so an already-
     # migrated agent would be systematically penalised against a not-yet-migrated
     # peer. Keeping the whole ledger on one version avoids that entirely.
-    #
-    # The threshold is computed here, inside the read, from committed rows only:
-    # every validator folds the ledger this query serves, so a given DB state
-    # must yield the same authority decision for every reader. It must never
-    # become time-based or config-drifty.
     #
     # Either way partial desired-version samples never affect ranks or weights,
     # and an explicit ``bench_version`` request stays a historical single-version
@@ -1919,38 +1904,17 @@ async def list_eligible_ledger(
             per_agent.c.cnt >= SCORING_QUORUM,
         )
         on_canonical = per_agent.c.bench_version == canonical_version
-        # Count ranked families on the desired ledger; ATH stays blocking.
-        member_ids = set(
-            await session.scalars(
-                select(BenchmarkRolloutMember.agent_id).where(
-                    BenchmarkRolloutMember.rollout_id == rollout.rollout_id
-                )
-            )
-        )
-        priority_complete = await rollout_cohort_score_complete(
-            session,
-            rollout=rollout,
-            cohort_size=rollout.priority_cohort_target,
-        )
-        desired_ready_agents = await count_ranked_quorum_agents(
-            session,
-            bench_version=desired_version,
-            require_v9_semantic_pass=desired_version == 9,
-        )
-        if (
-            len(member_ids) == rollout.cohort_size
-            and priority_complete
-            and desired_ready_agents >= MIN_DESIRED_AUTHORITY_AGENTS
-        ):
+        authority_version = await active_bench_version(session, open_transition=rollout)
+        if authority_version == desired_version:
             # Whole-pool flip: drop every row that is not a desired-version
             # quorum, so the read cannot return a mix of versions.
             authority_filter = desired_at_quorum
             version_priority = per_agent.c.bench_version
         else:
-            # Before the frozen priority prefix finishes, desired-only
-            # submissions are rollout progress, not leaderboard authority.
-            # Excluding them prevents a mixed v8/v9 ledger while the public
-            # rollout still says v8 is active.
+            # Before desired authority is earned, desired-only submissions are
+            # rollout progress, not leaderboard authority. Excluding them
+            # prevents a mixed v8/v9 ledger while the public rollout still
+            # says v8 is active.
             authority_filter = on_canonical
             version_priority = per_agent.c.bench_version
     selected_version_stmt = select(

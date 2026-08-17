@@ -229,6 +229,17 @@ async def resolve_review(
         return None
     if agent.status != AgentStatus.ATH_PENDING_REVIEW:
         raise ValueError(f"agent {agent_id} is {agent.status}, not ath_pending_review")
+    if decision == AgentStatus.BANNED:
+        from ditto.db.queries.benchmark_rollout import (
+            maybe_record_desired_authority,
+            open_rollout,
+        )
+
+        open_transition = await open_rollout(session)
+        if open_transition is not None:
+            await maybe_record_desired_authority(
+                session, open_transition, now=datetime.now(UTC)
+            )
     agent.status = decision
     if decision == AgentStatus.SCORED:
         agent.duplicate_of = None

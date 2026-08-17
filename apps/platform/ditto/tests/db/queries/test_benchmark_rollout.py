@@ -65,6 +65,7 @@ from ditto.db.queries.benchmark_rollout import (
     CANARY_BENCH_VERSION,
     DEFAULT_BENCH_VERSION,
     DEFAULT_RESCORE_COHORT_SIZE,
+    DESIRED_AUTHORITY_EARNED_EVENT,
     LEGACY_BENCH_VERSION,
     MIN_DESIRED_AUTHORITY_AGENTS,
     MIN_SCOREABLE_BENCH_VERSION,
@@ -77,11 +78,13 @@ from ditto.db.queries.benchmark_rollout import (
     bind_inference_activation_requirements,
     capable_validator_counts,
     create_rollout_snapshot,
+    desired_authority_earned,
     heartbeat_supports_version,
     historical_rescore_cohort,
     inference_activation_ready,
     issue_rollout_ticket,
     maybe_activate_rollout,
+    maybe_record_desired_authority,
     open_rollout,
     persisted_active_bench_version,
     rolling_top_five,
@@ -4062,7 +4065,7 @@ async def test_activation_recovers_legacy_cohort_with_linked_priority_family(
     ],
     ids=("proxy-disabled", "provider-key-removed", "stale-route"),
 )
-async def test_post_v7_top_five_authority_requires_live_inference_route(
+async def test_post_v7_inference_blocks_activation_not_hybrid_authority(
     session_maker: async_sessionmaker[AsyncSession],
     requirements: InferenceActivationRequirements,
     stale_route: bool,
@@ -4083,7 +4086,7 @@ async def test_post_v7_top_five_authority_requires_live_inference_route(
             assert route is not None
             route.last_observed_at = now - timedelta(minutes=6)
         bind_inference_activation_requirements(session, requirements)
-        assert await active_bench_version(session) == 2
+        assert await active_bench_version(session) == rollout.desired_version
         assert not await maybe_activate_rollout(
             session,
             rollout,
@@ -4092,6 +4095,7 @@ async def test_post_v7_top_five_authority_requires_live_inference_route(
         )
         assert rollout.status == "collecting"
         assert await persisted_active_bench_version(session) == 2
+        assert await active_bench_version(session) == rollout.desired_version
 
 
 async def test_activation_skips_permanently_ineligible_frozen_members(
@@ -4224,15 +4228,25 @@ async def test_incident_ban_keeps_desired_authority_when_outsiders_fill_emission
         assert await active_bench_version(session) == rollout.desired_version
 
 
-async def test_incident_ban_reverts_without_outsider_families(
+async def test_incident_ban_keeps_desired_authority_without_outsider_families(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Same unfinished ban without outsider families must drop desired authority."""
+    """Once earned, an unfinished ban must not resurrect the previous version."""
     now = datetime.now(UTC).replace(microsecond=0)
     async with _seeded_session(
         session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
     ) as (session, (agent_ids, rollout)):
         assert await active_bench_version(session) == rollout.desired_version
+        assert await maybe_record_desired_authority(session, rollout, now=now)
+        assert await desired_authority_earned(session, rollout)
+        events = set(
+            await session.scalars(
+                select(BenchmarkRolloutAudit.event).where(
+                    BenchmarkRolloutAudit.rollout_id == rollout.rollout_id
+                )
+            )
+        )
+        assert DESIRED_AUTHORITY_EARNED_EVENT in events
 
         unfinished_id = agent_ids[0]
         await _ban_unfinished_frozen_member(
@@ -4244,14 +4258,20 @@ async def test_incident_ban_reverts_without_outsider_families(
         assert await rollout_cohort_score_complete(
             session, rollout=rollout, cohort_size=rollout.priority_cohort_target
         )
+        assert (
+            await count_ranked_quorum_agents(
+                session, bench_version=rollout.desired_version
+            )
+            == MIN_DESIRED_AUTHORITY_AGENTS - 1
+        )
         state = await rollout_state(session, now=now)
         assert state["priority_complete"] is True
-        assert state["active_version"] == DEFAULT_BENCH_VERSION
-        assert await active_bench_version(session) == DEFAULT_BENCH_VERSION
+        assert state["active_version"] == rollout.desired_version
+        assert await active_bench_version(session) == rollout.desired_version
 
         ledger = await list_eligible_ledger(session)
         assert ledger
-        assert {row.bench_version for row in ledger} == {DEFAULT_BENCH_VERSION}
+        assert {row.bench_version for row in ledger} == {rollout.desired_version}
         assert unfinished_id not in {row.agent_id for row in ledger if row.eligible}
         assert not await maybe_activate_rollout(
             session,
@@ -4260,6 +4280,33 @@ async def test_incident_ban_reverts_without_outsider_families(
             inference_requirements=_activation_requirements(),
         )
         assert rollout.status == "collecting"
+        assert await active_bench_version(session) == rollout.desired_version
+
+
+async def test_hybrid_authority_does_not_require_live_inference(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Unbound inference readiness must not keep the public board on v_prev."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (_agent_ids, rollout)):
+        bind_inference_activation_requirements(session, None)
+        assert (
+            await inference_activation_ready(
+                session,
+                bench_version=rollout.desired_version,
+                now=now,
+                requirements=None,
+            )
+            is False
+        )
+        assert await active_bench_version(session) == rollout.desired_version
+        state = await rollout_state(session, now=now)
+        assert state["active_version"] == rollout.desired_version
+        ledger = await list_eligible_ledger(session)
+        assert ledger
+        assert {row.bench_version for row in ledger} == {rollout.desired_version}
 
 
 async def test_rollout_state_active_version_matches_start_guard_authority(

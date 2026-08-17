@@ -1010,6 +1010,17 @@ async def resolve_copy_review(
             if latest_reopen is not None
             else review.original_evidence.get("previous_status")
         )
+        if canonical != "clear":
+            from ditto.db.queries.benchmark_rollout import (
+                maybe_record_desired_authority,
+                open_rollout,
+            )
+
+            open_transition = await open_rollout(session)
+            if open_transition is not None:
+                await maybe_record_desired_authority(
+                    session, open_transition, now=datetime.now(UTC)
+                )
         agent.status = (
             AgentStatus.LIVE
             if canonical == "clear" and previous_status == AgentStatus.LIVE.value

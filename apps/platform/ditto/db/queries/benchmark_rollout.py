@@ -112,10 +112,14 @@ MAX_EXHAUSTED_ROLLOUT_TAIL_MEMBERS = 3
 # This is a semantic capability floor, not the active release version: v8
 # remains compatible and every later scorer release continues to satisfy it.
 _V9_MINIMUM_SCORER_VERSION = (0, 53, 10)
+# Append-only record that desired-version authority has already been earned.
+# Hybrid reads stay on the desired version after a later reject would make the
+# live first-flip predicates fail. Durable activation still uses its own close.
+DESIRED_AUTHORITY_EARNED_EVENT = "desired_authority_earned"
 # How many agents must hold a COMPLETE, ranked desired-version quorum before
 # the desired version may take over. Two gates enforce it against the same count
-# (``ditto.db.queries.scores.count_ranked_quorum_agents``): the ledger's
-# authority switch (``list_eligible_ledger``) and rollout activation
+# (``ditto.db.queries.scores.count_ranked_quorum_agents``): the first flip of
+# ``active_bench_version`` / ``list_eligible_ledger``, and rollout activation
 # (``maybe_activate_rollout``), which is where the ledger gate stops applying.
 #
 # Derived, not guessed: it is exactly the size of the KOTH emission set — the
@@ -658,6 +662,90 @@ async def append_rollout_member(
     return True
 
 
+async def _live_desired_authority_ready(
+    session: AsyncSession, rollout: BenchmarkRollout
+) -> bool:
+    """Whether the open rollout currently satisfies the first desired flip."""
+    from ditto.db.queries.scores import count_ranked_quorum_agents
+
+    member_ids = set(
+        await session.scalars(
+            select(BenchmarkRolloutMember.agent_id).where(
+                BenchmarkRolloutMember.rollout_id == rollout.rollout_id
+            )
+        )
+    )
+    if len(member_ids) != rollout.cohort_size:
+        return False
+    if not await rollout_cohort_score_complete(
+        session,
+        rollout=rollout,
+        cohort_size=rollout.priority_cohort_target,
+    ):
+        return False
+    ready = await count_ranked_quorum_agents(
+        session,
+        bench_version=rollout.desired_version,
+        require_v9_semantic_pass=rollout.desired_version == 9,
+    )
+    return ready >= MIN_DESIRED_AUTHORITY_AGENTS
+
+
+async def desired_authority_earned(
+    session: AsyncSession, rollout: BenchmarkRollout
+) -> bool:
+    """Whether this rollout has already recorded a desired-authority flip."""
+    return bool(
+        await session.scalar(
+            select(
+                exists().where(
+                    BenchmarkRolloutAudit.rollout_id == rollout.rollout_id,
+                    BenchmarkRolloutAudit.event == DESIRED_AUTHORITY_EARNED_EVENT,
+                )
+            )
+        )
+    )
+
+
+async def maybe_record_desired_authority(
+    session: AsyncSession,
+    rollout: BenchmarkRollout,
+    *,
+    now: datetime,
+) -> bool:
+    """Record that desired authority was earned, if the live flip now holds.
+
+    Idempotent. Write-path callers (score ingest, activation, reject) persist
+    this so a later ban cannot yank ``active_bench_version`` back to the
+    previous era. Read-only sessions that never commit still see desired
+    authority from the live predicate.
+    """
+    if await desired_authority_earned(session, rollout):
+        return True
+    if not await _live_desired_authority_ready(session, rollout):
+        return False
+    from ditto.db.queries.scores import count_ranked_quorum_agents
+
+    ranked = await count_ranked_quorum_agents(
+        session,
+        bench_version=rollout.desired_version,
+        require_v9_semantic_pass=rollout.desired_version == 9,
+    )
+    await _audit(
+        session,
+        rollout,
+        DESIRED_AUTHORITY_EARNED_EVENT,
+        {
+            "bench_version": rollout.desired_version,
+            "ranked_quorum_agents": ranked,
+            "min_ranked_quorum_agents": MIN_DESIRED_AUTHORITY_AGENTS,
+        },
+        now=now,
+    )
+    await session.flush()
+    return True
+
+
 async def active_bench_version(
     session: AsyncSession,
     *,
@@ -669,59 +757,35 @@ async def active_bench_version(
     every derived projection.  The explicit argument avoids re-reading the
     same transition several times while preserving the default for allocator
     and mutation paths that need a fresh database view.
+
+    The first flip requires a complete frozen snapshot, a finished priority
+    prefix (skipping permanently ineligible members), and at least
+    ``MIN_DESIRED_AUTHORITY_AGENTS`` ranked desired families. After that flip
+    is earned, later rejects must not roll the public board or ledger back to
+    the previous version. Live inference readiness stays a durable-activation
+    gate, not a hybrid-authority gate: scoring the desired era already proves
+    the fleet can serve it, and a stale route observation must not re-open
+    the settled previous-version view.
     """
     if open_transition is _UNRESOLVED_ROLLOUT:
         open_transition = await open_rollout(session)
     assert open_transition is None or isinstance(open_transition, BenchmarkRollout)
-    if open_transition is not None:
-        from ditto.db.queries.scores import count_ranked_quorum_agents
-
-        # Authority and background rescoring are deliberately separate gates.
-        # The operator freezes both widths at rollout start: the priority prefix
-        # must finish before the target may own weights, while the wider rescore
-        # cohort continues through the still-open rollout after that flip.
-        # Re-reading live policy here would move either finish line mid-rollout.
-        member_ids = set(
-            await session.scalars(
-                select(BenchmarkRolloutMember.agent_id).where(
-                    BenchmarkRolloutMember.rollout_id == open_transition.rollout_id
-                )
-            )
-        )
-        priority_complete = await rollout_cohort_score_complete(
-            session,
-            rollout=open_transition,
-            cohort_size=open_transition.priority_cohort_target,
-        )
-        ready = await count_ranked_quorum_agents(
-            session,
-            bench_version=open_transition.desired_version,
-            require_v9_semantic_pass=open_transition.desired_version == 9,
-        )
-        # MIN_DESIRED_AUTHORITY_AGENTS stays a constant on purpose. It is the
-        # KOTH emission-set size, so it is a consensus quantity, not queue
-        # policy: below it the ledger flip would have fewer recipients than the
-        # emission split expects. Count ranked families on the desired ledger.
-        # ``maybe_activate_rollout`` separately closes the durable rollout only
-        # after the wider rescore cohort finishes.
-        if (
-            len(member_ids) == open_transition.cohort_size
-            and priority_complete
-            and ready >= MIN_DESIRED_AUTHORITY_AGENTS
-        ):
-            if (
-                open_transition.desired_version >= 7
-                and not await inference_activation_ready(
-                    session,
-                    bench_version=open_transition.desired_version,
-                    now=datetime.now(UTC),
-                    requirements=session.info.get(
-                        _INFERENCE_ACTIVATION_REQUIREMENTS_SESSION_KEY
-                    ),
-                )
-            ):
-                return await persisted_active_bench_version(session)
-            return open_transition.desired_version
+    # Authority and background rescoring are deliberately separate gates.
+    # The operator freezes both widths at rollout start: the priority prefix
+    # must finish before the target may own weights, while the wider rescore
+    # cohort continues through the still-open rollout after that flip.
+    # Re-reading live policy here would move either finish line mid-rollout.
+    # MIN_DESIRED_AUTHORITY_AGENTS stays a constant on purpose. It is the
+    # KOTH emission-set size, so it is a consensus quantity, not queue
+    # policy: below it the *first* ledger flip would have fewer recipients
+    # than the emission split expects. Once earned, the flip is sticky.
+    # ``maybe_activate_rollout`` separately closes the durable rollout only
+    # after the wider rescore cohort finishes.
+    if open_transition is not None and (
+        await desired_authority_earned(session, open_transition)
+        or await _live_desired_authority_ready(session, open_transition)
+    ):
+        return open_transition.desired_version
     return await persisted_active_bench_version(session)
 
 
@@ -1959,6 +2023,10 @@ async def maybe_activate_rollout(
     if not await _validate_frozen_members(session, rollout, now=now):
         await session.flush()
         return False
+    # Persist hybrid authority as soon as the first-flip predicates hold, even
+    # when the wider cohort or inference gate still blocks durable close. A
+    # later reject must not resurrect the previous-version settled board.
+    await maybe_record_desired_authority(session, rollout, now=now)
     count_rows = (
         await session.execute(
             select(BenchmarkRolloutMember.agent_id, func.count(Score.validator_hotkey))

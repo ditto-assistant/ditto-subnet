@@ -127,13 +127,16 @@ If a frozen member becomes banned, rejected, quarantined, or screening-failed,
 it stays on the append-only snapshot so the freeze remains explainable, but it
 is suppressed from remaining rollout work and from the authority numerator.
 `blocked_ineligible` is reserved for an incomplete frozen membership, not for
-source-review enforcement. Desired-version authority still requires the
+source-review enforcement. The first desired-version flip still requires the
 inherited priority prefix to have raw 3/3 (skipping those permanently
 ineligible members) and at least `MIN_DESIRED_AUTHORITY_AGENTS` ranked owner
-families anywhere on the desired ledger, so banning an inherited cheat cannot
-revert weights while honest desired-version families already fill the emission
-set. An operator may still explicitly supersede the unactivated rollout with a
-recorded reason.
+families anywhere on the desired ledger. After that flip is earned, a later
+reject cannot yank `active_bench_version`, the public board, or the validator
+ledger back to the previous version — even if the remaining ranked set falls
+below the emission-set floor. Live inference readiness stays a durable
+activation gate, not a hybrid-authority gate: a stale route observation must
+not re-open the settled previous-version view. An operator may still
+explicitly supersede an unactivated rollout that does not yet own authority.
 
 ## Observation and recovery
 
