@@ -49,6 +49,52 @@ def test_context_index_paths_exist() -> None:
     )
 
 
+def _tracked_skill_names(prefix: str) -> set[str]:
+    completed = subprocess.run(
+        ["git", "ls-files", "-z", "--", prefix],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    names: set[str] = set()
+    for raw in completed.stdout.split(b"\0"):
+        if not raw:
+            continue
+        parts = Path(raw.decode()).parts
+        if len(parts) >= 3 and parts[1] == "skills":
+            names.add(parts[2])
+    return names
+
+
+def test_every_skill_is_available_to_agents_and_claude() -> None:
+    agents = _tracked_skill_names(".agents/skills")
+    claude = _tracked_skill_names(".claude/skills")
+    assert agents, "expected at least one tracked .agents skill"
+    missing_from_claude = sorted(agents - claude)
+    missing_from_agents = sorted(claude - agents)
+    assert not missing_from_claude, (
+        "skills must also exist under .claude/skills "
+        f"(symlink or Claude-specific tree): {missing_from_claude}"
+    )
+    assert not missing_from_agents, (
+        f"skills must also exist under .agents/skills: {missing_from_agents}"
+    )
+
+
+def test_shared_claude_skill_symlinks_point_at_agents_tree() -> None:
+    agents_root = (ROOT / ".agents" / "skills").resolve()
+    claude_root = ROOT / ".claude" / "skills"
+    for path in sorted(claude_root.iterdir()):
+        if not path.is_symlink():
+            assert (path / "SKILL.md").is_file(), path
+            assert (agents_root / path.name / "SKILL.md").is_file(), path.name
+            continue
+        target = (path.parent / path.readlink()).resolve()
+        expected = agents_root / path.name
+        assert target == expected, f"{path} -> {target}, expected {expected}"
+        assert (target / "SKILL.md").is_file(), target
+
+
 def test_context_index_rejects_paths_outside_repository(capsys) -> None:
     for escaped in ("/tmp", ".."):
         data = {

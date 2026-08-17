@@ -18,6 +18,28 @@ multi-repository temp clones or cross-repository synchronization for components
 already present in this tree. Read the nearest nested `AGENTS.md` or `CLAUDE.md`
 before editing a component.
 
+## Agent and Claude guidance
+
+`AGENTS.md` is the repository-wide instruction file for general agents.
+`CLAUDE.md` is Claude-specific: it can name Claude abilities, slash commands,
+and Claude-only routing. Keep shared policy aligned. Do not treat the files as
+copies of each other.
+
+## Skills for `.agents` and `.claude`
+
+Every repository skill must be available under both `.agents/skills/<name>`
+and `.claude/skills/<name>`.
+
+- When the skill is the same for every agent, put the canonical tree in
+  `.agents/skills/<name>` and symlink `.claude/skills/<name>` to
+  `../../.agents/skills/<name>`.
+- When Claude needs different frontmatter, allowed-tools, or slash-command
+  behavior, keep a real directory at `.claude/skills/<name>` (see
+  `.claude/skills/impeccable`). Agent-only extras can live under
+  `.agents/skills/<name>/agents/` without forcing the Claude tree to match
+  file-for-file.
+- A new shared skill is incomplete until the `.claude/skills` path exists.
+
 ## Semantic-release commit types
 
 - Do not use `test:` as a commit or pull-request title prefix; it is not a valid
