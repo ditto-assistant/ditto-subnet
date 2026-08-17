@@ -6,6 +6,7 @@ import argparse
 import base64
 import contextlib
 import fcntl
+import gzip
 import hashlib
 import json
 import os
@@ -13,6 +14,7 @@ import re
 import shlex
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import urllib.error
@@ -560,12 +562,63 @@ def _download_runtime_archive(artifact: dict[str, Any], destination: Path) -> No
         raise ControllerError("runtime artifact verification failed")
 
 
+def _materialize_image_archive(archive: Path) -> Path:
+    """Kaniko may emit gzip; skopeo's archive transports want a plain tar."""
+    with archive.open("rb") as handle:
+        magic = handle.read(2)
+    if magic != b"\x1f\x8b":
+        return archive
+    unpacked = archive.with_name(f"{archive.name}.plain")
+    with gzip.open(archive, "rb") as source, unpacked.open("wb") as handle:
+        os.chmod(unpacked, 0o600)
+        while chunk := source.read(8 * 1024**2):
+            handle.write(chunk)
+    return unpacked
+
+
+def _image_archive_names(archive: Path) -> frozenset[str]:
+    try:
+        with tarfile.open(archive, mode="r:*") as handle:
+            return frozenset(
+                member.name.split("/", 1)[0] for member in handle.getmembers()
+            )
+    except tarfile.TarError as error:
+        raise ControllerError("runtime archive is not a readable image tar") from error
+
+
+def _image_archive_sources(archive: Path) -> tuple[str, ...]:
+    names = _image_archive_names(archive)
+    docker = f"docker-archive:{archive}"
+    oci = f"oci-archive:{archive}"
+    if "oci-layout" in names or "index.json" in names:
+        return (oci, docker)
+    if "manifest.json" in names:
+        return (docker, oci)
+    raise ControllerError(
+        "runtime archive has neither manifest.json nor oci-layout"
+    )
+
+
+def _skopeo_detail(error: BaseException) -> str:
+    text = " ".join(
+        part.strip()
+        for part in (getattr(error, "stderr", None), getattr(error, "stdout", None))
+        if isinstance(part, str) and part.strip()
+    )
+    if not text:
+        return type(error).__name__
+    text = re.sub(r"ya29\.[A-Za-z0-9._-]+", "[oauth]", text)
+    text = re.sub(r"eyJ[A-Za-z0-9._-]{20,}", "[jwt]", text)
+    return " ".join(text.split())[:240]
+
+
 def _promote_runtime_archive(
     *, archive: Path, destination: str, access_token: str
 ) -> str:
     registry = destination.split("/", 1)[0]
     descriptor, auth_path_raw = tempfile.mkstemp(prefix="ditto-registry-auth-")
     auth_path = Path(auth_path_raw)
+    unpacked: Path | None = None
     try:
         os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "w") as handle:
@@ -582,20 +635,34 @@ def _promote_runtime_archive(
                 handle,
                 separators=(",", ":"),
             )
-        result = subprocess.run(
-            [
-                "skopeo",
-                "copy",
-                "--authfile",
-                str(auth_path),
-                f"docker-archive:{archive}",
-                f"docker://{destination}",
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
+        unpacked = _materialize_image_archive(archive)
+        last_error: BaseException | None = None
+        copied = False
+        for source in _image_archive_sources(unpacked):
+            result = subprocess.run(
+                [
+                    "skopeo",
+                    "copy",
+                    "--authfile",
+                    str(auth_path),
+                    source,
+                    f"docker://{destination}",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+            if result.returncode == 0:
+                copied = True
+                break
+            last_error = subprocess.CalledProcessError(
+                result.returncode, result.args, result.stdout, result.stderr
+            )
+        if not copied:
+            assert last_error is not None
+            raise ControllerError(
+                f"runtime image promotion failed: {_skopeo_detail(last_error)}"
+            ) from last_error
         inspect = subprocess.run(
             [
                 "skopeo",
@@ -611,11 +678,16 @@ def _promote_runtime_archive(
             text=True,
             timeout=60,
         )
+    except ControllerError:
+        raise
     except (OSError, subprocess.SubprocessError) as error:
-        raise ControllerError("runtime image promotion failed") from error
+        raise ControllerError(
+            f"runtime image promotion failed: {_skopeo_detail(error)}"
+        ) from error
     finally:
         auth_path.unlink(missing_ok=True)
-    del result
+        if unpacked is not None and unpacked != archive:
+            unpacked.unlink(missing_ok=True)
     digest = inspect.stdout.strip()
     if not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
         raise ControllerError("runtime image promotion returned invalid digest")

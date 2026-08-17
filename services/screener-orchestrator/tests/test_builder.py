@@ -11,7 +11,10 @@ from screener_capacity.builder import (
     SubmissionBuildControl,
     _delete_rental,
     _docker_config,
+    _image_archive_sources,
     _kaniko_script,
+    _promote_runtime_archive,
+    _skopeo_detail,
     build_parser,
     run_one,
     run_one_runtime_smoke,
@@ -33,6 +36,105 @@ def test_registry_config_uses_short_lived_oauth_token() -> None:
     assert (
         value["auths"]["us-central1-docker.pkg.dev"]["password"] == "short-lived-token"
     )
+
+
+def _write_tar(path: Path, names: list[str]) -> None:
+    import io
+    import tarfile
+
+    with tarfile.open(path, "w") as handle:
+        for name in names:
+            info = tarfile.TarInfo(name)
+            payload = b"{}"
+            info.size = len(payload)
+            handle.addfile(info, io.BytesIO(payload))
+
+
+def test_image_archive_prefers_oci_layout_then_docker_manifest(tmp_path: Path) -> None:
+    oci = tmp_path / "oci.tar"
+    docker = tmp_path / "docker.tar"
+    _write_tar(oci, ["oci-layout", "index.json", "blobs"])
+    _write_tar(docker, ["manifest.json", "sha256:abc"])
+    assert _image_archive_sources(oci)[0].startswith("oci-archive:")
+    assert _image_archive_sources(docker)[0].startswith("docker-archive:")
+
+
+class _Proc:
+    def __init__(
+        self,
+        *,
+        returncode: int = 0,
+        stdout: str = "",
+        stderr: str = "",
+        args: list[str] | None = None,
+    ) -> None:
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+        self.args = args or []
+
+
+def test_promote_retries_oci_when_docker_archive_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "image.tar"
+    _write_tar(archive, ["manifest.json"])
+    calls: list[list[str]] = []
+
+    def _run(argv: list[str], **_kwargs: object) -> _Proc:
+        calls.append(argv)
+        if argv[1] == "copy" and argv[4].startswith("oci-archive:"):
+            return _Proc()
+        if argv[1] == "inspect":
+            return _Proc(stdout="sha256:" + "d" * 64 + "\n")
+        return _Proc(
+            returncode=1,
+            stderr="Error parsing image: invalid tar header",
+            args=argv,
+        )
+
+    monkeypatch.setattr("screener_capacity.builder.subprocess.run", _run)
+    reference = _promote_runtime_archive(
+        archive=archive,
+        destination="us-central1-docker.pkg.dev/p/candidates/miner:build-test",
+        access_token="token",
+    )
+    assert reference.endswith("@sha256:" + "d" * 64)
+    copy_sources = [argv[4] for argv in calls if argv[1] == "copy"]
+    assert copy_sources == [
+        f"docker-archive:{archive}",
+        f"oci-archive:{archive}",
+    ]
+
+
+def test_promote_includes_redacted_skopeo_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "image.tar"
+    _write_tar(archive, ["manifest.json"])
+
+    def _run(argv: list[str], **_kwargs: object) -> object:
+        result = type("Result", (), {})()
+        result.returncode = 1
+        result.stdout = ""
+        result.stderr = "denied ya29.super-secret-token for docker-archive"
+        result.args = argv
+        return result
+
+    monkeypatch.setattr("screener_capacity.builder.subprocess.run", _run)
+    with pytest.raises(ControllerError, match="docker-archive") as raised:
+        _promote_runtime_archive(
+            archive=archive,
+            destination="us-central1-docker.pkg.dev/p/candidates/miner:build-test",
+            access_token="token",
+        )
+    assert "ya29." not in str(raised.value)
+    assert "[oauth]" in str(raised.value)
+
+
+def test_skopeo_detail_redacts_oauth_noise() -> None:
+    error = type("Err", (), {"stderr": "push failed ya29.abcDEF123", "stdout": ""})()
+    assert _skopeo_detail(error) == "push failed [oauth]"
 
 
 def test_kaniko_job_is_bound_to_exact_monorepo_sha_and_paths() -> None:
