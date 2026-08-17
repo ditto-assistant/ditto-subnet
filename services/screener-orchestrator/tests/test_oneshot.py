@@ -18,10 +18,12 @@ class _Targon:
         *,
         delete_fails: bool = False,
         delete_fails_until_suspended: bool = False,
+        deploy_status: int | None = None,
     ) -> None:
         self.rows = rows
         self.delete_fails = delete_fails
         self.delete_fails_until_suspended = delete_fails_until_suspended
+        self.deploy_status = deploy_status
         self.deleted: list[str] = []
         self.suspended: list[str] = []
         self.deployed: list[str] = []
@@ -43,6 +45,12 @@ class _Targon:
         return {}
 
     def deploy(self, uid: str) -> dict[str, object]:
+        if self.deploy_status is not None:
+            raise TargonAPIError(
+                operation="POST deploy",
+                status=self.deploy_status,
+                reason="HTTP error",
+            )
         self.deployed.append(uid)
         self.status_by_uid[uid] = "running"
         return {}
@@ -185,6 +193,23 @@ def test_sweep_can_delete_in_parallel() -> None:
     assert result["deleted"] == 2
     assert sorted(client.deleted) == ["wrk-a", "wrk-b"]
     assert sorted(client.deployed) == ["wrk-a", "wrk-b"]
+
+
+def test_sweep_stops_redeploy_after_payment_required() -> None:
+    client = _Targon(
+        [
+            _row(uid="wrk-a", name="ditto-miner-build-aaa", status="suspended"),
+            _row(uid="wrk-b", name="ditto-miner-build-bbb", status="suspended"),
+        ],
+        deploy_status=402,
+    )
+
+    result = sweep_oneshot_rentals(client)
+
+    assert result["deleted"] == 0
+    assert result["leftover"] == 2
+    assert {item["action"] for item in result["items"]} == {"payment-required"}
+    assert client.deployed == []
 
 
 def test_sweep_dry_run_does_not_mutate() -> None:

@@ -119,7 +119,9 @@ def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
     if status in {"suspended", "error", "registered"}:
         try:
             client.deploy(uid)
-        except TargonAPIError:
+        except TargonAPIError as error:
+            if error.status == 402:
+                raise
             return False
         status = _current_status(client, uid) or "provisioning"
     if status == "provisioning":
@@ -206,15 +208,36 @@ def sweep_oneshot_rentals(
         )
         workers = max(1, max_workers)
 
+        payment_blocked = False
+
         def _delete(row: dict[str, str | None]) -> dict[str, str | None]:
+            nonlocal payment_blocked
             uid = row["uid"] or ""
-            action = (
-                "deleted" if delete_oneshot_rental(client, uid) else "cleanup-required"
-            )
+            try:
+                action = (
+                    "deleted"
+                    if delete_oneshot_rental(client, uid)
+                    else "cleanup-required"
+                )
+            except TargonAPIError as error:
+                if error.status == 402:
+                    payment_blocked = True
+                    action = "payment-required"
+                else:
+                    action = "cleanup-required"
             return {**row, "action": action}
 
         if workers == 1:
-            results = [_delete(row) for row in pending]
+            results = []
+            for row in pending:
+                if payment_blocked and (row["status"] or "").casefold() in {
+                    "suspended",
+                    "error",
+                    "registered",
+                }:
+                    results.append({**row, "action": "payment-required"})
+                    continue
+                results.append(_delete(row))
         else:
             results = []
             with ThreadPoolExecutor(max_workers=workers) as pool:
