@@ -123,6 +123,22 @@ func (s relayExecutionSummary) provesV9RouteDisposition() bool {
 		(s.RouteProbeAttempts >= 2 && s.RouteProbeRouted == 0)
 }
 
+// routeChallengeUnfinished separates the two ways provesV9RouteDisposition can
+// be false, because only one of them is the platform's fault.
+//
+//   - Unfinished (routed == 0 && attempts < 2): we stopped asking. One routed
+//     probe would have proved the harness can reach the broker; two missed
+//     probes would have proved the adapter cannot. Neither happened, so the
+//     interval is ambiguous purely because the challenge is incomplete -- and
+//     completing it is the platform's job.
+//   - Incoherent (routed > attempts): the counters contradict themselves, so
+//     the evidence itself is untrustworthy. That must stay fail-closed and
+//     terminal; treating corrupt evidence as a platform gap would hand out
+//     retries on exactly the signal an attacker would want to forge.
+func (s relayExecutionSummary) routeChallengeUnfinished() bool {
+	return s.RouteProbeRouted == 0 && s.RouteProbeAttempts < 2
+}
+
 // lockScoredRelayRun serializes the portion of scored jobs that can call the
 // single model relay owned by this API instance. The relay's health accounting
 // is intentionally aggregate, so isolation must begin before the harness
@@ -349,10 +365,36 @@ func requireCompleteV7Usage(benchVersion int, usage protocol.TokenUsage, executi
 				// adapter mismatch for an agent strategy.
 				return nil
 			}
+			// A COMPLETED challenge is never ambiguous: one routed probe proves
+			// the harness can reach the broker, two missed probes prove the
+			// adapter cannot. So an unfinished challenge is the platform's gap,
+			// not an agent strategy.
+			//
+			// Charging the agent for it made an unfinished probe look identical
+			// to a template-fitter, and model_inference_required is both
+			// non-retryable and non-zeroable -- so one skipped challenge
+			// stranded a submission at zero scores permanently, which in turn
+			// left its rollout cohort unable to converge.
+			if execution.routeChallengeUnfinished() {
+				return fmt.Errorf(
+					"%w: benchmark v%d zero use lacks a signed model-route proof "+
+						"(route probe attempts=%d routed=%d)",
+					errRouteProofUnavailable,
+					benchVersion,
+					execution.RouteProbeAttempts,
+					execution.RouteProbeRouted,
+				)
+			}
+			// Incoherent counters: fail closed on the agent bin exactly as
+			// before. The evidence contradicts itself, so nothing here may be
+			// read as proof of platform fault, and nothing may mint a retry.
 			return fmt.Errorf(
-				"%w: benchmark v%d zero use lacks a signed model-route proof",
+				"%w: benchmark v%d zero use has incoherent route-proof counters "+
+					"(attempts=%d routed=%d)",
 				errAgentModelUseMissing,
 				benchVersion,
+				execution.RouteProbeAttempts,
+				execution.RouteProbeRouted,
 			)
 		}
 		return fmt.Errorf(
@@ -666,6 +708,7 @@ func (s *server) handleRelayPreflight(w http.ResponseWriter, r *http.Request) {
 var (
 	errAgentInferenceDeclined       = errors.New("agent-attributable inference decline")
 	errAgentModelUseMissing         = errors.New("agent made no authoritative model call")
+	errRouteProofUnavailable        = errors.New("platform did not complete the route challenge")
 	errInferenceLaneSaturated       = errors.New("platform inference lane saturated")
 	errRelayRecoveryExhausted       = errors.New("provider recovery exhausted")
 	errGrantDeclineEvidenceMismatch = errors.New("grant decline contradicted broker budget evidence")
@@ -709,6 +752,25 @@ func relayFinalizeFailure(err error) *store.Failure {
 			Kind:      "sandbox_failure",
 			Code:      "model_inference_required",
 			Retryable: false,
+		}
+	case errors.Is(err, errRouteProofUnavailable):
+		// The platform did not finish challenging the route, so it cannot tell
+		// an agent strategy from an adapter mismatch -- and that gap is ours.
+		// Deliberately NOT `model_inference_required`: that bin is terminal and
+		// agent-attributable, which permanently strands a submission at zero
+		// scores for something it did not do.
+		//
+		// Retryable, because unlike the agent bins a re-lease genuinely can
+		// resolve this: the next run challenges the route again. It is also
+		// deliberately NOT one of the validator's no-fault
+		// `_SANDBOX_INFRASTRUCTURE_CODES`, so it does NOT mint a retry grant or
+		// raise the attempt cap. It re-runs inside the ordinary bounded attempt
+		// budget, which keeps the mnemox unbounded re-lease loop closed while
+		// still letting a real proof gap heal itself.
+		return &store.Failure{
+			Kind:      "validator_infrastructure",
+			Code:      "route_proof_unavailable",
+			Retryable: true,
 		}
 	case errors.Is(err, errAgentInferenceDeclined):
 		// Terminal and the agent's: retrying cannot help, because the harness

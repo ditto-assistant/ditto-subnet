@@ -311,6 +311,30 @@ def _sandbox_infrastructure_failure_code(payload: dict[str, object]) -> str | No
     )
 
 
+_ROUTE_PROOF_UNAVAILABLE = "route_proof_unavailable"
+
+
+def _platform_route_proof_gap(payload: dict[str, object]) -> bool:
+    """Whether the scorer reported an unfinished platform route challenge.
+
+    Deliberately its own narrow shape rather than a new entry in
+    ``_SANDBOX_INFRASTRUCTURE_CODES``: every code in that set is no-fault and
+    mints a retry grant that RAISES the attempt cap, which is the unbounded
+    re-lease loop. This one must retry inside the ORDINARY attempt budget --
+    recoverable, because the next run challenges the route again, but bounded,
+    because a systematically unprobeable submission must still run out of
+    attempts instead of holding validator slots forever.
+    """
+    failure = payload.get("failure")
+    if not isinstance(failure, dict):
+        return False
+    return (
+        failure.get("kind") == "validator_infrastructure"
+        and failure.get("retryable") is True
+        and failure.get("code") == _ROUTE_PROOF_UNAVAILABLE
+    )
+
+
 def _agent_attributable_failure_code(payload: dict[str, object]) -> str | None:
     """Accept only the scorer's terminal, source-free agent classifier.
 
@@ -1461,6 +1485,16 @@ class DittobenchClient:
                             f"run {run_id} reported validator infrastructure "
                             f"failure: {infrastructure_code}",
                             code=infrastructure_detail,
+                        )
+                    if _platform_route_proof_gap(data):
+                        # Not the agent's: the platform never finished proving
+                        # the route disposition. Carrying the code keeps it out
+                        # of an opaque ``scoring_error`` and puts the real
+                        # reason on the ticket's ``failure_detail``.
+                        raise DittobenchError(
+                            f"run {run_id} could not prove its model route "
+                            "disposition; the platform challenge was unfinished",
+                            code=_ROUTE_PROOF_UNAVAILABLE,
                         )
                     raise DittobenchError(f"run {run_id} failed: {error}")
                 observed_at = time.monotonic()

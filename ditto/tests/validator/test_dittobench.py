@@ -27,6 +27,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorStackComponents,
     ValidatorStackIdentity,
 )
+from ditto.validator import dittobench
 from ditto.validator.dittobench import (
     _AGENT_ATTRIBUTABLE_INFERENCE_CODES,
     _SANDBOX_INFRASTRUCTURE_CODES,
@@ -2273,3 +2274,42 @@ async def test_v9_poll_rejects_invalid_base_evidence(failure: str) -> None:
 
     assert client.last_transcript is None
     assert client.take_transcript("private-run-id") is None
+
+
+class TestPlatformRouteProofGap:
+    """An unfinished platform route challenge is not the agent's failure.
+
+    It must retry inside the ordinary attempt budget: recoverable, because the
+    next run challenges the route again, but never no-fault, because a grant
+    would raise the attempt cap and re-lease without bound.
+    """
+
+    def _payload(self, code: str, kind: str, retryable: bool) -> dict[str, object]:
+        return {"failure": {"kind": kind, "code": code, "retryable": retryable}}
+
+    def test_gap_is_recognised(self) -> None:
+        payload = self._payload(
+            "route_proof_unavailable", "validator_infrastructure", True
+        )
+        assert dittobench._platform_route_proof_gap(payload) is True
+
+    def test_gap_is_not_agent_attributable(self) -> None:
+        payload = self._payload(
+            "route_proof_unavailable", "validator_infrastructure", True
+        )
+        assert dittobench._agent_attributable_failure_code(payload) is None
+
+    def test_gap_never_mints_a_no_fault_grant(self) -> None:
+        assert "route_proof_unavailable" not in dittobench._SANDBOX_INFRASTRUCTURE_CODES
+        payload = self._payload(
+            "route_proof_unavailable", "validator_infrastructure", True
+        )
+        assert dittobench._sandbox_infrastructure_failure_code(payload) is None
+
+    def test_model_inference_required_stays_terminal_and_the_agents(self) -> None:
+        payload = self._payload("model_inference_required", "sandbox_failure", False)
+        assert (
+            dittobench._agent_attributable_failure_code(payload)
+            == "model_inference_required"
+        )
+        assert dittobench._platform_route_proof_gap(payload) is False

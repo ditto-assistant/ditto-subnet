@@ -565,14 +565,68 @@ func TestV9RequiresSignedRouteProofForACompleteUnusedChatLane(t *testing.T) {
 		ProfileRevision:   "openrouter-route-0123456789abcdef-v1",
 		Model:             llm.V7HarnessModel,
 	}
+	// The proof requirement itself is unchanged: an unproven zero-use interval
+	// is still never scored 0.00. What changed is WHO it is charged to.
 	for _, version := range gatedZeroUseVersions {
 		err := requireCompleteV7Usage(version, unused, relayExecutionSummary{})
-		if !errors.Is(err, errAgentModelUseMissing) {
-			t.Fatalf("v%d unproven zero use error = %v, want model-use sentinel", version, err)
+		if !errors.Is(err, errRouteProofUnavailable) {
+			t.Fatalf("v%d unproven zero use error = %v, want route-proof sentinel", version, err)
+		}
+		if errors.Is(err, errAgentModelUseMissing) {
+			t.Fatalf("v%d blamed the agent for an unfinished platform probe", version)
 		}
 	}
 	if err := requireCompleteV7Usage(protocol.BenchVersionV8, unused, relayExecutionSummary{}); !errors.Is(err, errAgentModelUseMissing) {
 		t.Fatalf("v8 behavior changed: %v", err)
+	}
+}
+
+// TestUnprovenZeroUseIsAlwaysAnUnfinishedChallenge pins the contrapositive that
+// makes the reclassification safe: on a gated version there is no zero-use
+// interval that a COMPLETED route challenge leaves ambiguous. Every unproven
+// case has routed == 0 AND attempts < 2, i.e. the platform stopped asking. If
+// this ever fails, some genuinely ambiguous state exists and the blame split
+// has to be revisited rather than the assertion relaxed.
+func TestUnprovenZeroUseIsAlwaysAnUnfinishedChallenge(t *testing.T) {
+	for attempts := uint64(0); attempts <= 4; attempts++ {
+		for routed := uint64(0); routed <= attempts+1; routed++ {
+			execution := relayExecutionSummary{
+				RouteProbeAttempts: attempts,
+				RouteProbeRouted:   routed,
+			}
+			if execution.provesV9RouteDisposition() {
+				continue
+			}
+			// Every unproven state is either an unfinished challenge (ours)
+			// or incoherent counters (untrustworthy). There is no third kind,
+			// and in particular no state where a COMPLETED, coherent challenge
+			// left the interval ambiguous.
+			coherent := routed <= attempts
+			if coherent && !execution.routeChallengeUnfinished() {
+				t.Fatalf(
+					"unproven with attempts=%d routed=%d: a completed challenge was ambiguous",
+					attempts, routed,
+				)
+			}
+		}
+	}
+}
+
+// TestRouteProofGapRetriesWithoutMintingAGrant keeps both halves of the fix
+// honest: the gap must be recoverable (retryable) but must NOT reuse the
+// no-fault sandbox-infrastructure code set, which raises the attempt cap and
+// re-leases without bound.
+func TestRouteProofGapRetriesWithoutMintingAGrant(t *testing.T) {
+	failure := relayFinalizeFailure(errRouteProofUnavailable)
+	if failure.Kind != "validator_infrastructure" || !failure.Retryable {
+		t.Fatalf("route proof gap classification = %+v, want retryable infrastructure", failure)
+	}
+	if failure.Code == "model_inference_required" {
+		t.Fatal("route proof gap still lands in the terminal agent bin")
+	}
+	agent := relayFinalizeFailure(errAgentModelUseMissing)
+	if agent.Retryable || agent.Code != "model_inference_required" {
+		t.Fatalf("v8 agent classification regressed: %+v", agent)
 	}
 }
 
@@ -584,12 +638,18 @@ func TestV9SignedRouteProofDistinguishesGenuineZeroUse(t *testing.T) {
 		ProfileRevision:   "openrouter-route-0123456789abcdef-v1",
 		Model:             llm.V7HarnessModel,
 	}
+	// wantPlatformGap marks the unproven cases the platform caused by not
+	// finishing its own challenge. Incoherent counters stay on the agent bin:
+	// self-contradicting evidence must fail closed, or forging it would buy
+	// retries.
 	tests := []struct {
-		name      string
-		execution relayExecutionSummary
-		wantProof bool
+		name            string
+		execution       relayExecutionSummary
+		wantProof       bool
+		wantPlatformGap bool
 	}{
-		{name: "one selector missed", execution: relayExecutionSummary{RouteProbeAttempts: 1}},
+		{name: "never probed", execution: relayExecutionSummary{}, wantPlatformGap: true},
+		{name: "one selector missed", execution: relayExecutionSummary{RouteProbeAttempts: 1}, wantPlatformGap: true},
 		{name: "preferred selector routed", execution: relayExecutionSummary{RouteProbeAttempts: 1, RouteProbeRouted: 1}, wantProof: true},
 		{name: "both selectors missed", execution: relayExecutionSummary{RouteProbeAttempts: 2}, wantProof: true},
 		{name: "compatibility selector routed", execution: relayExecutionSummary{RouteProbeAttempts: 2, RouteProbeRouted: 1}, wantProof: true},
@@ -603,11 +663,27 @@ func TestV9SignedRouteProofDistinguishesGenuineZeroUse(t *testing.T) {
 			}
 			for _, version := range gatedZeroUseVersions {
 				err := requireCompleteV7Usage(version, unused, test.execution)
-				if test.wantProof && err != nil {
-					t.Fatalf("proved v%d zero rejected: %v", version, err)
+				if test.wantProof {
+					if err != nil {
+						t.Fatalf("proved v%d zero rejected: %v", version, err)
+					}
+					continue
 				}
-				if !test.wantProof && !errors.Is(err, errAgentModelUseMissing) {
-					t.Fatalf("unproved v%d zero error = %v, want model-use sentinel", version, err)
+				// Unproven either way: the zero is still never scored 0.00.
+				if err == nil {
+					t.Fatalf("unproved v%d zero was accepted", version)
+				}
+				if test.wantPlatformGap {
+					if !errors.Is(err, errRouteProofUnavailable) {
+						t.Fatalf("v%d unfinished challenge = %v, want route-proof sentinel", version, err)
+					}
+					continue
+				}
+				if !errors.Is(err, errAgentModelUseMissing) {
+					t.Fatalf("v%d incoherent counters = %v, want model-use sentinel", version, err)
+				}
+				if failure := relayFinalizeFailure(err); failure.Retryable {
+					t.Fatalf("v%d incoherent counters became retryable: %+v", version, failure)
 				}
 			}
 		})
@@ -646,15 +722,36 @@ func TestProvenZeroInferenceIsAcceptedOnEveryGatedBenchVersion(t *testing.T) {
 
 	// The proof requirement itself must not have been dropped along the way: an
 	// unproven zero is an adapter mismatch we cannot rule out, and scoring it
-	// 0.00 would charge the miner for a platform fault.
+	// 0.00 would charge the miner for a platform fault. That guard is about
+	// whether the interval is ACCEPTED, which is what this asserts. Who the
+	// rejection is charged to is a separate question, covered by
+	// TestV9SignedRouteProofDistinguishesGenuineZeroUse: a single missed probe
+	// is an unfinished platform challenge, so it is rejected as a route-proof
+	// gap rather than blamed on the agent.
 	for _, version := range gatedZeroUseVersions {
 		err := requireCompleteV7Usage(version, unused, relayExecutionSummary{RouteProbeAttempts: 1})
+		if err == nil {
+			t.Fatalf("v%d unproven zero was widened into an accepted score", version)
+		}
+		if !errors.Is(err, errRouteProofUnavailable) {
+			t.Fatalf("v%d unfinished challenge = %v, want route-proof sentinel", version, err)
+		}
+		if failure := relayFinalizeFailure(err); failure.Code == "model_inference_required" {
+			t.Fatalf("v%d unfinished challenge still blamed the agent: %+v", version, failure)
+		}
+	}
+
+	// And an interval whose counters contradict themselves stays terminal on
+	// the agent bin: corrupt evidence must never buy a retry.
+	for _, version := range gatedZeroUseVersions {
+		incoherent := relayExecutionSummary{RouteProbeAttempts: 1, RouteProbeRouted: 2}
+		err := requireCompleteV7Usage(version, unused, incoherent)
 		if !errors.Is(err, errAgentModelUseMissing) {
-			t.Fatalf("v%d unproven zero was widened into an accepted score: %v", version, err)
+			t.Fatalf("v%d incoherent counters = %v, want model-use sentinel", version, err)
 		}
 		failure := relayFinalizeFailure(err)
 		if failure.Kind != "sandbox_failure" || failure.Code != "model_inference_required" || failure.Retryable {
-			t.Fatalf("v%d unproven zero classification = %+v", version, failure)
+			t.Fatalf("v%d incoherent counter classification = %+v", version, failure)
 		}
 	}
 }
