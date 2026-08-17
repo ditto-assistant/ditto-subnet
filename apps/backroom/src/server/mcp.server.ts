@@ -449,13 +449,13 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_submission_cooldown:
     'Read the current miner submission fee and owner-coldkey cooldown. Revision history is newest-first and opt-in; historyLimit defaults to 0.',
   get_confirmation_bundle_settings:
-    'Read isolated Bench v9 confirmation issuance settings and optional audit history. Shadow cannot full-confirm. This does not activate v9 or rewards.',
+    'Read isolated LongMem confirmation issuance settings and optional audit history. Shadow cannot full-confirm. This does not activate rewards.',
   set_confirmation_bundle_settings:
-    'Apply a complete bounded confirmation policy with revision guard, reason, and exact mode phrase. Does not activate v9 or rewards.',
+    'Apply a complete bounded confirmation policy with revision guard, reason, and exact mode phrase. Does not activate rewards.',
   list_confirmation_bundles:
-    'Page v9 LongMem evidence, spend, ablations, and subject projections.',
+    'Page LongMem evidence, spend, ablations, subjects, and failure diagnostics.',
   get_confirmation_bundle:
-    'Read one complete v9 confirmation root, signature, typed evidence, tickets, and subject projections.',
+    'Read one complete confirmation root, signature, typed evidence, tickets, and subject projections.',
   authorize_confirmation_bundle_retest:
     'Authorize exactly the next evidence generation with current generation, request UUID, reason, and exact retest phrase. Does not activate rewards.',
   remove_failed_submission_from_queue:
@@ -1378,9 +1378,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'list_confirmation_bundles',
     {
-      title: 'List Bench v9 confirmation bundles',
+      title: 'List LongMem confirmation bundles',
       description:
-        'List newest-first Bench v9 LongMem bundles with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. Filter by state and page bounds. Requires backroom:read.',
+        'List newest-first LongMem bundles for the live benchmark with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. Filter by state and page bounds. Requires backroom:read. Each ticket carries failure_reason -- the coarse four-value protocol class that drives reissue -- plus failure_class and failure_stage, the allowlisted diagnostic and the last stage the slot published, both bound into the reporter signature. They are null only for a reporter predating that contract, so repeated nulls across fresh attempts mean the fleet has not adopted it yet. shadow_calibration counts completed_bundle_count (bundles that actually produced verified evidence) separately from superseded_bundle_count and failed_bundle_count: a lane with zero completions is an execution outage, not a cohort that completed and never promoted, and promotion_rate_bps is null rather than zero in that case.',
       inputSchema: {
         state: confirmationBundleStateSchema.optional(),
         limit: z.number().int().min(1).max(200).default(20),
@@ -1394,9 +1394,9 @@ export function createBackroomMcpServer(props: McpGrantProps) {
   registerTool(
     'get_confirmation_bundle',
     {
-      title: 'Get Bench v9 confirmation bundle',
+      title: 'Get LongMem confirmation bundle',
       description:
-        'Read one complete Bench v9 confirmation bundle by UUID. Use this before authorizing a retest or diagnosing qualification: it preserves the root digest and signature, settings/profile/generation binding, completion mode, qualification status, typed provider receipts and synthetic ablations, ticket history, and every subject projection. Requires backroom:read and changes nothing.',
+        'Read one complete LongMem confirmation bundle by UUID. Use this before authorizing a retest or diagnosing qualification: it preserves the root digest and signature, settings/profile/generation binding, completion mode, qualification status, typed provider receipts and synthetic ablations, ticket history (including the signed failure_class/failure_stage diagnostics for every attempt), and every subject projection. Requires backroom:read and changes nothing.',
       inputSchema: confirmationBundleDetailInputSchema,
       annotations: toolAnnotations('read'),
     },

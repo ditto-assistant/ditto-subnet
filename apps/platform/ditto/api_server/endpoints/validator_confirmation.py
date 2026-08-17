@@ -39,7 +39,7 @@ from ditto.api_models.validator_confirmation import (
 )
 from ditto.api_server.attestation import verify_signature
 from ditto.api_server.confirmation_candidate_reconciliation import (
-    reconcile_v9_confirmation_candidates,
+    reconcile_confirmation_candidates,
 )
 from ditto.api_server.confirmation_evidence import (
     ConfirmationEvidenceError,
@@ -78,6 +78,7 @@ from ditto.db.models import (
     ConfirmationBundleSubject,
     ConfirmationBundleTicket,
 )
+from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_attempt_lock import lock_confirmation_attempt
 from ditto.db.queries.confirmation_bundles import (
     ConfirmationBundlePersistenceError,
@@ -232,17 +233,36 @@ def v9_confirmation_fail_signing_message(
     reason: str,
     nonce: UUID,
     requested_at: datetime,
+    failure_class: str | None = None,
+    failure_stage: str | None = None,
 ) -> bytes:
+    """Bind one hand-back, and its diagnostics when the reporter sent any.
+
+    v1 is the original reason-only message and stays valid forever: a reporter
+    predating the diagnostic contract signs it and verifies unchanged. v2 binds
+    the allowlisted class and stage into the signature so a persisted diagnostic
+    is exactly what the reporter signed — an unsigned advisory field could be
+    forged or stripped by anything on the path, and this one is read by
+    operators deciding whether to spend the next bounded canary.
+    """
     if requested_at.tzinfo is None:
         raise ValueError("confirmation failure timestamp must include a timezone")
+    if (failure_class is None) != (failure_stage is None):
+        raise ValueError("confirmation failure class and stage must travel together")
     requested = (
         requested_at.astimezone(UTC)
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z")
     )
+    if failure_class is None:
+        return (
+            "validator-v9-confirmation-fail:v1:"
+            f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:{nonce}:{requested}"
+        ).encode()
     return (
-        "validator-v9-confirmation-fail:v1:"
-        f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:{nonce}:{requested}"
+        "validator-v9-confirmation-fail:v2:"
+        f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:"
+        f"{failure_class}:{failure_stage}:{nonce}:{requested}"
     ).encode()
 
 
@@ -352,7 +372,7 @@ async def _job_response(
         slot_id=ticket.slot_id,
         deadline=ticket.deadline,
         artifact_sha256=bundle.artifact_sha256,
-        bench_version=9,
+        bench_version=bundle.bench_version,
         settings_revision=bundle.settings_revision,
         settings_checksum=bundle.settings_checksum,
         retest_generation=bundle.retest_generation,
@@ -581,8 +601,10 @@ async def request_v9_confirmation_job(
             ):
                 response.status_code = 204
                 return response
-            await reconcile_v9_confirmation_candidates(
+            confirmation_version = await active_bench_version(session)
+            await reconcile_confirmation_candidates(
                 session,
+                bench_version=confirmation_version,
                 verification_profiles=_profile_registry(request),
             )
 
@@ -597,7 +619,7 @@ async def request_v9_confirmation_job(
                                 ConfirmationBundleState.BLOCKED_BUDGET.value,
                             )
                         ),
-                        ConfirmationBundle.bench_version == 9,
+                        ConfirmationBundle.bench_version == confirmation_version,
                         ConfirmationBundle.profile_revision == payload.profile_revision,
                         ConfirmationBundle.profile_checksum == payload.profile_checksum,
                         ConfirmationBundle.settings_revision
@@ -799,7 +821,7 @@ async def get_v9_confirmation_artifact(
         screened_image_size_bytes=agent.screened_image_size_bytes,
         screened_image_id=agent.screened_image_id,
         screened_image_ref=agent.screened_image_ref,
-        bench_version=9,
+        bench_version=bundle.bench_version,
         screening_policy_version=agent.screening_policy_version,
     )
 
@@ -974,6 +996,11 @@ async def fail_v9_confirmation_job(
         raise ValidatorAuthError(
             "confirmation failure header does not match signed hotkey"
         )
+    # The message version follows what the reporter actually sent: a hand-back
+    # carrying diagnostics must have signed them (v2), and one without them
+    # verifies exactly as before (v1). Both are checked against the same
+    # allowlisted model, so a forged or stripped diagnostic fails closed rather
+    # than landing in the operator-visible ledger.
     signed = v9_confirmation_fail_signing_message(
         validator_hotkey=payload.validator_hotkey,
         bundle_id=bundle_id,
@@ -981,6 +1008,8 @@ async def fail_v9_confirmation_job(
         reason=payload.reason,
         nonce=payload.nonce,
         requested_at=payload.requested_at,
+        failure_class=payload.failure_class,
+        failure_stage=payload.failure_stage,
     )
     if not verify_signature(
         signer=payload.validator_hotkey,
@@ -1056,6 +1085,12 @@ async def fail_v9_confirmation_job(
             )
             if not settlement.replayed:
                 ticket.failure_reason = expected_failure_reason
+                # Signed, allowlisted, and low-cardinality. This is the only
+                # place the cause of a confirmation failure becomes readable to
+                # an operator: without it a repeatable lane break is invisible
+                # outside one validator's host logs.
+                ticket.failure_class = payload.failure_class
+                ticket.failure_stage = payload.failure_stage
             return V9ConfirmationFailResponse(
                 bundle_id=bundle_id,
                 ticket_id=ticket.ticket_id,
@@ -1163,8 +1198,9 @@ async def submit_v9_confirmation_report(
                 verification_profile=profile,
                 now=now,
             )
-            await reconcile_v9_confirmation_candidates(
+            await reconcile_confirmation_candidates(
                 session,
+                bench_version=await active_bench_version(session),
                 verification_profiles=_profile_registry(request),
             )
             assert completed.evidence_sha256 is not None

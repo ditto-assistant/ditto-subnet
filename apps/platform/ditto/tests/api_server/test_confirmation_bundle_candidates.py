@@ -580,10 +580,17 @@ class TestCandidateSelection:
                 [candidate(1, 0.9, version=9), candidate(2, 0.8, version=10)]
             )
 
-    @pytest.mark.parametrize("version", [1, 8, 10])
-    def test_rejects_non_v9_candidate_axis(self, version: int) -> None:
-        with pytest.raises(ConfirmationPolicyError, match="must use bench v9"):
+    @pytest.mark.parametrize("version", [1, 8])
+    def test_rejects_pre_contract_candidate_axis(self, version: int) -> None:
+        with pytest.raises(ConfirmationPolicyError, match="carrying base evidence"):
             select_confirmation_candidates([candidate(1, 0.9, version=version)])
+
+    @pytest.mark.parametrize("version", [9, 10, 11])
+    def test_accepts_any_confirmation_capable_axis(self, version: int) -> None:
+        """Selection follows the live benchmark instead of one frozen epoch."""
+        selection = select_confirmation_candidates([candidate(1, 0.9, version=version)])
+        assert len(selection.selected) == 1
+        assert selection.selected[0].bench_version == version
 
     @pytest.mark.parametrize("top_n", [0, -1, 11, True])
     def test_rejects_invalid_top_n(self, top_n: int) -> None:

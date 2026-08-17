@@ -7508,6 +7508,28 @@ class TestFailJob:
 
 
 class TestSubmitScore:
+    @staticmethod
+    async def _activate_confirmation_epoch(
+        session_maker: async_sessionmaker[AsyncSession], *, bench_version: int
+    ) -> None:
+        """Make ``bench_version`` live.
+
+        Confirmation reconciliation converges the LIVE benchmark's cohort, so a
+        score for a superseded epoch deliberately creates no work. These
+        fixtures score at v9, so v9 has to be the activated benchmark.
+        """
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=uuid4(),
+                    from_version=bench_version - 1,
+                    desired_version=bench_version,
+                    status="activated",
+                    cohort_size=5,
+                    activated_at=datetime.now(UTC) - timedelta(days=2),
+                )
+            )
+
     async def test_v9_quorum_reconciles_once_without_starting_confirmation_work(
         self,
         app: FastAPI,
@@ -7522,12 +7544,13 @@ class TestSubmitScore:
             sha256="a" * 64,
             dataset_version=9,
         )
+        await self._activate_confirmation_epoch(session_maker, bench_version=9)
         _install_db(app, session_maker)
         _install_chain(app)
         reconcile = AsyncMock()
         monkeypatch.setattr(
             validator_endpoint,
-            "reconcile_v9_confirmation_candidates",
+            "reconcile_confirmation_candidates",
             reconcile,
         )
 
@@ -7552,6 +7575,54 @@ class TestSubmitScore:
         assert len(awaited.kwargs["finalized_scores"]) == 3
         assert awaited.kwargs["finalized_agent"].agent_id == agent_id
 
+    async def test_quorum_for_a_superseded_epoch_creates_no_confirmation_work(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A straggler score for a dead epoch must not manufacture work.
+
+        Confirmation converges the live cohort only. Reconciling a superseded
+        epoch is how the lane accumulated bundles against submissions that no
+        longer ranked, burning the daily cap on a cohort nobody would promote.
+        """
+        overrides = _v9_score_overrides()
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            sha256="a" * 64,
+            dataset_version=9,
+        )
+        # The network has moved past the epoch these scores are reported for.
+        await self._activate_confirmation_epoch(session_maker, bench_version=10)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        reconcile = AsyncMock()
+        monkeypatch.setattr(
+            validator_endpoint,
+            "reconcile_confirmation_candidates",
+            reconcile,
+        )
+
+        for keypair in _KEYPAIRS:
+            await _seed_ticket(
+                session_maker, agent_id, keypair=keypair, bench_version=9
+            )
+            response = await client.post(
+                f"/api/v1/validator/agent/{agent_id}/score",
+                json=_score_payload(
+                    agent_id,
+                    run_id="run-v9-vector",
+                    keypair=keypair,
+                    **overrides,
+                ),
+            )
+            assert response.status_code == 200, response.text
+
+        reconcile.assert_not_awaited()
+
     async def test_v9_reconciliation_failure_cannot_roll_back_canonical_quorum(
         self,
         app: FastAPI,
@@ -7566,12 +7637,13 @@ class TestSubmitScore:
             sha256="a" * 64,
             dataset_version=9,
         )
+        await self._activate_confirmation_epoch(session_maker, bench_version=9)
         _install_db(app, session_maker)
         _install_chain(app)
         reconcile = AsyncMock(side_effect=RuntimeError("auxiliary projection failed"))
         monkeypatch.setattr(
             validator_endpoint,
-            "reconcile_v9_confirmation_candidates",
+            "reconcile_confirmation_candidates",
             reconcile,
         )
 

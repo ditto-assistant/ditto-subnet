@@ -30,6 +30,7 @@ from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
+    BenchmarkRollout,
     ConfirmationBundleSettingsRevision,
     ConfirmationBundleTicket,
     ValidatorTicket,
@@ -120,6 +121,18 @@ async def _seed_confirmation_and_ordinary_candidates(
     confirmation_agent_id = uuid4()
     ordinary_agent_ids = [uuid4() for _ in range(ordinary_count)]
     async with maker() as session, session.begin():
+        # A confirmation claim only leases work for the live benchmark, so the
+        # epoch this bundle belongs to has to be the activated one.
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=8,
+                desired_version=9,
+                status="activated",
+                cohort_size=5,
+                activated_at=_NOW - timedelta(days=2),
+            )
+        )
         revision = ConfirmationBundleSettingsRevision(
             parent_revision=0,
             scope="*",

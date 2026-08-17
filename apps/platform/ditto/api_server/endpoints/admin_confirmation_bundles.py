@@ -36,7 +36,7 @@ from ditto.api_models.confirmation_bundles import (
     LongMemEvidence,
 )
 from ditto.api_server.confirmation_candidate_reconciliation import (
-    reconcile_v9_confirmation_candidates,
+    reconcile_confirmation_candidates,
 )
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
@@ -47,6 +47,7 @@ from ditto.db.models import (
 from ditto.db.models import (
     ConfirmationBundleSettingsRevision as SettingsRevisionRow,
 )
+from ditto.db.queries.benchmark_rollout import active_bench_version
 from ditto.db.queries.confirmation_bundles import (
     GLOBAL_SCOPE,
     ConfirmationBundlePersistenceError,
@@ -139,12 +140,14 @@ async def _shadow_calibration_view(
     session: AsyncSession,
     *,
     now: datetime,
+    bench_version: int,
     profile_revision: str | None,
     profile_checksum: str | None,
 ) -> ConfirmationShadowCalibrationView:
     measured = await confirmation_shadow_calibration(
         session,
         now=now,
+        bench_version=bench_version,
         profile_revision=profile_revision,
         profile_checksum=profile_checksum,
     )
@@ -178,7 +181,14 @@ async def _shadow_calibration_view(
             if measured.bundle_count
             else None
         ),
+        bench_version=bench_version,
+        # Completed means "produced verified evidence". Superseded and failed
+        # generations are reported on their own axes: folding them into the
+        # completed count is what let a lane with zero completions read as a
+        # populated window whose promotion rate happened to be zero.
         completed_bundle_count=measured.completed_bundle_count,
+        superseded_bundle_count=measured.superseded_bundle_count,
+        failed_bundle_count=measured.failed_bundle_count,
         qualified_bundle_count=measured.qualified_bundle_count,
         promotion_rate_bps=(
             (
@@ -197,7 +207,8 @@ async def _shadow_calibration_view(
         epoch_duration_seconds=None,
         projected_epoch_spend_microusd=None,
         epoch_projection_unavailable_reason=(
-            "Bench v9 has no configured epoch duration; no projection was guessed."
+            f"Bench v{bench_version} has no configured epoch duration; "
+            "no projection was guessed."
         ),
     )
 
@@ -299,6 +310,8 @@ async def _bundle_view(
                 issued_at=row.issued_at,
                 deadline=row.deadline,
                 failure_reason=row.failure_reason,
+                failure_class=row.failure_class,
+                failure_stage=row.failure_stage,
                 failed_at=row.failed_at,
             )
             for row in tickets
@@ -369,10 +382,12 @@ async def create_confirmation_bundle_settings_revision(
         )
         # The append-only revision is visible in this transaction, so changing
         # OFF/SHADOW/ENFORCE or installing an exact profile immediately
-        # reconciles already-finalized v9 candidates. This creates/reuses only
-        # metadata; reservation and execution remain validator-claim work.
-        await reconcile_v9_confirmation_candidates(
+        # reconciles already-finalized candidates on the live benchmark. This
+        # creates/reuses only metadata; reservation and execution remain
+        # validator-claim work.
+        await reconcile_confirmation_candidates(
             session,
+            bench_version=await active_bench_version(session),
             verification_profiles=getattr(
                 request.app.state, "confirmation_verification_profiles", {}
             ),
@@ -422,6 +437,7 @@ async def get_confirmation_bundles(
         shadow_calibration=await _shadow_calibration_view(
             session,
             now=now,
+            bench_version=await active_bench_version(session),
             profile_revision=effective_settings.profile_revision,
             profile_checksum=effective_settings.profile_checksum,
         ),

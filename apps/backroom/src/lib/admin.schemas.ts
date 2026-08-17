@@ -2404,6 +2404,11 @@ const confirmationBundleTicketSchema = z.strictObject({
   issued_at: confirmationTimestampSchema,
   deadline: confirmationTimestampSchema,
   failure_reason: z.string().nullable(),
+  // The signed, allowlisted diagnostics behind ``failure_reason``. Optional on
+  // the wire: a reporter predating the contract sends neither, so an older
+  // ticket in the same list must still parse.
+  failure_class: z.string().min(1).nullable().default(null),
+  failure_stage: z.string().min(1).nullable().default(null),
   failed_at: confirmationTimestampSchema.nullable(),
 })
 
@@ -2542,7 +2547,12 @@ export const confirmationShadowCalibrationSchema = z
     measured_base_cost_microusd: z.number().int().nonnegative().nullable(),
     confirmation_bundle_count: z.number().int().nonnegative(),
     measured_bundle_cost_microusd: z.number().int().nonnegative().nullable(),
+    bench_version: z.number().int().positive().default(9),
+    // completed = produced verified evidence. Superseded/failed generations are
+    // separate axes so an execution outage is not read as an unpromoted cohort.
     completed_bundle_count: z.number().int().nonnegative(),
+    superseded_bundle_count: z.number().int().nonnegative().default(0),
+    failed_bundle_count: z.number().int().nonnegative().default(0),
     qualified_bundle_count: z.number().int().nonnegative(),
     promotion_rate_bps: z.number().int().min(0).max(10_000).nullable(),
     projected_daily_spend_microusd: z.number().int().nonnegative().nullable(),

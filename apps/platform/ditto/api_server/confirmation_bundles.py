@@ -1,4 +1,10 @@
-"""Pure policy core for bounded Bench v9 confirmation bundles.
+"""Pure policy core for bounded LongMem confirmation bundles.
+
+LongMemEval is a permanent DittoBench fixture, not a one-epoch v9 experiment.
+Which benchmarks the lane runs on is therefore not an independent policy: it is
+exactly ``ditto_screening_protocol.bench_v9.supports_confirmation``, derived
+from the one alias that declares which epochs carry the base-evidence stack.
+Extend that alias and every layer here moves with it.
 
 This module deliberately has no FastAPI, SQLAlchemy, or clock dependencies.  It
 defines the decisions that later API/database layers persist under locks:
@@ -27,6 +33,10 @@ from datetime import UTC, date, datetime
 from enum import StrEnum
 from typing import Literal
 
+from ditto.api_models.confirmation_bundles import (
+    CONFIRMATION_BENCH_VERSIONS,
+    supports_confirmation,
+)
 from ditto_screening_protocol.confirmation_transport import (
     ConfirmationEligibilityMode,
 )
@@ -339,10 +349,19 @@ def settings_checksum(settings: ConfirmationBundleSettings) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def full_confirmation_eligible(candidate: ConfirmationCandidate) -> bool:
-    """Whether a v9 row has complete evidence for simulated full ranking."""
+def confirmation_bench_version_error(subject: str) -> str:
+    """The one refusal message every layer uses for an unsupported epoch."""
+    supported = ", ".join(f"v{version}" for version in CONFIRMATION_BENCH_VERSIONS)
     return (
-        candidate.bench_version == 9
+        f"confirmation {subject} require a benchmark carrying base evidence "
+        f"({supported})"
+    )
+
+
+def full_confirmation_eligible(candidate: ConfirmationCandidate) -> bool:
+    """Whether a row has complete evidence for simulated full ranking."""
+    return (
+        supports_confirmation(candidate.bench_version)
         and candidate.confirmation_state == ConfirmationState.COMPLETED
         and candidate.full_composite is not None
         and math.isfinite(candidate.full_composite)
@@ -357,9 +376,14 @@ def reward_eligible(
 
     Off/shadow preserve the pre-enforcement base ranking while evidence is
     measured. Enforce is the only mode that replaces that authority with the
-    fail-closed full-confirmation gate. Pre-v9 contracts are unchanged.
+    fail-closed full-confirmation gate, and it applies to every
+    confirmation-capable benchmark — a gate that silently stopped biting when
+    the network advanced an epoch would be worse than no gate. Contracts
+    without base evidence are unchanged.
     """
-    if candidate.bench_version != 9 or mode != ConfirmationMode.ENFORCE:
+    if not supports_confirmation(candidate.bench_version) or (
+        mode != ConfirmationMode.ENFORCE
+    ):
         return True
     return full_confirmation_eligible(candidate)
 
@@ -389,10 +413,13 @@ def select_confirmation_candidates(
     _require_finite_between("challenger_z", challenger_z, minimum=0.0, maximum=3.0)
     rows = tuple(candidates)
     versions = {row.bench_version for row in rows}
+    # One cohort is always one benchmark: base composites from different
+    # datasets are not numerically comparable, so a mixed set would silently
+    # rank across incomparable axes.
     if len(versions) > 1:
         raise ConfirmationPolicyError("candidate selection cannot mix bench versions")
-    if versions and versions != {9}:
-        raise ConfirmationPolicyError("confirmation candidates must use bench v9")
+    if versions and not supports_confirmation(next(iter(versions))):
+        raise ConfirmationPolicyError(confirmation_bench_version_error("candidates"))
 
     base_board = _group_best(rows, score_axis="base")
     confirmed_board = _group_best(
@@ -679,6 +706,7 @@ def _require_finite_between(
 
 
 __all__ = [
+    "confirmation_bench_version_error",
     "BudgetExhausted",
     "BudgetReservation",
     "CandidateSelection",

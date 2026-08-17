@@ -419,6 +419,8 @@ class PlatformClient:
         job: V9ConfirmationJobResponse,
         *,
         reason: Literal["execution_failed", "deadline", "cancelled", "infrastructure"],
+        failure_class: str | None = None,
+        failure_stage: str | None = None,
     ) -> V9ConfirmationFailResponse:
         """Close one private v9 lease without touching canonical fail routes."""
         url = f"{self._base}{_PREFIX}/v9-confirmation/bundle/{job.bundle_id}/fail"
@@ -432,6 +434,8 @@ class PlatformClient:
                 validator_hotkey=self._config.validator_hotkey,
                 ticket_id=job.ticket_id,
                 reason=reason,
+                failure_class=failure_class,
+                failure_stage=failure_stage,
                 nonce=nonce,
                 requested_at=requested_at,
                 signature=sign_v9_confirmation_fail(
@@ -440,6 +444,8 @@ class PlatformClient:
                     bundle_id=job.bundle_id,
                     ticket_id=job.ticket_id,
                     reason=reason,
+                    failure_class=failure_class,
+                    failure_stage=failure_stage,
                     nonce=nonce,
                     requested_at=requested_at,
                 ),

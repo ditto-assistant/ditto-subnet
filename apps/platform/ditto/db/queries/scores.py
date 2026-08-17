@@ -37,6 +37,8 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.confirmation_bundles import (
     ConfirmationBundleMode,
     ConfirmationBundleSettings,
+    confirmation_capable,
+    supports_confirmation,
 )
 from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
@@ -1048,7 +1050,7 @@ async def v9_confirmation_public_projections(
             )
             .where(
                 ConfirmationBundleSubject.agent_id.in_(ids),
-                ConfirmationBundleSubject.bench_version == 9,
+                confirmation_capable(ConfirmationBundleSubject.bench_version),
             )
         )
     ).all()
@@ -1338,7 +1340,7 @@ async def ranked_quorum_agent_ids(
         )
     )
     ranked = set(await session.scalars(qualifying))
-    if bench_version != 9:
+    if not supports_confirmation(bench_version):
         return ranked
     enforcement_settings = await _v9_confirmation_enforcement_settings(session)
     if enforcement_settings is None:
@@ -1354,7 +1356,7 @@ async def ranked_quorum_agent_ids(
             )
             .where(
                 ConfirmationBundleSubject.agent_id.in_(ranked),
-                ConfirmationBundleSubject.bench_version == 9,
+                ConfirmationBundleSubject.bench_version == bench_version,
                 ConfirmationBundleSubject.result_status == "full_confirmed",
                 ConfirmationBundleSubject.full_effective_micros > 0,
                 ConfirmationBundle.state == "completed",
@@ -1775,7 +1777,7 @@ async def list_eligible_ledger(
     if v9_enforce:
         ranking_composite = case(
             (
-                Score.bench_version == 9,
+                confirmation_capable(Score.bench_version),
                 ConfirmationBundleSubject.full_effective_micros / 1_000_000.0,
             ),
             else_=Score.composite,
@@ -1783,7 +1785,7 @@ async def list_eligible_ledger(
         ranked_predicate = and_(
             Score.n >= MIN_ELIGIBLE_CASES,
             ranking_composite > 0.0,
-            or_(Score.bench_version != 9, confirmed_v9),
+            or_(~confirmation_capable(Score.bench_version), confirmed_v9),
         )
     # Keep the ranking relation scalar-only. Large score JSON and moderation
     # fingerprints are joined only after PostgreSQL has selected one winner per
@@ -1825,9 +1827,10 @@ async def list_eligible_ledger(
                 ConfirmationBundle,
                 ConfirmationBundle.bundle_id == ConfirmationBundleSubject.bundle_id,
             )
-            # In enforce mode a base-only or unqualified v9 row is not merely
-            # ordered low: it is absent from the authoritative ledger entirely.
-            .where(or_(Score.bench_version != 9, confirmed_v9))
+            # In enforce mode a base-only or unqualified confirmation-capable
+            # row is not merely ordered low: it is absent from the
+            # authoritative ledger entirely.
+            .where(or_(~confirmation_capable(Score.bench_version), confirmed_v9))
         )
     agent_best = agent_best_stmt.subquery()
     per_agent = (
@@ -2099,7 +2102,7 @@ async def list_eligible_ledger(
             selection_score = (
                 case(
                     (
-                        authoritative.c.bench_version == 9,
+                        confirmation_capable(authoritative.c.bench_version),
                         authoritative.c.ranking_composite,
                     ),
                     else_=continual_selection,
@@ -2503,7 +2506,7 @@ async def list_eligible_ledger(
             if member.family_agent_id is not None
         )
         v9_confirmation = None
-        if row.bench_version == 9 and row.v9_bundle_id is not None:
+        if supports_confirmation(row.bench_version) and row.v9_bundle_id is not None:
             v9_confirmation = {
                 "mode": row.v9_completion_mode,
                 "result_status": row.v9_result_status,

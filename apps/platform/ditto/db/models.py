@@ -4832,7 +4832,7 @@ class ConfirmationRetestAuthorization(Base):
         CheckConstraint(
             "length(artifact_sha256) = 64", name="confirmation_retest_sha_check"
         ),
-        CheckConstraint("bench_version = 9", name="confirmation_retest_version_check"),
+        CheckConstraint("bench_version >= 9", name="confirmation_retest_version_check"),
         CheckConstraint(
             "length(profile_revision) BETWEEN 1 AND 128",
             name="confirmation_retest_profile_revision_check",
@@ -4967,7 +4967,9 @@ class ConfirmationBundle(Base):
         CheckConstraint(
             "length(artifact_sha256) = 64", name="confirmation_bundles_sha_check"
         ),
-        CheckConstraint("bench_version = 9", name="confirmation_bundles_version_check"),
+        CheckConstraint(
+            "bench_version >= 9", name="confirmation_bundles_version_check"
+        ),
         CheckConstraint(
             "length(profile_revision) BETWEEN 1 AND 128",
             name="confirmation_bundles_profile_revision_check",
@@ -5082,7 +5084,7 @@ class ConfirmationBundleSubject(Base):
             name="confirmation_subjects_bundle_fkey",
         ),
         CheckConstraint(
-            "bench_version = 9", name="confirmation_subjects_version_check"
+            "bench_version >= 9", name="confirmation_subjects_version_check"
         ),
         CheckConstraint(
             "length(artifact_sha256) = 64", name="confirmation_subjects_sha_check"
@@ -5143,6 +5145,19 @@ class ConfirmationBundleTicket(Base):
     )
     deadline: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
     failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_class: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Signed, allowlisted diagnostic class behind :attr:`failure_reason`.
+
+    ``failure_reason`` is a four-value protocol class chosen to drive reissue
+    policy; it cannot distinguish a sandbox OOM from an evidence-schema break.
+    This is the smallest thing that localizes that boundary fleet-wide without
+    becoming an error-string channel, and it is bound into the reporter's
+    signature. Optional: a reporter predating the contract sends neither field.
+    """
+
+    failure_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Last progress stage the slot published before it broke, or ``unknown``."""
+
     failed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -5171,6 +5186,27 @@ class ConfirmationBundleTicket(Base):
         CheckConstraint(
             "(failure_reason IS NULL) = (failed_at IS NULL)",
             name="confirmation_tickets_failure_pair_check",
+        ),
+        CheckConstraint(
+            "(failure_class IS NULL) = (failure_stage IS NULL)",
+            name="confirmation_tickets_failure_diagnostic_pair_check",
+        ),
+        CheckConstraint(
+            "failure_class IS NULL OR failure_reason IS NOT NULL",
+            name="confirmation_tickets_failure_diagnostic_requires_reason_check",
+        ),
+        CheckConstraint(
+            "failure_class IS NULL OR failure_class IN ("
+            "'sandbox_oom', 'lease_revoked', 'validator_infrastructure', "
+            "'platform_infrastructure', 'dittobench', 'platform', 'validator', "
+            "'evidence_schema', 'timeout', 'transport', 'unclassified')",
+            name="confirmation_tickets_failure_class_check",
+        ),
+        CheckConstraint(
+            "failure_stage IS NULL OR failure_stage IN ("
+            "'preparing', 'running_confirmation', 'finalizing', "
+            "'submitting_result', 'failed_retrying', 'unknown')",
+            name="confirmation_tickets_failure_stage_check",
         ),
         UniqueConstraint(
             "bundle_id", "attempt", name="confirmation_tickets_attempt_key"

@@ -342,15 +342,73 @@ class V9ConfirmationPreparedReport(BaseModel):
     evidence_sha256: Sha256
 
 
+# Allowlisted diagnostic classes a reporter may attach to a hand-back. The
+# protocol reason (four values) drives reissue policy; this says WHY without
+# ever becoming an error-string channel. Anything a reporter cannot classify
+# arrives as "unclassified" rather than as an arbitrary type or message. Both
+# sides read this one list so a validator can never widen it unilaterally.
+CONFIRMATION_FAILURE_CLASS_VALUES = (
+    "sandbox_oom",
+    "lease_revoked",
+    "validator_infrastructure",
+    "platform_infrastructure",
+    "dittobench",
+    "platform",
+    "validator",
+    "evidence_schema",
+    "timeout",
+    "transport",
+    "unclassified",
+)
+
+ConfirmationFailureClass = Literal[
+    "sandbox_oom",
+    "lease_revoked",
+    "validator_infrastructure",
+    "platform_infrastructure",
+    "dittobench",
+    "platform",
+    "validator",
+    "evidence_schema",
+    "timeout",
+    "transport",
+    "unclassified",
+]
+
+# The last progress stage the slot published before it broke, plus "unknown"
+# for a slot that failed before publishing any stage at all.
+ConfirmationFailureStage = Literal[
+    "preparing",
+    "running_confirmation",
+    "finalizing",
+    "submitting_result",
+    "failed_retrying",
+    "unknown",
+]
+
+
 class V9ConfirmationFailRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[str, Field(pattern=SS58_PATTERN)]
     ticket_id: UUID
     reason: Literal["execution_failed", "deadline", "cancelled", "infrastructure"]
+    # Optional so a reporter predating this contract keeps handing work back
+    # unchanged: it signs the v1 message and Platform verifies v1. A reporter
+    # that sends a class signs the v2 message, which binds both diagnostics, so
+    # neither field can be forged or stripped in flight. New reporter against
+    # old Platform fails its signature check — deploy Platform first.
+    failure_class: ConfirmationFailureClass | None = None
+    failure_stage: ConfirmationFailureStage | None = None
     nonce: UUID
     requested_at: datetime
     signature: SignatureHex
+
+    @model_validator(mode="after")
+    def _diagnostics_travel_together(self) -> V9ConfirmationFailRequest:
+        if (self.failure_class is None) != (self.failure_stage is None):
+            raise ValueError("failure class and stage must be reported together")
+        return self
 
     @field_validator("requested_at")
     @classmethod

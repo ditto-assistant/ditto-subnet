@@ -830,7 +830,7 @@ CREATE TABLE public.confirmation_bundle_subjects (
     CONSTRAINT ck_confirmation_bundle_subjects_confirmation_subjects_f_eef1 CHECK ((((full_quality_micros IS NULL) AND (full_stderr_micros IS NULL) AND (semantic_factor_bps IS NULL) AND (applied_factor_bps IS NULL) AND (full_effective_micros IS NULL)) OR (((full_quality_micros >= 0) AND (full_quality_micros <= 1000000)) AND ((full_stderr_micros >= 0) AND (full_stderr_micros <= 1000000)) AND (semantic_factor_bps = ANY (ARRAY[0, 10000])) AND (applied_factor_bps = ANY (ARRAY[0, 10000])) AND ((full_effective_micros >= 0) AND (full_effective_micros <= 1000000))))),
     CONSTRAINT ck_confirmation_bundle_subjects_confirmation_subjects_s_3012 CHECK ((((result_status = 'base_only'::text) AND (bundle_id IS NULL) AND (full_quality_micros IS NULL)) OR ((result_status = 'provisional'::text) AND (bundle_id IS NOT NULL)) OR ((result_status = 'full_confirmed'::text) AND (bundle_id IS NOT NULL) AND (full_quality_micros IS NOT NULL)))),
     CONSTRAINT ck_confirmation_bundle_subjects_confirmation_subjects_sha_check CHECK ((length(artifact_sha256) = 64)),
-    CONSTRAINT ck_confirmation_bundle_subjects_confirmation_subjects_v_85d6 CHECK ((bench_version = 9))
+    CONSTRAINT ck_confirmation_bundle_subjects_confirmation_subjects_v_85d6 CHECK ((bench_version >= 9))
 );
 
 
@@ -850,10 +850,16 @@ CREATE TABLE public.confirmation_bundle_tickets (
     failure_reason text,
     failed_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    failure_class text,
+    failure_stage text,
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_att_89d2 CHECK ((attempt > 0)),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_dea_5293 CHECK ((deadline > issued_at)),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_2246 CHECK (((failure_class IS NULL) OR (failure_class = ANY (ARRAY['sandbox_oom'::text, 'lease_revoked'::text, 'validator_infrastructure'::text, 'platform_infrastructure'::text, 'dittobench'::text, 'platform'::text, 'validator'::text, 'evidence_schema'::text, 'timeout'::text, 'transport'::text, 'unclassified'::text])))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_3459 CHECK (((failure_reason IS NULL) = (failed_at IS NULL))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_76ea CHECK (((failure_class IS NULL) OR (failure_reason IS NOT NULL))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_a665 CHECK (((failure_stage IS NULL) OR (failure_stage = ANY (ARRAY['preparing'::text, 'running_confirmation'::text, 'finalizing'::text, 'submitting_result'::text, 'failed_retrying'::text, 'unknown'::text])))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_aa75 CHECK (((status = 'expired'::text) OR ((failure_reason IS NULL) AND (failed_at IS NULL)))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_d595 CHECK (((failure_class IS NULL) = (failure_stage IS NULL))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_sta_eb22 CHECK ((status = ANY (ARRAY['issued'::text, 'scored'::text, 'expired'::text])))
 );
 
@@ -893,7 +899,7 @@ CREATE TABLE public.confirmation_bundles (
     CONSTRAINT ck_confirmation_bundles_confirmation_bundles_settings_c_dc28 CHECK ((length(settings_checksum) = 64)),
     CONSTRAINT ck_confirmation_bundles_confirmation_bundles_sha_check CHECK ((length(artifact_sha256) = 64)),
     CONSTRAINT ck_confirmation_bundles_confirmation_bundles_state_check CHECK ((state = ANY (ARRAY['blocked_budget'::text, 'pending'::text, 'leased'::text, 'failed'::text, 'completed'::text, 'superseded'::text]))),
-    CONSTRAINT ck_confirmation_bundles_confirmation_bundles_version_check CHECK ((bench_version = 9))
+    CONSTRAINT ck_confirmation_bundles_confirmation_bundles_version_check CHECK ((bench_version >= 9))
 );
 
 
@@ -1004,7 +1010,7 @@ CREATE TABLE public.confirmation_retest_authorizations (
     CONSTRAINT ck_confirmation_retest_authorizations_confirmation_rete_330d CHECK (((from_generation >= 0) AND (authorized_generation = (from_generation + 1)))),
     CONSTRAINT ck_confirmation_retest_authorizations_confirmation_rete_5901 CHECK ((length(artifact_sha256) = 64)),
     CONSTRAINT ck_confirmation_retest_authorizations_confirmation_rete_7fde CHECK (((length(TRIM(BOTH FROM actor)) >= 1) AND (length(TRIM(BOTH FROM actor)) <= 120))),
-    CONSTRAINT ck_confirmation_retest_authorizations_confirmation_rete_8178 CHECK ((bench_version = 9)),
+    CONSTRAINT ck_confirmation_retest_authorizations_confirmation_rete_8178 CHECK ((bench_version >= 9)),
     CONSTRAINT ck_confirmation_retest_authorizations_confirmation_rete_adda CHECK (((length(profile_revision) >= 1) AND (length(profile_revision) <= 128))),
     CONSTRAINT ck_confirmation_retest_authorizations_confirmation_rete_e451 CHECK ((length(profile_checksum) = 64))
 );

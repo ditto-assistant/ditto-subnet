@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Mapping
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -114,6 +114,30 @@ projection in Platform kept its own ``Literal[9]`` and 500'd on the first v10
 score a carried-forward validator reported. Extend the alias when the evidence
 contract reaches a new epoch, and every consumer moves with it.
 """
+
+CONFIRMATION_BENCH_VERSIONS: tuple[int, ...] = get_args(V9EvidenceBenchVersion)
+"""Every epoch the confirmation lane can run on, derived from the alias above.
+
+Derived, never restated. The LongMem confirmation lane projects the signed base
+evidence, so "can this benchmark be confirmed" is not an independent policy --
+it is exactly "does this benchmark carry the evidence stack". Writing that as a
+second constant is what stranded the whole lane on bench 9 while the network ran
+on 11: the alias had already been carried forward, and eight separate literals
+had not.
+"""
+
+MIN_CONFIRMATION_BENCH_VERSION: int = min(CONFIRMATION_BENCH_VERSIONS)
+"""Floor of the contract. Schema-level guards use this; policy uses membership."""
+
+
+def supports_confirmation(bench_version: int | None) -> bool:
+    """Whether ``bench_version`` carries the evidence the lane needs.
+
+    Membership, not ``>= MIN``, so this fails closed: activating an epoch
+    without carrying the evidence contract forward produces no confirmation
+    work, rather than bundles whose base proof can never be parsed.
+    """
+    return bench_version in CONFIRMATION_BENCH_VERSIONS
 
 
 class V9ModelUseGate(BaseModel):

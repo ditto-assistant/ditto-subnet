@@ -61,6 +61,9 @@ from ditto.validator.signing import (
 )
 from ditto.validator.worker import ValidatorWorker
 from ditto_screening_protocol.confirmation import canonical_json, evidence_digest
+from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_FAILURE_CLASS_VALUES,
+)
 from ditto_screening_protocol.confirmation_wire import (
     completion_report_from_go_dimensions,
 )
@@ -1964,21 +1967,31 @@ async def test_worker_rejects_platform_root_tampering_before_sign_or_submit(
 
     signing_spy.assert_not_called()
     platform.submit_v9_confirmation_report.assert_not_awaited()
-    platform.fail_v9_confirmation_job.assert_awaited_once_with(
-        job, reason="execution_failed"
-    )
+    platform.fail_v9_confirmation_job.assert_awaited_once()
+    handed_back = platform.fail_v9_confirmation_job.await_args.kwargs
+    assert handed_back["reason"] == "execution_failed"
+    # The hand-back also carries the allowlisted cause, which is the only way
+    # an operator can tell a repeatable break from a transient one.
+    assert handed_back["failure_class"] in CONFIRMATION_FAILURE_CLASS_VALUES
+    assert handed_back["failure_stage"] is not None
 
 
 @pytest.mark.parametrize(
-    ("error", "reason"),
+    ("error", "reason", "failure_class"),
     [
-        (DittobenchError("bad evidence"), "execution_failed"),
-        (worker_module.ValidatorInfrastructureError("local outage"), "infrastructure"),
-        (worker_module.LeaseDeadlineError("deadline"), "deadline"),
+        (DittobenchError("bad evidence"), "execution_failed", "dittobench"),
+        (
+            worker_module.ValidatorInfrastructureError("local outage"),
+            "infrastructure",
+            "validator_infrastructure",
+        ),
+        # LeaseDeadlineError subclasses DittobenchError, so the MRO walk
+        # classifies it there rather than falling through to "unclassified".
+        (worker_module.LeaseDeadlineError("deadline"), "deadline", "dittobench"),
     ],
 )
 async def test_worker_hands_private_failure_back_with_typed_reason(
-    error: Exception, reason: str
+    error: Exception, reason: str, failure_class: str
 ) -> None:
     job = _job().model_copy(
         update={
@@ -2020,7 +2033,12 @@ async def test_worker_hands_private_failure_back_with_typed_reason(
 
     await worker._run_v9_confirmation_lane(slot_ids=["longmem-0"])
 
-    platform.fail_v9_confirmation_job.assert_awaited_once_with(job, reason=reason)
+    platform.fail_v9_confirmation_job.assert_awaited_once_with(
+        job,
+        reason=reason,
+        failure_class=failure_class,
+        failure_stage="running_confirmation",
+    )
     platform.submit_v9_confirmation_report.assert_not_awaited()
 
 
@@ -2077,4 +2095,7 @@ async def test_worker_cancellation_hands_back_then_reraises() -> None:
     with pytest.raises(worker_module.asyncio.CancelledError):
         await task
 
-    platform.fail_v9_confirmation_job.assert_awaited_once_with(job, reason="cancelled")
+    # Cancellation is not a diagnosable failure, so it reports no class.
+    platform.fail_v9_confirmation_job.assert_awaited_once_with(
+        job, reason="cancelled", failure_class=None, failure_stage=None
+    )

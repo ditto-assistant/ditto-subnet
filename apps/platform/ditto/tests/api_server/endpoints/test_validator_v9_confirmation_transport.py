@@ -40,7 +40,7 @@ from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_models.validator import V9BaseEvidence
 from ditto.api_models.validator_confirmation import V9ConfirmationClaimRequest
 from ditto.api_server.confirmation_candidate_reconciliation import (
-    reconcile_v9_confirmation_candidates,
+    reconcile_confirmation_candidates,
 )
 from ditto.api_server.confirmation_evidence import (
     ConfirmationVerificationProfile,
@@ -64,6 +64,7 @@ from ditto.api_server.endpoints.validator_confirmation import (
 from ditto.chain.models import NeuronInfo
 from ditto.db.models import (
     Agent,
+    BenchmarkRollout,
     ConfirmationBudgetDay,
     ConfirmationBudgetReservation,
     ConfirmationBundle,
@@ -104,6 +105,10 @@ _JOB_URL = "/api/v1/validator/v9-confirmation/job"
 _REPORT_URL = "/api/v1/validator/v9-confirmation/bundle/{bundle_id}/report"
 _PREPARE_URL = "/api/v1/validator/v9-confirmation/bundle/{bundle_id}/prepare-report"
 _FAIL_URL = "/api/v1/validator/v9-confirmation/bundle/{bundle_id}/fail"
+
+# The epoch these transport fixtures run on. Bundles are no longer pinned to a
+# single benchmark, so the fixture states its epoch and activates it.
+_BUNDLE_BENCH_VERSION = 9
 _OTHER_KEYPAIR = bittensor.Keypair.create_from_uri("//Bob")
 _GO_FIXTURE_PATH = (
     Path(__file__).parents[6]
@@ -199,6 +204,20 @@ async def _seed_bundle(
     profile = verification_profile_override or verification_profile()
     agent_id = uuid4()
     async with maker() as session, session.begin():
+        # A claim only leases work for the LIVE benchmark, so the epoch this
+        # bundle belongs to has to be the activated one. Without this the
+        # fixture builds a bundle for a superseded epoch and the claim
+        # correctly returns 204.
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=_BUNDLE_BENCH_VERSION - 1,
+                desired_version=_BUNDLE_BENCH_VERSION,
+                status="activated",
+                cohort_size=5,
+                activated_at=datetime.now(UTC) - timedelta(days=2),
+            )
+        )
         revision = ConfirmationBundleSettingsRevision(
             parent_revision=0,
             scope="*",
@@ -224,7 +243,7 @@ async def _seed_bundle(
         resolution = await get_or_create_confirmation_bundle(
             session,
             agent_id=agent_id,
-            bench_version=9,
+            bench_version=_BUNDLE_BENCH_VERSION,
             **base_proof_kwargs(),
             settings_revision=revision.revision,
             settings=frozen,
@@ -399,6 +418,17 @@ async def _seed_reconcilable_bundle(
             )
         )
     async with maker() as session, session.begin():
+        # Claims only lease work for the live benchmark (see _seed_bundle).
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=_BUNDLE_BENCH_VERSION - 1,
+                desired_version=_BUNDLE_BENCH_VERSION,
+                status="activated",
+                cohort_size=5,
+                activated_at=datetime.now(UTC) - timedelta(days=2),
+            )
+        )
         revision = ConfirmationBundleSettingsRevision(
             parent_revision=0,
             scope="*",
@@ -421,8 +451,9 @@ async def _seed_reconcilable_bundle(
         )
         session.add_all(scores)
         await session.flush()
-        await reconcile_v9_confirmation_candidates(
+        await reconcile_confirmation_candidates(
             session,
+            bench_version=_BUNDLE_BENCH_VERSION,
             verification_profiles={
                 (
                     verification_profile().revision,
@@ -1951,10 +1982,20 @@ def _fail_payload(
     bundle_id: UUID,
     ticket_id: UUID,
     reason: str = "execution_failed",
+    failure_class: str | None = None,
+    failure_stage: str | None = None,
+    sign_class: str | None = None,
+    sign_stage: str | None = None,
     nonce: UUID | None = None,
     requested_at: datetime | None = None,
     keypair: bittensor.Keypair = VALIDATOR_KEYPAIR,
 ) -> dict[str, Any]:
+    """Build a hand-back, optionally signing diagnostics other than it sends.
+
+    ``sign_class``/``sign_stage`` default to the sent values; passing them
+    explicitly produces a payload whose diagnostics were never signed, which is
+    what a tampered or fabricated diagnostic looks like on the wire.
+    """
     failure_nonce = nonce or uuid4()
     failed_at = requested_at or datetime.now(UTC)
     signature = keypair.sign(
@@ -1963,11 +2004,13 @@ def _fail_payload(
             bundle_id=bundle_id,
             ticket_id=ticket_id,
             reason=reason,
+            failure_class=sign_class if sign_class is not None else failure_class,
+            failure_stage=sign_stage if sign_stage is not None else failure_stage,
             nonce=failure_nonce,
             requested_at=failed_at,
         )
     ).hex()
-    return {
+    payload: dict[str, Any] = {
         "validator_hotkey": keypair.ss58_address,
         "ticket_id": str(ticket_id),
         "reason": reason,
@@ -1975,6 +2018,10 @@ def _fail_payload(
         "requested_at": failed_at.isoformat(),
         "signature": signature,
     }
+    if failure_class is not None:
+        payload["failure_class"] = failure_class
+        payload["failure_stage"] = failure_stage
+    return payload
 
 
 async def _fail(
@@ -2235,7 +2282,7 @@ class TestV9ConfirmationClaimAdmission:
             side_effect=AssertionError("exhausted budget must not reconcile")
         )
         monkeypatch.setattr(
-            confirmation_mod, "reconcile_v9_confirmation_candidates", reconcile
+            confirmation_mod, "reconcile_confirmation_candidates", reconcile
         )
 
         response = await _claim(client)
@@ -2276,8 +2323,9 @@ class TestV9ConfirmationClaimAdmission:
         async with session_maker() as session, session.begin():
             await lock_confirmation_policy(session)
             revision = await _append_enforce_revision(session, parent=seeded)
-            await reconcile_v9_confirmation_candidates(
+            await reconcile_confirmation_candidates(
                 session,
+                bench_version=_BUNDLE_BENCH_VERSION,
                 verification_profiles={
                     (
                         verification_profile().revision,
@@ -3374,6 +3422,131 @@ class TestV9ConfirmationFailureRecovery:
                 f"infrastructure:{nonce}:2026-08-08T12:34:56.000789Z"
             ).encode()
         )
+
+    async def test_diagnostic_message_binds_class_and_stage_without_breaking_v1(
+        self,
+    ) -> None:
+        """v1 stays byte-identical; diagnostics get their own bound message."""
+        bundle_id = UUID("11111111-1111-1111-1111-111111111111")
+        ticket_id = UUID("22222222-2222-2222-2222-222222222222")
+        nonce = UUID("33333333-3333-3333-3333-333333333333")
+        requested_at = datetime(2026, 8, 8, 12, 34, 56, 789, tzinfo=UTC)
+
+        def message(**diagnostics: str) -> bytes:
+            return v9_confirmation_fail_signing_message(
+                validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
+                bundle_id=bundle_id,
+                ticket_id=ticket_id,
+                reason="execution_failed",
+                nonce=nonce,
+                requested_at=requested_at,
+                **diagnostics,
+            )
+
+        assert message().startswith(b"validator-v9-confirmation-fail:v1:")
+        assert (
+            message(failure_class="dittobench", failure_stage="running_confirmation")
+            == (
+                "validator-v9-confirmation-fail:v2:"
+                f"{VALIDATOR_KEYPAIR.ss58_address}:{bundle_id}:{ticket_id}:"
+                f"execution_failed:dittobench:running_confirmation:{nonce}:"
+                "2026-08-08T12:34:56.000789Z"
+            ).encode()
+        )
+
+        with pytest.raises(ValueError, match="travel together"):
+            message(failure_class="dittobench")
+
+    async def test_signed_failure_diagnostics_are_persisted_for_operators(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """The whole point of the change: the cause survives the hand-back.
+
+        Without this, every attempt reads as ``confirmation_execution_failed``
+        and a repeatable lane break is indistinguishable from a transient one.
+        """
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="sandbox_oom",
+                failure_stage="running_confirmation",
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_reason == "confirmation_execution_failed"
+            assert stored.failure_class == "sandbox_oom"
+            assert stored.failure_stage == "running_confirmation"
+
+    async def test_unsigned_failure_diagnostics_are_refused(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A diagnostic an operator acts on must be one the reporter signed."""
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+                failure_class="sandbox_oom",
+                failure_stage="running_confirmation",
+                sign_class="dittobench",
+                sign_stage="finalizing",
+            ),
+        )
+
+        assert response.status_code == 401, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_class is None
+
+    async def test_reporter_without_diagnostics_still_hands_back(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Old producer against new consumer is the safe skew direction."""
+        seeded, _, ticket, _, _ = await _seed_claimed_failure_case(
+            app, client, session_maker
+        )
+
+        response = await _fail(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_fail_payload(
+                bundle_id=seeded.bundle_id, ticket_id=ticket.ticket_id
+            ),
+        )
+
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.failure_reason == "confirmation_execution_failed"
+            assert stored.failure_class is None
+            assert stored.failure_stage is None
 
     async def test_same_nonce_is_rejected_but_new_nonce_replays_settlement(
         self,

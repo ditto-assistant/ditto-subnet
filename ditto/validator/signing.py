@@ -710,17 +710,36 @@ def v9_confirmation_fail_signing_message(
     reason: str,
     nonce: UUID,
     requested_at: datetime,
+    failure_class: str | None = None,
+    failure_stage: str | None = None,
 ) -> bytes:
+    """Bind one hand-back, and its diagnostics when the reporter sent any.
+
+    v1 is the original reason-only message and stays valid forever: a reporter
+    predating the diagnostic contract signs it and verifies unchanged. v2 binds
+    the allowlisted class and stage into the signature so a persisted diagnostic
+    is exactly what the reporter signed — an unsigned advisory field could be
+    forged or stripped by anything on the path, and this one is read by
+    operators deciding whether to spend the next bounded canary.
+    """
     if requested_at.tzinfo is None:
         raise ValueError("confirmation failure timestamp must include a timezone")
+    if (failure_class is None) != (failure_stage is None):
+        raise ValueError("confirmation failure class and stage must travel together")
     requested = (
         requested_at.astimezone(UTC)
         .isoformat(timespec="microseconds")
         .replace("+00:00", "Z")
     )
+    if failure_class is None:
+        return (
+            "validator-v9-confirmation-fail:v1:"
+            f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:{nonce}:{requested}"
+        ).encode()
     return (
-        "validator-v9-confirmation-fail:v1:"
-        f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:{nonce}:{requested}"
+        "validator-v9-confirmation-fail:v2:"
+        f"{validator_hotkey}:{bundle_id}:{ticket_id}:{reason}:"
+        f"{failure_class}:{failure_stage}:{nonce}:{requested}"
     ).encode()
 
 
@@ -733,10 +752,14 @@ def sign_v9_confirmation_fail(
     reason: str,
     nonce: UUID,
     requested_at: datetime,
+    failure_class: str | None = None,
+    failure_stage: str | None = None,
 ) -> str:
     return keypair.sign(
         v9_confirmation_fail_signing_message(
             validator_hotkey=validator_hotkey,
+            failure_class=failure_class,
+            failure_stage=failure_stage,
             bundle_id=bundle_id,
             ticket_id=ticket_id,
             reason=reason,

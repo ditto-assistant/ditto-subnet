@@ -1,10 +1,14 @@
-"""Reconcile ordinary Bench v9 quorum proofs with bounded confirmation work.
+"""Reconcile ordinary quorum proofs with bounded LongMem confirmation work.
 
 The score ledger remains authoritative for ordinary scoring.  This module only
-projects its signature-bound lower-median v9 proof into the separate
+projects its signature-bound lower-median base proof into the separate
 confirmation ledger, then applies the pure owner/top-N/challenger policy.  It
 never reserves budget, issues a lease, runs a provider, or mutates canonical
 scores, rollouts, or rewards.
+
+One reconciliation converges exactly one benchmark's cohort.  Callers pass the
+live benchmark, so the lane follows the network forward instead of accumulating
+work against an epoch that no longer ranks.
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.confirmation_bundles import (
     ConfirmationBundleMode,
     ConfirmationBundleSettings,
+    supports_confirmation,
 )
 from ditto.api_models.validator import V9BaseEvidence
 from ditto.api_server.confirmation_bundles import (
@@ -63,7 +68,7 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
-class V9BaseProof:
+class ConfirmationBaseProof:
     evidence_sha256: str
     quality_micros: int
     stderr_micros: int
@@ -80,10 +85,10 @@ class ConfirmationReconciliation:
     issuance_active: bool = False
 
 
-def lower_median_v9_base_proof(
-    scores: Sequence[Score], *, artifact_sha256: str
-) -> V9BaseProof:
-    """Return the physical lower-median row and its verified signed v9 root.
+def lower_median_base_proof(
+    scores: Sequence[Score], *, artifact_sha256: str, bench_version: int
+) -> ConfirmationBaseProof:
+    """Return the physical lower-median row and its verified signed base root.
 
     Choosing a row, rather than averaging even-sized quorums, preserves a proof
     whose digest and validator signature can be independently checked.  The
@@ -91,41 +96,51 @@ def lower_median_v9_base_proof(
     """
     if len(scores) < SCORING_QUORUM:
         raise ConfirmationBundlePersistenceError(
-            "v9 base proof requires a completed scoring quorum"
+            "confirmation base proof requires a completed scoring quorum"
         )
     ordered = sorted(scores, key=lambda row: (row.composite, row.validator_hotkey))
-    return _v9_base_proof_from_score(
-        ordered[(len(ordered) - 1) // 2], artifact_sha256=artifact_sha256
+    return _base_proof_from_score(
+        ordered[(len(ordered) - 1) // 2],
+        artifact_sha256=artifact_sha256,
+        bench_version=bench_version,
     )
 
 
-def _v9_base_proof_from_score(score: Score, *, artifact_sha256: str) -> V9BaseProof:
+def _base_proof_from_score(
+    score: Score, *, artifact_sha256: str, bench_version: int
+) -> ConfirmationBaseProof:
     details = score.details if isinstance(score.details, dict) else {}
     raw = details.get("v9_base")
     digest = details.get("base_evidence_sha256")
     if not isinstance(raw, dict) or not isinstance(digest, str):
         raise ConfirmationBundlePersistenceError(
-            "v9 quorum median lacks signature-bound base evidence"
+            "quorum median lacks signature-bound base evidence"
         )
     try:
         evidence = V9BaseEvidence.model_validate(raw)
     except ValidationError as error:
         raise ConfirmationBundlePersistenceError(
-            "v9 quorum median base evidence is invalid"
+            "quorum median base evidence is invalid"
         ) from error
     if evidence.artifact_sha256 != artifact_sha256:
         raise ConfirmationBundlePersistenceError(
-            "v9 quorum median base evidence has the wrong artifact digest"
+            "quorum median base evidence has the wrong artifact digest"
+        )
+    # The cohort is single-version by construction. Re-checking here keeps a
+    # proof carried on a row from another epoch from ever anchoring a bundle.
+    if evidence.bench_version != bench_version:
+        raise ConfirmationBundlePersistenceError(
+            "quorum median base evidence has the wrong bench version"
         )
     if digest != evidence.digest_hex():
         raise ConfirmationBundlePersistenceError(
-            "v9 quorum median base evidence digest is invalid"
+            "quorum median base evidence digest is invalid"
         )
     if round(score.composite * 1_000_000) != evidence.effective_composite_micros:
         raise ConfirmationBundlePersistenceError(
-            "v9 quorum median score contradicts its base evidence"
+            "quorum median score contradicts its base evidence"
         )
-    return V9BaseProof(
+    return ConfirmationBaseProof(
         evidence_sha256=digest,
         quality_micros=evidence.ordinary_composite_micros,
         stderr_micros=evidence.ordinary_stderr_micros,
@@ -154,32 +169,35 @@ def registered_confirmation_profile(
     return profile
 
 
-async def reconcile_v9_confirmation_candidates(
+async def reconcile_confirmation_candidates(
     session: AsyncSession,
     *,
+    bench_version: int,
     verification_profiles: object,
     finalized_agent: Agent | None = None,
     finalized_scores: Sequence[Score] = (),
-    bench_version: int = 9,
 ) -> ConfirmationReconciliation:
-    """Persist a just-finalized proof and converge the current bounded cohort.
+    """Persist a just-finalized proof and converge one benchmark's cohort.
 
     The optional finalized row is recorded even when moderation keeps it off
     the eligible leaderboard.  Candidate selection itself reads the canonical
-    v9 ledger, which already enforces full-run eligibility and one slot per
-    attested owner.
+    ledger for ``bench_version``, which already enforces full-run eligibility
+    and one slot per attested owner.
     """
-    if bench_version != 9:
+    if not supports_confirmation(bench_version):
         return ConfirmationReconciliation()
 
     recorded_agent_ids: set[UUID] = set()
     if finalized_agent is not None:
-        proof = lower_median_v9_base_proof(
-            finalized_scores, artifact_sha256=finalized_agent.sha256
+        proof = lower_median_base_proof(
+            finalized_scores,
+            artifact_sha256=finalized_agent.sha256,
+            bench_version=bench_version,
         )
         await _record_base_subject(
             session,
             agent_id=finalized_agent.agent_id,
+            bench_version=bench_version,
             proof=proof,
         )
         recorded_agent_ids.add(finalized_agent.agent_id)
@@ -218,7 +236,7 @@ async def reconcile_v9_confirmation_candidates(
 
     ledger = await list_eligible_ledger(
         session,
-        bench_version=9,
+        bench_version=bench_version,
         owner_score="canonical",
         apply_v9_confirmation_policy=False,
         include_fingerprints=False,
@@ -238,7 +256,7 @@ async def reconcile_v9_confirmation_candidates(
         ],
     )
     candidates: list[ConfirmationCandidate] = []
-    proofs: dict[str, V9BaseProof] = {}
+    proofs: dict[str, ConfirmationBaseProof] = {}
     agent_ids: dict[str, UUID] = {}
     for owner_root, row in zip(ledger_owner_roots, ledger, strict=True):
         if not row.eligible:
@@ -249,7 +267,7 @@ async def reconcile_v9_confirmation_candidates(
         carrier = Score(
             agent_id=row.agent_id,
             validator_hotkey=row.validator_hotkey,
-            bench_version=9,
+            bench_version=bench_version,
             run_id=row.run_id,
             signature=row.signature,
             seed=row.seed,
@@ -261,13 +279,22 @@ async def reconcile_v9_confirmation_candidates(
             details=row.details,
             generated_at=row.first_seen,
         )
-        proof = _v9_base_proof_from_score(carrier, artifact_sha256=row.sha256)
-        await _record_base_subject(session, agent_id=row.agent_id, proof=proof)
+        proof = _base_proof_from_score(
+            carrier, artifact_sha256=row.sha256, bench_version=bench_version
+        )
+        await _record_base_subject(
+            session,
+            agent_id=row.agent_id,
+            bench_version=bench_version,
+            proof=proof,
+        )
         recorded_agent_ids.add(row.agent_id)
-        subject = await session.get(ConfirmationBundleSubject, (row.agent_id, 9))
+        subject = await session.get(
+            ConfirmationBundleSubject, (row.agent_id, bench_version)
+        )
         if subject is None:  # pragma: no cover - record + flush is authoritative
             raise ConfirmationBundlePersistenceError(
-                "v9 confirmation subject was not persisted"
+                "confirmation subject was not persisted"
             )
         bundle = (
             await session.get(ConfirmationBundle, subject.bundle_id)
@@ -291,7 +318,7 @@ async def reconcile_v9_confirmation_candidates(
                 # space or one owner can occupy a slot through each source.
                 owner_id=owner_root,
                 artifact_sha256=row.sha256,
-                bench_version=9,
+                bench_version=bench_version,
                 base_composite=proof.quality_micros / 1_000_000,
                 base_stderr=proof.stderr_micros / 1_000_000,
                 first_seen=row.first_seen,
@@ -307,7 +334,7 @@ async def reconcile_v9_confirmation_candidates(
     # Once a subject has been persisted it remains the durable reconciliation
     # input. This matters after completion and settings changes: those triggers
     # must be able to re-evaluate a candidate even when a concurrent rollout
-    # temporarily removes explicit v9 rows from the canonical ledger read.
+    # temporarily removes explicit rows from the canonical ledger read.
     persisted_rows = (
         await session.execute(
             select(
@@ -318,7 +345,7 @@ async def reconcile_v9_confirmation_candidates(
             .join(Agent, Agent.agent_id == ConfirmationBundleSubject.agent_id)
             .outerjoin(EvaluationPayment, EvaluationPayment.agent_id == Agent.agent_id)
             .where(
-                ConfirmationBundleSubject.bench_version == 9,
+                ConfirmationBundleSubject.bench_version == bench_version,
                 Agent.status == AgentStatus.SCORED,
             )
             .order_by(Agent.created_at, Agent.agent_id)
@@ -333,7 +360,9 @@ async def reconcile_v9_confirmation_candidates(
         score_rows = await quorum_score_rows(
             session,
             [agent.agent_id for _, agent, _ in missing_rows],
-            bench_versions={agent.agent_id: 9 for _, agent, _ in missing_rows},
+            bench_versions={
+                agent.agent_id: bench_version for _, agent, _ in missing_rows
+            },
         )
         roots = await attested_emission_owner_roots(
             session,
@@ -357,8 +386,10 @@ async def reconcile_v9_confirmation_candidates(
             representative = ordered[(len(ordered) - 1) // 2]
             if representative.n < MIN_ELIGIBLE_CASES or representative.composite <= 0:
                 continue
-            proof = _v9_base_proof_from_score(
-                representative, artifact_sha256=agent.sha256
+            proof = _base_proof_from_score(
+                representative,
+                artifact_sha256=agent.sha256,
+                bench_version=bench_version,
             )
             bundle = (
                 await session.get(ConfirmationBundle, subject.bundle_id)
@@ -373,7 +404,7 @@ async def reconcile_v9_confirmation_candidates(
                     agent_id=key,
                     owner_id=root,
                     artifact_sha256=agent.sha256,
-                    bench_version=9,
+                    bench_version=bench_version,
                     base_composite=proof.quality_micros / 1_000_000,
                     base_stderr=proof.stderr_micros / 1_000_000,
                     first_seen=agent.created_at,
@@ -411,7 +442,7 @@ async def reconcile_v9_confirmation_candidates(
         resolution = await get_or_create_confirmation_bundle(
             session,
             agent_id=agent_ids[candidate.agent_id],
-            bench_version=9,
+            bench_version=bench_version,
             base_evidence_sha256=proof.evidence_sha256,
             base_quality_micros=proof.quality_micros,
             base_stderr_micros=proof.stderr_micros,
@@ -442,12 +473,16 @@ async def reconcile_v9_confirmation_candidates(
 
 
 async def _record_base_subject(
-    session: AsyncSession, *, agent_id: UUID, proof: V9BaseProof
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    bench_version: int,
+    proof: ConfirmationBaseProof,
 ) -> None:
     await record_base_only_subject(
         session,
         agent_id=agent_id,
-        bench_version=9,
+        bench_version=bench_version,
         base_evidence_sha256=proof.evidence_sha256,
         base_quality_micros=proof.quality_micros,
         base_stderr_micros=proof.stderr_micros,
@@ -488,8 +523,8 @@ def _reproject_completed_subject_for_current_mode(
 
 __all__ = [
     "ConfirmationReconciliation",
-    "V9BaseProof",
-    "lower_median_v9_base_proof",
-    "reconcile_v9_confirmation_candidates",
+    "ConfirmationBaseProof",
+    "lower_median_base_proof",
+    "reconcile_confirmation_candidates",
     "registered_confirmation_profile",
 ]

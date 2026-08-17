@@ -1,4 +1,4 @@
-"""Persistence primitives for bounded Bench v9 confirmation bundles.
+"""Persistence primitives for bounded LongMem confirmation bundles.
 
 The ordinary validator ticket remains the mutable execution-slot capability.
 This module owns the separate artifact/profile bundle ledger, append-only signed
@@ -27,8 +27,10 @@ from ditto.api_models.confirmation_bundles import (
     ConfirmationEvidenceRoot,
     ConfirmationReservationState,
     ConfirmationResultStatus,
+    supports_confirmation,
 )
 from ditto.api_server.attestation import verify_signature
+from ditto.api_server.confirmation_bundles import confirmation_bench_version_error
 from ditto.api_server.confirmation_evidence import (
     ConfirmationEvidenceError,
     ConfirmationVerificationProfile,
@@ -105,7 +107,13 @@ class ConfirmationShadowCalibration:
     base_cost_microusd: int
     bundle_count: int
     bundle_cost_microusd: int
+    # ``completed`` counts bundles that actually produced verified evidence.
+    # Superseded generations are reported separately: folding them in made a
+    # lane that had never once completed read as a well-populated calibration
+    # window with a zero promotion rate, which is a very different diagnosis.
     completed_bundle_count: int
+    superseded_bundle_count: int
+    failed_bundle_count: int
     qualified_bundle_count: int
     observed_from: datetime | None
     observed_through: datetime | None
@@ -208,19 +216,29 @@ async def list_active_confirmation_work(
     return active
 
 
+def _count_state(state: str):
+    """Count bundle rows in exactly one lifecycle state."""
+    return func.coalesce(
+        func.sum(case((ConfirmationBundle.state == state, 1), else_=0)), 0
+    )
+
+
 async def confirmation_shadow_calibration(
     session: AsyncSession,
     *,
     now: datetime,
+    bench_version: int,
     profile_revision: str | None,
     profile_checksum: str | None,
 ) -> ConfirmationShadowCalibration:
-    """Measure v9 base and confirmation costs without price-list estimates.
+    """Measure base and confirmation costs without price-list estimates.
 
-    Base cost follows the public leaderboard's settled, non-empty grant rule.
-    Confirmation cost uses authoritative settled reservation actuals.  A
-    qualified completed generation is a promotion; superseded completed
-    generations remain part of the immutable calibration history.
+    Base cost follows the public leaderboard's settled, non-empty grant rule for
+    ``bench_version``.  Confirmation cost uses authoritative settled reservation
+    actuals.  A qualified completed generation is a promotion; superseded and
+    failed generations remain part of the immutable calibration history but are
+    counted on their own axes so an execution outage can never be misread as a
+    completed-but-unpromoted cohort.
     """
 
     base_count, base_cost, base_first, base_last = (
@@ -237,7 +255,7 @@ async def confirmation_shadow_calibration(
                 func.min(InferenceGrant.created_at),
                 func.max(InferenceGrant.created_at),
             ).where(
-                InferenceGrant.bench_version == 9,
+                InferenceGrant.bench_version == bench_version,
                 or_(
                     InferenceGrant.ticket_deadline <= now,
                     InferenceGrant.status.in_(("revoked", "exhausted")),
@@ -251,7 +269,7 @@ async def confirmation_shadow_calibration(
     ).one()
     if profile_revision is None or profile_checksum is None:
         bundle_count, bundle_cost, bundle_first, bundle_last = 0, 0, None, None
-        completed_count, qualified_count = 0, 0
+        completed_count, superseded_count, failed_count, qualified_count = 0, 0, 0, 0
     else:
         bundle_count, bundle_cost, bundle_first, bundle_last = (
             await session.execute(
@@ -275,10 +293,12 @@ async def confirmation_shadow_calibration(
                 )
             )
         ).one()
-        completed_count, qualified_count = (
+        completed_count, superseded_count, failed_count, qualified_count = (
             await session.execute(
                 select(
-                    func.count(),
+                    _count_state(ConfirmationBundleState.COMPLETED.value),
+                    _count_state(ConfirmationBundleState.SUPERSEDED.value),
+                    _count_state(ConfirmationBundleState.FAILED.value),
                     func.coalesce(
                         func.sum(
                             case(
@@ -293,7 +313,6 @@ async def confirmation_shadow_calibration(
                         0,
                     ),
                 ).where(
-                    ConfirmationBundle.state.in_(("completed", "superseded")),
                     ConfirmationBundle.profile_revision == profile_revision,
                     ConfirmationBundle.profile_checksum == profile_checksum,
                 )
@@ -310,6 +329,8 @@ async def confirmation_shadow_calibration(
         bundle_count=int(bundle_count),
         bundle_cost_microusd=int(bundle_cost),
         completed_bundle_count=int(completed_count),
+        superseded_bundle_count=int(superseded_count),
+        failed_bundle_count=int(failed_count),
         qualified_bundle_count=int(qualified_count),
         observed_from=min(observed) if observed else None,
         observed_through=max(observed) if observed else None,
@@ -374,8 +395,10 @@ async def record_base_only_subject(
     base_tool_factor_bps: int,
 ) -> ConfirmationBundleSubject:
     """Record a typed base proof without touching canonical scoring state."""
-    if bench_version != 9:
-        raise ConfirmationBundlePersistenceError("confirmation subjects require v9")
+    if not supports_confirmation(bench_version):
+        raise ConfirmationBundlePersistenceError(
+            confirmation_bench_version_error("subjects")
+        )
     _validate_base_proof(
         base_evidence_sha256=base_evidence_sha256,
         base_quality_micros=base_quality_micros,
@@ -465,8 +488,10 @@ async def get_or_create_confirmation_bundle(
         return BundleResolution(
             bundle=None, subject=subject, reused_completed_evidence=False
         )
-    if bench_version != 9:
-        raise ConfirmationBundlePersistenceError("confirmation bundles require v9")
+    if not supports_confirmation(bench_version):
+        raise ConfirmationBundlePersistenceError(
+            confirmation_bench_version_error("bundles")
+        )
     if settings.profile_revision is None or settings.profile_checksum is None:
         raise ConfirmationBundlePersistenceError("confirmation profile is unconfigured")
     if verification_profile is None:

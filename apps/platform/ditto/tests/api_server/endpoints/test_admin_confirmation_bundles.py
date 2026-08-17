@@ -28,6 +28,7 @@ from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints import admin_confirmation_bundles
 from ditto.db.models import (
     Agent,
+    BenchmarkRollout,
     ConfirmationBudgetReservation,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
@@ -201,6 +202,27 @@ async def seed_completed_bundle(
     return agent_id, bundle.bundle_id
 
 
+async def activate_bench_version(
+    maker: async_sessionmaker[AsyncSession], version: int
+) -> None:
+    """Make ``version`` the live benchmark for this app.
+
+    Calibration is scoped to the benchmark actually being confirmed, so a test
+    that seeds base runs at one epoch has to say that epoch is live.
+    """
+    async with maker() as session, session.begin():
+        session.add(
+            BenchmarkRollout(
+                rollout_id=uuid4(),
+                from_version=version - 1,
+                desired_version=version,
+                status="activated",
+                cohort_size=5,
+                activated_at=_NOW,
+            )
+        )
+
+
 async def seed_settled_base_run(
     maker: async_sessionmaker[AsyncSession], *, agent_id: UUID
 ) -> None:
@@ -330,7 +352,7 @@ class TestSettingsWrites:
         reconcile = AsyncMock()
         monkeypatch.setattr(
             admin_confirmation_bundles,
-            "reconcile_v9_confirmation_candidates",
+            "reconcile_confirmation_candidates",
             reconcile,
         )
 
@@ -519,14 +541,17 @@ class TestBundleReadAndRetest:
             "measured_base_cost_microusd": None,
             "confirmation_bundle_count": 0,
             "measured_bundle_cost_microusd": None,
+            "bench_version": 7,
             "completed_bundle_count": 0,
+            "superseded_bundle_count": 0,
+            "failed_bundle_count": 0,
             "qualified_bundle_count": 0,
             "promotion_rate_bps": None,
             "projected_daily_spend_microusd": None,
             "epoch_duration_seconds": None,
             "projected_epoch_spend_microusd": None,
             "epoch_projection_unavailable_reason": (
-                "Bench v9 has no configured epoch duration; no projection was guessed."
+                "Bench v7 has no configured epoch duration; no projection was guessed."
             ),
         }
 
@@ -535,6 +560,7 @@ class TestBundleReadAndRetest:
     ) -> None:
         install(app, settings_maker)
         agent_id, bundle_id = await seed_completed_bundle(settings_maker)
+        await activate_bench_version(settings_maker, 9)
         await seed_settled_base_run(settings_maker, agent_id=agent_id)
         async with settings_maker() as session, session.begin():
             session.add(
@@ -567,7 +593,10 @@ class TestBundleReadAndRetest:
             "measured_base_cost_microusd": 130_000,
             "confirmation_bundle_count": 1,
             "measured_bundle_cost_microusd": 20_000,
+            "bench_version": 9,
             "completed_bundle_count": 1,
+            "superseded_bundle_count": 0,
+            "failed_bundle_count": 0,
             "qualified_bundle_count": 1,
             "promotion_rate_bps": 10_000,
             "projected_daily_spend_microusd": 150_000,

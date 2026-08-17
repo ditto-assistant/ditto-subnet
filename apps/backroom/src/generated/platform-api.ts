@@ -8544,8 +8544,12 @@ export interface components {
             deadline: string;
             /** Failed At */
             failed_at: string | null;
+            /** Failure Class */
+            failure_class?: string | null;
             /** Failure Reason */
             failure_reason: string | null;
+            /** Failure Stage */
+            failure_stage?: string | null;
             /**
              * Issued At
              * Format: date-time
@@ -9044,6 +9048,8 @@ export interface components {
         ConfirmationShadowCalibrationView: {
             /** Base Run Count */
             base_run_count: number;
+            /** Bench Version */
+            bench_version: number;
             /** Completed Bundle Count */
             completed_bundle_count: number;
             /** Confirmation Bundle Count */
@@ -9056,6 +9062,8 @@ export interface components {
             epoch_duration_seconds: number | null;
             /** Epoch Projection Unavailable Reason */
             epoch_projection_unavailable_reason: string | null;
+            /** Failed Bundle Count */
+            failed_bundle_count: number;
             /** Measured Base Cost Microusd */
             measured_base_cost_microusd: number | null;
             /** Measured Bundle Cost Microusd */
@@ -9074,6 +9082,8 @@ export interface components {
             promotion_rate_bps: number | null;
             /** Qualified Bundle Count */
             qualified_bundle_count: number;
+            /** Superseded Bundle Count */
+            superseded_bundle_count: number;
         };
         /** ConfirmationUsageTotals */
         ConfirmationUsageTotals: {
@@ -17645,6 +17655,10 @@ export interface components {
         };
         /** V9ConfirmationFailRequest */
         V9ConfirmationFailRequest: {
+            /** Failure Class */
+            failure_class?: ("sandbox_oom" | "lease_revoked" | "validator_infrastructure" | "platform_infrastructure" | "dittobench" | "platform" | "validator" | "evidence_schema" | "timeout" | "transport" | "unclassified") | null;
+            /** Failure Stage */
+            failure_stage?: ("preparing" | "running_confirmation" | "finalizing" | "submitting_result" | "failed_retrying" | "unknown") | null;
             /**
              * Nonce
              * Format: uuid

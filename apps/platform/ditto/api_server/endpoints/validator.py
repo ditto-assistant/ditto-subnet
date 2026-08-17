@@ -78,6 +78,7 @@ from ditto.api_models.benchmark_capacity import (
 )
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.benchmark_progress import benchmark_progress_signing_token
+from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     confirmation_progress_signing_token,
@@ -123,7 +124,7 @@ from ditto.api_server.benchmark_rollout import (
 )
 from ditto.api_server.config import ValidatorCompatibilityConfig
 from ditto.api_server.confirmation_candidate_reconciliation import (
-    reconcile_v9_confirmation_candidates,
+    reconcile_confirmation_candidates,
 )
 from ditto.api_server.continual_retest_settings import (
     ContinualRetestSettingsResolver,
@@ -1802,14 +1803,25 @@ def _reported_dataset_sha256(report: ScoreReport) -> str | None:
 
 
 def _reported_v9_base_evidence(report: ScoreReport) -> V9BaseEvidence | None:
-    """Return the already model-validated v9 base root, when applicable."""
-    if report.bench_version != 9:
+    """Return the already model-validated base root, when the report has one.
+
+    Every confirmation-capable benchmark carries this root, so the cross-checks
+    downstream must not stop applying the moment the network advances an epoch.
+    It stays optional above the first such version: a scorer predating the
+    carried-forward evidence contract is admissible without one (see
+    ``ScoreReport._validate_v9_base_evidence``), which is why this reads the key
+    defensively instead of indexing it.
+    """
+    if not supports_confirmation(report.bench_version):
         return None
     details = report.details if isinstance(report.details, dict) else {}
+    raw = details.get("v9_base")
+    if not isinstance(raw, dict):
+        return None
     # ScoreReport's model validator has already checked this exact object and
     # its digest. Re-parse into the typed model so later identity comparisons do
-    # not read authoritative v9 fields from an opaque dictionary.
-    return V9BaseEvidence.model_validate(details["v9_base"])
+    # not read authoritative fields from an opaque dictionary.
+    return V9BaseEvidence.model_validate(raw)
 
 
 def _score_details(
@@ -6389,39 +6401,47 @@ async def submit_score(
         # removing this eager handoff delays nothing and leaves one lock owner.
         result_status = agent.status
 
-    # Bench v9's expensive dimensions live on a separate bounded ledger. Once
-    # the canonical score transaction commits, persist its physical
-    # lower-median signed base proof and converge the owner/top-N cohort in a
-    # fresh transaction. This projection is deliberately fail-open: a profile,
+    # LongMem's expensive dimensions live on a separate bounded ledger. Once the
+    # canonical score transaction commits, persist its physical lower-median
+    # signed base proof and converge the owner/top-N cohort in a fresh
+    # transaction. This projection is deliberately fail-open: a profile,
     # migration, or auxiliary-ledger fault must never roll back an accepted
     # ordinary score or consumed ticket. Pre-claim/settings reconciliation
     # converges any missed projection before expensive work can start.
-    if report_version == 9:
+    #
+    # The cohort is the LIVE benchmark, never the version this report happens to
+    # carry. A straggler score for a superseded epoch must not manufacture new
+    # confirmation work no one will ever rank — that is exactly how the lane
+    # stayed pinned to a retired v9 cohort while the network ran on v11.
+    if supports_confirmation(report_version):
         try:
             async with session.begin():
-                finalized_agent = await get_agent_by_id(
-                    session, agent_id=agent_id, for_update=True
-                )
-                finalized_v9_scores = await list_scores_for_agent(
-                    session, agent_id=agent_id, bench_version=9
-                )
-                if (
-                    finalized_agent is not None
-                    and len(finalized_v9_scores) >= SCORING_QUORUM
-                ):
-                    await reconcile_v9_confirmation_candidates(
-                        session,
-                        verification_profiles=getattr(
-                            request.app.state,
-                            "confirmation_verification_profiles",
-                            {},
-                        ),
-                        finalized_agent=finalized_agent,
-                        finalized_scores=finalized_v9_scores,
+                confirmation_version = await active_bench_version(session)
+                if report_version == confirmation_version:
+                    finalized_agent = await get_agent_by_id(
+                        session, agent_id=agent_id, for_update=True
                     )
+                    finalized_base_scores = await list_scores_for_agent(
+                        session, agent_id=agent_id, bench_version=confirmation_version
+                    )
+                    if (
+                        finalized_agent is not None
+                        and len(finalized_base_scores) >= SCORING_QUORUM
+                    ):
+                        await reconcile_confirmation_candidates(
+                            session,
+                            bench_version=confirmation_version,
+                            verification_profiles=getattr(
+                                request.app.state,
+                                "confirmation_verification_profiles",
+                                {},
+                            ),
+                            finalized_agent=finalized_agent,
+                            finalized_scores=finalized_base_scores,
+                        )
         except Exception:
             logger.exception(
-                "v9 confirmation candidate reconciliation failed for agent %s",
+                "confirmation candidate reconciliation failed for agent %s",
                 agent_id,
             )
 

@@ -464,6 +464,49 @@
   },
   "V9ConfirmationFailRequest": {
     "properties": {
+      "failure_class": {
+        "anyOf": [
+          {
+            "enum": [
+              "sandbox_oom",
+              "lease_revoked",
+              "validator_infrastructure",
+              "platform_infrastructure",
+              "dittobench",
+              "platform",
+              "validator",
+              "evidence_schema",
+              "timeout",
+              "transport",
+              "unclassified"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
+      "failure_stage": {
+        "anyOf": [
+          {
+            "enum": [
+              "preparing",
+              "running_confirmation",
+              "finalizing",
+              "submitting_result",
+              "failed_retrying",
+              "unknown"
+            ],
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "default": null
+      },
       "nonce": {
         "format": "uuid",
         "type": "string"

@@ -96,7 +96,7 @@ func (q *Queries) DeleteConfirmationInferenceRequest(ctx context.Context, arg De
 }
 
 const getConfirmationBundleTicketForUpdate = `-- name: GetConfirmationBundleTicketForUpdate :one
-SELECT ticket_id, bundle_id, validator_hotkey, slot_id, status, attempt, issued_at, deadline, failure_reason, failed_at, created_at FROM confirmation_bundle_tickets
+SELECT ticket_id, bundle_id, validator_hotkey, slot_id, status, attempt, issued_at, deadline, failure_reason, failed_at, created_at, failure_class, failure_stage FROM confirmation_bundle_tickets
 WHERE ticket_id = $1::uuid
 FOR UPDATE
 `
@@ -118,6 +118,8 @@ func (q *Queries) GetConfirmationBundleTicketForUpdate(ctx context.Context, tick
 		&i.FailureReason,
 		&i.FailedAt,
 		&i.CreatedAt,
+		&i.FailureClass,
+		&i.FailureStage,
 	)
 	return i, err
 }

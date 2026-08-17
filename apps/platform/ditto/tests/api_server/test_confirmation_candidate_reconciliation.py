@@ -1,4 +1,4 @@
-"""DB-backed reconciliation tests for ordinary v9 -> confirmation work."""
+"""DB-backed reconciliation tests for ordinary quorum -> confirmation work."""
 
 from __future__ import annotations
 
@@ -24,8 +24,8 @@ from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.validator import V9BaseEvidence
 from ditto.api_server.confirmation_candidate_reconciliation import (
     ConfirmationReconciliation,
-    lower_median_v9_base_proof,
-    reconcile_v9_confirmation_candidates,
+    lower_median_base_proof,
+    reconcile_confirmation_candidates,
 )
 from ditto.db.models import (
     Agent,
@@ -50,6 +50,7 @@ from ditto.tests.confirmation_evidence_fixtures import (
     signed_report,
     verification_profile,
 )
+from ditto_screening_protocol.bench_v9 import V9ScoreGateEvidence
 
 pytestmark = pytest.mark.asyncio
 
@@ -98,6 +99,7 @@ def _score(
     composite_micros: int,
     stderr_micros: int,
     validator_index: int,
+    bench_version: int = 9,
 ) -> Score:
     raw = copy.deepcopy(_VECTOR)
     raw.update(
@@ -110,12 +112,20 @@ def _score(
             "effective_stderr_micros": stderr_micros,
         }
     )
+    # The gate stack is digest-bound, so moving the epoch means re-deriving the
+    # digest exactly as a scorer would rather than editing the field in place.
+    gates = V9ScoreGateEvidence.model_validate(
+        {**raw["score_gates"], "bench_version": bench_version}
+    )
+    raw["bench_version"] = bench_version
+    raw["score_gates"] = gates.model_dump(mode="json")
+    raw["score_gates_sha256"] = gates.digest_hex()
     evidence = V9BaseEvidence.model_validate(raw)
     digest = evidence.digest_hex()
     return Score(
         agent_id=agent_id,
         validator_hotkey=f"5Validator-{validator_index:02d}",
-        bench_version=9,
+        bench_version=bench_version,
         run_id=evidence.run_id,
         signature=f"{validator_index + 1:02x}",
         seed=validator_index,
@@ -139,6 +149,7 @@ async def _agent_with_quorum(
     composites: tuple[int, ...],
     stderr_micros: int = 10_000,
     artifact_sha256: str | None = None,
+    bench_version: int = 9,
 ) -> tuple[Agent, list[Score]]:
     agent = Agent(
         agent_id=uuid4(),
@@ -156,6 +167,7 @@ async def _agent_with_quorum(
             composite_micros=value,
             stderr_micros=stderr_micros,
             validator_index=position,
+            bench_version=bench_version,
         )
         for position, value in enumerate(composites)
     ]
@@ -179,9 +191,12 @@ async def test_no_settings_persists_physical_lower_median_base_proof_only(
             index=0,
             composites=(900_000, 600_000, 800_000, 700_000),
         )
-        expected = lower_median_v9_base_proof(scores, artifact_sha256=agent.sha256)
-        result = await reconcile_v9_confirmation_candidates(
+        expected = lower_median_base_proof(
+            scores, artifact_sha256=agent.sha256, bench_version=9
+        )
+        result = await reconcile_confirmation_candidates(
             session,
+            bench_version=9,
             verification_profiles={},
             finalized_agent=agent,
             finalized_scores=scores,
@@ -223,8 +238,9 @@ async def test_background_reconciliation_yields_to_contended_policy_write(
                     .order_by(Score.validator_hotkey)
                 )
             )
-            return await reconcile_v9_confirmation_candidates(
+            return await reconcile_confirmation_candidates(
                 worker,
+                bench_version=9,
                 verification_profiles=_registry(),
                 finalized_agent=finalized_agent,
                 finalized_scores=finalized_scores,
@@ -251,23 +267,87 @@ async def test_background_reconciliation_yields_to_contended_policy_write(
         )
 
 
-@pytest.mark.parametrize("future_version", [10, 11, 100])
-async def test_future_bench_versions_do_not_enter_the_v9_ledger(
-    session: AsyncSession, future_version: int
+# The evidence stack itself is pinned by ``V9EvidenceBenchVersion``; these are
+# every epoch that currently carries it.
+@pytest.mark.parametrize("live_version", [9, 10, 11])
+async def test_confirmation_follows_the_live_benchmark(
+    session: AsyncSession, live_version: int
 ) -> None:
+    """LongMemEval is a permanent fixture, so every live epoch gets a cohort.
+
+    This is the regression that matters most: the lane used to accept only
+    bench 9, so the moment the network activated a later epoch it stopped
+    producing candidates entirely and kept re-superseding a frozen cohort of
+    submissions that no longer ranked.
+    """
     async with session.begin():
+        await _settings(session)
         agent, scores = await _agent_with_quorum(
-            session, index=0, composites=(700_000, 800_000, 900_000)
-        )
-        result = await reconcile_v9_confirmation_candidates(
             session,
+            index=0,
+            composites=(970_000, 980_000, 990_000),
+            bench_version=live_version,
+        )
+        session.add(
+            EvaluationPayment(
+                block_hash=f"0x{0:064x}",
+                extrinsic_index=0,
+                agent_id=agent.agent_id,
+                miner_hotkey=agent.miner_hotkey,
+                miner_coldkey="5LiveBenchOwner",
+                amount_rao=1,
+                dest_address="5ConfirmationTreasury",
+                timestamp=_NOW,
+            )
+        )
+        result = await reconcile_confirmation_candidates(
+            session,
+            bench_version=live_version,
             verification_profiles=_registry(),
             finalized_agent=agent,
             finalized_scores=scores,
-            bench_version=future_version,
         )
-    assert result.base_subjects == 0
-    assert await session.get(ConfirmationBundleSubject, (agent.agent_id, 9)) is None
+
+    assert result.base_subjects == 1
+    subject = await session.get(
+        ConfirmationBundleSubject, (agent.agent_id, live_version)
+    )
+    assert subject is not None
+    assert subject.bench_version == live_version
+    # The subject must not be filed under the epoch the lane happened to ship
+    # in; that aliasing is what made the stale cohort look populated.
+    if live_version != 9:
+        assert await session.get(ConfirmationBundleSubject, (agent.agent_id, 9)) is None
+
+
+@pytest.mark.parametrize("pre_contract_version", [1, 8])
+async def test_pre_contract_bench_versions_never_enter_the_ledger(
+    session: AsyncSession, pre_contract_version: int
+) -> None:
+    """Below the first version carrying a typed base root there is nothing to
+    project, so those closed contracts stay exactly as they were."""
+    async with session.begin():
+        await _settings(session)
+        agent, scores = await _agent_with_quorum(
+            session, index=0, composites=(700_000, 800_000, 900_000)
+        )
+        result = await reconcile_confirmation_candidates(
+            session,
+            bench_version=pre_contract_version,
+            verification_profiles=_registry(),
+            finalized_agent=agent,
+            finalized_scores=scores,
+        )
+    assert result == ConfirmationReconciliation()
+    assert (
+        await session.get(
+            ConfirmationBundleSubject, (agent.agent_id, pre_contract_version)
+        )
+        is None
+    )
+    assert (
+        await session.scalar(select(func.count()).select_from(ConfirmationBundle)) == 0
+    )
 
 
 async def test_active_settings_without_exact_registered_profile_fail_base_only(
@@ -278,8 +358,9 @@ async def test_active_settings_without_exact_registered_profile_fail_base_only(
         agent, scores = await _agent_with_quorum(
             session, index=0, composites=(700_000, 800_000, 900_000)
         )
-        result = await reconcile_v9_confirmation_candidates(
+        result = await reconcile_confirmation_candidates(
             session,
+            bench_version=9,
             verification_profiles={},
             finalized_agent=agent,
             finalized_scores=scores,
@@ -297,8 +378,9 @@ async def test_off_settings_never_create_work_even_with_registered_profile(
         agent, scores = await _agent_with_quorum(
             session, index=0, composites=(700_000, 800_000, 900_000)
         )
-        result = await reconcile_v9_confirmation_candidates(
+        result = await reconcile_confirmation_candidates(
             session,
+            bench_version=9,
             verification_profiles=_registry(),
             finalized_agent=agent,
             finalized_scores=scores,
@@ -341,11 +423,11 @@ async def test_top_n_challenger_digest_reuse_and_replay_are_deterministic(
             index=3,
             composites=(700_000,) * 3,
         )
-        first_pass = await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=_registry()
+        first_pass = await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=_registry()
         )
-        second_pass = await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=_registry()
+        second_pass = await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=_registry()
         )
 
     subjects = {
@@ -399,8 +481,9 @@ async def test_ledger_and_persisted_fallback_share_attested_owner_key_space(
         await session.flush()
         # Persist the older subject while issuance is disabled, reproducing a
         # durable fallback row without creating spendable work.
-        await reconcile_v9_confirmation_candidates(
+        await reconcile_confirmation_candidates(
             session,
+            bench_version=9,
             verification_profiles={},
             finalized_agent=older,
             finalized_scores=older_scores,
@@ -414,8 +497,8 @@ async def test_ledger_and_persisted_fallback_share_attested_owner_key_space(
         )
         session.add(payment(winner, index=1))
         await session.flush()
-        result = await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=_registry()
+        result = await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=_registry()
         )
 
     older_subject = await session.get(ConfirmationBundleSubject, (older.agent_id, 9))
@@ -435,8 +518,8 @@ async def test_settings_change_supersedes_only_zero_spend_pending_generation(
     async with session.begin():
         shadow_revision, _ = await _settings(session, top_n=1)
         agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
-        await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
         subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
         assert subject is not None and subject.bundle_id is not None
@@ -449,11 +532,11 @@ async def test_settings_change_supersedes_only_zero_spend_pending_generation(
             top_n=1,
             parent_revision=shadow_revision.revision,
         )
-        first = await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        first = await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
-        replay = await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        replay = await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
 
     refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
@@ -481,8 +564,8 @@ async def test_settings_change_recovers_failed_spent_generation(
     async with session.begin():
         shadow_revision, shadow = await _settings(session, top_n=1)
         agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
-        await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
         subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
         assert subject is not None and subject.bundle_id is not None
@@ -523,8 +606,8 @@ async def test_settings_change_recovers_failed_spent_generation(
             top_n=1,
             parent_revision=shadow_revision.revision,
         )
-        await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
 
     refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
@@ -548,8 +631,8 @@ async def test_settings_change_recovers_budget_blocked_spent_generation(
     async with session.begin():
         shadow_revision, shadow = await _settings(session, top_n=1, daily_bundle_cap=1)
         agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
-        await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
         subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
         assert subject is not None and subject.bundle_id is not None
@@ -603,8 +686,8 @@ async def test_settings_change_recovers_budget_blocked_spent_generation(
             parent_revision=shadow_revision.revision,
             daily_bundle_cap=2,
         )
-        await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
 
     refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
@@ -626,8 +709,8 @@ async def test_reserved_pending_generation_requires_operator_recovery(
     async with session.begin():
         shadow_revision, shadow = await _settings(session, top_n=1)
         agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
-        await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
         subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
         assert subject is not None and subject.bundle_id is not None
@@ -651,8 +734,8 @@ async def test_reserved_pending_generation_requires_operator_recovery(
             top_n=1,
             parent_revision=shadow_revision.revision,
         )
-        await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
 
     refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
@@ -673,8 +756,8 @@ async def test_shadow_evidence_reprojects_under_enforce_without_new_spend(
     async with session.begin():
         shadow_revision, shadow = await _settings(session, top_n=1)
         agent, _ = await _agent_with_quorum(session, index=0, composites=(800_000,) * 3)
-        await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
         subject = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
         assert subject is not None and subject.bundle_id is not None
@@ -726,8 +809,8 @@ async def test_shadow_evidence_reprojects_under_enforce_without_new_spend(
             top_n=1,
             parent_revision=shadow_revision.revision,
         )
-        enforce_result = await reconcile_v9_confirmation_candidates(
-            session, verification_profiles=registry
+        enforce_result = await reconcile_confirmation_candidates(
+            session, bench_version=9, verification_profiles=registry
         )
         assert enforce_result.reused_bundles == 1
         assert subject.result_status == ConfirmationResultStatus.FULL_CONFIRMED.value

@@ -66,6 +66,8 @@ type ConfirmationBundleTicket struct {
 	FailureReason   pgtype.Text        `json:"failureReason"`
 	FailedAt        pgtype.Timestamptz `json:"failedAt"`
 	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
+	FailureClass    pgtype.Text        `json:"failureClass"`
+	FailureStage    pgtype.Text        `json:"failureStage"`
 }
 
 type ConfirmationInferenceGrant struct {

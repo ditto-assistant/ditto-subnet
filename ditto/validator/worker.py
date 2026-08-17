@@ -120,6 +120,9 @@ from ditto.validator.weights import (
     resolve_miner_emission_share,
     select_champion,
 )
+from ditto_screening_protocol.confirmation_transport import (
+    CONFIRMATION_FAILURE_CLASS_VALUES,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -254,6 +257,15 @@ CONFIRMATION_FAILURE_CLASSES: dict[str, str] = {
     "ServerTimeoutError": "timeout",
 }
 _UNCLASSIFIED_CONFIRMATION_FAILURE = "unclassified"
+
+# These slugs are now persisted by Platform and shown to operators, so they are
+# a wire contract, not local telemetry. Fail at import if this map ever emits a
+# value the shared allowlist does not accept: a drifted slug would be rejected
+# by Platform's signature-bound model at the exact moment a failure needed
+# reporting, turning one diagnosable break into a silent one.
+assert set(CONFIRMATION_FAILURE_CLASSES.values()) | {
+    _UNCLASSIFIED_CONFIRMATION_FAILURE
+} <= set(CONFIRMATION_FAILURE_CLASS_VALUES)
 
 
 def confirmation_failure_class(error: BaseException) -> str:
@@ -1912,9 +1924,23 @@ class ValidatorWorker:
                 reason: Literal[
                     "execution_failed", "deadline", "cancelled", "infrastructure"
                 ],
+                error: BaseException | None = None,
             ) -> None:
                 if job is None:
                     return
+                # Classify against the stage BEFORE publishing progress: the
+                # publish below overwrites the slot's stage with
+                # "failed_retrying", and the stage at the point of failure is
+                # the whole diagnostic value. Both fields are allowlisted and
+                # signed, so this is the cause of the failure as the operator
+                # will read it in Backroom -- the only place it is readable at
+                # all for a managed or third-party validator.
+                failure_class = (
+                    confirmation_failure_class(error) if error is not None else None
+                )
+                failure_stage = (
+                    self._confirmation_stage(slot_id) if error is not None else None
+                )
                 await self._publish_confirmation_progress(
                     job,
                     "failed_retrying",
@@ -1927,6 +1953,8 @@ class ValidatorWorker:
                             self._platform.fail_v9_confirmation_job(
                                 job,
                                 reason=reason,
+                                failure_class=failure_class,
+                                failure_stage=failure_stage,
                             )
                         ),
                         timeout=_FAIL_REPORT_TIMEOUT_SECONDS,
@@ -2046,7 +2074,7 @@ class ValidatorWorker:
                 # "failed_retrying" -- the stage at the point of failure is the
                 # whole diagnostic value.
                 failed_stage = self._confirmation_stage(slot_id)
-                await hand_back("deadline")
+                await hand_back("deadline", error)
                 self._record_confirmation_failure(error, failed_stage, "deadline")
                 logger.warning(
                     "v9 confirmation exhausted its lease on %s at stage %s: %s",
@@ -2056,7 +2084,7 @@ class ValidatorWorker:
                 )
             except (ValidatorInfrastructureError, PlatformInfrastructureError) as error:
                 failed_stage = self._confirmation_stage(slot_id)
-                await hand_back("infrastructure")
+                await hand_back("infrastructure", error)
                 self._record_confirmation_failure(error, failed_stage, "infrastructure")
                 logger.warning(
                     "v9 confirmation infrastructure failed on %s at stage %s: %s",
@@ -2066,7 +2094,7 @@ class ValidatorWorker:
                 )
             except Exception as error:  # noqa: BLE001 - isolate optional slot work
                 failed_stage = self._confirmation_stage(slot_id)
-                await hand_back("execution_failed")
+                await hand_back("execution_failed", error)
                 self._record_confirmation_failure(
                     error, failed_stage, "execution_failed"
                 )

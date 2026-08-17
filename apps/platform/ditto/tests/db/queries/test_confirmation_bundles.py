@@ -447,13 +447,21 @@ class TestBundleResolution:
         assert second.bundle is not None
         assert second.bundle.bundle_id != first.bundle_id
 
-    async def test_non_v9_bundle_is_rejected_before_write(
+    async def test_pre_contract_bundle_is_rejected_before_write(
         self, session: AsyncSession
     ) -> None:
+        """Only versions below the base-evidence contract are refused.
+
+        Versions at or above it are accepted so the lane can follow the live
+        benchmark; it used to accept bench 9 alone, which stranded it the
+        moment a later epoch was activated.
+        """
         async with session.begin():
             agent_id = await seed_agent(session)
             revision, policy = await seed_settings(session)
-            with pytest.raises(ConfirmationBundlePersistenceError, match="require v9"):
+            with pytest.raises(
+                ConfirmationBundlePersistenceError, match="carrying base evidence"
+            ):
                 await get_or_create_confirmation_bundle(
                     session,
                     agent_id=agent_id,
@@ -463,6 +471,26 @@ class TestBundleResolution:
                     settings=policy,
                     verification_profile=verification_profile(),
                 )
+
+    @pytest.mark.parametrize("live_version", [10, 11])
+    async def test_bundle_is_written_for_a_later_live_benchmark(
+        self, session: AsyncSession, live_version: int
+    ) -> None:
+        async with session.begin():
+            agent_id = await seed_agent(session)
+            revision, policy = await seed_settings(session)
+            resolution = await get_or_create_confirmation_bundle(
+                session,
+                agent_id=agent_id,
+                bench_version=live_version,
+                **base_proof_kwargs(quality_micros=800_000, stderr_micros=10_000),
+                settings_revision=revision.revision,
+                settings=policy,
+                verification_profile=verification_profile(),
+            )
+        assert resolution.bundle is not None
+        assert resolution.bundle.bench_version == live_version
+        assert resolution.subject.bench_version == live_version
 
     async def test_supplied_settings_must_match_frozen_revision(
         self, session: AsyncSession

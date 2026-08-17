@@ -273,6 +273,13 @@ export function ConfirmationBundleControlPanel({
               <Metric label={`Measured base cost · ${integer(calibration.base_run_count)} runs`} value={cost(calibration.measured_base_cost_microusd)} />
               <Metric label={`Average bundle cost · ${integer(calibration.confirmation_bundle_count)} bundles`} value={cost(calibration.measured_bundle_cost_microusd)} />
               <Metric label={`Promotion rate · ${integer(calibration.completed_bundle_count)} completed`} value={rate(calibration.promotion_rate_bps)} />
+              {/* Superseded and failed generations used to be folded into the
+                  completed count, which made a lane that had never once produced
+                  evidence read as a populated window with a 0% promotion rate. */}
+              <Metric
+                label={`Failed · ${integer(calibration.superseded_bundle_count)} superseded`}
+                value={integer(calibration.failed_bundle_count)}
+              />
               <Metric label="Projected daily spend" value={cost(calibration.projected_daily_spend_microusd)} />
               <Metric label="Projected epoch spend" value={cost(calibration.projected_epoch_spend_microusd)} />
             </dl>

@@ -1,6 +1,6 @@
-"""Wire contracts for bounded Bench v9 confirmation bundles.
+"""Wire contracts for bounded LongMem confirmation bundles.
 
-The expensive v9 dimensions are one indivisible bundle.  These models keep the
+The expensive dimensions are one indivisible bundle.  These models keep the
 operator policy, evidence provenance, and base/full ranking state explicit so a
 consumer cannot accidentally compare a provisional base score with a confirmed
 full score.
@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from enum import StrEnum
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -22,6 +22,15 @@ from pydantic import (
     model_validator,
 )
 
+from ditto_screening_protocol.bench_v9 import (
+    CONFIRMATION_BENCH_VERSIONS as CONFIRMATION_BENCH_VERSIONS,
+)
+from ditto_screening_protocol.bench_v9 import (
+    MIN_CONFIRMATION_BENCH_VERSION as MIN_CONFIRMATION_BENCH_VERSION,
+)
+from ditto_screening_protocol.bench_v9 import (
+    supports_confirmation as supports_confirmation,
+)
 from ditto_screening_protocol.confirmation import (
     AblationBudget as AblationBudget,
 )
@@ -78,6 +87,18 @@ MAX_CONFIRMATION_TOP_N = 10
 DEFAULT_CONFIRMATION_MIN_BASE_SCORE_MICROS = 950_000
 MAX_DAILY_BUNDLE_CAP = 1_000
 MAX_DAILY_DOLLAR_MICROUSD = 1_000_000_000
+
+
+def confirmation_capable(column: Any) -> Any:
+    """SQL form of :func:`supports_confirmation` for a bench-version column.
+
+    The ranking queries have to express the same rule in SQLAlchemy. Deriving
+    the ``IN`` list from the one alias keeps a query branch from silently
+    disagreeing with the in-process predicate -- the exact drift that let the
+    enforce-mode ledger keep gating bench 9 alone.
+    """
+    return column.in_(CONFIRMATION_BENCH_VERSIONS)
+
 
 Sha256 = Annotated[
     str,
@@ -259,6 +280,10 @@ class ConfirmationBundleTicketView(BaseModel):
     issued_at: datetime
     deadline: datetime
     failure_reason: str | None
+    # The signed, allowlisted diagnostics behind ``failure_reason``. Null for a
+    # reporter predating the contract, so a consumer must not require them.
+    failure_class: str | None = None
+    failure_stage: str | None = None
     failed_at: datetime | None
 
 
@@ -348,7 +373,14 @@ class ConfirmationShadowCalibrationView(BaseModel):
     measured_base_cost_microusd: Annotated[int, Field(ge=0)] | None
     confirmation_bundle_count: Annotated[int, Field(ge=0)]
     measured_bundle_cost_microusd: Annotated[int, Field(ge=0)] | None
+    bench_version: Annotated[int, Field(ge=1)]
+    # ``completed`` is evidence actually produced. A generation that was
+    # superseded by an operator settings write, or that failed every attempt,
+    # is counted on its own axis so an execution outage cannot be read as a
+    # completed cohort that simply never promoted.
     completed_bundle_count: Annotated[int, Field(ge=0)]
+    superseded_bundle_count: Annotated[int, Field(ge=0)]
+    failed_bundle_count: Annotated[int, Field(ge=0)]
     qualified_bundle_count: Annotated[int, Field(ge=0)]
     promotion_rate_bps: FactorBPS | None
     projected_daily_spend_microusd: Annotated[int, Field(ge=0)] | None
