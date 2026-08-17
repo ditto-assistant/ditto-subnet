@@ -8,6 +8,7 @@ deleted. Screener slot rentals are never touched.
 
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
@@ -31,6 +32,8 @@ ONESHOT_NAME_PREFIXES = (
 INFLIGHT_STATUSES = frozenset({"running", "provisioning"})
 SWEEPABLE_STATUSES = frozenset({"suspended", "error", "registered", "deleted"})
 DEFAULT_REGISTERED_GRACE_SECONDS = 1200
+DEFAULT_INFLIGHT_GRACE_SECONDS = 2700
+RUNNING_WAIT_SECONDS = 180.0
 
 
 def is_oneshot_name(name: str) -> bool:
@@ -56,16 +59,40 @@ def should_sweep(
     created_at: str | None,
     now: datetime,
     registered_grace_seconds: int,
+    inflight_grace_seconds: int = DEFAULT_INFLIGHT_GRACE_SECONDS,
 ) -> bool:
     if not is_oneshot_name(name):
         return False
     normalized = (status or "").casefold()
-    if normalized in INFLIGHT_STATUSES or normalized not in SWEEPABLE_STATUSES:
+    age = _created_age_seconds(created_at, now=now)
+    if normalized in INFLIGHT_STATUSES:
+        # created_at is the original record time. A leftover we redeployed
+        # stays old even while provisioning; a live job is recent.
+        return age is not None and age >= inflight_grace_seconds
+    if normalized not in SWEEPABLE_STATUSES:
         return False
     if normalized != "registered":
         return True
-    age = _created_age_seconds(created_at, now=now)
     return age is not None and age >= registered_grace_seconds
+
+
+def _current_status(client: TargonClient, uid: str) -> str:
+    try:
+        return str(client.state(uid).get("status", "")).casefold()
+    except TargonAPIError:
+        return ""
+
+
+def _wait_until_running(client: TargonClient, uid: str) -> bool:
+    deadline = time.monotonic() + RUNNING_WAIT_SECONDS
+    while time.monotonic() < deadline:
+        status = _current_status(client, uid)
+        if status == "running":
+            return True
+        if status in {"deleted", "error", "suspended"}:
+            return False
+        time.sleep(5)
+    return _current_status(client, uid) == "running"
 
 
 def _try_delete(client: TargonClient, uid: str) -> bool:
@@ -88,10 +115,7 @@ def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
     """
     if _try_delete(client, uid):
         return True
-    try:
-        status = str(client.state(uid).get("status", "")).casefold()
-    except TargonAPIError:
-        return False
+    status = _current_status(client, uid)
     if status == "deleted":
         return True
     if status in {"suspended", "error", "registered"}:
@@ -99,8 +123,14 @@ def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
             client.deploy(uid)
         except TargonAPIError:
             return False
+        status = _current_status(client, uid) or "provisioning"
+    if status == "provisioning":
+        if not _wait_until_running(client, uid):
+            return False
+        status = "running"
+    if status == "running":
         return _try_delete(client, uid)
-    return _try_delete(client, uid)
+    return False
 
 
 def sweep_oneshot_rentals(

@@ -44,7 +44,7 @@ class _Targon:
 
     def deploy(self, uid: str) -> dict[str, object]:
         self.deployed.append(uid)
-        self.status_by_uid[uid] = "provisioning"
+        self.status_by_uid[uid] = "running"
         return {}
 
     def delete(self, uid: str) -> None:
@@ -99,7 +99,14 @@ def test_should_sweep_skips_inflight_and_fresh_registered() -> None:
     assert not should_sweep(
         name="ditto-miner-build-abc",
         status="running",
-        created_at="2026-08-16T00:00:00Z",
+        created_at="2026-08-16T11:50:00Z",
+        now=now,
+        registered_grace_seconds=1200,
+    )
+    assert should_sweep(
+        name="ditto-miner-build-abc",
+        status="provisioning",
+        created_at="2026-08-11T00:00:00Z",
         now=now,
         registered_grace_seconds=1200,
     )
@@ -140,13 +147,18 @@ def test_sweep_deletes_terminal_oneshots_and_skips_inflight() -> None:
     client = _Targon(
         [
             _row(uid="wrk-slot", name="ditto-screener-prod-slot-01", status="running"),
-            _row(uid="wrk-run", name="ditto-miner-build-aaa", status="running"),
+            _row(
+                uid="wrk-run",
+                name="ditto-miner-build-aaa",
+                status="running",
+                created_at="2026-08-16T11:50:00Z",
+            ),
             _row(uid="wrk-hold", name="ditto-miner-build-bbb", status="suspended"),
             _row(uid="wrk-err", name="ditto-rootless-probe-ccc", status="error"),
         ]
     )
 
-    result = sweep_oneshot_rentals(client)
+    result = sweep_oneshot_rentals(client, now=datetime(2026, 8, 16, 12, 0, tzinfo=UTC))
 
     assert result["oneshot"] == 3
     assert result["skipped_inflight"] == 1

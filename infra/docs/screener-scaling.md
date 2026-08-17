@@ -101,7 +101,9 @@ scripts/targon-smoke.sh sweep-oneshots
 scripts/targon-smoke.sh sweep-oneshots --apply
 ```
 
-`--apply` deletes in parallel. In-flight `running`/`provisioning` rentals are skipped.
+`--apply` redeploys leftover terminal records, waits until they are
+`running`, then deletes. Recent `running`/`provisioning` jobs are skipped;
+older ones are treated as leftover redeploys.
 
 The GCE autoscaler remains as an independent `ONLY_SCALE_OUT` watchdog on the
 group-level backlog metric. It cannot scale in or fight the controller. Its
