@@ -420,12 +420,15 @@ async def _snapshot_can_be_shared(
         for entry in snapshot.entries
         if entry.efficiency_factor is not None
     ]
-    if any(version is None for version in curve_versions):
+    resolved_versions = [
+        version for version in curve_versions if isinstance(version, int)
+    ]
+    if len(resolved_versions) != len(curve_versions):
         # Missing curve metadata cannot prove the payload is v3-safe.
         return False
     required_protocol = (
         _UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL
-        if any(version >= 4 for version in curve_versions)
+        if any(version >= 4 for version in resolved_versions)
         else _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
     )
     return (

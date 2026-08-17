@@ -630,6 +630,7 @@ class TestEfficiencyAdjustedFloors:
         assert bonuses == {}
         assert factors == {}
         assert curve_versions == {}
+        assert fleet_gate.await_args is not None
         assert fleet_gate.await_args.kwargs["minimum_protocol"] == 25
 
     async def test_resolver_serves_v4_factor_when_fleet_reports_protocol_25(
@@ -672,6 +673,7 @@ class TestEfficiencyAdjustedFloors:
         assert bonuses == {}
         assert factors == {row.agent_id: pytest.approx(1.5)}
         assert curve_versions == {row.agent_id: 4}
+        assert fleet_gate.await_args is not None
         assert fleet_gate.await_args.kwargs["minimum_protocol"] == 25
 
     async def test_protocol_24_requester_does_not_inherit_a_v4_factor(
@@ -764,6 +766,7 @@ class TestEfficiencyAdjustedFloors:
         assert bonuses == {}
         assert factors == {row.agent_id: pytest.approx(1.10)}
         assert curve_versions == {row.agent_id: 3}
+        assert fleet_gate.await_args is not None
         assert fleet_gate.await_args.kwargs["minimum_protocol"] == 21
 
     async def test_resolver_withholds_when_snapshot_curve_metadata_is_missing(
