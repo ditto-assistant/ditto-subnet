@@ -51,6 +51,7 @@ from ditto.chain import ChainError
 from ditto.validator import worker as worker_mod
 from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 from ditto.validator.dittobench import (
+    SUPPORTED_BENCH_VERSIONS,
     DittobenchProgressSnapshot,
     InferenceBrokerSession,
 )
@@ -223,8 +224,39 @@ class TestComputeWeights:
         v10 = _entry("v10", 0.9, bench_version=10)
         assert filter_weight_confirmed([v10]) == [v10]
 
-    def test_preconfirmation_fold_fails_closed_for_unknown_future_version(self) -> None:
-        assert filter_weight_confirmed([_entry("future", 0.9, bench_version=11)]) == []
+    @pytest.mark.parametrize("bench_version", SUPPORTED_BENCH_VERSIONS)
+    def test_every_executable_version_is_payable(self, bench_version: int) -> None:
+        """Anti-drift guard: the executable pin and the payable set cannot diverge.
+
+        Bench v11 shipped with ``SUPPORTED_BENCH_VERSIONS`` updated but the fold's
+        own enumerated allowlist left at ``{<9, 9, 10}``. Validators scored v11
+        fine, the whole v11 ledger was then dropped from the fold, and the fleet
+        stopped setting weights entirely. A v9 entry needs its receipt only under
+        enforce, which is a separate contract, not a version gate.
+        """
+        entry = _entry("m", 0.9, bench_version=bench_version)
+        assert filter_weight_confirmed([entry], enforce=False) == [entry]
+
+    def test_future_version_is_payable_on_ordinary_quorum(self) -> None:
+        """A version newer than this binary must not be dropped.
+
+        The fold takes the pool as served: older validators ignore
+        ``bench_version`` outright, so failing closed here would diverge the fleet
+        from them and, when the whole ledger sits on the new version, zero the
+        weight vector for everyone running the newer build.
+        """
+        future = _entry("future", 0.9, bench_version=max(SUPPORTED_BENCH_VERSIONS) + 1)
+        assert filter_weight_confirmed([future]) == [future]
+
+    def test_v11_only_ledger_still_produces_a_weight_vector(self) -> None:
+        """The end-to-end shape of the outage: a healthy ledger must fold."""
+        entries = [
+            _entry("champ", 0.993028, bench_version=11, first_seen=_T0),
+            _entry("r1", 0.987052, bench_version=11, first_seen=_T0 + timedelta(1)),
+        ]
+        payable = filter_weight_confirmed(entries)
+        assert payable == entries
+        assert compute_weights(payable, **_KOTH) == {"champ": 0.65, "r1": 0.14}
 
     def test_champion_and_tail_split(self) -> None:
         entries = [

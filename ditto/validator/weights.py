@@ -244,26 +244,38 @@ def filter_weight_confirmed(
 ) -> list[LedgerEntry]:
     """Keep entries whose score contract is payable under the served policy.
 
-    A Bench v9 ordinary quorum is reward authority while confirmation is off or
-    shadowing.  Only the Platform's explicit ``v9_confirmation_mode=enforce``
-    marker makes a full-confirmation receipt mandatory.  Treating the mere
-    presence of v9 as enforce used to drop the whole post-rollout ledger, build
-    an empty weight vector, and leave the previous 100% burn visible on-chain.
+    Bench v9 is the *only* version that carries a full-confirmation receipt
+    contract, so it is the only version this filter special-cases. A v9 ordinary
+    quorum is reward authority while confirmation is off or shadowing; only the
+    Platform's explicit ``v9_confirmation_mode=enforce`` marker makes the receipt
+    mandatory. Treating the mere presence of v9 as enforce used to drop the whole
+    post-rollout ledger, build an empty weight vector, and leave the previous
+    100% burn visible on-chain. The default preserves the stricter v9 behavior
+    for callers that do not possess the signed ledger-level mode.
 
-    Bench v10 has no v9 confirmation receipt contract, so its ordinary quorum
-    is payable. Versions beyond the latest executable contract remain fail
-    closed. The default preserves the stricter v9 behavior for callers that do
-    not possess the signed ledger-level mode.
+    **Every other version is payable on its ordinary quorum, including versions
+    newer than this binary knows about.** This deliberately does not fail closed
+    on an unrecognized future version, for the same reason
+    :func:`compute_weights` refuses a global maximum-version filter: the pool is
+    served by the Platform, older validators ignore the additive ``bench_version``
+    field entirely, and a version gate here diverges the fleet from them. The
+    entry only exists because a quorum of validators that *could* execute that
+    contract signed it, so this layer has nothing to add by second-guessing it.
+
+    An enumerated allowlist here is a live outage. Bench v11 activated on
+    2026-08-16 with the executable pin (``SUPPORTED_BENCH_VERSIONS``) updated but
+    this list still enumerating ``{<9, 9, 10}``: the whole v11 ledger was dropped,
+    every validator took the "no weight-confirmed entries" early return in
+    ``worker.py``, and the fleet stopped calling ``put_weights`` for ~11.7h while
+    a stale v10 vector stayed frozen on-chain paying the wrong champion. Keep this
+    predicate open-ended so a bench bump cannot silently defund the subnet again.
     """
     return [
         entry
         for entry in entries
-        if _entry_version(entry) < 9
-        or _entry_version(entry) == 10
-        or (
-            _entry_version(entry) == 9
-            and (not enforce or getattr(entry, "v9_confirmation", None) is not None)
-        )
+        if _entry_version(entry) != 9
+        or not enforce
+        or getattr(entry, "v9_confirmation", None) is not None
     ]
 
 
