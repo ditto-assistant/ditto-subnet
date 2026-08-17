@@ -194,6 +194,16 @@ def sweep_oneshot_rentals(
         deleted = len(pending)
         items.extend(pending)
     elif pending:
+        status_rank = {
+            "suspended": 0,
+            "error": 1,
+            "registered": 2,
+            "provisioning": 3,
+            "running": 4,
+        }
+        pending.sort(
+            key=lambda row: status_rank.get((row["status"] or "").casefold(), 5)
+        )
         workers = max(1, max_workers)
 
         def _delete(row: dict[str, str | None]) -> dict[str, str | None]:
