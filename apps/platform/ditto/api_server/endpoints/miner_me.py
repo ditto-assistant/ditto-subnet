@@ -284,9 +284,7 @@ async def set_my_avatar(
 
 
 @router.delete("/avatar", response_model=MinerAvatarResponse)
-async def clear_my_avatar(
-    request: Request, session: SessionDep
-) -> MinerAvatarResponse:
+async def clear_my_avatar(request: Request, session: SessionDep) -> MinerAvatarResponse:
     hippius = _require_hippius(request)
     now = datetime.now(UTC)
     deleted_key: str | None = None

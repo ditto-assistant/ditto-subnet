@@ -51,8 +51,7 @@ def upgrade() -> None:
             name="miner_profiles_discord_len",
         ),
         sa.CheckConstraint(
-            "discord_handle IS NULL OR discord_handle ~ "
-            "'^[A-Za-z0-9._]{2,32}$'",
+            "discord_handle IS NULL OR discord_handle ~ '^[A-Za-z0-9._]{2,32}$'",
             name="miner_profiles_discord_charset",
         ),
     )
@@ -125,7 +124,9 @@ def upgrade() -> None:
         "miner_oauth_clients",
         sa.Column("client_id", sa.Text(), nullable=False),
         sa.Column("client_name", sa.Text(), nullable=False),
-        sa.Column("redirect_uris", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
+        sa.Column(
+            "redirect_uris", postgresql.JSONB(astext_type=sa.Text()), nullable=False
+        ),
         sa.Column(
             "created_at",
             sa.TIMESTAMP(timezone=True),

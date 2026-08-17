@@ -1439,6 +1439,123 @@ CREATE TABLE public.miner_avatars (
 
 
 --
+-- Name: miner_device_grants; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_device_grants (
+    grant_id uuid NOT NULL,
+    user_code text NOT NULL,
+    poll_token_hash text,
+    status text NOT NULL,
+    scopes text NOT NULL,
+    ttl_seconds integer NOT NULL,
+    miner_hotkey text,
+    session_id uuid,
+    oauth_client_id text,
+    redirect_uri text,
+    state text,
+    code_challenge text,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    approved_at timestamp with time zone,
+    consumed_at timestamp with time zone,
+    CONSTRAINT ck_miner_device_grants_miner_device_grants_poll_hash_len CHECK (((poll_token_hash IS NULL) OR (length(poll_token_hash) = 64))),
+    CONSTRAINT ck_miner_device_grants_miner_device_grants_status_check CHECK ((status = ANY (ARRAY['pending'::text, 'approved'::text, 'expired'::text, 'denied'::text, 'consumed'::text]))),
+    CONSTRAINT ck_miner_device_grants_miner_device_grants_ttl_range CHECK (((ttl_seconds >= 3600) AND (ttl_seconds <= 2592000))),
+    CONSTRAINT ck_miner_device_grants_miner_device_grants_user_code_fmt CHECK ((user_code ~ '^[A-Z0-9]{4}-[A-Z0-9]{4}$'::text))
+);
+
+
+--
+-- Name: miner_login_nonces; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_login_nonces (
+    nonce uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    used_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+
+--
+-- Name: miner_oauth_clients; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_oauth_clients (
+    client_id text NOT NULL,
+    client_name text NOT NULL,
+    redirect_uris jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_miner_oauth_clients_miner_oauth_clients_id_len CHECK (((length(client_id) >= 16) AND (length(client_id) <= 80))),
+    CONSTRAINT ck_miner_oauth_clients_miner_oauth_clients_name_len CHECK (((length(client_name) >= 1) AND (length(client_name) <= 120)))
+);
+
+
+--
+-- Name: miner_oauth_codes; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_oauth_codes (
+    code_hash text NOT NULL,
+    grant_id uuid NOT NULL,
+    session_id uuid NOT NULL,
+    redirect_uri text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    consumed_at timestamp with time zone,
+    CONSTRAINT ck_miner_oauth_codes_miner_oauth_codes_hash_len CHECK ((length(code_hash) = 64))
+);
+
+
+--
+-- Name: miner_profiles; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_profiles (
+    miner_hotkey text NOT NULL,
+    x_url text,
+    github_url text,
+    discord_handle text,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_miner_profiles_miner_profiles_discord_charset CHECK (((discord_handle IS NULL) OR (discord_handle ~ '^[A-Za-z0-9._]{2,32}$'::text))),
+    CONSTRAINT ck_miner_profiles_miner_profiles_discord_len CHECK (((discord_handle IS NULL) OR ((length(discord_handle) >= 2) AND (length(discord_handle) <= 32)))),
+    CONSTRAINT ck_miner_profiles_miner_profiles_github_url_len CHECK (((github_url IS NULL) OR ((length(github_url) >= 8) AND (length(github_url) <= 200)))),
+    CONSTRAINT ck_miner_profiles_miner_profiles_x_url_len CHECK (((x_url IS NULL) OR ((length(x_url) >= 8) AND (length(x_url) <= 200))))
+);
+
+
+--
+-- Name: miner_session_tokens; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_session_tokens (
+    token_hash text NOT NULL,
+    session_id uuid NOT NULL,
+    issued_at timestamp with time zone DEFAULT now() NOT NULL,
+    last_used_at timestamp with time zone,
+    CONSTRAINT ck_miner_session_tokens_miner_session_tokens_hash_len CHECK ((length(token_hash) = 64))
+);
+
+
+--
+-- Name: miner_sessions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.miner_sessions (
+    session_id uuid NOT NULL,
+    miner_hotkey text NOT NULL,
+    scopes text NOT NULL,
+    label text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    revoked_at timestamp with time zone,
+    last_used_at timestamp with time zone,
+    CONSTRAINT ck_miner_sessions_miner_sessions_hotkey_len CHECK (((length(miner_hotkey) >= 47) AND (length(miner_hotkey) <= 48))),
+    CONSTRAINT ck_miner_sessions_miner_sessions_label_check CHECK ((label = ANY (ARRAY['dashboard'::text, 'mcp'::text, 'cli'::text]))),
+    CONSTRAINT ck_miner_sessions_miner_sessions_scopes_len CHECK (((length(scopes) >= 1) AND (length(scopes) <= 200)))
+);
+
+
+--
 -- Name: name_claim_endorsements; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2911,6 +3028,78 @@ ALTER TABLE ONLY public.miner_avatars
 
 
 --
+-- Name: miner_device_grants miner_device_grants_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_device_grants
+    ADD CONSTRAINT miner_device_grants_pkey PRIMARY KEY (grant_id);
+
+
+--
+-- Name: miner_device_grants miner_device_grants_poll_token_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_device_grants
+    ADD CONSTRAINT miner_device_grants_poll_token_key UNIQUE (poll_token_hash);
+
+
+--
+-- Name: miner_device_grants miner_device_grants_user_code_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_device_grants
+    ADD CONSTRAINT miner_device_grants_user_code_key UNIQUE (user_code);
+
+
+--
+-- Name: miner_login_nonces miner_login_nonces_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_login_nonces
+    ADD CONSTRAINT miner_login_nonces_pkey PRIMARY KEY (nonce);
+
+
+--
+-- Name: miner_oauth_clients miner_oauth_clients_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_oauth_clients
+    ADD CONSTRAINT miner_oauth_clients_pkey PRIMARY KEY (client_id);
+
+
+--
+-- Name: miner_oauth_codes miner_oauth_codes_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_oauth_codes
+    ADD CONSTRAINT miner_oauth_codes_pkey PRIMARY KEY (code_hash);
+
+
+--
+-- Name: miner_profiles miner_profiles_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_profiles
+    ADD CONSTRAINT miner_profiles_pkey PRIMARY KEY (miner_hotkey);
+
+
+--
+-- Name: miner_session_tokens miner_session_tokens_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_session_tokens
+    ADD CONSTRAINT miner_session_tokens_pkey PRIMARY KEY (token_hash);
+
+
+--
+-- Name: miner_sessions miner_sessions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_sessions
+    ADD CONSTRAINT miner_sessions_pkey PRIMARY KEY (session_id);
+
+
+--
 -- Name: name_claim_endorsements name_claim_endorsements_nonce_key; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3910,6 +4099,27 @@ CREATE INDEX miner_avatar_nonces_hotkey_idx ON public.miner_avatar_nonces USING 
 
 
 --
+-- Name: miner_device_grants_status_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_device_grants_status_idx ON public.miner_device_grants USING btree (status, expires_at);
+
+
+--
+-- Name: miner_session_tokens_session_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_session_tokens_session_idx ON public.miner_session_tokens USING btree (session_id);
+
+
+--
+-- Name: miner_sessions_hotkey_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX miner_sessions_hotkey_idx ON public.miner_sessions USING btree (miner_hotkey, expires_at);
+
+
+--
 -- Name: name_claim_endorsements_claim_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4563,6 +4773,46 @@ ALTER TABLE ONLY public.inference_grants
 
 ALTER TABLE ONLY public.inference_requests
     ADD CONSTRAINT fk_inference_requests_grant_id_inference_grants FOREIGN KEY (grant_id) REFERENCES public.inference_grants(grant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: miner_device_grants miner_device_grants_client_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_device_grants
+    ADD CONSTRAINT miner_device_grants_client_id_fkey FOREIGN KEY (oauth_client_id) REFERENCES public.miner_oauth_clients(client_id) ON DELETE SET NULL;
+
+
+--
+-- Name: miner_device_grants miner_device_grants_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_device_grants
+    ADD CONSTRAINT miner_device_grants_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE SET NULL;
+
+
+--
+-- Name: miner_oauth_codes miner_oauth_codes_grant_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_oauth_codes
+    ADD CONSTRAINT miner_oauth_codes_grant_id_fkey FOREIGN KEY (grant_id) REFERENCES public.miner_device_grants(grant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: miner_oauth_codes miner_oauth_codes_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_oauth_codes
+    ADD CONSTRAINT miner_oauth_codes_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE CASCADE;
+
+
+--
+-- Name: miner_session_tokens miner_session_tokens_session_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.miner_session_tokens
+    ADD CONSTRAINT miner_session_tokens_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.miner_sessions(session_id) ON DELETE CASCADE;
 
 
 --

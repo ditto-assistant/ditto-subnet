@@ -4,6 +4,91 @@
  */
 
 export interface paths {
+    "/.well-known/mcp/server.json": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Mcp Server Metadata */
+        get: operations["mcp_server_metadata__well_known_mcp_server_json_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-authorization-server": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Oauth Metadata */
+        get: operations["oauth_metadata__well_known_oauth_authorization_server_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-authorization-server/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Oauth Metadata */
+        get: operations["oauth_metadata__well_known_oauth_authorization_server_mcp_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Protected Resource */
+        get: operations["protected_resource__well_known_oauth_protected_resource_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/.well-known/oauth-protected-resource/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Protected Resource */
+        get: operations["protected_resource__well_known_oauth_protected_resource_mcp_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/scoring-readiness": {
         parameters: {
             query?: never;
@@ -2036,6 +2121,196 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/me": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Me */
+        get: operations["me_api_v1_me_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update Me */
+        patch: operations["update_me_api_v1_me_patch"];
+        trace?: never;
+    };
+    "/api/v1/me/avatar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Set My Avatar */
+        post: operations["set_my_avatar_api_v1_me_avatar_post"];
+        /** Clear My Avatar */
+        delete: operations["clear_my_avatar_api_v1_me_avatar_delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/commands": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Commands */
+        get: operations["my_commands_api_v1_me_commands_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/reviews": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Reviews */
+        get: operations["my_reviews_api_v1_me_reviews_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/me/submissions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** My Submissions */
+        get: operations["my_submissions_api_v1_me_submissions_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/miner-auth/device": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Device */
+        post: operations["start_device_api_v1_miner_auth_device_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/miner-auth/device/{user_code}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Public Device */
+        get: operations["public_device_api_v1_miner_auth_device__user_code__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/miner-auth/device/{user_code}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Device */
+        post: operations["approve_device_api_v1_miner_auth_device__user_code__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/miner-auth/device/{user_code}/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Poll Device */
+        get: operations["poll_device_api_v1_miner_auth_device__user_code__status_post"];
+        put?: never;
+        /** Poll Device */
+        post: operations["poll_device_api_v1_miner_auth_device__user_code__status_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/miner-auth/session": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Current Session */
+        get: operations["current_session_api_v1_miner_auth_session_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/miner-auth/session/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Revoke Current Session */
+        post: operations["revoke_current_session_api_v1_miner_auth_session_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/miner-avatars": {
         parameters: {
             query?: never;
@@ -2592,6 +2867,26 @@ export interface paths {
          *     Hippius URL. Missing avatars are 404; an unconfigured store is 503.
          */
         get: operations["public_miner_avatar_api_v1_public_miners__hotkey__avatar_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/public/miners/{miner_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Public Miner Profile
+         * @description Public miner profile: handle, avatar, socials, recent submissions.
+         */
+        get: operations["public_miner_profile_api_v1_public_miners__miner_id__get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4094,6 +4389,92 @@ export interface paths {
          * @description Claim one artifact/profile-deduplicated internal confirmation bundle.
          */
         post: operations["request_v9_confirmation_job_api_v1_validator_v9_confirmation_job_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Miner Mcp */
+        get: operations["miner_mcp_mcp_post"];
+        put?: never;
+        /** Miner Mcp */
+        post: operations["miner_mcp_mcp_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp/oauth/authorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Authorize */
+        get: operations["authorize_mcp_oauth_authorize_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp/oauth/complete": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Complete Oauth */
+        get: operations["complete_oauth_mcp_oauth_complete_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp/oauth/register": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register Client */
+        post: operations["register_client_mcp_oauth_register_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/mcp/oauth/token": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Issue Token */
+        post: operations["issue_token_mcp_oauth_token_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8250,6 +8631,11 @@ export interface components {
             /** Payload */
             payload: string;
         };
+        /** Body_set_my_avatar_api_v1_me_avatar_post */
+        Body_set_my_avatar_api_v1_me_avatar_post: {
+            /** File */
+            file: string;
+        };
         /** Body_upload_agent_api_v1_upload_agent_post */
         Body_upload_agent_api_v1_upload_agent_post: {
             /** Admission Token */
@@ -10821,6 +11207,107 @@ export interface components {
             /** Updated At */
             updated_at?: string | null;
         };
+        /** MinerCommand */
+        MinerCommand: {
+            /** Action */
+            action: string;
+            /** Command */
+            command: string;
+            /** Reason */
+            reason: string;
+            /** Submit Url */
+            submit_url?: string | null;
+        };
+        /** MinerDevicePublicResponse */
+        MinerDevicePublicResponse: {
+            /** Expires In */
+            expires_in: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Login Command */
+            login_command: string;
+            /** Miner Hotkey */
+            miner_hotkey?: string | null;
+            /**
+             * Oauth
+             * @default false
+             */
+            oauth: boolean;
+            /** Scopes */
+            scopes: ("read" | "profile" | "download" | "upload" | "handle" | "challenges")[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "approved" | "expired" | "denied" | "consumed";
+            /** Ttl Seconds */
+            ttl_seconds: number;
+            /** User Code */
+            user_code: string;
+        };
+        /** MinerDeviceStartRequest */
+        MinerDeviceStartRequest: {
+            /** Client Id */
+            client_id?: string | null;
+            /** Code Challenge */
+            code_challenge?: string | null;
+            /** Redirect Uri */
+            redirect_uri?: string | null;
+            /** Scopes */
+            scopes: ("read" | "profile" | "download" | "upload" | "handle" | "challenges")[];
+            /** State */
+            state?: string | null;
+            /** Ttl Seconds */
+            ttl_seconds: number;
+        };
+        /** MinerDeviceStartResponse */
+        MinerDeviceStartResponse: {
+            /** Expires In */
+            expires_in: number;
+            /**
+             * Interval
+             * @default 2
+             */
+            interval: number;
+            /** Login Command */
+            login_command: string;
+            /** Poll Token */
+            poll_token?: string | null;
+            /** Scopes */
+            scopes: ("read" | "profile" | "download" | "upload" | "handle" | "challenges")[];
+            /** Ttl Seconds */
+            ttl_seconds: number;
+            /** User Code */
+            user_code: string;
+            /** Verification Uri */
+            verification_uri: string;
+            /** Verification Uri Complete */
+            verification_uri_complete: string;
+        };
+        /** MinerDeviceStatusResponse */
+        MinerDeviceStatusResponse: {
+            /** Access Token */
+            access_token?: string | null;
+            /** Continue Url */
+            continue_url?: string | null;
+            /** Scopes */
+            scopes: ("read" | "profile" | "download" | "upload" | "handle" | "challenges")[];
+            session?: components["schemas"]["MinerSessionView"] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "approved" | "expired" | "denied" | "consumed";
+            /** Token Type */
+            token_type?: string | null;
+            /** Ttl Seconds */
+            ttl_seconds: number;
+            /** User Code */
+            user_code: string;
+        };
         /** MinerFeeDay */
         MinerFeeDay: {
             /**
@@ -10836,6 +11323,93 @@ export interface components {
             paid_submissions: number;
             /** Priced Submissions */
             priced_submissions: number;
+        };
+        /** MinerLoginApproveRequest */
+        MinerLoginApproveRequest: {
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Netuid */
+            netuid: number;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            proof: components["schemas"]["NameClaimProof"];
+        };
+        /** MinerMeResponse */
+        MinerMeResponse: {
+            /** Avatar Url */
+            avatar_url?: string | null;
+            /** Commands */
+            commands: components["schemas"]["MinerCommand"][];
+            name_handle?: components["schemas"]["PublicNameHandle"] | null;
+            profile: components["schemas"]["MinerProfileLinks"];
+            /** Profile Url */
+            profile_url: string;
+            session: components["schemas"]["MinerSessionView"];
+        };
+        /** MinerMeReviewsResponse */
+        MinerMeReviewsResponse: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Reviews */
+            reviews: components["schemas"]["PublicMinerReview"][];
+        };
+        /** MinerProfileLinks */
+        MinerProfileLinks: {
+            /** Discord Handle */
+            discord_handle?: string | null;
+            /** Github Url */
+            github_url?: string | null;
+            /** X Url */
+            x_url?: string | null;
+        };
+        /** MinerProfileUpdateRequest */
+        MinerProfileUpdateRequest: {
+            /** Discord Handle */
+            discord_handle?: string | null;
+            /** Github Url */
+            github_url?: string | null;
+            /** X Url */
+            x_url?: string | null;
+        };
+        /** MinerSessionView */
+        MinerSessionView: {
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Expires In */
+            expires_in: number;
+            /**
+             * Label
+             * @enum {string}
+             */
+            label: "dashboard" | "mcp" | "cli";
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Scopes */
+            scopes: ("read" | "profile" | "download" | "upload" | "handle" | "challenges")[];
+            /**
+             * Session Id
+             * Format: uuid
+             */
+            session_id: string;
         };
         /**
          * NameClaimEndorsementView
@@ -13581,6 +14155,49 @@ export interface components {
              * @description Human-readable name.
              */
             label: string;
+        };
+        /** PublicMinerReview */
+        PublicMinerReview: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Detail */
+            detail?: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "ath" | "dispute";
+            /** Name */
+            name: string;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Status */
+            status: string;
+        };
+        /** PublicMinerSubmission */
+        PublicMinerSubmission: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Avatar Url */
+            avatar_url?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Name */
+            name: string;
+            /** Status */
+            status: string;
         };
         /**
          * PublicModelUse
@@ -18538,6 +19155,106 @@ export interface components {
 }
 export type $defs = Record<string, never>;
 export interface operations {
+    mcp_server_metadata__well_known_mcp_server_json_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    oauth_metadata__well_known_oauth_authorization_server_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    oauth_metadata__well_known_oauth_authorization_server_mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    protected_resource__well_known_oauth_protected_resource_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    protected_resource__well_known_oauth_protected_resource_mcp_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
     scoring_readiness_api_v1_admin_agents__agent_id__scoring_readiness_get: {
         parameters: {
             query?: never;
@@ -22365,6 +23082,375 @@ export interface operations {
             };
         };
     };
+    me_api_v1_me_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerMeResponse"];
+                };
+            };
+        };
+    };
+    update_me_api_v1_me_patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MinerProfileUpdateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerMeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_my_avatar_api_v1_me_avatar_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "multipart/form-data": components["schemas"]["Body_set_my_avatar_api_v1_me_avatar_post"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerAvatarResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    clear_my_avatar_api_v1_me_avatar_delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerAvatarResponse"];
+                };
+            };
+        };
+    };
+    my_commands_api_v1_me_commands_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerCommand"][];
+                };
+            };
+        };
+    };
+    my_reviews_api_v1_me_reviews_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerMeReviewsResponse"];
+                };
+            };
+        };
+    };
+    my_submissions_api_v1_me_submissions_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PublicMinerSubmission"][];
+                };
+            };
+        };
+    };
+    start_device_api_v1_miner_auth_device_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["MinerDeviceStartRequest"] | null;
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDeviceStartResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_device_api_v1_miner_auth_device__user_code__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDevicePublicResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_device_api_v1_miner_auth_device__user_code__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                user_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MinerLoginApproveRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDeviceStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_device_api_v1_miner_auth_device__user_code__status_post: {
+        parameters: {
+            query?: {
+                poll_token?: string | null;
+            };
+            header?: never;
+            path: {
+                user_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDeviceStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    poll_device_api_v1_miner_auth_device__user_code__status_post: {
+        parameters: {
+            query?: {
+                poll_token?: string | null;
+            };
+            header?: never;
+            path: {
+                user_code: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerDeviceStatusResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    current_session_api_v1_miner_auth_session_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerSessionView"];
+                };
+            };
+        };
+    };
+    revoke_current_session_api_v1_miner_auth_session_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
     set_miner_avatar_api_v1_miner_avatars_post: {
         parameters: {
             query?: never;
@@ -22594,6 +23680,7 @@ export interface operations {
                 downloadable?: boolean;
                 review?: "ath" | null;
                 q?: string | null;
+                miner?: string | null;
             };
             header?: never;
             path?: never;
@@ -23085,6 +24172,37 @@ export interface operations {
             header?: never;
             path: {
                 hotkey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    public_miner_profile_api_v1_public_miners__miner_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                miner_id: string;
             };
             cookie?: never;
         };
@@ -25943,6 +27061,126 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    miner_mcp_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    miner_mcp_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    authorize_mcp_oauth_authorize_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    complete_oauth_mcp_oauth_complete_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    register_client_mcp_oauth_register_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    issue_token_mcp_oauth_token_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
         };

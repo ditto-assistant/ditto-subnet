@@ -188,7 +188,9 @@ export function Sidebar(props: SidebarProps): JSX.Element {
                 {item.icon()}
               </span>
               <span class="ni-text">
-                <span class="ni-label">{typeof item.label === "function" ? item.label() : item.label}</span>
+                <span class="ni-label">
+                  {typeof item.label === "function" ? item.label() : item.label}
+                </span>
                 <span class="ni-desc">{item.desc(props.displayVersion)}</span>
               </span>
             </a>

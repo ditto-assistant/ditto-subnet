@@ -64,9 +64,7 @@ def normalize_scopes(raw: list[str] | tuple[str, ...] | str) -> tuple[Scope, ...
         parts = [str(part).strip() for part in raw if str(part).strip()]
     unknown = sorted({part for part in parts if part not in ALL_SCOPES})
     if unknown:
-        raise MinerSessionRejected(
-            "unknown miner session scope: " + ", ".join(unknown)
-        )
+        raise MinerSessionRejected("unknown miner session scope: " + ", ".join(unknown))
     if not parts:
         raise MinerSessionRejected("at least one miner session scope is required")
     ordered = tuple(scope for scope in ALL_SCOPES if scope in set(parts))

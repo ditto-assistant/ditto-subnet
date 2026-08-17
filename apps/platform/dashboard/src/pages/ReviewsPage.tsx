@@ -129,7 +129,9 @@ function SignInPanel(props: { presetCode: string }): JSX.Element {
         let pollToken = "";
         try {
           const stored = sessionStorage.getItem(POLL_STORAGE_KEY);
-          const parsed = stored ? (JSON.parse(stored) as { user_code?: string; poll_token?: string }) : null;
+          const parsed = stored
+            ? (JSON.parse(stored) as { user_code?: string; poll_token?: string })
+            : null;
           if (parsed?.user_code === publicDevice.user_code) pollToken = parsed.poll_token || "";
         } catch {
           pollToken = "";
@@ -248,9 +250,9 @@ function SignInPanel(props: { presetCode: string }): JSX.Element {
         <p class="ath-eyebrow">Miner console</p>
         <h2>Sign in with your hotkey</h2>
         <p>
-          Copy a <code>ditto login</code> command, run it against the wallet that owns
-          your SN118 hotkey, and this page becomes your private backroom. No TAO
-          moves. The session lasts as long as you choose.
+          Copy a <code>ditto login</code> command, run it against the wallet that owns your SN118
+          hotkey, and this page becomes your private backroom. No TAO moves. The session lasts as
+          long as you choose.
         </p>
       </div>
       <div class="account-grid">
@@ -435,7 +437,11 @@ function AccountPanel(): JSX.Element {
       <nav class="account-tabs">
         <For each={["profile", "submissions", "reviews", "mcp"] as const}>
           {(item) => (
-            <button class="btn ghost" classList={{ active: tab() === item }} onClick={() => setTab(item)}>
+            <button
+              class="btn ghost"
+              classList={{ active: tab() === item }}
+              onClick={() => setTab(item)}
+            >
               {item}
             </button>
           )}
@@ -457,7 +463,11 @@ function AccountPanel(): JSX.Element {
           </label>
           <label class="account-field">
             X
-            <input value={xUrl()} onInput={(ev) => setXUrl(ev.currentTarget.value)} placeholder="https://x.com/you" />
+            <input
+              value={xUrl()}
+              onInput={(ev) => setXUrl(ev.currentTarget.value)}
+              placeholder="https://x.com/you"
+            />
           </label>
           <label class="account-field">
             GitHub
@@ -528,13 +538,13 @@ function AccountPanel(): JSX.Element {
         <div class="account-card">
           <h3>Miner MCP</h3>
           <p>
-            Add <code>{location.origin}/mcp</code> to your coding agent. The agent opens this
-            page, you run the copied <code>ditto login</code> command, and the session is
-            authorized for the hours you picked.
+            Add <code>{location.origin}/mcp</code> to your coding agent. The agent opens this page,
+            you run the copied <code>ditto login</code> command, and the session is authorized for
+            the hours you picked.
           </p>
           <p class="muted">
-            Tools that still need a hotkey signature return the matching{" "}
-            <code>ditto</code> command instead of signing remotely.
+            Tools that still need a hotkey signature return the matching <code>ditto</code> command
+            instead of signing remotely.
           </p>
           <ul class="account-list">
             <For each={me()?.commands || []}>

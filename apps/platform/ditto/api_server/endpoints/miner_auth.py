@@ -113,9 +113,7 @@ async def resolve_miner_session(
     if not token:
         raise HTTPException(status_code=401, detail="miner session required")
     now = datetime.now(UTC)
-    found = await lookup_session_token(
-        session, token_hash=hash_secret(token), now=now
-    )
+    found = await lookup_session_token(session, token_hash=hash_secret(token), now=now)
     if found is None:
         raise HTTPException(
             status_code=401, detail="miner session is invalid or expired"

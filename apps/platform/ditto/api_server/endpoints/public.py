@@ -4045,7 +4045,10 @@ async def public_miner_profile(
     )
     from ditto.api_server.miner_avatar import public_avatar_path
     from ditto.api_server.name_claim import expected_netuid, normalize_name_stem
-    from ditto.db.queries.miner_sessions import get_profile, list_recent_agents_for_hotkey
+    from ditto.db.queries.miner_sessions import (
+        get_profile,
+        list_recent_agents_for_hotkey,
+    )
     from ditto.db.queries.name_claims import active_handle_claims
 
     response.headers["Cache-Control"] = "public, max-age=30"
@@ -4076,12 +4079,7 @@ async def public_miner_profile(
     profile = await get_profile(session, hotkey=hotkey)
     avatar = await get_miner_avatar(session, hotkey=hotkey)
     agents = await list_recent_agents_for_hotkey(session, hotkey=hotkey, limit=25)
-    if (
-        profile is None
-        and avatar is None
-        and handle is None
-        and not agents
-    ):
+    if profile is None and avatar is None and handle is None and not agents:
         raise HTTPException(status_code=404, detail="unknown miner")
     return PublicMinerProfileResponse(
         miner_hotkey=hotkey,

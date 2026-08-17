@@ -96,14 +96,7 @@ describe("PAGES registry", () => {
     expect(ENTITY_PAGES.miner).toBe("overview");
     expect(ENTITY_PAGES.validator).toBe("operations");
     expect(ENTITY_PAGES.screener).toBe("operations");
-    expect(PAGE_SCOPED_PARAMS).toEqual([
-      "status",
-      "downloadable",
-      "q",
-      "page",
-      "code",
-      "login",
-    ]);
+    expect(PAGE_SCOPED_PARAMS).toEqual(["status", "downloadable", "q", "page", "code", "login"]);
   });
 });
 

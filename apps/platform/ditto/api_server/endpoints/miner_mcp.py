@@ -139,8 +139,10 @@ async def register_client(request: Request, session: SessionDep) -> JSONResponse
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="invalid client metadata")
     uris = body.get("redirect_uris") or []
-    if not isinstance(uris, list) or not uris or not all(
-        isinstance(uri, str) for uri in uris
+    if (
+        not isinstance(uris, list)
+        or not uris
+        or not all(isinstance(uri, str) for uri in uris)
     ):
         raise HTTPException(status_code=400, detail="redirect_uris is required")
     name = body.get("client_name") or "miner-mcp"

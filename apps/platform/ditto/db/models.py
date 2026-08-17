@@ -4809,7 +4809,9 @@ class MinerSession(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
-    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
     revoked_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -4901,9 +4903,7 @@ class MinerDeviceGrant(Base):
     scopes: Mapped[str] = mapped_column(Text, nullable=False)
     ttl_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     miner_hotkey: Mapped[str | None] = mapped_column(Text, nullable=True)
-    session_id: Mapped[UUID | None] = mapped_column(
-        SaUUID(as_uuid=True), nullable=True
-    )
+    session_id: Mapped[UUID | None] = mapped_column(SaUUID(as_uuid=True), nullable=True)
     oauth_client_id: Mapped[str | None] = mapped_column(Text, nullable=True)
     redirect_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     state: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -4911,7 +4911,9 @@ class MinerDeviceGrant(Base):
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
-    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
     approved_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
@@ -4963,7 +4965,9 @@ class MinerOauthCode(Base):
     grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
     session_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
     redirect_uri: Mapped[str] = mapped_column(Text, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(TIMESTAMP(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
     consumed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )

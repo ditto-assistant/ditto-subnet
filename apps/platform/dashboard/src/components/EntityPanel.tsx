@@ -368,11 +368,12 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       return;
     }
     if (route.kind === "miner") {
-      const entry = props.entries().find(
-        (item) =>
-          item.miner_hotkey === route.id ||
-          item.name_handle?.stem === route.id.toLowerCase(),
-      );
+      const entry = props
+        .entries()
+        .find(
+          (item) =>
+            item.miner_hotkey === route.id || item.name_handle?.stem === route.id.toLowerCase(),
+        );
       if (entry) setView({ tenant: "miner", key: route.key, entry });
       else setView({ tenant: "miner-profile", key: route.key, id: route.id });
       return;
