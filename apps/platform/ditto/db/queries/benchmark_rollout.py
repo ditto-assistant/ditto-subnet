@@ -701,11 +701,9 @@ async def active_bench_version(
         # MIN_DESIRED_AUTHORITY_AGENTS stays a constant on purpose. It is the
         # KOTH emission-set size, so it is a consensus quantity, not queue
         # policy: below it the ledger flip would have fewer recipients than the
-        # emission split expects. Count it on the desired ledger, not only
-        # inside the inherited snapshot, so source-review bans cannot revert
-        # an already-qualified desired bench. ``maybe_activate_rollout``
-        # separately closes the durable rollout only after the wider rescore
-        # cohort finishes.
+        # emission split expects. Count ranked families on the desired ledger.
+        # ``maybe_activate_rollout`` separately closes the durable rollout only
+        # after the wider rescore cohort finishes.
         if (
             len(member_ids) == open_transition.cohort_size
             and priority_complete
@@ -2026,10 +2024,11 @@ async def maybe_activate_rollout(
     # without desired-version scores simply drops out.
     #
     # A completed member may legitimately score zero under the new contract;
-    # that result must not deadlock the transition. The raw counts above prove
-    # that every frozen member finished, while this independent threshold
-    # proves that the desired ledger still has a full semantic-pass emission
-    # set before authority becomes durable.
+    # that result must not deadlock the transition. Permanently ineligible
+    # members are skipped; remaining eligible members must finish or be a
+    # suppressed tail. This independent threshold proves the desired ledger
+    # still has a full semantic-pass emission set before authority becomes
+    # durable.
     from ditto.db.queries.scores import count_ranked_quorum_agents
 
     ranked_cohort_agents = await count_ranked_quorum_agents(
@@ -2201,11 +2200,11 @@ async def rollout_state(
     cohort_ready_count = sum(
         counts.get(member.agent_id, 0) >= SCORING_QUORUM for member in members
     )
-    priority_members = [
-        member for member in members if member.position <= priority_target
-    ]
-    priority_complete = len(priority_members) == priority_target and all(
-        counts.get(member.agent_id, 0) >= SCORING_QUORUM for member in priority_members
+    # Same skip-ineligible first-five barrier as authority and activation.
+    priority_complete = await rollout_cohort_score_complete(
+        session,
+        rollout=rollout,
+        cohort_size=priority_target,
     )
     return {
         "active_version": active_version,

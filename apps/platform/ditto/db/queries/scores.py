@@ -1882,8 +1882,6 @@ async def list_eligible_ledger(
     #   authoritative row at all and drops out. That drop-out is the point of the
     #   threshold: it only happens once enough agents have crossed to still fill
     #   the KOTH emission set (see MIN_DESIRED_AUTHORITY_AGENTS).
-    #   Banning a frozen inherited cheat must not yank that authority backward
-    #   when five other families already hold ranked desired-version quorums.
     #
     # Deliberately NOT a per-agent switch. Ranking a v_next composite against a
     # v_active composite inside one KOTH fold compares incomparable scales — a
@@ -1921,14 +1919,7 @@ async def list_eligible_ledger(
             per_agent.c.cnt >= SCORING_QUORUM,
         )
         on_canonical = per_agent.c.bench_version == canonical_version
-        # The frozen priority prefix is the inherited-rescore barrier. The
-        # wider rescore cohort remains in this open rollout and continues in
-        # the background; an unfinished tail member must not hold the whole
-        # subnet on the old benchmark. Authority additionally requires a full
-        # five-member emission set of semantic-pass agents on the desired
-        # ledger — not only inside the inherited snapshot — so banning a
-        # frozen cheat cannot revert weights while honest desired-version
-        # families already fill the emission set.
+        # Count ranked families on the desired ledger; ATH stays blocking.
         member_ids = set(
             await session.scalars(
                 select(BenchmarkRolloutMember.agent_id).where(
