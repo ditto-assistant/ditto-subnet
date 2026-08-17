@@ -12,7 +12,7 @@ The tables are not referenced by ``emission_owner_key``: this is a
 public-name control, not an emission-slot control.
 
 Revision ID: a8c1e4f29b70
-Revises: f1a7b3c9d502
+Revises: c4d9e2f18a67
 Create Date: 2026-08-16
 """
 
@@ -23,7 +23,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "a8c1e4f29b70"
-down_revision: str | Sequence[str] | None = "f1a7b3c9d502"
+down_revision: str | Sequence[str] | None = "c4d9e2f18a67"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
