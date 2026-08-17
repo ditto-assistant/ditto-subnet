@@ -75,9 +75,9 @@ def test_cleanup_failure_is_reported_without_masking_probe_result() -> None:
         "uid": "wrk-probe",
         "deleted": False,
         "suspended": True,
-        "status": "running",
+        "status": "suspended",
     }
-    assert client.deleted == ["wrk-probe"]
+    assert client.deleted == ["wrk-probe", "wrk-probe"]
     assert client.suspended == ["wrk-probe"]
 
 

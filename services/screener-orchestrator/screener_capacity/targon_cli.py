@@ -19,6 +19,11 @@ import urllib.request
 from dataclasses import asdict
 from uuid import uuid4
 
+from screener_capacity.oneshot import (
+    DEFAULT_REGISTERED_GRACE_SECONDS,
+    delete_oneshot_rental,
+    sweep_oneshot_rentals,
+)
 from screener_capacity.targon import TargonAPIError, TargonClient, workload_summary
 
 
@@ -59,36 +64,30 @@ def _safe_logs(client: TargonClient, uid: str, *, tail: int) -> str:
 
 def _cleanup_probe_workload(client: TargonClient, uid: str) -> dict[str, object]:
     """Delete first without letting provider cleanup hide the probe result."""
-    try:
-        client.delete(uid)
+    if delete_oneshot_rental(client, uid):
         return {"phase": "deleted", "uid": uid, "deleted": True, "suspended": False}
+    try:
+        state = _safe_state(client, uid)
     except TargonAPIError:
-        try:
-            state = _safe_state(client, uid)
-        except TargonAPIError:
-            state = {}
-        status = str(state.get("status", "")).casefold()
-        if status == "deleted":
-            return {
-                "phase": "deleted",
-                "uid": uid,
-                "deleted": True,
-                "suspended": False,
-            }
-        suspended = status == "suspended"
-        if status not in {"suspended", "deleted", "error"}:
-            try:
-                client.suspend(uid)
-                suspended = True
-            except TargonAPIError:
-                pass
-        return {
-            "phase": "cleanup-required",
-            "uid": uid,
-            "deleted": False,
-            "suspended": suspended,
-            "status": status or None,
-        }
+        state = {}
+    status = str(state.get("status", "")).casefold()
+    return {
+        "phase": "cleanup-required",
+        "uid": uid,
+        "deleted": False,
+        "suspended": status == "suspended",
+        "status": status or None,
+    }
+
+
+def command_sweep_oneshots(args: argparse.Namespace) -> int:
+    result = sweep_oneshot_rentals(
+        _client(args, authenticated=True),
+        dry_run=not args.apply,
+        registered_grace_seconds=args.registered_grace_seconds,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 1 if int(result["leftover"]) > 0 else 0
 
 
 def _wait_until_ready(
@@ -1160,6 +1159,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_command = subparsers.add_parser("list")
     list_command.set_defaults(handler=command_list)
+
+    sweep = subparsers.add_parser("sweep-oneshots")
+    sweep.add_argument(
+        "--apply",
+        action="store_true",
+        help="Delete matching leftover rentals. Default is a dry run.",
+    )
+    sweep.add_argument(
+        "--registered-grace-seconds",
+        type=int,
+        default=DEFAULT_REGISTERED_GRACE_SECONDS,
+    )
+    sweep.set_defaults(handler=command_sweep_oneshots)
 
     probe = subparsers.add_parser("rootless-probe")
     probe.add_argument("--resource", default="cpu-small")

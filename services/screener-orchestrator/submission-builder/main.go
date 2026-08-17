@@ -28,7 +28,7 @@ import (
 const (
 	maxSourceBytes      = 20 * 1024 * 1024
 	maxOutputBytes      = int64(4 * 1024 * 1024 * 1024)
-	successHoldDuration = 10 * time.Minute
+	successHoldDuration = 90 * time.Second
 )
 
 var (
@@ -182,11 +182,9 @@ func run() error {
 		return stageFailure("COMPLETE", errors.New("platform did not verify remote image"))
 	}
 	fmt.Printf("DITTO_SUBMISSION_BUILD_OK=%s:%d\n", outputSHA, outputSize)
-	// Rentals are persistent workloads. Keep the successful one-shot process
-	// alive until the controller observes Platform's committed result and
-	// deletes the rental. Exiting immediately lets the provider restart the
-	// container; the second invocation then correctly rejects the consumed job
-	// capability and makes a successful build look like a SOURCE failure.
+	// Rentals restart when PID 1 exits. Hold just long enough for the
+	// controller to observe Platform's committed success and DELETE the
+	// rental. A longer hold keeps a finished build billed.
 	time.Sleep(successHoldDuration)
 	return nil
 }

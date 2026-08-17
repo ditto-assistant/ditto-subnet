@@ -76,6 +76,7 @@ class TargonClient:
         authenticated: bool = True,
         expect_text: bool = False,
         retryable: bool = False,
+        timeout_seconds: float | None = None,
     ) -> Any:
         if authenticated and self._api_key is None:
             raise TargonAPIError(
@@ -93,11 +94,10 @@ class TargonClient:
         )
         operation = f"{method} {path.split('?', 1)[0]}"
         attempts = 3 if retryable else 1
+        timeout = self._timeout_seconds if timeout_seconds is None else timeout_seconds
         for attempt in range(attempts):
             try:
-                with urllib.request.urlopen(
-                    request, timeout=self._timeout_seconds
-                ) as response:
+                with urllib.request.urlopen(request, timeout=timeout) as response:
                     body = response.read()
                 break
             except urllib.error.HTTPError as error:
@@ -328,11 +328,27 @@ class TargonClient:
         return value if isinstance(value, dict) else {}
 
     def delete(self, uid: str) -> None:
+        # Teardown of a running rental can exceed the default 15s timeout.
+        # Do not retry the DELETE itself: a second call can race the first
+        # teardown and leave the record suspended. Reconcile instead.
         try:
-            self._request("DELETE", self._workload_path(f"/{uid}"), retryable=True)
+            self._request(
+                "DELETE",
+                self._workload_path(f"/{uid}"),
+                timeout_seconds=60.0,
+            )
         except TargonAPIError as error:
-            if error.status != 404:
-                raise
+            if error.status == 404:
+                return
+            try:
+                state = self.state(uid)
+            except TargonAPIError as state_error:
+                if state_error.status == 404:
+                    return
+                raise error from None
+            if str(state.get("status", "")).casefold() == "deleted":
+                return
+            raise
 
 
 def workload_summary(workload: dict[str, Any]) -> WorkloadSummary:

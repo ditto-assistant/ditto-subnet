@@ -27,6 +27,7 @@ from screener_capacity.controller import (
     GCPBootstrapTokenMinter,
     _read_secret_file,
 )
+from screener_capacity.oneshot import delete_oneshot_rental, sweep_oneshot_rentals
 from screener_capacity.targon import TargonAPIError, TargonClient
 
 _DIGEST = re.compile(r"DITTO_BUILD_DIGEST=(sha256:[0-9a-f]{64})")
@@ -469,31 +470,12 @@ def _kaniko_script(build: dict[str, Any]) -> str:
         'case "$digest" in '
         "sha256:????????????????????????????????????????????????????????????????) ;; "
         "*) exit 71 ;; esac; "
-        "echo DITTO_BUILD_DIGEST=$digest; sleep 600"
+        "echo DITTO_BUILD_DIGEST=$digest; sleep 90"
     )
 
 
 def _delete_rental(client: TargonClient, uid: str) -> bool:
-    """Delete first; suspend only as the zero-replica failure fallback.
-
-    Targon's DELETE contract tears down the runtime itself. Suspending first can
-    race that teardown and leave an otherwise successful one-shot build in a
-    terminal provider state that can no longer be deleted.
-    """
-    try:
-        client.delete(uid)
-        return True
-    except TargonAPIError:
-        try:
-            state = client.state(uid)
-        except TargonAPIError:
-            state = {}
-        if str(state.get("status", "")).casefold() == "deleted":
-            return True
-        if str(state.get("status", "")).casefold() != "suspended":
-            with contextlib.suppress(TargonAPIError):
-                client.suspend(uid)
-        return False
+    return delete_oneshot_rental(client, uid)
 
 
 @dataclass(frozen=True)
@@ -507,6 +489,7 @@ class Settings:
     build_timeout_seconds: int
     interval_seconds: int
     lock_file: Path
+    sweep_interval_seconds: int
     submission_builder_image: str
     # The four fields below are optional ON PURPOSE. They are supplied by the
     # Ansible-owned systemd unit, while the code is shipped by the release
@@ -1100,6 +1083,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--provision-timeout-seconds", type=int, default=600)
     parser.add_argument("--build-timeout-seconds", type=int, default=1800)
     parser.add_argument("--interval-seconds", type=int, default=15)
+    parser.add_argument("--sweep-interval-seconds", type=int, default=300)
     parser.add_argument("--lock-file", default="/run/lock/ditto-image-builder.lock")
     parser.add_argument("--once", action="store_true")
     return parser
@@ -1120,6 +1104,7 @@ def main() -> int:
         build_timeout_seconds=args.build_timeout_seconds,
         interval_seconds=args.interval_seconds,
         lock_file=Path(args.lock_file),
+        sweep_interval_seconds=max(0, args.sweep_interval_seconds),
         submission_builder_image=_submission_builder_image(_source_revision()),
         gcp_bootstrap_service_account=args.gcp_bootstrap_service_account,
         gcp_bootstrap_delegate_service_account=(
@@ -1177,6 +1162,7 @@ def main() -> int:
         except BlockingIOError:
             print("trusted image builder already running", file=sys.stderr)
             return 75
+        next_sweep = 0.0
         while True:
             try:
                 # Build first because both downstream Targon lanes consume a
@@ -1197,6 +1183,26 @@ def main() -> int:
                 # bounded poll retries without exposing response bodies.
                 print(str(error), file=sys.stderr)
                 handled = False
+            now = time.monotonic()
+            if handled or now >= next_sweep:
+                try:
+                    swept = sweep_oneshot_rentals(client)
+                    print(
+                        json.dumps(
+                            {
+                                "phase": swept["phase"],
+                                "oneshot": swept["oneshot"],
+                                "deleted": swept["deleted"],
+                                "leftover": swept["leftover"],
+                                "skipped_inflight": swept["skipped_inflight"],
+                            },
+                            separators=(",", ":"),
+                        ),
+                        file=sys.stderr,
+                    )
+                except TargonAPIError as error:
+                    print(str(error), file=sys.stderr)
+                next_sweep = now + settings.sweep_interval_seconds
             if args.once:
                 return 0
             if not handled:

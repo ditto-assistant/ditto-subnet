@@ -86,6 +86,20 @@ separates rental start, builder runtime, source, Kaniko, archive, upload,
 verification, timeout, and Platform-control failures without copying provider
 responses or untrusted build logs into Platform.
 
+One-shot builder, runtime, source-review, and probe rentals are deleted when
+the job finishes. DELETE of a still-running rental can time out while Targon
+tears the runtime down; the builder then suspends to drop replicas and retries
+DELETE. The same process sweeps leftover `ditto-miner-build-*`,
+`ditto-build-*`, `ditto-runtime-*`, `ditto-source-*`, and `ditto-*-probe-*`
+records that are already `suspended`, `error`, or stale `registered`. It never
+touches screener slot rentals or in-flight `running`/`provisioning` work.
+Operators can drain the current pile without waiting for a deploy:
+
+```bash
+scripts/targon-smoke.sh sweep-oneshots
+scripts/targon-smoke.sh sweep-oneshots --apply
+```
+
 The GCE autoscaler remains as an independent `ONLY_SCALE_OUT` watchdog on the
 group-level backlog metric. It cannot scale in or fight the controller. Its
 floor is zero; normal scale-in is controller-owned and lease-aware.

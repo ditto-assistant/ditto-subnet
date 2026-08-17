@@ -17,6 +17,9 @@ func TestSuccessHoldCoversControllerReconciliation(t *testing.T) {
 	if successHoldDuration < time.Minute {
 		t.Fatalf("success hold is too short for controller reconciliation: %s", successHoldDuration)
 	}
+	if successHoldDuration > 2*time.Minute {
+		t.Fatalf("success hold leaves a finished rental billed too long: %s", successHoldDuration)
+	}
 }
 
 func TestDecodeURLRequiresTLS(t *testing.T) {

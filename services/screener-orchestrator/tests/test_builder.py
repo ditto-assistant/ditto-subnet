@@ -48,6 +48,7 @@ def test_kaniko_job_is_bound_to_exact_monorepo_sha_and_paths() -> None:
     assert f"--context=/workspace/src/ditto-subnet-{sha}" in script
     assert "--dockerfile=workers/screener/Dockerfile" in script
     assert "DITTO_BUILD_DIGEST=" in script
+    assert "sleep 90" in script
     assert "short-lived-token" not in script
 
 
@@ -80,6 +81,7 @@ class _Targon:
         self,
         *,
         delete_fails: bool = False,
+        delete_fails_until_suspended: bool = False,
         available: int = 1,
         deploy_error: TargonAPIError | None = None,
         state_status: str = "running",
@@ -87,6 +89,7 @@ class _Targon:
         state_after_delete_failure: str | None = None,
     ) -> None:
         self.delete_fails = delete_fails
+        self.delete_fails_until_suspended = delete_fails_until_suspended
         self.available = available
         self.deploy_error = deploy_error
         self.state_status = state_status
@@ -134,6 +137,8 @@ class _Targon:
         self.deleted.append(uid)
         if self.delete_fails:
             raise TargonAPIError(operation="DELETE", status=500, reason="HTTP error")
+        if self.delete_fails_until_suspended and uid not in self.suspended:
+            raise TargonAPIError(operation="DELETE", status=500, reason="HTTP error")
 
     def logs(self, _uid: str, tail: int = 160) -> str:
         del tail
@@ -151,6 +156,7 @@ def _settings() -> Settings:
         build_timeout_seconds=1,
         interval_seconds=1,
         lock_file=Path("/tmp/test-builder.lock"),
+        sweep_interval_seconds=300,
         submission_builder_image="public.example/submission-builder@sha256:" + "a" * 64,
         gcp_bootstrap_service_account="bootstrap@example.test",
         gcp_bootstrap_delegate_service_account=None,
@@ -345,7 +351,7 @@ def test_runtime_smoke_delete_failure_is_suspended_and_audited(monkeypatch) -> N
 
     assert run_one_runtime_smoke(_settings(), targon, control)
 
-    assert targon.deleted == ["wrk-build-1"]
+    assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
     assert targon.suspended == ["wrk-build-1"]
     assert control.cleanup == [(build_id, "wrk-build-1")]
 
@@ -404,9 +410,20 @@ def test_submission_delete_failure_is_suspended_and_audited() -> None:
 
     assert run_one_submission(_settings(), targon, control)
 
-    assert targon.deleted == ["wrk-build-1"]
+    assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
     assert targon.suspended == ["wrk-build-1"]
     assert control.cleanup == [(_submission()["build_id"], "wrk-build-1")]
+
+
+def test_submission_delete_retries_after_suspend() -> None:
+    control = _SubmissionControl(_submission())
+    targon = _Targon(delete_fails_until_suspended=True)
+
+    assert run_one_submission(_settings(), targon, control)
+
+    assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
+    assert targon.suspended == ["wrk-build-1"]
+    assert control.cleanup == []
 
 
 def test_delete_lost_response_reconciles_provider_deleted_state() -> None:
@@ -542,7 +559,7 @@ def test_trusted_kaniko_delete_failure_is_suspended_and_audited(
 
     assert run_one(_settings(), targon, control)
 
-    assert targon.deleted == ["wrk-build-1"]
+    assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
     assert targon.suspended == ["wrk-build-1"]
     assert control.cleanup == [(_trusted_build()["build_id"], "wrk-build-1")]
 
@@ -578,6 +595,7 @@ class TestOptionalLaneConfiguration:
         assert args.candidate_registry_writer_service_account is None
         assert args.gcp_bootstrap_service_account is None
         assert args.source_review_secret_resource is None
+        assert args.sweep_interval_seconds == 300
 
     def test_missing_candidate_registry_disables_only_runtime_smoke(self) -> None:
         settings = replace(

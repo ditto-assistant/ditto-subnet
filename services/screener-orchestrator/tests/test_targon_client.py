@@ -219,6 +219,32 @@ class TargonClientTests(unittest.TestCase):
         self.assertNotIn("leaked-secret-value", str(raised.exception))
         self.assertIn("rate limited", str(raised.exception))
 
+    @patch("screener_capacity.targon.urllib.request.urlopen")
+    def test_delete_uses_long_timeout_and_does_not_retry_teardown(
+        self, urlopen: object
+    ) -> None:
+        urlopen.return_value = _Response(None)  # type: ignore[attr-defined]
+        client = TargonClient(api_key="x" * 40, org_slug="ditto")
+
+        client.delete("rental-1")
+
+        self.assertEqual(urlopen.call_count, 1)  # type: ignore[attr-defined]
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 60.0)  # type: ignore[attr-defined]
+
+    @patch("screener_capacity.targon.urllib.request.urlopen")
+    def test_delete_reconciles_timeout_when_state_is_already_deleted(
+        self, urlopen: object
+    ) -> None:
+        urlopen.side_effect = [  # type: ignore[attr-defined]
+            TimeoutError(),
+            _Response({"status": "deleted"}),
+        ]
+        client = TargonClient(api_key="x" * 40, org_slug="ditto")
+
+        client.delete("rental-1")
+
+        self.assertEqual(urlopen.call_count, 2)  # type: ignore[attr-defined]
+
     @patch("screener_capacity.targon.time.sleep", return_value=None)
     @patch("screener_capacity.targon.urllib.request.urlopen")
     def test_deploy_retries_transient_provider_failure(
