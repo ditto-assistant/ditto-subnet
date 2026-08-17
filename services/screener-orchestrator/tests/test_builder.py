@@ -48,7 +48,7 @@ def test_kaniko_job_is_bound_to_exact_monorepo_sha_and_paths() -> None:
     assert f"--context=/workspace/src/ditto-subnet-{sha}" in script
     assert "--dockerfile=workers/screener/Dockerfile" in script
     assert "DITTO_BUILD_DIGEST=" in script
-    assert "sleep 90" in script
+    assert "sleep 1800" in script
     assert "short-lived-token" not in script
 
 
@@ -211,6 +211,7 @@ def test_source_review_runs_as_one_shot_pinned_rental(monkeypatch) -> None:
         "-m",
     ]
     assert targon.created["args"] == ["ditto_screener.source_review_job"]
+    assert targon.created["experiments"] == {"persistent-workload": False}
     envs = targon.created["envs"]
     assert {row["name"] for row in envs} >= {
         "DITTO_SOURCE_REVIEW_JOB",
@@ -351,7 +352,7 @@ def test_runtime_smoke_delete_failure_is_suspended_and_audited(monkeypatch) -> N
 
     assert run_one_runtime_smoke(_settings(), targon, control)
 
-    assert targon.deleted == ["wrk-build-1"]
+    assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
     assert targon.suspended == []
     assert control.cleanup == [(build_id, "wrk-build-1")]
 
@@ -374,6 +375,7 @@ def test_submission_rental_receives_only_attempt_capability_and_pinned_image() -
                 "value": _submission()["job_token"],
             },
         ],
+        "experiments": {"persistent-workload": False},
     }
     assert targon.deployed == ["wrk-build-1"]
     assert targon.suspended == []
@@ -410,7 +412,7 @@ def test_submission_delete_failure_is_suspended_and_audited() -> None:
 
     assert run_one_submission(_settings(), targon, control)
 
-    assert targon.deleted == ["wrk-build-1"]
+    assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
     assert targon.suspended == []
     assert control.cleanup == [(_submission()["build_id"], "wrk-build-1")]
 
@@ -548,7 +550,7 @@ def test_trusted_kaniko_delete_failure_is_suspended_and_audited(
 
     assert run_one(_settings(), targon, control)
 
-    assert targon.deleted == ["wrk-build-1"]
+    assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
     assert targon.suspended == []
     assert control.cleanup == [(_trusted_build()["build_id"], "wrk-build-1")]
 

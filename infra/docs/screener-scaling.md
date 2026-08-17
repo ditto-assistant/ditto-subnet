@@ -86,24 +86,20 @@ separates rental start, builder runtime, source, Kaniko, archive, upload,
 verification, timeout, and Platform-control failures without copying provider
 responses or untrusted build logs into Platform.
 
-One-shot builder, runtime, source-review, and probe rentals are deleted while
-they are still running. Live Targon DELETE returns HTTP 500 for `suspended`,
-`error`, and `registered` records, so the builder never suspends as a teardown
-fallback. Leftover records in those states are redeployed and deleted
-immediately. The same process sweeps leftover `ditto-miner-build-*`,
-`ditto-build-*`, `ditto-runtime-*`, `ditto-source-*`, and `ditto-*-probe-*`
-names. It never touches screener slot rentals or in-flight
-`running`/`provisioning` work.
-Operators can drain the current pile without waiting for a deploy:
+One-shot builder rentals are billed from create until DELETE, including time
+spent `suspended` or crash-looping after PID 1 exits. The builder therefore
+holds the successful process until Targon delivers SIGTERM, DELETEs while the
+rental is still `running`, and never treats suspend as a cost-safe parking
+lot. Targon DELETE returns HTTP 500 for `suspended`/`error`/`registered`
+records, so leftovers in those states are brought back to `running` only long
+enough for DELETE to succeed. One-shot creates request
+`experiments.persistent-workload=false` so a finished job should not restart.
+Screener slot rentals stay persistent and are never swept.
 
 ```bash
 scripts/targon-smoke.sh sweep-oneshots
 scripts/targon-smoke.sh sweep-oneshots --apply
 ```
-
-`--apply` redeploys leftover terminal records, waits until they are
-`running`, then deletes. Recent `running`/`provisioning` jobs are skipped;
-older ones are treated as leftover redeploys.
 
 The GCE autoscaler remains as an independent `ONLY_SCALE_OUT` watchdog on the
 group-level backlog metric. It cannot scale in or fight the controller. Its

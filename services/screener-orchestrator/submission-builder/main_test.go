@@ -13,12 +13,12 @@ import (
 	"time"
 )
 
-func TestSuccessHoldCoversControllerReconciliation(t *testing.T) {
-	if successHoldDuration < time.Minute {
-		t.Fatalf("success hold is too short for controller reconciliation: %s", successHoldDuration)
+func TestSuccessHoldWaitsForControllerDelete(t *testing.T) {
+	if successHoldDuration < 20*time.Minute {
+		t.Fatalf("success hold must outlast delete retries: %s", successHoldDuration)
 	}
-	if successHoldDuration > 2*time.Minute {
-		t.Fatalf("success hold leaves a finished rental billed too long: %s", successHoldDuration)
+	if successHoldDuration > 45*time.Minute {
+		t.Fatalf("success hold cap is too long: %s", successHoldDuration)
 	}
 }
 

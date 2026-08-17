@@ -71,12 +71,10 @@ credential. The helper verifies the source SHA-256, runs the immutable Kaniko
 executor without push/cache, uploads one bounded tar archive, and asks Platform
 to hash every output byte. The owning GCE screener independently hashes and
 imports the archive, applies the existing gates, then deletes the temporary
-object. Rental deletion is attempted while the workload is still running. Targon
-returns HTTP 500 for DELETE of `suspended`/`error`/`registered` records, so
-those leftovers are redeployed and deleted instead of being left suspended.
-A remaining record is an operator cleanup event. The builder also sweeps
-leftover one-shot rentals on an interval. Zero replicas is the cost-safety
-boundary.
+object. Rental charges run from create until DELETE, including `suspended` time. The
+builder holds a finished job until DELETE, requests a non-persistent rental,
+and sweeps leftovers by bringing them to `running` only long enough to DELETE.
+A remaining record is an operator cleanup event.
 
 After Platform verifies every archive byte, the trusted controller impersonates
 `ditto-screening-candidate-push` and promotes the exact archive into the private

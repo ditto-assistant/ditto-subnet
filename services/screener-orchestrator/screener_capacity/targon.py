@@ -185,6 +185,7 @@ class TargonClient:
         args: list[str] | None = None,
         ports: list[dict[str, Any]] | None = None,
         registry_auth: dict[str, str] | None = None,
+        experiments: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "type": "RENTAL",
@@ -201,6 +202,8 @@ class TargonClient:
             payload["args"] = args
         if registry_auth:
             payload["registry_auth"] = registry_auth
+        if experiments:
+            payload["experiments"] = experiments
         value = self._request("POST", self._workload_path(), payload=payload)
         if not isinstance(value, dict) or not isinstance(value.get("uid"), str):
             raise TargonAPIError(

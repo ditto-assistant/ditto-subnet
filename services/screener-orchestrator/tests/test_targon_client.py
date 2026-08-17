@@ -104,6 +104,7 @@ class TargonClientTests(unittest.TestCase):
             name="ditto-test",
             image="busybox:1.37",
             resource_name="cpu-small",
+            experiments={"persistent-workload": False},
         )
         client.deploy("rental-1")
         client.update("rental-1", envs=[{"name": "PUBLIC", "value": "yes"}])
@@ -121,6 +122,8 @@ class TargonClientTests(unittest.TestCase):
             [request.get_method() for request in requests],
             ["POST", "POST", "PATCH", "GET", "POST", "GET", "POST", "DELETE"],
         )
+        create_payload = json.loads(requests[0].data)
+        self.assertEqual(create_payload["experiments"], {"persistent-workload": False})
         base = "https://api.targon.com/tha/v3/orgs/ditto/workloads"
         self.assertEqual(
             [request.full_url for request in requests],

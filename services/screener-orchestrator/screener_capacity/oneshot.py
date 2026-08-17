@@ -1,9 +1,9 @@
 """One-shot Targon rental teardown and leftover sweep.
 
-Builder, runtime-smoke, source-review, and operator probes all create disposable
-rentals. Live Targon DELETE returns HTTP 500 for suspended, error, and
-registered records, so leftovers in those states are redeployed and then
-deleted. Screener slot rentals are never touched.
+Targon bills a rental from create until DELETE, including `suspended` time.
+DELETE of `suspended`/`error`/`registered` records returns HTTP 500, so those
+leftovers are briefly brought to `running` only so DELETE can succeed.
+Screener slot rentals are never touched.
 """
 
 from __future__ import annotations
@@ -107,12 +107,13 @@ def _try_delete(client: TargonClient, uid: str) -> bool:
 
 
 def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
-    """Delete a disposable rental. Never suspend as a teardown fallback.
+    """Delete a disposable rental. Suspended leftovers still accrue charges.
 
-    Live Targon DELETE returns HTTP 500 for `suspended`, `error`, and
-    `registered` records. Redeploy so the provider has a live runtime, then
-    DELETE immediately. Soft-deleted state counts as success.
+    Try DELETE first. If Targon 500s because the record is not `running`,
+    deploy just long enough to DELETE. Never treat suspend as terminal.
     """
+    if _try_delete(client, uid):
+        return True
     status = _current_status(client, uid)
     if status == "deleted":
         return True

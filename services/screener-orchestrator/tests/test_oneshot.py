@@ -146,7 +146,7 @@ def test_delete_redeploys_suspended_rental_then_deletes() -> None:
     client.status_by_uid["wrk-1"] = "suspended"
 
     assert delete_oneshot_rental(client, "wrk-1")
-    assert client.deleted == ["wrk-1"]
+    assert client.deleted == ["wrk-1", "wrk-1"]
     assert client.deployed == ["wrk-1"]
     assert client.suspended == []
 
@@ -172,7 +172,7 @@ def test_sweep_deletes_terminal_oneshots_and_skips_inflight() -> None:
     assert result["skipped_inflight"] == 1
     assert result["deleted"] == 2
     assert result["leftover"] == 0
-    assert sorted(client.deleted) == ["wrk-err", "wrk-hold"]
+    assert sorted(client.deleted) == ["wrk-err", "wrk-err", "wrk-hold", "wrk-hold"]
     assert sorted(client.deployed) == ["wrk-err", "wrk-hold"]
     assert {item["uid"] for item in result["items"] if item["action"] == "deleted"} == {
         "wrk-hold",
@@ -191,7 +191,7 @@ def test_sweep_can_delete_in_parallel() -> None:
     result = sweep_oneshot_rentals(client, max_workers=2)
 
     assert result["deleted"] == 2
-    assert sorted(client.deleted) == ["wrk-a", "wrk-b"]
+    assert sorted(client.deleted) == ["wrk-a", "wrk-a", "wrk-b", "wrk-b"]
     assert sorted(client.deployed) == ["wrk-a", "wrk-b"]
 
 

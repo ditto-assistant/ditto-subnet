@@ -18,17 +18,19 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
 	maxSourceBytes      = 20 * 1024 * 1024
 	maxOutputBytes      = int64(4 * 1024 * 1024 * 1024)
-	successHoldDuration = 90 * time.Second
+	successHoldDuration = 30 * time.Minute
 )
 
 var (
@@ -182,11 +184,23 @@ func run() error {
 		return stageFailure("COMPLETE", errors.New("platform did not verify remote image"))
 	}
 	fmt.Printf("DITTO_SUBMISSION_BUILD_OK=%s:%d\n", outputSHA, outputSize)
-	// Rentals restart when PID 1 exits. Hold just long enough for the
-	// controller to observe Platform's committed success and DELETE the
-	// rental. A longer hold keeps a finished build billed.
-	time.Sleep(successHoldDuration)
+	holdUntilDeleted()
 	return nil
+}
+
+// Rentals are persistent: if PID 1 exits, Targon restarts the container.
+// A restart of a consumed job crash-loops and stays billed until DELETE.
+// Stay up until the controller DELETE delivers SIGTERM, or the hold cap.
+func holdUntilDeleted() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	defer signal.Stop(signals)
+	timer := time.NewTimer(successHoldDuration)
+	defer timer.Stop()
+	select {
+	case <-signals:
+	case <-timer.C:
+	}
 }
 
 func sanitizedEnvironment() []string {
