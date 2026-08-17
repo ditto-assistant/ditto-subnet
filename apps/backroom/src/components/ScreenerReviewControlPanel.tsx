@@ -22,6 +22,9 @@ const defaults: ScreenerReviewSettings = {
   l3_model: 'openai/gpt-5.6-sol',
   timeout_seconds: 900,
   max_steps: 18,
+  source_review_max_steps: 24,
+  source_review_max_read_bytes: 1_200_000,
+  source_review_reasoning_effort: 'high',
   max_input_tokens: 425_000,
   max_output_tokens: 20_000,
   max_completion_tokens: 2_400,
@@ -29,6 +32,10 @@ const defaults: ScreenerReviewSettings = {
   critic_reasoning_effort: 'medium',
   cache_ttl_seconds: 604_800,
   audit_retention_days: 30,
+}
+
+function withDefaults(settings?: Partial<ScreenerReviewSettings>): ScreenerReviewSettings {
+  return { ...defaults, ...settings }
 }
 
 function shortDigest(value: string) {
@@ -377,7 +384,7 @@ export function ScreenerReviewControlPanel({
     [scope, state.current],
   )
   const [settings, setSettings] = useState<ScreenerReviewSettings>(
-    selected?.settings ?? defaults,
+    withDefaults(selected?.settings),
   )
   const [reason, setReason] = useState('')
   const [confirmation, setConfirmation] = useState('')
@@ -396,7 +403,7 @@ export function ScreenerReviewControlPanel({
 
   const chooseScope = (next: string) => {
     setScope(next)
-    setSettings(state.current.find((revision) => revision.scope === next)?.settings ?? defaults)
+    setSettings(withDefaults(state.current.find((revision) => revision.scope === next)?.settings))
     setReason('')
     setConfirmation('')
   }
@@ -407,7 +414,7 @@ export function ScreenerReviewControlPanel({
     try {
       const next = await fetchControl()
       setState(next)
-      setSettings(next.current.find((revision) => revision.scope === scope)?.settings ?? defaults)
+      setSettings(withDefaults(next.current.find((revision) => revision.scope === scope)?.settings))
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Unable to refresh reviewer settings')
     } finally {
@@ -563,7 +570,21 @@ export function ScreenerReviewControlPanel({
                 </label>
               ))}
               <NumericField label="Timeout seconds" value={settings.timeout_seconds} onChange={(value) => setSettings((current) => ({ ...current, timeout_seconds: value }))} />
-              <NumericField label="Max agent steps" value={settings.max_steps} onChange={(value) => setSettings((current) => ({ ...current, max_steps: value }))} />
+              <NumericField label="L2 max agent steps" value={settings.max_steps} onChange={(value) => setSettings((current) => ({ ...current, max_steps: value }))} />
+              <NumericField label="L1 Luna max steps" value={settings.source_review_max_steps} onChange={(value) => setSettings((current) => ({ ...current, source_review_max_steps: value }))} />
+              <NumericField label="L1 Luna read bytes" value={settings.source_review_max_read_bytes} onChange={(value) => setSettings((current) => ({ ...current, source_review_max_read_bytes: value }))} />
+              <label className="block text-xs text-[var(--muted)]">
+                L1 Luna reasoning
+                <select
+                  value={settings.source_review_reasoning_effort}
+                  onChange={(event) => setSettings((current) => ({ ...current, source_review_reasoning_effort: event.target.value as 'low' | 'medium' | 'high' }))}
+                  className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
+                >
+                  <option value="low">Low</option>
+                  <option value="medium">Medium</option>
+                  <option value="high">High</option>
+                </select>
+              </label>
               <NumericField label="Max input tokens" value={settings.max_input_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_input_tokens: value }))} />
               <NumericField label="Max output tokens" value={settings.max_output_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_output_tokens: value }))} />
               <NumericField label="Completion cap" value={settings.max_completion_tokens} onChange={(value) => setSettings((current) => ({ ...current, max_completion_tokens: value }))} />
@@ -574,11 +595,12 @@ export function ScreenerReviewControlPanel({
                 SOL critic reasoning
                 <select
                   value={settings.critic_reasoning_effort}
-                  onChange={(event) => setSettings((current) => ({ ...current, critic_reasoning_effort: event.target.value as 'low' | 'medium' }))}
+                  onChange={(event) => setSettings((current) => ({ ...current, critic_reasoning_effort: event.target.value as 'low' | 'medium' | 'high' }))}
                   className="mt-1.5 min-h-11 w-full rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-sm text-white"
                 >
                   <option value="low">Low</option>
                   <option value="medium">Medium</option>
+                  <option value="high">High</option>
                 </select>
               </label>
             </div>

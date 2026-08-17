@@ -86,6 +86,8 @@ describe('Backroom MCP tools', () => {
         'get_inference_runtime_metrics',
         'download_runtime_profile',
         'get_queue_policy_settings',
+        'get_screener_review_settings',
+        'apply_screener_review_settings',
         'get_validator_slot_settings',
         'list_confirmation_bundles',
         'set_burn_settings',
@@ -167,13 +169,13 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 20_250 description sum includes the ATH precedent-search catalog entry.
+    // 84_000 whole-payload includes the screener-review settings write schema.
     // Keep modest headroom for schema evolution; tighten the description
     // budgets, not this whole-payload backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(81_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(84_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      20_250,
+      20_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -1374,6 +1376,36 @@ describe('Backroom MCP tools', () => {
       expect.objectContaining({ method: 'GET' }),
     )
 
+    await client.close()
+    await server.close()
+  })
+
+  it('reads screener review settings through a read-only grant', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        current: [],
+        history: [],
+        known_instances: ['ditto-screener-prod'],
+        applied_instances: [],
+        shadow_observations: [],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screener_review_settings',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      known_instances: ['ditto-screener-prod'],
+      applied_instances: [],
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-review-settings',
+      expect.any(Object),
+    )
     await client.close()
     await server.close()
   })

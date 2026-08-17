@@ -14,7 +14,7 @@ ReviewModel = Literal[
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
 ]
-ReasoningEffort = Literal["low", "medium"]
+ReasoningEffort = Literal["low", "medium", "high"]
 
 
 class ScreenerReviewSettings(BaseModel):
@@ -32,6 +32,14 @@ class ScreenerReviewSettings(BaseModel):
     l3_model: Literal["openai/gpt-5.6-sol"] = "openai/gpt-5.6-sol"
     timeout_seconds: Annotated[int, Field(ge=30, le=900)] = 900
     max_steps: Annotated[int, Field(ge=1, le=20)] = 18
+    # L1 Luna budget. Distinct from ``max_steps``, which bounds L2. Exhausting
+    # either L1 bound yields no verdict and dumps the submission on the human
+    # ATH queue with a null finding.
+    source_review_max_steps: Annotated[int, Field(ge=1, le=40)] = 24
+    source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=4_000_000)] = (
+        1_200_000
+    )
+    source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 425_000
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)] = 20_000
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)] = 2_400

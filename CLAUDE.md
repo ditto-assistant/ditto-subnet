@@ -53,6 +53,11 @@ and persistence. DittoBench owns versioned execution/scoring. Research adapters
 must use normal score paths. Backroom is the public SN118 operator console and
 must keep privileged tokens and OAuth state server-side.
 
+When a live diagnosis cannot see a production knob through Backroom MCP, add
+the read tool. Do not leave operator settings, review budgets, last-applied
+worker state, or audit trails only on the UI. Err toward more Backroom
+visibility.
+
 ## Delivery
 
 Conventional commits drive semantic releases for affected components. Platform

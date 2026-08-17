@@ -18,6 +18,16 @@ multi-repository temp clones or cross-repository synchronization for components
 already present in this tree. Read the nearest nested `AGENTS.md` or `CLAUDE.md`
 before editing a component.
 
+## Backroom MCP debug first
+
+The public Backroom MCP at `https://backroom.dittobench.ai/mcp` is the only
+production control plane. When a live diagnosis is missing a knob, a queue
+reason, a budget, a last-applied setting, or a review audit, add a
+`backroom:read` tool that returns it. Do not infer production state from the
+dashboard, logs, or a local default. Err toward more Backroom visibility, not
+less: a setting that exists only in the operator UI is not operator-visible
+to agents.
+
 ## Agent and Claude guidance
 
 `AGENTS.md` is the repository-wide instruction file for general agents.

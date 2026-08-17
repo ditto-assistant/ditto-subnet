@@ -67,6 +67,7 @@ import {
   setInferenceConcurrencySettingsInputSchema,
   runtimeProfileCaptureInputSchema,
   runtimeProfileLookupInputSchema,
+  applyScreenerReviewSettingsInputSchema,
   setQueuePolicySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
@@ -139,6 +140,8 @@ import {
   captureRuntimeProfile,
   downloadRuntimeProfile,
   fetchQueuePolicySettings,
+  fetchScreenerReviewControl,
+  applyScreenerReviewSettings,
   setInferenceConcurrencySettings,
   setQueuePolicySettings,
   fetchValidatorSlotSettings,
@@ -196,6 +199,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
   'set_queue_policy_settings',
+  'apply_screener_review_settings',
   'set_validator_slot_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
@@ -390,6 +394,10 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  get_screener_review_settings:
+    'Read L1/L2/L3 source-review settings, last-applied worker instances, and shadow observations. bypass lives on get_queue_policy_settings.',
+  apply_screener_review_settings:
+    'Write one L1/L2/L3 source-review revision. Confirmation: APPLY SCREENER REVIEW {scope} {MODE}.',
   set_queue_policy_settings:
     'Apply a complete queue-policy revision with expectedRevision, reason, and "APPLY QUEUE POLICY SETTINGS". It NEVER resizes an in-flight rollout; rollout-locked fields are REFUSED while a benchmark rollout is open. similarity_budget is a queue-fairness and capacity rail; prev_gen_carryover ships DISABLED. The whole nested block is required. This is subnet queue policy; Ditto app entitlement flags are not served by this server.',
   set_continual_retest_settings:
@@ -1317,6 +1325,30 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => setContinualRetestSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_screener_review_settings',
+    {
+      title: 'Get screener review settings',
+      description:
+        'Read L1/L2/L3 source-review settings, last-applied worker instances, and recent shadow observations. L1 is openai/gpt-5.6-luna. deferred_source_review.mode lives on get_queue_policy_settings; bypass means this reviewer never runs. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchScreenerReviewControl()),
+  )
+
+  registerTool(
+    'apply_screener_review_settings',
+    {
+      title: 'Apply screener review settings',
+      description:
+        'Write one L1/L2/L3 source-review revision. Confirmation is APPLY SCREENER REVIEW {scope} {MODE}. Requires backroom:write.',
+      inputSchema: applyScreenerReviewSettingsInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => applyScreenerReviewSettings(props.session.email, input)),
   )
 
   registerTool(

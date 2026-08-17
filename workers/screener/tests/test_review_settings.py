@@ -107,20 +107,62 @@ async def test_platform_settings_are_cached_and_apply_every_budget(
     assert ReviewSettingsCache(config.review_settings_cache_file).load() is not None
 
 
-def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
-    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+def _legacy_payload(config, dropped: tuple[str, ...]) -> dict:
     baseline = bootstrap_review_settings(config)
+    payload = baseline.model_dump()
     legacy = baseline.settings.model_dump(mode="json")
-    legacy.pop("l3_enabled")
-    legacy_checksum = hashlib.sha256(
+    for name in dropped:
+        legacy.pop(name)
+    payload["checksum"] = hashlib.sha256(
         json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+    return payload
 
-    payload = baseline.model_dump()
-    payload["checksum"] = legacy_checksum
+
+def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
+    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+    payload = _legacy_payload(
+        config,
+        (
+            "l3_enabled",
+            "source_review_max_steps",
+            "source_review_max_read_bytes",
+            "source_review_reasoning_effort",
+        ),
+    )
     compatible = EffectiveReviewSettings.model_validate(payload)
-
     assert compatible.settings.l3_enabled is True
+
+
+def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
+    config = make_config()
+    payload = _legacy_payload(
+        config,
+        (
+            "source_review_max_steps",
+            "source_review_max_read_bytes",
+            "source_review_reasoning_effort",
+        ),
+    )
+    compatible = EffectiveReviewSettings.model_validate(payload)
+    assert compatible.settings.source_review_max_steps == 24
+    assert compatible.settings.source_review_max_read_bytes == 1_200_000
+    assert compatible.settings.source_review_reasoning_effort == "high"
+
+
+def test_explicit_budget_is_never_dropped_from_the_checksum(make_config) -> None:
+    config = make_config()
+    payload = _legacy_payload(
+        config,
+        (
+            "source_review_max_steps",
+            "source_review_max_read_bytes",
+            "source_review_reasoning_effort",
+        ),
+    )
+    payload["settings"]["source_review_max_read_bytes"] = 2_000_000
+    with pytest.raises(ValidationError, match="checksum"):
+        EffectiveReviewSettings.model_validate(payload)
 
 
 @pytest.mark.asyncio

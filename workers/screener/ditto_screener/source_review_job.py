@@ -101,7 +101,13 @@ async def _amain() -> int:
                     "https://openrouter.ai/api/v1",
                 ),
                 timeout_seconds=timeout_seconds,
-                max_steps=int(os.environ.get("SCREENER_SOURCE_REVIEW_MAX_STEPS", "10")),
+                max_steps=int(os.environ.get("SCREENER_SOURCE_REVIEW_MAX_STEPS", "24")),
+                max_read_bytes=int(
+                    os.environ.get("SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "1200000")
+                ),
+                reasoning_effort=os.environ.get(
+                    "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
+                ),
                 static_preflight_v2_mode=os.environ.get(
                     "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
                 ),

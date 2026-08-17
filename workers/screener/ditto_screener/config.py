@@ -140,6 +140,8 @@ class ScreenerConfig:
     source_review_base_url: str
     source_review_timeout_seconds: float
     source_review_max_steps: int
+    source_review_max_read_bytes: int
+    source_review_reasoning_effort: str
     static_preflight_v2_mode: str
     """V2 detector rollout: legacy authority in off/shadow, v2 in enforce."""
     static_preflight_audit_file: str | None
@@ -318,9 +320,15 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_SOURCE_REVIEW_BASE_URL", "https://openrouter.ai/api/v1"
         ),
         source_review_timeout_seconds=_parse_float(
-            "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "180"
+            "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "600"
         ),
-        source_review_max_steps=_parse_int("SCREENER_SOURCE_REVIEW_MAX_STEPS", "10"),
+        source_review_max_steps=_parse_int("SCREENER_SOURCE_REVIEW_MAX_STEPS", "24"),
+        source_review_max_read_bytes=_parse_int(
+            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "1200000"
+        ),
+        source_review_reasoning_effort=os.environ.get(
+            "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
+        ),
         static_preflight_v2_mode=os.environ.get(
             "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
         ),
@@ -391,9 +399,17 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_API_KEY_FILE is required by screening policy v8"
         )
-    if not 1 <= config.source_review_max_steps <= 20:
+    if not 1 <= config.source_review_max_steps <= 40:
         raise ScreenerConfigError(
-            "SCREENER_SOURCE_REVIEW_MAX_STEPS must be between 1 and 20"
+            "SCREENER_SOURCE_REVIEW_MAX_STEPS must be between 1 and 40"
+        )
+    if not 32_000 <= config.source_review_max_read_bytes <= 4_000_000:
+        raise ScreenerConfigError(
+            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES must be between 32000 and 4000000"
+        )
+    if config.source_review_reasoning_effort not in {"low", "medium", "high"}:
+        raise ScreenerConfigError(
+            "SCREENER_SOURCE_REVIEW_REASONING_EFFORT must be low, medium, or high"
         )
     if config.static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
         raise ScreenerConfigError(
