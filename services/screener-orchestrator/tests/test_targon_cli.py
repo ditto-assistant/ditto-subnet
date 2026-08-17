@@ -37,6 +37,10 @@ class _Targon:
     def deploy(self, _uid: str) -> dict[str, object]:
         return {}
 
+    def update(self, uid: str, **values: object) -> dict[str, object]:
+        del uid, values
+        return {}
+
     def state(self, uid: str) -> dict[str, object]:
         return {
             "uid": uid,

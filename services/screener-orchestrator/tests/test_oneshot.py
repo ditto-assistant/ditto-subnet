@@ -2,6 +2,8 @@ from argparse import Namespace
 from datetime import UTC, datetime
 
 from screener_capacity.oneshot import (
+    HOLD_COMMANDS,
+    HOLD_IMAGE,
     delete_oneshot_rental,
     is_oneshot_name,
     should_sweep,
@@ -27,6 +29,8 @@ class _Targon:
         self.deleted: list[str] = []
         self.suspended: list[str] = []
         self.deployed: list[str] = []
+        self.updated: list[tuple[str, dict[str, object]]] = []
+        self.update_fails = False
         self.status_by_uid = {
             str(row["uid"]): str((row.get("state") or {}).get("status") or "")
             for row in rows
@@ -42,6 +46,16 @@ class _Targon:
     def suspend(self, uid: str) -> dict[str, object]:
         self.suspended.append(uid)
         self.status_by_uid[uid] = "suspended"
+        return {}
+
+    def update(self, uid: str, **values: object) -> dict[str, object]:
+        if self.update_fails:
+            raise TargonAPIError(
+                operation="PATCH",
+                status=400,
+                reason="HTTP error",
+            )
+        self.updated.append((uid, values))
         return {}
 
     def deploy(self, uid: str) -> dict[str, object]:
@@ -141,7 +155,7 @@ def test_should_sweep_skips_inflight_and_fresh_registered() -> None:
     )
 
 
-def test_delete_redeploys_suspended_rental_then_deletes() -> None:
+def test_delete_replaces_leftover_image_before_waking() -> None:
     client = _Targon([])
     client.status_by_uid["wrk-1"] = "suspended"
 
@@ -149,6 +163,28 @@ def test_delete_redeploys_suspended_rental_then_deletes() -> None:
     assert client.deleted == ["wrk-1", "wrk-1"]
     assert client.deployed == ["wrk-1"]
     assert client.suspended == []
+    assert client.updated == [
+        (
+            "wrk-1",
+            {
+                "image": HOLD_IMAGE,
+                "commands": HOLD_COMMANDS,
+                "args": [],
+                "envs": [],
+            },
+        )
+    ]
+
+
+def test_delete_does_not_wake_leftover_when_image_replace_fails() -> None:
+    client = _Targon([])
+    client.status_by_uid["wrk-1"] = "error"
+    client.update_fails = True
+
+    assert not delete_oneshot_rental(client, "wrk-1")
+    assert client.deleted == ["wrk-1"]
+    assert client.deployed == []
+    assert client.updated == []
 
 
 def test_sweep_deletes_terminal_oneshots_and_skips_inflight() -> None:

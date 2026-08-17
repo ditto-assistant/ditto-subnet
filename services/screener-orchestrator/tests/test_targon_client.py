@@ -124,6 +124,8 @@ class TargonClientTests(unittest.TestCase):
         )
         create_payload = json.loads(requests[0].data)
         self.assertEqual(create_payload["experiments"], {"persistent-workload": False})
+        update_payload = json.loads(requests[2].data)
+        self.assertEqual(update_payload, {"envs": [{"name": "PUBLIC", "value": "yes"}]})
         base = "https://api.targon.com/tha/v3/orgs/ditto/workloads"
         self.assertEqual(
             [request.full_url for request in requests],
@@ -137,6 +139,35 @@ class TargonClientTests(unittest.TestCase):
                 base + "/rental-1/suspend",
                 base + "/rental-1",
             ],
+        )
+
+    @patch("screener_capacity.targon.urllib.request.urlopen")
+    def test_update_can_replace_image_and_command(self, urlopen: object) -> None:
+        urlopen.return_value = _Response({"uid": "rental-1"})  # type: ignore[attr-defined]
+        client = TargonClient(api_key="x" * 40, org_slug="ditto")
+
+        client.update(
+            "rental-1",
+            image="busybox:1.37.0",
+            commands=["sleep", "3600"],
+            args=[],
+            envs=[],
+        )
+
+        request = urlopen.call_args.args[0]  # type: ignore[attr-defined]
+        self.assertEqual(request.get_method(), "PATCH")
+        self.assertEqual(
+            request.full_url,
+            "https://api.targon.com/tha/v3/orgs/ditto/workloads/rental-1",
+        )
+        self.assertEqual(
+            json.loads(request.data),
+            {
+                "image": "busybox:1.37.0",
+                "commands": ["sleep", "3600"],
+                "args": [],
+                "envs": [],
+            },
         )
 
     @patch("screener_capacity.targon.urllib.request.urlopen")

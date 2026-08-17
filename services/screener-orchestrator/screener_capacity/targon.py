@@ -286,11 +286,39 @@ class TargonClient:
             return state
         return value if isinstance(value, dict) else {}
 
-    def update(self, uid: str, *, envs: list[dict[str, str]]) -> dict[str, Any]:
+    def update(
+        self,
+        uid: str,
+        *,
+        name: str | None = None,
+        image: str | None = None,
+        envs: list[dict[str, str]] | None = None,
+        commands: list[str] | None = None,
+        args: list[str] | None = None,
+        registry_auth: dict[str, str] | None = None,
+        experiments: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {}
+        if name is not None:
+            payload["name"] = name
+        if image is not None:
+            payload["image"] = image
+        if envs is not None:
+            payload["envs"] = envs
+        if commands is not None:
+            payload["commands"] = commands
+        if args is not None:
+            payload["args"] = args
+        if registry_auth is not None:
+            payload["registry_auth"] = registry_auth
+        if experiments is not None:
+            payload["experiments"] = experiments
+        if not payload:
+            raise ValueError("Targon update requires at least one field")
         value = self._request(
             "PATCH",
             self._workload_path(f"/{uid}"),
-            payload={"envs": envs},
+            payload=payload,
             retryable=True,
         )
         return value if isinstance(value, dict) else {}

@@ -92,7 +92,9 @@ holds the successful process until Targon delivers SIGTERM, DELETEs while the
 rental is still `running`, and never treats suspend as a cost-safe parking
 lot. Targon DELETE returns HTTP 500 for `suspended`/`error`/`registered`
 records, so leftovers in those states are brought back to `running` only long
-enough for DELETE to succeed. One-shot creates do not send
+enough for DELETE to succeed. Before that wake, the sweeper replaces the
+leftover image and command with a public `busybox` sleep so a crash-looping
+Kaniko or consumed builder is never resumed. One-shot creates do not send
 `experiments.persistent-workload`; that key is config-gated and Targon
 rejects it with HTTP 400. Screener slot rentals stay persistent and are
 never swept.

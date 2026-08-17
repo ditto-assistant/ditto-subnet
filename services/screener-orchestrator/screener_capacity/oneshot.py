@@ -2,8 +2,9 @@
 
 Targon bills a rental from create until DELETE, including `suspended` time.
 DELETE of `suspended`/`error`/`registered` records returns HTTP 500, so those
-leftovers are briefly brought to `running` only so DELETE can succeed.
-Screener slot rentals are never touched.
+leftovers are patched onto a public sleep image and briefly brought to
+`running` only so DELETE can succeed. The original crashing container is
+never resumed. Screener slot rentals are never touched.
 """
 
 from __future__ import annotations
@@ -34,6 +35,10 @@ SWEEPABLE_STATUSES = frozenset({"suspended", "error", "registered", "deleted"})
 DEFAULT_REGISTERED_GRACE_SECONDS = 1200
 DEFAULT_INFLIGHT_GRACE_SECONDS = 2700
 RUNNING_WAIT_SECONDS = 180.0
+# Public image used only to make leftover DELETE legal. Never resume the
+# original crashing job — that crash-loops and keeps the billing meter on.
+HOLD_IMAGE = "busybox:1.37.0"
+HOLD_COMMANDS = ["sleep", "3600"]
 
 
 def is_oneshot_name(name: str) -> bool:
@@ -106,25 +111,52 @@ def _try_delete(client: TargonClient, uid: str) -> bool:
             return False
 
 
+def _replace_with_hold_image(client: TargonClient, uid: str) -> bool:
+    """Swap a leftover onto a cheap sleep image before waking it.
+
+    PATCH of `suspended`/`registered` does not redeploy. PATCH of `error` or
+    `running` can. Either way the next start must not be the old PID-1.
+    """
+    try:
+        client.update(
+            uid,
+            image=HOLD_IMAGE,
+            commands=HOLD_COMMANDS,
+            args=[],
+            envs=[],
+        )
+        return True
+    except TargonAPIError:
+        return False
+
+
 def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
     """Delete a disposable rental. Suspended leftovers still accrue charges.
 
     Try DELETE first. If Targon 500s because the record is not `running`,
-    deploy just long enough to DELETE. Never treat suspend as terminal.
+    replace the spec with a public sleep image and deploy only long enough
+    for DELETE. Never treat suspend as terminal, and never resume the
+    original crashing container.
     """
     if _try_delete(client, uid):
         return True
     status = _current_status(client, uid)
     if status == "deleted":
         return True
+    if not _replace_with_hold_image(client, uid):
+        return False
+    status = _current_status(client, uid)
     if status in {"suspended", "error", "registered"}:
         try:
             client.deploy(uid)
         except TargonAPIError as error:
             if error.status == 402:
                 raise
-            return False
-        status = _current_status(client, uid) or "provisioning"
+            status = _current_status(client, uid)
+            if status not in {"running", "provisioning"}:
+                return False
+        else:
+            status = _current_status(client, uid) or "provisioning"
     if status == "provisioning":
         if not _wait_until_running(client, uid):
             return False
