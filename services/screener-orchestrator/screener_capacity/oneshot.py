@@ -36,6 +36,7 @@ DEFAULT_REGISTERED_GRACE_SECONDS = 1200
 DEFAULT_INFLIGHT_GRACE_SECONDS = 2700
 RUNNING_WAIT_SECONDS = 180.0
 DELETED_SETTLE_SECONDS = 15.0
+DELETE_ATTEMPTS = 3
 # Public image used only to make leftover DELETE legal. Never resume the
 # original crashing job — that crash-loops and keeps the billing meter on.
 HOLD_IMAGE = "busybox:1.37.0"
@@ -160,31 +161,34 @@ def delete_oneshot_rental(client: TargonClient, uid: str) -> bool:
     """
     if _try_delete(client, uid):
         return True
-    status = _current_status(client, uid)
-    if status == "deleted":
-        return True
-    if not _replace_with_hold_image(client, uid):
-        return False
-    status = _current_status(client, uid)
-    if status in {"suspended", "error", "registered"}:
-        try:
-            client.deploy(uid)
-        except TargonAPIError as error:
-            if error.status == 402:
-                raise
-            status = _current_status(client, uid)
-            if status not in {"running", "provisioning"}:
-                return False
-        else:
-            status = _current_status(client, uid) or "provisioning"
-    if status == "provisioning":
-        if not _wait_until_running(client, uid):
+    for _attempt in range(DELETE_ATTEMPTS):
+        status = _current_status(client, uid)
+        if status == "deleted" and _still_deleted(client, uid):
+            return True
+        if not _replace_with_hold_image(client, uid):
             return False
-        status = "running"
-    if status == "running":
+        status = _current_status(client, uid)
+        if status in {"suspended", "error", "registered"}:
+            try:
+                client.deploy(uid)
+            except TargonAPIError as error:
+                if error.status == 402:
+                    raise
+                status = _current_status(client, uid)
+                if status not in {"running", "provisioning"}:
+                    return False
+            else:
+                status = _current_status(client, uid) or "provisioning"
+        if status == "provisioning":
+            if not _wait_until_running(client, uid):
+                return False
+            status = "running"
+        if status != "running":
+            return False
         if not _try_delete(client, uid):
             return False
-        return _still_deleted(client, uid)
+        if _still_deleted(client, uid):
+            return True
     return False
 
 

@@ -204,7 +204,7 @@ def test_delete_is_not_done_when_deleted_status_bounces_to_error(monkeypatch) ->
     client.delete = _delete  # type: ignore[method-assign]
 
     assert not delete_oneshot_rental(client, "wrk-1")
-    assert client.deployed == ["wrk-1"]
+    assert client.deployed == ["wrk-1"] * oneshot_mod.DELETE_ATTEMPTS
     assert client.updated
 
 
