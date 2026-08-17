@@ -211,7 +211,7 @@ def test_source_review_runs_as_one_shot_pinned_rental(monkeypatch) -> None:
         "-m",
     ]
     assert targon.created["args"] == ["ditto_screener.source_review_job"]
-    assert targon.created["experiments"] == {"persistent-workload": False}
+    assert "experiments" not in targon.created
     envs = targon.created["envs"]
     assert {row["name"] for row in envs} >= {
         "DITTO_SOURCE_REVIEW_JOB",
@@ -375,7 +375,6 @@ def test_submission_rental_receives_only_attempt_capability_and_pinned_image() -
                 "value": _submission()["job_token"],
             },
         ],
-        "experiments": {"persistent-workload": False},
     }
     assert targon.deployed == ["wrk-build-1"]
     assert targon.suspended == []

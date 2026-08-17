@@ -92,9 +92,10 @@ holds the successful process until Targon delivers SIGTERM, DELETEs while the
 rental is still `running`, and never treats suspend as a cost-safe parking
 lot. Targon DELETE returns HTTP 500 for `suspended`/`error`/`registered`
 records, so leftovers in those states are brought back to `running` only long
-enough for DELETE to succeed. One-shot creates request
-`experiments.persistent-workload=false` so a finished job should not restart.
-Screener slot rentals stay persistent and are never swept.
+enough for DELETE to succeed. One-shot creates do not send
+`experiments.persistent-workload`; that key is config-gated and Targon
+rejects it with HTTP 400. Screener slot rentals stay persistent and are
+never swept.
 
 ```bash
 scripts/targon-smoke.sh sweep-oneshots

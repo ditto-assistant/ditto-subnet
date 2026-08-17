@@ -30,7 +30,6 @@ from screener_capacity.controller import (
 from screener_capacity.oneshot import delete_oneshot_rental, sweep_oneshot_rentals
 from screener_capacity.targon import TargonAPIError, TargonClient
 
-_ONESHOT_EXPERIMENTS = {"persistent-workload": False}
 _DIGEST = re.compile(r"DITTO_BUILD_DIGEST=(sha256:[0-9a-f]{64})")
 _SUBMISSION_EXIT_CODE = re.compile(r"(?:^|\D)exit code (71|72|73|74|75|76)(?:\D|$)")
 _SUBMISSION_STAGE_BY_EXIT_CODE = {
@@ -677,7 +676,6 @@ def run_one_runtime_smoke(
                 "username": "oauth2accesstoken",
                 "password": pull_token,
             },
-            experiments=_ONESHOT_EXPERIMENTS,
         )
         uid = str(created["uid"])
         control.update(build_id, status="running", provider_resource_id=uid)
@@ -800,7 +798,6 @@ def run_one_source_review(
             envs=[{"name": key, "value": value} for key, value in sorted(env.items())],
             commands=["/app/workers/screener/.venv/bin/python", "-m"],
             args=["ditto_screener.source_review_job"],
-            experiments=_ONESHOT_EXPERIMENTS,
         )
         uid = str(created["uid"])
         control.update(review_id, status="running", provider_resource_id=uid)
@@ -883,7 +880,6 @@ def run_one(settings: Settings, client: TargonClient, control: BuildControl) -> 
             ],
             commands=["/busybox/sh", "-c"],
             args=[_kaniko_script(build)],
-            experiments=_ONESHOT_EXPERIMENTS,
         )
         uid = str(created["uid"])
         control.update(build_id, status="running", provider_resource_id=uid)
@@ -967,7 +963,6 @@ def run_one_submission(
                 {"name": "DITTO_BUILD_ID", "value": build_id},
                 {"name": "DITTO_BUILD_JOB_TOKEN", "value": job_token},
             ],
-            experiments=_ONESHOT_EXPERIMENTS,
         )
         uid = str(created["uid"])
         phase = "mark_running"
