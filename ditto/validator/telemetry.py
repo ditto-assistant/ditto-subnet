@@ -84,6 +84,26 @@ class ScoredAgentStat:
 
 
 @dataclass(frozen=True)
+class ConfirmationFailureStat:
+    """One confirmation slot failure, reduced to low-cardinality diagnostics.
+
+    Deliberately carries no exception text, submitted body, URL, case id, or
+    provider detail — only an allowlisted class and the last progress stage the
+    slot published. That is enough to localize the failing boundary (seed vs
+    run vs report preparation vs signing/submission) without turning telemetry
+    into an error-string channel. Purely observational: it never influences
+    score, retry ownership, or settlement.
+    """
+
+    failure_class: str
+    """Allowlisted slug from ``CONFIRMATION_FAILURE_CLASSES``."""
+    stage: str
+    """Last ``ConfirmationProgressStage`` the slot reached before failing."""
+    hand_back_reason: str
+    """The protocol reason handed back to Platform."""
+
+
+@dataclass(frozen=True)
 class SweepStats:
     """Everything one sweep contributes to telemetry."""
 
@@ -160,6 +180,7 @@ class ValidatorTelemetry:
         self._run: Any = None
         self._step = 0
         self._last_pylon_acceptance_at: float | None = None
+        self._confirmation_failures: defaultdict[str, int] = defaultdict(int)
         if config.enabled:
             self._init_run()
 
@@ -207,6 +228,38 @@ class ValidatorTelemetry:
             self._log_sweep(stats)
         except Exception as e:  # noqa: BLE001 - telemetry must never break scoring
             logger.warning("wandb log failed (continuing): %s", e)
+
+    def record_confirmation_failure(self, stat: ConfirmationFailureStat) -> None:
+        """Log one confirmation slot failure. Swallows all errors.
+
+        Without this, every non-deadline confirmation failure collapses into the
+        opaque ``execution_failed`` hand-back and the exception is visible only
+        in a validator's own host logs — which is unreachable for the managed
+        fleet, so a lane can fail on every attempt with no fleet-wide signal.
+        """
+        if self._run is None:
+            return
+        try:
+            self._log_confirmation_failure(stat)
+        except Exception as e:  # noqa: BLE001 - telemetry must never break scoring
+            logger.warning("wandb confirmation log failed (continuing): %s", e)
+
+    def _log_confirmation_failure(self, stat: ConfirmationFailureStat) -> None:
+        wandb = self._wandb
+        self._confirmation_failures[stat.failure_class] += 1
+        wandb.log(
+            {
+                "confirmation/failure_class": stat.failure_class,
+                "confirmation/failure_stage": stat.stage,
+                "confirmation/hand_back_reason": stat.hand_back_reason,
+                "confirmation/failure_total": sum(self._confirmation_failures.values()),
+                f"confirmation/failures_by_class/{stat.failure_class}": (
+                    self._confirmation_failures[stat.failure_class]
+                ),
+            },
+            step=self._step,
+        )
+        self._step += 1
 
     def _log_sweep(self, stats: SweepStats) -> None:
         wandb = self._wandb

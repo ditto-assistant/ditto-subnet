@@ -15,7 +15,9 @@ from types import SimpleNamespace
 import pytest
 
 from ditto.api_models.validator import CaseScore, ScoreReport
+from ditto.validator.errors import DittobenchError, SandboxOomError
 from ditto.validator.telemetry import (
+    ConfirmationFailureStat,
     SweepStats,
     TelemetryConfig,
     ValidatorTelemetry,
@@ -24,6 +26,7 @@ from ditto.validator.telemetry import (
     per_category_means,
     scored_agent_stat,
 )
+from ditto.validator.worker import confirmation_failure_class
 
 _VALIDATOR = "5CZq6MdanxF3j8ACp8oVtiaphTeyrA7QFPU92ke2jEFzK1mp"
 
@@ -290,3 +293,96 @@ class TestNoOpWhenDisabled:
             netuid=118,
         )
         assert telemetry.enabled is False
+
+
+class TestConfirmationFailureTelemetry:
+    """Confirmation slot failures publish an allowlisted class, never a message.
+
+    The protocol hand-back reason has only four values, so without this a
+    repeatable lane break is invisible fleet-wide: the exception survives only
+    in one validator's host logs, unreachable for managed validators.
+    """
+
+    def test_disabled_sink_is_a_no_op(self) -> None:
+        telemetry = ValidatorTelemetry(
+            TelemetryConfig(mode="disabled", project="p", entity=None, run_name=None),
+            validator_hotkey=_VALIDATOR,
+            netuid=118,
+        )
+        assert telemetry.enabled is False
+        telemetry.record_confirmation_failure(
+            ConfirmationFailureStat(
+                failure_class="dittobench",
+                stage="running_confirmation",
+                hand_back_reason="execution_failed",
+            )
+        )
+
+    def test_publishes_allowlisted_scalars_and_counts_by_class(self) -> None:
+        logged: list[dict[str, object]] = []
+        telemetry = ValidatorTelemetry(
+            TelemetryConfig(mode="disabled", project="p", entity=None, run_name=None),
+            validator_hotkey=_VALIDATOR,
+            netuid=118,
+        )
+        telemetry._run = SimpleNamespace()
+        telemetry._wandb = SimpleNamespace(
+            log=lambda payload, **_kwargs: logged.append(payload)
+        )
+
+        for _ in range(2):
+            telemetry.record_confirmation_failure(
+                ConfirmationFailureStat(
+                    failure_class="dittobench",
+                    stage="running_confirmation",
+                    hand_back_reason="execution_failed",
+                )
+            )
+
+        assert logged[0]["confirmation/failure_class"] == "dittobench"
+        assert logged[0]["confirmation/failure_stage"] == "running_confirmation"
+        assert logged[0]["confirmation/hand_back_reason"] == "execution_failed"
+        assert logged[1]["confirmation/failure_total"] == 2
+        assert logged[1]["confirmation/failures_by_class/dittobench"] == 2
+
+    def test_a_logging_failure_never_propagates(self) -> None:
+        def boom(_payload: object, **_kwargs: object) -> None:
+            raise RuntimeError("wandb down")
+
+        telemetry = ValidatorTelemetry(
+            TelemetryConfig(mode="disabled", project="p", entity=None, run_name=None),
+            validator_hotkey=_VALIDATOR,
+            netuid=118,
+        )
+        telemetry._run = SimpleNamespace()
+        telemetry._wandb = SimpleNamespace(log=boom)
+
+        telemetry.record_confirmation_failure(
+            ConfirmationFailureStat(
+                failure_class="timeout",
+                stage="finalizing",
+                hand_back_reason="deadline",
+            )
+        )
+
+
+class TestConfirmationFailureClass:
+    """The classifier is an allowlist: unknown types must not leak their name."""
+
+    def test_known_type_maps_to_its_slug(self) -> None:
+        assert confirmation_failure_class(SandboxOomError("x")) == "sandbox_oom"
+
+    def test_subclass_resolves_through_the_mro(self) -> None:
+        class WeirdBenchFailure(DittobenchError):
+            pass
+
+        assert confirmation_failure_class(WeirdBenchFailure("x")) == "dittobench"
+
+    def test_unknown_type_is_bucketed_not_passed_through(self) -> None:
+        class TotallyNovelSecretNamedError(Exception):
+            pass
+
+        assert (
+            confirmation_failure_class(TotallyNovelSecretNamedError("secret detail"))
+            == "unclassified"
+        )

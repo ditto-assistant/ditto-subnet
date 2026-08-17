@@ -94,6 +94,7 @@ from ditto.validator.stack_identity import (
     validator_capabilities_and_stack,
 )
 from ditto.validator.telemetry import (
+    ConfirmationFailureStat,
     ScoredAgentStat,
     SweepStats,
     TelemetryConfig,
@@ -229,6 +230,45 @@ _FAIL_REPORT_TIMEOUT_SECONDS = 30.0
 # Keep a successfully reported generic failure visible through at least one
 # progress reporting interval. A new ticket supersedes it immediately.
 _FAILED_PROGRESS_MIN_VISIBLE_SECONDS = 60.0
+
+# Allowlisted confirmation failure classes. The protocol hand-back reason is
+# deliberately coarse (four values), so a repeatable lane break is invisible
+# fleet-wide: the exception survives only in one validator's host logs, which
+# nobody can read for a managed or third-party validator. These slugs are the
+# smallest thing that localizes the boundary without becoming an error-string
+# channel — the exception TYPE only, never its message, and an explicit
+# "unclassified" bucket rather than a passthrough of an unknown name.
+CONFIRMATION_FAILURE_CLASSES: dict[str, str] = {
+    "SandboxOomError": "sandbox_oom",
+    "LeaseRevokedError": "lease_revoked",
+    "ValidatorInfrastructureError": "validator_infrastructure",
+    "PlatformInfrastructureError": "platform_infrastructure",
+    "DittobenchError": "dittobench",
+    "PlatformError": "platform",
+    "ValidatorError": "validator",
+    "ValidationError": "evidence_schema",
+    "TimeoutError": "timeout",
+    "ClientError": "transport",
+    "ClientResponseError": "transport",
+    "ClientConnectorError": "transport",
+    "ServerTimeoutError": "timeout",
+}
+_UNCLASSIFIED_CONFIRMATION_FAILURE = "unclassified"
+
+
+def confirmation_failure_class(error: BaseException) -> str:
+    """Map an exception to an allowlisted, low-cardinality failure slug.
+
+    Walks the MRO so a subclass of a known error still classifies, and falls
+    back to ``unclassified`` rather than leaking an arbitrary type name.
+    """
+    for klass in type(error).__mro__:
+        slug = CONFIRMATION_FAILURE_CLASSES.get(klass.__name__)
+        if slug is not None:
+            return slug
+    return _UNCLASSIFIED_CONFIRMATION_FAILURE
+
+
 _RESOURCE_SLOT_RECOVERY_SECONDS = 10 * 60.0
 # How long a slot that found an empty queue waits before polling again, while a
 # sibling slot is still executing a lease. It only bounds how quickly free
@@ -1478,6 +1518,32 @@ class ValidatorWorker:
             for slot_id in sorted(self._confirmation_progress)
         ]
 
+    def _confirmation_stage(self, slot_id: str) -> str:
+        """Last stage this slot published, or ``unknown`` before the first one."""
+        progress = self._confirmation_progress.get(slot_id)
+        return progress.stage if progress is not None else "unknown"
+
+    def _record_confirmation_failure(
+        self,
+        error: BaseException,
+        stage: str,
+        hand_back_reason: str,
+    ) -> None:
+        """Publish an allowlisted failure class. Never raises, never scores."""
+        try:
+            self._telemetry.record_confirmation_failure(
+                ConfirmationFailureStat(
+                    failure_class=confirmation_failure_class(error),
+                    stage=stage,
+                    hand_back_reason=hand_back_reason,
+                )
+            )
+        except Exception as telemetry_error:  # noqa: BLE001 - never break a slot
+            logger.warning(
+                "confirmation failure telemetry failed (continuing): %s",
+                telemetry_error,
+            )
+
     async def _publish_confirmation_progress(
         self,
         job: V9ConfirmationJobResponse,
@@ -1976,25 +2042,40 @@ class ValidatorWorker:
                 await hand_back("cancelled")
                 raise
             except LeaseDeadlineError as error:
+                # Capture the stage before hand_back overwrites it with
+                # "failed_retrying" -- the stage at the point of failure is the
+                # whole diagnostic value.
+                failed_stage = self._confirmation_stage(slot_id)
                 await hand_back("deadline")
+                self._record_confirmation_failure(error, failed_stage, "deadline")
                 logger.warning(
-                    "v9 confirmation exhausted its lease on %s: %s",
+                    "v9 confirmation exhausted its lease on %s at stage %s: %s",
                     slot_id,
+                    failed_stage,
                     error,
                 )
             except (ValidatorInfrastructureError, PlatformInfrastructureError) as error:
+                failed_stage = self._confirmation_stage(slot_id)
                 await hand_back("infrastructure")
+                self._record_confirmation_failure(error, failed_stage, "infrastructure")
                 logger.warning(
-                    "v9 confirmation infrastructure failed on %s: %s",
+                    "v9 confirmation infrastructure failed on %s at stage %s: %s",
                     slot_id,
+                    failed_stage,
                     error,
                 )
             except Exception as error:  # noqa: BLE001 - isolate optional slot work
+                failed_stage = self._confirmation_stage(slot_id)
                 await hand_back("execution_failed")
+                self._record_confirmation_failure(
+                    error, failed_stage, "execution_failed"
+                )
                 logger.warning(
-                    "v9 confirmation failed on %s; sibling slots and canonical "
-                    "scoring continue: %s",
+                    "v9 confirmation failed on %s at stage %s (class %s); sibling "
+                    "slots and canonical scoring continue: %s",
                     slot_id,
+                    failed_stage,
+                    confirmation_failure_class(error),
                     error,
                 )
             finally:
