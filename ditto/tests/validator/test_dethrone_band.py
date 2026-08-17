@@ -50,6 +50,7 @@ def _e(
     continual_method: str | None = None,
     efficiency_bonus: float | None = None,
     efficiency_factor: float | None = None,
+    efficiency_curve_version: int | None = None,
     v9_full_composite: float | None = None,
     bench_version: int | None = None,
     minutes: int = 0,
@@ -85,6 +86,8 @@ def _e(
         ns.efficiency_bonus = efficiency_bonus
     if efficiency_factor is not None:
         ns.efficiency_factor = efficiency_factor
+    if efficiency_curve_version is not None:
+        ns.efficiency_curve_version = efficiency_curve_version
     if v9_full_composite is not None:
         ns.v9_confirmation = SimpleNamespace(
             full_effective_micros=round(v9_full_composite * 1_000_000)
@@ -572,6 +575,43 @@ class TestEffectiveComposite:
         entry = _e("a", 0.8, efficiency_factor=0.85, bench_version=9)
 
         assert _effective_composite(entry) == pytest.approx(0.8)
+
+    def test_curve_v4_unclamped_factor_uses_asymptotic_headroom(self) -> None:
+        entry = _e(
+            "a",
+            0.997012,
+            efficiency_factor=1.5,
+            efficiency_curve_version=4,
+            v9_full_composite=0.997012,
+            bench_version=10,
+        )
+
+        assert _effective_composite(entry) == pytest.approx(
+            0.997012 + (1.0 - 0.997012) * (1.0 - 1.0 / 1.5)
+        )
+        assert _effective_composite(entry) < 1.0
+
+    def test_curve_v4_cheaper_agent_breaks_an_exact_quality_tie(self) -> None:
+        cheap = _e(
+            "cheap",
+            0.997012,
+            efficiency_factor=1.5,
+            efficiency_curve_version=4,
+            v9_full_composite=0.997012,
+            bench_version=10,
+            minutes=10,
+        )
+        dear = _e(
+            "dear",
+            0.997012,
+            efficiency_factor=1.1,
+            efficiency_curve_version=4,
+            v9_full_composite=0.997012,
+            bench_version=10,
+            minutes=0,
+        )
+
+        assert _effective_composite(cheap) > _effective_composite(dear)
 
 
 class TestBeatsWithConfirmations:

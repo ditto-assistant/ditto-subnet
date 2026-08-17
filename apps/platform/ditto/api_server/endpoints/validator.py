@@ -3589,11 +3589,13 @@ async def _current_koth_entries(
         agent_ids=[row.agent_id for row in rows],
         bench_version=canonical_version,
     )
-    efficiency_bonuses, efficiency_factors = await resolve_efficiency_adjustments(
-        session,
-        rows=rows,
-        efficiency_config=efficiency_config,
-        now=now,
+    efficiency_bonuses, efficiency_factors, efficiency_curve_versions = (
+        await resolve_efficiency_adjustments(
+            session,
+            rows=rows,
+            efficiency_config=efficiency_config,
+            now=now,
+        )
     )
     raw_scores = {
         row.agent_id: (
@@ -3626,6 +3628,7 @@ async def _current_koth_entries(
             ),
             efficiency_bonus=efficiency_bonuses.get(row.agent_id),
             efficiency_factor=efficiency_factors.get(row.agent_id),
+            efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
         )
         for rank, row in enumerate(raw_rows, start=1)
     ]
@@ -3714,6 +3717,7 @@ async def _current_koth_entries(
                 ),
                 efficiency_bonus=efficiency_bonuses.get(row.agent_id),
                 efficiency_factor=efficiency_factors.get(row.agent_id),
+                efficiency_curve_version=efficiency_curve_versions.get(row.agent_id),
             )
         )
     quality_primary = any(entry.efficiency_factor is not None for entry in entries)

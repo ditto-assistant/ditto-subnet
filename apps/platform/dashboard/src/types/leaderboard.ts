@@ -164,8 +164,10 @@ export interface LeaderboardEntry {
   pre_efficiency_composite?: number | null;
   /** Frozen legacy curve-v1/v2 upside fraction, when that fold is active. */
   efficiency_bonus?: number | null;
-  /** Frozen Bench-v9 bounded multiplier; supersedes efficiency_bonus when present. */
+  /** Frozen Bench-v9+ multiplier; supersedes efficiency_bonus when present. */
   efficiency_factor?: number | null;
+  /** 3 = bounded linear headroom; 4 = unclamped asymptotic headroom. */
+  efficiency_curve_version?: number | null;
   /** True when the surfaced curve-v3 tie-break or legacy fold is active. */
   efficiency_fold_applied?: boolean;
   /** Adjustment projection; curve v3 uses this only after exact quality equality. */

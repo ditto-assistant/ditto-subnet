@@ -14,15 +14,18 @@ validator-side spec (ditto-subnet ``docs/relative-efficiency-bonus-spec.md``):
 * The **reference** is robust: the efficient quartile (nearest-rank P25) of
   the cohort's audited chat-token totals — never the mean, an operator value,
   or the single minimum. It is frozen with the cohort for deterministic replay.
-* Historical curves v1/v2 are strictly-upside bonuses. New Bench-v9 snapshots
-  use curve v3: ``clamp((P25 / agent_cost) ** alpha, min, max)``. P25 is
-  neutral, cheaper qualified agents receive a bounded bonus, and more expensive
-  qualified agents receive a bounded penalty. The board's authoritative v9
-  quality is adjusted only after all signed quality gates apply: canonical /
-  continual quality normally, or full-confirmed quality while confirmation
-  enforcement is active.
-  Downside multiplies quality; upside closes only a bounded fraction of its
-  remaining headroom, so imperfect quality never saturates at 1.0.
+* Historical curves v1/v2 are strictly-upside bonuses. Frozen Bench-v9
+  snapshots stay on curve v3:
+  ``clamp((P25 / agent_cost) ** alpha, min, max)``. New snapshots use curve
+  v4: the same power, unclamped, so a cheaper harness cannot retie the
+  1.10 cap and fall through to ``first_seen``. P25 is neutral. The board's
+  authoritative v9 quality is adjusted only after all signed quality gates
+  apply: canonical / continual quality normally, or full-confirmed quality
+  while confirmation enforcement is active.
+  Downside multiplies quality. Curve-v3 upside closes a linear share of
+  remaining headroom and is only safe inside the 1.10 envelope. Curve-v4
+  upside is asymptotic in the factor, so the composite stays below 1.0 for
+  every finite factor and imperfect quality never saturates.
 * **Frozen cohorts**: the snapshot (membership, floors, reference values) is
   computed once per epoch and persisted; a submission's bonus is assigned
   once, against the frozen reference of the epoch it finalized in, and never
@@ -91,11 +94,31 @@ nothing extra)."""
 CURVE_VERSION_BOUNDED_FACTOR = 3
 """Bounded power curve for Bench v9+:
 ``clamp((reference_cost / agent_cost) ** alpha, minimum, maximum)``."""
+CURVE_VERSION_UNBOUNDED_FACTOR = 4
+"""Unclamped power curve for Bench v9+:
+``(reference_cost / agent_cost) ** alpha``.
+
+The 1.10 envelope is easy for a competitive harness to saturate, after which
+protocol-21 order falls through to ``first_seen``. v4 keeps the same power and
+the same quality-primary tie-break, but does not clamp, so cost still
+orders an exact-quality tier. Frozen v3 snapshots replay unchanged."""
+FACTOR_CURVE_VERSIONS = frozenset(
+    {CURVE_VERSION_BOUNDED_FACTOR, CURVE_VERSION_UNBOUNDED_FACTOR}
+)
+"""Curve versions that store a signed factor rather than a v1/v2 bonus."""
 BOUNDED_FACTOR_BENCH_VERSION = 9
-"""The first bench version scored by curve v3. Later versions (v10+) inherit the
-same bounded-factor tie-break: the signed v9 base-evidence contract carries
-forward, stamped with the run's actual bench version. The legacy two-tier fold
-never applies above this version."""
+"""The first bench version scored by a factor curve. Later versions (v10+)
+inherit the same quality-primary tie-break: the signed v9 base-evidence
+contract carries forward, stamped with the run's actual bench version. The
+legacy two-tier fold never applies above this version. New snapshots freeze
+as curve v4; already-published v3 rows stay on v3."""
+
+
+def is_factor_curve(curve_version: int | None) -> bool:
+    """Whether this frozen policy stores a signed factor, not a v1/v2 bonus."""
+    return curve_version in FACTOR_CURVE_VERSIONS
+
+
 V9_TOKEN_COST_QUORUM = 3
 """Every accepted k=3 score row must carry valid v9 cost evidence."""
 
@@ -200,11 +223,11 @@ class CohortReference:
     deep_frontier_ratio: float | None = None
     """Deep frontier as a fraction of P25 (two-tier curve only), in (0, 1)."""
     factor_alpha: float | None = None
-    """Power exponent frozen for the bounded-factor curve (v3 only)."""
+    """Power exponent frozen for a factor curve (v3/v4)."""
     minimum_factor: float | None = None
-    """Lower clamp frozen for the bounded-factor curve (v3 only)."""
+    """Lower clamp frozen for audit. Curve v3 applies it; v4 records it."""
     maximum_factor: float | None = None
-    """Upper clamp frozen for the bounded-factor curve (v3 only)."""
+    """Upper clamp frozen for audit. Curve v3 applies it; v4 records it."""
 
 
 def lineage_key(normalized_source_hash: str | None, sha256: str) -> str:
@@ -572,15 +595,9 @@ def build_cohort_snapshot(
         deep_frontier_ratio=(
             deep_frontier_ratio if frozen_curve == CURVE_VERSION_TWO_TIER else None
         ),
-        factor_alpha=(
-            factor_alpha if frozen_curve == CURVE_VERSION_BOUNDED_FACTOR else None
-        ),
-        minimum_factor=(
-            minimum_factor if frozen_curve == CURVE_VERSION_BOUNDED_FACTOR else None
-        ),
-        maximum_factor=(
-            maximum_factor if frozen_curve == CURVE_VERSION_BOUNDED_FACTOR else None
-        ),
+        factor_alpha=(factor_alpha if is_factor_curve(frozen_curve) else None),
+        minimum_factor=(minimum_factor if is_factor_curve(frozen_curve) else None),
+        maximum_factor=(maximum_factor if is_factor_curve(frozen_curve) else None),
     )
 
 
@@ -613,42 +630,69 @@ def bounded_efficiency_factor(
     return min(max(raw, minimum_factor), maximum_factor)
 
 
+def unbounded_efficiency_factor(
+    agent_cost: float,
+    *,
+    reference_cost: float,
+    alpha: float,
+) -> float:
+    """Apply the frozen v4 power curve without a min/max envelope.
+
+    The reference is still neutral. Lower audited cost increases the
+    multiplier without a ceiling, so two exact-quality agents cannot retie
+    at the old 1.10 cap. Invalid inputs stay fail-closed at the neutral
+    factor so a malformed snapshot cannot invent a ranking.
+    """
+    values = (agent_cost, reference_cost, alpha)
+    if any(not isfinite(value) for value in values):
+        return 1.0
+    if agent_cost <= 0.0 or reference_cost <= 0.0 or not 0.0 < alpha <= 1.0:
+        return 1.0
+    return (reference_cost / agent_cost) ** alpha
+
+
 def factor_for_submission(
     composite: float,
     memory_mean: float,
     token_total: float | None,
     reference: CohortReference,
 ) -> float | None:
-    """One curve-v3 assignment, or ``None`` when cost integrity is absent.
+    """One factor-curve assignment, or ``None`` when cost integrity is absent.
 
-    Quality and memory floors choose the robust reference cohort and gate v3
-    upside. They must not exempt an otherwise valid submission from downside:
-    otherwise an expensive agent could sandbag just below a floor to avoid a
-    penalty, and improving quality across that boundary could lower its final
-    score. A below-floor submission therefore receives ``min(raw, 1)``—never a
-    bonus, but the same bounded penalty as an above-floor peer.
+    Quality and memory floors choose the robust reference cohort and gate
+    factor upside. They must not exempt an otherwise valid submission from
+    downside: otherwise an expensive agent could sandbag just below a floor
+    to avoid a penalty, and improving quality across that boundary could
+    lower its final score. A below-floor submission therefore receives
+    ``min(raw, 1)`` — never a bonus, but the same penalty as an above-floor
+    peer. Curve v3 still applies the frozen [min, max] envelope; v4 does
+    not, so cost can still order an exact-quality tier.
     """
     if (
-        reference.curve_version != CURVE_VERSION_BOUNDED_FACTOR
+        not is_factor_curve(reference.curve_version)
         or reference.bench_version < BOUNDED_FACTOR_BENCH_VERSION
     ):
         return None
     if not reference.active or token_total is None:
         return None
-    if (
-        reference.reference_p25_tokens is None
-        or reference.factor_alpha is None
-        or reference.minimum_factor is None
-        or reference.maximum_factor is None
-    ):
+    if reference.reference_p25_tokens is None or reference.factor_alpha is None:
         return None
-    factor = bounded_efficiency_factor(
-        token_total,
-        reference_cost=reference.reference_p25_tokens,
-        alpha=reference.factor_alpha,
-        minimum_factor=reference.minimum_factor,
-        maximum_factor=reference.maximum_factor,
-    )
+    if reference.curve_version == CURVE_VERSION_UNBOUNDED_FACTOR:
+        factor = unbounded_efficiency_factor(
+            token_total,
+            reference_cost=reference.reference_p25_tokens,
+            alpha=reference.factor_alpha,
+        )
+    else:
+        if reference.minimum_factor is None or reference.maximum_factor is None:
+            return None
+        factor = bounded_efficiency_factor(
+            token_total,
+            reference_cost=reference.reference_p25_tokens,
+            alpha=reference.factor_alpha,
+            minimum_factor=reference.minimum_factor,
+            maximum_factor=reference.maximum_factor,
+        )
     if not qualifies(
         composite,
         memory_mean,
@@ -786,14 +830,14 @@ def floors_from_previous(
     ``MEMORY_FLOOR_FRACTION x`` previous median memory_mean — both never
     below the configured static floors, which alone govern the first epoch.
 
-    Curve v3 ranks independently confirmed full-v9 quality, whereas legacy
-    curves stored the earlier base composite. Those values are not comparable:
-    on the v2 -> v3 transition, configured floors govern until an active v3
-    cohort exists. Subsequent v3 epochs may inherit only from a v3 snapshot.
+    Factor curves rank independently confirmed full-v9 quality, whereas
+    legacy curves stored the earlier base composite. Those values are not
+    comparable: on the v2 -> v3/v4 transition, configured floors govern
+    until an active factor-curve cohort exists. Subsequent factor-curve
+    epochs may inherit from any factor-curve snapshot (v3 or v4).
     """
-    if (
-        current_curve_version == CURVE_VERSION_BOUNDED_FACTOR
-        and previous_curve_version != CURVE_VERSION_BOUNDED_FACTOR
+    if is_factor_curve(current_curve_version) and not is_factor_curve(
+        previous_curve_version
     ):
         return quality_floor, memory_floor
     if not previous_members:
@@ -1089,7 +1133,7 @@ def _candidates_from_rows(
     curve_version: int = CURVE_VERSION_TWO_TIER,
 ) -> list[EfficiencyCandidate]:
     def quality_composite(row: LedgerRow) -> float | None:
-        if curve_version != CURVE_VERSION_BOUNDED_FACTOR:
+        if not is_factor_curve(curve_version):
             return row.composite
         # ``list_eligible_ledger`` already resolves this contract boundary in
         # one place. With confirmation enforcement off, ``official_composite``
@@ -1236,7 +1280,7 @@ async def _materialize_epoch(
         snapshot.curve_version
         if snapshot is not None
         else (
-            CURVE_VERSION_BOUNDED_FACTOR
+            CURVE_VERSION_UNBOUNDED_FACTOR
             if bench_version >= BOUNDED_FACTOR_BENCH_VERSION
             else CURVE_VERSION_TWO_TIER
         )
@@ -1259,8 +1303,7 @@ async def _materialize_epoch(
             for row in rows
             if row.agent_id not in existing
             or (
-                curve_version == CURVE_VERSION_BOUNDED_FACTOR
-                and existing[row.agent_id].factor is None
+                is_factor_curve(curve_version) and existing[row.agent_id].factor is None
             )
         ]
         if not rows:
@@ -1269,7 +1312,7 @@ async def _materialize_epoch(
         versions = dict.fromkeys(agent_ids, bench_version)
 
     score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
-    if curve_version == CURVE_VERSION_BOUNDED_FACTOR:
+    if is_factor_curve(curve_version):
         from ditto.db.queries.confirmation_scores import (
             ConfirmationEfficiencyCosts,
             confirmation_efficiency_costs_by_agent,
@@ -1332,19 +1375,13 @@ async def _materialize_epoch(
             ),
             curve_version=curve_version,
             factor_alpha=(
-                config.factor_alpha
-                if curve_version == CURVE_VERSION_BOUNDED_FACTOR
-                else None
+                config.factor_alpha if is_factor_curve(curve_version) else None
             ),
             minimum_factor=(
-                config.minimum_factor
-                if curve_version == CURVE_VERSION_BOUNDED_FACTOR
-                else None
+                config.minimum_factor if is_factor_curve(curve_version) else None
             ),
             maximum_factor=(
-                config.maximum_factor
-                if curve_version == CURVE_VERSION_BOUNDED_FACTOR
-                else None
+                config.maximum_factor if is_factor_curve(curve_version) else None
             ),
         )
         snapshot = await insert_snapshot(session, reference)
@@ -1378,7 +1415,7 @@ async def _materialize_epoch(
         existing_row = existing.get(candidate.agent_id)
         if existing_row is not None:
             if (
-                reference.curve_version == CURVE_VERSION_BOUNDED_FACTOR
+                is_factor_curve(reference.curve_version)
                 and existing_row.factor is None
                 and factor is not None
                 and candidate.token_total is not None
@@ -1392,7 +1429,7 @@ async def _materialize_epoch(
             continue
         bonus = (
             0.0
-            if reference.curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            if is_factor_curve(reference.curve_version)
             else bonus_for_submission(
                 candidate.composite,
                 candidate.memory_mean,
@@ -1400,11 +1437,11 @@ async def _materialize_epoch(
                 reference,
             )
         )
-        # A v3 assignment is authority only when all signed cost-integrity
-        # evidence is present. Do not freeze a null row: complete evidence
-        # arriving later in this same epoch must still be able to qualify
-        # against the already-frozen reference.
-        if reference.curve_version == CURVE_VERSION_BOUNDED_FACTOR and factor is None:
+        # A factor-curve assignment is authority only when all signed
+        # cost-integrity evidence is present. Do not freeze a null row:
+        # complete evidence arriving later in this same epoch must still be
+        # able to qualify against the already-frozen reference.
+        if is_factor_curve(reference.curve_version) and factor is None:
             continue
         await insert_bonus(
             session,
@@ -1573,11 +1610,11 @@ async def preview_efficiency_board(
     versions = dict.fromkeys(agent_ids, bench_version)
     score_rows = await quorum_score_rows(session, agent_ids, bench_versions=versions)
     curve_version = (
-        CURVE_VERSION_BOUNDED_FACTOR
+        CURVE_VERSION_UNBOUNDED_FACTOR
         if bench_version >= BOUNDED_FACTOR_BENCH_VERSION
         else CURVE_VERSION_TWO_TIER
     )
-    if curve_version == CURVE_VERSION_BOUNDED_FACTOR:
+    if is_factor_curve(curve_version):
         from ditto.db.queries.confirmation_scores import (
             ConfirmationEfficiencyCosts,
             confirmation_efficiency_costs_by_agent,
@@ -1642,20 +1679,12 @@ async def preview_efficiency_board(
             else None
         ),
         curve_version=curve_version,
-        factor_alpha=(
-            config.factor_alpha
-            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
-            else None
-        ),
+        factor_alpha=(config.factor_alpha if is_factor_curve(curve_version) else None),
         minimum_factor=(
-            config.minimum_factor
-            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
-            else None
+            config.minimum_factor if is_factor_curve(curve_version) else None
         ),
         maximum_factor=(
-            config.maximum_factor
-            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
-            else None
+            config.maximum_factor if is_factor_curve(curve_version) else None
         ),
     )
     cost_evidence = [
@@ -1681,7 +1710,7 @@ async def preview_efficiency_board(
         preview_reference=reference,
         preview_bonuses=(
             None
-            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            if is_factor_curve(curve_version)
             else {
                 candidate.agent_id: bonus_for_submission(
                     candidate.composite,
@@ -1706,7 +1735,7 @@ async def preview_efficiency_board(
                 )
                 is not None
             }
-            if curve_version == CURVE_VERSION_BOUNDED_FACTOR
+            if is_factor_curve(curve_version)
             else None
         ),
         preview_candidate_count=len(candidates),

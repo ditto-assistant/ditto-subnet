@@ -190,6 +190,7 @@ from ditto.api_server.efficiency import (
 )
 from ditto.api_server.endpoints.scoring import (
     _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+    _UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
     _confirmation_composites,
     _confirmation_seeds,
     _fleet_safe_efficiency_adjustments,
@@ -1948,6 +1949,7 @@ def _public_entry(
     continual_aggregate_active: bool = False,
     efficiency_bonus: float | None = None,
     efficiency_factor: float | None = None,
+    efficiency_curve_version: int | None = None,
     efficiency_fold_applied: bool = False,
     efficiency_snapshot_id: UUID | None = None,
     efficiency_bonus_preview: float | None = None,
@@ -2020,6 +2022,7 @@ def _public_entry(
         effective_projection = bounded_efficiency_adjusted_quality(
             efficiency_base,
             efficiency_factor,
+            curve_version=efficiency_curve_version or 3,
         )
     elif efficiency_bonus is not None:
         # Preserve the frozen v1/v2 replay contract. Only curve v3 uses the
@@ -2100,6 +2103,7 @@ def _public_entry(
         ),
         efficiency_bonus=efficiency_bonus,
         efficiency_factor=efficiency_factor,
+        efficiency_curve_version=efficiency_curve_version,
         efficiency_fold_applied=efficiency_fold_applied,
         # Full-confirmed v9 quality already includes its signature-bound model,
         # tool and semantic gates. Apply curve v3 after that authoritative
@@ -2233,6 +2237,7 @@ def _public_koth_emissions(
     anchor_version: int | None = None,
     efficiency_bonuses: dict[UUID, float] | None = None,
     efficiency_factors: dict[UUID, float] | None = None,
+    efficiency_curve_versions: dict[UUID, int] | None = None,
     tie_weighting_active: bool = False,
     ceiling_band_clamp: bool = False,
 ) -> PublicKothEmissions | None:
@@ -2240,6 +2245,7 @@ def _public_koth_emissions(
     quorum_values = quorum_by_agent or {}
     bonus_values = efficiency_bonuses or {}
     factor_values = efficiency_factors or {}
+    curve_values = efficiency_curve_versions or {}
     candidates, by_seed, depths = completed_wave_data(
         rows,
         stderrs=stderrs,
@@ -2309,6 +2315,7 @@ def _public_koth_emissions(
                 ),
                 efficiency_bonus=bonus_values.get(row.agent_id),
                 efficiency_factor=factor_values.get(row.agent_id),
+                efficiency_curve_version=curve_values.get(row.agent_id),
             )
         )
 
@@ -2569,7 +2576,7 @@ def _displayed_efficiency_factors(
         view is None
         or view.preview
         or view.snapshot is None
-        or view.snapshot.curve_version != 3
+        or view.snapshot.curve_version not in {3, 4}
     ):
         return {}
     return {
@@ -2577,7 +2584,7 @@ def _displayed_efficiency_factors(
         for agent_id, assignment in view.bonuses.items()
         if assignment.factor is not None
         and agent_id in finalized_by_id
-        and finalized_by_id[agent_id].bench_version == 9
+        and finalized_by_id[agent_id].bench_version >= 9
     }
 
 
@@ -2828,18 +2835,25 @@ async def build_public_leaderboard(
         efficiency_view,
         finalized_by_id,
     )
-    # A curve-v3 factor changes the exact-quality secondary order. Suppress it
-    # from both the public tiebreak and validator-equivalent KOTH projection
-    # until every recently-live validator capable of serving Bench v9 advertises
-    # protocol 21, the first fold that consumes its quality-primary semantics.
-    # Validators that cannot serve v9 are not part of this scoring contract and must not
-    # indefinitely veto activation. Historical v1/v2 bonuses above deliberately
-    # do not inherit this new gate.
+    # A factor-curve assignment changes the exact-quality secondary order.
+    # Suppress it from both the public tiebreak and validator-equivalent KOTH
+    # projection until every recently-live validator capable of serving Bench
+    # v9 advertises the protocol that understands that curve: 21 for v3, 25
+    # for unclamped v4. Validators that cannot serve v9 are not part of this
+    # scoring contract and must not indefinitely veto activation. Historical
+    # v1/v2 bonuses above deliberately do not inherit this new gate.
     factor_fleet_ready = False
     if displayed_efficiency_factors and efficiency_fold_active:
+        required_factor_protocol = (
+            _UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL
+            if efficiency_view is not None
+            and efficiency_view.snapshot is not None
+            and efficiency_view.snapshot.curve_version >= 4
+            else _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
+        )
         factor_fleet_ready = await live_validator_fleet_supports_protocol(
             session,
-            minimum_protocol=_BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+            minimum_protocol=required_factor_protocol,
             bench_version=9,
             now=now,
             freshness=_VALIDATOR_STALE_WINDOW,
@@ -2849,6 +2863,11 @@ async def build_public_leaderboard(
         displayed_efficiency_factors if efficiency_fold_active else {},
         factor_fleet_ready=factor_fleet_ready,
     )
+    board_curve_versions = {
+        agent_id: efficiency_view.snapshot.curve_version
+        for agent_id in efficiency_factors
+        if efficiency_view is not None and efficiency_view.snapshot is not None
+    }
     board_official_composites = official_composites(
         finalized_rows,
         quorum=quorum,
@@ -2856,12 +2875,14 @@ async def build_public_leaderboard(
         continual_mean_active=continual_mean_active,
         efficiency_bonuses=efficiency_bonuses,
         efficiency_factors=efficiency_factors,
+        efficiency_curve_versions=board_curve_versions,
         efficiency_fold_active=efficiency_fold_active,
     )
     board_efficiency_tiebreaks = efficiency_tiebreak_composites(
         finalized_rows,
         official=board_official_composites,
         efficiency_factors=efficiency_factors,
+        efficiency_curve_versions=board_curve_versions,
     )
     finalized_rows = dedupe_owner_rows(
         finalized_rows,
@@ -3128,6 +3149,13 @@ async def build_public_leaderboard(
                 rollout_score_count=rolling_count,
                 efficiency_bonus=legacy_bonus,
                 efficiency_factor=bounded_factor,
+                efficiency_curve_version=(
+                    efficiency_view.snapshot.curve_version
+                    if bounded_factor is not None
+                    and efficiency_view is not None
+                    and efficiency_view.snapshot is not None
+                    else None
+                ),
                 efficiency_fold_applied=(
                     row.agent_id in efficiency_bonuses
                     or row.agent_id in efficiency_factors
@@ -3280,6 +3308,7 @@ async def build_public_leaderboard(
                 anchor_version=active_version,
                 efficiency_bonuses=efficiency_bonuses,
                 efficiency_factors=efficiency_factors,
+                efficiency_curve_versions=board_curve_versions,
                 tie_weighting_active=tie_weighting_active,
                 ceiling_band_clamp=ceiling_band_clamp_active,
             )

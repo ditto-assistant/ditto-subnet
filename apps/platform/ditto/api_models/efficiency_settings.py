@@ -53,11 +53,20 @@ class EfficiencyBonusSettings(BaseModel):
     factor_alpha: Annotated[float, Field(gt=0, le=1)] = 0.25
     """Exponent for the bounded v3 cost ratio, in ``(0, 1]``."""
 
-    minimum_factor: Annotated[float, Field(ge=0.85, le=1)] = 0.85
-    """Lower clamp for the bounded v3 efficiency factor, in ``[0.85, 1]``."""
+    minimum_factor: Annotated[float, Field(gt=0, le=1)] = 0.85
+    """Lower clamp for a factor-curve envelope, in ``(0, 1]``.
 
-    maximum_factor: Annotated[float, Field(ge=1, le=1.10)] = 1.10
-    """Upper clamp for the bounded v3 efficiency factor, in ``[1, 1.10]``."""
+    Curve v3 still applies this bound. Curve v4 records it for audit but
+    does not clamp, so an operator can widen the stored envelope without a
+    further code change.
+    """
+
+    maximum_factor: Annotated[float, Field(ge=1, le=100)] = 1.10
+    """Upper clamp for a factor-curve envelope, in ``[1, 100]``.
+
+    Curve v3 still applies this bound. Curve v4 is unclamped; a large
+    stored maximum is how an operator documents that the envelope is off.
+    """
 
     cohort_size: Annotated[int, Field(ge=2)] = 25
     """Top-N cap on cohort membership (``>= min_cohort``)."""
@@ -100,8 +109,8 @@ class EfficiencyBonusSettingsWrite(EfficiencyBonusSettings):
     deep_cap: Annotated[float, Field(gt=0, le=0.10)]
     deep_frontier_ratio: Annotated[float, Field(gt=0, lt=1)]
     factor_alpha: Annotated[float, Field(gt=0, le=1)]
-    minimum_factor: Annotated[float, Field(ge=0.85, le=1)]
-    maximum_factor: Annotated[float, Field(ge=1, le=1.10)]
+    minimum_factor: Annotated[float, Field(gt=0, le=1)]
+    maximum_factor: Annotated[float, Field(ge=1, le=100)]
     cohort_size: Annotated[int, Field(ge=2)]
     min_cohort: Annotated[int, Field(ge=2)]
     epoch_hours: Annotated[int, Field(ge=1)]

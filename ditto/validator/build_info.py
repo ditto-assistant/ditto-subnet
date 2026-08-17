@@ -84,7 +84,15 @@ from ditto import __version__
 # marker until every recently-live weight setter reports v24+, because a v23
 # validator ignores the additive field and would keep defending the crown with
 # the uncapped band -- a different champion, and so a different weight vector.
-HEARTBEAT_PROTOCOL_VERSION = 24
+#
+# v25 consumes unclamped curve-v4 ``efficiency_factor`` values and the
+# asymptotic remaining-headroom transform. The heartbeat request and signing
+# bytes are unchanged; this is a capability-negotiation bump. Platform must
+# not expose a v4 factor until every recently-live weight setter reports
+# v25+, because a v21-v24 validator still parses the field as ``[0.85, 1.10]``
+# and applies the linear v3 projection -- a different rank order, and so a
+# different weight vector. Frozen v3 snapshots stay on the v21 gate.
+HEARTBEAT_PROTOCOL_VERSION = 25
 
 
 @dataclass(frozen=True)

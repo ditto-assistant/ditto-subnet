@@ -605,19 +605,37 @@ def _entry_confirmation_history(entry: LedgerEntry) -> dict[int, float] | None:
     return {seed: _median(values) for seed, values in grouped.items()}
 
 
+def _efficiency_curve_version(entry: LedgerEntry) -> int:
+    """Frozen curve that produced this entry's factor, defaulting to v3."""
+    version = getattr(entry, "efficiency_curve_version", None)
+    if isinstance(version, int) and version >= 3:
+        return version
+    return 3
+
+
 def _bounded_efficiency_factor(entry: LedgerEntry) -> float | None:
-    """Return a surfaced curve-v3 factor, neutralizing malformed values."""
+    """Return a surfaced factor, neutralizing malformed values.
+
+    Frozen v3 rows stay inside ``[0.85, 1.10]``. Curve v4 accepts any finite
+    positive factor. Bench v10+ inherits the same quality-primary tie-break
+    as v9; requiring an exact version here would neutralize every live
+    factor and fall through to ``first_seen``.
+    """
     factor = getattr(entry, "efficiency_factor", None)
     if factor is None:
         return None
-    if _entry_version(entry) != 9 or getattr(entry, "v9_confirmation", None) is None:
+    if _entry_version(entry) < 9:
+        return 1.0
+    if _entry_version(entry) == 9 and getattr(entry, "v9_confirmation", None) is None:
         return 1.0
     if (
         isinstance(factor, bool)
         or not isinstance(factor, (int, float))
         or not math.isfinite(factor)
-        or not 0.85 <= factor <= 1.1
+        or factor <= 0.0
     ):
+        return 1.0
+    if _efficiency_curve_version(entry) < 4 and not 0.85 <= factor <= 1.1:
         return 1.0
     return float(factor)
 
@@ -658,6 +676,8 @@ def _efficiency_adjusted_composite(entry: LedgerEntry, quality: float) -> float:
     if factor is not None:
         if factor <= 1.0:
             return quality * factor
+        if _efficiency_curve_version(entry) >= 4:
+            return quality + (1.0 - quality) * (1.0 - 1.0 / factor)
         return quality + (factor - 1.0) * (1.0 - quality)
     return quality * _efficiency_multiplier(entry)
 
@@ -681,7 +701,11 @@ def _efficiency_stderr_scale(entry: LedgerEntry) -> float:
     """
     factor = _bounded_efficiency_factor(entry)
     if factor is not None:
-        return factor if factor <= 1.0 else 2.0 - factor
+        if factor <= 1.0:
+            return factor
+        if _efficiency_curve_version(entry) >= 4:
+            return 1.0 / factor
+        return 2.0 - factor
     return _efficiency_multiplier(entry)
 
 

@@ -24,6 +24,7 @@ from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.efficiency import (
     CURVE_VERSION_BOUNDED_FACTOR,
+    CURVE_VERSION_UNBOUNDED_FACTOR,
     CohortMember,
     CohortReference,
     _finalized_ranked_rows,
@@ -950,7 +951,7 @@ class TestBoundedFactorMaterialization:
             session, bench_version=9, run_size="full", epoch_index=epoch
         )
         assert snapshot is not None
-        assert snapshot.curve_version == CURVE_VERSION_BOUNDED_FACTOR
+        assert snapshot.curve_version == CURVE_VERSION_UNBOUNDED_FACTOR
         assert snapshot.active is True
         assert snapshot.quality_floor == 0.5
         assert snapshot.memory_floor == 0.4
@@ -1067,7 +1068,7 @@ class TestBoundedFactorMaterialization:
             max_epoch_index=10**12,
         )
         assert snapshot is not None
-        assert snapshot.curve_version == CURVE_VERSION_BOUNDED_FACTOR
+        assert snapshot.curve_version == CURVE_VERSION_UNBOUNDED_FACTOR
         # Dynamic cohort statistic: N=5 -> nearest-rank P25 is the second cost.
         assert snapshot.reference_p25_tokens == 10_000.0
         assert snapshot.factor_alpha == 0.25
@@ -1089,8 +1090,10 @@ class TestBoundedFactorMaterialization:
         assert assignments[agents[0].agent_id].factor == pytest.approx(1.0)
         assert assignments[agents[1].agent_id].token_total == 10_000.0
         assert assignments[agents[1].agent_id].factor == 1.0
-        # (10,000 / 20,000) ** 0.25 = 0.8409, below the frozen 0.85 floor.
-        assert assignments[agents[2].agent_id].factor == 0.85
+        # (10,000 / 20,000) ** 0.25 = 0.8409; v4 does not floor this at 0.85.
+        assert assignments[agents[2].agent_id].factor == pytest.approx(
+            (10_000.0 / 20_000.0) ** 0.25
+        )
 
         # A config edit inside the same epoch cannot rewrite the snapshot or
         # assignments. The P25 and knobs are facts frozen at epoch creation.

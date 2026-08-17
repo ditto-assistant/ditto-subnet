@@ -65,20 +65,23 @@ constants. For each new `(bench_version=9, run_size=full, epoch)` snapshot:
    the immutable epoch snapshot. A later arrival is measured against that
    frozen reference and cannot move already-published scores.
 
-At the reference, the factor is exactly `1.0`. A lower audited cost earns a
-factor above one, capped at `1.10`; a higher audited cost receives a factor
-below one, floored at `0.85`. Defaults use `alpha=0.25`, which softens raw cost
-ratios. Positive efficiency scales only the quality score's remaining
-headroom. For example, quality `0.95` and factor `1.10` produce `0.955`, not
-`1.0`. An imperfect quality score therefore cannot become perfect through
-efficiency, while a factor below one remains a bounded multiplicative penalty.
-This never changes the signed quality evidence or the frozen factor.
+At the reference, the factor is exactly `1.0`. Frozen curve-v3 snapshots still
+cap a cheaper run at `1.10` and floor an expensive run at `0.85`. New snapshots
+use curve v4: the same `alpha=0.25` power, unclamped, so two exact-quality
+agents cannot retie at the 1.10 cap and fall through to `first_seen`. Curve-v3
+upside is linear in remaining headroom (`quality + (factor - 1) × (1 -
+quality)`). That form reaches 1.0 at `factor = 2` and then has a negative
+stderr slope, which is why v3 had to stay inside 1.10. Curve-v4 upside is
+asymptotic (`quality + (1 - quality) × (1 - 1 / factor)`), so the composite
+stays below 1.0 for every finite factor and imperfect quality never saturates.
+Downside still multiplies quality. This never changes the signed quality
+evidence or a frozen factor.
 
 Because the neutral point is P25, roughly the efficient quartile is
-neutral-or-better and the rest of a non-degenerate cohort is on the bounded
-penalty side. Thus equal Tool/Memory/Gates quality is ordered by audited
-efficiency before the canonical `first_seen` tiebreak. `first_seen` remains
-decisive only when the resulting effective scores are genuinely equal.
+neutral-or-better and the rest of a non-degenerate cohort is on the penalty
+side. Thus equal Tool/Memory/Gates quality is ordered by audited efficiency
+before the canonical `first_seen` tiebreak. `first_seen` remains decisive only
+when the resulting effective scores are genuinely equal.
 
 The public `average_run_cost_microusd` field remains informational. It reads a
 short-retention grant ledger and includes embedding/provider-price effects and
@@ -87,9 +90,12 @@ for consensus scoring. Under the locked v9 model/profile, signed chat tokens
 are the durable comparable cost proxy. This PR must not claim that the factor
 uses literal USD.
 
-Historical v1/v2 snapshots—including any already-frozen v9 snapshot—replay
-their stored curve exactly. Curve v3 is selected only when creating a new v9
-snapshot; v7/v8 behavior and the deterministic scorer contract do not change.
+Historical v1/v2/v3 snapshots replay their stored curve exactly. Curve v4 is
+selected only when creating a new Bench-v9+ snapshot; v7/v8 behavior and the
+deterministic scorer contract do not change. Platform withholds a v4 factor
+until every recently-live weight-setting validator reports heartbeat protocol
+25, because a v21–v24 validator still parses `efficiency_factor` as
+`[0.85, 1.10]` and applies the linear v3 projection.
 
 Code map:
 
@@ -317,7 +323,7 @@ and byte-identical whenever this wire shape changes.
 | `DITTO_EFFICIENCY_BONUS_DEEP_FRONTIER_RATIO` | `0.5` | deep frontier as a fraction of P25; boot-validated to `(0, 1)`; the bonus saturates flat below `ratio x P25` |
 | `DITTO_EFFICIENCY_BONUS_FACTOR_ALPHA` | `0.25` | curve-v3 exponent in `(0, 1]`; softens the reference/agent cost ratio |
 | `DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR` | `0.85` | curve-v3 penalty floor in `[0.85, 1]` |
-| `DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR` | `1.10` | curve-v3 reward cap in `[1, 1.10]` |
+| `DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR` | `1.10` | stored envelope cap in `[1, 100]`; applied by curve v3 only |
 | `DITTO_EFFICIENCY_BONUS_COHORT_SIZE` | `25` | top-N cohort membership cap |
 | `DITTO_EFFICIENCY_BONUS_MIN_COHORT` | `8` | `N_min` activation gate (after dedupe) |
 | `DITTO_EFFICIENCY_BONUS_EPOCH_HOURS` | `24` | efficiency epoch length / namespace (fixed UTC windows; immutable once policy history or snapshots exist) |

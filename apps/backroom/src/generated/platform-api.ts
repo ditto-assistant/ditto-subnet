@@ -10359,8 +10359,13 @@ export interface components {
              */
             efficiency_bonus?: number | null;
             /**
+             * Efficiency Curve Version
+             * @description Frozen efficiency curve that produced efficiency_factor. 3 = bounded linear-headroom transform; 4 = unclamped asymptotic-headroom transform. Absent on pre-v4 ledgers; older validators ignore the field.
+             */
+            efficiency_curve_version?: number | null;
+            /**
              * Efficiency Factor
-             * @description Frozen platform-side bounded efficiency factor for this entry. Protocol 21 keeps authoritative Bench-v9 quality as the primary order and uses curve-v3's adjusted projection only to break exact-quality ties. Populated only while the coordinated efficiency fold is active and every recently-live weight-setting validator reports heartbeat protocol 21+, regardless of scorer capability; when present it supersedes efficiency_bonus.
+             * @description Frozen platform-side efficiency factor for this entry. Protocol 21 keeps authoritative Bench-v9 quality as the primary order and uses the adjusted projection only to break exact-quality ties. Curve v3 factors stay in [0.85, 1.10]; curve v4 is unclamped so cost can still order a saturated quality tier. Populated only while the coordinated efficiency fold is active and the fleet speaks the matching protocol (21+ for v3, 25+ for v4); when present it supersedes efficiency_bonus.
              */
             efficiency_factor?: number | null;
             /**
@@ -12623,7 +12628,7 @@ export interface components {
             cost_evidence_count?: number | null;
             /**
              * Curve Version
-             * @description Frozen bonus-curve policy: 1 = single-tier (cap at/below P25), 2 = two-tier (cap ramps to deep_bonus_cap between P25 and the deep frontier, then saturates flat), 3 = bounded power factor around the P25 reference (Bench v9 only).
+             * @description Frozen bonus-curve policy: 1 = single-tier (cap at/below P25), 2 = two-tier (cap ramps to deep_bonus_cap between P25 and the deep frontier, then saturates flat), 3 = bounded power factor around the P25 reference, 4 = unclamped power factor with asymptotic remaining-headroom upside (Bench v9+).
              * @default 1
              */
             curve_version: number;
@@ -12654,12 +12659,12 @@ export interface components {
             lineage_deduped_count?: number | null;
             /**
              * Maximum Factor
-             * @description Frozen upper multiplier clamp for curve v3.
+             * @description Frozen upper multiplier clamp. Applied by curve v3.
              */
             maximum_factor?: number | null;
             /**
              * Minimum Factor
-             * @description Frozen lower multiplier clamp for curve v3.
+             * @description Frozen lower multiplier clamp. Applied by curve v3.
              */
             minimum_factor?: number | null;
             /**
@@ -13151,13 +13156,18 @@ export interface components {
              */
             efficiency_bonus_preview?: number | null;
             /**
+             * Efficiency Curve Version
+             * @description Frozen efficiency curve that produced efficiency_factor. 3 = bounded linear-headroom transform; 4 = unclamped asymptotic-headroom transform.
+             */
+            efficiency_curve_version?: number | null;
+            /**
              * Efficiency Factor
-             * @description Frozen curve-v3 bounded efficiency factor in [0.85, 1.10]. Applied after authoritative Bench-v9 full quality: downside multiplies quality and upside scales remaining headroom. When present it supersedes the legacy efficiency_bonus.
+             * @description Frozen efficiency factor. Curve v3 stays in [0.85, 1.10]; curve v4 is the unclamped power so cost can still order an exact-quality tier. Downside multiplies quality; upside scales remaining headroom (linear on v3, asymptotic on v4). When present it supersedes the legacy efficiency_bonus.
              */
             efficiency_factor?: number | null;
             /**
              * Efficiency Factor Preview
-             * @description What curve v3's bounded factor would be if enabled. Computed at read time, persisted nowhere, never folded into ranking, and never sent to validators.
+             * @description What the current factor curve would assign if enabled. Computed at read time, persisted nowhere, never folded into ranking, and never sent to validators.
              */
             efficiency_factor_preview?: number | null;
             /**

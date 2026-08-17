@@ -425,10 +425,10 @@ class TestEfficiencyBonusConfig:
             ({"enabled": True, "deep_frontier_ratio": -0.5}, "in \\(0, 1\\)"),
             ({"enabled": True, "factor_alpha": 0.0}, "FACTOR_ALPHA"),
             ({"enabled": True, "factor_alpha": 1.1}, "FACTOR_ALPHA"),
-            ({"enabled": True, "minimum_factor": 0.84}, "MINIMUM_FACTOR"),
+            ({"enabled": True, "minimum_factor": 0.0}, "MINIMUM_FACTOR"),
             ({"enabled": True, "minimum_factor": 1.01}, "MINIMUM_FACTOR"),
             ({"enabled": True, "maximum_factor": 0.99}, "MAXIMUM_FACTOR"),
-            ({"enabled": True, "maximum_factor": 1.11}, "MAXIMUM_FACTOR"),
+            ({"enabled": True, "maximum_factor": 101.0}, "MAXIMUM_FACTOR"),
             ({"enabled": True, "min_cohort": 1}, "at least 2"),
             (
                 {"enabled": True, "cohort_size": 5, "min_cohort": 8},

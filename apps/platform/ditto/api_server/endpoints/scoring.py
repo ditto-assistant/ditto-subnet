@@ -109,6 +109,7 @@ _TIE_WEIGHTING_PROTOCOL = 20
 # factor.  Older validators ignore the additive field, so exposing it to a
 # mixed active-benchmark fleet would produce different KOTH/weight folds.
 _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 21
+_UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 25
 # The first validator protocol that caps the KOTH indifference band at a share
 # of the score a challenger can still gain. Older validators ignore the additive
 # marker and would keep defending the crown with the uncapped decayed band, so a
@@ -175,6 +176,7 @@ class _LedgerContext:
     continual_fleet_ready: bool
     tie_weighting_fleet_ready: bool
     factor_fleet_ready: bool
+    unbounded_factor_fleet_ready: bool = False
     dethrone_band_clamp_fleet_ready: bool = False
 
 
@@ -346,6 +348,12 @@ async def _resolve_ledger_context(
         bench_version=bench_version,
         now=now,
     )
+    unbounded_factor_fleet_ready = await live_validator_fleet_supports_protocol(
+        session,
+        minimum_protocol=_UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+        bench_version=bench_version,
+        now=now,
+    )
     dethrone_band_clamp_fleet_ready = await live_validator_fleet_supports_protocol(
         session,
         minimum_protocol=_DETHRONE_BAND_CLAMP_PROTOCOL,
@@ -358,6 +366,7 @@ async def _resolve_ledger_context(
         continual_fleet_ready=continual_fleet_ready,
         tie_weighting_fleet_ready=tie_weighting_fleet_ready,
         factor_fleet_ready=factor_fleet_ready,
+        unbounded_factor_fleet_ready=unbounded_factor_fleet_ready,
         dethrone_band_clamp_fleet_ready=dethrone_band_clamp_fleet_ready,
     )
 
@@ -406,9 +415,18 @@ async def _snapshot_can_be_shared(
     seen_at = requester.seen_at
     if seen_at.tzinfo is None:
         seen_at = seen_at.replace(tzinfo=UTC)
+    required_protocol = (
+        _UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL
+        if any(
+            getattr(entry, "efficiency_curve_version", None) is not None
+            and entry.efficiency_curve_version >= 4
+            for entry in snapshot.entries
+        )
+        else _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
+    )
     return (
         seen_at >= now - VALIDATOR_STALE_WINDOW
-        and requester.protocol_version >= _BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
+        and requester.protocol_version >= required_protocol
     )
 
 
@@ -673,13 +691,14 @@ async def scores(
         # read at compute time from the hot-swappable policy (latest revision,
         # short TTL) so a backroom flip lands here with no restart; the
         # `fold requires enabled` invariant is enforced by the resolver.
-        efficiency_bonuses, efficiency_factors = await resolve_efficiency_adjustments(
-            session,
-            rows=rows,
-            efficiency_config=efficiency_config,
-            now=auth_now,
-            requesting_validator_hotkey=x_validator_hotkey,
-            factor_fleet_ready=ledger_context.factor_fleet_ready,
+        efficiency_bonuses, efficiency_factors, efficiency_curve_versions = (
+            await resolve_efficiency_adjustments(
+                session,
+                rows=rows,
+                efficiency_config=efficiency_config,
+                now=auth_now,
+                requesting_validator_hotkey=x_validator_hotkey,
+            )
         )
         ranking_scores = official_composites(
             rows,
@@ -688,12 +707,14 @@ async def scores(
             continual_mean_active=continual_mean_active,
             efficiency_bonuses=efficiency_bonuses,
             efficiency_factors=efficiency_factors,
+            efficiency_curve_versions=efficiency_curve_versions,
             efficiency_fold_active=bool(efficiency_bonuses or efficiency_factors),
         )
         efficiency_tiebreaks = efficiency_tiebreak_composites(
             rows,
             official=ranking_scores,
             efficiency_factors=efficiency_factors,
+            efficiency_curve_versions=efficiency_curve_versions,
         )
         rows = dedupe_owner_rows(
             rows,
@@ -764,6 +785,7 @@ async def scores(
             ),
             efficiency_bonus=(efficiency_bonuses.get(r.agent_id)),
             efficiency_factor=efficiency_factors.get(r.agent_id),
+            efficiency_curve_version=efficiency_curve_versions.get(r.agent_id),
             effective_composite=(
                 efficiency_tiebreaks[r.agent_id]
                 if r.agent_id in efficiency_factors

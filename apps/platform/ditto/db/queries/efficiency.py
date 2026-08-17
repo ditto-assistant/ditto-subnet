@@ -166,7 +166,7 @@ async def get_bonus_rows(
             # readable exactly as before.
             or_(
                 EfficiencyBonus.factor.is_(None),
-                EfficiencyCohortSnapshot.curve_version == 3,
+                EfficiencyCohortSnapshot.curve_version.in_((3, 4)),
             ),
         )
     )

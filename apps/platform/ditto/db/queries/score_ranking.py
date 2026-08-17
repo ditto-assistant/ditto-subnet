@@ -89,6 +89,12 @@ CONTINUAL_MEAN_PROTOCOL = 14
 # factors hidden from older validators: protocol 19/20 would otherwise consume
 # the same field under the superseded arithmetic and disagree on weights.
 BOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 21
+# Protocol 25 consumes unclamped curve-v4 factors and the asymptotic
+# remaining-headroom transform. A v21-v24 validator still parses
+# ``efficiency_factor`` as ``[0.85, 1.10]`` and applies the linear v3
+# projection, so exposing a v4 factor to a mixed fleet would disagree on
+# both parse and rank.
+UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL = 25
 VALIDATOR_STALE_WINDOW = timedelta(minutes=15)
 
 
@@ -257,6 +263,7 @@ def official_composites(
     continual_mean_active: bool,
     efficiency_bonuses: Mapping[UUID, float] | None = None,
     efficiency_factors: Mapping[UUID, float] | None = None,
+    efficiency_curve_versions: Mapping[UUID, int] | None = None,
     efficiency_fold_active: bool = False,
 ) -> RankingScores:
     """The score every ranking surface cuts on, per agent.
@@ -277,6 +284,7 @@ def official_composites(
     rows = list(rows)
     bonuses = efficiency_bonuses or {}
     factors = efficiency_factors or {}
+    curve_versions = efficiency_curve_versions or {}
     active_factors = factors if efficiency_fold_active else {}
 
     def authoritative_quality(row: FinalizedRow) -> float:
@@ -328,6 +336,7 @@ def official_composites(
                 if efficiency_fold_active and row.bench_version >= 9
                 else None
             ),
+            efficiency_curve_version=curve_versions.get(row.agent_id),
         )
         # Curve-v3 is quality-primary. Its adjusted projection is a secondary
         # key only, so a cheaper lower-quality row cannot cross a quality tier.
@@ -341,6 +350,7 @@ def official_composites(
         rows,
         official=resolved,
         efficiency_factors=active_factors,
+        efficiency_curve_versions=curve_versions,
     )
     return RankingScores(resolved, secondary_scores=secondary)
 
@@ -350,23 +360,30 @@ def efficiency_tiebreak_composites(
     *,
     official: Mapping[UUID, float],
     efficiency_factors: Mapping[UUID, float] | None = None,
+    efficiency_curve_versions: Mapping[UUID, int] | None = None,
 ) -> dict[UUID, float]:
-    """Return the curve-v3 secondary key without changing quality order.
+    """Return the factor-curve secondary key without changing quality order.
 
     Entries without a Bench-v9 factor are omitted; the comparator defaults
     their secondary to the primary official score. Callers pass this map to
     :func:`rank_submissions` only as a secondary key, after exact equality on
-    authoritative quality.
+    authoritative quality. Frozen v3 rows keep the linear headroom transform;
+    v4 rows use the asymptotic form.
     """
     from ditto.api_server.koth import bounded_efficiency_adjusted_quality
 
     factors = efficiency_factors or {}
+    curve_versions = efficiency_curve_versions or {}
     out: dict[UUID, float] = {}
     for row in rows:
         quality = official.get(row.agent_id, row.composite)
         factor = factors.get(row.agent_id)
         if row.bench_version >= 9 and factor is not None:
-            out[row.agent_id] = bounded_efficiency_adjusted_quality(quality, factor)
+            out[row.agent_id] = bounded_efficiency_adjusted_quality(
+                quality,
+                factor,
+                curve_version=curve_versions.get(row.agent_id, 3),
+            )
     return out
 
 
@@ -440,7 +457,7 @@ async def resolve_official_composites(
     if not rows:
         return RankingScores({})
 
-    bonuses, factors = await resolve_efficiency_adjustments(
+    bonuses, factors, curve_versions = await resolve_efficiency_adjustments(
         session,
         rows=rows,
         efficiency_config=efficiency_config,
@@ -456,6 +473,7 @@ async def resolve_official_composites(
             continual_mean_active=False,
             efficiency_bonuses=bonuses,
             efficiency_factors=factors,
+            efficiency_curve_versions=curve_versions,
             efficiency_fold_active=adjustment_active,
         )
     agent_ids = [row.agent_id for row in rows]
@@ -484,6 +502,7 @@ async def resolve_official_composites(
         continual_mean_active=True,
         efficiency_bonuses=bonuses,
         efficiency_factors=factors,
+        efficiency_curve_versions=curve_versions,
         efficiency_fold_active=adjustment_active,
     )
 
@@ -496,7 +515,7 @@ async def resolve_efficiency_adjustments(
     now: datetime | None = None,
     requesting_validator_hotkey: str | None = None,
     factor_fleet_ready: bool | None = None,
-) -> tuple[dict[UUID, float], dict[UUID, float]]:
+) -> tuple[dict[UUID, float], dict[UUID, float], dict[UUID, int]]:
     """Resolve the fleet-safe adjustments shared by every official fold.
 
     The scoring ledger, queue floors, and Platform KOTH scheduler must not each
@@ -507,11 +526,19 @@ async def resolve_efficiency_adjustments(
     App callers pass the resolver's effective config so an env-seeded rollout
     is honored. Bare DB callers read the latest persisted revision; with no
     revision the historical default-off policy remains in force.
+
+    The third map is the frozen curve version that produced each factor, so
+    ranking can keep v3 linear headroom and v4 asymptotic headroom distinct.
     """
+    from sqlalchemy import select
+
     from ditto.api_server.config import EfficiencyBonusConfig
-    from ditto.api_server.efficiency import epoch_index_for
+    from ditto.api_server.efficiency import (
+        CURVE_VERSION_UNBOUNDED_FACTOR,
+        epoch_index_for,
+    )
     from ditto.api_server.efficiency_settings import effective_config, settings_from_row
-    from ditto.db.models import ValidatorHeartbeat
+    from ditto.db.models import EfficiencyCohortSnapshot, ValidatorHeartbeat
     from ditto.db.queries.efficiency import get_bonus_rows
     from ditto.db.queries.efficiency_settings import (
         latest_efficiency_settings_revision,
@@ -519,13 +546,13 @@ async def resolve_efficiency_adjustments(
     from ditto.db.queries.heartbeats import live_validator_fleet_supports_protocol
 
     if not rows:
-        return {}, {}
+        return {}, {}, {}
     if efficiency_config is None:
         revision = await latest_efficiency_settings_revision(session)
         settings = settings_from_row(revision)
         efficiency_config = effective_config(EfficiencyBonusConfig(), settings)
     if not efficiency_config.enabled or not efficiency_config.fold_enabled:
-        return {}, {}
+        return {}, {}, {}
 
     resolved_now = now or datetime.now(UTC)
     assignments = await get_bonus_rows(
@@ -540,13 +567,51 @@ async def resolve_efficiency_adjustments(
         for agent_id, assignment in assignments.items()
         if assignment.factor is None and agent_id in by_id
     }
-    factor_candidates = {
-        agent_id: float(assignment.factor)
+    factor_assignments = {
+        agent_id: assignment
         for agent_id, assignment in assignments.items()
         if assignment.factor is not None
         and agent_id in by_id
         and by_id[agent_id].bench_version >= 9
     }
+    factor_candidates = {
+        agent_id: float(assignment.factor)
+        for agent_id, assignment in factor_assignments.items()
+        if assignment.factor is not None
+    }
+    curve_versions: dict[UUID, int] = {}
+    snapshot_ids = {
+        assignment.snapshot_id
+        for assignment in factor_assignments.values()
+        if getattr(assignment, "snapshot_id", None) is not None
+    }
+    if snapshot_ids:
+        snapshot_rows = await session.execute(
+            select(
+                EfficiencyCohortSnapshot.snapshot_id,
+                EfficiencyCohortSnapshot.curve_version,
+            ).where(EfficiencyCohortSnapshot.snapshot_id.in_(snapshot_ids))
+        )
+        snapshot_curves: dict[UUID, int] = {}
+        for snapshot_id, curve_version in snapshot_rows.all():
+            snapshot_curves[snapshot_id] = curve_version
+        curve_versions = {
+            agent_id: snapshot_curves[assignment.snapshot_id]
+            for agent_id, assignment in factor_assignments.items()
+            if getattr(assignment, "snapshot_id", None) in snapshot_curves
+        }
+    elif factor_assignments:
+        # Unit tests and placeholder rows may omit snapshot identity. Treat
+        # those as frozen v3 so existing protocol-21 callers stay byte-identical.
+        curve_versions = dict.fromkeys(factor_assignments, 3)
+    required_protocol = (
+        UNBOUNDED_EFFICIENCY_FACTOR_PROTOCOL
+        if any(
+            version >= CURVE_VERSION_UNBOUNDED_FACTOR
+            for version in curve_versions.values()
+        )
+        else BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
+    )
     factors: dict[UUID, float] = {}
     requester_protocol_ready = True
     if factor_candidates and requesting_validator_hotkey is not None:
@@ -564,13 +629,11 @@ async def resolve_efficiency_adjustments(
                 "a fresh validator heartbeat is required before serving "
                 "bounded efficiency factors"
             )
-        requester_protocol_ready = (
-            requester.protocol_version >= BOUNDED_EFFICIENCY_FACTOR_PROTOCOL
-        )
+        requester_protocol_ready = requester.protocol_version >= required_protocol
     if factor_candidates and requester_protocol_ready and factor_fleet_ready is None:
         factor_fleet_ready = await live_validator_fleet_supports_protocol(
             session,
-            minimum_protocol=BOUNDED_EFFICIENCY_FACTOR_PROTOCOL,
+            minimum_protocol=required_protocol,
             bench_version=max(
                 by_id[agent_id].bench_version for agent_id in factor_candidates
             ),
@@ -579,7 +642,9 @@ async def resolve_efficiency_adjustments(
         )
     if factor_candidates and requester_protocol_ready and factor_fleet_ready:
         factors = factor_candidates
-    return bonuses, factors
+    else:
+        curve_versions = {}
+    return bonuses, factors, curve_versions
 
 
 async def resolve_ranking_scores(

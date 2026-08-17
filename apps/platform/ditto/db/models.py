@@ -1241,16 +1241,16 @@ class EfficiencyCohortSnapshot(Base):
     only), in (0, 1). Null under the single-tier policy."""
 
     factor_alpha: Mapped[float | None] = mapped_column(Float, nullable=True)
-    """Exponent applied to the reference/agent token-cost ratio by the
-    bounded-factor curve (curve v3). Null for legacy v1/v2 snapshots."""
+    """Exponent applied to the reference/agent token-cost ratio by a
+    factor curve (v3/v4). Null for legacy v1/v2 snapshots."""
 
     minimum_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
-    """Lower multiplier bound frozen for a bounded-factor snapshot. Null for
-    legacy v1/v2 snapshots."""
+    """Lower multiplier bound frozen for a factor-curve snapshot. Curve v3
+    applies it; v4 records it. Null for legacy v1/v2 snapshots."""
 
     maximum_factor: Mapped[float | None] = mapped_column(Float, nullable=True)
-    """Upper multiplier bound frozen for a bounded-factor snapshot. Null for
-    legacy v1/v2 snapshots."""
+    """Upper multiplier bound frozen for a factor-curve snapshot. Curve v3
+    applies it; v4 records it. Null for legacy v1/v2 snapshots."""
 
     quality_floor: Mapped[float] = mapped_column(Float, nullable=False)
     """Composite floor (``Q_min``) applied at freeze time."""
@@ -1328,7 +1328,13 @@ class EfficiencyCohortSnapshot(Base):
             "AND deep_bonus_cap IS NULL AND deep_frontier_ratio IS NULL "
             "AND factor_alpha > 0 AND factor_alpha <= 1 "
             "AND minimum_factor >= 0.85 AND minimum_factor <= 1 "
-            "AND maximum_factor >= 1 AND maximum_factor <= 1.1)",
+            "AND maximum_factor >= 1 AND maximum_factor <= 1.1) OR "
+            "(curve_version = 4 AND bench_version >= 9 "
+            "AND deep_bonus_cap IS NULL AND deep_frontier_ratio IS NULL "
+            "AND factor_alpha > 0 AND factor_alpha <= 1 "
+            "AND minimum_factor > 0 AND minimum_factor <= 1 "
+            "AND maximum_factor >= 1 AND maximum_factor <= 100 "
+            "AND minimum_factor <= maximum_factor)",
             name="efficiency_cohort_snapshots_factor_parameters_check",
         ),
         CheckConstraint("n_min >= 2", name="efficiency_cohort_snapshots_n_min_check"),
@@ -1408,8 +1414,8 @@ class EfficiencyBonus(Base):
     negative. Bounded-factor rows keep this compatibility column at zero."""
 
     factor: Mapped[float | None] = mapped_column(Float, nullable=True)
-    """The frozen bounded efficiency multiplier in ``[0.85, 1.10]`` for
-    curve-v3 assignments. Null for legacy v1/v2 bonus rows."""
+    """The frozen efficiency multiplier. Curve v3 stays in ``[0.85, 1.10]``;
+    curve v4 is any finite positive value. Null for legacy v1/v2 bonus rows."""
 
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
@@ -1452,7 +1458,7 @@ class EfficiencyBonus(Base):
             "factor IS NULL OR (bench_version >= 9 "
             "AND bonus = 0 AND token_total IS NOT NULL AND token_total > 0 "
             "AND token_total < 'Infinity'::double precision "
-            "AND factor >= 0.85 AND factor <= 1.1)",
+            "AND factor > 0 AND factor < 'Infinity'::double precision)",
             name="efficiency_bonuses_factor_range_check",
         ),
         CheckConstraint(

@@ -881,13 +881,25 @@ class PublicLeaderboardEntry(BaseModel):
         float | None,
         Field(
             default=None,
-            ge=0.85,
-            le=1.1,
+            gt=0.0,
             description=(
-                "Frozen curve-v3 bounded efficiency factor in [0.85, 1.10]. "
-                "Applied after authoritative Bench-v9 full quality: downside "
-                "multiplies quality and upside scales remaining headroom. When "
-                "present it supersedes the legacy efficiency_bonus."
+                "Frozen efficiency factor. Curve v3 stays in [0.85, 1.10]; "
+                "curve v4 is the unclamped power so cost can still order an "
+                "exact-quality tier. Downside multiplies quality; upside "
+                "scales remaining headroom (linear on v3, asymptotic on v4). "
+                "When present it supersedes the legacy efficiency_bonus."
+            ),
+        ),
+    ] = None
+    efficiency_curve_version: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=3,
+            description=(
+                "Frozen efficiency curve that produced efficiency_factor. "
+                "3 = bounded linear-headroom transform; 4 = unclamped "
+                "asymptotic-headroom transform."
             ),
         ),
     ] = None
@@ -952,12 +964,11 @@ class PublicLeaderboardEntry(BaseModel):
         float | None,
         Field(
             default=None,
-            ge=0.85,
-            le=1.1,
+            gt=0.0,
             description=(
-                "What curve v3's bounded factor would be if enabled. Computed "
-                "at read time, persisted nowhere, never folded into ranking, "
-                "and never sent to validators."
+                "What the current factor curve would assign if enabled. "
+                "Computed at read time, persisted nowhere, never folded into "
+                "ranking, and never sent to validators."
             ),
         ),
     ] = None
@@ -1555,7 +1566,8 @@ class PublicEfficiencyStatus(BaseModel):
                 "Frozen bonus-curve policy: 1 = single-tier (cap at/below "
                 "P25), 2 = two-tier (cap ramps to deep_bonus_cap between P25 "
                 "and the deep frontier, then saturates flat), 3 = bounded "
-                "power factor around the P25 reference (Bench v9 only)."
+                "power factor around the P25 reference, 4 = unclamped power "
+                "factor with asymptotic remaining-headroom upside (Bench v9+)."
             ),
         ),
     ] = 1
@@ -1598,9 +1610,9 @@ class PublicEfficiencyStatus(BaseModel):
         float | None,
         Field(
             default=None,
-            ge=0.85,
+            gt=0.0,
             le=1.0,
-            description="Frozen lower multiplier clamp for curve v3.",
+            description="Frozen lower multiplier clamp. Applied by curve v3.",
         ),
     ] = None
     maximum_factor: Annotated[
@@ -1608,8 +1620,8 @@ class PublicEfficiencyStatus(BaseModel):
         Field(
             default=None,
             ge=1.0,
-            le=1.1,
-            description="Frozen upper multiplier clamp for curve v3.",
+            le=100.0,
+            description="Frozen upper multiplier clamp. Applied by curve v3.",
         ),
     ] = None
     reference_p25_tokens: Annotated[
@@ -1695,8 +1707,10 @@ class PublicEfficiencySnapshotResponse(BaseModel):
         float | None, Field(default=None, gt=0.0, lt=1.0)
     ] = None
     factor_alpha: Annotated[float | None, Field(default=None, gt=0.0, le=1.0)] = None
-    minimum_factor: Annotated[float | None, Field(default=None, ge=0.85, le=1.0)] = None
-    maximum_factor: Annotated[float | None, Field(default=None, ge=1.0, le=1.1)] = None
+    minimum_factor: Annotated[float | None, Field(default=None, gt=0.0, le=1.0)] = None
+    maximum_factor: Annotated[float | None, Field(default=None, ge=1.0, le=100.0)] = (
+        None
+    )
     quality_floor: Annotated[float, Field(ge=0.0, le=1.0)]
     memory_floor: Annotated[float, Field(ge=0.0, le=1.0)]
     reference_p25_tokens: Annotated[float | None, Field(default=None, ge=0.0)] = None

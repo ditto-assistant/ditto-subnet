@@ -564,7 +564,7 @@ class TestEfficiencyAdjustedFloors:
             fleet_gate,
         )
 
-        bonuses, factors = await resolve_efficiency_adjustments(
+        bonuses, factors, curve_versions = await resolve_efficiency_adjustments(
             session,  # type: ignore[arg-type]
             rows=[row],
             efficiency_config=config,
@@ -574,6 +574,7 @@ class TestEfficiencyAdjustedFloors:
 
         assert bonuses == {}
         assert factors == {}
+        assert curve_versions == {}
         fleet_gate.assert_not_awaited()
 
     async def test_fifth_and_tenth_floors_use_factor_adjusted_order(

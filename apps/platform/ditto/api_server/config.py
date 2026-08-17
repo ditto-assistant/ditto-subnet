@@ -184,12 +184,13 @@ class EfficiencyBonusConfig:
     one soften cost differences before the minimum/maximum clamps apply."""
 
     minimum_factor: float = 0.85
-    """Lower clamp for the bounded v3 efficiency factor
-    (``DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR``), in ``[0.85, 1]``."""
+    """Lower clamp for a factor-curve envelope
+    (``DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR``), in ``(0, 1]``."""
 
     maximum_factor: float = 1.10
-    """Upper clamp for the bounded v3 efficiency factor
-    (``DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR``), in ``[1, 1.10]``."""
+    """Upper clamp for a factor-curve envelope
+    (``DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR``), in ``[1, 100]``.
+    Curve v4 does not apply this bound."""
 
     cohort_size: int = 25
     """Top-N quality-qualified agents forming a cohort
@@ -987,13 +988,13 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError(
             "DITTO_EFFICIENCY_BONUS_FACTOR_ALPHA must be in (0, 1]"
         )
-    if not 0.85 <= efficiency.minimum_factor <= 1.0:
+    if not 0.0 < efficiency.minimum_factor <= 1.0:
         raise ApiServerConfigError(
-            "DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR must be in [0.85, 1]"
+            "DITTO_EFFICIENCY_BONUS_MINIMUM_FACTOR must be in (0, 1]"
         )
-    if not 1.0 <= efficiency.maximum_factor <= 1.10:
+    if not 1.0 <= efficiency.maximum_factor <= 100.0:
         raise ApiServerConfigError(
-            "DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR must be in [1, 1.10]"
+            "DITTO_EFFICIENCY_BONUS_MAXIMUM_FACTOR must be in [1, 100]"
         )
     if efficiency.minimum_factor > efficiency.maximum_factor:
         raise ApiServerConfigError(

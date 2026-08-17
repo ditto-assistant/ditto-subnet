@@ -24,6 +24,7 @@ from ditto.api_server.config import EfficiencyBonusConfig
 from ditto.api_server.efficiency import (
     BONUS_RUN_SIZE,
     CURVE_VERSION_BOUNDED_FACTOR,
+    CURVE_VERSION_UNBOUNDED_FACTOR,
     MIN_BONUS_BENCH_VERSION,
     CohortReference,
     EfficiencyCandidate,
@@ -43,6 +44,7 @@ from ditto.api_server.efficiency import (
     nearest_rank_percentile,
     qualifies,
     read_efficiency_board,
+    unbounded_efficiency_factor,
 )
 from ditto_screening_protocol.bench_v9 import V9BaseEvidence, V9ScoreGateEvidence
 
@@ -925,6 +927,45 @@ class TestBoundedEfficiencyFactor:
 
         legacy_version = replace(reference, bench_version=8)
         assert factor_for_submission(0.8, 0.8, 80_000.0, legacy_version) is None
+
+
+class TestUnboundedEfficiencyFactor:
+    _KW = {"reference_cost": 100.0, "alpha": 0.25}
+
+    def test_reference_is_neutral(self) -> None:
+        assert unbounded_efficiency_factor(100.0, **self._KW) == 1.0
+
+    def test_does_not_clamp_at_the_old_envelope(self) -> None:
+        assert unbounded_efficiency_factor(1.0, **self._KW) > 1.10
+        assert unbounded_efficiency_factor(1_000_000.0, **self._KW) < 0.85
+
+    def test_cheaper_is_strictly_higher(self) -> None:
+        cheap = unbounded_efficiency_factor(50.0, **self._KW)
+        dear = unbounded_efficiency_factor(80.0, **self._KW)
+        assert cheap > dear > 1.0
+
+    def test_factor_for_submission_uses_v4_without_min_max(self) -> None:
+        reference = CohortReference(
+            bench_version=10,
+            run_size=BONUS_RUN_SIZE,
+            epoch_index=1000,
+            active=True,
+            cohort_limit=25,
+            n_min=8,
+            bonus_cap=0.05,
+            quality_floor=0.5,
+            memory_floor=0.4,
+            reference_p25_tokens=120_000.0,
+            reference_median_tokens=200_000.0,
+            members=(),
+            curve_version=CURVE_VERSION_UNBOUNDED_FACTOR,
+            factor_alpha=0.25,
+        )
+        assert factor_for_submission(0.8, 0.8, 120_000.0, reference) == 1.0
+        cheaper = factor_for_submission(0.8, 0.8, 80_000.0, reference)
+        saturable = factor_for_submission(0.8, 0.8, 1.0, reference)
+        assert cheaper is not None and cheaper > 1.0
+        assert saturable is not None and saturable > 1.10
 
 
 class TestEffectiveComposite:

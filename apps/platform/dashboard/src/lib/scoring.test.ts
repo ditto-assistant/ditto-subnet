@@ -736,6 +736,35 @@ describe("composite equations (row 38: quality and token adjustments stay separa
     expect(byKey["Efficiency tie-break"]).toBe("0.955 · active only after exact quality equality");
   });
 
+  it("shows the curve-v4 asymptotic remaining-headroom transform", () => {
+    const input = {
+      tool_mean: 0.997012,
+      memory_mean: 0.997012,
+      bench_version: 10,
+      composite: 0.997012,
+      official_composite: 0.997012,
+      effective_composite: 0.998008,
+      pre_efficiency_composite: 0.997012,
+      efficiency_factor: 1.5,
+      efficiency_curve_version: 4,
+      efficiency_fold_applied: true,
+      composite_breakdown: { ...breakdown, final_composite: 0.997012 },
+    };
+
+    expect(curveV3ScoreAdjustment(input)).toEqual({
+      quality: 0.997012,
+      factor: 1.5,
+      adjusted: 0.997012 + (1 - 0.997012) * (1 - 1 / 1.5),
+      mode: "headroom",
+    });
+    const byKey = Object.fromEntries(
+      (compositeCalculationRows(input) ?? []).map((row) => [row.k, row.v]),
+    );
+    expect(byKey["Bench v9+ efficiency transform"]).toContain("1 − 1 / 1.500");
+    expect(byKey["Current quality score"]).toBe("0.997 · primary ranking key");
+    expect(byKey["Efficiency tie-break"]).toContain("active only after exact quality equality");
+  });
+
   it("labels the tie-break by direction and magnitude, never by its raw value", () => {
     // A floored agent's tie-break value (0.847 beside quality 0.997) is the
     // exact pairing that reads as a contradiction on the board.

@@ -1450,17 +1450,30 @@ class LedgerEntry(BaseModel):
         float | None,
         Field(
             default=None,
-            ge=0.85,
-            le=1.1,
+            gt=0.0,
             description=(
-                "Frozen platform-side bounded efficiency factor for this "
-                "entry. Protocol 21 keeps authoritative Bench-v9 quality as "
-                "the primary order and uses curve-v3's adjusted projection only "
-                "to break exact-quality ties. "
-                "Populated only while the coordinated efficiency fold is active "
-                "and every recently-live weight-setting validator reports "
-                "heartbeat protocol 21+, regardless of scorer capability; "
-                "when present it supersedes efficiency_bonus."
+                "Frozen platform-side efficiency factor for this entry. "
+                "Protocol 21 keeps authoritative Bench-v9 quality as the "
+                "primary order and uses the adjusted projection only to break "
+                "exact-quality ties. Curve v3 factors stay in [0.85, 1.10]; "
+                "curve v4 is unclamped so cost can still order a saturated "
+                "quality tier. Populated only while the coordinated efficiency "
+                "fold is active and the fleet speaks the matching protocol "
+                "(21+ for v3, 25+ for v4); when present it supersedes "
+                "efficiency_bonus."
+            ),
+        ),
+    ] = None
+    efficiency_curve_version: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=3,
+            description=(
+                "Frozen efficiency curve that produced efficiency_factor. "
+                "3 = bounded linear-headroom transform; 4 = unclamped "
+                "asymptotic-headroom transform. Absent on pre-v4 ledgers; "
+                "older validators ignore the field."
             ),
         ),
     ] = None

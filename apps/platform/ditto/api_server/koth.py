@@ -16,6 +16,11 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from ditto.api_server.efficiency import (
+    CURVE_VERSION_BOUNDED_FACTOR,
+    CURVE_VERSION_UNBOUNDED_FACTOR,
+    is_factor_curve,
+)
 from ditto.score_order import rank_submissions
 
 # Frozen consensus constants from ditto-subnet/ditto/validator/config.py.
@@ -65,6 +70,7 @@ class KothEntry:
     confirmation_seeds: tuple[int, ...] | None = None
     efficiency_bonus: float | None = None
     efficiency_factor: float | None = None
+    efficiency_curve_version: int | None = None
 
 
 @dataclass(frozen=True)
@@ -572,8 +578,21 @@ def _validated_composites(
     return values
 
 
+def _efficiency_curve_version(entry: KothEntry) -> int:
+    """Frozen curve that produced this entry's factor, defaulting to v3."""
+    version = entry.efficiency_curve_version
+    if isinstance(version, int) and is_factor_curve(version):
+        return version
+    return CURVE_VERSION_BOUNDED_FACTOR
+
+
 def _bounded_efficiency_factor(entry: KothEntry) -> float | None:
-    """Return a surfaced curve-v3 factor, neutralizing malformed values."""
+    """Return a surfaced factor, neutralizing malformed values.
+
+    Frozen v3 rows stay inside ``[0.85, 1.10]``. Curve v4 accepts any finite
+    positive factor so an unclamped cost ratio is not silently rewritten to
+    the old 1.10 cap (and then to ``first_seen``).
+    """
     factor = entry.efficiency_factor
     if factor is None:
         return None
@@ -583,7 +602,12 @@ def _bounded_efficiency_factor(entry: KothEntry) -> float | None:
         isinstance(factor, bool)
         or not isinstance(factor, (int, float))
         or not math.isfinite(factor)
-        or not 0.85 <= factor <= 1.1
+        or factor <= 0.0
+    ):
+        return 1.0
+    if (
+        _efficiency_curve_version(entry) < CURVE_VERSION_UNBOUNDED_FACTOR
+        and not 0.85 <= factor <= 1.1
     ):
         return 1.0
     return float(factor)
@@ -611,15 +635,25 @@ def _efficiency_multiplier(entry: KothEntry) -> float:
     return 1.0 + float(bonus)
 
 
-def bounded_efficiency_adjusted_quality(quality: float, factor: float) -> float:
-    """Apply curve-v3 downside or remaining-headroom upside to quality.
+def bounded_efficiency_adjusted_quality(
+    quality: float,
+    factor: float,
+    *,
+    curve_version: int = CURVE_VERSION_BOUNDED_FACTOR,
+) -> float:
+    """Apply a factor-curve downside or remaining-headroom upside to quality.
 
     The caller supplies already-validated Bench-v9 quality and factor values.
-    Keeping this pure transform public inside the Platform package lets public
-    audit projections use the exact same arithmetic as ranking and KOTH.
+    Curve v3 uses the linear headroom form, which reaches 1.0 at ``factor = 2``
+    and then has a negative stderr slope. Curve v4 uses the asymptotic form
+    ``quality + (1 - quality) * (1 - 1 / factor)`` so the composite stays
+    strictly below 1.0 for every finite factor and imperfect quality.
+    Frozen v3 snapshots must keep the original arithmetic.
     """
     if factor <= 1.0:
         return quality * factor
+    if curve_version >= CURVE_VERSION_UNBOUNDED_FACTOR:
+        return quality + (1.0 - quality) * (1.0 - 1.0 / factor)
     return quality + (factor - 1.0) * (1.0 - quality)
 
 
@@ -635,7 +669,11 @@ def _efficiency_stderr_scale(entry: KothEntry) -> float:
     """
     factor = _bounded_efficiency_factor(entry)
     if factor is not None:
-        return factor if factor <= 1.0 else 2.0 - factor
+        if factor <= 1.0:
+            return factor
+        if _efficiency_curve_version(entry) >= CURVE_VERSION_UNBOUNDED_FACTOR:
+            return 1.0 / factor
+        return 2.0 - factor
     return _efficiency_multiplier(entry)
 
 
@@ -650,7 +688,9 @@ def _efficiency_adjusted_composite(entry: KothEntry, quality: float) -> float:
     """
     factor = _bounded_efficiency_factor(entry)
     if factor is not None:
-        return bounded_efficiency_adjusted_quality(quality, factor)
+        return bounded_efficiency_adjusted_quality(
+            quality, factor, curve_version=_efficiency_curve_version(entry)
+        )
     return quality * _efficiency_multiplier(entry)
 
 
