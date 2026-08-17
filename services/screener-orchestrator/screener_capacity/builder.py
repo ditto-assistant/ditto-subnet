@@ -508,13 +508,44 @@ class Settings:
     interval_seconds: int
     lock_file: Path
     submission_builder_image: str
-    gcp_bootstrap_service_account: str
+    # The four fields below are optional ON PURPOSE. They are supplied by the
+    # Ansible-owned systemd unit, while the code is shipped by the release
+    # deploy -- two paths that are not synchronized. When they were required
+    # argparse arguments, a release carrying new code reached a host whose unit
+    # predated it, the builder exited 2/INVALIDARGUMENT on every restart, the
+    # deploy healthcheck failed, and the whole controller rolled back. Absent
+    # configuration must disable the lane that needs it, never the daemon.
+    gcp_bootstrap_service_account: str | None
     gcp_bootstrap_delegate_service_account: str | None
-    source_review_secret_resource: str
+    source_review_secret_resource: str | None
     source_review_timeout_seconds: int
-    candidate_registry_service_account: str
-    candidate_registry_writer_service_account: str
+    candidate_registry_service_account: str | None
+    candidate_registry_writer_service_account: str | None
     runtime_timeout_seconds: int
+
+    @property
+    def runtime_smoke_enabled(self) -> bool:
+        """Runtime smoke needs both candidate-registry identities to pull/push."""
+        return bool(
+            self.candidate_registry_service_account
+            and self.candidate_registry_writer_service_account
+        )
+
+    @property
+    def source_review_enabled(self) -> bool:
+        """Source review needs the bootstrap identity and its secret resource."""
+        return bool(
+            self.gcp_bootstrap_service_account and self.source_review_secret_resource
+        )
+
+    def disabled_lanes(self) -> list[str]:
+        """Lane names skipped for missing configuration, for a startup log."""
+        missing = []
+        if not self.runtime_smoke_enabled:
+            missing.append("runtime-smoke")
+        if not self.source_review_enabled:
+            missing.append("source-review")
+        return missing
 
 
 def _download_runtime_archive(artifact: dict[str, Any], destination: Path) -> None:
@@ -613,6 +644,12 @@ def run_one_runtime_smoke(
     client: TargonClient,
     control: RuntimeSmokeControl,
 ) -> bool:
+    # Fail closed rather than claiming work this builder cannot finish: an
+    # unconfigured lane must not take a lease it would only abandon.
+    writer = settings.candidate_registry_writer_service_account
+    reader = settings.candidate_registry_service_account
+    if not writer or not reader:
+        raise ControllerError("runtime smoke lane is not configured")
     artifact = control.claim()
     if artifact is None:
         return False
@@ -637,13 +674,11 @@ def run_one_runtime_smoke(
         os.unlink(raw_path)
         archive = Path(raw_path)
         _download_runtime_archive(artifact, archive)
-        promotion_token = _mint_access_token(
-            settings.candidate_registry_writer_service_account
-        )
+        promotion_token = _mint_access_token(writer)
         image_reference = _promote_runtime_archive(
             archive=archive, destination=destination, access_token=promotion_token
         )
-        pull_token = _mint_access_token(settings.candidate_registry_service_account)
+        pull_token = _mint_access_token(reader)
         created = client.create_rental(
             name=f"ditto-runtime-{build_id.replace('-', '')[:14]}"[:32],
             image=image_reference,
@@ -719,6 +754,11 @@ def run_one_source_review(
     client: TargonClient,
     control: SourceReviewControl,
 ) -> bool:
+    # Fail closed rather than claiming work this builder cannot finish.
+    bootstrap_target = settings.gcp_bootstrap_service_account
+    review_secret = settings.source_review_secret_resource
+    if not bootstrap_target or not review_secret:
+        raise ControllerError("source review lane is not configured")
     review = control.claim()
     if review is None:
         return False
@@ -750,7 +790,7 @@ def run_one_source_review(
         if len(job_token) < 43:
             raise ValueError("source-review token is invalid")
         bootstrap_token = GCPBootstrapTokenMinter(
-            target=settings.gcp_bootstrap_service_account,
+            target=bootstrap_target,
             delegate=settings.gcp_bootstrap_delegate_service_account,
         ).mint()
         env = {
@@ -762,9 +802,7 @@ def run_one_source_review(
             "DITTO_SOURCE_REVIEW_JOB": "1",
             "SCREENER_NODE_CREDENTIAL_FILE": "/tmp/ditto-source-review/node.json",
             "SCREENER_GCP_BOOTSTRAP_ACCESS_TOKEN": bootstrap_token,
-            "SCREENER_SOURCE_REVIEW_SECRET_RESOURCE": (
-                settings.source_review_secret_resource
-            ),
+            "SCREENER_SOURCE_REVIEW_SECRET_RESOURCE": review_secret,
             "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS": str(
                 settings.source_review_timeout_seconds
             ),
@@ -1049,12 +1087,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--targon-resource", default="cpu-small")
     parser.add_argument("--kaniko-image", required=True)
     parser.add_argument("--registry-service-account", required=True)
-    parser.add_argument("--gcp-bootstrap-service-account", required=True)
+    # Deliberately NOT required: see Settings. A missing value disables exactly
+    # the lane that needs it so a code-only deploy degrades instead of
+    # crash-looping the daemon and rolling the controller back.
+    parser.add_argument("--gcp-bootstrap-service-account")
     parser.add_argument("--gcp-bootstrap-delegate-service-account")
-    parser.add_argument("--source-review-secret-resource", required=True)
+    parser.add_argument("--source-review-secret-resource")
     parser.add_argument("--source-review-timeout-seconds", type=int, default=180)
-    parser.add_argument("--candidate-registry-service-account", required=True)
-    parser.add_argument("--candidate-registry-writer-service-account", required=True)
+    parser.add_argument("--candidate-registry-service-account")
+    parser.add_argument("--candidate-registry-writer-service-account")
     parser.add_argument("--runtime-timeout-seconds", type=int, default=180)
     parser.add_argument("--provision-timeout-seconds", type=int, default=600)
     parser.add_argument("--build-timeout-seconds", type=int, default=1800)
@@ -1117,6 +1158,18 @@ def main() -> int:
         epoch=epoch,
     )
     client = TargonClient(api_key=targon_key, org_slug=args.targon_org_slug)
+    # Announce a degraded builder loudly and exactly once. Silently skipping a
+    # lane would look identical to an idle queue, which is how "source review
+    # has never produced a row" could go unnoticed.
+    disabled = settings.disabled_lanes()
+    if disabled:
+        print(
+            "trusted image builder starting with disabled lanes: "
+            + ", ".join(disabled)
+            + " (missing configuration; the systemd unit is Ansible-owned and "
+            "may predate this release)",
+            file=sys.stderr,
+        )
     settings.lock_file.parent.mkdir(parents=True, exist_ok=True)
     with settings.lock_file.open("w") as lock:
         try:
@@ -1130,9 +1183,9 @@ def main() -> int:
                 # successfully verified image. Runtime smoke then qualifies
                 # that exact archive before source review uses spare capacity.
                 handled = run_one_submission(settings, client, submission_control)
-                if not handled:
+                if not handled and settings.runtime_smoke_enabled:
                     handled = run_one_runtime_smoke(settings, client, runtime_control)
-                if not handled:
+                if not handled and settings.source_review_enabled:
                     handled = run_one_source_review(
                         settings, client, source_review_control
                     )

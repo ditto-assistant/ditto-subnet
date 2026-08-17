@@ -1,7 +1,10 @@
 import base64
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from screener_capacity.builder import (
     Settings,
@@ -9,6 +12,7 @@ from screener_capacity.builder import (
     _delete_rental,
     _docker_config,
     _kaniko_script,
+    build_parser,
     run_one,
     run_one_runtime_smoke,
     run_one_source_review,
@@ -541,3 +545,82 @@ def test_trusted_kaniko_delete_failure_is_suspended_and_audited(
     assert targon.deleted == ["wrk-build-1"]
     assert targon.suspended == ["wrk-build-1"]
     assert control.cleanup == [(_trusted_build()["build_id"], "wrk-build-1")]
+
+
+class TestOptionalLaneConfiguration:
+    """A code-only deploy must degrade, never crash-loop the daemon.
+
+    The four lane flags live on the Ansible-owned systemd unit while the code
+    ships via the release deploy. When they were argparse ``required=True``, a
+    release reaching a host with an older unit exited 2/INVALIDARGUMENT on every
+    restart, failed the deploy healthcheck, and rolled the whole controller
+    back to the previous revision.
+    """
+
+    def test_parser_accepts_a_unit_that_predates_the_lane_flags(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "--platform-url",
+                "https://platform.example",
+                "--platform-token-file",
+                "/etc/token",
+                "--targon-api-key-file",
+                "/etc/targon",
+                "--targon-org-slug",
+                "ditto",
+                "--kaniko-image",
+                "kaniko@example",
+                "--registry-service-account",
+                "builder@example.test",
+            ]
+        )
+        assert args.candidate_registry_service_account is None
+        assert args.candidate_registry_writer_service_account is None
+        assert args.gcp_bootstrap_service_account is None
+        assert args.source_review_secret_resource is None
+
+    def test_missing_candidate_registry_disables_only_runtime_smoke(self) -> None:
+        settings = replace(
+            _settings(),
+            candidate_registry_service_account=None,
+            candidate_registry_writer_service_account=None,
+        )
+        assert settings.runtime_smoke_enabled is False
+        assert settings.source_review_enabled is True
+        assert settings.disabled_lanes() == ["runtime-smoke"]
+
+    def test_missing_bootstrap_identity_disables_only_source_review(self) -> None:
+        settings = replace(
+            _settings(),
+            gcp_bootstrap_service_account=None,
+            source_review_secret_resource=None,
+        )
+        assert settings.source_review_enabled is False
+        assert settings.runtime_smoke_enabled is True
+        assert settings.disabled_lanes() == ["source-review"]
+
+    def test_fully_configured_unit_enables_every_lane(self) -> None:
+        settings = _settings()
+        assert settings.runtime_smoke_enabled is True
+        assert settings.source_review_enabled is True
+        assert settings.disabled_lanes() == []
+
+    def test_unconfigured_runtime_smoke_refuses_to_claim(self) -> None:
+        settings = replace(_settings(), candidate_registry_writer_service_account=None)
+
+        class ExplodingControl:
+            def claim(self) -> dict[str, Any]:
+                raise AssertionError("must not claim work it cannot finish")
+
+        with pytest.raises(ControllerError, match="runtime smoke lane"):
+            run_one_runtime_smoke(settings, object(), ExplodingControl())  # type: ignore[arg-type]
+
+    def test_unconfigured_source_review_refuses_to_claim(self) -> None:
+        settings = replace(_settings(), source_review_secret_resource=None)
+
+        class ExplodingControl:
+            def claim(self) -> dict[str, Any]:
+                raise AssertionError("must not claim work it cannot finish")
+
+        with pytest.raises(ControllerError, match="source review lane"):
+            run_one_source_review(settings, object(), ExplodingControl())  # type: ignore[arg-type]
