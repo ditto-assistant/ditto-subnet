@@ -7,7 +7,7 @@ and social links without asking the miner to re-sign every click. Upload,
 handle reservation, and other one-shot signed actions stay CLI-signed.
 
 Revision ID: b7e2c9a14d80
-Revises: 3f5c81a7d940
+Revises: a8c4f1d0e92b
 Create Date: 2026-08-17
 """
 
@@ -19,7 +19,7 @@ from sqlalchemy.dialects import postgresql
 from alembic import op
 
 revision: str = "b7e2c9a14d80"
-down_revision: str | Sequence[str] | None = "3f5c81a7d940"
+down_revision: str | Sequence[str] | None = "a8c4f1d0e92b"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
