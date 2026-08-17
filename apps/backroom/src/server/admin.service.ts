@@ -9,8 +9,10 @@ import {
   copyReviewCurrentComparisonSchema,
   copyReviewListSchema,
   type CopyReviewGeneration,
+  athPrecedentListSchema,
   getAthReviewInputSchema,
   openAthReviewInputSchema,
+  searchAthPrecedentsInputSchema,
   openAthReviewResponseSchema,
   resolveCopyReviewInputSchema,
   resolveCopyReviewResponseSchema,
@@ -1225,6 +1227,26 @@ export async function fetchAthReview(rawInput: unknown) {
     `/api/v1/admin/copy-reviews/${encodeURIComponent(input.agentId)}/audit`,
   )
   return athReviewAuditSchema.parse(payload)
+}
+
+export async function fetchAthPrecedents(
+  rawInput: unknown,
+  limit: number,
+  offset: number,
+) {
+  const input = searchAthPrecedentsInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    status: 'resolved',
+    limit: String(limit),
+    offset: String(offset),
+  })
+  if (input.query) query.set('q', input.query)
+  if (input.resolution) query.set('resolution', input.resolution)
+  if (input.reviewKind) query.set('review_kind', input.reviewKind)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/copy-reviews/precedents?${query.toString()}`,
+  )
+  return athPrecedentListSchema.parse(payload)
 }
 
 export async function openAthReview(rawInput: unknown, actor: string) {

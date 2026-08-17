@@ -4759,6 +4759,48 @@ export const getAthReviewInputSchema = z.object({
   agentId: z.string().uuid(),
 })
 
+/**
+ * Search decided ATH reviews as case law.
+ *
+ * The queue (`get_screening_review_queue`) is unresolved work. This surface
+ * is the reporter: resolved `clear` / `reject` reasons an operator can cite.
+ * `status` and `generation` stay pinned — a "precedent" that can return an
+ * open hold is a queue row in disguise, and scoring-cohort filters hide
+ * holdings that survived a bench rollout.
+ */
+export const searchAthPrecedentsInputSchema = z.object({
+  query: z.string().trim().min(2).max(200).optional(),
+  resolution: copyReviewResolutionSchema.optional(),
+  reviewKind: athReviewKindSchema.optional(),
+})
+
+export const athPrecedentItemSchema = z.object({
+  review_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  agent_version: z.number().int().nullable().default(null),
+  miner_hotkey: z.string(),
+  status: z.enum(['pending', 'resolved']),
+  resolution: copyReviewResolutionSchema.nullable(),
+  resolution_reason: z.string().nullable(),
+  original_reason: z.string().nullable(),
+  review_kind: athReviewKindSchema,
+  opened_at: z.string(),
+  resolved_at: z.string().nullable(),
+  resolved_by: z.string().nullable(),
+})
+
+export const athPrecedentListSchema = z.object({
+  items: z.array(athPrecedentItemSchema),
+  count: z.number().int().nonnegative(),
+  limit: z.number().int().positive(),
+  offset: z.number().int().nonnegative(),
+  q: z.string().nullable().default(null),
+  resolution: z.enum(['clear', 'reject', 'all']),
+  review_kind: athReviewKindSchema.nullable().default(null),
+  status: z.enum(['resolved', 'all']),
+})
+
 export const athReviewAuditSchema = z.object({
   review: copyReviewItemSchema,
   agent_status: z.string(),
@@ -5035,6 +5077,7 @@ export type CopyReviewCurrentComparison = z.infer<typeof copyReviewCurrentCompar
 export type CopyReviewResolution = z.infer<typeof copyReviewResolutionSchema>
 export type AthReviewAudit = z.infer<typeof athReviewAuditSchema>
 export type OpenAthReviewInput = z.infer<typeof openAthReviewInputSchema>
+export type AthPrecedentList = z.infer<typeof athPrecedentListSchema>
 export type CopyReviewList = z.infer<typeof copyReviewConsoleListSchema>
 export type SourceDiffFile = z.infer<typeof sourceDiffFileSchema>
 export type SourceDiffManifest = z.infer<typeof sourceDiffManifestSchema>

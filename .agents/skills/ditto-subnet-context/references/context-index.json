@@ -88,14 +88,26 @@
     {
       "id": "backroom",
       "title": "Public subnet Backroom Worker",
-      "keywords": ["backroom", "cloudflare worker", "oauth", "admin", "operator", "review", "wrangler", "dittobench.ai"],
+      "keywords": ["backroom", "cloudflare worker", "oauth", "admin", "operator", "review", "wrangler", "dittobench.ai", "ath", "precedent"],
       "summary": "The public SN118 operator console runs as a Cloudflare Worker and calls Platform administrative APIs.",
       "owns": ["apps/backroom"],
-      "read": ["apps/backroom/AGENTS.md", "apps/backroom/docs/oauth.md", "apps/backroom/docs/platform-contract-sync.md"],
+      "read": ["apps/backroom/AGENTS.md", "apps/backroom/docs/oauth.md", "apps/backroom/docs/platform-contract-sync.md", ".agents/skills/backroom-board-review/SKILL.md"],
       "search": ["rg -n 'DITTO_ADMIN_API_TOKEN|GOOGLE_CLIENT|SESSION_SECRET' apps/backroom", "rg -n 'admin.service|platform-api' apps/backroom/src"],
       "validate": ["cd apps/backroom && pnpm check", "cd apps/backroom && pnpm test", "cd apps/backroom && pnpm build"],
       "invariants": ["Keep OAuth, administrator lists, sessions, and Platform tokens out of browser code.", "Generate the Platform contract locally; never dispatch to a sibling repository."],
-      "related": ["platform-api", "release-delivery", "infra-cloud"]
+      "related": ["platform-api", "board-review", "release-delivery", "infra-cloud"]
+    },
+    {
+      "id": "board-review",
+      "title": "High-score ATH board review and precedents",
+      "keywords": ["board review", "ath review", "precedent", "high score", "emulation", "family compiler", "zero-token", "reject-until-match", "open_ath_review", "search_ath_precedents"],
+      "summary": "Review scored high-rank agents against the two-limb plus production-engine bar, citing local and live ATH precedents before clearing or rejecting.",
+      "owns": [".agents/skills/backroom-board-review"],
+      "read": [".agents/skills/backroom-board-review/SKILL.md", ".agents/skills/backroom-board-review/references/review-bar.md", "apps/platform/docs/ath-review-queue.md"],
+      "search": ["rg -n 'search_ath_precedents|copy-reviews/precedents' apps/backroom apps/platform", "python3 .agents/skills/backroom-board-review/scripts/search-precedents.py --list"],
+      "validate": ["python3 .agents/skills/backroom-board-review/scripts/search-precedents.py family-compiler", "cd apps/platform && uv run pytest ditto/tests/api_server/endpoints/test_admin_copy_review.py -q -k precedents", "cd apps/backroom && pnpm exec vitest run src/server/mcp.server.test.ts src/server/admin.service.test.ts"],
+      "invariants": ["Cite a live or local precedent before resolving an ATH hold.", "Ban is per agent UUID; same SHA or hotkey is a different row.", "Do not open ATH on evaluating agents."],
+      "related": ["backroom", "platform-api"]
     },
     {
       "id": "screener-capacity",

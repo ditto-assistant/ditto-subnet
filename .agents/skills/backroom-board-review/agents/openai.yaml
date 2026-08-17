@@ -1,0 +1,15 @@
+interface:
+  display_name: "Backroom Board Review"
+  short_description: "Review high-score SN118 agents against ATH precedents"
+  default_prompt: "Use $backroom-board-review to inspect high-scoring SN118 agents, search precedents, and apply audited ATH clear or reject decisions."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "sn118-backroom"
+      description: "OAuth-protected SN118 Backroom operator MCP"
+      transport: "streamable_http"
+      url: "https://backroom.dittobench.ai/mcp"
+
+policy:
+  allow_implicit_invocation: true

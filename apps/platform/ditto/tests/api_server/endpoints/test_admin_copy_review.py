@@ -1424,3 +1424,177 @@ async def test_source_diff_digest_mismatch_is_502(
         f"/api/v1/admin/copy-reviews/{candidate_id}/source-diff", headers=_HEADERS
     )
     assert response.status_code == 502
+
+
+async def _seed_precedent(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    name: str,
+    version: int,
+    hotkey: str,
+    original_reason: str,
+    resolution: str,
+    resolution_reason: str,
+    review_kind: str | None = "benchmark_overfit",
+    resolved_at: datetime = _T0,
+    pending: bool = False,
+) -> UUID:
+    agent_id, review_id = uuid4(), uuid4()
+    provenance: dict[str, object] = {"backfilled": False}
+    if review_kind is not None:
+        provenance["review_kind"] = review_kind
+    async with maker() as session, session.begin():
+        session.add_all(
+            [
+                Agent(
+                    agent_id=agent_id,
+                    miner_hotkey=hotkey,
+                    name=name,
+                    version=version,
+                    sha256=agent_id.hex * 2,
+                    status=(
+                        AgentStatus.ATH_PENDING_REVIEW
+                        if pending
+                        else AgentStatus.BANNED
+                        if resolution == "reject"
+                        else AgentStatus.SCORED
+                    ),
+                    created_at=_T0,
+                ),
+                AthReview(
+                    review_id=review_id,
+                    agent_id=agent_id,
+                    status="pending" if pending else "resolved",
+                    opened_at=_T0 - timedelta(hours=1),
+                    resolved_at=None if pending else resolved_at,
+                    resolved_by=None if pending else "operator@omniaura.ai",
+                    resolution=None if pending else resolution,
+                    resolution_reason=None if pending else resolution_reason,
+                    original_reason=original_reason,
+                    original_policy_version=9,
+                    original_evidence={"sha256": agent_id.hex * 2},
+                    algorithm_provenance=provenance,
+                ),
+            ]
+        )
+    return agent_id
+
+
+async def test_precedents_search_resolved_holdings_and_ignore_like_wildcards(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    rejected = await _seed_precedent(
+        maker,
+        name="Omar-miner",
+        version=20,
+        hotkey="5OmarHotkey",
+        original_reason="phrase table plus character-match corrections",
+        resolution="reject",
+        resolution_reason="v19 phrase table and v10_open_program_evidence remain",
+        resolved_at=_T0 + timedelta(hours=2),
+    )
+    cleared = await _seed_precedent(
+        maker,
+        name="Hogwarts_v1",
+        version=17,
+        hotkey="5HogwartsHotkey",
+        original_reason="same-owner near-duplicate of rejected v16",
+        resolution="clear",
+        resolution_reason="v16 zero-token glossary bypass removed; model authors",
+        review_kind="copy",
+        resolved_at=_T0 + timedelta(hours=1),
+    )
+    await _seed_precedent(
+        maker,
+        name="pending-hold",
+        version=1,
+        hotkey="5Pending",
+        original_reason="phrase table still under review",
+        resolution="reject",
+        resolution_reason="placeholder",
+        pending=True,
+    )
+    _install(app, maker)
+
+    by_reason = await client.get(
+        "/api/v1/admin/copy-reviews/precedents",
+        params={"q": "phrase table"},
+        headers=_HEADERS,
+    )
+    assert by_reason.status_code == 200
+    body = by_reason.json()
+    assert body["count"] == 1
+    assert body["items"][0]["agent_id"] == str(rejected)
+    assert body["items"][0]["resolution"] == "reject"
+    assert body["items"][0]["review_kind"] == "benchmark_overfit"
+    assert "v10_open_program_evidence" in body["items"][0]["resolution_reason"]
+
+    by_name = await client.get(
+        "/api/v1/admin/copy-reviews/precedents",
+        params={"q": "Hogwarts"},
+        headers=_HEADERS,
+    )
+    assert [item["agent_id"] for item in by_name.json()["items"]] == [str(cleared)]
+
+    by_version = await client.get(
+        "/api/v1/admin/copy-reviews/precedents",
+        params={"q": "20"},
+        headers=_HEADERS,
+    )
+    assert [item["agent_id"] for item in by_version.json()["items"]] == [str(rejected)]
+
+    clears = await client.get(
+        "/api/v1/admin/copy-reviews/precedents",
+        params={"resolution": "clear"},
+        headers=_HEADERS,
+    )
+    assert [item["agent_id"] for item in clears.json()["items"]] == [str(cleared)]
+    assert clears.json()["resolution"] == "clear"
+
+    # A literal %% must not become a wildcard that matches every holding.
+    wildcard = await client.get(
+        "/api/v1/admin/copy-reviews/precedents",
+        params={"q": "%%"},
+        headers=_HEADERS,
+    )
+    assert wildcard.status_code == 200
+    assert wildcard.json()["count"] == 0
+
+    newest = await client.get(
+        "/api/v1/admin/copy-reviews/precedents",
+        headers=_HEADERS,
+    )
+    assert [item["agent_id"] for item in newest.json()["items"]] == [
+        str(rejected),
+        str(cleared),
+    ]
+    assert newest.json()["status"] == "resolved"
+    assert newest.json()["count"] == 2
+
+    including_pending = await client.get(
+        "/api/v1/admin/copy-reviews/precedents",
+        params={"status": "all", "q": "phrase table"},
+        headers=_HEADERS,
+    )
+    assert including_pending.json()["count"] == 2
+
+
+async def test_precedents_path_is_not_captured_as_an_agent_id(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    _install(app, maker)
+    response = await client.get(
+        "/api/v1/admin/copy-reviews/precedents",
+        headers=_HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "items": [],
+        "count": 0,
+        "limit": 20,
+        "offset": 0,
+        "q": None,
+        "resolution": "all",
+        "review_kind": None,
+        "status": "resolved",
+    }

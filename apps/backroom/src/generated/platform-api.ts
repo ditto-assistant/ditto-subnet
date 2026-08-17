@@ -300,6 +300,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/copy-reviews/precedents": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Copy Review Precedents
+         * @description Search decided ATH reviews as case law.
+         *
+         *     Courts cite holdings. The operator queue lists *open* work; this lists
+         *     *resolved* reasons so a later review can match a phrase table, family
+         *     compiler, or zero-token bypass to a prior clear or reject. Declared
+         *     before ``/copy-reviews/{agent_id}`` so ``precedents`` is never parsed
+         *     as a UUID.
+         */
+        get: operations["search_copy_review_precedents_api_v1_admin_copy_reviews_precedents_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/copy-reviews/{agent_id}": {
         parameters: {
             query?: never;
@@ -5079,6 +5105,81 @@ export interface components {
             /** Reopened */
             reopened: boolean;
             review: components["schemas"]["AdminCopyReviewItem"];
+        };
+        /**
+         * AdminCopyReviewPrecedent
+         * @description One decided ATH holding, compact enough to page as case law.
+         */
+        AdminCopyReviewPrecedent: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Version */
+            agent_version?: number | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /**
+             * Opened At
+             * Format: date-time
+             */
+            opened_at: string;
+            /** Original Reason */
+            original_reason?: string | null;
+            /** Resolution */
+            resolution?: ("clear" | "reject") | null;
+            /** Resolution Reason */
+            resolution_reason?: string | null;
+            /** Resolved At */
+            resolved_at?: string | null;
+            /** Resolved By */
+            resolved_by?: string | null;
+            /**
+             * Review Id
+             * Format: uuid
+             */
+            review_id: string;
+            /**
+             * Review Kind
+             * @enum {string}
+             */
+            review_kind: "copy" | "benchmark_overfit" | "deferred_source_review";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "resolved";
+        };
+        /**
+         * AdminCopyReviewPrecedentList
+         * @description Paged ATH holdings matched by reason text, identity, or resolution.
+         */
+        AdminCopyReviewPrecedentList: {
+            /** Count */
+            count: number;
+            /** Items */
+            items: components["schemas"]["AdminCopyReviewPrecedent"][];
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Q */
+            q?: string | null;
+            /**
+             * Resolution
+             * @enum {string}
+             */
+            resolution: "clear" | "reject" | "all";
+            /** Review Kind */
+            review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review") | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "resolved" | "all";
         };
         /** AdminCopyReviewResolveRequest */
         AdminCopyReviewResolveRequest: {
@@ -19078,6 +19179,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminCopyReviewList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_copy_review_precedents_api_v1_admin_copy_reviews_precedents_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                resolution?: "clear" | "reject" | "all";
+                status?: "resolved" | "all";
+                limit?: number;
+                offset?: number;
+                review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review") | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCopyReviewPrecedentList"];
                 };
             };
             /** @description Validation Error */

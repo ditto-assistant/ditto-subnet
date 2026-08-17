@@ -28,6 +28,16 @@ value as `copy`. Those two rules must stay in step: a filter matching only the
 literal string would drop legacy rows while every row it returned still said
 `copy`, which is an omission with nothing on its face to reveal it.
 
+## Precedents are the resolved holdings
+
+`GET /api/v1/admin/copy-reviews/precedents` is the court reporter, not the
+queue. It defaults to `status=resolved` and searches `original_reason`,
+`resolution_reason`, agent name, version, and miner hotkey. Filter with
+`resolution=clear|reject` and `review_kind`. Omit `q` to page newest holdings
+first. Backroom reaches it as `search_ath_precedents`. The static path is
+declared before `/copy-reviews/{agent_id}` so `precedents` is never parsed as
+a UUID.
+
 ## Two surfaces that are not the queue
 
 **`GET /admin/screening-quarantines?status=active` is effectively always

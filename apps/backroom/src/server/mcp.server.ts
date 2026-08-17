@@ -27,6 +27,7 @@ import {
   benchmarkContractRefreshLookupInputSchema,
   getAthReviewInputSchema,
   openAthReviewInputSchema,
+  searchAthPrecedentsInputSchema,
   quarantineResolutionSchema,
   resolveCopyReviewInputSchema,
   screeningQuarantineBatchContextInputSchema,
@@ -80,6 +81,7 @@ import {
   fetchCopyReviewSourceDiff,
   fetchCopyReviewSourceDiffFile,
   fetchAthReview,
+  fetchAthPrecedents,
   fetchQuarantineBaselineDiff,
   fetchQuarantineBaselineDiffFile,
   fetchAthReviewQueue,
@@ -714,6 +716,26 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchAthReview(input)),
+  )
+
+  registerTool(
+    'search_ath_precedents',
+    {
+      title: 'Search ATH precedents',
+      description:
+        'Search resolved ATH holdings as case law by reason, agent name, version, or hotkey. Filter with resolution and reviewKind. Not the open queue. Requires backroom:read.',
+      inputSchema: {
+        ...searchAthPrecedentsInputSchema.shape,
+        ...MCP_PAGINATION_INPUT,
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ limit, offset, ...input }) =>
+      result(
+        compacted(await fetchAthPrecedents(input, limit, offset), {
+          items: { pin: ['agent_id', 'resolution'] },
+        }),
+      ),
   )
 
   registerTool(

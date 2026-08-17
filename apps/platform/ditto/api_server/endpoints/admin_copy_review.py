@@ -5,11 +5,12 @@ import hashlib
 import logging
 from collections import defaultdict
 from datetime import UTC, datetime
-from typing import Annotated, Literal, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from sqlalchemy import exists, false, func, or_, select
+from sqlalchemy import String, exists, false, func, or_, select
+from sqlalchemy import cast as sa_cast
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Load, undefer_group
 from sqlalchemy.sql.elements import ColumnElement
@@ -24,6 +25,8 @@ from ditto.api_models.admin_copy_review import (
     AdminCopyReviewList,
     AdminCopyReviewOpenRequest,
     AdminCopyReviewOpenResponse,
+    AdminCopyReviewPrecedent,
+    AdminCopyReviewPrecedentList,
     AdminCopyReviewResolveRequest,
     AdminCopyReviewResolveResponse,
     AdminDeferredReviewEvidence,
@@ -419,6 +422,37 @@ def _review_kind_filter(review_kind: str) -> ColumnElement[bool]:
     return or_(stored.is_(None), stored.not_in(_KNOWN_REVIEW_KINDS), stored == "copy")
 
 
+def _ilike_contains(column: Any, query: str) -> Any:
+    """Case-insensitive substring match that treats ``%`` and ``_`` as literals."""
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return column.ilike(f"%{escaped}%", escape="\\")
+
+
+def _precedent_item(review: AthReview, agent: Agent) -> AdminCopyReviewPrecedent:
+    provenance = review.algorithm_provenance
+    review_kind = provenance.get("review_kind")
+    if review_kind not in _KNOWN_REVIEW_KINDS:
+        review_kind = "copy"
+    return AdminCopyReviewPrecedent(
+        review_id=review.review_id,
+        agent_id=agent.agent_id,
+        agent_name=agent.name,
+        agent_version=agent.version,
+        miner_hotkey=agent.miner_hotkey,
+        status=cast(Literal["pending", "resolved"], review.status),
+        resolution=cast(Literal["clear", "reject"] | None, review.resolution),
+        resolution_reason=review.resolution_reason,
+        original_reason=review.original_reason,
+        review_kind=cast(
+            Literal["copy", "benchmark_overfit", "deferred_source_review"],
+            review_kind,
+        ),
+        opened_at=review.reopened_at or review.opened_at,
+        resolved_at=review.resolved_at,
+        resolved_by=review.resolved_by,
+    )
+
+
 @router.get("/copy-reviews", response_model=AdminCopyReviewList)
 async def list_copy_reviews(
     _admin: AdminDep,
@@ -532,6 +566,77 @@ async def list_copy_reviews(
         generation=generation,
         active_bench_version=active_version,
         rollout_bench_version=rollout_version,
+    )
+
+
+@router.get("/copy-reviews/precedents", response_model=AdminCopyReviewPrecedentList)
+async def search_copy_review_precedents(
+    _admin: AdminDep,
+    session: SessionDep,
+    q: Annotated[str | None, Query(min_length=2, max_length=200)] = None,
+    resolution: Literal["clear", "reject", "all"] = "all",
+    status: Literal["resolved", "all"] = "resolved",
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    review_kind: Literal["copy", "benchmark_overfit", "deferred_source_review"]
+    | None = None,
+) -> AdminCopyReviewPrecedentList:
+    """Search decided ATH reviews as case law.
+
+    Courts cite holdings. The operator queue lists *open* work; this lists
+    *resolved* reasons so a later review can match a phrase table, family
+    compiler, or zero-token bypass to a prior clear or reject. Declared
+    before ``/copy-reviews/{agent_id}`` so ``precedents`` is never parsed
+    as a UUID.
+    """
+    where: list[ColumnElement[bool]] = []
+    if status != "all":
+        where.append(AthReview.status == status)
+    if resolution != "all":
+        where.append(AthReview.resolution == resolution)
+    if review_kind is not None:
+        where.append(_review_kind_filter(review_kind))
+    if q is not None:
+        needle = q.strip()
+        if needle:
+            where.append(
+                or_(
+                    _ilike_contains(AthReview.original_reason, needle),
+                    _ilike_contains(AthReview.resolution_reason, needle),
+                    _ilike_contains(Agent.name, needle),
+                    _ilike_contains(Agent.miner_hotkey, needle),
+                    _ilike_contains(sa_cast(Agent.version, String()), needle),
+                )
+            )
+    count = await session.scalar(
+        select(func.count())
+        .select_from(AthReview)
+        .join(Agent, Agent.agent_id == AthReview.agent_id)
+        .where(*where)
+    )
+    rows = (
+        await session.execute(
+            select(AthReview, Agent)
+            .join(Agent, Agent.agent_id == AthReview.agent_id)
+            .where(*where)
+            .order_by(
+                AthReview.resolved_at.desc().nulls_last(),
+                func.coalesce(AthReview.reopened_at, AthReview.opened_at).desc(),
+                AthReview.review_id.desc(),
+            )
+            .limit(limit)
+            .offset(offset)
+        )
+    ).all()
+    return AdminCopyReviewPrecedentList(
+        items=[_precedent_item(review, agent) for review, agent in rows],
+        count=count or 0,
+        limit=limit,
+        offset=offset,
+        q=q,
+        resolution=resolution,
+        review_kind=review_kind,
+        status=status,
     )
 
 

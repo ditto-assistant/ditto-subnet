@@ -72,6 +72,7 @@ describe('Backroom MCP tools', () => {
         'get_backroom_access',
         'get_backroom_tool_help',
         'get_ath_review',
+        'search_ath_precedents',
         'get_benchmark_contract_refresh',
         'get_benchmark_contract_migration',
         'get_benchmark_rollout_qualification',
@@ -165,13 +166,14 @@ describe('Backroom MCP tools', () => {
     // Prose is guarded exactly by the two description assertions below; this
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
-    // bounded input schemas without relaxing either prose budget below. Keep
-    // modest headroom for schema evolution; tighten the description budgets,
-    // not this whole-payload backstop, to push back on tutorials.
+    // bounded input schemas without relaxing either prose budget below. The
+    // 20_250 description sum includes the ATH precedent-search catalog entry.
+    // Keep modest headroom for schema evolution; tighten the description
+    // budgets, not this whole-payload backstop, to push back on tutorials.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(81_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      20_000,
+      20_250,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -2787,6 +2789,75 @@ describe('Backroom MCP tools', () => {
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/${agentId}/audit`,
       expect.any(Object),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('searches resolved ATH holdings as precedents through a read-only grant', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            review_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+            agent_id: '11111111-1111-4111-8111-111111111111',
+            agent_name: 'Omar-miner',
+            agent_version: 20,
+            miner_hotkey: '5Omar',
+            status: 'resolved',
+            resolution: 'reject',
+            resolution_reason: 'v19 phrase table remains',
+            original_reason: 'phrase table plus character-match',
+            review_kind: 'benchmark_overfit',
+            opened_at: '2026-08-17T15:00:00Z',
+            resolved_at: '2026-08-17T16:00:00Z',
+            resolved_by: 'peyton@omniaura.ai',
+          },
+        ],
+        count: 1,
+        limit: 20,
+        offset: 0,
+        q: 'phrase table',
+        resolution: 'reject',
+        review_kind: 'benchmark_overfit',
+        status: 'resolved',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'search_ath_precedents',
+      arguments: {
+        query: 'phrase table',
+        resolution: 'reject',
+        reviewKind: 'benchmark_overfit',
+        limit: 20,
+        offset: 0,
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      count: 1,
+      q: 'phrase table',
+      items: [
+        {
+          agent_id: '11111111-1111-4111-8111-111111111111',
+          agent_name: 'Omar-miner',
+          resolution: 'reject',
+        },
+      ],
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/precedents?status=resolved&limit=20&offset=0&q=phrase+table&resolution=reject&review_kind=benchmark_overfit',
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+        }),
+      }),
     )
 
     await client.close()

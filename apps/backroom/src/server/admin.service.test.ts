@@ -5,6 +5,7 @@ import {
   supersedeBenchmarkRollout,
   selectActiveBenchmark,
   fetchAthReview,
+  fetchAthPrecedents,
   fetchBenchmarkRolloutControl,
   fetchCopyReviews,
   fetchBenchmarkContractRefresh,
@@ -1977,6 +1978,32 @@ describe('copy review admin service', () => {
     expect(result.opened_by).toBe('operator@example.com')
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/${review.agent_id}/audit`,
+      expect.any(Object),
+    )
+  })
+
+  it('searches resolved ATH holdings as precedents', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        items: [],
+        count: 0,
+        limit: 20,
+        offset: 0,
+        q: 'family compiler',
+        resolution: 'all',
+        review_kind: null,
+        status: 'resolved',
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await fetchAthPrecedents({ query: 'family compiler' }, 20, 0)
+
+    expect(result.count).toBe(0)
+    expect(result.q).toBe('family compiler')
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/copy-reviews/precedents?status=resolved&limit=20&offset=0&q=family+compiler',
       expect.any(Object),
     )
   })

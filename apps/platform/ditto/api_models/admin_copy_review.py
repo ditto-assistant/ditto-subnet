@@ -248,3 +248,38 @@ class AdminCopyReviewResolveResponse(BaseModel):
     review: AdminCopyReviewItem
     agent_status: str
     idempotent: bool
+
+
+class AdminCopyReviewPrecedent(BaseModel):
+    """One decided ATH holding, compact enough to page as case law."""
+
+    model_config = ConfigDict(extra="ignore")
+    review_id: UUID
+    agent_id: UUID
+    agent_name: str
+    agent_version: int | None = None
+    miner_hotkey: str
+    status: Literal["pending", "resolved"]
+    resolution: Literal["clear", "reject"] | None = None
+    resolution_reason: str | None = None
+    original_reason: str | None = None
+    review_kind: Literal["copy", "benchmark_overfit", "deferred_source_review"]
+    opened_at: datetime
+    resolved_at: datetime | None = None
+    resolved_by: str | None = None
+
+
+class AdminCopyReviewPrecedentList(BaseModel):
+    """Paged ATH holdings matched by reason text, identity, or resolution."""
+
+    model_config = ConfigDict(extra="ignore")
+    items: list[AdminCopyReviewPrecedent]
+    count: int
+    limit: int
+    offset: int
+    q: str | None = None
+    resolution: Literal["clear", "reject", "all"]
+    review_kind: (
+        Literal["copy", "benchmark_overfit", "deferred_source_review"] | None
+    ) = None
+    status: Literal["resolved", "all"]
