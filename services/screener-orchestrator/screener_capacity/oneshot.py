@@ -116,10 +116,11 @@ def _still_deleted(
     client: TargonClient,
     uid: str,
     *,
-    settle_seconds: float = DELETED_SETTLE_SECONDS,
+    settle_seconds: float | None = None,
 ) -> bool:
     """Targon can report `deleted` while stopping, then bounce to `error`."""
-    deadline = time.monotonic() + settle_seconds
+    wait = DELETED_SETTLE_SECONDS if settle_seconds is None else settle_seconds
+    deadline = time.monotonic() + wait
     while True:
         status = _current_status(client, uid)
         if status not in {"", "deleted"}:
