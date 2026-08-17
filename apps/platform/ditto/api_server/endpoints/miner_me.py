@@ -50,6 +50,7 @@ from ditto.api_server.miner_session import (
 )
 from ditto.api_server.name_claim import expected_netuid
 from ditto.api_server.storage.errors import ObjectUploadFailedError
+from ditto.db.models import AthReview
 from ditto.db.queries.miner_avatars import (
     delete_miner_avatar,
     get_miner_avatar,
@@ -345,8 +346,8 @@ async def my_reviews(request: Request, session: SessionDep) -> MinerMeReviewsRes
         require_scope(row, "read")
         items = await list_reviews_for_hotkey(session, hotkey=row.miner_hotkey)
     reviews: list[PublicMinerReview] = []
-    for kind, item, agent in items:
-        if kind == "ath":
+    for _kind, item, agent in items:
+        if isinstance(item, AthReview):
             reviews.append(
                 PublicMinerReview(
                     kind="ath",

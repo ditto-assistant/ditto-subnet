@@ -37,6 +37,7 @@ from ditto.api_server.miner_session import (
     scopes_csv,
 )
 from ditto.api_server.name_claim import expected_netuid
+from ditto.db.models import AthReview
 from ditto.db.queries.miner_avatars import get_miner_avatar
 from ditto.db.queries.miner_sessions import (
     MinerGrantConflictError,
@@ -405,7 +406,7 @@ async def _call_tool(
     session: AsyncSession,
     name: str,
     arguments: dict[str, Any],
-) -> dict[str, Any]:
+) -> Any:
     now = datetime.now(UTC)
     row, _token = await resolve_miner_session(request, session)
     if name == "whoami":
@@ -488,11 +489,11 @@ async def _call_tool(
         require_scope(row, "read")
         items = await list_reviews_for_hotkey(session, hotkey=row.miner_hotkey)
         out = []
-        for kind, item, agent in items:
-            opened = item.opened_at if kind == "ath" else item.created_at
+        for _kind, item, agent in items:
+            opened = item.opened_at if isinstance(item, AthReview) else item.created_at
             out.append(
                 {
-                    "kind": kind,
+                    "kind": "ath" if isinstance(item, AthReview) else "dispute",
                     "agent_id": str(agent.agent_id),
                     "name": agent.name,
                     "status": item.status,
@@ -551,7 +552,8 @@ async def miner_mcp(request: Request, session: SessionDep) -> Response:
         return _json(_rpc_error(None, -32600, "invalid request"), status=400)
     rpc_id = payload.get("id")
     method = payload.get("method")
-    params = payload.get("params") if isinstance(payload.get("params"), dict) else {}
+    raw_params = payload.get("params")
+    params = raw_params if isinstance(raw_params, dict) else {}
     if method == "initialize":
         return _json(
             _rpc_result(

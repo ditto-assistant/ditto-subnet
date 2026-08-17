@@ -37,6 +37,7 @@ from ditto.api_server.miner_session import (
     verify_signed_action,
 )
 from ditto.api_server.name_claim import expected_netuid
+from ditto.db.models import MinerSession, MinerSessionToken
 from ditto.db.queries.attestation import get_bound_coldkey_for_hotkey
 from ditto.db.queries.miner_sessions import (
     MinerGrantConflictError,
@@ -105,7 +106,7 @@ def _session_view(row, *, now: datetime) -> MinerSessionView:
 
 async def resolve_miner_session(
     request: Request, session: AsyncSession
-) -> tuple[object, object]:
+) -> tuple[MinerSession, MinerSessionToken]:
     header = request.headers.get("authorization") or ""
     if not header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="miner session required")
@@ -140,7 +141,7 @@ async def start_device(
         ttl_seconds=24 * 3600,
     )
     now = datetime.now(UTC)
-    requested = list(payload.scopes)
+    requested: list[str] = list(payload.scopes)
     if "read" not in requested:
         requested = ["read", *requested]
     scopes = scopes_csv(requested)

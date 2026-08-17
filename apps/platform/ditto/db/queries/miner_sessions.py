@@ -11,6 +11,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 
 from ditto.db.models import (
+    Agent,
+    AthReview,
     MinerDeviceGrant,
     MinerLoginNonce,
     MinerOauthClient,
@@ -18,6 +20,7 @@ from ditto.db.models import (
     MinerProfile,
     MinerSession,
     MinerSessionToken,
+    ScreeningDispute,
 )
 
 if TYPE_CHECKING:
@@ -280,9 +283,7 @@ async def list_recent_agents_for_hotkey(
     *,
     hotkey: str,
     limit: int = 25,
-) -> list:
-    from ditto.db.models import Agent
-
+) -> list[Agent]:
     stmt = (
         select(Agent)
         .where(Agent.miner_hotkey == hotkey)
@@ -297,10 +298,8 @@ async def list_reviews_for_hotkey(
     *,
     hotkey: str,
     limit: int = 50,
-) -> list[tuple[str, object, object]]:
+) -> list[tuple[str, AthReview | ScreeningDispute, Agent]]:
     """Return (kind, review_or_dispute, agent) tuples newest first."""
-    from ditto.db.models import Agent, AthReview, ScreeningDispute
-
     ath_rows = list(
         (
             await session.execute(
@@ -323,7 +322,7 @@ async def list_reviews_for_hotkey(
             )
         ).all()
     )
-    combined: list[tuple[str, object, object, datetime]] = []
+    combined: list[tuple[str, AthReview | ScreeningDispute, Agent, datetime]] = []
     for review, agent in ath_rows:
         combined.append(("ath", review, agent, review.opened_at))
     for dispute, agent in dispute_rows:

@@ -4031,6 +4031,14 @@ async def public_name_claims(
     return await list_claims(session)
 
 
+def _public_handle_status(raw: str) -> Literal["reserved", "disputed", "pending"]:
+    if raw == "upheld" or raw == "reserved":
+        return "reserved"
+    if raw == "disputed":
+        return "disputed"
+    return "pending"
+
+
 @router.get("/miners/{miner_id}", response_model=None)
 async def public_miner_profile(
     miner_id: str,
@@ -4064,7 +4072,7 @@ async def public_miner_profile(
         hotkey = claim.claimant_hotkey
         handle = PublicNameHandle(
             stem=claim.name_stem,
-            status="reserved" if claim.status == "upheld" else claim.status,
+            status=_public_handle_status(claim.status),
             claim_id=claim.claim_id,
         )
     else:
@@ -4072,7 +4080,7 @@ async def public_miner_profile(
             if claim.claimant_hotkey == hotkey:
                 handle = PublicNameHandle(
                     stem=claim.name_stem,
-                    status="reserved" if claim.status == "upheld" else claim.status,
+                    status=_public_handle_status(claim.status),
                     claim_id=claim.claim_id,
                 )
                 break
