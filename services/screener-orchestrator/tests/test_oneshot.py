@@ -69,6 +69,8 @@ def test_oneshot_names_exclude_screener_slots() -> None:
     assert is_oneshot_name("ditto-miner-build-550e8400e29b")
     assert is_oneshot_name("ditto-buildkit-probe-abc")
     assert is_oneshot_name("ditto-screener-vm-probe-abc")
+    assert is_oneshot_name("ditto-kaniko-runtime-0f327e")
+    assert is_oneshot_name("ditto-sandbox-probe-494d9f")
     assert not is_oneshot_name("ditto-screener-prod-slot-01")
     assert not is_oneshot_name("manual-debug")
 
@@ -144,6 +146,20 @@ def test_sweep_deletes_terminal_oneshots_and_skips_inflight() -> None:
     }
 
 
+def test_sweep_can_delete_in_parallel() -> None:
+    client = _Targon(
+        [
+            _row(uid="wrk-a", name="ditto-miner-build-aaa", status="suspended"),
+            _row(uid="wrk-b", name="ditto-miner-build-bbb", status="error"),
+        ]
+    )
+
+    result = sweep_oneshot_rentals(client, max_workers=2)
+
+    assert result["deleted"] == 2
+    assert sorted(client.deleted) == ["wrk-a", "wrk-b"]
+
+
 def test_sweep_dry_run_does_not_mutate() -> None:
     client = _Targon(
         [_row(uid="wrk-hold", name="ditto-miner-build-bbb", status="suspended")]
@@ -166,7 +182,9 @@ def test_sweep_command_defaults_to_dry_run(monkeypatch, capsys) -> None:
     )
 
     assert (
-        command_sweep_oneshots(Namespace(apply=False, registered_grace_seconds=1200))
+        command_sweep_oneshots(
+            Namespace(apply=False, registered_grace_seconds=1200, workers=8)
+        )
         == 0
     )
 

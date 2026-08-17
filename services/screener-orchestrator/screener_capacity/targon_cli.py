@@ -85,6 +85,7 @@ def command_sweep_oneshots(args: argparse.Namespace) -> int:
         _client(args, authenticated=True),
         dry_run=not args.apply,
         registered_grace_seconds=args.registered_grace_seconds,
+        max_workers=1 if not args.apply else max(1, args.workers),
     )
     print(json.dumps(result, indent=2, sort_keys=True))
     return 1 if int(result["leftover"]) > 0 else 0
@@ -1170,6 +1171,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--registered-grace-seconds",
         type=int,
         default=DEFAULT_REGISTERED_GRACE_SECONDS,
+    )
+    sweep.add_argument(
+        "--workers",
+        type=int,
+        default=8,
+        help="Parallel DELETE workers used with --apply.",
     )
     sweep.set_defaults(handler=command_sweep_oneshots)
 

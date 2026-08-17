@@ -229,7 +229,7 @@ class TargonClientTests(unittest.TestCase):
         client.delete("rental-1")
 
         self.assertEqual(urlopen.call_count, 1)  # type: ignore[attr-defined]
-        self.assertEqual(urlopen.call_args.kwargs["timeout"], 60.0)  # type: ignore[attr-defined]
+        self.assertEqual(urlopen.call_args.kwargs["timeout"], 180.0)  # type: ignore[attr-defined]
 
     @patch("screener_capacity.targon.urllib.request.urlopen")
     def test_delete_reconciles_timeout_when_state_is_already_deleted(

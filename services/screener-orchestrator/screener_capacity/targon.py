@@ -327,27 +327,34 @@ class TargonClient:
         )
         return value if isinstance(value, dict) else {}
 
+    def _gone(self, uid: str) -> bool:
+        try:
+            state = self.state(uid)
+        except TargonAPIError as error:
+            return error.status == 404
+        return str(state.get("status", "")).casefold() == "deleted"
+
     def delete(self, uid: str) -> None:
-        # Teardown of a running rental can exceed the default 15s timeout.
-        # Do not retry the DELETE itself: a second call can race the first
-        # teardown and leave the record suspended. Reconcile instead.
+        # Teardown can exceed the default 15s client timeout. Do not retry
+        # DELETE itself: a second call can race the first teardown. Reconcile
+        # a lost or slow response by polling provider state instead.
         try:
             self._request(
                 "DELETE",
                 self._workload_path(f"/{uid}"),
-                timeout_seconds=60.0,
+                timeout_seconds=180.0,
             )
         except TargonAPIError as error:
             if error.status == 404:
                 return
-            try:
-                state = self.state(uid)
-            except TargonAPIError as state_error:
-                if state_error.status == 404:
+            timed_out = error.status is None and error.reason == "TimeoutError"
+            deadline = time.monotonic() + (45.0 if timed_out else 0.0)
+            while True:
+                if self._gone(uid):
                     return
-                raise error from None
-            if str(state.get("status", "")).casefold() == "deleted":
-                return
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(5)
             raise
 
 

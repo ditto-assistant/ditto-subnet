@@ -40,7 +40,7 @@ uv run pytest
 scripts/targon-smoke.sh inventory
 scripts/targon-smoke.sh list
 scripts/targon-smoke.sh sweep-oneshots
-scripts/targon-smoke.sh sweep-oneshots --apply
+scripts/targon-smoke.sh sweep-oneshots --apply --workers 8
 scripts/targon-smoke.sh kaniko-probe --resource cpu-small --roundtrip
 scripts/targon-smoke.sh runtime-probe
 scripts/targon-smoke.sh source-review-probe --image registry.example/screener@sha256:DIGEST

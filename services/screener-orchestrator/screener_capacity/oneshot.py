@@ -10,6 +10,7 @@ DELETE, and sweeps terminal leftovers. Screener slot rentals are never touched.
 from __future__ import annotations
 
 import contextlib
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from typing import Any
 
@@ -22,9 +23,11 @@ ONESHOT_NAME_PREFIXES = (
     "ditto-source-",
     "ditto-rootless-probe-",
     "ditto-kaniko-probe-",
+    "ditto-kaniko-runtime-",
     "ditto-agent-probe-",
     "ditto-buildkit-probe-",
     "ditto-dind-probe-",
+    "ditto-sandbox-probe-",
     "ditto-screener-vm-probe-",
 )
 INFLIGHT_STATUSES = frozenset({"running", "provisioning"})
@@ -106,6 +109,7 @@ def sweep_oneshot_rentals(
     dry_run: bool = False,
     registered_grace_seconds: int = DEFAULT_REGISTERED_GRACE_SECONDS,
     now: datetime | None = None,
+    max_workers: int = 1,
 ) -> dict[str, Any]:
     """Delete terminal one-shot rentals.
 
@@ -119,6 +123,7 @@ def sweep_oneshot_rentals(
     deleted = 0
     leftover = 0
     items: list[dict[str, str | None]] = []
+    pending: list[dict[str, str | None]] = []
     for row in client.list_workloads():
         summary = workload_summary(row)
         scanned += 1
@@ -149,31 +154,41 @@ def sweep_oneshot_rentals(
                 }
             )
             continue
-        if dry_run:
-            deleted += 1
-            items.append(
-                {
-                    "uid": summary.uid,
-                    "name": summary.name,
-                    "status": status,
-                    "action": "would-delete",
-                }
-            )
-            continue
-        if delete_oneshot_rental(client, summary.uid):
-            deleted += 1
-            action = "deleted"
-        else:
-            leftover += 1
-            action = "cleanup-required"
-        items.append(
+        pending.append(
             {
                 "uid": summary.uid,
                 "name": summary.name,
                 "status": status,
-                "action": action,
+                "action": "would-delete" if dry_run else "pending",
             }
         )
+    if dry_run:
+        deleted = len(pending)
+        items.extend(pending)
+    elif pending:
+        workers = max(1, max_workers)
+
+        def _delete(row: dict[str, str | None]) -> dict[str, str | None]:
+            uid = row["uid"] or ""
+            action = (
+                "deleted" if delete_oneshot_rental(client, uid) else "cleanup-required"
+            )
+            return {**row, "action": action}
+
+        if workers == 1:
+            results = [_delete(row) for row in pending]
+        else:
+            results = []
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(_delete, row) for row in pending]
+                for future in as_completed(futures):
+                    results.append(future.result())
+        for row in results:
+            if row["action"] == "deleted":
+                deleted += 1
+            else:
+                leftover += 1
+        items.extend(results)
     return {
         "phase": "oneshot-sweep",
         "dry_run": dry_run,

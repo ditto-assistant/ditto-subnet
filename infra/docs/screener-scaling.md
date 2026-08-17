@@ -100,6 +100,8 @@ scripts/targon-smoke.sh sweep-oneshots
 scripts/targon-smoke.sh sweep-oneshots --apply
 ```
 
+`--apply` deletes in parallel. In-flight `running`/`provisioning` rentals are skipped.
+
 The GCE autoscaler remains as an independent `ONLY_SCALE_OUT` watchdog on the
 group-level backlog metric. It cannot scale in or fight the controller. Its
 floor is zero; normal scale-in is controller-owned and lease-aware.
