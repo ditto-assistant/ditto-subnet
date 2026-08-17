@@ -59,8 +59,7 @@ def clear_message(
 ) -> bytes:
     issued = _issued_stamp(issued_at)
     return (
-        f"{CLEAR_DOMAIN}:{netuid}:{miner_hotkey}:{nonce}:{issued}"
-        f":{key_kind}:{signer}"
+        f"{CLEAR_DOMAIN}:{netuid}:{miner_hotkey}:{nonce}:{issued}:{key_kind}:{signer}"
     ).encode()
 
 
@@ -108,9 +107,7 @@ def verify_signed_action(
 def sniff_image(body: bytes) -> tuple[str, Literal["png", "jpg", "webp"]]:
     """Return content-type and extension, or raise if the bytes are not an image."""
     if len(body) > MAX_AVATAR_BYTES:
-        raise MinerAvatarRejected(
-            f"avatar exceeds {MAX_AVATAR_BYTES} bytes"
-        )
+        raise MinerAvatarRejected(f"avatar exceeds {MAX_AVATAR_BYTES} bytes")
     if len(body) < 12:
         raise MinerAvatarRejected("avatar is too small to be an image")
     if body.startswith(_PNG):

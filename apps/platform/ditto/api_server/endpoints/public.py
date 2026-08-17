@@ -3081,9 +3081,7 @@ async def build_public_leaderboard(
     handle_claims = await active_handle_claims(session, netuid=_name_claim_netuid())
     avatar_hotkeys = {row.miner_hotkey for row in rows}
     avatar_rows = await list_miner_avatars(session, hotkeys=avatar_hotkeys)
-    avatar_urls = {
-        hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows
-    }
+    avatar_urls = {hotkey: public_avatar_path(hotkey) for hotkey in avatar_rows}
     entries = []
     for i, row in enumerate(finalized_rows, start=1):
         settled, rolling, rolling_count = rollout_states.get(

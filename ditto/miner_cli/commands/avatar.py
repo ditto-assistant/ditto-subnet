@@ -204,7 +204,7 @@ def run(args: argparse.Namespace) -> int:
                 live_wallet=wallet, key_kind=key_kind, payload=payload
             ),
         )
-        body = MinerAvatarClearRequest(
+        clear_body = MinerAvatarClearRequest(
             netuid=args.netuid,
             miner_hotkey=handle.hotkey_ss58,
             nonce=nonce,
@@ -212,10 +212,10 @@ def run(args: argparse.Namespace) -> int:
             proof=proof,
         )
         if args.print_only:
-            print(body.model_dump_json(indent=2))
+            print(clear_body.model_dump_json(indent=2))
             return 0
         with ApiClient(base_url=network.api_url) as client:
-            result = client.clear_miner_avatar(body)
+            result = client.clear_miner_avatar(clear_body)
         print(result.miner_hotkey)
         print("avatar cleared", file=sys.stderr)
         return 0

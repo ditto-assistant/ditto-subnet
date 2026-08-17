@@ -33,9 +33,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("miner_hotkey", name="miner_avatars_pkey"),
         sa.UniqueConstraint("nonce", name="miner_avatars_nonce_key"),
-        sa.CheckConstraint(
-            "length(sha256) = 64", name="miner_avatars_sha256_check"
-        ),
+        sa.CheckConstraint("length(sha256) = 64", name="miner_avatars_sha256_check"),
         sa.CheckConstraint(
             "content_type IN ('image/png', 'image/jpeg', 'image/webp')",
             name="miner_avatars_content_type_check",

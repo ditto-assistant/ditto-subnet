@@ -17,9 +17,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 
-async def get_miner_avatar(
-    session: AsyncSession, *, hotkey: str
-) -> MinerAvatar | None:
+async def get_miner_avatar(session: AsyncSession, *, hotkey: str) -> MinerAvatar | None:
     return await session.get(MinerAvatar, hotkey)
 
 
@@ -48,9 +46,7 @@ async def record_avatar_nonce(
     miner_hotkey: str,
     now: datetime,
 ) -> None:
-    session.add(
-        MinerAvatarNonce(nonce=nonce, miner_hotkey=miner_hotkey, used_at=now)
-    )
+    session.add(MinerAvatarNonce(nonce=nonce, miner_hotkey=miner_hotkey, used_at=now))
 
 
 async def upsert_miner_avatar(

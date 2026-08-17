@@ -98,41 +98,45 @@ async def set_miner_avatar(
         )
     except MinerAvatarRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    existing = await get_miner_avatar(session, hotkey=body.miner_hotkey)
-    try:
-        await record_avatar_nonce(
-            session, nonce=body.nonce, miner_hotkey=body.miner_hotkey, now=now
-        )
-        await session.flush()
-    except IntegrityError as exc:
-        raise HTTPException(
-            status_code=400, detail="avatar nonce has already been used"
-        ) from exc
     object_key = f"avatars/{body.miner_hotkey}.{ext}"
-    try:
-        await hippius.put_object(key=object_key, body=raw, content_type=content_type)
-        if existing is not None and existing.object_key != object_key:
-            await hippius.delete_object(key=existing.object_key)
-    except ObjectUploadFailedError as exc:
-        raise HTTPException(
-            status_code=502, detail="failed to store avatar image"
-        ) from exc
-    row = await upsert_miner_avatar(
-        session,
-        miner_hotkey=body.miner_hotkey,
-        object_key=object_key,
-        content_type=content_type,
-        sha256=digest,
-        nonce=body.nonce,
-        now=now,
-    )
-    return MinerAvatarResponse(
-        miner_hotkey=row.miner_hotkey,
-        avatar_url=public_avatar_path(row.miner_hotkey),
-        content_type=row.content_type,
-        sha256=row.sha256,
-        updated_at=row.updated_at,
-    )
+    async with session.begin():
+        existing = await get_miner_avatar(session, hotkey=body.miner_hotkey)
+        try:
+            await record_avatar_nonce(
+                session, nonce=body.nonce, miner_hotkey=body.miner_hotkey, now=now
+            )
+            await session.flush()
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=400, detail="avatar nonce has already been used"
+            ) from exc
+        try:
+            await hippius.put_object(
+                key=object_key, body=raw, content_type=content_type
+            )
+            if existing is not None and existing.object_key != object_key:
+                await hippius.delete_object(key=existing.object_key)
+        except ObjectUploadFailedError as exc:
+            raise HTTPException(
+                status_code=502, detail="failed to store avatar image"
+            ) from exc
+        row = await upsert_miner_avatar(
+            session,
+            miner_hotkey=body.miner_hotkey,
+            object_key=object_key,
+            content_type=content_type,
+            sha256=digest,
+            nonce=body.nonce,
+            now=now,
+        )
+        response = MinerAvatarResponse(
+            miner_hotkey=row.miner_hotkey,
+            avatar_url=public_avatar_path(row.miner_hotkey),
+            content_type=row.content_type,
+            sha256=row.sha256,
+            updated_at=row.updated_at,
+        )
+    return response
 
 
 @router.post("/clear", response_model=MinerAvatarResponse)
@@ -170,19 +174,23 @@ async def clear_miner_avatar(
         )
     except MinerAvatarRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    try:
-        await record_avatar_nonce(
-            session, nonce=body.nonce, miner_hotkey=body.miner_hotkey, now=now
-        )
-        await session.flush()
-    except IntegrityError as exc:
-        raise HTTPException(
-            status_code=400, detail="avatar nonce has already been used"
-        ) from exc
-    row = await delete_miner_avatar(session, hotkey=body.miner_hotkey)
-    if row is not None:
+    deleted_key: str | None = None
+    async with session.begin():
         try:
-            await hippius.delete_object(key=row.object_key)
+            await record_avatar_nonce(
+                session, nonce=body.nonce, miner_hotkey=body.miner_hotkey, now=now
+            )
+            await session.flush()
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=400, detail="avatar nonce has already been used"
+            ) from exc
+        row = await delete_miner_avatar(session, hotkey=body.miner_hotkey)
+        if row is not None:
+            deleted_key = row.object_key
+    if deleted_key is not None:
+        try:
+            await hippius.delete_object(key=deleted_key)
         except ObjectUploadFailedError as exc:
             raise HTTPException(
                 status_code=502, detail="failed to delete avatar image"
