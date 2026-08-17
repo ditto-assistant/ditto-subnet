@@ -65,13 +65,30 @@ jobs:
               "migration-order/merge-result; this job still fails when the" \
               "migration check itself fails."
           else
-            gh api \
-              --method POST \
-              "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
-              -f state="$state" \
-              -f context="migration-order/merge-result" \
-              -f description="$description" \
-              -f target_url="$RUN_URL"
+            # GitHub 503s must not paint this required check red after a
+            # passing Alembic-order result. Retry the status POST, then
+            # still exit with the migration check's code.
+            attempt=1
+            max_attempts=6
+            while true; do
+              if gh api \
+                --method POST \
+                "repos/${GITHUB_REPOSITORY}/statuses/${HEAD_SHA}" \
+                -f state="$state" \
+                -f context="migration-order/merge-result" \
+                -f description="$description" \
+                -f target_url="$RUN_URL"; then
+                break
+              fi
+              if (( attempt >= max_attempts )); then
+                echo "::warning::failed to publish" \
+                  "migration-order/merge-result after ${max_attempts}" \
+                  "attempts; leaving that context pending."
+                break
+              fi
+              sleep $(( attempt * 2 ))
+              attempt=$(( attempt + 1 ))
+            done
           fi
           exit "$exit_code"
 

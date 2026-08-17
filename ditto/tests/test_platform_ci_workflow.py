@@ -156,3 +156,10 @@ def test_release_owns_shared_exact_source_component_gates() -> None:
         "dashboard": "${{ needs.plan.outputs.platform_dashboard == 'true' }}",
     }
     assert "steps" not in verify
+
+
+def test_migration_order_retries_status_publish_without_failing_a_clean_check() -> None:
+    text = (ROOT / ".github/workflows/platform-migration-order.yml").read_text()
+    assert "max_attempts=6" in text
+    assert "leaving that context pending" in text
+    assert 'exit "$exit_code"' in text
