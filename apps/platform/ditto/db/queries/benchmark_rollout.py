@@ -1583,18 +1583,18 @@ async def rollout_cohort_score_complete(
     ).all()
     if len(count_rows) != cohort_size:
         return False
-    statuses = dict(
-        (
-            await session.execute(
-                select(BenchmarkRolloutMember.agent_id, Agent.status)
-                .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
-                .where(
-                    BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
-                    BenchmarkRolloutMember.position <= cohort_size,
-                )
+    statuses: dict[UUID, AgentStatus] = {}
+    for agent_id, status in (
+        await session.execute(
+            select(BenchmarkRolloutMember.agent_id, Agent.status)
+            .join(Agent, Agent.agent_id == BenchmarkRolloutMember.agent_id)
+            .where(
+                BenchmarkRolloutMember.rollout_id == rollout.rollout_id,
+                BenchmarkRolloutMember.position <= cohort_size,
             )
-        ).all()
-    )
+        )
+    ).all():
+        statuses[agent_id] = status
     return all(
         statuses.get(agent_id) in PERMANENTLY_INELIGIBLE_MEMBER_STATUSES
         or int(count) >= SCORING_QUORUM
