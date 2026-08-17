@@ -419,6 +419,15 @@ class ApiClient:
             raise LoginRejectedError(_format_error(response, prefix="miner-login"))
         return MinerDeviceStatusResponse.model_validate(response.json())
 
+    def revoke_miner_session(self, token: str) -> None:
+        response = self._request(
+            "POST",
+            "/api/v1/miner-auth/session/revoke",
+            headers={"authorization": f"Bearer {token}"},
+        )
+        if response.status_code not in (200, 204):
+            raise LoginRejectedError(_format_error(response, prefix="miner-logout"))
+
     def clear_miner_avatar(self, body: MinerAvatarClearRequest) -> MinerAvatarResponse:
         response = self._request(
             "POST",

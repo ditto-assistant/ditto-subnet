@@ -16,6 +16,14 @@ if TYPE_CHECKING:
     import bittensor
 
 LOGIN_DOMAIN: Final = "ditto-miner-login:v1"
+KNOWN_SCOPES: Final[tuple[str, ...]] = (
+    "read",
+    "profile",
+    "download",
+    "upload",
+    "handle",
+    "challenges",
+)
 KeyKind = Literal["hotkey", "coldkey"]
 
 
@@ -42,24 +50,23 @@ def login_message(
     issued_at: datetime,
     key_kind: KeyKind,
     signer: str,
+    oauth_client_id: str | None = None,
+    redirect_uri: str | None = None,
 ) -> bytes:
     issued = _issued_stamp(issued_at)
     code = normalize_user_code(user_code)
-    ordered = ",".join(
-        scope
-        for scope in (
-            "read",
-            "profile",
-            "download",
-            "upload",
-            "handle",
-            "challenges",
-        )
-        if scope in {part.strip() for part in scopes.split(",") if part.strip()}
-    )
+    parts = {part.strip() for part in scopes.split(",") if part.strip()}
+    unknown = sorted(parts - set(KNOWN_SCOPES))
+    if unknown:
+        raise ValueError("unknown miner session scope: " + ", ".join(unknown))
+    if not parts:
+        raise ValueError("at least one miner session scope is required")
+    ordered = ",".join(scope for scope in KNOWN_SCOPES if scope in parts)
+    client = oauth_client_id or "-"
+    redirect = redirect_uri or "-"
     return (
         f"{LOGIN_DOMAIN}:{netuid}:{miner_hotkey}:{code}:{grant_id}:{ttl_seconds}"
-        f":{ordered}:{nonce}:{issued}:{key_kind}:{signer}"
+        f":{ordered}:{nonce}:{issued}:{key_kind}:{signer}:{client}:{redirect}"
     ).encode()
 
 

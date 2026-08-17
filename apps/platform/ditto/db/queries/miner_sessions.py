@@ -157,7 +157,11 @@ async def get_device_grant(
 async def expire_stale_grant(
     session: AsyncSession, *, grant: MinerDeviceGrant, now: datetime
 ) -> MinerDeviceGrant:
-    if grant.status == "pending" and grant.expires_at <= now:
+    if (
+        grant.consumed_at is None
+        and grant.status in {"pending", "approved"}
+        and grant.expires_at <= now
+    ):
         grant.status = "expired"
         await session.flush()
     return grant

@@ -16,18 +16,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.miner_auth import (
+    _network_for_command,
     _origin,
     _verification_uri,
     require_scope,
     resolve_miner_session,
 )
-from ditto.api_server.endpoints.miner_me import miner_commands
+from ditto.api_server.endpoints.miner_me import _handle_for_hotkey, miner_commands
 from ditto.api_server.miner_avatar import public_avatar_path
 from ditto.api_server.miner_session import (
-    DEFAULT_SCOPES,
+    ALL_SCOPES,
     DEFAULT_TTL_SECONDS,
     GRANT_TTL,
     OAUTH_CODE_TTL,
+    OAUTH_DEFAULT_SCOPES,
+    MinerSessionRejected,
     hash_secret,
     login_command,
     new_token,
@@ -35,6 +38,8 @@ from ditto.api_server.miner_session import (
     normalize_user_code,
     parse_scopes,
     scopes_csv,
+    validate_pkce,
+    validate_redirect_uri,
 )
 from ditto.api_server.name_claim import expected_netuid
 from ditto.db.models import AthReview
@@ -95,7 +100,7 @@ async def oauth_metadata(request: Request) -> JSONResponse:
             "grant_types_supported": ["authorization_code"],
             "code_challenge_methods_supported": ["S256"],
             "token_endpoint_auth_methods_supported": ["none"],
-            "scopes_supported": list(DEFAULT_SCOPES),
+            "scopes_supported": list(ALL_SCOPES),
         }
     )
 
@@ -109,7 +114,7 @@ async def protected_resource(request: Request) -> JSONResponse:
             "resource": f"{issuer}/mcp",
             "authorization_servers": [issuer],
             "bearer_methods_supported": ["header"],
-            "scopes_supported": list(DEFAULT_SCOPES),
+            "scopes_supported": list(ALL_SCOPES),
         }
     )
 
@@ -146,6 +151,10 @@ async def register_client(request: Request, session: SessionDep) -> JSONResponse
         or not all(isinstance(uri, str) for uri in uris)
     ):
         raise HTTPException(status_code=400, detail="redirect_uris is required")
+    try:
+        uris = [validate_redirect_uri(uri) for uri in uris]
+    except MinerSessionRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     name = body.get("client_name") or "miner-mcp"
     if not isinstance(name, str) or not (1 <= len(name) <= 120):
         raise HTTPException(status_code=400, detail="invalid client_name")
@@ -180,14 +189,20 @@ async def authorize(request: Request, session: SessionDep) -> Response:
     state = params.get("state")
     challenge = params.get("code_challenge")
     method = params.get("code_challenge_method") or "S256"
-    raw_scope = params.get("scope") or scopes_csv(DEFAULT_SCOPES)
+    raw_scope = params.get("scope") or scopes_csv(OAUTH_DEFAULT_SCOPES)
     if method != "S256" or not challenge:
         raise HTTPException(status_code=400, detail="PKCE S256 is required")
     if not client_id or not redirect_uri:
         raise HTTPException(
             status_code=400, detail="client_id and redirect_uri are required"
         )
+    try:
+        validate_pkce(challenge, label="code_challenge")
+        validate_redirect_uri(redirect_uri)
+    except MinerSessionRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     now = datetime.now(UTC)
+    complete_token = secrets.token_urlsafe(32)
     async with session.begin():
         client = await get_oauth_client(session, client_id=client_id)
         if client is None or redirect_uri not in client.redirect_uris:
@@ -195,7 +210,7 @@ async def authorize(request: Request, session: SessionDep) -> Response:
                 status_code=400, detail="unknown client or redirect_uri"
             )
         try:
-            parts = raw_scope.replace(",", " ").split() or list(DEFAULT_SCOPES)
+            parts = raw_scope.replace(",", " ").split() or list(OAUTH_DEFAULT_SCOPES)
             csv = scopes_csv(parts)
         except Exception as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -205,7 +220,7 @@ async def authorize(request: Request, session: SessionDep) -> Response:
                 await create_device_grant(
                     session,
                     user_code=user_code,
-                    poll_token_hash=None,
+                    poll_token_hash=hash_secret(complete_token),
                     scopes=csv,
                     ttl_seconds=DEFAULT_TTL_SECONDS,
                     expires_at=now + GRANT_TTL,
@@ -222,16 +237,36 @@ async def authorize(request: Request, session: SessionDep) -> Response:
                 status_code=503, detail="could not allocate a login code"
             )
     _uri, complete = _verification_uri(request, user_code)
+    sep = "&" if "?" in complete else "?"
     return RedirectResponse(
-        complete, status_code=302, headers={"Cache-Control": "no-store"}
+        complete + sep + urlencode({"complete": complete_token}),
+        status_code=302,
+        headers={"Cache-Control": "no-store"},
     )
 
 
 @router.get("/mcp/oauth/complete")
+async def complete_oauth_get() -> Response:
+    return Response(
+        status_code=405,
+        headers={"Allow": "POST", "Cache-Control": "no-store"},
+    )
+
+
+@router.post("/mcp/oauth/complete")
 async def complete_oauth(request: Request, session: SessionDep) -> Response:
-    raw_code = request.query_params.get("code")
-    if not raw_code:
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    if not isinstance(body, dict):
+        body = {}
+    raw_code = body.get("code") or request.query_params.get("code")
+    complete_token = body.get("complete") or request.headers.get("x-miner-poll-token")
+    if not isinstance(raw_code, str) or not raw_code:
         raise HTTPException(status_code=400, detail="missing login code")
+    if not isinstance(complete_token, str) or not complete_token:
+        raise HTTPException(status_code=401, detail="complete token is required")
     try:
         user_code = normalize_user_code(raw_code)
     except Exception as exc:
@@ -242,6 +277,10 @@ async def complete_oauth(request: Request, session: SessionDep) -> Response:
         if grant is None:
             raise HTTPException(status_code=404, detail="unknown login code")
         grant = await expire_stale_grant(session, grant=grant, now=now)
+        if grant.poll_token_hash is None or not secrets.compare_digest(
+            grant.poll_token_hash, hash_secret(complete_token)
+        ):
+            raise HTTPException(status_code=401, detail="complete token is invalid")
         if (
             grant.status != "approved"
             or grant.session_id is None
@@ -250,6 +289,10 @@ async def complete_oauth(request: Request, session: SessionDep) -> Response:
             raise HTTPException(
                 status_code=409, detail="login is not ready to continue"
             )
+        try:
+            validate_redirect_uri(grant.redirect_uri)
+        except MinerSessionRejected as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
         auth_code = secrets.token_urlsafe(32)
         await create_oauth_code(
             session,
@@ -267,17 +310,18 @@ async def complete_oauth(request: Request, session: SessionDep) -> Response:
     if state:
         query["state"] = state
     sep = "&" if "?" in redirect else "?"
-    return RedirectResponse(
-        redirect + sep + urlencode(query),
-        status_code=302,
-        headers={"Cache-Control": "no-store"},
-    )
+    return _json({"redirect_to": redirect + sep + urlencode(query)})
 
 
 def _verify_pkce(challenge: str, verifier: str) -> bool:
-    digest = hashlib.sha256(verifier.encode("ascii")).digest()
-    encoded = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
-    return secrets.compare_digest(encoded, challenge)
+    try:
+        validate_pkce(challenge, label="code_challenge")
+        validate_pkce(verifier, label="code_verifier")
+        digest = hashlib.sha256(verifier.encode("ascii")).digest()
+        encoded = base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+        return secrets.compare_digest(encoded, challenge)
+    except (MinerSessionRejected, ValueError):
+        return False
 
 
 @router.post("/mcp/oauth/token")
@@ -323,7 +367,7 @@ async def issue_token(request: Request, session: SessionDep) -> JSONResponse:
             now=now,
         )
         expires_in = max(0, int((row.expires_at - now).total_seconds()))
-        scopes = row.scopes
+        scopes = " ".join(parse_scopes(row.scopes))
     return _json(
         {
             "access_token": token,
@@ -422,14 +466,10 @@ async def _call_tool(
         profile = await get_profile(session, hotkey=row.miner_hotkey)
         avatar = await get_miner_avatar(session, hotkey=row.miner_hotkey)
         claims = await active_handle_claims(session, netuid=expected_netuid())
-        handle = None
-        for claim in claims.values():
-            if claim.claimant_hotkey == row.miner_hotkey:
-                handle = {"stem": claim.name_stem, "status": claim.status}
-                break
+        handle = _handle_for_hotkey(claims, row.miner_hotkey)
         return {
             "miner_hotkey": row.miner_hotkey,
-            "name_handle": handle,
+            "name_handle": None if handle is None else handle.model_dump(mode="json"),
             "avatar_url": public_avatar_path(row.miner_hotkey) if avatar else None,
             "profile": {
                 "x_url": None if profile is None else profile.x_url,
@@ -449,10 +489,23 @@ async def _call_tool(
         require_scope(row, "profile")
         from ditto.api_server.miner_session import MinerSessionRejected
 
+        existing = await get_profile(session, hotkey=row.miner_hotkey)
         try:
-            x_url = normalize_x_url(arguments.get("x_url"))
-            github_url = normalize_github_url(arguments.get("github_url"))
-            discord_handle = normalize_discord_handle(arguments.get("discord_handle"))
+            x_url = (
+                normalize_x_url(arguments.get("x_url"))
+                if "x_url" in arguments
+                else (None if existing is None else existing.x_url)
+            )
+            github_url = (
+                normalize_github_url(arguments.get("github_url"))
+                if "github_url" in arguments
+                else (None if existing is None else existing.github_url)
+            )
+            discord_handle = (
+                normalize_discord_handle(arguments.get("discord_handle"))
+                if "discord_handle" in arguments
+                else (None if existing is None else existing.discord_handle)
+            )
         except MinerSessionRejected as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         profile = await upsert_profile(
@@ -506,7 +559,7 @@ async def _call_tool(
         commands = {
             item.action: item.model_dump()
             for item in miner_commands(
-                network="local" if "localhost" in (_origin(request)) else "finney",
+                network=_network_for_command(request),
                 scopes=row.scopes,
             )
         }
@@ -519,7 +572,9 @@ async def _call_tool(
     if name == "get_miner_mcp_help":
         return {
             "help": _TOOL_HELP,
-            "login": login_command(user_code="ABCD-EFGH"),
+            "login": login_command(
+                user_code="ABCD-EFGH", network=_network_for_command(request)
+            ),
             "dashboard": f"{_origin(request)}/#/reviews",
         }
     del now

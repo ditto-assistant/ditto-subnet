@@ -63,6 +63,7 @@ interface DeviceStatus {
     expires_at: string;
   } | null;
   continue_url?: string | null;
+  oauth?: boolean;
 }
 
 interface MinerMe {
@@ -95,66 +96,114 @@ interface MinerReview {
   detail?: string | null;
 }
 
+interface StoredPollGrant {
+  user_code: string;
+  poll_token: string;
+  expires_at: number;
+}
+
+function hashParams(): URLSearchParams {
+  return new URLSearchParams(location.hash.split("?")[1] || "");
+}
+
+function persistPollGrant(userCode: string, pollToken: string): void {
+  try {
+    const record: StoredPollGrant = {
+      user_code: userCode,
+      poll_token: pollToken,
+      expires_at: Date.now() + 15 * 60 * 1000,
+    };
+    localStorage.setItem(POLL_STORAGE_KEY, JSON.stringify(record));
+  } catch {
+    // storage can be unavailable; in-memory pending still works.
+  }
+}
+
+function readPollGrant(): StoredPollGrant | null {
+  try {
+    const raw = localStorage.getItem(POLL_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StoredPollGrant;
+    if (!parsed.user_code || !parsed.poll_token || !parsed.expires_at) return null;
+    if (parsed.expires_at <= Date.now()) {
+      localStorage.removeItem(POLL_STORAGE_KEY);
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeLoginHash(userCode: string, completeToken?: string): void {
+  const params = new URLSearchParams({ code: userCode });
+  if (completeToken) params.set("complete", completeToken);
+  history.replaceState(history.state ?? {}, "", "#/reviews?" + params.toString());
+}
+
 export function ReviewsPage(): JSX.Element {
-  const params = () => new URLSearchParams(location.hash.split("?")[1] || "");
+  const params = () => hashParams();
   const presetCode = () => params().get("code") || params().get("login") || "";
+  const completeToken = () => params().get("complete") || "";
 
   return (
     <section class="page active account-page" data-page="reviews">
-      <Show when={minerSession()} fallback={<SignInPanel presetCode={presetCode()} />}>
+      <Show
+        when={minerSession()}
+        fallback={<SignInPanel presetCode={presetCode()} completeToken={completeToken()} />}
+      >
         <AccountPanel />
       </Show>
     </section>
   );
 }
 
-function SignInPanel(props: { presetCode: string }): JSX.Element {
+function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.Element {
   const [hours, setHours] = createSignal(24);
-  const [scopes, setScopes] = createSignal<string[]>(SCOPES.map((item) => item.id));
+  const [scopes, setScopes] = createSignal<string[]>(["read", "profile"]);
   const [pending, setPending] = createSignal<DeviceStart | null>(null);
   const [status, setStatus] = createSignal("idle");
   const [error, setError] = createSignal("");
   const [copied, setCopied] = createSignal(false);
+  const [oauth, setOauth] = createSignal(false);
+  let stopped = false;
 
   const command = createMemo(() => pending()?.login_command || "");
+  const terminal = (value: string) =>
+    value === "expired" || value === "denied" || value === "consumed";
 
   createEffect(() => {
-    const code = props.presetCode;
-    if (!code || pending()) return;
+    if (pending()) return;
+    const hashCode = props.presetCode;
+    const hashComplete = props.completeToken;
+    const stored = readPollGrant();
     void (async () => {
+      const code = hashCode || stored?.user_code || "";
+      const pollToken = hashComplete || stored?.poll_token || "";
+      if (!code) return;
+      if (!pollToken) {
+        setError("This browser cannot finish that sign-in. Start a new one here.");
+        return;
+      }
       try {
         const publicDevice = await authJSON<DevicePublic>(
           "/miner-auth/device/" + encodeURIComponent(code),
         );
-        let pollToken = "";
-        try {
-          const stored = sessionStorage.getItem(POLL_STORAGE_KEY);
-          const parsed = stored
-            ? (JSON.parse(stored) as { user_code?: string; poll_token?: string })
-            : null;
-          if (parsed?.user_code === publicDevice.user_code) pollToken = parsed.poll_token || "";
-        } catch {
-          pollToken = "";
+        if (stored && stored.user_code !== publicDevice.user_code && !hashCode) {
+          return;
         }
-        setPending({
+        const grant: DeviceStart = {
           user_code: publicDevice.user_code,
           poll_token: pollToken,
           login_command: publicDevice.login_command,
           verification_uri_complete: location.href,
           scopes: publicDevice.scopes || [],
           ttl_seconds: publicDevice.ttl_seconds || 0,
-        });
+        };
+        persistPollGrant(grant.user_code, pollToken);
+        setOauth(Boolean(publicDevice.oauth) || Boolean(hashComplete));
+        setPending(grant);
         setStatus(publicDevice.status);
-        if (pollToken) {
-          void poll({
-            user_code: publicDevice.user_code,
-            poll_token: pollToken,
-            login_command: publicDevice.login_command,
-            verification_uri_complete: location.href,
-            scopes: publicDevice.scopes || [],
-            ttl_seconds: publicDevice.ttl_seconds || 0,
-          });
-        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Could not load that login code.");
       }
@@ -164,10 +213,14 @@ function SignInPanel(props: { presetCode: string }): JSX.Element {
   createEffect(() => {
     const grant = pending();
     if (!grant) return;
-    void (grant.poll_token ? poll(grant) : pollPublic(grant.user_code));
+    stopped = false;
+    if (!grant.poll_token) {
+      setError("This browser cannot finish that sign-in. Start a new one here.");
+      return;
+    }
+    void poll(grant);
     const timer = window.setInterval(() => {
-      if (grant.poll_token) void poll(grant);
-      else void pollPublic(grant.user_code);
+      if (!stopped) void poll(grant);
     }, 2000);
     onCleanup(() => window.clearInterval(timer));
   });
@@ -180,14 +233,9 @@ function SignInPanel(props: { presetCode: string }): JSX.Element {
         scopes: requested,
         ttl_seconds: hours() * 3600,
       });
-      try {
-        sessionStorage.setItem(
-          POLL_STORAGE_KEY,
-          JSON.stringify({ user_code: started.user_code, poll_token: started.poll_token }),
-        );
-      } catch {
-        // sessionStorage can be unavailable; in-memory pending still works.
-      }
+      persistPollGrant(started.user_code, started.poll_token);
+      writeLoginHash(started.user_code);
+      setOauth(false);
       setPending(started);
       setStatus("pending");
     } catch (err) {
@@ -195,20 +243,16 @@ function SignInPanel(props: { presetCode: string }): JSX.Element {
     }
   }
 
-  async function pollPublic(userCode: string): Promise<void> {
+  async function finishOauth(grant: DeviceStart): Promise<void> {
     try {
-      const publicDevice = await authJSON<DevicePublic>(
-        "/miner-auth/device/" + encodeURIComponent(userCode),
-      );
-      setStatus(publicDevice.status);
-      if (
-        publicDevice.oauth &&
-        (publicDevice.status === "approved" || publicDevice.status === "consumed")
-      ) {
-        location.assign("/mcp/oauth/complete?code=" + encodeURIComponent(userCode));
-      }
+      const result = await authJSON<{ redirect_to?: string }>("/mcp/oauth/complete", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ code: grant.user_code, complete: grant.poll_token }),
+      });
+      if (result.redirect_to) location.assign(result.redirect_to);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Polling failed.");
+      setError(err instanceof Error ? err.message : "Could not finish MCP login.");
     }
   }
 
@@ -230,8 +274,20 @@ function SignInPanel(props: { presetCode: string }): JSX.Element {
           scopes: result.session.scopes,
           expiresAt: result.session.expires_at,
         });
+        try {
+          localStorage.removeItem(POLL_STORAGE_KEY);
+        } catch {
+          // ignore
+        }
       }
-      if (result.continue_url) location.assign(result.continue_url);
+      if ((result.oauth || oauth()) && result.status === "approved" && grant.poll_token) {
+        stopped = true;
+        await finishOauth(grant);
+        return;
+      }
+      if (terminal(result.status) && !result.access_token) {
+        stopped = true;
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Polling failed.");
     }
@@ -341,7 +397,7 @@ function AccountPanel(): JSX.Element {
     void loadMe();
   });
 
-  async function loadMe(): Promise<void> {
+  async function loadMe(): Promise<boolean> {
     try {
       const body = await authJSON<MinerMe>("/me", { headers: sessionAuthHeader() });
       setMe(body);
@@ -354,7 +410,7 @@ function AccountPanel(): JSX.Element {
       if (message.includes("HTTP 401") || message.includes("invalid or expired")) {
         clearMinerSession();
       }
-      return;
+      return false;
     }
     try {
       const mine = await authJSON<MinerSubmission[]>("/me/submissions", {
@@ -372,6 +428,7 @@ function AccountPanel(): JSX.Element {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not load reviews.");
     }
+    return true;
   }
 
   async function saveProfile(): Promise<void> {
@@ -397,15 +454,28 @@ function AccountPanel(): JSX.Element {
   async function uploadAvatar(file: File): Promise<void> {
     const data = new FormData();
     data.append("file", file);
+    setError("");
+    setSaved("");
     try {
       const response = await fetch(API_BASE + "/me/avatar", {
         method: "POST",
         headers: sessionAuthHeader(),
         body: data,
       });
-      if (!response.ok) throw new Error("Could not upload picture.");
-      await loadMe();
-      setSaved("Picture updated.");
+      const payload: unknown = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        const detail =
+          typeof payload === "object" &&
+          payload !== null &&
+          typeof (payload as { detail?: unknown }).detail === "string"
+            ? (payload as { detail: string }).detail
+            : "Could not upload picture.";
+        if (response.status === 401 || detail.includes("invalid or expired")) {
+          clearMinerSession();
+        }
+        throw new Error(detail);
+      }
+      if (await loadMe()) setSaved("Picture updated.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not upload picture.");
     }

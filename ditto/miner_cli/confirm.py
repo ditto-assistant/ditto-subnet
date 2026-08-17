@@ -305,6 +305,8 @@ def confirm_login_action(
     scopes: str,
     hours: int,
     skip: bool,
+    oauth_client_name: str | None = None,
+    redirect_uri: str | None = None,
 ) -> None:
     """Preview a dashboard/MCP login before signing."""
     print()
@@ -313,6 +315,9 @@ def confirm_login_action(
     print(f"  Hotkey:  {hotkey_ss58}")
     print(f"  Scopes:  {scopes}")
     print(f"  Hours:   {hours}")
+    if oauth_client_name or redirect_uri:
+        print(f"  Client:  {oauth_client_name or 'oauth'}")
+        print(f"  Redirect: {redirect_uri or '-'}")
     print()
     print("Signing does NOT transfer any TAO. The signature authorizes a")
     print("short-lived session on dittobench.ai / the miner MCP.")

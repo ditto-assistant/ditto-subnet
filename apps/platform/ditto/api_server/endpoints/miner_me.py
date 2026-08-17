@@ -16,6 +16,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.miner_avatar import MinerAvatarResponse
@@ -54,6 +55,7 @@ from ditto.db.models import AthReview
 from ditto.db.queries.miner_avatars import (
     delete_miner_avatar,
     get_miner_avatar,
+    record_avatar_nonce,
     upsert_miner_avatar,
 )
 from ditto.db.queries.miner_sessions import (
@@ -109,14 +111,22 @@ def _profile_links(row) -> MinerProfileLinks:
 def _handle_for_hotkey(claims, hotkey: str):
     from ditto.api_models.name_claim import PublicNameHandle
 
+    chosen = None
     for claim in claims.values():
-        if claim.claimant_hotkey == hotkey:
-            return PublicNameHandle(
-                stem=claim.name_stem,
-                status="reserved" if claim.status == "upheld" else claim.status,
-                claim_id=claim.claim_id,
-            )
-    return None
+        if claim.claimant_hotkey != hotkey:
+            continue
+        if claim.status == "upheld":
+            chosen = claim
+            break
+        if chosen is None:
+            chosen = claim
+    if chosen is None:
+        return None
+    return PublicNameHandle(
+        stem=chosen.name_stem,
+        status="reserved" if chosen.status == "upheld" else chosen.status,
+        claim_id=chosen.claim_id,
+    )
 
 
 def miner_commands(*, network: str, scopes: str) -> list[MinerCommand]:
@@ -168,10 +178,9 @@ def miner_commands(*, network: str, scopes: str) -> list[MinerCommand]:
 
 
 def _network(request: Request) -> str:
-    host = request.headers.get("host") or ""
-    if "localhost" in host or "127.0.0.1" in host:
-        return "local"
-    return "finney"
+    from ditto.api_server.endpoints.miner_auth import _network_for_command
+
+    return _network_for_command(request)
 
 
 @router.get("", response_model=MinerMeResponse)
@@ -266,15 +275,24 @@ async def set_my_avatar(
             raise HTTPException(
                 status_code=502, detail="failed to store avatar image"
             ) from exc
-        stored = await upsert_miner_avatar(
-            session,
-            miner_hotkey=row.miner_hotkey,
-            object_key=object_key,
-            content_type=content_type,
-            sha256=digest,
-            nonce=uuid4(),
-            now=now,
-        )
+        nonce = uuid4()
+        try:
+            await record_avatar_nonce(
+                session, nonce=nonce, miner_hotkey=row.miner_hotkey, now=now
+            )
+            stored = await upsert_miner_avatar(
+                session,
+                miner_hotkey=row.miner_hotkey,
+                object_key=object_key,
+                content_type=content_type,
+                sha256=digest,
+                nonce=nonce,
+                now=now,
+            )
+        except IntegrityError as exc:
+            raise HTTPException(
+                status_code=400, detail="avatar nonce has already been used"
+            ) from exc
     return MinerAvatarResponse(
         miner_hotkey=stored.miner_hotkey,
         avatar_url=public_avatar_path(stored.miner_hotkey),

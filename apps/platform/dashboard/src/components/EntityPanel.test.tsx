@@ -107,6 +107,38 @@ describe("EntityPanel miner tenant", () => {
     expect(location.hash).toBe("#/overview");
     expect(modal()).toHaveAttribute("aria-hidden", "true");
   });
+
+  it("loads /h/{handle} through the public miner profile", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (raw.includes("/public/miners/jupiter")) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              miner_hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+              name_handle: { stem: "jupiter", status: "reserved" },
+              avatar_url:
+                "/api/v1/public/miners/5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY/avatar",
+              profile: { x_url: "https://x.com/jupiter", github_url: null, discord_handle: null },
+              submissions: [],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }
+      return original(input, init);
+    }) as typeof fetch;
+    renderPanel();
+    visit("/h/jupiter");
+    await waitFor(() => {
+      expect(document.getElementById("d-title")).toHaveTextContent("jupiter");
+    });
+    expect(document.getElementById("d-stats")?.textContent).toContain("X");
+    expect(document.querySelector("#d-hotkey a")?.textContent).toContain(
+      "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    );
+  });
 });
 
 describe("EntityPanel validator tenant (row 26 shell slice)", () => {

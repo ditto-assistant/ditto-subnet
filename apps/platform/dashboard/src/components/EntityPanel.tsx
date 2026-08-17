@@ -25,7 +25,7 @@ import {
 import type { JSX } from "solid-js";
 
 import { publicQueryKeys, queryClient } from "../data/queryClient";
-import { getJSON } from "../lib/api";
+import { HTTPError, getJSON } from "../lib/api";
 import { entityActions } from "../lib/entity-links";
 import {
   agentName,
@@ -372,7 +372,9 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
         .entries()
         .find(
           (item) =>
-            item.miner_hotkey === route.id || item.name_handle?.stem === route.id.toLowerCase(),
+            item.miner_hotkey === route.id ||
+            item.name_handle?.stem === route.id.toLowerCase() ||
+            item.name_handle?.stem === route.id.replace(/[^A-Za-z0-9]+/g, "-").toLowerCase(),
         );
       if (entry) setView({ tenant: "miner", key: route.key, entry });
       else setView({ tenant: "miner-profile", key: route.key, id: route.id });
@@ -464,6 +466,14 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     return kind ? entityActions(kind, actionId()) : null;
   };
 
+  const minerProfileId = () => {
+    const current = view();
+    return current?.tenant === "miner-profile" ? current.id : undefined;
+  };
+  const [minerProfile] = createResource(minerProfileId, (id) =>
+    getJSON<PublicMinerProfile>("/public/miners/" + encodeURIComponent(id)),
+  );
+
   interface HeaderState {
     title: string;
     handle?: NameHandle | null;
@@ -478,11 +488,14 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     const current = view();
     if (!current) return null;
     if (current.tenant === "miner-profile") {
+      const loaded = minerProfile();
       return {
-        title: "Miner profile",
+        title: loaded?.name_handle?.stem || loaded?.miner_hotkey || "Miner profile",
+        handle: loaded?.name_handle,
+        avatarUrl: loaded?.avatar_url,
         chip: { text: "profile", class: "", title: "Public miner profile" },
         dkLabel: "Miner",
-        hotkey: current.id,
+        hotkey: loaded?.miner_hotkey || current.id,
         hotkeyKind: "miner",
       };
     }
@@ -677,7 +690,14 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
         </div>
         <div id="d-stats" classList={{ "pipeline-mode": view()?.tenant !== "miner" }}>
           <Show when={entityRoute()?.kind === "miner" && entityRoute()?.id}>
-            {(id) => <MinerProfileCard id={id()} />}
+            {(id) => (
+              <MinerProfileCard
+                id={id()}
+                profile={view()?.tenant === "miner-profile" ? minerProfile() : undefined}
+                error={view()?.tenant === "miner-profile" ? minerProfile.error : undefined}
+                loading={view()?.tenant === "miner-profile" ? minerProfile.loading : false}
+              />
+            )}
           </Show>
           <Switch>
             <Match when={minerEntry()}>
@@ -767,53 +787,74 @@ interface PublicMinerProfile {
   submissions: Array<{ agent_id: string; name: string; status: string; created_at: string }>;
 }
 
-function MinerProfileCard(props: { id: string }): JSX.Element {
-  const [profile] = createResource(
-    () => props.id,
+function MinerProfileCard(props: {
+  id: string;
+  profile?: PublicMinerProfile;
+  error?: unknown;
+  loading?: boolean;
+}): JSX.Element {
+  const [fetched] = createResource(
+    () => (props.profile || props.loading || props.error ? undefined : props.id),
     async (id) => {
       try {
         return await getJSON<PublicMinerProfile>("/public/miners/" + encodeURIComponent(id));
-      } catch {
-        return undefined;
+      } catch (err) {
+        if (err instanceof HTTPError && err.status === 404) return undefined;
+        throw err;
       }
     },
   );
+  const profile = () => props.profile ?? fetched();
+  const loading = () => Boolean(props.loading || fetched.loading);
+  const error = () => props.error ?? fetched.error;
+  const unknown = () => error() instanceof HTTPError && (error() as HTTPError).status === 404;
   return (
-    <Show when={profile()}>
-      {(profile) => (
-        <div class="miner-profile">
-          <div class="stat-head">Public profile</div>
-          <div class="miner-profile-links">
-            <Show when={profile().profile.x_url}>
-              <a href={profile().profile.x_url ?? undefined} target="_blank" rel="noopener">
-                X
-              </a>
+    <div class="miner-profile">
+      <Show when={loading()}>
+        <p class="muted">Loading profile…</p>
+      </Show>
+      <Show when={!loading() && unknown()}>
+        <p class="muted">Unknown miner handle.</p>
+      </Show>
+      <Show when={!loading() && error() && !unknown()}>
+        <p class="muted">Could not load this miner profile.</p>
+      </Show>
+      <Show when={profile()}>
+        {(loaded) => (
+          <>
+            <div class="stat-head">Public profile</div>
+            <div class="miner-profile-links">
+              <Show when={loaded().profile.x_url}>
+                <a href={loaded().profile.x_url ?? undefined} target="_blank" rel="noopener">
+                  X
+                </a>
+              </Show>
+              <Show when={loaded().profile.github_url}>
+                <a href={loaded().profile.github_url ?? undefined} target="_blank" rel="noopener">
+                  GitHub
+                </a>
+              </Show>
+              <Show when={loaded().profile.discord_handle}>
+                <span>Discord @{loaded().profile.discord_handle}</span>
+              </Show>
+            </div>
+            <Show when={loaded().submissions.length}>
+              <div class="stat-head">Submissions</div>
+              <ul class="account-list">
+                <For each={loaded().submissions}>
+                  {(item) => (
+                    <li>
+                      <a href={"/agent/" + item.agent_id}>{item.name}</a>
+                      <span class="muted">{item.status}</span>
+                    </li>
+                  )}
+                </For>
+              </ul>
             </Show>
-            <Show when={profile().profile.github_url}>
-              <a href={profile().profile.github_url ?? undefined} target="_blank" rel="noopener">
-                GitHub
-              </a>
-            </Show>
-            <Show when={profile().profile.discord_handle}>
-              <span>Discord @{profile().profile.discord_handle}</span>
-            </Show>
-          </div>
-          <Show when={profile().submissions.length}>
-            <div class="stat-head">Submissions</div>
-            <ul class="account-list">
-              <For each={profile().submissions}>
-                {(item) => (
-                  <li>
-                    <a href={"/agent/" + item.agent_id}>{item.name}</a>
-                    <span class="muted">{item.status}</span>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-        </div>
-      )}
-    </Show>
+          </>
+        )}
+      </Show>
+    </div>
   );
 }
 

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.miner_session import (
@@ -34,6 +34,8 @@ from ditto.api_server.miner_session import (
     normalize_user_code,
     parse_scopes,
     scopes_csv,
+    validate_pkce,
+    validate_redirect_uri,
     verify_signed_action,
 )
 from ditto.api_server.name_claim import expected_netuid
@@ -144,8 +146,15 @@ async def start_device(
     requested: list[str] = list(payload.scopes)
     if "read" not in requested:
         requested = ["read", *requested]
-    scopes = scopes_csv(requested)
-    ttl = clamp_ttl_seconds(payload.ttl_seconds)
+    try:
+        scopes = scopes_csv(requested)
+        ttl = clamp_ttl_seconds(payload.ttl_seconds)
+        if payload.code_challenge is not None:
+            validate_pkce(payload.code_challenge, label="code_challenge")
+        if payload.redirect_uri is not None:
+            validate_redirect_uri(payload.redirect_uri)
+    except MinerSessionRejected as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if payload.client_id is not None:
         client = await get_oauth_client(session, client_id=payload.client_id)
         if client is None:
@@ -211,6 +220,9 @@ async def public_device(
         if grant is None:
             raise HTTPException(status_code=404, detail="unknown login code")
         grant = await expire_stale_grant(session, grant=grant, now=now)
+        client = None
+        if grant.oauth_client_id:
+            client = await get_oauth_client(session, client_id=grant.oauth_client_id)
     remaining = max(0, int((grant.expires_at - now).total_seconds()))
     return MinerDevicePublicResponse(
         user_code=grant.user_code,
@@ -224,13 +236,15 @@ async def public_device(
         ),
         miner_hotkey=grant.miner_hotkey,
         oauth=bool(grant.oauth_client_id),
+        oauth_client_id=grant.oauth_client_id,
+        oauth_client_name=None if client is None else client.client_name,
+        redirect_uri=grant.redirect_uri,
     )
 
 
 @router.post("/device/{user_code}/approve", response_model=MinerDeviceStatusResponse)
 async def approve_device(
     user_code: str,
-    request: Request,
     session: SessionDep,
     body: MinerLoginApproveRequest,
 ) -> MinerDeviceStatusResponse:
@@ -266,6 +280,8 @@ async def approve_device(
                     issued_at=body.issued_at,
                     key_kind=body.proof.key_kind,
                     signer=body.proof.signer,
+                    oauth_client_id=grant.oauth_client_id,
+                    redirect_uri=grant.redirect_uri,
                 ),
                 hotkey=body.miner_hotkey,
                 key_kind=body.proof.key_kind,
@@ -306,11 +322,6 @@ async def approve_device(
         grant.session_id = row.session_id
         grant_view = grant
         session_row = row
-    continue_url = None
-    if grant_view.oauth_client_id:
-        continue_url = (
-            f"{_origin(request)}/mcp/oauth/complete?code={grant_view.user_code}"
-        )
     return MinerDeviceStatusResponse(
         user_code=grant_view.user_code,
         status="approved",
@@ -319,7 +330,8 @@ async def approve_device(
         session=_session_view(session_row, now=now),
         access_token=issued_token,
         token_type="Bearer",
-        continue_url=continue_url,
+        continue_url=None,
+        oauth=bool(grant_view.oauth_client_id),
     )
 
 
@@ -328,13 +340,11 @@ async def poll_device(
     user_code: str,
     request: Request,
     session: SessionDep,
-    poll_token: str | None = Query(default=None),
 ) -> MinerDeviceStatusResponse:
     return await _poll_device(
         user_code=user_code,
         request=request,
         session=session,
-        poll_token=poll_token,
     )
 
 
@@ -348,7 +358,6 @@ async def poll_device_post(
         user_code=user_code,
         request=request,
         session=session,
-        poll_token=None,
     )
 
 
@@ -357,14 +366,13 @@ async def _poll_device(
     user_code: str,
     request: Request,
     session: AsyncSession,
-    poll_token: str | None,
 ) -> MinerDeviceStatusResponse:
     now = datetime.now(UTC)
     try:
         code = normalize_user_code(user_code)
     except MinerSessionRejected as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    token = poll_token or request.headers.get("x-miner-poll-token")
+    token = request.headers.get("x-miner-poll-token")
     if token is None and request.method == "POST":
         try:
             payload = await request.json()
@@ -400,9 +408,6 @@ async def _poll_device(
             grant.consumed_at = now
             if not grant.oauth_client_id:
                 grant.status = "consumed"
-    continue_url = None
-    if grant.oauth_client_id and grant.status == "approved":
-        continue_url = f"{_origin(request)}/mcp/oauth/complete?code={grant.user_code}"
     return MinerDeviceStatusResponse(
         user_code=grant.user_code,
         status=grant.status,  # type: ignore[arg-type]
@@ -411,7 +416,8 @@ async def _poll_device(
         session=_session_view(session_row, now=now) if session_row else None,
         access_token=issued_token,
         token_type="Bearer" if issued_token else None,
-        continue_url=continue_url,
+        continue_url=None,
+        oauth=bool(grant.oauth_client_id),
     )
 
 

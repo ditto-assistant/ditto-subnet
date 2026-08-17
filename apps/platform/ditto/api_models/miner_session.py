@@ -50,6 +50,9 @@ class MinerDevicePublicResponse(BaseModel):
     login_command: str
     miner_hotkey: str | None = None
     oauth: bool = False
+    oauth_client_id: str | None = None
+    oauth_client_name: str | None = None
+    redirect_uri: str | None = None
 
 
 class MinerLoginApproveRequest(BaseModel):
@@ -85,6 +88,7 @@ class MinerDeviceStatusResponse(BaseModel):
     access_token: str | None = None
     token_type: str | None = None
     continue_url: str | None = None
+    oauth: bool = False
 
 
 class MinerProfileLinks(BaseModel):
@@ -120,6 +124,7 @@ class PublicMinerSubmission(BaseModel):
     status: str
     created_at: datetime
     avatar_url: str | None = None
+    name_handle: PublicNameHandle | None = None
 
 
 class PublicMinerReview(BaseModel):

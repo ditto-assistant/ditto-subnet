@@ -38,6 +38,75 @@ def test_social_normalization() -> None:
     assert normalize_discord_handle("@Jupiter_01") == "Jupiter_01"
     with pytest.raises(MinerSessionRejected):
         normalize_x_url("https://example.com/x")
+    with pytest.raises(MinerSessionRejected):
+        normalize_x_url("x.com/" + ("a" * 200))
+
+
+def test_login_message_binds_oauth_client() -> None:
+    nonce = uuid4()
+    issued = datetime(2026, 8, 17, 12, 0, 0, tzinfo=UTC)
+    grant_id = uuid4()
+    payload = login_message(
+        netuid=118,
+        miner_hotkey="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        user_code="ABCD-EFGH",
+        grant_id=grant_id,
+        ttl_seconds=86400,
+        scopes="profile,read,upload",
+        nonce=nonce,
+        issued_at=issued,
+        key_kind="hotkey",
+        signer="5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+        oauth_client_id="mcp_client",
+        redirect_uri="http://127.0.0.1:8757/cb",
+    )
+    assert payload.startswith(b"ditto-miner-login:v1:118:")
+    assert b":mcp_client:http://127.0.0.1:8757/cb" in payload
+    assert b":read,profile,upload:" in payload
+
+
+def test_expire_stale_grant_covers_approved() -> None:
+    from datetime import timedelta
+
+    from ditto.db.models import MinerDeviceGrant
+    from ditto.db.queries.miner_sessions import expire_stale_grant
+
+    now = datetime.now(UTC)
+    grant = MinerDeviceGrant(
+        grant_id=uuid4(),
+        user_code="ABCD-EFGH",
+        poll_token_hash="a" * 64,
+        status="approved",
+        scopes="read",
+        ttl_seconds=3600,
+        expires_at=now - timedelta(seconds=1),
+    )
+
+    class _Session:
+        async def flush(self) -> None:
+            return None
+
+    async def _run() -> None:
+        expired = await expire_stale_grant(_Session(), grant=grant, now=now)  # type: ignore[arg-type]
+        assert expired.status == "expired"
+
+    import asyncio
+
+    asyncio.run(_run())
+
+
+def test_pkce_and_redirect_rules() -> None:
+    from ditto.api_server.miner_session import validate_pkce, validate_redirect_uri
+
+    assert validate_pkce("a" * 43) == "a" * 43
+    with pytest.raises(MinerSessionRejected):
+        validate_pkce("short")
+    assert validate_redirect_uri("https://app.example/cb") == "https://app.example/cb"
+    assert validate_redirect_uri("http://127.0.0.1:8757/cb").startswith("http://")
+    with pytest.raises(MinerSessionRejected):
+        validate_redirect_uri("javascript:alert(1)")
+    with pytest.raises(MinerSessionRejected):
+        validate_redirect_uri("http://evil.example/cb")
 
 
 def test_login_signature_round_trip() -> None:

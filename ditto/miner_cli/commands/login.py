@@ -30,7 +30,7 @@ if TYPE_CHECKING:
     from ditto.miner_cli.miner_session import KeyKind
 
 DEFAULT_NETUID = 118
-DEFAULT_SCOPES = "read,profile,download,upload,handle,challenges"
+DEFAULT_SCOPES = "read,profile"
 
 
 def add_subparser(
@@ -153,13 +153,10 @@ def _logout(args: argparse.Namespace) -> int:
     if isinstance(token, str) and token:
         try:
             with ApiClient(base_url=network.api_url) as client:
-                client._request(
-                    "POST",
-                    "/api/v1/miner-auth/session/revoke",
-                    headers={"authorization": f"Bearer {token}"},
-                )
-        except Exception:
-            pass
+                client.revoke_miner_session(token)
+        except Exception as exc:
+            print(f"could not revoke server session: {exc}", file=sys.stderr)
+            return 1
     clear_miner_session(network=network.name)
     print("signed out", file=sys.stderr)
     return 0
@@ -180,6 +177,8 @@ def _approve(args: argparse.Namespace) -> int:
             ttl_seconds = public.ttl_seconds
             scopes = ",".join(public.scopes)
             grant_id = public.grant_id
+            oauth_client_id = public.oauth_client_id
+            redirect_uri = public.redirect_uri
         else:
             hours = max(1, min(int(args.hours), 720))
             started = client.start_miner_device(
@@ -197,21 +196,29 @@ def _approve(args: argparse.Namespace) -> int:
             ttl_seconds = public.ttl_seconds
             scopes = ",".join(public.scopes)
             grant_id = public.grant_id
+            oauth_client_id = public.oauth_client_id
+            redirect_uri = public.redirect_uri
             print(started.verification_uri_complete, file=sys.stderr)
         nonce = uuid4()
         issued_at = datetime.now(UTC)
-        payload = login_message(
-            netuid=args.netuid,
-            miner_hotkey=handle.hotkey_ss58,
-            user_code=user_code,
-            grant_id=grant_id,
-            ttl_seconds=ttl_seconds,
-            scopes=scopes,
-            nonce=nonce,
-            issued_at=issued_at,
-            key_kind=key_kind,
-            signer=signer,
-        )
+        try:
+            payload = login_message(
+                netuid=args.netuid,
+                miner_hotkey=handle.hotkey_ss58,
+                user_code=user_code,
+                grant_id=grant_id,
+                ttl_seconds=ttl_seconds,
+                scopes=scopes,
+                nonce=nonce,
+                issued_at=issued_at,
+                key_kind=key_kind,
+                signer=signer,
+                oauth_client_id=oauth_client_id,
+                redirect_uri=redirect_uri,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
         signature = sign_payload(live_wallet=wallet, key_kind=key_kind, payload=payload)
         body = MinerLoginApproveRequest(
             netuid=args.netuid,
@@ -233,16 +240,22 @@ def _approve(args: argparse.Namespace) -> int:
             scopes=scopes,
             hours=max(1, ttl_seconds // 3600),
             skip=bool(args.yes),
+            oauth_client_name=public.oauth_client_name,
+            redirect_uri=redirect_uri,
         )
         result = client.approve_miner_device(user_code, body)
     if result.access_token and result.session:
-        save_miner_session(
+        saved = save_miner_session(
             network=network.name,
             token=result.access_token,
             hotkey=result.session.miner_hotkey,
             scopes=list(result.session.scopes),
             expires_at=result.session.expires_at.isoformat(),
         )
+        if not saved:
+            print(
+                "signed in, but the local session file was not saved", file=sys.stderr
+            )
     signed = result.session.miner_hotkey if result.session else handle.hotkey_ss58
     print(f"signed in as {signed}")
     if result.continue_url:

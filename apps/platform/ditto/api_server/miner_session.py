@@ -43,13 +43,20 @@ ALL_SCOPES: Final[tuple[Scope, ...]] = (
     "handle",
     "challenges",
 )
-DEFAULT_SCOPES: Final[tuple[Scope, ...]] = ALL_SCOPES
+DEFAULT_SCOPES: Final[tuple[Scope, ...]] = ("read",)
+OAUTH_DEFAULT_SCOPES: Final[tuple[Scope, ...]] = ("read",)
 SessionLabel = Literal["dashboard", "mcp", "cli"]
 
 _X_HOSTS: Final = ("x.com", "www.x.com", "twitter.com", "www.twitter.com")
 _GITHUB_HOSTS: Final = ("github.com", "www.github.com")
 _DISCORD_RE = re.compile(r"^[A-Za-z0-9._]{2,32}$")
 _USER_CODE_RE = re.compile(r"^[A-Z0-9]{4}-[A-Z0-9]{4}$")
+_PKCE_RE = re.compile(r"^[A-Za-z0-9\-._~]{43,128}$")
+_CUSTOM_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.-]{1,32}$")
+_BLOCKED_REDIRECT_SCHEMES: Final = frozenset(
+    {"javascript", "data", "file", "vbscript", "about"}
+)
+MAX_PROFILE_URL_LEN: Final = 200
 
 
 class MinerSessionRejected(MinerAvatarRejected):
@@ -132,14 +139,48 @@ def login_message(
     issued_at: datetime,
     key_kind: KeyKind,
     signer: str,
+    oauth_client_id: str | None = None,
+    redirect_uri: str | None = None,
 ) -> bytes:
     issued = _issued_stamp(issued_at)
     csv = scopes_csv(scopes)
     code = normalize_user_code(user_code)
+    client = oauth_client_id or "-"
+    redirect = redirect_uri or "-"
     return (
         f"{LOGIN_DOMAIN}:{netuid}:{miner_hotkey}:{code}:{grant_id}:{ttl_seconds}"
-        f":{csv}:{nonce}:{issued}:{key_kind}:{signer}"
+        f":{csv}:{nonce}:{issued}:{key_kind}:{signer}:{client}:{redirect}"
     ).encode()
+
+
+def validate_pkce(value: str, *, label: str = "PKCE value") -> str:
+    if not _PKCE_RE.fullmatch(value):
+        raise MinerSessionRejected(
+            f"{label} must be 43-128 unreserved characters (A-Z, a-z, 0-9, -._~)"
+        )
+    return value
+
+
+def validate_redirect_uri(raw: str) -> str:
+    value = raw.strip()
+    if not value or any(ch in value for ch in "\r\n\x00"):
+        raise MinerSessionRejected("redirect_uri is invalid")
+    from urllib.parse import urlparse
+
+    parsed = urlparse(value)
+    scheme = (parsed.scheme or "").lower()
+    if scheme in _BLOCKED_REDIRECT_SCHEMES:
+        raise MinerSessionRejected("redirect_uri scheme is not allowed")
+    if scheme == "https":
+        return value
+    if scheme == "http":
+        host = (parsed.hostname or "").lower()
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return value
+        raise MinerSessionRejected("http redirect_uri must target loopback")
+    if scheme and _CUSTOM_SCHEME_RE.fullmatch(scheme):
+        return value
+    raise MinerSessionRejected("redirect_uri scheme is not allowed")
 
 
 def check_freshness(*, issued_at: datetime, now: datetime) -> None:
@@ -204,7 +245,10 @@ def normalize_x_url(raw: str | None) -> str | None:
     path = (parsed.path or "").rstrip("/")
     if not path or path == "/":
         raise MinerSessionRejected("x_url must include a profile path")
-    return f"https://x.com{path}"
+    normalized = f"https://x.com{path}"
+    if len(normalized) > MAX_PROFILE_URL_LEN:
+        raise MinerSessionRejected("x_url is too long")
+    return normalized
 
 
 def normalize_github_url(raw: str | None) -> str | None:
@@ -224,7 +268,10 @@ def normalize_github_url(raw: str | None) -> str | None:
     path = (parsed.path or "").rstrip("/")
     if not path or path == "/":
         raise MinerSessionRejected("github_url must include a username path")
-    return f"https://github.com{path}"
+    normalized = f"https://github.com{path}"
+    if len(normalized) > MAX_PROFILE_URL_LEN:
+        raise MinerSessionRejected("github_url is too long")
+    return normalized
 
 
 def normalize_discord_handle(raw: str | None) -> str | None:

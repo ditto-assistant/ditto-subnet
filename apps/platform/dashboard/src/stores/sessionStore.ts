@@ -1,6 +1,8 @@
 import { createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 
+import { API_BASE } from "../lib/config";
+
 const STORAGE_KEY = "ditto.miner.session.v1";
 
 export interface MinerSessionRecord {
@@ -29,7 +31,7 @@ function readStored(): MinerSessionRecord | null {
     const parsed = JSON.parse(raw) as MinerSessionRecord;
     if (!parsed.token || !parsed.hotkey || !parsed.expiresAt) return null;
     if (Date.parse(parsed.expiresAt) <= Date.now()) {
-      localStorage.removeItem(STORAGE_KEY);
+      storage()?.removeItem(STORAGE_KEY);
       return null;
     }
     return parsed;
@@ -46,7 +48,7 @@ export function setMinerSession(record: MinerSessionRecord): void {
 export function clearMinerSession(): void {
   const current = sessionSignal();
   if (current?.token) {
-    void fetch((globalThis.location?.origin || "") + "/api/v1/miner-auth/session/revoke", {
+    void fetch(API_BASE + "/miner-auth/session/revoke", {
       method: "POST",
       headers: { authorization: "Bearer " + current.token },
     }).catch(() => undefined);

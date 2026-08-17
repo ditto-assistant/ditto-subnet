@@ -4437,10 +4437,11 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** Complete Oauth */
-        get: operations["complete_oauth_mcp_oauth_complete_get"];
+        /** Complete Oauth Get */
+        get: operations["complete_oauth_get_mcp_oauth_complete_get"];
         put?: never;
-        post?: never;
+        /** Complete Oauth */
+        post: operations["complete_oauth_mcp_oauth_complete_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11236,6 +11237,12 @@ export interface components {
              * @default false
              */
             oauth: boolean;
+            /** Oauth Client Id */
+            oauth_client_id?: string | null;
+            /** Oauth Client Name */
+            oauth_client_name?: string | null;
+            /** Redirect Uri */
+            redirect_uri?: string | null;
             /** Scopes */
             scopes: ("read" | "profile" | "download" | "upload" | "handle" | "challenges")[];
             /**
@@ -11293,6 +11300,11 @@ export interface components {
             access_token?: string | null;
             /** Continue Url */
             continue_url?: string | null;
+            /**
+             * Oauth
+             * @default false
+             */
+            oauth: boolean;
             /** Scopes */
             scopes: ("read" | "profile" | "download" | "upload" | "handle" | "challenges")[];
             session?: components["schemas"]["MinerSessionView"] | null;
@@ -14196,6 +14208,7 @@ export interface components {
             created_at: string;
             /** Name */
             name: string;
+            name_handle?: components["schemas"]["PublicNameHandle"] | null;
             /** Status */
             status: string;
         };
@@ -23349,9 +23362,7 @@ export interface operations {
     };
     poll_device_api_v1_miner_auth_device__user_code__status_get: {
         parameters: {
-            query?: {
-                poll_token?: string | null;
-            };
+            query?: never;
             header?: never;
             path: {
                 user_code: string;
@@ -27123,7 +27134,27 @@ export interface operations {
             };
         };
     };
-    complete_oauth_mcp_oauth_complete_get: {
+    complete_oauth_get_mcp_oauth_complete_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+        };
+    };
+    complete_oauth_mcp_oauth_complete_post: {
         parameters: {
             query?: never;
             header?: never;

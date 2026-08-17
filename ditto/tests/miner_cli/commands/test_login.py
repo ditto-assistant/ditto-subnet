@@ -44,6 +44,49 @@ def _wallet() -> tuple[MagicMock, MagicMock]:
     return handle, wallet
 
 
+def test_login_message_rejects_unknown_scopes_and_binds_oauth() -> None:
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from ditto.miner_cli.miner_session import login_message
+
+    nonce = uuid4()
+    issued = datetime(2026, 8, 17, 12, 0, 0, tzinfo=UTC)
+    payload = login_message(
+        netuid=118,
+        miner_hotkey=HOTKEY,
+        user_code="ABCD-EFGH",
+        grant_id=uuid4(),
+        ttl_seconds=86400,
+        scopes="profile,read,upload",
+        nonce=nonce,
+        issued_at=issued,
+        key_kind="hotkey",
+        signer=HOTKEY,
+        oauth_client_id="mcp_client",
+        redirect_uri="http://127.0.0.1:8757/cb",
+    )
+    assert b":mcp_client:http://127.0.0.1:8757/cb" in payload
+    assert b":read,profile,upload:" in payload
+    try:
+        login_message(
+            netuid=118,
+            miner_hotkey=HOTKEY,
+            user_code="ABCD-EFGH",
+            grant_id=uuid4(),
+            ttl_seconds=86400,
+            scopes="admin",
+            nonce=nonce,
+            issued_at=issued,
+            key_kind="hotkey",
+            signer=HOTKEY,
+        )
+    except ValueError as exc:
+        assert "unknown miner session scope" in str(exc)
+    else:
+        raise AssertionError("expected unknown scope to fail")
+
+
 def test_print_only_does_not_approve() -> None:
     handle, wallet = _wallet()
     public = MinerDevicePublicResponse(
@@ -119,6 +162,69 @@ def test_approve_saves_session(tmp_path, monkeypatch) -> None:
         rc = run(_args())
     assert rc == 0
     client.approve_miner_device.assert_called_once()
+    from ditto.miner_cli.preferences import load_miner_session
+
+    saved = load_miner_session(network="local")
+    assert saved is not None
+    assert saved["token"].startswith("ditto_ms_")
+    assert saved["hotkey"] == HOTKEY
+    assert saved["scopes"] == ["read", "profile"]
+    mode = (tmp_path / "config.json").stat().st_mode & 0o777
+    assert mode == 0o600
+    from io import StringIO
+    from unittest.mock import patch as _patch
+
+    with _patch("sys.stdout", new=StringIO()) as out:
+        status_rc = run(_args(login_command="status"))
+    assert status_rc == 0
+    printed = out.getvalue()
+    assert "ditto_ms_" not in printed
+    assert HOTKEY in printed
+
+
+def test_logout_revokes_before_clearing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(tmp_path / "config.json"))
+    from ditto.miner_cli.preferences import load_miner_session, save_miner_session
+
+    save_miner_session(
+        network="local",
+        token="ditto_ms_" + "ab" * 32,
+        hotkey=HOTKEY,
+        scopes=["read"],
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+    client = MagicMock()
+    ctor = MagicMock()
+    ctor.return_value.__enter__.return_value = client
+    ctor.return_value.__exit__.return_value = False
+    with patch("ditto.miner_cli.commands.login.ApiClient", ctor):
+        rc = run(_args(login_command="logout", user_code=None))
+    assert rc == 0
+    client.revoke_miner_session.assert_called_once()
+    assert load_miner_session(network="local") is None
+
+
+def test_logout_keeps_session_when_revoke_fails(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("DITTO_CLI_CONFIG_PATH", str(tmp_path / "config.json"))
+    from ditto.miner_cli.errors import LoginRejectedError
+    from ditto.miner_cli.preferences import load_miner_session, save_miner_session
+
+    save_miner_session(
+        network="local",
+        token="ditto_ms_" + "ab" * 32,
+        hotkey=HOTKEY,
+        scopes=["read"],
+        expires_at="2099-01-01T00:00:00+00:00",
+    )
+    client = MagicMock()
+    client.revoke_miner_session.side_effect = LoginRejectedError("miner-logout failed")
+    ctor = MagicMock()
+    ctor.return_value.__enter__.return_value = client
+    ctor.return_value.__exit__.return_value = False
+    with patch("ditto.miner_cli.commands.login.ApiClient", ctor):
+        rc = run(_args(login_command="logout", user_code=None))
+    assert rc == 1
+    assert load_miner_session(network="local") is not None
 
 
 def test_start_without_code_prints_url() -> None:
