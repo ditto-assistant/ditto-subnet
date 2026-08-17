@@ -594,9 +594,7 @@ def _image_archive_sources(archive: Path) -> tuple[str, ...]:
         return (oci, docker)
     if "manifest.json" in names:
         return (docker, oci)
-    raise ControllerError(
-        "runtime archive has neither manifest.json nor oci-layout"
-    )
+    raise ControllerError("runtime archive has neither manifest.json nor oci-layout")
 
 
 def _skopeo_detail(error: BaseException) -> str:
