@@ -12,6 +12,7 @@
 | Public operator console | `apps/backroom/` |
 | Local OpenAPI generation | `apps/backroom/scripts/platform-contract/generate.sh` |
 | Affected-component graph | `release/components.toml` |
+| Production DB (read-only) | `.agents/skills/gcloud-ditto-platform-db-readonly/` |
 
 ## High-value lookups
 

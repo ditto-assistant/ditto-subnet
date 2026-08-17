@@ -95,6 +95,59 @@ def test_shared_claude_skill_symlinks_point_at_agents_tree() -> None:
         assert (target / "SKILL.md").is_file(), target
 
 
+_COMPONENT_SKILL_PREFIXES = (
+    "apps",
+    "services",
+    "packages",
+    "research",
+    "infra",
+    "workers",
+    "miners",
+    "ditto",
+)
+
+
+def test_component_local_skills_are_symlinks_to_agents_tree() -> None:
+    completed = subprocess.run(
+        ["git", "ls-files", "-z", "--", *_COMPONENT_SKILL_PREFIXES],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+    )
+    agents_root = (ROOT / ".agents" / "skills").resolve()
+    owned_files: list[str] = []
+    seen_skill_dirs: set[Path] = set()
+
+    for raw in completed.stdout.split(b"\0"):
+        if not raw:
+            continue
+        rel = Path(raw.decode())
+        parts = rel.parts
+        try:
+            agents_idx = parts.index(".agents")
+        except ValueError:
+            continue
+        if agents_idx + 2 >= len(parts) or parts[agents_idx + 1] != "skills":
+            continue
+        skill_rel = Path(*parts[: agents_idx + 3])
+        skill_path = ROOT / skill_rel
+        if not skill_path.is_symlink():
+            owned_files.append(str(rel))
+            continue
+        if skill_rel in seen_skill_dirs:
+            continue
+        seen_skill_dirs.add(skill_rel)
+        target = (skill_path.parent / skill_path.readlink()).resolve()
+        expected = agents_root / skill_path.name
+        assert target == expected, f"{skill_rel} -> {target}, expected {expected}"
+        assert (target / "SKILL.md").is_file(), expected
+
+    assert not owned_files, (
+        "component-local .agents/skills trees may only symlink to "
+        f"repo-root .agents/skills/<name>: {owned_files}"
+    )
+
+
 def test_context_index_rejects_paths_outside_repository(capsys) -> None:
     for escaped in ("/tmp", ".."):
         data = {

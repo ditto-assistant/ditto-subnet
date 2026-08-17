@@ -32,7 +32,7 @@ Read [`references/platform-index.md`](references/platform-index.md), then only t
 
 ## Safety
 
-- Use the production DB only through the read-only GCP skill. Never mutate production while diagnosing.
+- Use the production DB only through `.agents/skills/gcloud-ditto-platform-db-readonly`. Never mutate production while diagnosing.
 - Keep Cloudflare OAuth, sessions, administrator lists, and Platform admin tokens server-side.
 - Never revive repository dispatch or bot contract-sync PRs. Same-repository generated artifacts are ordinary reviewed changes.
 - Distinguish an exact source SHA, green CI, merge, release, deployment, migration success, and browser-visible behavior.

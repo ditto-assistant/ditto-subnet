@@ -39,6 +39,8 @@ and `.claude/skills/<name>`.
   `.agents/skills/<name>/agents/` without forcing the Claude tree to match
   file-for-file.
 - A new shared skill is incomplete until the `.claude/skills` path exists.
+- Component-local trees such as `apps/platform/.agents/skills/<name>` are not
+  the canonical home; they must symlink back to `.agents/skills/<name>`.
 
 ## Semantic-release commit types
 

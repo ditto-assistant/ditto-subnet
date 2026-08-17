@@ -67,7 +67,7 @@
       "keywords": ["platform", "api", "fastapi", "database", "postgres", "alembic", "migration", "queue", "ticket", "lease", "admin endpoint"],
       "summary": "Platform owns HTTP contracts, durable state, scheduling, admission, leases, and administrative control.",
       "owns": ["apps/platform/ditto/api_server", "apps/platform/ditto/api_models", "apps/platform/ditto/db", "apps/platform/alembic"],
-      "read": ["apps/platform/CLAUDE.md", "apps/platform/docs/submission-contract.md", "apps/platform/docs/validator-retry-model.md"],
+      "read": ["apps/platform/CLAUDE.md", "apps/platform/docs/submission-contract.md", "apps/platform/docs/validator-retry-model.md", ".agents/skills/gcloud-ditto-platform-db-readonly/SKILL.md"],
       "search": ["rg -n 'APIRouter|@router|create_api_server' apps/platform/ditto/api_server", "rg -n 'down_revision|safe_add_column|safe_drop_column' apps/platform/alembic apps/platform/ditto/db"],
       "validate": ["cd apps/platform && python scripts/check_migration_order.py origin/main", "cd apps/platform && make lint lint-copy typecheck test"],
       "invariants": ["Alembic must have exactly one head and hot-table migrations must use the safe helpers.", "Platform API changes mark Backroom affected; dashboard-only changes do not."],
