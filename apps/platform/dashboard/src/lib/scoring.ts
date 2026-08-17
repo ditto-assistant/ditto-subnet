@@ -1109,11 +1109,11 @@ export function compositeCalculationRows(e: {
                   fx(scoreAdjustment.quality) +
                   ") = " +
                   fx(scoreAdjustment.adjusted)
-              : fx(scoreAdjustment.quality) +
-                " × " +
-                fx(scoreAdjustment.factor) +
-                " = " +
-                fx(scoreAdjustment.adjusted),
+                : fx(scoreAdjustment.quality) +
+                  " × " +
+                  fx(scoreAdjustment.factor) +
+                  " = " +
+                  fx(scoreAdjustment.adjusted),
         });
       }
     } else if (hasBonus) {

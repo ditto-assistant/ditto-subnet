@@ -422,7 +422,7 @@ class TestScoringLedger:
 
         # The shared resolver owns requester/global readiness. Its neutral result
         # represents the broad fleet minimum seeing this fresh protocol-18 row.
-        resolver = AsyncMock(return_value=({}, {}))
+        resolver = AsyncMock(return_value=({}, {}, {}))
         monkeypatch.setattr(scoring_mod, "resolve_efficiency_adjustments", resolver)
         _install_db(app, session_maker)
         _install_chain(app)
@@ -849,10 +849,11 @@ class TestScoringLiveness:
             return await real_list(*args, **kwargs)
 
         async def _factor_adjustments(*_args: Any, **kwargs: Any) -> Any:
-            return {}, {row.agent_id: 1.05 for row in kwargs["rows"]}
+            factors = {row.agent_id: 1.05 for row in kwargs["rows"]}
+            return {}, factors, dict.fromkeys(factors, 3)
 
         def _stable_tiebreaks(
-            rows: Any, *, official: Any, efficiency_factors: Any
+            rows: Any, *, official: Any, efficiency_factors: Any, **_kwargs: Any
         ) -> Any:
             assert efficiency_factors
             return {row.agent_id: official[row.agent_id] for row in rows}
