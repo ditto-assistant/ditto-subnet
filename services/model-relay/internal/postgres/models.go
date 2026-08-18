@@ -265,4 +265,5 @@ type ValidatorTicket struct {
 	FirstReportedAt         pgtype.Timestamptz `json:"firstReportedAt"`
 	FailureDetail           pgtype.Text        `json:"failureDetail"`
 	ContainerLogTail        pgtype.Text        `json:"containerLogTail"`
+	ContainerLogTailAttempt pgtype.Int4        `json:"containerLogTailAttempt"`
 }

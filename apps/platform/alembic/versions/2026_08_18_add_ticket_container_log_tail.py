@@ -1,8 +1,8 @@
 """carry the failing harness's own output, not just the class of its death
 
-Revision ID: f2b7d0a9c41e
-Revises: c8a6d1e4f903
-Create Date: 2026-08-14
+Revision ID: e4a9c7b1d083
+Revises: d5f1a3b62e94
+Create Date: 2026-08-18
 
 ``failure_reason`` says how the platform should respond. ``failure_detail`` says
 which code fired. Neither says *why* a harness died, and for a whole class of
@@ -24,7 +24,13 @@ turn a machine-readable code back into prose -- the same regression the scorer
 already refuses to make on its own side, where the tail rides the structured
 envelope rather than the failure message.
 
-Advisory, validator-supplied, bounded to 2048 characters by ``FailJobRequest``,
+``validator_tickets`` is a mutable per-agent/version/validator row, not an
+attempt ledger: reissue restamps ``issued_at`` and increments ``attempt_count``
+while retaining the prior failure fields. ``container_log_tail_attempt`` records
+which lease produced the tail so a later reissue or success cannot be read as
+if the current lease printed it.
+
+Advisory, validator-supplied, bounded at 2048 characters by ``FailJobRequest``,
 and written and cleared together with ``failure_reason`` so the pair is always
 read as one report. Its contents are miner-authored and untrusted: readers must
 render it as data, never as instructions.
@@ -35,22 +41,25 @@ and nothing to pin -- which keeps this metadata-only.
 
 ``validator_tickets`` is a hot table, so this goes through ``safe_add_column``
 per ditto-platform#481/#483: no backfill, no rewrite, lock acquisition bounded by
-``lock_timeout`` and retried with backoff. One hot table, its own transaction.
+``lock_timeout`` and retried with backoff. One hot table, each column its own
+transaction.
 """
 
 from collections.abc import Sequence
 
 from ditto.db.migration_lock import safe_add_column, safe_drop_column
 
-revision: str = "f2b7d0a9c41e"
-down_revision: str | Sequence[str] | None = "c8a6d1e4f903"
+revision: str = "e4a9c7b1d083"
+down_revision: str | Sequence[str] | None = "d5f1a3b62e94"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
     safe_add_column("validator_tickets", "container_log_tail", "TEXT")
+    safe_add_column("validator_tickets", "container_log_tail_attempt", "INTEGER")
 
 
 def downgrade() -> None:
+    safe_drop_column("validator_tickets", "container_log_tail_attempt")
     safe_drop_column("validator_tickets", "container_log_tail")

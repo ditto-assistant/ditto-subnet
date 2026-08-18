@@ -670,9 +670,12 @@ uv run ditto login logout
 ```
 
 While that session is live, the dashboard can update your picture and
-social links without asking you to sign again. Upload, handle reservation,
-and other one-shot signed actions still happen in the CLI. The hosted MCP
-at `https://dittobench.ai/mcp` returns those `ditto` commands instead of
+social links without asking you to sign again. The same session can read
+your own validator harness logs (`ditto logs <agent_id>`, the submissions
+tab, or the hosted MCP `get_my_harness_logs` tool) so a failed scoring run
+is no longer a bare `scoring_error`. Upload, handle reservation, and other
+one-shot signed actions still happen in the CLI. The hosted MCP at
+`https://dittobench.ai/mcp` returns those `ditto` commands instead of
 signing remotely.
 
 Public miner profiles are `/miner/<hotkey>` and `/h/<handle>`. X, GitHub,
@@ -689,6 +692,12 @@ login --code …` command. You do not need `--coldkey` / `--hotkey`; the
 CLI offers to find them under `~/.bittensor/wallets`. Signing does not
 transfer TAO. `ditto name` and `ditto avatar` still work without a
 session.
+
+**Why did my agent fail scoring?** After `ditto login`, run
+`ditto logs <agent_id>` or open the submissions tab on the miner console.
+That shows each validator ticket's failure class, code, and the harness's
+own last output. A `stale` flag means the tail is from a prior lease —
+reissue keeps the last failure on the row while starting a new attempt.
 
 **How much does evaluation cost?** The Backroom-controlled fee is denominated in
 TAO and is currently **0.04 TAO (40,000,000 rao)**. The CLI fetches and shows

@@ -2139,6 +2139,31 @@ export interface paths {
         patch: operations["update_me_api_v1_me_patch"];
         trace?: never;
     };
+    "/api/v1/me/agents/{agent_id}/harness-logs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * My Harness Logs
+         * @description Return this signed-in miner's harness diagnostics for one of their agents.
+         *
+         *     Authenticated by the miner session, not a one-shot hotkey signature. The
+         *     caller already proved possession of the hotkey at ``ditto login`` /
+         *     dashboard sign-in; this only checks that the session's hotkey owns
+         *     ``agent_id``. Unknown and other-miners' agents are the same 404.
+         */
+        get: operations["my_harness_logs_api_v1_me_agents__agent_id__harness_logs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/me/avatar": {
         parameters: {
             query?: never;
@@ -7865,6 +7890,13 @@ export interface components {
             bench_version: number;
             /** Container Log Tail */
             container_log_tail?: string | null;
+            /** Container Log Tail Attempt */
+            container_log_tail_attempt?: number | null;
+            /**
+             * Container Log Tail Stale
+             * @default false
+             */
+            container_log_tail_stale: boolean;
             /**
              * Deadline
              * Format: date-time
@@ -11346,6 +11378,72 @@ export interface components {
             paid_submissions: number;
             /** Priced Submissions */
             priced_submissions: number;
+        };
+        /**
+         * MinerHarnessLogAttempt
+         * @description One validator ticket for this agent, with whatever it last reported.
+         *
+         *     ``validator_tickets`` is a mutable per-agent/version/validator row, not an
+         *     attempt ledger. Reissue restamps ``issued_at`` and increments
+         *     ``attempt_count`` while retaining the prior failure fields. ``stale`` is
+         *     true when ``container_log_tail`` belongs to an earlier lease than the one
+         *     ``issued_at`` describes -- do not compute a runtime from
+         *     ``failed_at - issued_at`` in that case.
+         *
+         *     Scoped to diagnosis. It carries no score, no ranking, and nothing about any
+         *     other miner's submission.
+         */
+        MinerHarnessLogAttempt: {
+            /** Attempt Count */
+            attempt_count: number;
+            /** Bench Version */
+            bench_version: number;
+            /** Container Log Tail */
+            container_log_tail?: string | null;
+            /**
+             * Deadline
+             * Format: date-time
+             */
+            deadline: string;
+            /** Failed At */
+            failed_at?: string | null;
+            /** Failure Detail */
+            failure_detail?: string | null;
+            /** Failure Reason */
+            failure_reason?: string | null;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Log Tail Attempt */
+            log_tail_attempt?: number | null;
+            /**
+             * Stale
+             * @default false
+             */
+            stale: boolean;
+            /** Status */
+            status: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * MinerHarnessLogsResponse
+         * @description Every recorded validator ticket for one agent, newest first.
+         */
+        MinerHarnessLogsResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Attempts */
+            attempts: components["schemas"]["MinerHarnessLogAttempt"][];
+            /** Miner Hotkey */
+            miner_hotkey: string;
         };
         /** MinerLoginApproveRequest */
         MinerLoginApproveRequest: {
@@ -23169,6 +23267,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MinerMeResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    my_harness_logs_api_v1_me_agents__agent_id__harness_logs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MinerHarnessLogsResponse"];
                 };
             };
             /** @description Validation Error */

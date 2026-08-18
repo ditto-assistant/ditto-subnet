@@ -2598,6 +2598,7 @@ CREATE TABLE public.validator_tickets (
     first_reported_at timestamp with time zone,
     failure_detail text,
     container_log_tail text,
+    container_log_tail_attempt integer,
     CONSTRAINT ck_validator_tickets_validator_tickets_failure_reason CHECK (((failure_reason IS NULL) OR (failure_reason = ANY (ARRAY['infrastructure'::text, 'scoring_error'::text, 'sandbox_oom'::text])))),
     CONSTRAINT ck_validator_tickets_validator_tickets_infra_retry_gran_aa85 CHECK ((infra_retry_grants >= 0)),
     CONSTRAINT ck_validator_tickets_validator_tickets_purpose_revision_df08 CHECK ((purpose_revision >= 0)),

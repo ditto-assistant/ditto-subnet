@@ -7,19 +7,21 @@ all a miner ever saw. Agent ``5fdadd33`` burned four validator leases in 82-108
 seconds each behind a bare ``scoring_error``; the harness's own output named the
 cause the entire time and lived only on validator hosts.
 
-This command prints that output. Authentication is a signature from the hotkey
-that owns the agent: no token to request, nothing to be granted, and no operator
-in the loop. A miner reads their own rows and nobody else's.
+This command prints that output. Authentication is the miner session created by
+``ditto login`` (or the dashboard / hosted MCP sign-in). A miner reads their
+own rows and nobody else's.
 
 Output formats:
 
-- Default: per-validator human summary, with the log tail last
+- Default: per-validator human summary, with the log tail last. ANSI and
+  other terminal control sequences in the tail are escaped so a visual
+  fence cannot be used to hijack the terminal.
 - ``--json``: full JSON response body (raw API shape, scriptable)
 
 Exit codes:
 - 0 success (agent found, attempts printed)
-- 1 generic error (network, malformed UUID, no wallet resolvable)
-- 3 not found (404 — unknown agent, not yours, or signature rejected)
+- 1 generic error (network, malformed UUID, not signed in)
+- 3 not found (404 — unknown agent or not yours)
 """
 
 from __future__ import annotations
@@ -27,26 +29,35 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
+import re
 import sys
-from datetime import UTC, datetime
 from uuid import UUID
 
-from ditto.api_models.miner_logs import (
-    MinerHarnessLogAttempt,
-    MinerHarnessLogsRequest,
-)
+from ditto.api_models.miner_logs import MinerHarnessLogAttempt
 from ditto.miner_cli.api_client import ApiClient
 from ditto.miner_cli.errors import (
     AgentNotFoundError,
     ApiResponseError,
-    WalletNotFoundError,
+    LoginRequiredError,
 )
 from ditto.miner_cli.network import resolve_network
-from ditto.miner_cli.signing import sign_harness_logs_request
-from ditto.miner_cli.wallet import load_wallet
+from ditto.miner_cli.preferences import load_miner_session
 
 logger = logging.getLogger(__name__)
+
+_ANSI_RE = re.compile(r"\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
+_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def sanitize_harness_output(text: str) -> str:
+    """Strip ANSI and escape remaining C0 controls for a terminal.
+
+    A visual fence around the tail does not stop the terminal from
+    interpreting CSI sequences or other control bytes the harness printed.
+    Human output therefore never writes those bytes raw.
+    """
+    stripped = _ANSI_RE.sub("", text)
+    return _CTRL_RE.sub(lambda match: f"\\x{ord(match.group()):02x}", stripped)
 
 
 def add_subparser(
@@ -57,12 +68,11 @@ def add_subparser(
     """Register the ``logs`` subparser on the top-level argparse layout."""
     parser = subparsers.add_parser(
         "logs",
-        help="Read your own agent's harness diagnostics (signed).",
+        help="Read your own agent's harness diagnostics (signed-in session).",
         description=(
             "Print what each validator reported for one of your agents, "
-            "including the failing harness's own output. Requires the "
-            "wallet hotkey that owns the agent: the request is signed and "
-            "the platform returns only agents that hotkey owns."
+            "including the failing harness's own output. Requires a miner "
+            "session from `ditto login` (or the dashboard / MCP sign-in)."
         ),
         parents=parents or [],
     )
@@ -70,22 +80,6 @@ def add_subparser(
         "agent_id",
         type=UUID,
         help="UUID of your agent to read diagnostics for.",
-    )
-    parser.add_argument(
-        "--wallet.name",
-        "--coldkey",
-        dest="coldkey_name",
-        default=os.environ.get("WALLET_NAME"),
-        help=(
-            "Coldkey wallet name. Aliases: --wallet.name / --coldkey. Env: WALLET_NAME."
-        ),
-    )
-    parser.add_argument(
-        "--wallet.hotkey",
-        "--hotkey",
-        dest="hotkey_name",
-        default=os.environ.get("HOTKEY_NAME"),
-        help="Hotkey name. Aliases: --wallet.hotkey / --hotkey. Env: HOTKEY_NAME.",
     )
     parser.add_argument(
         "--json",
@@ -99,34 +93,25 @@ def add_subparser(
 def run(args: argparse.Namespace) -> int:
     """Execute the logs subcommand and return an exit code."""
     network = resolve_network(args.network)
+    saved = load_miner_session(network=network.name)
+    if saved is None:
+        print(
+            "not signed in. run `ditto login` (or approve the code on "
+            "dittobench.ai/#/reviews) and retry.",
+            file=sys.stderr,
+        )
+        return 1
     try:
-        handle, live_wallet = load_wallet(
-            coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
-        )
-        # Serialized once, here, and reused verbatim in both the signature and
-        # the body. Formatting it twice would risk two spellings of the same
-        # instant, and the signature would not verify.
-        requested_at = datetime.now(UTC)
-        requested_at_wire = requested_at.isoformat(timespec="microseconds")
-        body = MinerHarnessLogsRequest(
-            miner_hotkey=handle.hotkey_ss58,
-            agent_id=args.agent_id,
-            requested_at=requested_at,
-            signature=sign_harness_logs_request(
-                handle=handle,
-                live_wallet=live_wallet,
-                agent_id=str(args.agent_id),
-                requested_at=requested_at_wire,
-            ),
-        )
         with ApiClient(base_url=network.api_url) as client:
-            response = client.post_harness_logs(body)
+            response = client.get_harness_logs(
+                agent_id=args.agent_id, token=str(saved["token"])
+            )
+    except LoginRequiredError as e:
+        print(f"session expired: {e}", file=sys.stderr)
+        return 1
     except AgentNotFoundError as e:
         print(f"not found: {e}", file=sys.stderr)
         return 3
-    except WalletNotFoundError as e:
-        print(f"wallet error: {e}", file=sys.stderr)
-        return 1
     except ApiResponseError as e:
         print(f"api error: {e}", file=sys.stderr)
         return 1
@@ -147,26 +132,39 @@ def run(args: argparse.Namespace) -> int:
 
 
 def _print_attempt(attempt: MinerHarnessLogAttempt) -> None:
-    """Print one validator's attempt, log tail last and clearly delimited."""
-    print(f"\n--- validator {attempt.validator_hotkey} (v{attempt.bench_version})")
+    """Print one validator ticket, log tail last and clearly delimited."""
+    print(
+        f"\n--- validator {attempt.validator_hotkey} "
+        f"(v{attempt.bench_version}, attempt {attempt.attempt_count})"
+    )
     print(f"    status:   {attempt.status}")
     print(f"    issued:   {attempt.issued_at.isoformat()}")
+    if attempt.stale:
+        tail_from = (
+            str(attempt.log_tail_attempt)
+            if attempt.log_tail_attempt is not None
+            else "a prior lease"
+        )
+        print(
+            f"    stale:    evidence is from {tail_from}; "
+            f"current lease is attempt {attempt.attempt_count}"
+        )
     if attempt.failed_at is not None:
-        # The single most diagnostic number for an early death: a lease is 90
-        # minutes, so a lifetime in seconds says the harness never really ran.
-        lifetime = (attempt.failed_at - attempt.issued_at).total_seconds()
-        print(f"    failed:   {attempt.failed_at.isoformat()} ({lifetime:.1f}s in)")
+        # Only compute a lifetime when both timestamps belong to this lease.
+        # After reissue, issued_at is new and failed_at is old.
+        if not attempt.stale and attempt.failed_at >= attempt.issued_at:
+            lifetime = (attempt.failed_at - attempt.issued_at).total_seconds()
+            print(f"    failed:   {attempt.failed_at.isoformat()} ({lifetime:.1f}s in)")
+        else:
+            print(f"    failed:   {attempt.failed_at.isoformat()}")
     if attempt.failure_reason is not None:
         print(f"    reason:   {attempt.failure_reason}")
     if attempt.failure_detail is not None:
         print(f"    detail:   {attempt.failure_detail}")
     if attempt.container_log_tail is None:
         return
-    # Fenced, and never interpreted. This is the harness's own output replayed
-    # verbatim: it can contain ANSI escapes, partial lines, or anything else it
-    # chose to print, so it gets an unambiguous boundary and no formatting.
     print("    harness output (last bytes before exit):")
     print("    " + "-" * 66)
-    for line in attempt.container_log_tail.splitlines():
+    for line in sanitize_harness_output(attempt.container_log_tail).splitlines():
         print(f"    | {line}")
     print("    " + "-" * 66)

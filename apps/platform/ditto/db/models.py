@@ -2979,6 +2979,17 @@ class ValidatorTicket(Base):
     data, never as instructions, and never parse it for machine meaning.
     """
 
+    container_log_tail_attempt: Mapped[int | None] = mapped_column(
+        Integer, nullable=True
+    )
+    """:attr:`attempt_count` of the lease that wrote :attr:`container_log_tail`.
+
+    This row is mutable: reissue restamps :attr:`issued_at` and increments
+    :attr:`attempt_count` while retaining the prior failure fields. Without this
+    stamp a later lease, or a later success, would look like it produced the
+    previous attempt's tail. NULL means no tail was reported.
+    """
+
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True),
         nullable=False,

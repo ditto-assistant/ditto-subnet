@@ -64,6 +64,22 @@
 .account-error {
   color: var(--danger);
 }
+.account-logs {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 10px;
+}
+.account-logs pre {
+  margin: 6px 0 0;
+  max-height: 240px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  font-size: 12px;
+}
 .account-head,
 .account-tabs {
   display: flex;

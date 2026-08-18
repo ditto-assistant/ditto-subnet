@@ -12,37 +12,34 @@ from datetime import datetime
 from typing import Annotated
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from ditto.api_models.upload import _SIGNATURE_HEX_PATTERN, _SS58_PATTERN
-
-
-class MinerHarnessLogsRequest(BaseModel):
-    """Signed proof that the caller holds the hotkey owning ``agent_id``."""
-
-    miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
-    agent_id: UUID
-    requested_at: datetime
-    signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+from ditto.api_models.upload import _SS58_PATTERN
 
 
 class MinerHarnessLogAttempt(BaseModel):
-    """One validator's attempt at this agent, with whatever it reported."""
+    """One validator ticket for this agent, with whatever it last reported."""
+
+    model_config = ConfigDict(extra="ignore")
 
     validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
     bench_version: Annotated[int, Field(ge=1)]
     status: str
+    attempt_count: Annotated[int, Field(ge=1)]
     issued_at: datetime
     deadline: datetime
     failed_at: datetime | None = None
     failure_reason: str | None = None
     failure_detail: str | None = None
     container_log_tail: str | None = None
-    """This harness's own bounded, redacted stdout/stderr tail, if any."""
+    log_tail_attempt: int | None = None
+    stale: bool = False
 
 
 class MinerHarnessLogsResponse(BaseModel):
-    """Every recorded attempt at one agent, newest first."""
+    """Every recorded validator ticket for one agent, newest first."""
+
+    model_config = ConfigDict(extra="ignore")
 
     agent_id: UUID
     miner_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]

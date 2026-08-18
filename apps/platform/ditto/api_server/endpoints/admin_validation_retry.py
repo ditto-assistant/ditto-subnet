@@ -62,6 +62,7 @@ from ditto.api_models.retry_state import RETRY_STATE_ORDER, RetryState
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
+from ditto.api_server.endpoints.miner_logs import ticket_log_is_stale
 from ditto.db.models import (
     Agent,
     BenchmarkRolloutMember,
@@ -412,6 +413,8 @@ def _ticket_item(ticket: ValidatorTicket) -> AdminValidationTicket:
         failed_at=ticket.failed_at,
         failure_detail=ticket.failure_detail,
         container_log_tail=ticket.container_log_tail,
+        container_log_tail_attempt=ticket.container_log_tail_attempt,
+        container_log_tail_stale=ticket_log_is_stale(ticket),
         silently_expired=_silently_expired(ticket),
     )
 

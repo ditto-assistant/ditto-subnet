@@ -6961,6 +6961,7 @@ class TestFailJob:
             assert ticket is not None
             assert ticket.failure_reason == "scoring_error"
             assert ticket.container_log_tail == tail
+            assert ticket.container_log_tail_attempt == ticket.attempt_count
             # Carried beside failure_detail, never folded into it: that field
             # stays the one thing an operator can GROUP BY.
             assert ticket.failure_detail is None

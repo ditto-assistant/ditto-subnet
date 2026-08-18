@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime
 from typing import Annotated
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import (
     APIRouter,
@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.miner_avatar import MinerAvatarResponse
+from ditto.api_models.miner_logs import MinerHarnessLogsResponse
 from ditto.api_models.miner_session import (
     MinerCommand,
     MinerMeResponse,
@@ -35,6 +36,7 @@ from ditto.api_server.endpoints.miner_auth import (
     require_scope,
     resolve_miner_session,
 )
+from ditto.api_server.endpoints.miner_logs import load_owned_agent_logs
 from ditto.api_server.hippius import HippiusClient
 from ditto.api_server.miner_avatar import (
     MAX_AVATAR_BYTES,
@@ -334,6 +336,30 @@ async def clear_my_avatar(request: Request, session: SessionDep) -> MinerAvatarR
         sha256=None,
         updated_at=now,
     )
+
+
+@router.get("/agents/{agent_id}/harness-logs", response_model=MinerHarnessLogsResponse)
+async def my_harness_logs(
+    agent_id: UUID,
+    request: Request,
+    session: SessionDep,
+) -> MinerHarnessLogsResponse:
+    """Return this signed-in miner's harness diagnostics for one of their agents.
+
+    Authenticated by the miner session, not a one-shot hotkey signature. The
+    caller already proved possession of the hotkey at ``ditto login`` /
+    dashboard sign-in; this only checks that the session's hotkey owns
+    ``agent_id``. Unknown and other-miners' agents are the same 404.
+    """
+    async with session.begin():
+        row, _token = await resolve_miner_session(request, session)
+        require_scope(row, "read")
+        payload = await load_owned_agent_logs(
+            session, hotkey=row.miner_hotkey, agent_id=agent_id
+        )
+    if payload is None:
+        raise HTTPException(status_code=404, detail="no such agent for this hotkey")
+    return payload
 
 
 @router.get("/submissions", response_model=list[PublicMinerSubmission])

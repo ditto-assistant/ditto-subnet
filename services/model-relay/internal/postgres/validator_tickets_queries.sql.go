@@ -13,7 +13,7 @@ import (
 
 const getValidatorTicketForUpdate = `-- name: GetValidatorTicketForUpdate :one
 
-SELECT agent_id, validator_hotkey, status, issued_at, deadline, created_at, updated_at, bench_version, attempt_count, retry_after, manual_retry_grants, infra_retry_grants, slot_id, purpose, legacy_completion_allowed, purpose_revision, seed, dataset_sha256, seed_block, seed_block_hash, failure_reason, failed_at, first_reported_at, failure_detail, container_log_tail FROM validator_tickets
+SELECT agent_id, validator_hotkey, status, issued_at, deadline, created_at, updated_at, bench_version, attempt_count, retry_after, manual_retry_grants, infra_retry_grants, slot_id, purpose, legacy_completion_allowed, purpose_revision, seed, dataset_sha256, seed_block, seed_block_hash, failure_reason, failed_at, first_reported_at, failure_detail, container_log_tail, container_log_tail_attempt FROM validator_tickets
 WHERE agent_id = $1::uuid
   AND bench_version = $2::integer
   AND validator_hotkey = $3::text
@@ -64,6 +64,7 @@ func (q *Queries) GetValidatorTicketForUpdate(ctx context.Context, arg GetValida
 		&i.FirstReportedAt,
 		&i.FailureDetail,
 		&i.ContainerLogTail,
+		&i.ContainerLogTailAttempt,
 	)
 	return i, err
 }

@@ -148,4 +148,102 @@ describe("miner sign-in page", () => {
     });
     expect(minerSession()?.token).toBe("ditto_ms_abc");
   });
+
+  it("loads harness logs for a signed-in submission", async () => {
+    const session = {
+      token: "ditto_ms_abc",
+      hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+      scopes: ["read"],
+      expiresAt: "2099-01-01T00:00:00.000Z",
+    };
+    localStorage.setItem("ditto.miner.session.v1", JSON.stringify(session));
+    const { setMinerSession } = await import("../stores/sessionStore");
+    setMinerSession(session);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.endsWith("/me")) {
+          return new Response(
+            JSON.stringify({
+              session: {
+                miner_hotkey: session.hotkey,
+                scopes: ["read"],
+                expires_at: session.expiresAt,
+                expires_in: 3600,
+              },
+              profile: {},
+              profile_url: "/miner/" + session.hotkey,
+              commands: [],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/me/submissions")) {
+          return new Response(
+            JSON.stringify([
+              {
+                agent_id: "5fdadd33-bd0f-492d-ba71-49bef159f069",
+                name: "alpha",
+                status: "evaluating",
+                created_at: "2026-08-18T00:00:00Z",
+              },
+            ]),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/me/reviews")) {
+          return new Response(JSON.stringify({ reviews: [] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (url.includes("/harness-logs")) {
+          return new Response(
+            JSON.stringify({
+              agent_id: "5fdadd33-bd0f-492d-ba71-49bef159f069",
+              miner_hotkey: session.hotkey,
+              agent_status: "evaluating",
+              attempts: [
+                {
+                  validator_hotkey: session.hotkey,
+                  bench_version: 12,
+                  status: "expired",
+                  attempt_count: 1,
+                  issued_at: "2026-08-18T00:00:00Z",
+                  deadline: "2026-08-18T01:00:00Z",
+                  failure_reason: "scoring_error",
+                  container_log_tail: "cannot open /data/index",
+                  log_tail_attempt: 1,
+                  stale: false,
+                },
+              ],
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("[]", { status: 200 });
+      }),
+    );
+    render(() => <ReviewsPage />);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("Signed in");
+    });
+    const submissionsTab = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "submissions",
+    );
+    expect(submissionsTab).toBeTruthy();
+    fireEvent.click(submissionsTab as HTMLButtonElement);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("alpha");
+    });
+    const logs = Array.from(document.querySelectorAll("button")).find(
+      (button) => button.textContent?.trim() === "Logs",
+    );
+    expect(logs).toBeTruthy();
+    fireEvent.click(logs as HTMLButtonElement);
+    await waitFor(() => {
+      expect(document.body.textContent).toContain("cannot open /data/index");
+    });
+  });
 });

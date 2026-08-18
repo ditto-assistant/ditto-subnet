@@ -50,7 +50,6 @@ from ditto.api_models import (
     UploadCheckResponse,
 )
 from ditto.api_models.miner_logs import (
-    MinerHarnessLogsRequest,
     MinerHarnessLogsResponse,
 )
 from ditto.miner_cli.errors import (
@@ -60,6 +59,7 @@ from ditto.miner_cli.errors import (
     AvatarRejectedError,
     HotkeyAgentNotFoundError,
     LoginRejectedError,
+    LoginRequiredError,
     NameClaimRejectedError,
     PaymentAmountMismatchError,
     PaymentRecoveryExpiredError,
@@ -442,40 +442,33 @@ class ApiClient:
             raise AvatarRejectedError(_format_error(response, prefix="avatar-clear"))
         return MinerAvatarResponse.model_validate(response.json())
 
-    def post_harness_logs(
-        self, body: MinerHarnessLogsRequest
+    def get_harness_logs(
+        self, *, agent_id: UUID, token: str
     ) -> MinerHarnessLogsResponse:
-        """Fetch this miner's own harness diagnostics for one of their agents.
-
-        POST rather than GET because the signature and timestamp travel in the
-        body: a query string would land in access logs, proxy caches, and
-        browser history.
+        """Fetch this signed-in miner's harness diagnostics for one agent.
 
         Args:
-            body: Request signed by the hotkey that owns ``agent_id``; see
-                :func:`ditto.miner_cli.signing.sign_harness_logs_request`.
+            agent_id: Agent the current miner session claims to own.
+            token: Bearer token from ``ditto login``.
 
         Returns:
-            Parsed :class:`MinerHarnessLogsResponse`, attempts newest first.
+            Parsed :class:`MinerHarnessLogsResponse`, tickets newest first.
 
         Raises:
-            AgentNotFoundError: On 404. The platform returns one response for
-                every denial -- bad signature, stale timestamp, unknown agent,
-                or an agent owned by another hotkey -- so that it cannot be used
-                to probe which agent ids exist. Do not report a cause here that
-                the server deliberately withheld.
+            LoginRequiredError: On 401 (missing, invalid, or expired session).
+            AgentNotFoundError: On 404. Unknown agent and another miner's
+                agent are indistinguishable.
             ApiResponseError: On any other non-200.
         """
         response = self._request(
-            "POST",
-            "/api/v1/miner/harness-logs",
-            json=body.model_dump(mode="json"),
+            "GET",
+            f"/api/v1/me/agents/{agent_id}/harness-logs",
+            headers={"authorization": f"Bearer {token}"},
         )
+        if response.status_code == 401:
+            raise LoginRequiredError("miner session is invalid or expired")
         if response.status_code == 404:
-            raise AgentNotFoundError(
-                f"no agent {body.agent_id} for hotkey {body.miner_hotkey} "
-                "(or the signature did not verify)"
-            )
+            raise AgentNotFoundError(f"no agent {agent_id} for this signed-in hotkey")
         if response.status_code != 200:
             raise ApiResponseError(_format_error(response, prefix="harness-logs"))
         return MinerHarnessLogsResponse.model_validate(response.json())

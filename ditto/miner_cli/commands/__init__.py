@@ -10,6 +10,7 @@ from __future__ import annotations
 from ditto.miner_cli.commands.attest import run as run_attest
 from ditto.miner_cli.commands.avatar import run as run_avatar
 from ditto.miner_cli.commands.login import run as run_login
+from ditto.miner_cli.commands.logs import run as run_logs
 from ditto.miner_cli.commands.name_claim import run as run_name_claim
 from ditto.miner_cli.commands.status import run as run_status
 from ditto.miner_cli.commands.upload import run as run_upload
@@ -19,6 +20,7 @@ __all__ = [
     "run_attest",
     "run_avatar",
     "run_login",
+    "run_logs",
     "run_name_claim",
     "run_status",
     "run_upload",

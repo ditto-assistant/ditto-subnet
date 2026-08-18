@@ -418,6 +418,18 @@ def _tools() -> list[dict[str, Any]]:
         ),
         _tool("list_my_submissions", "List this hotkey's submissions.", empty),
         _tool(
+            "get_my_harness_logs",
+            "Return validator-reported harness diagnostics for one of this "
+            "miner's agents, including a stale flag when the log tail belongs "
+            "to a prior lease.",
+            {
+                "type": "object",
+                "properties": {"agent_id": {"type": "string"}},
+                "required": ["agent_id"],
+                "additionalProperties": False,
+            },
+        ),
+        _tool(
             "list_my_reviews",
             "List ATH reviews and screening disputes for this hotkey.",
             empty,
@@ -524,6 +536,24 @@ async def _call_tool(
                 "discord_handle": profile.discord_handle,
             },
         }
+    if name == "get_my_harness_logs":
+        from uuid import UUID
+
+        from ditto.api_server.endpoints.miner_logs import load_owned_agent_logs
+
+        require_scope(row, "read")
+        try:
+            agent_id = UUID(str(arguments.get("agent_id") or ""))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=400, detail="agent_id is not a UUID"
+            ) from exc
+        payload = await load_owned_agent_logs(
+            session, hotkey=row.miner_hotkey, agent_id=agent_id
+        )
+        if payload is None:
+            raise HTTPException(status_code=404, detail="no such agent for this hotkey")
+        return payload.model_dump(mode="json")
     if name == "list_my_submissions":
         require_scope(row, "read")
         agents = await list_recent_agents_for_hotkey(

@@ -30,7 +30,6 @@ from ditto.api_models.miner_avatar import (
 )
 from ditto.api_models.miner_logs import (
     MinerHarnessLogAttempt,
-    MinerHarnessLogsRequest,
     MinerHarnessLogsResponse,
 )
 from ditto.api_models.miner_session import (
@@ -68,7 +67,6 @@ __all__ = [
     "MinerAvatarResponse",
     "MinerAvatarSetRequest",
     "MinerHarnessLogAttempt",
-    "MinerHarnessLogsRequest",
     "MinerHarnessLogsResponse",
     "MinerDevicePublicResponse",
     "MinerDeviceStartRequest",

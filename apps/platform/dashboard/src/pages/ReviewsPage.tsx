@@ -17,7 +17,7 @@ import {
 import type { NameHandle } from "../types/leaderboard";
 
 const SCOPES: Array<{ id: string; label: string; hint: string }> = [
-  { id: "read", label: "Read", hint: "Required. Profile, my submissions, my reviews" },
+  { id: "read", label: "Read", hint: "Required. Profile, my submissions, reviews, harness logs" },
   { id: "profile", label: "Profile", hint: "Set picture, X, GitHub, Discord" },
   { id: "download", label: "Download", hint: "Download my own submissions" },
   { id: "upload", label: "Upload", hint: "Returns a ditto upload command" },
@@ -96,6 +96,26 @@ interface MinerReview {
   status: string;
   opened_at: string;
   detail?: string | null;
+}
+
+interface MinerHarnessLogAttempt {
+  validator_hotkey: string;
+  bench_version: number;
+  status: string;
+  attempt_count: number;
+  issued_at: string;
+  failed_at?: string | null;
+  failure_reason?: string | null;
+  failure_detail?: string | null;
+  container_log_tail?: string | null;
+  log_tail_attempt?: number | null;
+  stale: boolean;
+}
+
+interface MinerHarnessLogs {
+  agent_id: string;
+  agent_status: string;
+  attempts: MinerHarnessLogAttempt[];
 }
 
 interface StoredPollGrant {
@@ -402,6 +422,9 @@ function AccountPanel(): JSX.Element {
   const [tab, setTab] = createSignal<"profile" | "submissions" | "reviews" | "mcp">("profile");
   const [subs, setSubs] = createSignal<MinerSubmission[]>([]);
   const [reviews, setReviews] = createSignal<MinerReview[]>([]);
+  const [logAgent, setLogAgent] = createSignal<string | null>(null);
+  const [logs, setLogs] = createSignal<MinerHarnessLogs | null>(null);
+  const [logsError, setLogsError] = createSignal("");
   const [xUrl, setXUrl] = createSignal("");
   const [github, setGithub] = createSignal("");
   const [discord, setDiscord] = createSignal("");
@@ -444,6 +467,20 @@ function AccountPanel(): JSX.Element {
       setError(err instanceof Error ? err.message : "Could not load reviews.");
     }
     return true;
+  }
+
+  async function loadLogs(agentId: string): Promise<void> {
+    setLogAgent(agentId);
+    setLogs(null);
+    setLogsError("");
+    try {
+      const body = await authJSON<MinerHarnessLogs>(`/me/agents/${agentId}/harness-logs`, {
+        headers: sessionAuthHeader(),
+      });
+      setLogs(body);
+    } catch (err) {
+      setLogsError(err instanceof Error ? err.message : "Could not load harness logs.");
+    }
   }
 
   async function saveProfile(): Promise<void> {
@@ -591,6 +628,43 @@ function AccountPanel(): JSX.Element {
                     <span class="muted">
                       {item.status} · {item.created_at}
                     </span>
+                    <button class="btn ghost" onClick={() => void loadLogs(item.agent_id)}>
+                      Logs
+                    </button>
+                    <Show when={logAgent() === item.agent_id}>
+                      <Show when={logsError()}>
+                        <p class="account-error">{logsError()}</p>
+                      </Show>
+                      <Show when={logs()}>
+                        <ul class="account-logs">
+                          <For each={logs()?.attempts || []}>
+                            {(attempt) => (
+                              <li>
+                                <p>
+                                  v{attempt.bench_version} · attempt {attempt.attempt_count} ·{" "}
+                                  {attempt.status}
+                                  <Show when={attempt.stale}>
+                                    <span class="muted">
+                                      {" "}
+                                      · stale from attempt {attempt.log_tail_attempt ?? "prior"}
+                                    </span>
+                                  </Show>
+                                </p>
+                                <Show when={attempt.failure_reason}>
+                                  <p class="muted">{attempt.failure_reason}</p>
+                                </Show>
+                                <Show when={attempt.failure_detail}>
+                                  <p class="muted">{attempt.failure_detail}</p>
+                                </Show>
+                                <Show when={attempt.container_log_tail}>
+                                  <pre>{attempt.container_log_tail}</pre>
+                                </Show>
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                      </Show>
+                    </Show>
                   </li>
                 )}
               </For>

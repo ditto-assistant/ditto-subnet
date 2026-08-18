@@ -340,6 +340,16 @@ class LoginRejectedError(ApiResponseError):
     """Raised when a miner device-code login is rejected."""
 
 
+class LoginRequiredError(ApiResponseError):
+    """Raised when a miner session is missing or no longer valid.
+
+    This can happen when:
+    - ``ditto logs`` (or another session-authenticated command) runs
+      before ``ditto login``.
+    - The stored bearer has expired or been revoked.
+    """
+
+
 class AttestationRejectedError(ApiResponseError):
     """Raised when ``/attestations/owner-link`` returns a non-2xx status.
 
