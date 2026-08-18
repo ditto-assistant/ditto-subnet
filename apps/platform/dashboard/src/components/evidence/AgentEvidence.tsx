@@ -925,10 +925,7 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
         ? "Screening: " + e.screening_reason
         : "No additional evidence reported.";
     if (e.duplicate_of) {
-      out +=
-        duplicateComparisonLabel(e) === "Initial comparison"
-          ? " Initial comparison: " + duplicateLabel(e) + "."
-          : " Compared with " + duplicateLabel(e) + ".";
+      out += " " + duplicateComparisonLabel(e) + " " + duplicateLabel(e) + ".";
     }
     return out;
   };

@@ -220,6 +220,23 @@ describe('CopyReviewPanel', () => {
     expect(screen.getByText(/5G9QoBvJLtAs…/)).toBeDefined()
   })
 
+  it('names a same-hotkey match as a rename of the previously rejected agent', () => {
+    const renamed = item({
+      miner_hotkey: '5G9QoBvJLtAsE9WRnz8cPknYu6D6WfHmfbfGxiWpyvs5JSP4',
+      original: {
+        ...eligible.original,
+        duplicate_of_name: 'Zeus_v11',
+        duplicate_of_version: 6,
+        duplicate_of_hotkey: '5G9QoBvJLtAsE9WRnz8cPknYu6D6WfHmfbfGxiWpyvs5JSP4',
+      },
+    })
+    render(<CopyReviewPanel {...panelProps} initialItems={[renamed]} initialBulkEligibleCount={1} readOnly />)
+    expect(screen.getByText('same-miner rename of Zeus_v11 v6')).toBeDefined()
+    fireEvent.click(screen.getByText(/held-agent/))
+    expect(screen.getByText('Previously rejected as')).toBeDefined()
+    expect(screen.getByText('Zeus_v11 v6')).toBeDefined()
+  })
+
   it('renders public-safe deferred trigger and inconclusive evidence without copy language', () => {
     const deferred = item({
       original: {

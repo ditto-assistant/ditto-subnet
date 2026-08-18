@@ -5391,6 +5391,7 @@ class TestPublicActivity:
             "duplicate_of": None,
             "duplicate_name": None,
             "duplicate_version": None,
+            "duplicate_hotkey": None,
             "review_reason": None,
             "review_event": None,
             "review_event_at": None,
@@ -5719,6 +5720,10 @@ class TestPublicActivity:
         assert body["entries"][1]["duplicate_of"] == older_id
         assert body["entries"][1]["duplicate_name"] == "memory-v1"
         assert body["entries"][1]["duplicate_version"] is None
+        matched = body["entries"][1]
+        ancestor = body["entries"][2]
+        assert matched["duplicate_hotkey"] == ancestor["miner_hotkey"]
+        assert matched["duplicate_hotkey"] != matched["miner_hotkey"]
         assert "jaccard 0.950" in body["entries"][1]["review_reason"]
         assert set(body["entries"][0]) == {
             "agent_id",
@@ -5735,6 +5740,7 @@ class TestPublicActivity:
             "duplicate_of",
             "duplicate_name",
             "duplicate_version",
+            "duplicate_hotkey",
             "review_reason",
             "review_event",
             "review_event_at",

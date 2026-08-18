@@ -6046,6 +6046,7 @@ async def submit_score(
                         agent_id=agent_id,
                         submitted_at=agent.created_at,
                         sha256=agent.sha256,
+                        miner_hotkey=agent.miner_hotkey,
                         normalized_source_hash=agent.normalized_source_hash,
                         content_fingerprint=agent.content_fingerprint,
                         rejected=await list_rejected_artifacts(

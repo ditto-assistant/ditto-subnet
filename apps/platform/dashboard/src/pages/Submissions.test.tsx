@@ -984,4 +984,37 @@ describe("review-event evidence in the table (#622/#636)", () => {
     expect(notes[2]).toContain("granite, Submission v3");
     expect(cell.textContent).not.toContain("Copy review:");
   });
+
+  it("names a same-miner match as the previously rejected ancestor", async () => {
+    const base = (activity.entries ?? [])[0] as Record<string, unknown>;
+    stubActivityFetch(() => ({
+      entries: [
+        {
+          ...base,
+          status: "rejected",
+          miner_hotkey: "5Di44xhKBhUfX7X1s411zD9WxwTWGhLECXsajkASzbtmzQWf",
+          review_event: "rejected",
+          review_reason:
+            "Same miner, previously rejected as Zeus_v11 v6. Served /run still uses the compiler.",
+          review_original_reason: "Resubmission of a rejected artifact",
+          duplicate_of: "7020bd00-bd1b-42e9-90b2-34937fe3f0bd",
+          duplicate_name: "Zeus_v11",
+          duplicate_version: 6,
+          duplicate_hotkey: "5Di44xhKBhUfX7X1s411zD9WxwTWGhLECXsajkASzbtmzQWf",
+        },
+      ],
+      status_counts: { rejected: 1 },
+      page: 1,
+      total_pages: 1,
+      total: 1,
+    }));
+    render(() => <SubmissionsPage />);
+    await waitFor(() => expect(document.querySelector(".stage-cell .stage")).toBeTruthy());
+    const cell = document.querySelector(".stage-cell") as HTMLElement;
+    const notes = Array.from(cell.querySelectorAll(".stage-note"), (note) => note.textContent);
+    expect(notes.some((note) => note?.includes("Previously rejected as"))).toBe(true);
+    expect(cell.textContent).toContain("Zeus_v11, Submission v6");
+    expect(cell.textContent).not.toContain("Compared with");
+    expect(cell.textContent).not.toContain("Initial comparison");
+  });
 });

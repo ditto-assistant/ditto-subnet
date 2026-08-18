@@ -155,6 +155,25 @@ describe("review-event evidence (#622/#636)", () => {
     );
     expect(duplicateComparisonLabel({ duplicate_of: "abc" })).toBe("Compared with");
   });
+
+  it("names a same-miner match as the previously rejected ancestor", () => {
+    const sameMiner = {
+      review_event: "rejected",
+      duplicate_of: "7020bd00",
+      miner_hotkey: "5Di44xhKsame",
+      duplicate_hotkey: "5Di44xhKsame",
+    };
+    expect(duplicateComparisonLabel(sameMiner)).toBe("Previously rejected as");
+    expect(
+      duplicateComparisonLabel({ ...sameMiner, review_event: "opened" }),
+    ).toBe("Previously rejected as");
+    expect(
+      duplicateComparisonLabel({
+        ...sameMiner,
+        duplicate_hotkey: "5OtherHotkey",
+      }),
+    ).toBe("Initial comparison");
+  });
 });
 
 // ── Weekend drift #623: the screening-policy chip ───────────────────────────

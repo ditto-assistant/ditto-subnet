@@ -32,6 +32,22 @@ function comparisonLabel(item: CopyReviewConsoleItem) {
   return 'Needs review'
 }
 
+function sameMinerRename(item: Pick<CopyReviewConsoleItem, 'miner_hotkey' | 'original'>): boolean {
+  return Boolean(
+    item.miner_hotkey &&
+      item.original.duplicate_of_hotkey &&
+      item.miner_hotkey === item.original.duplicate_of_hotkey,
+  )
+}
+
+function matchedSubmissionPhrase(item: Pick<CopyReviewConsoleItem, 'miner_hotkey' | 'original'>): string | null {
+  if (!item.original.duplicate_of_name) return null
+  const version =
+    item.original.duplicate_of_version != null ? ` v${item.original.duplicate_of_version}` : ''
+  const name = `${item.original.duplicate_of_name}${version}`
+  return sameMinerRename(item) ? `same-miner rename of ${name}` : `copy of ${name}`
+}
+
 function reviewType(item: CopyReviewConsoleItem) {
   if (item.original.deferred_review || item.original.review_kind === 'deferred_source_review') {
     return 'Score-qualified source review'
@@ -399,12 +415,9 @@ export function CopyReviewPanel({
                         <span className="block truncate font-medium">score-qualified source review</span>
                       ) : item.original.review_kind === 'benchmark_overfit' ? (
                         <span className="block truncate font-medium">manual benchmark review</span>
-                      ) : item.original.duplicate_of_name ? (
+                      ) : matchedSubmissionPhrase(item) ? (
                         <span className="block truncate font-medium">
-                          copy of {item.original.duplicate_of_name}
-                          {item.original.duplicate_of_version != null
-                            ? ` v${item.original.duplicate_of_version}`
-                            : ''}
+                          {matchedSubmissionPhrase(item)}
                         </span>
                       ) : null}
                       <span className="block truncate text-[var(--muted-strong)]">
@@ -545,7 +558,9 @@ export function CopyReviewPanel({
                   </>
                 ) : null}
                 {!selected.original.deferred_review ? <div>
-                  <dt className="text-[var(--muted)]">Matched submission</dt>
+                  <dt className="text-[var(--muted)]">
+                    {sameMinerRename(selected) ? 'Previously rejected as' : 'Matched submission'}
+                  </dt>
                   <dd>
                     {selected.original.duplicate_of_name ? (
                       <>

@@ -95,6 +95,8 @@ export interface ReviewEventFields {
   review_reason?: string | null;
   review_original_reason?: string | null;
   duplicate_of?: string | null;
+  miner_hotkey?: string | null;
+  duplicate_hotkey?: string | null;
 }
 
 /** "opened" → "Operator review", plus the reopened/cleared/rejected states
@@ -142,11 +144,26 @@ export function reviewEvidenceText(entry: ReviewEventFields): string {
 }
 
 /**
+ * Same miner re-uploaded or renamed a previously rejected row. The public
+ * comparison must say that — "Compared with Zeus_v11 v6" reads like a
+ * different owner's agent.
+ */
+export function sameMinerDuplicate(entry: ReviewEventFields): boolean {
+  return Boolean(
+    entry.miner_hotkey &&
+      entry.duplicate_hotkey &&
+      entry.miner_hotkey === entry.duplicate_hotkey,
+  );
+}
+
+/**
  * #636: once a review has moved past its opening event, the mechanical
  * duplicate-claim reason stays out of the current-evidence channel — the
- * comparison reads as the initial one, not the live reason.
+ * comparison reads as the initial one, not the live reason. Same-miner
+ * holds name the rejected ancestor instead of implying a cross-owner copy.
  */
 export function duplicateComparisonLabel(entry: ReviewEventFields): string {
+  if (sameMinerDuplicate(entry)) return "Previously rejected as";
   return entry.review_event && entry.review_event !== "opened"
     ? "Initial comparison"
     : "Compared with";

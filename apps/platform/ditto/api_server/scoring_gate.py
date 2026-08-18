@@ -1122,11 +1122,21 @@ def evaluate_duplicate_signals(
     return _NOT_HELD
 
 
+def _rejected_identity(row: RejectedArtifact) -> str:
+    """Miner-visible name of a rejected ancestor: ``Name vN (agent …, uploaded …)``."""
+    version = f" v{row.version}" if row.version is not None else ""
+    return (
+        f"{row.name}{version} (agent {row.agent_id}, uploaded "
+        f"{_utc(row.first_seen).isoformat()})"
+    )
+
+
 def evaluate_rejected_resubmission(
     *,
     agent_id: UUID,
     submitted_at: datetime,
     sha256: str,
+    miner_hotkey: str | None = None,
     normalized_source_hash: str | None = None,
     content_fingerprint: dict | None = None,
     rejected: Sequence[RejectedArtifact] = (),
@@ -1277,15 +1287,23 @@ def evaluate_rejected_resubmission(
     match, relation = min(
         candidates, key=lambda pair: (_utc(pair[0].first_seen), pair[0].agent_id)
     )
+    identity = _rejected_identity(match)
+    same_miner = miner_hotkey is not None and miner_hotkey == match.miner_hotkey
+    if same_miner:
+        reason = (
+            f"Same miner, previously rejected as {identity}. This upload is "
+            f"{relation} that rejected artifact. Held for operator review to "
+            "check whether the cited behavior was removed."
+        )
+    else:
+        reason = (
+            f"Resubmission of a rejected artifact: this upload is {relation} "
+            f"{identity} (hotkey {match.miner_hotkey}), which an operator "
+            "rejected before this artifact was uploaded. Held for operator "
+            "review."
+        )
     return ReviewDecision(
         held=True,
         duplicate_of=match.agent_id,
-        reason=(
-            f"Resubmission of a rejected artifact: this upload is {relation} "
-            f"agent {match.agent_id} (hotkey {match.miner_hotkey}, uploaded "
-            f"{_utc(match.first_seen).isoformat()}), which an operator rejected "
-            "before this artifact was uploaded. Held for operator review; the "
-            "lexical channel cannot distinguish a re-upload from an honest "
-            "descendant that shares scaffolding."
-        ),
+        reason=reason,
     )

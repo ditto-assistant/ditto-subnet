@@ -1889,17 +1889,26 @@ def _public_named(
     return display, handle
 
 
+@dataclass(frozen=True, slots=True)
+class _DuplicateSubmissionMetadata:
+    """Name, version, owner root, and hotkey of a copy-review match."""
+
+    name: str
+    version: int | None
+    owner_root: str
+    miner_hotkey: str
+
+
 def _public_duplicate_name(
-    metadata: tuple[str | None, int | None, str | None] | None,
+    metadata: _DuplicateSubmissionMetadata | None,
     claims: dict[str, Any],
     *,
     strike: bool,
 ) -> str | None:
     """Strike a copy-review target the same way as the row's own name."""
-    if metadata is None or metadata[0] is None:
+    if metadata is None:
         return None
-    stored_name, _version, owner_root = metadata
-    return _public_named(str(stored_name), owner_root, claims, strike=strike)[0]
+    return _public_named(metadata.name, metadata.owner_root, claims, strike=strike)[0]
 
 
 async def _attested_owner_roots_for_rows(
@@ -4687,7 +4696,7 @@ def _public_activity_response(
     active_bench_version: int | None = None,
     benchmark_admitted_agent_ids: set[UUID] | None = None,
     retry_states: dict[UUID, AgentRetryState] | None = None,
-    duplicate_metadata: dict[UUID, tuple[str, int | None, str | None]] | None = None,
+    duplicate_metadata: dict[UUID, _DuplicateSubmissionMetadata] | None = None,
     ath_reviews: dict[UUID, _PublicAthReviewSnapshot] | None = None,
     ath_review_composite: dict[UUID, float] | None = None,
     retired_agent_ids: set[UUID] | None = None,
@@ -4841,6 +4850,13 @@ def _public_activity_response(
         for row, _row_status in page_rows
     }
     avatars = avatar_urls or {}
+    matches = duplicate_metadata or {}
+
+    def _matched(row: Any) -> _DuplicateSubmissionMetadata | None:
+        if row.agent.duplicate_of is None:
+            return None
+        return matches.get(row.agent.duplicate_of)
+
     return PublicActivityResponse(
         generated_at=now,
         count=len(page_rows),
@@ -4869,13 +4885,16 @@ def _public_activity_response(
                 ),
                 duplicate_of=row.agent.duplicate_of,
                 duplicate_name=_public_duplicate_name(
-                    (duplicate_metadata or {}).get(row.agent.duplicate_of),
+                    _matched(row),
                     claims,
                     strike=strike_colliding_names,
                 ),
-                duplicate_version=(duplicate_metadata or {}).get(
-                    row.agent.duplicate_of, (None, None, None)
-                )[1],
+                duplicate_version=(
+                    _matched(row).version if _matched(row) is not None else None
+                ),
+                duplicate_hotkey=(
+                    _matched(row).miner_hotkey if _matched(row) is not None else None
+                ),
                 review_reason=(
                     (ath_reviews or {})[row.agent.agent_id].reason
                     if row.agent.agent_id in (ath_reviews or {})
@@ -4990,8 +5009,8 @@ def _operations_activity_rows(
 
 async def _duplicate_submission_metadata(
     session: AsyncSession, rows: list[Any]
-) -> dict[UUID, tuple[str, int | None, str | None]]:
-    """Resolve stored name, version, and attested owner root for copy targets."""
+) -> dict[UUID, _DuplicateSubmissionMetadata]:
+    """Resolve stored name, version, owner root, and hotkey for copy targets."""
     duplicate_ids = {
         row.agent.duplicate_of for row in rows if row.agent.duplicate_of is not None
     }
@@ -5030,8 +5049,13 @@ async def _duplicate_submission_metadata(
         ],
     )
     return {
-        agent_id: (name, version, root)
-        for (agent_id, name, version, _hotkey, _coldkey), root in zip(
+        agent_id: _DuplicateSubmissionMetadata(
+            name=name,
+            version=version,
+            owner_root=root,
+            miner_hotkey=hotkey,
+        )
+        for (agent_id, name, version, hotkey, _coldkey), root in zip(
             loaded, roots, strict=True
         )
     }
@@ -5879,7 +5903,8 @@ async def agent_summary(
         ),
         duplicate_of=row.agent.duplicate_of,
         duplicate_name=_public_duplicate_name(duplicate, handle_claims, strike=True),
-        duplicate_version=duplicate[1] if duplicate is not None else None,
+        duplicate_version=duplicate.version if duplicate is not None else None,
+        duplicate_hotkey=duplicate.miner_hotkey if duplicate is not None else None,
         review_reason=review.reason if review is not None else row.agent.review_reason,
         review_event=review.event if review is not None else None,
         review_event_at=review.event_at if review is not None else None,

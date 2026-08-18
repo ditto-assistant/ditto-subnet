@@ -2340,6 +2340,18 @@ class PublicActivityEntry(BaseModel):
             description="Version of the matched submission; null when it is legacy.",
         ),
     ]
+    duplicate_hotkey: Annotated[
+        str | None,
+        Field(
+            default=None,
+            pattern=_SS58_PATTERN,
+            description=(
+                "Hotkey of the matched submission. Equal to miner_hotkey when "
+                "this hold is a same-miner rename or re-upload of that earlier "
+                "row, not a comparison against someone else's agent."
+            ),
+        ),
+    ]
     review_reason: Annotated[
         str | None,
         Field(
@@ -2932,6 +2944,9 @@ class PublicAgentSummary(BaseModel):
     duplicate_of: UUID | None = None
     duplicate_name: str | None = None
     duplicate_version: Annotated[int | None, Field(default=None, ge=1)] = None
+    duplicate_hotkey: Annotated[
+        str | None, Field(default=None, pattern=_SS58_PATTERN)
+    ] = None
     review_reason: str | None = None
     review_event: Literal["opened", "reopened", "cleared", "rejected"] | None = None
     review_event_at: datetime | None = None

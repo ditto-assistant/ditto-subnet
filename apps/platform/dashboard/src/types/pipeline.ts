@@ -25,6 +25,8 @@ export interface ActivityEntry {
   duplicate_of?: string | null;
   duplicate_name?: string | null;
   duplicate_version?: number | null;
+  /** Hotkey of the matched submission; equals miner_hotkey on a same-miner rename. */
+  duplicate_hotkey?: string | null;
   artifact_sha256?: string | null;
   screening_policy_version?: number | null;
   required_screening_policy_version?: number | null;

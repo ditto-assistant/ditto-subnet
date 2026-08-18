@@ -33,6 +33,8 @@ def _rejected(
     sha256: str = "rejected-sha",
     normalized_source_hash: str | None = "rejected-normalized",
     content_fingerprint: dict | None = None,
+    name: str = "Zeus_v11",
+    version: int | None = 6,
 ) -> RejectedArtifact:
     return RejectedArtifact(
         agent_id=agent_id,
@@ -41,6 +43,8 @@ def _rejected(
         sha256=sha256,
         normalized_source_hash=normalized_source_hash,
         content_fingerprint=content_fingerprint,
+        name=name,
+        version=version,
     )
 
 
@@ -90,9 +94,28 @@ def test_same_owner_resubmission_is_held() -> None:
         agent_id=_CANDIDATE,
         submitted_at=_NOW,
         sha256="rejected-sha",
+        miner_hotkey="5SameMiner",
         rejected=[_rejected(hotkey="5SameMiner")],
     )
     assert decision.held is True
+    assert decision.reason is not None
+    assert "Same miner, previously rejected as Zeus_v11 v6" in decision.reason
+    assert "cannot distinguish" not in decision.reason
+
+
+def test_cross_owner_resubmission_names_the_other_hotkey() -> None:
+    decision = evaluate_rejected_resubmission(
+        agent_id=_CANDIDATE,
+        submitted_at=_NOW,
+        sha256="rejected-sha",
+        miner_hotkey="5OtherMiner",
+        rejected=[_rejected(hotkey="5Rejected")],
+    )
+    assert decision.held is True
+    assert decision.reason is not None
+    assert "Same miner, previously rejected as" not in decision.reason
+    assert "hotkey 5Rejected" in decision.reason
+    assert "Zeus_v11 v6" in decision.reason
 
 
 def test_lexical_near_duplicate_is_held() -> None:

@@ -2823,6 +2823,8 @@ class RejectedArtifact:
     sha256: str
     normalized_source_hash: str | None
     content_fingerprint: dict | None
+    name: str
+    version: int | None
 
 
 async def list_rejected_artifacts(
@@ -2863,6 +2865,8 @@ async def list_rejected_artifacts(
                 Agent.sha256,
                 Agent.normalized_source_hash,
                 Agent.content_fingerprint,
+                Agent.name,
+                Agent.version,
             )
             .where(
                 Agent.status == AgentStatus.BANNED,
@@ -2883,6 +2887,8 @@ async def list_rejected_artifacts(
             sha256=row.sha256,
             normalized_source_hash=row.normalized_source_hash,
             content_fingerprint=row.content_fingerprint,
+            name=row.name,
+            version=row.version,
         )
         for row in rows
     ]

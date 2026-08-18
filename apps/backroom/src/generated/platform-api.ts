@@ -11838,6 +11838,11 @@ export interface components {
              */
             avatar_url?: string | null;
             /**
+             * Duplicate Hotkey
+             * @description Hotkey of the matched submission. Equal to miner_hotkey when this hold is a same-miner rename or re-upload of that earlier row, not a comparison against someone else's agent.
+             */
+            duplicate_hotkey?: string | null;
+            /**
              * Duplicate Name
              * @description Name of the matched submission.
              */
@@ -12073,6 +12078,8 @@ export interface components {
              * @description Public URL for this miner's signed profile picture, if set.
              */
             avatar_url?: string | null;
+            /** Duplicate Hotkey */
+            duplicate_hotkey?: string | null;
             /** Duplicate Name */
             duplicate_name?: string | null;
             /** Duplicate Of */
