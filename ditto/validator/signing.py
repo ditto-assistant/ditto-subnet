@@ -53,6 +53,7 @@ from ditto.api_models.validator_updater import (
     validator_updater_status_signing_token,
 )
 from ditto.validator.errors import ValidatorConfigError
+from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation import canonical_json
 from ditto_screening_protocol.confirmation_wire import (
     ConfirmationWireError,
@@ -311,7 +312,7 @@ def verify_v9_confirmation_receipt(entry: LedgerEntry) -> bool:
     """
 
     receipt = getattr(entry, "v9_confirmation", None)
-    if entry.bench_version != 9 or receipt is None:
+    if not supports_confirmation(entry.bench_version) or receipt is None:
         return False
     try:
         root = receipt.evidence_root
@@ -471,7 +472,7 @@ def verify_ledger_entry(entry: LedgerEntry, *, quorum: int = 3) -> bool:
     )
     if not ordinary_valid:
         return False
-    if entry.bench_version == 9 and entry.v9_confirmation is not None:
+    if supports_confirmation(entry.bench_version) and entry.v9_confirmation is not None:
         # The v9 receipt replaces every legacy continual-score projection. A
         # Platform must not be able to attach unsigned paired evidence and make
         # the KOTH fold bypass the verified full-confirmed composite.

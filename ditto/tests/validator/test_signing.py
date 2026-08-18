@@ -31,6 +31,7 @@ from ditto.api_models.validator_capabilities import (
     ValidatorStackIdentity,
 )
 from ditto.api_models.validator_updater import ValidatorUpdaterStatus
+from ditto.validator import signing
 from ditto.validator.signing import (
     artifact_signing_message,
     heartbeat_signing_message,
@@ -47,6 +48,7 @@ from ditto.validator.signing import (
     top5_confirmation_score_signing_message,
     verify_ledger_entry,
     verify_score_proof,
+    verify_v9_confirmation_receipt,
 )
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
@@ -1371,6 +1373,64 @@ def test_v9_ledger_entry_rejects_tampered_signed_quorum() -> None:
     proofs[0] = proofs[0].model_copy(update={"base_evidence_sha256": "aa" * 32})
 
     assert not verify_ledger_entry(entry.model_copy(update={"score_proofs": proofs}))
+
+
+def test_confirmation_receipt_is_verified_for_every_confirmation_bench_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A carried-forward entry that ships a receipt must reach receipt verification.
+
+    Regression for the pin that dispatched on ``bench_version == 9``: a v10+ entry
+    carrying a confirmation receipt skipped the receipt branch and fell through to
+    ``return entry.v9_confirmation is None`` -> False. Platform rejects the WHOLE
+    ledger when any entry fails its proof, so the validator stops setting weights
+    every epoch until the version is unpinned.
+    """
+
+    from ditto_screening_protocol.bench_v9 import CONFIRMATION_BENCH_VERSIONS
+
+    for bench_version in CONFIRMATION_BENCH_VERSIONS:
+        entry = _signed_ledger_entry(bench_version=bench_version).model_copy(
+            update={
+                "v9_confirmation": object(),
+                # A receipt replaces the legacy projections; carrying both is
+                # refused by design, so clear them to isolate the version guard.
+                "confirmation_history": [],
+                "confirmation_seeds": [],
+                "confirmation_composites": [],
+            }
+        )
+        seen: list[int | None] = []
+
+        def _fake_receipt(
+            candidate: LedgerEntry, *, sink: list[int | None] = seen
+        ) -> bool:
+            sink.append(candidate.bench_version)
+            return True
+
+        monkeypatch.setattr(signing, "verify_v9_confirmation_receipt", _fake_receipt)
+        assert verify_ledger_entry(entry), f"v{bench_version} receipt entry rejected"
+        assert seen == [bench_version], (
+            f"v{bench_version} entry never reached receipt verification"
+        )
+
+
+def test_confirmation_receipt_guard_admits_every_confirmation_bench_version() -> None:
+    """The receipt verifier itself must not early-return on a supported version."""
+
+    from ditto_screening_protocol.bench_v9 import (
+        CONFIRMATION_BENCH_VERSIONS,
+        supports_confirmation,
+    )
+
+    assert supports_confirmation(12)
+    for bench_version in CONFIRMATION_BENCH_VERSIONS:
+        entry = _signed_ledger_entry(bench_version=bench_version).model_copy(
+            update={"v9_confirmation": None}
+        )
+        # No receipt attached: the guard must still refuse, but for the missing
+        # receipt rather than the version.
+        assert not verify_v9_confirmation_receipt(entry)
 
 
 def test_legacy_unsigned_ledger_entry_remains_valid() -> None:
