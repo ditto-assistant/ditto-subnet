@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -612,8 +613,8 @@ def _skopeo_detail(error: BaseException) -> str:
 
 def _skopeo_env(*, registry_host: str, access_token: str) -> dict[str, str]:
     # Host skopeo is 1.18 and has no --dest-password-stdin. Write an isolated
-    # authfile instead. Empty DOCKER_CONFIG so ProtectHome cannot pull in
-    # Docker credHelpers for *.pkg.dev.
+    # authfile instead. Point HOME/XDG away from /home/deploy: ProtectHome
+    # makes lstat of ~/.config/containers/registries.conf.d fail closed.
     config_dir = Path(tempfile.mkdtemp(prefix="ditto-skopeo-config-"))
     (config_dir / "config.json").write_text("{}", encoding="utf-8")
     os.chmod(config_dir / "config.json", 0o600)
@@ -626,7 +627,14 @@ def _skopeo_env(*, registry_host: str, access_token: str) -> dict[str, str]:
         encoding="utf-8",
     )
     os.chmod(auth_path, 0o600)
+    containers_dir = config_dir / ".config" / "containers" / "registries.conf.d"
+    containers_dir.mkdir(parents=True)
+    runtime_dir = config_dir / "run"
+    runtime_dir.mkdir()
     env = os.environ.copy()
+    env["HOME"] = str(config_dir)
+    env["XDG_CONFIG_HOME"] = str(config_dir / ".config")
+    env["XDG_RUNTIME_DIR"] = str(runtime_dir)
     env["DOCKER_CONFIG"] = str(config_dir)
     env["REGISTRY_AUTH_FILE"] = str(auth_path)
     return env
@@ -651,10 +659,7 @@ def _run_skopeo(
             env=env,
         )
     finally:
-        config_dir = Path(env["DOCKER_CONFIG"])
-        for child in config_dir.glob("*"):
-            child.unlink(missing_ok=True)
-        config_dir.rmdir()
+        shutil.rmtree(env["DOCKER_CONFIG"], ignore_errors=True)
 
 
 def _promote_runtime_archive(

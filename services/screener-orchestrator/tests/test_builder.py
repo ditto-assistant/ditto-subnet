@@ -1,5 +1,6 @@
 import base64
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ from screener_capacity.builder import (
     _kaniko_script,
     _promote_runtime_archive,
     _skopeo_detail,
+    _skopeo_env,
     build_parser,
     run_one,
     run_one_runtime_smoke,
@@ -177,6 +179,26 @@ def test_promote_inspect_failure_includes_redacted_skopeo_stderr(
         )
     assert "ya29." not in str(raised.value)
     assert "[oauth]" in str(raised.value)
+
+
+def test_skopeo_env_isolates_home_from_protecthome() -> None:
+    env = _skopeo_env(registry_host="us-central1-docker.pkg.dev", access_token="token")
+    home = Path(env["HOME"])
+    try:
+        assert home.name.startswith("ditto-skopeo-config-")
+        assert env["XDG_CONFIG_HOME"] == str(home / ".config")
+        assert (home / ".config" / "containers" / "registries.conf.d").is_dir()
+        encoded = json.loads(
+            Path(env["REGISTRY_AUTH_FILE"]).read_text(encoding="utf-8")
+        )
+        assert (
+            base64.b64decode(
+                encoded["auths"]["us-central1-docker.pkg.dev"]["auth"]
+            ).decode()
+            == "oauth2accesstoken:token"
+        )
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
 
 
 def test_skopeo_detail_redacts_oauth_noise() -> None:
