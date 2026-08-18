@@ -83,10 +83,15 @@ def test_promote_retries_oci_when_docker_archive_is_rejected(
 
     def _run(argv: list[str], **_kwargs: object) -> _Proc:
         calls.append(argv)
-        if argv[1] == "copy" and argv[4].startswith("oci-archive:"):
-            return _Proc()
         if argv[1] == "inspect":
             return _Proc(stdout="sha256:" + "d" * 64 + "\n")
+        source = next(
+            part
+            for part in argv
+            if part.startswith(("oci-archive:", "docker-archive:"))
+        )
+        if argv[1] == "copy" and source.startswith("oci-archive:"):
+            return _Proc()
         return _Proc(
             returncode=1,
             stderr="Error parsing image: invalid tar header",
@@ -100,7 +105,20 @@ def test_promote_retries_oci_when_docker_archive_is_rejected(
         access_token="token",
     )
     assert reference.endswith("@sha256:" + "d" * 64)
-    copy_sources = [argv[4] for argv in calls if argv[1] == "copy"]
+    copy_cmds = [argv for argv in calls if argv[1] == "copy"]
+    assert copy_cmds[0][2:5] == [
+        "--dest-username",
+        "oauth2accesstoken",
+        "--dest-password-stdin",
+    ]
+    copy_sources = [
+        next(
+            part
+            for part in argv
+            if part.startswith(("oci-archive:", "docker-archive:"))
+        )
+        for argv in copy_cmds
+    ]
     assert copy_sources == [
         f"docker-archive:{archive}",
         f"oci-archive:{archive}",

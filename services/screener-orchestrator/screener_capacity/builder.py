@@ -607,47 +607,63 @@ def _skopeo_detail(error: BaseException) -> str:
         return type(error).__name__
     text = re.sub(r"ya29\.[A-Za-z0-9._-]+", "[oauth]", text)
     text = re.sub(r"eyJ[A-Za-z0-9._-]{20,}", "[jwt]", text)
-    return " ".join(text.split())[:240]
+    return " ".join(text.split())[:480]
+
+
+def _skopeo_env() -> dict[str, str]:
+    # The builder unit sets ProtectHome. Skopeo still consults Docker
+    # credHelpers for *.pkg.dev unless DOCKER_CONFIG is an empty store.
+    config_dir = Path(tempfile.mkdtemp(prefix="ditto-skopeo-config-"))
+    (config_dir / "config.json").write_text("{}", encoding="utf-8")
+    os.chmod(config_dir / "config.json", 0o600)
+    env = os.environ.copy()
+    env["DOCKER_CONFIG"] = str(config_dir)
+    env["REGISTRY_AUTH_FILE"] = str(config_dir / "auth.json")
+    (config_dir / "auth.json").write_text("{}", encoding="utf-8")
+    os.chmod(config_dir / "auth.json", 0o600)
+    return env
+
+
+def _run_skopeo(
+    args: list[str], *, access_token: str, timeout: int
+) -> subprocess.CompletedProcess[str]:
+    env = _skopeo_env()
+    try:
+        return subprocess.run(
+            args,
+            input=access_token,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=env,
+        )
+    finally:
+        config_dir = Path(env["DOCKER_CONFIG"])
+        for child in config_dir.glob("*"):
+            child.unlink(missing_ok=True)
+        config_dir.rmdir()
 
 
 def _promote_runtime_archive(
     *, archive: Path, destination: str, access_token: str
 ) -> str:
-    registry = destination.split("/", 1)[0]
-    descriptor, auth_path_raw = tempfile.mkstemp(prefix="ditto-registry-auth-")
-    auth_path = Path(auth_path_raw)
     unpacked: Path | None = None
     try:
-        os.fchmod(descriptor, 0o600)
-        with os.fdopen(descriptor, "w") as handle:
-            json.dump(
-                {
-                    "auths": {
-                        registry: {
-                            "auth": base64.b64encode(
-                                f"oauth2accesstoken:{access_token}".encode()
-                            ).decode()
-                        }
-                    }
-                },
-                handle,
-                separators=(",", ":"),
-            )
         unpacked = _materialize_image_archive(archive)
         last_error: BaseException | None = None
         copied = False
         for source in _image_archive_sources(unpacked):
-            result = subprocess.run(
+            result = _run_skopeo(
                 [
                     "skopeo",
                     "copy",
-                    "--authfile",
-                    str(auth_path),
+                    "--dest-username",
+                    "oauth2accesstoken",
+                    "--dest-password-stdin",
                     source,
                     f"docker://{destination}",
                 ],
-                capture_output=True,
-                text=True,
+                access_token=access_token,
                 timeout=600,
             )
             if result.returncode == 0:
@@ -661,21 +677,24 @@ def _promote_runtime_archive(
             raise ControllerError(
                 f"runtime image promotion failed: {_skopeo_detail(last_error)}"
             ) from last_error
-        inspect = subprocess.run(
+        inspect = _run_skopeo(
             [
                 "skopeo",
                 "inspect",
-                "--authfile",
-                str(auth_path),
+                "--username",
+                "oauth2accesstoken",
+                "--password-stdin",
                 "--format",
                 "{{.Digest}}",
                 f"docker://{destination}",
             ],
-            check=True,
-            capture_output=True,
-            text=True,
+            access_token=access_token,
             timeout=60,
         )
+        if inspect.returncode != 0:
+            raise ControllerError(
+                f"runtime image promotion failed: {_skopeo_detail(inspect)}"
+            )
     except ControllerError:
         raise
     except (OSError, subprocess.SubprocessError) as error:
@@ -683,7 +702,6 @@ def _promote_runtime_archive(
             f"runtime image promotion failed: {_skopeo_detail(error)}"
         ) from error
     finally:
-        auth_path.unlink(missing_ok=True)
         if unpacked is not None and unpacked != archive:
             unpacked.unlink(missing_ok=True)
     digest = inspect.stdout.strip()
