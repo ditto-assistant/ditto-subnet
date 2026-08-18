@@ -11228,6 +11228,8 @@ export interface components {
              * Format: uuid
              */
             grant_id: string;
+            /** Login Clone */
+            login_clone?: string | null;
             /** Login Command */
             login_command: string;
             /** Miner Hotkey */
@@ -11279,6 +11281,8 @@ export interface components {
              * @default 2
              */
             interval: number;
+            /** Login Clone */
+            login_clone?: string | null;
             /** Login Command */
             login_command: string;
             /** Poll Token */

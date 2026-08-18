@@ -309,9 +309,9 @@ function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.
         <p class="ath-eyebrow">Miner console</p>
         <h2>Sign in with your hotkey</h2>
         <p>
-          Copy the <code>uvx</code> command, run it, and this page becomes your private
-          backroom. No clone required. The CLI will offer to pick your coldkey and hotkey
-          from <code>~/.bittensor/wallets</code>. No TAO moves.
+          Copy the <code>uvx</code> command, run it, and this page becomes your private backroom. No
+          clone required. The CLI will offer to pick your coldkey and hotkey from{" "}
+          <code>~/.bittensor/wallets</code>. No TAO moves.
         </p>
       </div>
       <div class="account-grid">

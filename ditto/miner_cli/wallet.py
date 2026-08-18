@@ -73,9 +73,7 @@ def list_local_wallet_pairs(*, root: Path | None = None) -> list[WalletPair]:
             if name.startswith(".") or name.endswith("pub.txt"):
                 continue
             if hot.is_file() or hot.is_dir():
-                pairs.append(
-                    WalletPair(coldkey_name=cold.name, hotkey_name=name)
-                )
+                pairs.append(WalletPair(coldkey_name=cold.name, hotkey_name=name))
     return pairs
 
 

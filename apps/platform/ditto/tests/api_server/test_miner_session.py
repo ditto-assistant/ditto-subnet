@@ -34,7 +34,9 @@ def test_login_command_uses_uvx_from_git() -> None:
     from ditto.api_server.miner_session import login_clone_command, login_command
 
     one = login_command(user_code="abcd efgh", network="finney")
-    assert one.startswith("uvx --from git+https://github.com/ditto-assistant/ditto-subnet.git ")
+    assert one.startswith(
+        "uvx --from git+https://github.com/ditto-assistant/ditto-subnet.git "
+    )
     assert one.endswith("ditto --network finney login --code ABCD-EFGH")
     clone = login_clone_command(user_code="ABCD-EFGH", network="finney")
     assert "git clone https://github.com/ditto-assistant/ditto-subnet.git" in clone
