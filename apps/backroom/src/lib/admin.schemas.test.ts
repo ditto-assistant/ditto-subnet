@@ -25,6 +25,7 @@ import {
   releaseValidatorAssignmentInputSchema,
   validatorAssignmentListSchema,
   screenerReviewControlSchema,
+  screenerReviewSettingsSchema,
   applyScreenerReviewSettingsInputSchema,
   efficiencyBonusConfirmation,
   efficiencyBonusSettingsControlSchema,
@@ -1323,6 +1324,9 @@ describe('screener review settings schemas', () => {
     l3_model: 'openai/gpt-5.6-sol',
     timeout_seconds: 900,
     max_steps: 18,
+    source_review_max_steps: 24,
+    source_review_max_read_bytes: 1_200_000,
+    source_review_reasoning_effort: 'high',
     max_input_tokens: 425_000,
     max_output_tokens: 20_000,
     max_completion_tokens: 2_400,
@@ -1346,6 +1350,18 @@ describe('screener review settings schemas', () => {
       shadow_observations: [],
     })
     expect(parsed.applied_instances[0]?.revision).toBe(42)
+  })
+
+  it('fills L1 Luna budget defaults when older payloads omit them', () => {
+    const { source_review_max_steps, source_review_max_read_bytes, source_review_reasoning_effort, ...legacy } =
+      settings
+    expect(source_review_max_steps).toBe(24)
+    expect(source_review_max_read_bytes).toBe(1_200_000)
+    expect(source_review_reasoning_effort).toBe('high')
+    const parsed = screenerReviewSettingsSchema.parse(legacy)
+    expect(parsed.source_review_max_steps).toBe(24)
+    expect(parsed.source_review_max_read_bytes).toBe(1_200_000)
+    expect(parsed.source_review_reasoning_effort).toBe('high')
   })
 
   it('rejects duplicate model chains and short audit reasons', () => {
