@@ -4885,15 +4885,13 @@ def _public_activity_response(
                 ),
                 duplicate_of=row.agent.duplicate_of,
                 duplicate_name=_public_duplicate_name(
-                    _matched(row),
+                    (matched := _matched(row)),
                     claims,
                     strike=strike_colliding_names,
                 ),
-                duplicate_version=(
-                    _matched(row).version if _matched(row) is not None else None
-                ),
+                duplicate_version=(matched.version if matched is not None else None),
                 duplicate_hotkey=(
-                    _matched(row).miner_hotkey if _matched(row) is not None else None
+                    matched.miner_hotkey if matched is not None else None
                 ),
                 review_reason=(
                     (ath_reviews or {})[row.agent.agent_id].reason

@@ -164,9 +164,9 @@ describe("review-event evidence (#622/#636)", () => {
       duplicate_hotkey: "5Di44xhKsame",
     };
     expect(duplicateComparisonLabel(sameMiner)).toBe("Previously rejected as");
-    expect(
-      duplicateComparisonLabel({ ...sameMiner, review_event: "opened" }),
-    ).toBe("Previously rejected as");
+    expect(duplicateComparisonLabel({ ...sameMiner, review_event: "opened" })).toBe(
+      "Previously rejected as",
+    );
     expect(
       duplicateComparisonLabel({
         ...sameMiner,

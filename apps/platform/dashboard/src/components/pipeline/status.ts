@@ -150,9 +150,7 @@ export function reviewEvidenceText(entry: ReviewEventFields): string {
  */
 export function sameMinerDuplicate(entry: ReviewEventFields): boolean {
   return Boolean(
-    entry.miner_hotkey &&
-      entry.duplicate_hotkey &&
-      entry.miner_hotkey === entry.duplicate_hotkey,
+    entry.miner_hotkey && entry.duplicate_hotkey && entry.miner_hotkey === entry.duplicate_hotkey,
   );
 }
 
