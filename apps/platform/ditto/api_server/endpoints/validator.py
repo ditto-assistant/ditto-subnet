@@ -5339,9 +5339,7 @@ async def fail_job(
             # predates the field sends None and this stays NULL.
             ticket.container_log_tail = payload.container_log_tail
             ticket.container_log_tail_attempt = (
-                ticket.attempt_count
-                if payload.container_log_tail is not None
-                else None
+                ticket.attempt_count if payload.container_log_tail is not None else None
             )
             ticket.failed_at = now
             if payload.reason == "infrastructure" or platform_revoked:
