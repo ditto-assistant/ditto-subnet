@@ -12,6 +12,19 @@
   font-size: 12px;
   line-height: 1.45;
 }
+/* The derivation behind the calculation rows, folded away by default. */
+.calc-note-group {
+  margin-top: 6px;
+  border-bottom: none;
+}
+.calc-note-group > .cgsum {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.calc-note-group .calc-note {
+  margin: 0 0 8px;
+  padding-left: 20px;
+}
 .score-calc-inline {
   margin: 5px 0 2px;
   color: var(--text-dim);

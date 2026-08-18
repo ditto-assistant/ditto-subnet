@@ -66,6 +66,55 @@ function modal(): HTMLElement {
   return el;
 }
 
+const PROFILE_HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY";
+
+interface StubSubmission {
+  agent_id: string;
+  name: string;
+  status: string;
+  created_at: string;
+}
+
+/** Stub the public profile endpoint for both the handle route and the ranked
+ * leaderboard hotkey, leaving every other request on the fixtures. */
+function installProfileFetch(submissions: StubSubmission[]): void {
+  const original = globalThis.fetch;
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+    if (raw.includes("/public/miners/")) {
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({
+            miner_hotkey: PROFILE_HOTKEY,
+            name_handle: { stem: "jupiter", status: "reserved" },
+            avatar_url: "/api/v1/public/miners/" + PROFILE_HOTKEY + "/avatar",
+            profile: { x_url: "https://x.com/jupiter", github_url: null, discord_handle: null },
+            submissions,
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        ),
+      );
+    }
+    return original(input, init);
+  }) as typeof fetch;
+}
+
+function submission(index: number, status: string): StubSubmission {
+  return {
+    agent_id: "agent-" + index,
+    name: "luffy" + index,
+    status,
+    // Descending in index order, so index 0 is the newest.
+    created_at: new Date(Date.UTC(2026, 0, 20 - index)).toISOString(),
+  };
+}
+
+const many = (): StubSubmission[] => [
+  submission(0, "scored"),
+  submission(1, "evaluating"),
+  ...Array.from({ length: 6 }, (_, i) => submission(i + 2, "rejected")),
+];
+
 describe("EntityPanel miner tenant", () => {
   it("opens the overlay dialog from a hash-query miner route", () => {
     renderPanel();
@@ -98,6 +147,18 @@ describe("EntityPanel miner tenant", () => {
     expect(document.getElementById("d-stats")?.classList.contains("pipeline-mode")).toBe(false);
   });
 
+  it("folds the composite derivation away without dropping it", () => {
+    renderPanel();
+    visit("/#/overview?miner=" + topEntry.miner_hotkey);
+    // The calculation rows stay in the open; only the paragraph behind them
+    // is one click away, and it is still in the DOM for search and copy.
+    expect(document.getElementById("d-stats")?.textContent).toContain("Tool/memory base");
+    const note = document.querySelector("details.calc-note-group") as HTMLDetailsElement;
+    expect(note).not.toBeNull();
+    expect(note.open).toBe(false);
+    expect(note.querySelector(".calc-note")?.textContent).toContain("benchmark-quality multiplier");
+  });
+
   it("closes on Escape, returning to the page under the overlay", async () => {
     renderPanel();
     visit("/#/overview?miner=" + topEntry.miner_hotkey);
@@ -109,26 +170,7 @@ describe("EntityPanel miner tenant", () => {
   });
 
   it("loads /h/{handle} through the public miner profile", async () => {
-    const original = globalThis.fetch;
-    globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-      const raw = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (raw.includes("/public/miners/jupiter")) {
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              miner_hotkey: "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
-              name_handle: { stem: "jupiter", status: "reserved" },
-              avatar_url:
-                "/api/v1/public/miners/5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY/avatar",
-              profile: { x_url: "https://x.com/jupiter", github_url: null, discord_handle: null },
-              submissions: [],
-            }),
-            { status: 200, headers: { "content-type": "application/json" } },
-          ),
-        );
-      }
-      return original(input, init);
-    }) as typeof fetch;
+    installProfileFetch([]);
     renderPanel();
     visit("/h/jupiter");
     await waitFor(() => {
@@ -138,6 +180,104 @@ describe("EntityPanel miner tenant", () => {
     expect(document.querySelector("#d-hotkey a")?.textContent).toContain(
       "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
     );
+  });
+});
+
+// The miner's own profile — socials plus up to 25 recent submissions, most of
+// them re-uploads of one name — used to render above the run summary as one
+// unbounded list of raw status words. It is the follow-up question, not the
+// lede, so it now sits under the summary, folds behind a one-line digest, and
+// is scanned by status band rather than read end to end.
+describe("EntityPanel miner profile card", () => {
+  function profileCard(): HTMLDetailsElement {
+    const el = document.querySelector("details.miner-profile-group");
+    if (!el) throw new Error("missing miner profile card");
+    return el as HTMLDetailsElement;
+  }
+
+  function rows(): HTMLElement[] {
+    return Array.from(document.querySelectorAll<HTMLElement>(".miner-subs-list .miner-sub"));
+  }
+
+  function bandButton(label: string): HTMLButtonElement {
+    const match = Array.from(
+      document.querySelectorAll<HTMLButtonElement>(".miner-subs-filters .activity-filter"),
+    ).find((button) => (button.textContent || "").startsWith(label));
+    if (!match) throw new Error("missing band filter " + label);
+    return match;
+  }
+
+  it("keeps the run summary above the profile and folds the profile shut", async () => {
+    installProfileFetch(many());
+    renderPanel();
+    visit("/#/overview?miner=" + topEntry.miner_hotkey);
+    await waitFor(() =>
+      expect(document.querySelector("details.miner-profile-group")).not.toBeNull(),
+    );
+    const text = document.getElementById("d-stats")?.textContent ?? "";
+    expect(text.indexOf("Best-scoring agent")).toBeGreaterThanOrEqual(0);
+    expect(text.indexOf("Best-scoring agent")).toBeLessThan(text.indexOf("Public profile"));
+    // Folded, but the digest still says how much history is behind it.
+    expect(profileCard().open).toBe(false);
+    expect(profileCard().querySelector(".cgsum")?.textContent).toContain("8 recent submissions");
+    // The benchmark glossary stays the panel's last line, under both blocks.
+    expect(text.indexOf("Public profile")).toBeLessThan(text.indexOf("What each category"));
+  });
+
+  it("previews five submissions and expands the rest on request", async () => {
+    installProfileFetch(many());
+    renderPanel();
+    visit("/h/jupiter");
+    await waitFor(() => expect(rows().length).toBe(5));
+    // Newest first, whatever order the endpoint sent.
+    expect(rows()[0]?.textContent).toContain("luffy0");
+    const more = document.querySelector(".miner-subs-more") as HTMLButtonElement;
+    expect(more.textContent).toContain("Show all 8");
+    more.click();
+    await waitFor(() => expect(rows().length).toBe(8));
+    expect((document.querySelector(".miner-subs-more") as HTMLElement).textContent).toContain(
+      "Show fewer",
+    );
+  });
+
+  it("names each status and links the submission as an overlay drilldown", async () => {
+    installProfileFetch([submission(0, "scored"), submission(1, "under_review")]);
+    renderPanel();
+    visit("/h/jupiter");
+    await waitFor(() => expect(rows().length).toBe(2));
+    // The submissions page vocabulary, not the raw wire status.
+    expect(rows()[0]?.textContent).toContain("Scored");
+    expect(rows()[1]?.textContent).toContain("Source integrity review");
+    expect(rows()[1]?.textContent).not.toContain("under_review");
+    const link = rows()[0]?.querySelector('a[data-entity-link="agent"]');
+    expect(link).toHaveTextContent("luffy0");
+    expect(link).toHaveAttribute("href", expect.stringContaining("agent=agent-0"));
+  });
+
+  it("filters the history by status band", async () => {
+    installProfileFetch(many());
+    renderPanel();
+    visit("/h/jupiter");
+    await waitFor(() => expect(rows().length).toBe(5));
+    expect(bandButton("Rejected").textContent).toContain("6");
+    bandButton("Scored").click();
+    await waitFor(() => expect(rows().length).toBe(1));
+    expect(rows()[0]?.textContent).toContain("luffy0");
+    // Selecting a band with fewer rows than the preview drops the expander.
+    expect(document.querySelector(".miner-subs-more")).toBeNull();
+    bandButton("All").click();
+    await waitFor(() => expect(rows().length).toBe(5));
+  });
+
+  it("says nothing under a scored summary when the profile is unavailable", async () => {
+    renderPanel();
+    visit("/#/overview?miner=" + topEntry.miner_hotkey);
+    await waitFor(() =>
+      expect(document.getElementById("d-stats")?.textContent).toContain("Best-scoring agent"),
+    );
+    const text = document.getElementById("d-stats")?.textContent ?? "";
+    expect(text).not.toContain("Unknown miner handle");
+    expect(text).not.toContain("Could not load this miner profile");
   });
 });
 

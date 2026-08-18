@@ -109,3 +109,49 @@
 .miner-profile-links a {
   color: var(--accent);
 }
+
+/* The entity panel's profile card: a foldable section under the score
+   summary, whose submission history is scanned by band rather than read
+   end to end. */
+.miner-profile-group {
+  margin-top: var(--detail-space-lg, 16px);
+}
+.miner-profile-group > .cgsum {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 10px;
+}
+.miner-profile-digest {
+  font-size: 12px;
+}
+.miner-profile-body {
+  padding: 2px 0 10px 22px;
+}
+.miner-subs-filters {
+  margin: 10px 0 12px;
+}
+.miner-subs-list {
+  gap: 8px;
+}
+.miner-subs-list .miner-sub {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.miner-sub-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.miner-sub-time {
+  font-size: 12px;
+  white-space: nowrap;
+}
+.miner-subs-more {
+  margin-top: 10px;
+}

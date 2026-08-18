@@ -714,16 +714,6 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
           </div>
         </div>
         <div id="d-stats" classList={{ "pipeline-mode": view()?.tenant !== "miner" }}>
-          <Show when={entityRoute()?.kind === "miner" && entityRoute()?.id}>
-            {(id) => (
-              <MinerProfileCard
-                id={id()}
-                profile={view()?.tenant === "miner-profile" ? minerProfile() : undefined}
-                error={view()?.tenant === "miner-profile" ? minerProfile.error : undefined}
-                loading={view()?.tenant === "miner-profile" ? minerProfile.loading : false}
-              />
-            )}
-          </Show>
           <Switch>
             <Match when={minerEntry()}>
               {(entry) => (
@@ -761,6 +751,27 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
               )}
             </Match>
           </Switch>
+          {/* Below the summary deliberately: the panel opens on the question
+              "how did this miner score", and the profile — socials plus 25
+              recent submissions, most of them re-uploads of one name — is the
+              follow-up, not the lede. It stays folded while a leaderboard
+              summary is present. */}
+          <Show when={entityRoute()?.kind === "miner" && entityRoute()?.id}>
+            {(id) => (
+              <MinerProfileCard
+                id={id()}
+                profile={view()?.tenant === "miner-profile" ? minerProfile() : undefined}
+                error={view()?.tenant === "miner-profile" ? minerProfile.error : undefined}
+                loading={view()?.tenant === "miner-profile" ? minerProfile.loading : false}
+                collapsed={view()?.tenant === "miner"}
+              />
+            )}
+          </Show>
+          <Show when={minerEntry()}>
+            <div class="gloss-link">
+              <a href="#/benchmark">What each category and metric means →</a>
+            </div>
+          </Show>
         </div>
       </aside>
     </>
@@ -804,12 +815,145 @@ function minerBenchChip(
   };
 }
 
+interface PublicMinerSubmission {
+  agent_id: string;
+  name: string;
+  status: string;
+  created_at: string;
+}
+
 interface PublicMinerProfile {
   miner_hotkey: string;
   name_handle?: NameHandle | null;
   avatar_url?: string | null;
   profile: { x_url?: string | null; github_url?: string | null; discord_handle?: string | null };
-  submissions: Array<{ agent_id: string; name: string; status: string; created_at: string }>;
+  submissions: PublicMinerSubmission[];
+}
+
+/**
+ * Submission bands for the profile's history list. The endpoint returns the
+ * miner's 25 most recent submissions, and for an active miner most of them are
+ * the same name re-uploaded — a flat list of them buries the score summary the
+ * reader opened the panel for. The bands are the submissions page's status
+ * vocabulary (ACTIVITY_FILTERS) narrowed to the four questions actually asked
+ * of one miner: what scored, what is still moving, what is held, what failed.
+ * Anything outside them lands in "Other" so no submission is reachable under
+ * "All" alone.
+ */
+const PROFILE_BANDS: ReadonlyArray<{ key: string; label: string; statuses: readonly string[] }> = [
+  { key: "scored", label: "Scored", statuses: ["scored", "live"] },
+  {
+    key: "in_flight",
+    label: "In progress",
+    statuses: [
+      "waiting_screening",
+      "screening",
+      "waiting_validator",
+      "evaluating",
+      "below_score_floor",
+    ],
+  },
+  { key: "under_review", label: "Under review", statuses: ["under_review"] },
+  { key: "rejected", label: "Rejected", statuses: ["rejected"] },
+  { key: "closed", label: "Closed", statuses: ["not_queued", "retired"] },
+  { key: "other", label: "Other", statuses: [] },
+];
+
+function submissionBand(status: string | null | undefined): string {
+  const match = PROFILE_BANDS.find((band) => band.statuses.includes(String(status)));
+  return match ? match.key : "other";
+}
+
+/** How many rows the list shows before the reader asks for the rest. */
+const PROFILE_SUBMISSION_PREVIEW = 5;
+
+function MinerSubmissions(props: { submissions: PublicMinerSubmission[] }): JSX.Element {
+  const [band, setBand] = createSignal("all");
+  const [expanded, setExpanded] = createSignal(false);
+  // Newest first, and never mutate the resource's array in place.
+  const ordered = () =>
+    props.submissions
+      .slice()
+      .sort((a, b) => Date.parse(b.created_at || "") - Date.parse(a.created_at || ""));
+  const counts = (): Record<string, number> => {
+    const tally: Record<string, number> = {};
+    for (const item of props.submissions) {
+      const key = submissionBand(item.status);
+      tally[key] = (tally[key] || 0) + 1;
+    }
+    return tally;
+  };
+  // Only bands this miner actually has; a single band is no choice at all, so
+  // the row disappears rather than offering "All" beside its only sibling.
+  const bands = () => PROFILE_BANDS.filter((entry) => (counts()[entry.key] || 0) > 0);
+  const selected = () => (bands().some((entry) => entry.key === band()) ? band() : "all");
+  const filtered = () =>
+    selected() === "all"
+      ? ordered()
+      : ordered().filter((item) => submissionBand(item.status) === selected());
+  const visible = () => (expanded() ? filtered() : filtered().slice(0, PROFILE_SUBMISSION_PREVIEW));
+  const hidden = () => Math.max(0, filtered().length - visible().length);
+  return (
+    <>
+      <div class="stat-head">Submissions</div>
+      <Show when={bands().length > 1}>
+        <div
+          class="activity-filter-list miner-subs-filters"
+          role="group"
+          aria-label="Filter submissions"
+        >
+          <For each={[{ key: "all", label: "All" }, ...bands()]}>
+            {(entry) => (
+              <button
+                type="button"
+                class="activity-filter"
+                aria-pressed={selected() === entry.key ? "true" : "false"}
+                onClick={() => {
+                  setBand(entry.key);
+                  setExpanded(false);
+                }}
+              >
+                {entry.label}{" "}
+                <span class="activity-filter-count">
+                  {entry.key === "all" ? props.submissions.length : counts()[entry.key] || 0}
+                </span>
+              </button>
+            )}
+          </For>
+        </div>
+      </Show>
+      <ul class="account-list miner-subs-list">
+        <For each={visible()}>
+          {(item) => {
+            const stage = () => activityStage(item.status);
+            return (
+              <li class="miner-sub">
+                <span class="miner-sub-main">
+                  {/* The overlay route, not a full page load: a reader
+                      comparing a miner's submissions should keep this panel
+                      and the board underneath it. */}
+                  <EntityButton kind="agent" id={item.agent_id} label={agentName(item.name)} />
+                  <StatusChip label={stage()[0]} tone={stage()[1]} />
+                </span>
+                <span class="miner-sub-time muted" title={item.created_at}>
+                  {relTime(item.created_at)}
+                </span>
+              </li>
+            );
+          }}
+        </For>
+      </ul>
+      <Show when={hidden() > 0 || expanded()}>
+        <button
+          type="button"
+          class="btn ghost miner-subs-more"
+          onClick={() => setExpanded(!expanded())}
+        >
+          {expanded() ? "Show fewer" : "Show all " + filtered().length}
+        </button>
+      </Show>
+    </>
+  );
 }
 
 function MinerProfileCard(props: {
@@ -817,6 +961,9 @@ function MinerProfileCard(props: {
   profile?: PublicMinerProfile;
   error?: unknown;
   loading?: boolean;
+  /** Fold the card shut behind its summary line. True when a leaderboard
+   * summary is already answering the panel's main question. */
+  collapsed?: boolean;
 }): JSX.Element {
   const [fetched] = createResource(
     () => (props.profile || props.loading || props.error ? undefined : props.id),
@@ -833,51 +980,66 @@ function MinerProfileCard(props: {
   const loading = () => Boolean(props.loading || fetched.loading);
   const error = () => props.error ?? fetched.error;
   const unknown = () => error() instanceof HTTPError && (error() as HTTPError).status === 404;
+  // A profile that is loading, missing, or unreachable is the panel's whole
+  // content when the route resolved to a handle, and pure noise under a
+  // leaderboard summary that already answered the question. Say nothing there.
+  const narrateState = () => !props.collapsed;
   return (
     <div class="miner-profile">
-      <Show when={loading()}>
+      <Show when={narrateState() && loading()}>
         <p class="muted">Loading profile…</p>
       </Show>
-      <Show when={!loading() && unknown()}>
+      <Show when={narrateState() && !loading() && unknown()}>
         <p class="muted">Unknown miner handle.</p>
       </Show>
-      <Show when={!loading() && error() && !unknown()}>
+      <Show when={narrateState() && !loading() && error() && !unknown()}>
         <p class="muted">Could not load this miner profile.</p>
       </Show>
       <Show when={profile()}>
-        {(loaded) => (
-          <>
-            <div class="stat-head">Public profile</div>
-            <div class="miner-profile-links">
-              <Show when={loaded().profile.x_url}>
-                <a href={loaded().profile.x_url ?? undefined} target="_blank" rel="noopener">
-                  X
-                </a>
-              </Show>
-              <Show when={loaded().profile.github_url}>
-                <a href={loaded().profile.github_url ?? undefined} target="_blank" rel="noopener">
-                  GitHub
-                </a>
-              </Show>
-              <Show when={loaded().profile.discord_handle}>
-                <span>Discord @{loaded().profile.discord_handle}</span>
-              </Show>
-            </div>
-            <Show when={loaded().submissions.length}>
-              <div class="stat-head">Submissions</div>
-              <ul class="account-list">
-                <For each={loaded().submissions}>
-                  {(item) => (
-                    <li>
-                      <a href={"/agent/" + item.agent_id}>{item.name}</a>
-                      <span class="muted">{item.status}</span>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Show>
-          </>
-        )}
+        {(loaded) => {
+          const submissions = () => loaded().submissions || [];
+          const links = () => loaded().profile;
+          const hasLinks = () =>
+            Boolean(links().x_url || links().github_url || links().discord_handle);
+          // The one line that has to survive the fold: how much history is
+          // behind it, so a collapsed card is still an answer.
+          const digest = () =>
+            submissions().length
+              ? String(submissions().length) +
+                " recent submission" +
+                (submissions().length === 1 ? "" : "s")
+              : "No public submissions yet";
+          return (
+            <details class="cgroup miner-profile-group" open={!props.collapsed}>
+              <summary class="cgsum">
+                <span>Public profile</span>
+                <span class="muted miner-profile-digest">{digest()}</span>
+              </summary>
+              <div class="miner-profile-body">
+                <Show when={hasLinks()}>
+                  <div class="miner-profile-links">
+                    <Show when={links().x_url}>
+                      <a href={links().x_url ?? undefined} target="_blank" rel="noopener">
+                        X
+                      </a>
+                    </Show>
+                    <Show when={links().github_url}>
+                      <a href={links().github_url ?? undefined} target="_blank" rel="noopener">
+                        GitHub
+                      </a>
+                    </Show>
+                    <Show when={links().discord_handle}>
+                      <span>Discord @{links().discord_handle}</span>
+                    </Show>
+                  </div>
+                </Show>
+                <Show when={submissions().length}>
+                  <MinerSubmissions submissions={submissions()} />
+                </Show>
+              </div>
+            </details>
+          );
+        }}
       </Show>
     </div>
   );
@@ -931,16 +1093,20 @@ function MinerSummary(props: { entry: RankedEntry; settled: boolean; total: numb
               {rows().map((row) => (
                 <Stat k={row.k} v={row.v} />
               ))}
-              <p class="calc-note">{COMPOSITE_CALC_NOTE}</p>
+              {/* The rows are the answer; this paragraph is the derivation
+                  behind them, and printing it in full over every miner is
+                  most of what made the panel a wall. It stays one click
+                  away, and stays in the DOM for search and copy. */}
+              <details class="cgroup calc-note-group">
+                <summary class="cgsum">How the multiplier works</summary>
+                <p class="calc-note">{COMPOSITE_CALC_NOTE}</p>
+              </details>
             </div>
           )}
         </Show>
       </div>
       <div id="d-consensus">
         <Show when={e().agent_id}>{(id) => <Consensus agentId={id()} />}</Show>
-      </div>
-      <div class="gloss-link">
-        <a href="#/benchmark">What each category and metric means →</a>
       </div>
     </>
   );
