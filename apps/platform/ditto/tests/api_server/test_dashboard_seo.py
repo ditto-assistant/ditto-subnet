@@ -146,6 +146,7 @@ class TestSnapshotFromLeaderboard:
         assert len(snapshot.miners) == 1
         assert snapshot.miners[0].handle == "jupiter"
         assert snapshot.miners[0].profile_path == "/h/jupiter"
+        assert snapshot.champion_hotkey is not None
         assert snapshot.champion_hotkey.endswith("694ty")
 
 
