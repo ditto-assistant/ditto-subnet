@@ -157,6 +157,7 @@ async def get_settings(
     tie_fleet_ready = await _tie_weighting_fleet_ready(session)
     rollout = await open_rollout(session)
     desired_version = rollout.desired_version if rollout is not None else None
+    authority_version = await active_bench_version(session, open_transition=rollout)
     # Reported for the fleet, so the operator sees the stand-down that a
     # rollout-capable validator hits rather than guessing why retests went quiet.
     standdown_active = (
@@ -164,6 +165,9 @@ async def get_settings(
             settings,
             open_rollout_desired_version=desired_version,
             validator_supports_desired_version=True,
+            desired_authority_earned=(
+                desired_version is not None and authority_version == desired_version
+            ),
         )
         is not None
     )

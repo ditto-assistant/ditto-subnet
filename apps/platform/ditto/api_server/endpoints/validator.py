@@ -4431,9 +4431,12 @@ async def request_top5_confirmation_job(
             )
         # Yield previous-generation rescoring to an open rollout. This is a
         # stand-down at issuance only: a lease already held elsewhere still runs
-        # and reports, so no shared-seed wave is torn in half, and the
-        # `open_rollout` predicate lifts the stand-down by itself on activation
-        # or supersede. `active_bench_version` and the k=3 quorum are untouched.
+        # and reports, so no shared-seed wave is torn in half. It also lifts
+        # when the desired version already owns the board -- leftover
+        # collecting work is then previous-cohort catchup, not a reason to
+        # pause current-generation retests -- and when `open_rollout` itself
+        # goes away on activation or supersede. `active_bench_version` and
+        # the k=3 quorum are untouched.
         standdown_rollout = await open_rollout(session)
         standdown = rollout_standdown_reason(
             continual_settings,
@@ -4447,6 +4450,10 @@ async def request_top5_confirmation_job(
                 and heartbeat_supports_version(
                     heartbeat, now=now, version=standdown_rollout.desired_version
                 )
+            ),
+            desired_authority_earned=(
+                standdown_rollout is not None
+                and canonical_version == standdown_rollout.desired_version
             ),
         )
         if standdown is not None:

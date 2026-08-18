@@ -3375,6 +3375,8 @@ def _add_exhausted_tail_tickets(
     now: datetime,
     bench_version: int,
     running_validator: int | None = None,
+    attempt_count: int = 2,
+    manual_retry_grants: int = 1,
 ) -> None:
     for validator in range(3):
         running = validator == running_validator
@@ -3388,8 +3390,8 @@ def _add_exhausted_tail_tickets(
                 purpose_revision=2,
                 issued_at=now - timedelta(minutes=10),
                 deadline=now + timedelta(minutes=80) if running else now,
-                attempt_count=2,
-                manual_retry_grants=1,
+                attempt_count=attempt_count,
+                manual_retry_grants=manual_retry_grants,
                 infra_retry_grants=0,
                 failure_reason=None if running else "scoring_error",
                 failed_at=None if running else now,
@@ -3706,6 +3708,48 @@ async def test_activation_does_not_suppress_more_than_three_exhausted_tail_membe
             inference_requirements=_activation_requirements(),
         )
         assert rollout.status == "collecting"
+
+
+async def test_activation_suppresses_automatically_exhausted_tail_without_manual_retry(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Automatic budget exhaustion is enough to close a leftover 0-score tail."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (_agent_ids, rollout)):
+        tail_id = await _append_scoreless_rollout_tail(
+            session, rollout=rollout, now=now, suffix="auto-exhausted"
+        )
+        _add_exhausted_tail_tickets(
+            session,
+            agent_id=tail_id,
+            now=now,
+            bench_version=rollout.desired_version,
+            attempt_count=MAX_ATTEMPTS_PER_VERSION,
+            manual_retry_grants=0,
+        )
+        await session.flush()
+
+        assert await maybe_activate_rollout(
+            session,
+            rollout,
+            now=now,
+            inference_requirements=_activation_requirements(),
+        )
+        assert rollout.status == "activated"
+        assert await open_rollout(session) is None
+        audits = list(
+            await session.scalars(
+                select(BenchmarkRolloutAudit).where(
+                    BenchmarkRolloutAudit.rollout_id == rollout.rollout_id
+                )
+            )
+        )
+        suppression = next(
+            audit for audit in audits if audit.event == "tail_suppressed"
+        )
+        assert suppression.payload["agent_ids"] == [str(tail_id)]
 
 
 @pytest.mark.parametrize(

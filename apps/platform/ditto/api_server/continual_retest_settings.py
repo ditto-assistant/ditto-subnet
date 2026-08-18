@@ -65,14 +65,22 @@ def rollout_standdown_reason(
     *,
     open_rollout_desired_version: int | None,
     validator_supports_desired_version: bool,
+    desired_authority_earned: bool = False,
 ) -> str | None:
     """Why this validator must not start a previous-generation retest now.
 
     Continual retests re-score the ACTIVE benchmark generation. While a rollout
-    collects, the fleet's scarce benchmark slots are the same ones the cohort
-    needs to reach quorum on the DESIRED generation, so a fresh retest lease
-    directly delays the thing the rollout exists to do. Returning a reason keeps
-    the refusal self-describing at the call site and in the operator API.
+    collects *and the previous generation still owns the board*, the fleet's
+    scarce benchmark slots are the same ones the cohort needs to reach quorum
+    on the DESIRED generation, so a fresh retest lease directly delays the
+    thing the rollout exists to do. Returning a reason keeps the refusal
+    self-describing at the call site and in the operator API.
+
+    Once desired-version authority is already earned, a leftover collecting
+    row is background rescoring of the *previous* frozen cohort. Retests of
+    the now-active generation are current-generation work, not previous-
+    generation yield, so standing them down would idle the lane for a close
+    that no longer needs those slots.
 
     ``capable_validators`` (the default) yields only the capacity the rollout can
     actually use: a validator that does not advertise the desired version can
@@ -81,10 +89,12 @@ def rollout_standdown_reason(
 
     This is deliberately a stand-down at *issuance* only. An already-leased wave
     runs and reports to completion, so shared-seed wave semantics are never torn
-    in half, and the stand-down lifts on its own the moment ``open_rollout``
-    stops returning a row -- that is, on activation or supersede.
+    in half. The stand-down also lifts when ``open_rollout`` stops returning a
+    row -- that is, on activation or supersede.
     """
     if open_rollout_desired_version is None:
+        return None
+    if desired_authority_earned:
         return None
     if settings.rollout_standdown == "off":
         return None
@@ -97,7 +107,8 @@ def rollout_standdown_reason(
         "continual retests are standing down while benchmark version "
         f"{open_rollout_desired_version} is collecting; validator capacity is "
         "reserved for rollout qualification and retests resume automatically "
-        "once the rollout activates or is superseded"
+        "once the desired version takes authority or the rollout activates "
+        "or is superseded"
     )
 
 

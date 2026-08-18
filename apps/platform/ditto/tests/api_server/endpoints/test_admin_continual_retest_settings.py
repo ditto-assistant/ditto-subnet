@@ -178,8 +178,8 @@ async def test_open_rollout_surfaces_the_standdown_state(
         session.add(
             BenchmarkRollout(
                 rollout_id=uuid4(),
-                from_version=6,
-                desired_version=7,
+                from_version=11,
+                desired_version=12,
                 status="collecting",
                 cohort_size=5,
                 created_at=datetime.now(UTC) - timedelta(hours=1),
@@ -189,7 +189,7 @@ async def test_open_rollout_surfaces_the_standdown_state(
     collecting = await client.get(_URL, headers=_HEADERS)
     assert collecting.status_code == 200, collecting.text
     effective = collecting.json()["effective"]
-    assert effective["open_rollout_desired_version"] == 7
+    assert effective["open_rollout_desired_version"] == 12
     assert effective["rollout_standdown_active"] is True
 
     override = _payload(rollout_standdown="off")
@@ -198,8 +198,51 @@ async def test_open_rollout_surfaces_the_standdown_state(
     assert applied.json()["settings"]["rollout_standdown"] == "off"
 
     forced = await client.get(_URL, headers=_HEADERS)
-    assert forced.json()["effective"]["open_rollout_desired_version"] == 7
+    assert forced.json()["effective"]["open_rollout_desired_version"] == 12
     assert forced.json()["effective"]["rollout_standdown_active"] is False
+
+
+async def test_earned_desired_authority_clears_standdown_without_operator_override(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Hybrid authority already flipped: leftover collecting must not mute retests."""
+    from datetime import UTC, datetime, timedelta
+    from uuid import uuid4
+
+    from ditto.db.models import BenchmarkRollout, BenchmarkRolloutAudit
+    from ditto.db.queries.benchmark_rollout import DESIRED_AUTHORITY_EARNED_EVENT
+
+    _install(app, settings_maker)
+    rollout_id = uuid4()
+    now = datetime.now(UTC)
+    async with settings_maker() as session, session.begin():
+        session.add(
+            BenchmarkRollout(
+                rollout_id=rollout_id,
+                from_version=6,
+                desired_version=7,
+                status="collecting",
+                cohort_size=5,
+                created_at=now - timedelta(hours=1),
+            )
+        )
+        session.add(
+            BenchmarkRolloutAudit(
+                audit_id=uuid4(),
+                rollout_id=rollout_id,
+                event=DESIRED_AUTHORITY_EARNED_EVENT,
+                payload={"bench_version": 7, "ranked_quorum_agents": 5},
+                recorded_at=now,
+            )
+        )
+
+    response = await client.get(_URL, headers=_HEADERS)
+    assert response.status_code == 200, response.text
+    effective = response.json()["effective"]
+    assert effective["open_rollout_desired_version"] == 7
+    assert effective["rollout_standdown_active"] is False
 
 
 async def test_retest_cohort_size_is_operator_controlled_and_bounded(
@@ -418,6 +461,18 @@ async def test_rollout_standdown_modes_are_explicit() -> None:
             ContinualRetestSettings(rollout_standdown="off"),
             open_rollout_desired_version=7,
             validator_supports_desired_version=True,
+        )
+        is None
+    )
+    # A leftover collecting row after the desired era already owns the board
+    # is previous-cohort catchup, not a reason to pause current-generation
+    # retests. The operator setting stays capable_validators.
+    assert (
+        rollout_standdown_reason(
+            default,
+            open_rollout_desired_version=7,
+            validator_supports_desired_version=True,
+            desired_authority_earned=True,
         )
         is None
     )

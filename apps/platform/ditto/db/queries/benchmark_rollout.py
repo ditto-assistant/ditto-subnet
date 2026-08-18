@@ -1964,11 +1964,13 @@ async def _terminal_exhausted_rollout_tail(
 
     Authority may already belong to the desired benchmark while the wider
     rescore cohort finishes. Do not leave that rollout open forever when its
-    final non-priority members have failed on every quorum validator despite an
-    audited operator retry. This is deliberately narrower than treating an
-    exhausted ticket as a score: at most three members, all outside the frozen
-    priority gate, each with zero accepted rows and no live or retryable
-    canonical lease.
+    final non-priority members have exhausted every quorum validator's
+    canonical retry budget with zero accepted rows. This is deliberately
+    narrower than treating an exhausted ticket as a score: at most three
+    members, all outside the frozen priority gate, each with zero accepted
+    rows and no live or retryable canonical lease. An automatic budget
+    exhaustion is enough; requiring an audited operator retry would pin the
+    transition open on a member nobody will grant another lease to.
     """
     if not 1 <= len(incomplete_ids) <= MAX_EXHAUSTED_ROLLOUT_TAIL_MEMBERS:
         return set()
@@ -2000,7 +2002,6 @@ async def _terminal_exhausted_rollout_tail(
             ticket.purpose != TicketPurpose.CANONICAL_QUORUM
             or ticket.purpose_revision <= 0
             or ticket.status != TicketStatus.EXPIRED
-            or ticket.manual_retry_grants <= 0
             or ticket.attempt_count < ticket_attempt_cap(ticket)
             for ticket in agent_tickets
         ):
