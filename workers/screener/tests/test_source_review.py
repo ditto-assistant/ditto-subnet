@@ -2518,6 +2518,7 @@ def test_regression_fixture_covers_allowed_and_prohibited_boundary() -> None:
         "derive-as-prompt-records-retained-model-draft-served",
         "same-owner-near-dup-after-bypass-removed",
         "honest-and-bad-low-score-is-not-cheat",
+        "glossary-block-prompt-grounding-model-draft-served",
     } <= legitimate
     assert {
         "fixed-world-checker-retries-model-drafts",
@@ -3317,11 +3318,34 @@ pub async fn run(req: Request) -> RunResponse {
     }
     RunResponse::from_model(call_model(req.question, retrieve(req.user_id)))
 }
+
+#[cfg(test)]
+fn protocol_helper() -> RunResponse {
+    RunResponse { prompt_tokens: 0, output_tokens: 0, answer: None }
+}
+
+const PROTOCOL_JSON: &str = r#"{"prompt_tokens":0}"#;
 """
 
     leads = find_source_review_leads([("src/main.rs", source)])
 
     assert "c13-bench-family-fingerprint" not in {lead["kind"] for lead in leads}
+
+
+def test_glossary_block_prompt_grounding_is_c13_lead_not_compiler() -> None:
+    source = """\
+fn answer(req: Request) -> Response {
+    let records = retrieve(req.user_id);
+    let glossary_block = role_grounding(records);
+    Response::from_model(call_model(req.question, records, glossary_block))
+}
+"""
+
+    leads = find_source_review_leads([("src/baseline.rs", source)])
+    kinds = {lead["kind"] for lead in leads}
+
+    assert "c13-bench-family-fingerprint" in kinds
+    assert "finite-family-world-compiler" not in kinds
 
 
 def test_derive_as_prompt_is_not_a_c13_fingerprint_or_compiler_lead() -> None:

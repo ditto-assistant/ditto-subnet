@@ -119,7 +119,7 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v31"
+    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v32"
     assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v10"
     assert L2_CAUSE_PROMPT_REVISION == "l3-sol-violation-cause-v24"
     assert L2_CAUSE_TIEBREAKER_PROMPT_REVISION == ("l3-sol-cause-disagreement-v5")
@@ -159,7 +159,8 @@ def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() 
     assert "assigned into the served response contract" in _SYSTEM_PROMPT
     assert "locally derived expected-value checker" in _SYSTEM_PROMPT
     assert "fresh model generation" in _SYSTEM_PROMPT
-    assert "manual-review benchmark-emulation lead" in _SYSTEM_PROMPT
+    assert "that model draft served as the graded answer" in _SYSTEM_PROMPT
+    assert "production-engine fail, not a two-limb pass" in _SYSTEM_PROMPT
     assert "two-limb refusal test" in _SYSTEM_PROMPT
     assert "necessary and not sufficient" in _SYSTEM_PROMPT
     assert "production-engine fail" in _SYSTEM_PROMPT

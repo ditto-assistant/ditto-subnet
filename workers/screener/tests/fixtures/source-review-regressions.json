@@ -110,11 +110,15 @@
     },
     {
       "name": "same-owner-near-dup-after-bypass-removed",
-      "source": "fn answer(req: Request) { let records = retrieve(req.user_id); return call_model(req.question, records); }"
+      "source": "fn answer(req: Request) { let records = retrieve(req.user_id); let glossary_block = role_grounding(records); return call_model(req.question, records, glossary_block); }"
     },
     {
       "name": "honest-and-bad-low-score-is-not-cheat",
-      "source": "fn answer(req: Request) { let records = retrieve(req.user_id); return call_model(req.question, records); }"
+      "source": "fn answer(req: Request) { let records = retrieve(req.user_id); let draft = call_model(req.question, records); return Response::from_model(draft); }"
+    },
+    {
+      "name": "glossary-block-prompt-grounding-model-draft-served",
+      "source": "fn answer(req: Request) { let records = retrieve(req.user_id); let glossary_block = role_grounding(records); return call_model(req.question, records, glossary_block); }"
     }
   ],
   "advisory": [

@@ -622,8 +622,7 @@ _RULES = (
                     r"system prompt\s*=\s*compact|try solve|"
                     r"fn family of|family router|family::classify|"
                     r"v10 open program|role::phrases|"
-                    r"reply with exactly|wjfast|do not recompute|"
-                    r"prompt tokens:\s*0)"
+                    r"reply with exactly|wjfast|do not recompute)"
                 ),
             ),
         ),
