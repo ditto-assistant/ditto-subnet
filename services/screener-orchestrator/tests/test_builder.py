@@ -80,9 +80,13 @@ def test_promote_retries_oci_when_docker_archive_is_rejected(
     archive = tmp_path / "image.tar"
     _write_tar(archive, ["manifest.json"])
     calls: list[list[str]] = []
+    auths: list[dict[str, Any]] = []
 
     def _run(argv: list[str], **_kwargs: object) -> _Proc:
         calls.append(argv)
+        if argv[1] == "copy":
+            authfile = argv[argv.index("--dest-authfile") + 1]
+            auths.append(json.loads(Path(authfile).read_text(encoding="utf-8")))
         if argv[1] == "inspect":
             return _Proc(stdout="sha256:" + "d" * 64 + "\n")
         source = next(
@@ -106,11 +110,10 @@ def test_promote_retries_oci_when_docker_archive_is_rejected(
     )
     assert reference.endswith("@sha256:" + "d" * 64)
     copy_cmds = [argv for argv in calls if argv[1] == "copy"]
-    assert copy_cmds[0][2:5] == [
-        "--dest-username",
-        "oauth2accesstoken",
-        "--dest-password-stdin",
-    ]
+    assert copy_cmds[0][2] == "--dest-authfile"
+    assert auths
+    encoded = auths[0]["auths"]["us-central1-docker.pkg.dev"]["auth"]
+    assert base64.b64decode(encoded).decode() == "oauth2accesstoken:token"
     copy_sources = [
         next(
             part

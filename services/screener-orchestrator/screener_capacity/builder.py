@@ -610,28 +610,41 @@ def _skopeo_detail(error: BaseException) -> str:
     return " ".join(text.split())[:480]
 
 
-def _skopeo_env() -> dict[str, str]:
-    # The builder unit sets ProtectHome. Skopeo still consults Docker
-    # credHelpers for *.pkg.dev unless DOCKER_CONFIG is an empty store.
+def _skopeo_env(*, registry_host: str, access_token: str) -> dict[str, str]:
+    # Host skopeo is 1.18 and has no --dest-password-stdin. Write an isolated
+    # authfile instead. Empty DOCKER_CONFIG so ProtectHome cannot pull in
+    # Docker credHelpers for *.pkg.dev.
     config_dir = Path(tempfile.mkdtemp(prefix="ditto-skopeo-config-"))
     (config_dir / "config.json").write_text("{}", encoding="utf-8")
     os.chmod(config_dir / "config.json", 0o600)
+    encoded = base64.b64encode(f"oauth2accesstoken:{access_token}".encode()).decode()
+    auth_path = config_dir / "auth.json"
+    auth_path.write_text(
+        json.dumps(
+            {"auths": {registry_host: {"auth": encoded}}}, separators=(",", ":")
+        ),
+        encoding="utf-8",
+    )
+    os.chmod(auth_path, 0o600)
     env = os.environ.copy()
     env["DOCKER_CONFIG"] = str(config_dir)
-    env["REGISTRY_AUTH_FILE"] = str(config_dir / "auth.json")
-    (config_dir / "auth.json").write_text("{}", encoding="utf-8")
-    os.chmod(config_dir / "auth.json", 0o600)
+    env["REGISTRY_AUTH_FILE"] = str(auth_path)
     return env
 
 
 def _run_skopeo(
-    args: list[str], *, access_token: str, timeout: int
+    args: list[str], *, registry_host: str, access_token: str, timeout: int
 ) -> subprocess.CompletedProcess[str]:
-    env = _skopeo_env()
+    env = _skopeo_env(registry_host=registry_host, access_token=access_token)
+    authfile = env["REGISTRY_AUTH_FILE"]
+    command = list(args)
+    if len(command) > 1 and command[1] == "copy":
+        command[2:2] = ["--dest-authfile", authfile]
+    elif len(command) > 1 and command[1] == "inspect":
+        command[2:2] = ["--authfile", authfile]
     try:
         return subprocess.run(
-            args,
-            input=access_token,
+            command,
             capture_output=True,
             text=True,
             timeout=timeout,
@@ -652,17 +665,16 @@ def _promote_runtime_archive(
         unpacked = _materialize_image_archive(archive)
         last_error: BaseException | None = None
         copied = False
+        registry_host = destination.split("/", 1)[0]
         for source in _image_archive_sources(unpacked):
             result = _run_skopeo(
                 [
                     "skopeo",
                     "copy",
-                    "--dest-username",
-                    "oauth2accesstoken",
-                    "--dest-password-stdin",
                     source,
                     f"docker://{destination}",
                 ],
+                registry_host=registry_host,
                 access_token=access_token,
                 timeout=600,
             )
@@ -681,13 +693,11 @@ def _promote_runtime_archive(
             [
                 "skopeo",
                 "inspect",
-                "--username",
-                "oauth2accesstoken",
-                "--password-stdin",
                 "--format",
                 "{{.Digest}}",
                 f"docker://{destination}",
             ],
+            registry_host=registry_host,
             access_token=access_token,
             timeout=60,
         )
