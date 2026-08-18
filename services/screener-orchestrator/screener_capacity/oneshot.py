@@ -144,9 +144,7 @@ def _still_deleted(
         try:
             state = client.state(uid)
         except TargonAPIError as error:
-            if error.status == 404:
-                return True
-            return False
+            return error.status == 404
         if not _state_is_torn_down(state):
             return False
         remaining = deadline - time.monotonic()
