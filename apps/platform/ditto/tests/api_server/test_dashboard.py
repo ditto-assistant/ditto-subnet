@@ -147,10 +147,8 @@ class TestDashboard:
         "path",
         [
             "/agent/6c10d0df-fc93-4903-a939-147d51cea1cc",
-            "/miner/5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
             "/agents/6c10d0df-fc93-4903-a939-147d51cea1cc",
             "/miners/5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
-            "/h/jupiter",
             "/validators/5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
             "/screeners/5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
         ],
@@ -161,8 +159,39 @@ class TestDashboard:
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
         assert resp.headers["Cache-Control"] == "public, max-age=60, must-revalidate"
-        # Entity paths serve the same SPA shell as /.
+        # Overlay entity paths serve the same SPA shell as /.
         assert resp.text == (await _get(app, "/")).text
+
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/miner/5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
+            "/h/jupiter",
+        ],
+    )
+    async def test_miner_profile_html_carries_open_graph(self, path: str) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        resp = await _get(app, path)
+        assert resp.status_code == 200
+        body = resp.text
+        assert '<div id="root">' in body
+        assert 'property="og:title"' in body
+        assert 'property="og:url"' in body
+        assert path in body
+        assert "Ditto SN118 miner" in body
+        assert "application/ld+json" in body
+        assert "Subnet Leaderboard" not in body.split("<title>")[1].split("</title>")[0]
+
+    async def test_robots_and_sitemap_are_public(self) -> None:
+        app = create_api_server(make_api_server_config(dashboard_enabled=True))
+        robots = await _get(app, "/robots.txt")
+        assert robots.status_code == 200
+        assert "Allow: /miner/" in robots.text
+        assert "Sitemap:" in robots.text
+        sitemap = await _get(app, "/sitemap.xml")
+        assert sitemap.status_code == 200
+        assert sitemap.headers["content-type"].startswith("application/xml")
+        assert "<urlset" in sitemap.text
 
     async def test_wandb_url_is_html_escaped(self) -> None:
         # A stray quote in the configured URL must not break out of the attribute.

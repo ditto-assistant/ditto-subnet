@@ -28,6 +28,7 @@ from ditto.api_server.confirmation_profile_installation import (
     installed_confirmation_verification_profiles,
 )
 from ditto.api_server.continual_retest_settings import ContinualRetestSettingsResolver
+from ditto.api_server.dashboard_share import apply_share_card, share_card_for_miner
 from ditto.api_server.datapipeline import create_generator
 from ditto.api_server.efficiency import EfficiencyStateMaterializer
 from ditto.api_server.efficiency_settings import (
@@ -455,23 +456,73 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
                     response_class=HTMLResponse,
                     name=f"dashboard_{entity_kind}",
                 )
-            for entity_kind in ("agent", "miner"):
-                app.add_api_route(
-                    f"/{entity_kind}/{{entity_id}}",
-                    dashboard_response,
-                    methods=["GET"],
-                    include_in_schema=False,
-                    response_class=HTMLResponse,
-                    name=f"dashboard_{entity_kind}",
+
+            async def miner_share_response(
+                request: Request, miner_id: str, path: str
+            ) -> Response:
+                card = await share_card_for_miner(request, miner_id=miner_id, path=path)
+                html = apply_share_card(dashboard_html, card)
+                etag = compute_etag(html.encode("utf-8"))
+                headers = {
+                    "Cache-Control": "public, max-age=60, must-revalidate",
+                    "ETag": etag,
+                }
+                if if_none_match(request.headers.get("if-none-match"), etag):
+                    return Response(
+                        status_code=304,
+                        headers={**headers, "Vary": "Accept-Encoding"},
+                    )
+                return HTMLResponse(content=html, headers=headers)
+
+            @app.get("/miner/{entity_id}", include_in_schema=False)
+            async def dashboard_miner(request: Request, entity_id: str) -> Response:
+                return await miner_share_response(
+                    request, entity_id, f"/miner/{entity_id}"
                 )
+
+            @app.get("/h/{handle}", include_in_schema=False)
+            async def dashboard_miner_handle(request: Request, handle: str) -> Response:
+                return await miner_share_response(request, handle, f"/h/{handle}")
+
             app.add_api_route(
-                "/h/{handle}",
+                "/agent/{entity_id}",
                 dashboard_response,
                 methods=["GET"],
                 include_in_schema=False,
                 response_class=HTMLResponse,
-                name="dashboard_miner_handle",
+                name="dashboard_agent",
             )
+
+            @app.get("/robots.txt", include_in_schema=False)
+            async def robots_txt(request: Request) -> Response:
+                from ditto.api_server.dashboard_share import request_origin
+
+                origin = request_origin(request)
+                body = (
+                    "User-agent: *\n"
+                    "Allow: /\n"
+                    "Allow: /miner/\n"
+                    "Allow: /h/\n"
+                    "Disallow: /api/\n"
+                    f"Sitemap: {origin}/sitemap.xml\n"
+                )
+                return Response(content=body, media_type="text/plain")
+
+            @app.get("/sitemap.xml", include_in_schema=False)
+            async def sitemap_xml(request: Request) -> Response:
+                from ditto.api_server.dashboard_share import request_origin
+
+                origin = request_origin(request)
+                urls = [f"{origin}/"]
+                body = (
+                    '<?xml version="1.0" encoding="UTF-8"?>\n'
+                    '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n'
+                    + "".join(
+                        f"  <url><loc>{html.escape(url)}</loc></url>\n" for url in urls
+                    )
+                    + "</urlset>\n"
+                )
+                return Response(content=body, media_type="application/xml")
 
             if _DASHBOARD_ASSETS.is_dir():
                 # Vite emits content-hashed bundles under dist/assets/ (safe to
