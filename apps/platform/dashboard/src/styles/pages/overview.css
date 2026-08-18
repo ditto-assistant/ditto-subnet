@@ -728,6 +728,13 @@
 .champion-name .entity-link {
   color: inherit;
 }
+/* The incumbent's picture is the box's one image and sits beside display
+   type at up to 30px — it takes the crown's gold ring and halo so the two
+   read as one statement rather than an avatar parked next to a name. */
+.champion-name .miner-avatar {
+  --avatar-ring: var(--gold);
+  --avatar-glow: color-mix(in oklch, var(--gold) 52%, transparent);
+}
 .champion-score {
   font-family: var(--display);
   font-size: clamp(32px, 3vw, 44px);

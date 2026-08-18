@@ -1278,6 +1278,52 @@ tbody tr.champion .rank {
   color: var(--rank-three-text);
 }
 
+/* ── Avatar rank tinting ──────────────────────────────────────
+   The rank chip already says where a row stands; the profile picture is
+   what the eye actually lands on first, so it repeats that standing in
+   colour. Medals ring the top three, the crown outranks all of them (gold
+   ring + halo, one step larger), and chain-weight rows borrow the same two
+   hues their leading rule uses. Rows with no standing keep the neutral
+   ring from widgets.css. */
+tbody tr:has(.rank.r1) .miner-avatar {
+  --avatar-ring: color-mix(in oklch, var(--gold) 78%, transparent);
+}
+tbody tr:has(.rank.r2) .miner-avatar {
+  --avatar-ring: var(--border-strong);
+}
+tbody tr:has(.rank.r3) .miner-avatar {
+  --avatar-ring: color-mix(in oklch, #a85d35 72%, transparent);
+}
+tbody tr.chain-top:not(.champion) .miner-avatar {
+  --avatar-ring: color-mix(in oklch, var(--gold) 62%, transparent);
+}
+tbody tr.chain-weighted:not(.champion) .miner-avatar {
+  --avatar-ring: color-mix(in oklch, var(--memory) 68%, transparent);
+}
+tbody tr.champion .miner-avatar {
+  width: 32px;
+  height: 32px;
+  --avatar-ring: var(--gold);
+  --avatar-glow: color-mix(in oklch, var(--gold) 55%, transparent);
+}
+/* Hover is where a row becomes the one you are reading: the picture lifts
+   with it. Suppressed under reduced-motion by the transform guard below. */
+tbody tr:hover .miner-avatar,
+tbody tr:focus-visible .miner-avatar {
+  transform: scale(1.07);
+  --avatar-glow: color-mix(in oklch, var(--accent) 38%, transparent);
+}
+tbody tr.champion:hover .miner-avatar,
+tbody tr.champion:focus-visible .miner-avatar {
+  --avatar-glow: color-mix(in oklch, var(--gold) 75%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  tbody tr:hover .miner-avatar,
+  tbody tr:focus-visible .miner-avatar {
+    transform: none;
+  }
+}
+
 /* ── Leaderboard-page-scoped rules (2455–2475) ──────────────── */
 /* The strips were spaced for their old above-table home; give the first
    one clear separation from the board on the Leaderboard page. */

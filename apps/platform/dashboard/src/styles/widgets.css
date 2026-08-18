@@ -735,18 +735,44 @@ tr:hover .copy,
 .tip-chip {
   cursor: help;
 }
+/* Miner profile picture. It is the only image on an otherwise typographic
+   board, so it is sized and ringed to read as identity rather than as a
+   favicon: a hairline ring lifts it off the row surface, and a soft cast
+   shadow separates it from the tinted champion/chain-weight backgrounds
+   that sit directly behind it. Callers never pass a colour — the ring and
+   halo are driven by --avatar-ring / --avatar-glow, which rank-aware rules
+   (leaderboard sheet) override per row. */
 .miner-avatar {
+  --avatar-ring: color-mix(in oklab, var(--border-strong) 85%, transparent);
+  --avatar-glow: transparent;
   flex: none;
-  width: 22px;
-  height: 22px;
-  border: 1px solid var(--border);
+  width: 26px;
+  height: 26px;
+  border: 0;
   border-radius: 50%;
-  background: var(--surface-2, var(--bg-elevated, transparent));
+  background: var(--bg-elev-2, transparent);
   object-fit: cover;
+  box-shadow:
+    0 0 0 1.5px var(--avatar-ring),
+    0 1px 3px color-mix(in oklab, #000 26%, transparent),
+    0 0 9px 1px var(--avatar-glow);
+  transition:
+    box-shadow 0.18s var(--ease-out-quart, ease),
+    transform 0.18s var(--ease-out-quart, ease);
 }
 .miner-avatar.lg {
-  width: 36px;
-  height: 36px;
+  width: 42px;
+  height: 42px;
+  --avatar-ring: color-mix(in oklab, var(--accent) 60%, var(--border-strong));
+  box-shadow:
+    0 0 0 2px var(--avatar-ring),
+    0 2px 6px color-mix(in oklab, #000 30%, transparent),
+    0 0 14px 2px var(--avatar-glow);
+}
+@media (prefers-reduced-motion: reduce) {
+  .miner-avatar {
+    transition: none;
+  }
 }
 
 .handle-badge {

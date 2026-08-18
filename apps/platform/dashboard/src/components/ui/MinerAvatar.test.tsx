@@ -17,6 +17,8 @@ describe("MinerAvatar", () => {
     ));
     const img = container.querySelector("img.miner-avatar.lg");
     expect(img).toHaveAttribute("src", "/api/v1/public/miners/5Hotkey/avatar");
-    expect(img).toHaveAttribute("width", "36");
+    expect(img).toHaveAttribute("width", "42");
+    expect(img).toHaveAttribute("height", "42");
+    expect(img).toHaveAttribute("loading", "lazy");
   });
 });
