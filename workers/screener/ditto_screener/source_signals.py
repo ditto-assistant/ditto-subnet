@@ -605,6 +605,29 @@ _RULES = (
             ),
         ),
     ),
+    _Rule(
+        # Distinctive v12 bench-family compiler tokens. Location-only lead:
+        # the reviewer must still apply the two-limb and production-engine
+        # tests. A fingerprint is never a finding or auto-ban. Omit official
+        # protocol types (RunResponse) and generic retry syntax (for attempt
+        # in); those belong in the L1 grep card, not this static lead.
+        "c13-bench-family-fingerprint",
+        (
+            _Role(
+                "c13-fingerprint",
+                _words(
+                    r"(?:verified result|glossary block|"
+                    r"established for prompt|settled without operation|"
+                    r"author reconciled value|exact value prompt|"
+                    r"system prompt\s*=\s*compact|try solve|"
+                    r"fn family of|family router|family::classify|"
+                    r"v10 open program|role::phrases|"
+                    r"reply with exactly|wjfast|do not recompute|"
+                    r"prompt tokens:\s*0)"
+                ),
+            ),
+        ),
+    ),
 )
 
 

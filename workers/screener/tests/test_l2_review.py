@@ -119,7 +119,8 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v30"
+    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v31"
+    assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v10"
     assert L2_CAUSE_PROMPT_REVISION == "l3-sol-violation-cause-v24"
     assert L2_CAUSE_TIEBREAKER_PROMPT_REVISION == ("l3-sol-cause-disagreement-v5")
     assert "Generator mirroring is earlier and therefore" in _VIOLATION_CAUSE_TASK
@@ -159,6 +160,11 @@ def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() 
     assert "locally derived expected-value checker" in _SYSTEM_PROMPT
     assert "fresh model generation" in _SYSTEM_PROMPT
     assert "manual-review benchmark-emulation lead" in _SYSTEM_PROMPT
+    assert "two-limb refusal test" in _SYSTEM_PROMPT
+    assert "necessary and not sufficient" in _SYSTEM_PROMPT
+    assert "production-engine fail" in _SYSTEM_PROMPT
+    assert "Derive-as-prompt that" in _SYSTEM_PROMPT
+    assert "Honest-and-bad or post-remediation low score" in _SYSTEM_PROMPT
     assert "live schema-driven routing" in _SYSTEM_PROMPT
     assert "reported prior-population" in _SAFETY_ADJUDICATOR_TASK
     assert "regardless of L1's category" in _SAFETY_ADJUDICATOR_TASK

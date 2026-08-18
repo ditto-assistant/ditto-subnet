@@ -74,13 +74,15 @@ when the provider omits cost. A stable instructions/tool/dossier prefix,
 `prompt_cache_key`, and artifact-scoped `session_id` maximize provider cache
 reuse without enabling response replay caching. The result-cache key includes
 all budgets, model/fallback/critic routing, reasoning settings, artifact/L1
-digests, prompt revisions `l2-kimi-source-review-v23`,
-`l3-sol-adversarial-critic-v15`, `l3-sol-violation-cause-v22`,
-`l3-sol-cause-disagreement-v5`, `l3-sol-safety-adjudicator-v19`, and
+digests, prompt revisions `l2-kimi-source-review-v31`,
+`l3-sol-adversarial-critic-v18`, `l3-sol-violation-cause-v24`,
+`l3-sol-cause-disagreement-v5`, `l3-sol-safety-adjudicator-v21`, and
 `l2-integrity-static-hold-v3`, dossier revision
-`l1-compressed-dossier-v8`, harness revision
-`l2-isolated-coding-harness-v17`, and the supported canonical-starter revision
-set. The inert analyzer chooses the canonical v2 or v3 baseline with the fewest
+`l1-compressed-dossier-v10`, harness revision
+`l2-isolated-coding-harness-v19`, and the supported canonical-starter revision
+set. The compressed L1 dossier now also surfaces C13 bench-family fingerprint
+leads; they remain search prompts, never auto-bans. L1 and this L2 prompt apply
+the two-limb refusal test and the production-engine test. The inert analyzer chooses the canonical v2 or v3 baseline with the fewest
 file-digest deltas and reports the selected exact revision in the dossier; this
 keeps historical artifacts and current v3 starter submissions comparable
 without trusting submission metadata.

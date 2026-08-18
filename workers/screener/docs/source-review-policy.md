@@ -75,8 +75,9 @@ runtime path shows at least one of these behaviors:
 
 - exact generator, scorer, canary, challenge, or audit token/template
   recognition that changes runtime behavior;
-- deterministic solvers or phrase tables for scored question families that
-  bypass the claimed general model/tool path;
+- deterministic solvers, phrase tables, closed `Program`/`try_solve` trees, or
+  baked family-router classifiers for scored question families that bypass the
+  claimed general model/tool path;
 - training or runtime selection based on expected answers, answer items,
   evaluator/grader implementations, or private challenge outcomes;
 - scorer-aware answer or abstain rewriting that is not derived from the genuine
@@ -114,6 +115,62 @@ rejects model drafts until they match a derived value, quarantine may preserve
 the evidence for operator review. The finding must state that the model still
 authors the final response when that is true; it must not allege direct field
 replacement without a traced assignment.
+
+### Two-limb refusal test
+
+After a derived value is injected into the deciding turn:
+
+- **Retention.** Does the model still receive the current user's records on
+  that same turn?
+- **Dissent.** If the model disagrees with the draft, is that model draft
+  served as the graded answer at the agent's own score cost?
+
+Fail either limb = `benchmark_emulation`. Withheld-evidence compact prompts,
+emptied notes, `established_for_prompt = ""`, and reject-until-match loops fail
+retention or dissent even when a real model call appears in the trace.
+
+A locally derived expected-value checker that keeps records on the deciding
+turn and forwards the accepted model draft is allowed. That is
+derive-as-prompt, not replacement.
+
+### Production-engine test
+
+Limbs (a) and (b) are necessary and not sufficient. An allowed engine must be
+shippable in Ditto production against arbitrary user records and paraphrased
+requests.
+
+A finite bench-family compiler is `benchmark_emulation` even when records stay
+on the first harness turn and the graded slot is not overwritten. Closed
+`Program` / `try_solve` trees, phrase tables, character-match ladders, baked
+`family-router.json` classifiers, `fn family_of`, and prompts such as "Do not
+recompute", "State this exact resolved value", or "Copy its value exactly" on a
+compiled decimal are production-engine fails.
+
+Ask: if this user renamed every field and asked the same question in
+production tomorrow, would this code still be a general assistant? If it only
+works because the public bench is a closed family pool, quarantine as
+`benchmark_emulation`.
+
+### Calibration contrasts
+
+- Derive-as-prompt that retains records and serves the model draft is allowed.
+- Same-owner lexical near-duplicate of a rejected ancestor is a hold/lead,
+  not an automatic reject. Diff the served path. A real remediation that
+  removed the bypass is allowed.
+- Honest-and-bad or post-remediation low score is not a cheat signal.
+- Ban is per agent UUID. Same SHA, same hotkey, or an older upload after a ban
+  is a different row.
+
+### C13 fingerprints
+
+The following tokens are location-only review leads on the served `/run`
+path, never automatic bans: `prompt_tokens: 0`, `VERIFIED RESULT`,
+`glossary_block`, `established_for_prompt`, `settled_without_operation`,
+`author_reconciled_value`, `EXACT_VALUE_PROMPT`, `system_prompt = compact`,
+`try_solve`, `fn family_of`, `family-router`, `family::classify`,
+`v10_open_program`, `Role::PHRASES`, `for attempt in`, `REPLY WITH EXACTLY`,
+`WJFAST`, `Do not recompute`. A hit is a search prompt. Apply the two-limb
+and production-engine tests before citing a finding.
 
 Live schema-driven routing, genuine retrieval/reranking, prompt specialization,
 runtime-described semantics, generic state reconstruction, and bounded

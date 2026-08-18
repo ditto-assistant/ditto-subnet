@@ -52,13 +52,13 @@ L2_MODEL = "moonshotai/kimi-k3"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
-L2_PROMPT_REVISION = "l2-kimi-source-review-v30"
+L2_PROMPT_REVISION = "l2-kimi-source-review-v31"
 L2_CRITIC_PROMPT_REVISION = "l3-sol-adversarial-critic-v18"
 L2_CAUSE_PROMPT_REVISION = "l3-sol-violation-cause-v24"
 L2_CAUSE_TIEBREAKER_PROMPT_REVISION = "l3-sol-cause-disagreement-v5"
 L2_SAFETY_PROMPT_REVISION = "l3-sol-safety-adjudicator-v21"
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
-L2_DOSSIER_REVISION = "l1-compressed-dossier-v9"
+L2_DOSSIER_REVISION = "l1-compressed-dossier-v10"
 L2_CAUSE_REASONING_EFFORT = "medium"
 L2_SAFETY_ADJUDICATOR_REASONING_EFFORT = "low"
 L2_CAUSE_MAX_STEPS = 8
@@ -475,10 +475,22 @@ unchanged, do not label it answer replacement or scorer-field manipulation.
 Still inspect whether a stable case/template/definition registry, fixed world
 parser, finite answer-family compiler, or grader-mirroring rule repeatedly
 constrains those drafts; that is a manual-review benchmark-emulation lead when
-the fixed benchmark mechanism is reachable. Clear live schema-driven routing,
-genuine retrieval/reranking, prompt specialization, runtime-described semantics,
-generic state reconstruction, and bounded model-authored correction passes when
-the current request and actual model/tool path remain authoritative.
+the fixed benchmark mechanism is reachable.
+Apply the two-limb refusal test after a derived value is injected: (a) does the
+model still receive the current user's records on that turn, and (b) if the
+model disagrees, is that draft served at the agent's score cost? Fail either
+limb is benchmark_emulation. Limbs (a) and (b) are necessary and not sufficient.
+A finite bench-family compiler — closed Program/try_solve trees,
+phrase tables, character-match ladders, baked family-router.json, fn family_of,
+or "Do not recompute" / "Copy its value exactly" on a compiled decimal — is
+still a production-engine fail even when both limbs pass. Derive-as-prompt that
+retains records and serves the model draft is allowed. Lexical near-duplicate
+of a same-owner rejected ancestor is a hold/lead, not an automatic reject.
+Honest-and-bad or post-remediation low score is not a cheat signal. Clear
+live schema-driven routing, genuine retrieval/reranking, prompt specialization,
+runtime-described semantics, generic state reconstruction, and bounded
+model-authored correction passes when the current request and actual
+model/tool path remain authoritative.
 2. Tool fidelity: every reported tool call must be selected through the genuine
 planner/model path and correspond to a call actually executed by either a
 request-supplied tool endpoint or a genuine harness-owned Tool implementation.

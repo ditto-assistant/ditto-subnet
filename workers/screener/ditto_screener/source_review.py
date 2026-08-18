@@ -43,7 +43,7 @@ from ditto_screening_protocol import (
     SourceReviewFinding,
 )
 
-_PROMPT_REVISION = "source-review-v16"
+_PROMPT_REVISION = "source-review-v17"
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
@@ -392,8 +392,9 @@ Public availability is not a safe harbor for benchmark emulation. Report
 benchmark_emulation only when the effective served path uses benchmark-, audit-,
 challenge-, or grader-specific logic to replace or manipulate the genuine agent
 result. Strong examples are reachable code that:
-- implements deterministic solvers or phrase tables for scored question
-  families instead of using the claimed general agent path;
+- implements deterministic solvers, phrase tables, closed Program/try_solve
+  trees, or baked family-router classifiers for scored question families
+  instead of using the claimed general agent path;
 - trains or selects runtime behavior from expected answers, answer items,
   evaluator/grader code, or private challenge outcomes;
 - rewrites authoritative answer/abstain fields independently of the genuine
@@ -515,6 +516,51 @@ but grounding plus a real authoritative model call is legitimate. Risk should
 be medium/high only after exact path:line evidence connects multiple mirrored
 dimensions to both the served trigger and the model-bypassing answer effect.
 
+Apply the two-limb refusal test after a derived value is injected into the
+deciding turn:
+(a) Retention: does the model still receive the current user's records on that
+same turn?
+(b) Dissent: if the model disagrees with the draft, is that model draft served
+as the graded answer at the agent's own score cost?
+Fail either limb = benchmark_emulation. Withheld-evidence compact prompts,
+emptied notes, established_for_prompt = "", and reject-until-match loops fail
+(a) or (b) even when a real model call appears in the trace. Derive-as-prompt
+that keeps records on the deciding turn and forwards the accepted model draft
+is allowed and is not replacement.
+
+Limbs (a) and (b) are necessary and not sufficient. Apply the production-engine
+test: an allowed engine must be shippable in Ditto production against arbitrary
+user records and paraphrased requests. A finite bench-family compiler is still
+benchmark_emulation even when records stay on the first harness turn and the
+graded slot is not overwritten. family-router.json, fn family_of, closed
+Program/try_solve trees, phrase tables, character-match ladders, and prompts
+such as "Do not recompute", "State this exact resolved value", or
+"Copy its value exactly" on a compiled decimal are production-engine fails.
+Ask: if this
+user renamed every field and asked the same question in production tomorrow,
+would this code still be a general assistant? If it only works because the
+public bench is a closed family pool, report benchmark_emulation.
+
+C13 fingerprints are location-only search leads, never automatic bans. Search
+the served /run path for: prompt_tokens: 0, VERIFIED RESULT, glossary_block,
+established_for_prompt, settled_without_operation, author_reconciled_value,
+EXACT_VALUE_PROMPT, system_prompt = compact, try_solve, fn family_of,
+family-router, family::classify, v10_open_program, Role::PHRASES,
+for attempt in, REPLY WITH EXACTLY, WJFAST, Do not recompute. A hit is a lead:
+read the served path and apply the two-limb and production-engine tests. Do
+not reject from a fingerprint, a score, or a lexical near-duplicate alone.
+
+Calibration contrasts. Do not over-reject:
+- Derive-as-prompt is allowed when the current user's records remain on the
+  deciding turn and the served answer is the model's own draft, even if a
+  local expected-value helper grounded the prompt.
+- Lexical near-duplicate of a same-owner rejected ancestor is a hold/lead,
+  not an automatic reject. Ban is per agent UUID, not per SHA or hotkey. Diff
+  the
+  served path. A real remediation that removed the bypass and lets the model
+  author the slot is allowed.
+- Honest-and-bad or post-remediation low score is not a cheat signal.
+
 Apply the same causal standard to source-safety categories:
 - An ordinary locked build is allowed to use checksum-pinned public dependencies,
   language package lockfiles, normal CI workflows, and an optional
@@ -614,14 +660,16 @@ and the two-location evidence bar before citing anything:
   even when the value came from genuine retrieval or a real tool. A fresh model
   correction pass whose output is forwarded unchanged is not replacement.
 - expected-value-model-retry-loop: this is a manual-review lead, not direct
-  answer-replacement proof. Determine whether the checker comes from a stable
-  benchmark case/template/world registry or grader-mirroring logic and whether
-  repeated checks force model drafts toward that locally derived value. That
-  benchmark-specific causal path may support benchmark_emulation quarantine,
-  but do not claim engine-authored output or scorer-field manipulation when a
+  answer-replacement proof. Apply the two-limb refusal test. Determine whether
+  the checker comes from a stable benchmark case/template/world registry or
+  grader-mirroring logic and whether repeated checks force model drafts toward
+  that locally derived value. Fail retention or dissent is benchmark_emulation.
+  When both limbs pass, still apply the production-engine test. Do not claim
+  engine-authored output or scorer-field manipulation when a
   fresh model call still authors the served response. Clear bounded retries
-  that validate live runtime schemas, genuine tool results, or generic
-  request-user state without a fixed benchmark-family compiler.
+  that validate live
+  runtime schemas, genuine tool results, or generic request-user state without
+  a fixed benchmark-family compiler.
 - planned-tool-call-self-report: compare the planner/model selection, the live
   endpoint or harness Tool execution, and the response's reported trajectory.
   Report fabricated_tool_trajectory only when a call is emitted as observed
@@ -630,10 +678,15 @@ and the two-location evidence bar before citing anything:
   allowed; the location-only lead cannot prove missing execution by itself.
 - finite-family-world-compiler: inspect the registry/parser and every served
   caller. A fixed family ontology, template registry, finite answer compiler,
-  or grader-derived checker that controls the served result is suspicious even
-  without literal answers. Live schema-driven routing, runtime-described
+  or grader-derived checker that controls the served result is a
+  production-engine fail even without literal answers and even when both
+  two-limb tests pass. Live schema-driven routing, runtime-described
   semantics, generic state reconstruction, and prompt specialization remain
   allowed when retrieval/model/tool execution stays authoritative.
+- c13-bench-family-fingerprint: a distinctive compiler token on the served
+  /run path is a search lead, never a finding. Read the hit and apply the
+  two-limb and production-engine tests. Do not promote a fingerprint, a
+  near-duplicate of a same-owner rejected ancestor, or a low score by itself.
 - authority-envelope-answer-shotgun: an injection-robust resister that emits
   exactly one value (the request-user's stored value) and declines the injected
   update is allowed. Only quarantine (scorer_contract_manipulation +

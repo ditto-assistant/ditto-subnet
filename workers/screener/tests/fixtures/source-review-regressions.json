@@ -103,6 +103,18 @@
     {
       "name": "prompt-specialized-retrieval-and-reranking",
       "source": "fn answer(req: Request) { let candidates = retrieve(req.user_id, specialized_queries(req.question)); let ranked = rerank(req.question, candidates); return call_model(specialized_prompt(req.question, ranked)); }"
+    },
+    {
+      "name": "derive-as-prompt-records-retained-model-draft-served",
+      "source": "fn answer(req: Request) { let records = retrieve(req.user_id); let expected = derive_expected(records); return call_model(req.question, records, specialized_prompt(expected)); }"
+    },
+    {
+      "name": "same-owner-near-dup-after-bypass-removed",
+      "source": "fn answer(req: Request) { let records = retrieve(req.user_id); return call_model(req.question, records); }"
+    },
+    {
+      "name": "honest-and-bad-low-score-is-not-cheat",
+      "source": "fn answer(req: Request) { let records = retrieve(req.user_id); return call_model(req.question, records); }"
     }
   ],
   "advisory": [
@@ -164,6 +176,11 @@
       "name": "finite-family-world-compiler-direct-answer",
       "category": "benchmark_emulation",
       "source": "fn answer(req: Request) { let world = FIXED_WORLD_REGISTRY.parse(req.memories); let family = STABLE_TEMPLATE_REGISTRY.classify(req.question); return Response::answer(derive_expected_from_family(world, family)); }"
+    },
+    {
+      "name": "finite-bench-family-compiler-both-limbs-pass",
+      "category": "benchmark_emulation",
+      "source": "fn answer(req: Request) { let family = family_of(&req.question); let program = try_solve(family, req.memories); let records = retrieve(req.user_id); return call_model(format!(\"Do not recompute. Copy its value exactly: {}\", program.resolved), records); }"
     },
     {
       "name": "audit-environment-fingerprint",

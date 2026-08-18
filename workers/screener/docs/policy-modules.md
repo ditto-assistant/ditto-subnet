@@ -47,9 +47,10 @@ The strict manifest contains exactly `policy_version`, `rotation_id`, and
   static tables. Trust never extends to a changed path or derivative file.
   A bounded semantic-lead pass supplies location-only co-occurrence hints for
   challenge-shaped retrieval overrides, deterministic question resolvers,
-  scorer-contract manipulation, request rewrites, user-isolation bugs, and
-  external build inputs. Leads never decide policy or expose matched source;
-  the reviewer must validate reachability and causal effect.
+  scorer-contract manipulation, request rewrites, user-isolation bugs,
+  external build inputs, and C13 bench-family compiler fingerprints. Leads
+  never decide policy or expose matched source; the reviewer must validate
+  reachability and causal effect. C13 hits are search leads, never auto-bans.
 - `behavioral_challenge_pack`: runs bounded private `/run` requests only after a
   selector trips. It records response digests, elapsed time, and JSON keys, not
   private prompts or response bodies. An anomaly becomes quarantine and an
