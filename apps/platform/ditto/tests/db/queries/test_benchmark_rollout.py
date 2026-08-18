@@ -112,14 +112,14 @@ _Seeded = TypeVar("_Seeded")
 
 
 async def test_newest_contract_is_a_target_not_an_activation() -> None:
-    # v11 is the newest shipped contract. Shipping it makes it a discoverable
+    # v12 is the newest shipped contract. Shipping it makes it a discoverable
     # rollout target and moves CANARY/CURRENT (discovery metadata); it does not
     # activate it or move weight authority, which stays on the durable ledger.
-    contract = benchmark_contract(11)
+    contract = benchmark_contract(12)
     assert contract.minimum_screening_policy_version == 9
     assert contract.requires_screened_image is True
     assert latest_benchmark_contract() == contract
-    assert CANARY_BENCH_VERSION == 11
+    assert CANARY_BENCH_VERSION == 12
     assert DEFAULT_BENCH_VERSION == 2
     assert LEGACY_BENCH_VERSION == 2
 
@@ -160,7 +160,7 @@ async def test_admin_status_read_does_not_start_rollout(
         # A target must be both above the active version and at or above the
         # floor. Shipping v8 through v11 makes each discoverable as a target but
         # does not create or activate a rollout.
-        assert control["available_target_versions"] == [8, 9, 10, 11]
+        assert control["available_target_versions"] == [8, 9, 10, 11, 12]
         contracts = control["contracts"]
         assert isinstance(contracts, list)
         assert [item["version"] for item in contracts] == [
@@ -174,6 +174,7 @@ async def test_admin_status_read_does_not_start_rollout(
             9,
             10,
             11,
+            12,
         ]
         assert control["status"] == "inactive"
         count = await session.scalar(select(func.count(BenchmarkRollout.rollout_id)))
@@ -197,7 +198,7 @@ def _capabilities(now: datetime) -> tuple[dict, dict]:
             # Model a current scorer that retains every shipped rollout
             # contract. Individual tests narrow this list when they need to
             # exercise a missing-version boundary.
-            "supported_bench_versions": [2, 7, 8, 9, 10, 11],
+            "supported_bench_versions": [2, 7, 8, 9, 10, 11, 12],
             "observed_at": int(now.timestamp()),
             "software_version": "1.3.0",
             "source_revision": revision,
@@ -3222,7 +3223,7 @@ async def test_admin_start_route_is_parameterised_by_version(
 
         # An unshipped version fails closed rather than opening a bad rollout.
         with pytest.raises(HTTPException) as exc_info:
-            await get_rollout(None, session, "12")
+            await get_rollout(None, session, "13")
         assert exc_info.value.status_code == 409
         with pytest.raises(HTTPException) as not_found:
             await get_rollout(None, session, "banana")

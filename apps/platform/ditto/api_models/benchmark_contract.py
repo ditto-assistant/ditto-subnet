@@ -65,6 +65,15 @@ _CONTRACTS = {
     # rollout target; it does not open a rollout or change active benchmark
     # authority (activation remains a deliberate POST).
     11: BenchmarkContract(11, 9, True, False),
+    # v12 is the anti-emulation bump on the v9..v11 evidence stack: it keeps
+    # LongMemEval and the trusted token-efficiency path while adding the causal
+    # model-dependence, answer-stuffing and inference-latency score gates, plus a
+    # generated surface whose required operation is recoverable only from the
+    # seeded records. It retains the same policy-9 screened-image and post-v7
+    # route prerequisites as v11. Shipping this contract exposes a guarded
+    # operator rollout target; it does not open a rollout or change active
+    # benchmark authority (activation remains a deliberate POST).
+    12: BenchmarkContract(12, 9, True, False),
 }
 
 
