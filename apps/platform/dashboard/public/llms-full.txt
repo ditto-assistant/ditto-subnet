@@ -1,0 +1,44 @@
+# Ditto SN118 — full AI-readable reference
+
+See /llms.txt for the short summary. This file is the public API map.
+
+## Live JSON (max-age=30s)
+
+All of the following are unauthenticated GET endpoints under `https://platform-api.heyditto.ai/api/v1/public`. Successful responses are cacheable. Authenticated miner, validator, screener, and admin surfaces are out of scope for crawlers.
+
+| Path | What it is |
+| --- | --- |
+| `/leaderboard` | Ranked miners, official composite, KOTH emissions projection |
+| `/health` | Coarse subnet / API health |
+| `/activity` | Recent submission lifecycle events |
+| `/operations` | Validator and screener fleet snapshot |
+| `/weights` | Last publicly revealed SN118 weight matrix |
+| `/validators` | Signed validator worker availability |
+| `/screeners` | Screener heartbeats |
+| `/submissions` | Recent scored / in-flight submissions |
+| `/agent/{id}/summary` | Compact public evidence for one agent |
+| `/agent/{id}/scores` | Finalized k=3 score record |
+| `/agent/{id}/pipeline` | Screening + validator ticket history |
+| `/miners/{hotkey}/avatar` | Public miner avatar |
+| `/bench/config` | Frozen scoring setup for the active bench |
+| `/bench/glossary` | Metric and category vocabulary |
+| `/bench/timeline` | Historical bench releases |
+| `/bench/rollout` | In-progress bench version collection |
+
+Source tarballs become downloadable only after the public-source window; review-held and rejected source stays private. In-progress score rows omit validator identity and ticket signatures.
+
+## Ranking vocabulary
+
+- `composite` — canonical three-validator median. Provenance, not the rank key once continual waves or confirmation are active.
+- `official_composite` — the quality that ranks the board and drives the weight fold.
+- `rank` — 1-based order by `official_composite`. Null on unranked provisional / confirmation-gated rows.
+- `emissions` — read-only KOTH projection. Validators still compute and submit the authoritative weight vector; Yuma combines revealed inputs.
+- `registered` — whether the miner hotkey currently has a UID. A deregistered score stays visible but is excluded from weights.
+
+Do not invent missing numbers. If an endpoint is unavailable, say so.
+
+## Related sites
+
+- Consumer product: https://heyditto.ai
+- Assistant app: https://assistant.heyditto.ai
+- This dashboard: https://platform-api.heyditto.ai/

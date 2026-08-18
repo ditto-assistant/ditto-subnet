@@ -3,21 +3,16 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Ditto SN118 · Subnet Leaderboard</title>
+    <meta name="author" content="Ditto" />
     <meta
-      name="description"
-      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
+      name="keywords"
+      content="Bittensor, SN118, Subnet 118, Ditto, DittoBench, miner leaderboard, validator, decentralized AI, AI memory, subnet scores"
     />
-    <link rel="canonical" href="https://platform-api.heyditto.ai/" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
 
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Ditto" />
-    <meta property="og:title" content="Ditto SN118 · Subnet Leaderboard" />
-    <meta
-      property="og:description"
-      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
-    />
-    <meta property="og:url" content="https://platform-api.heyditto.ai/" />
+    <meta property="og:locale" content="en_US" />
     <meta
       property="og:image"
       content="https://platform-api.heyditto.ai/assets/paperditto-512.png"
@@ -28,16 +23,60 @@
     <meta property="og:image:alt" content="Ditto paper mascot" />
 
     <meta name="twitter:card" content="summary" />
-    <meta name="twitter:title" content="Ditto SN118 · Subnet Leaderboard" />
-    <meta
-      name="twitter:description"
-      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
-    />
+    <meta name="twitter:site" content="@heydittoai" />
+    <meta name="twitter:creator" content="@heydittoai" />
     <meta
       name="twitter:image"
       content="https://platform-api.heyditto.ai/assets/paperditto-512.png"
     />
     <meta name="twitter:image:alt" content="Ditto paper mascot" />
+
+    <link
+      rel="apple-touch-icon"
+      href="https://platform-api.heyditto.ai/assets/paperditto-512.png"
+    />
+    <link
+      rel="alternate"
+      type="text/plain"
+      href="/llms.txt"
+      title="LLMs.txt - AI-readable SN118 summary"
+    />
+    <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
+
+    <!--
+      Variable SEO (title, description, canonical, JSON-LD). Static defaults
+      below keep a standalone dist host crawlable; the platform replaces this
+      block at serve time with a 30s snapshot of the live public board.
+    -->
+    <!--ditto:seo-head-->
+    <title>Ditto SN118 · Subnet Leaderboard</title>
+    <meta
+      name="description"
+      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
+    />
+    <link rel="canonical" href="https://platform-api.heyditto.ai/" />
+    <meta property="og:title" content="Ditto SN118 · Subnet Leaderboard" />
+    <meta
+      property="og:description"
+      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
+    />
+    <meta property="og:url" content="https://platform-api.heyditto.ai/" />
+    <meta name="twitter:title" content="Ditto SN118 · Subnet Leaderboard" />
+    <meta
+      name="twitter:description"
+      content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
+    />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "Ditto SN118",
+        "url": "https://platform-api.heyditto.ai/",
+        "description": "Live Ditto SN118 leaderboard scores, submission progress, and validator health.",
+        "publisher": { "@type": "Organization", "name": "Ditto" }
+      }
+    </script>
+    <!--/ditto:seo-head-->
 
     <!--
     Public transparency dashboard for Bittensor Subnet 118 (Ditto).
@@ -111,6 +150,8 @@
     </script>
   </head>
   <body>
+    <!--ditto:seo-body-->
+    <!--/ditto:seo-body-->
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

@@ -44,6 +44,12 @@ describe("currentPage", () => {
     expect(currentPage()).toBe("operations");
   });
 
+  it("follows a crawlable pathname when there is no hash page", () => {
+    setLocation("/leaderboard");
+    syncFromLocation();
+    expect(currentPage()).toBe("leaderboard");
+  });
+
   it("resolves unknown '#/…' routes to overview and normalizes the URL", () => {
     setLocation("/#/bogus");
     syncFromLocation();

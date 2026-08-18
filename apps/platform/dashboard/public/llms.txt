@@ -1,0 +1,49 @@
+# Ditto SN118
+
+> Public transparency dashboard for Bittensor Subnet 118 (Ditto). Live miner leaderboard, submission pipeline, validator fleet, and DittoBench scoring. All numbers come from the platform's public read API; nothing here is a sample.
+
+The dashboard is the human front door. The same data is available as JSON with `Cache-Control: public, max-age=30`, so a crawler that wants the current standings should fetch the API rather than scrape the SPA.
+
+## Live JSON (max-age=30s)
+
+- Leaderboard: https://platform-api.heyditto.ai/api/v1/public/leaderboard
+- Health: https://platform-api.heyditto.ai/api/v1/public/health
+- Submission activity: https://platform-api.heyditto.ai/api/v1/public/activity
+- Validator / screener fleet: https://platform-api.heyditto.ai/api/v1/public/operations
+- Revealed on-chain weights: https://platform-api.heyditto.ai/api/v1/public/weights
+- Benchmark timeline: https://platform-api.heyditto.ai/api/v1/public/bench/timeline
+- Benchmark config: https://platform-api.heyditto.ai/api/v1/public/bench/config
+- Benchmark glossary: https://platform-api.heyditto.ai/api/v1/public/bench/glossary
+
+## Pages
+
+- Overview: https://platform-api.heyditto.ai/
+- Leaderboard: https://platform-api.heyditto.ai/leaderboard
+- Benchmark: https://platform-api.heyditto.ai/benchmark
+- Submission pipeline: https://platform-api.heyditto.ai/pipeline
+- Validator fleet: https://platform-api.heyditto.ai/operations
+- Recent submissions: https://platform-api.heyditto.ai/submissions
+- ATH reviews: https://platform-api.heyditto.ai/ath
+- Miner profile: https://platform-api.heyditto.ai/miner/{hotkey} or https://platform-api.heyditto.ai/h/{handle}
+- Agent evidence: https://platform-api.heyditto.ai/agent/{agent_id}
+
+## Quick facts
+
+- Subnet: Bittensor SN118 (Ditto)
+- Dashboard: https://platform-api.heyditto.ai/
+- Product landing: https://heyditto.ai
+- App: https://assistant.heyditto.ai
+- Source: https://github.com/ditto-assistant/ditto-subnet
+- Company: Omni Aura LLC
+- Contact: support@heyditto.ai
+
+## What this site is
+
+SN118 scores miner-submitted AI memory agents on DittoBench. Validators independently score each submission; the platform publishes the aggregate board, the KOTH emissions projection, and the public evidence record. Rank is by official composite on the active benchmark, not raw median alone.
+
+This host is not the consumer Ditto assistant. It does not accept sign-ups and it does not serve private product data.
+
+## Machine-readable companion
+
+- https://platform-api.heyditto.ai/llms-full.txt — public API map and scoring vocabulary
+- https://platform-api.heyditto.ai/sitemap.xml — crawlable page list, refreshed with the board

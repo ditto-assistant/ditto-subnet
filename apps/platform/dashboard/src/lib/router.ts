@@ -60,6 +60,13 @@ export function isPageName(value: string): value is PageName {
   return Object.prototype.hasOwnProperty.call(PAGES, value);
 }
 
+/** First path segment when it is a sidebar page (`/leaderboard`). */
+export function pageFromPathname(pathname?: string): PageName | null {
+  const raw = (pathname ?? location.pathname).replace(/^\/+|\/+$/g, "");
+  const segment = raw.split("/")[0] ?? "";
+  return segment !== "" && isPageName(segment) ? segment : null;
+}
+
 export type EntityKind = "agent" | "miner" | "validator" | "screener";
 
 // Singular kind → plural path segment (legacy /agents/{id} style paths).
@@ -156,11 +163,12 @@ export function spaHref(page: string, query?: URLSearchParams): string {
   return "/" + configSearch() + "#/" + page + (qs ? "?" + qs : "");
 }
 
-// The page currently addressed by the hash, or null when the hash is not a
-// valid page route (e.g. on a dedicated /agent/{id} page).
+// The page currently addressed by the hash, or by a crawlable pathname
+// (`/leaderboard`). Null on a dedicated /agent/{id} page with no page route.
 export function currentPageName(): PageName | null {
   const page = parseHashRoute().page;
-  return page !== null && page !== "" && isPageName(page) ? page : null;
+  if (page !== null && page !== "" && isPageName(page)) return page;
+  return pageFromPathname();
 }
 
 export function entityHref(kind: EntityKind, identifier: string, page?: string): string {

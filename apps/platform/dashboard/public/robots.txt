@@ -1,0 +1,11 @@
+# robots.txt for the Ditto SN118 public dashboard
+# Allow all crawlers (including AI bots) — wildcard covers everything.
+#
+# The platform serves a generated copy of this file (with the request
+# origin) when the dashboard is hosted same-origin. This static file is
+# the fallback for a standalone dist host.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://platform-api.heyditto.ai/sitemap.xml

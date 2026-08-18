@@ -10,6 +10,7 @@ import {
   dashboardHref,
   entityHref,
   isPageName,
+  pageFromPathname,
   readEntityRoute,
 } from "../lib/router";
 import type { EntityKind, EntityRoute, PageName } from "../lib/router";
@@ -45,8 +46,9 @@ function derivePage(current: PageName | null): PageName {
   // disagree after closing an overlay.)
   const candidate = m?.[1];
   const hashPage = candidate !== undefined && isPageName(candidate) ? candidate : null;
+  const pathPage = pageFromPathname();
   const page: PageName =
-    hashPage ?? (entity ? (ENTITY_PAGES[entity.kind] ?? "overview") : "overview");
+    hashPage ?? pathPage ?? (entity ? (ENTITY_PAGES[entity.kind] ?? "overview") : "overview");
   // An unknown "#/…" route (e.g. "#/bogus", "#/") resolves to overview both
   // at boot and after; normalize the URL so it doesn't advertise a route that
   // doesn't exist. Entity routes own their hash and are left untouched.

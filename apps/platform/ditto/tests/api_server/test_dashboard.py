@@ -135,7 +135,9 @@ class TestDashboard:
         resp = await _get(app, "/")
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
-        assert resp.headers["Cache-Control"] == "public, max-age=60, must-revalidate"
+        assert resp.headers["Cache-Control"] == (
+            "public, max-age=30, stale-while-revalidate=120, must-revalidate"
+        )
         body = resp.text
         # The wandb link is injected into the meta tag the SPA reads.
         assert f'content="{url}"' in body
@@ -153,6 +155,9 @@ class TestDashboard:
             "/h/jupiter",
             "/validators/5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm",
             "/screeners/5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            "/leaderboard",
+            "/benchmark",
+            "/overview",
         ],
     )
     async def test_serves_dashboard_at_entity_paths(self, path: str) -> None:
@@ -160,7 +165,9 @@ class TestDashboard:
         resp = await _get(app, path)
         assert resp.status_code == 200
         assert resp.headers["content-type"].startswith("text/html")
-        assert resp.headers["Cache-Control"] == "public, max-age=60, must-revalidate"
+        assert resp.headers["Cache-Control"] == (
+            "public, max-age=30, stale-while-revalidate=120, must-revalidate"
+        )
         # Entity paths serve the same SPA shell as /.
         assert resp.text == (await _get(app, "/")).text
 
@@ -212,7 +219,9 @@ class TestDashboard:
         assert second.status_code == 304
         assert second.content == b""
         assert second.headers["etag"] == etag
-        assert second.headers["Cache-Control"] == "public, max-age=60, must-revalidate"
+        assert second.headers["Cache-Control"] == (
+            "public, max-age=30, stale-while-revalidate=120, must-revalidate"
+        )
         # RFC 9110 §15.4.5: the 304 repeats the 200's Vary: Accept-Encoding.
         assert second.headers["Vary"] == "Accept-Encoding"
 

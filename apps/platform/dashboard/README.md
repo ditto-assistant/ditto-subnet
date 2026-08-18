@@ -166,3 +166,24 @@ would additionally require CORS on the API's `/public/*` routes (not currently
 enabled, since the default is same-origin). The API sets
 `Cache-Control: public, max-age=30` on the data; the SPA auto-refreshes on the
 same 30s cadence.
+
+## SEO / crawlers
+
+Same-origin serving (the default) also exposes the landing-astro discovery
+set at the dashboard origin:
+
+| Path | Freshness |
+| --- | --- |
+| `/robots.txt` | 5 min |
+| `/llms.txt`, `/llms-full.txt` | 5 min |
+| `/sitemap.xml` | 30s (includes current miner / agent URLs) |
+| `/`, `/leaderboard`, … | 30s HTML with JSON-LD + `<noscript>` standings |
+
+The HTML cache matches the public leaderboard (`max-age=30`). Crawlers that
+do not run JavaScript still see the current ranks in JSON-LD and a noscript
+list; the same numbers live at `/api/v1/public/leaderboard`. A failed board
+read never substitutes sample ranks — the static shell is served instead.
+
+Hash routes (`/#/leaderboard`) still work. Crawlable path aliases
+(`/leaderboard`, `/benchmark`, `/pipeline`, `/operations`, `/submissions`,
+`/ath`, `/overview`) are what the sitemap advertises.

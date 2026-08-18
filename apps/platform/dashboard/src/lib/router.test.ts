@@ -17,6 +17,7 @@ import {
   dashboardHref,
   entityHref,
   fullEntityHref,
+  pageFromPathname,
   parseHashRoute,
   readEntityRoute,
   spaHref,
@@ -214,6 +215,17 @@ describe("currentPageName", () => {
   it("returns null on a dedicated entity page", () => {
     setLocation("/agent/a1");
     expect(currentPageName()).toBeNull();
+  });
+
+  it("returns the page for a crawlable pathname", () => {
+    setLocation("/leaderboard");
+    expect(currentPageName()).toBe("leaderboard");
+    expect(pageFromPathname()).toBe("leaderboard");
+  });
+
+  it("lets a hash page win over a crawlable pathname", () => {
+    setLocation("/leaderboard#/benchmark");
+    expect(currentPageName()).toBe("benchmark");
   });
 });
 

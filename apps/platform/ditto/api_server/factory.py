@@ -28,6 +28,19 @@ from ditto.api_server.confirmation_profile_installation import (
     installed_confirmation_verification_profiles,
 )
 from ditto.api_server.continual_retest_settings import ContinualRetestSettingsResolver
+from ditto.api_server.dashboard_seo import (
+    CRAWLABLE_PAGE_PATHS,
+    DOC_CACHE_CONTROL,
+    HTML_CACHE_CONTROL,
+    STATIC_DOC_CACHE_CONTROL,
+    inject_live_seo,
+    llms_full_txt,
+    llms_txt,
+    load_seo_snapshot,
+    public_origin,
+    robots_txt,
+    sitemap_xml,
+)
 from ditto.api_server.datapipeline import create_generator
 from ditto.api_server.efficiency import EfficiencyStateMaterializer
 from ditto.api_server.efficiency_settings import (
@@ -408,7 +421,8 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
 
     # Serve the public dashboard SPA same-origin at ``/`` so the platform is the
     # transparency front door (its ``/api/v1/public/*`` calls need no CORS). The
-    # HTML is rendered once at boot with the wandb link injected; a missing file
+    # SPA shell is read at boot with the wandb link injected; live SEO (JSON-LD,
+    # noscript standings, sitemap) is filled in per request. A missing file
     # just skips the route.
     if config.dashboard_enabled:
         dashboard_html = _render_dashboard(config.dashboard_wandb_url)
@@ -417,32 +431,92 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
                 "dashboard SPA not found at %s; serving API only", _DASHBOARD_FILE
             )
         else:
-            # The HTML is rendered once at boot, so hash it once for a strong
-            # ETag. With max-age=60 the SPA revalidates often, but a matching
-            # If-None-Match returns an empty 304 — cheap for the VM and the
-            # main win of the polling dashboard. must-revalidate + the short
-            # TTL keeps deploys visible within a minute.
-            dashboard_etag = compute_etag(dashboard_html.encode("utf-8"))
-            dashboard_headers = {
-                "Cache-Control": "public, max-age=60, must-revalidate",
-                "ETag": dashboard_etag,
-            }
+            # The SPA shell is baked at boot (wandb URL). Live JSON-LD /
+            # noscript standings are injected per request from a 30s snapshot
+            # so crawlers see current ranks without a boot-stale HTML cache.
+            # ETag is of the injected document: unchanged standings still 304.
 
             async def dashboard_response(request: Request) -> Response:
-                if if_none_match(request.headers.get("if-none-match"), dashboard_etag):
+                origin = public_origin(request)
+                snapshot = await load_seo_snapshot(request)
+                body = inject_live_seo(
+                    dashboard_html,
+                    origin=origin,
+                    path=request.url.path,
+                    snapshot=snapshot,
+                )
+                etag = compute_etag(body.encode("utf-8"))
+                headers = {
+                    "Cache-Control": HTML_CACHE_CONTROL,
+                    "ETag": etag,
+                }
+                if if_none_match(request.headers.get("if-none-match"), etag):
                     # The 200 this revalidates carries "Vary: Accept-Encoding"
                     # (added by the gzip layer); RFC 9110 §15.4.5 says the 304
                     # must repeat it. Set here only — on the shared 200 headers
                     # gzip's add_vary_header would append a duplicate.
                     return Response(
                         status_code=304,
-                        headers={**dashboard_headers, "Vary": "Accept-Encoding"},
+                        headers={**headers, "Vary": "Accept-Encoding"},
                     )
-                return HTMLResponse(content=dashboard_html, headers=dashboard_headers)
+                return HTMLResponse(content=body, headers=headers)
 
             @app.get("/", include_in_schema=False, response_class=HTMLResponse)
             async def dashboard(request: Request) -> Response:
                 return await dashboard_response(request)
+
+            @app.get("/robots.txt", include_in_schema=False)
+            async def dashboard_robots(request: Request) -> Response:
+                return Response(
+                    content=robots_txt(public_origin(request)),
+                    media_type="text/plain; charset=utf-8",
+                    headers={"Cache-Control": STATIC_DOC_CACHE_CONTROL},
+                )
+
+            @app.get("/sitemap.xml", include_in_schema=False)
+            async def dashboard_sitemap(request: Request) -> Response:
+                snapshot = await load_seo_snapshot(request)
+                return Response(
+                    content=sitemap_xml(public_origin(request), snapshot),
+                    media_type="application/xml; charset=utf-8",
+                    headers={"Cache-Control": DOC_CACHE_CONTROL},
+                )
+
+            @app.get("/llms.txt", include_in_schema=False)
+            async def dashboard_llms(request: Request) -> Response:
+                return Response(
+                    content=llms_txt(public_origin(request)),
+                    media_type="text/plain; charset=utf-8",
+                    headers={"Cache-Control": STATIC_DOC_CACHE_CONTROL},
+                )
+
+            @app.get("/llms-full.txt", include_in_schema=False)
+            async def dashboard_llms_full(request: Request) -> Response:
+                return Response(
+                    content=llms_full_txt(public_origin(request)),
+                    media_type="text/plain; charset=utf-8",
+                    headers={"Cache-Control": STATIC_DOC_CACHE_CONTROL},
+                )
+
+            # Crawlable page aliases (hash routes stay valid). A sitemap URL
+            # has to be a real document path, not a fragment.
+            for page_path in CRAWLABLE_PAGE_PATHS:
+                app.add_api_route(
+                    page_path,
+                    dashboard_response,
+                    methods=["GET"],
+                    include_in_schema=False,
+                    response_class=HTMLResponse,
+                    name=f"dashboard_{page_path.strip('/').replace('/', '_')}",
+                )
+            app.add_api_route(
+                "/reviews",
+                dashboard_response,
+                methods=["GET"],
+                include_in_schema=False,
+                response_class=HTMLResponse,
+                name="dashboard_reviews",
+            )
 
             # Backward-compatible plural URLs serve the SPA shell and normalize to
             # query-param popovers. Singular agent/miner URLs are dedicated views.
