@@ -4519,6 +4519,7 @@ def test_confirmation_work_is_public_without_consuming_ordinary_slots() -> None:
             ),
             bundle=SimpleNamespace(
                 bundle_id=bundle_id,
+                bench_version=12,
                 profile_revision="longmemeval-s-native-memory-tools-v2",
             ),
             mode=ConfirmationBundleMode.SHADOW,
@@ -4557,6 +4558,9 @@ def test_confirmation_work_is_public_without_consuming_ordinary_slots() -> None:
     [published] = entry.confirmation_benchmarks
     assert published.bundle_id == bundle_id
     assert published.slot_id == "longmem-0"
+    # The bundle's own epoch, not the model default. This projection silently
+    # reported 9 for every carried-forward confirmation run before #932.
+    assert published.bench_version == 12
     assert published.mode == "shadow"
     assert published.stage == "running_confirmation"
     assert published.completed == 117

@@ -981,6 +981,33 @@ describe('Bench v9 confirmation bundle schemas', () => {
     expect(() => confirmationBundleViewSchema.parse(stale)).toThrow(/settings_checksum/)
   })
 
+  it('accepts a carried-forward v12 confirmation bundle end to end', () => {
+    // The evidence stack carries forward to every epoch in
+    // V9EvidenceBenchVersion. Backroom pinned z.literal(9) in six places, so a
+    // v12 bundle threw at parse and took /confirmation-bundles plus the
+    // get_confirmation_bundle MCP tool down with it. The `9` fixtures above
+    // cannot catch that -- only an explicitly non-9 bundle can.
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle())) as Record<string, unknown>
+    const retarget = (node: unknown): void => {
+      if (Array.isArray(node)) {
+        node.forEach(retarget)
+        return
+      }
+      if (node === null || typeof node !== 'object') return
+      const record = node as Record<string, unknown>
+      if (typeof record.bench_version === 'number') record.bench_version = 12
+      Object.values(record).forEach(retarget)
+    }
+    retarget(bundle)
+
+    const parsed = confirmationBundleViewSchema.parse(bundle)
+    expect(parsed.bench_version).toBe(12)
+    expect(parsed.evidence_root?.bench_version).toBe(12)
+    expect(parsed.evidence_root?.longmemeval.evidence.bench_version).toBe(12)
+    expect(parsed.evidence_root?.inference_ablation.evidence.bench_version).toBe(12)
+    expect(parsed.subjects[0]?.bench_version).toBe(12)
+  })
+
   it('preserves receipt-derived LongMem lane cost and integer score fields', () => {
     const parsed = confirmationBundleViewSchema.parse(confirmationBundle())
     expect(parsed.generation_reason).toBe('initial')

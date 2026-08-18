@@ -4558,9 +4558,9 @@ export interface components {
             baseline_scores_sha256: string | null;
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10 | 11 | 12;
             /** Case Set Sha256 */
             case_set_sha256: string;
             /** Contract Version */
@@ -9290,9 +9290,9 @@ export interface components {
             artifact_sha256: string;
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10 | 11 | 12;
             composite_policy: components["schemas"]["ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -11101,9 +11101,9 @@ export interface components {
             artifact_sha256: string;
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10 | 11 | 12;
             /** Case Set Digest */
             case_set_digest: string;
             /** Dataset Revision */
@@ -13021,9 +13021,9 @@ export interface components {
             /**
              * Bench Version
              * @default 9
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10 | 11 | 12;
             /**
              * Bundle Id
              * Format: uuid
@@ -18397,9 +18397,9 @@ export interface components {
             artifact_sha256: string;
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10 | 11 | 12;
             composite_policy: components["schemas"]["V9ConfirmationCompositePolicy"];
             /** Confirmation Profile Checksum */
             confirmation_profile_checksum: string;
@@ -18490,9 +18490,9 @@ export interface components {
             artifact_sha256: string;
             /**
              * Bench Version
-             * @constant
+             * @enum {integer}
              */
-            bench_version: 9;
+            bench_version: 9 | 10 | 11 | 12;
             /**
              * Bundle Id
              * Format: uuid

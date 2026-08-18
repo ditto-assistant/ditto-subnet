@@ -8,6 +8,7 @@ from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 from ditto_screening_protocol.confirmation import (
     AblationBudget,
     Sha256,
@@ -94,7 +95,7 @@ class V9ConfirmationScorerRequest(BaseModel):
     screened_image_size_bytes: Annotated[int, Field(gt=0)]
     screened_image_id: Annotated[str, Field(min_length=1)]
     screened_image_ref: Annotated[str, Field(min_length=1)]
-    bench_version: Literal[9]
+    bench_version: V9EvidenceBenchVersion
     deadline: datetime
     profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
     profile_checksum: Sha256

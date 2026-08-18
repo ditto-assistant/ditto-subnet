@@ -349,6 +349,7 @@ from ditto.db.queries.tickets import (
     score_priority_floor_rows_from_resolved_ledger,
 )
 from ditto.score_order import score_order_key
+from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 
 logger = logging.getLogger(__name__)
 
@@ -3630,6 +3631,9 @@ def _public_confirmation_progress(
     return PublicConfirmationProgress(
         bundle_id=work.bundle.bundle_id,
         slot_id=work.ticket.slot_id,
+        # Project the bundle's own epoch. Defaulting this to 9 silently
+        # mislabelled every carried-forward (v10+) confirmation run as v9.
+        bench_version=cast(V9EvidenceBenchVersion, work.bundle.bench_version),
         mode=cast(Literal["shadow", "enforce"], work.mode.value),
         profile_revision=work.bundle.profile_revision,
         attempt=work.ticket.attempt,

@@ -13,6 +13,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
+from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
+
 Sha256 = Annotated[
     str,
     StringConstraints(pattern=r"^[0-9a-f]{64}$", min_length=64, max_length=64),
@@ -129,7 +131,7 @@ class LongMemEvidence(BaseModel):
 
     schema_version: Literal[2]
     artifact_sha256: Sha256
-    bench_version: Literal[9]
+    bench_version: V9EvidenceBenchVersion
     profile_checksum: Sha256
     case_set_digest: Sha256
     dataset_revision: Annotated[str, Field(min_length=1, max_length=128)]
@@ -256,7 +258,7 @@ class AblationEvidence(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     contract_version: Annotated[str, Field(min_length=1, max_length=128)]
-    bench_version: Literal[9]
+    bench_version: V9EvidenceBenchVersion
     artifact_sha256: Sha256
     intervention: Literal["inference", "embedding"]
     mode: Literal["off", "shadow", "enforce"]
@@ -450,7 +452,7 @@ class ConfirmationEvidenceRoot(BaseModel):
 
     schema_version: Literal[1]
     artifact_sha256: Sha256
-    bench_version: Literal[9]
+    bench_version: V9EvidenceBenchVersion
     confirmation_profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
     confirmation_profile_checksum: Sha256
     settings_revision: Annotated[int, Field(ge=1)]

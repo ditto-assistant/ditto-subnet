@@ -2257,7 +2257,7 @@ class PublicConfirmationProgress(BaseModel):
 
     bundle_id: UUID
     slot_id: str
-    bench_version: Literal[9] = 9
+    bench_version: V9EvidenceBenchVersion = 9
     mode: Literal["shadow", "enforce"]
     profile_revision: str
     attempt: Annotated[int, Field(ge=1)]

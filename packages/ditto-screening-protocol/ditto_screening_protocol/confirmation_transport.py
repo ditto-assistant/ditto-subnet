@@ -24,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 
+from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 from ditto_screening_protocol.confirmation import (
     AblationBudget,
     AblationDimensionEnvelope,
@@ -265,7 +266,7 @@ class V9ConfirmationJobResponse(BaseModel):
     slot_id: LongMemSlotId
     deadline: datetime
     artifact_sha256: Sha256
-    bench_version: Literal[9]
+    bench_version: V9EvidenceBenchVersion
     settings_revision: Annotated[int, Field(ge=1)]
     settings_checksum: Sha256
     retest_generation: Annotated[int, Field(ge=0)]

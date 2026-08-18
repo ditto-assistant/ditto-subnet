@@ -1104,7 +1104,12 @@
         "type": "string"
       },
       "bench_version": {
-        "const": 9,
+        "enum": [
+          9,
+          10,
+          11,
+          12
+        ],
         "type": "integer"
       },
       "bundle_id": {
@@ -1450,7 +1455,12 @@
             ]
           },
           "bench_version": {
-            "const": 9,
+            "enum": [
+              9,
+              10,
+              11,
+              12
+            ],
             "type": "integer"
           },
           "case_set_sha256": {
@@ -1787,7 +1797,12 @@
             "type": "string"
           },
           "bench_version": {
-            "const": 9,
+            "enum": [
+              9,
+              10,
+              11,
+              12
+            ],
             "type": "integer"
           },
           "case_set_digest": {
@@ -2181,7 +2196,12 @@
             ]
           },
           "bench_version": {
-            "const": 9,
+            "enum": [
+              9,
+              10,
+              11,
+              12
+            ],
             "type": "integer"
           },
           "case_set_sha256": {
@@ -2550,7 +2570,12 @@
             "type": "string"
           },
           "bench_version": {
-            "const": 9,
+            "enum": [
+              9,
+              10,
+              11,
+              12
+            ],
             "type": "integer"
           },
           "case_set_digest": {

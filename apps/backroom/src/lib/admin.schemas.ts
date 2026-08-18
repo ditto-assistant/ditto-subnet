@@ -19,6 +19,35 @@ type GeneratedSourceReviewCausalEvidence =
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
 
+// Every bench epoch that carries the signed confirmation evidence stack. One
+// definition, derived from the generated contract -- restating it per schema is
+// exactly what stranded this lane on bench 9 while the network ran on 11.
+type GeneratedConfirmationBenchVersion =
+  PlatformComponents['schemas']['LongMemEvidence']['bench_version']
+
+export const confirmationBenchVersionSchema = z.union([
+  z.literal(9),
+  z.literal(10),
+  z.literal(11),
+  z.literal(12),
+])
+
+// Exact set equality against the contract, checked in BOTH directions. A plain
+// `satisfies z.ZodType<...>` cannot catch this: a narrower union stays
+// assignable to a wider one, so dropping a member would type-check and then
+// reject real evidence at runtime. The false branches must be `false`, NOT
+// `never` -- `never extends true` is vacuously true, so a `never` branch makes
+// this whole guard silently pass (verified: narrowing the union to 9|10|11 with
+// a `never` branch still compiled clean).
+type AssertTrue<Value extends true> = Value
+export type ConfirmationBenchVersionsMatchContract = AssertTrue<
+  [GeneratedConfirmationBenchVersion] extends [z.infer<typeof confirmationBenchVersionSchema>]
+    ? [z.infer<typeof confirmationBenchVersionSchema>] extends [GeneratedConfirmationBenchVersion]
+      ? true
+      : false
+    : false
+>
+
 export const auditReasonSchema = (minimum: 3 | 8) =>
   z.string().trim().min(minimum)
 
@@ -2068,7 +2097,7 @@ const longMemEvidenceSchema = z
   .strictObject({
     schema_version: z.literal(2),
     artifact_sha256: confirmationSha256Schema,
-    bench_version: z.literal(9),
+    bench_version: confirmationBenchVersionSchema,
     profile_checksum: confirmationSha256Schema,
     case_set_digest: confirmationSha256Schema,
     dataset_revision: z.string().min(1).max(128),
@@ -2178,7 +2207,7 @@ const ablationSyntheticUsageSchema = z
 const ablationEvidenceSchema = z
   .strictObject({
     contract_version: z.string().min(1).max(128),
-    bench_version: z.literal(9),
+    bench_version: confirmationBenchVersionSchema,
     artifact_sha256: confirmationSha256Schema,
     intervention: z.enum(['inference', 'embedding']),
     mode: z.enum(['off', 'shadow', 'enforce']),
@@ -2322,7 +2351,7 @@ const confirmationEvidenceRootSchema = z
   .strictObject({
     schema_version: z.literal(1),
     artifact_sha256: confirmationSha256Schema,
-    bench_version: z.literal(9),
+    bench_version: confirmationBenchVersionSchema,
     confirmation_profile_revision: z.string().min(1).max(128),
     confirmation_profile_checksum: confirmationSha256Schema,
     settings_revision: z.number().int().positive(),
@@ -2370,7 +2399,11 @@ const confirmationDimensionEvidenceSchema = z
   })
   .superRefine((dimension, context) => {
     if (dimension.dimension === 'longmemeval') {
-      if (dimension.synthetic || dimension.evidence.bench_version !== 9 || !('score' in dimension.evidence)) {
+      // Shape, not version: `'score' in evidence` is what distinguishes LongMem
+      // evidence from ablation evidence. The old `bench_version !== 9` arm
+      // restated a version pin the member schemas already own, and rejected
+      // every valid v10+ LongMem dimension.
+      if (dimension.synthetic || !('score' in dimension.evidence)) {
         context.addIssue({ code: 'custom', message: 'longmemeval requires non-synthetic LongMem evidence' })
       }
       return
@@ -2383,7 +2416,10 @@ const confirmationDimensionEvidenceSchema = z
 
 const confirmationBundleSubjectSchema = z.strictObject({
   agent_id: z.string().uuid(),
-  bench_version: z.literal(9),
+  // Generated contract says `number` -- this view reads the bundle's stored
+  // epoch, not the evidence union. Pinning it to 9 was stricter than the
+  // contract and rejected every carried-forward bundle.
+  bench_version: z.number().int().positive(),
   artifact_sha256: confirmationSha256Schema,
   result_status: z.enum(['base_only', 'provisional', 'full_confirmed']),
   base_evidence_sha256: confirmationSha256Schema,
@@ -2422,7 +2458,8 @@ export const confirmationBundleViewSchema = z
   .strictObject({
     bundle_id: z.string().uuid(),
     artifact_sha256: confirmationSha256Schema,
-    bench_version: z.literal(9),
+    // Generated contract says `number`; see confirmationBundleSubjectSchema.
+    bench_version: z.number().int().positive(),
     profile_revision: z.string().min(1).max(128),
     profile_checksum: confirmationSha256Schema,
     retest_generation: z.number().int().nonnegative(),
@@ -4636,10 +4673,20 @@ export const unavailableCopyReviewComparison = (reason: string) =>
     reason,
   })
 
+// One definition of the ATH review kinds. `copyReviewOriginalSchema` used to
+// restate all four inline, which is how a newly-added kind reaches the console
+// as an unhandled value in some paths and a valid one in others.
+export const athReviewKindSchema = z.enum([
+  'copy',
+  'benchmark_overfit',
+  'deferred_source_review',
+  'anomalous_score',
+])
+
+export type AthReviewKind = z.infer<typeof athReviewKindSchema>
+
 export const copyReviewOriginalSchema = z.object({
-  review_kind: z
-    .enum(['copy', 'benchmark_overfit', 'deferred_source_review', 'anomalous_score'])
-    .default('copy'),
+  review_kind: athReviewKindSchema.default('copy'),
   duplicate_of: z.string().uuid().nullable(),
   reason: z.string().nullable(),
   policy_version: z.number().int(),
@@ -4693,13 +4740,6 @@ export const copyReviewItemSchema = z.object({
   // include=current_comparison; null from older platforms (fan-out fallback).
   current_comparison: copyReviewCurrentComparisonSchema.nullish().default(null),
 })
-
-export const athReviewKindSchema = z.enum([
-  'copy',
-  'benchmark_overfit',
-  'deferred_source_review',
-  'anomalous_score',
-])
 
 export const copyReviewListSchema = z.object({
   items: z.array(copyReviewItemSchema),

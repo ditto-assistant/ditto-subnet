@@ -1,7 +1,7 @@
 import { useServerFn } from '@tanstack/react-start'
 import { AlertTriangle, CheckCircle2, Gavel, RefreshCw, ShieldCheck, Sparkles } from 'lucide-react'
 import { useMemo, useState } from 'react'
-import type { CopyReviewConsoleItem, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
+import type { AthReviewKind, CopyReviewConsoleItem, CopyReviewGeneration, CopyReviewResolution } from '../lib/admin.schemas'
 import { decideCopyReview, listCopyReviews, openAthReview } from '../server/admin.functions'
 import { CopyReviewSourceDiff } from './CopyReviewSourceDiff'
 import { Modal } from './Modal'
@@ -48,21 +48,44 @@ function matchedSubmissionPhrase(item: Pick<CopyReviewConsoleItem, 'miner_hotkey
   return sameMinerRename(item) ? `same-miner rename of ${name}` : `copy of ${name}`
 }
 
+// Keyed by AthReviewKind, so adding a fifth kind to the contract is a compile
+// error here rather than a blank cell and a wrong audit string. The previous
+// if/ternary chains fell through: `anomalous_score` rendered as "Copy review",
+// was rejected with the benchmark-overfit reason, and showed nothing at all in
+// the queue table.
+const REVIEW_KIND_COPY: Record<
+  AthReviewKind,
+  { type: string; rejection: string; queue: string }
+> = {
+  copy: {
+    type: 'Copy review',
+    rejection: 'rejected as a confirmed copy',
+    queue: 'copy hold',
+  },
+  benchmark_overfit: {
+    type: 'Manual benchmark-overfit review',
+    rejection: 'rejected after benchmark-overfit review',
+    queue: 'manual benchmark review',
+  },
+  deferred_source_review: {
+    type: 'Score-qualified source review',
+    rejection: 'rejected after score-qualified source review',
+    queue: 'score-qualified source review',
+  },
+  anomalous_score: {
+    type: 'Anomalous-score review',
+    rejection: 'rejected after anomalous-score review',
+    queue: 'anomalous score',
+  },
+}
+
 function reviewType(item: CopyReviewConsoleItem) {
-  if (item.original.deferred_review || item.original.review_kind === 'deferred_source_review') {
-    return 'Score-qualified source review'
-  }
-  return item.original.review_kind === 'benchmark_overfit'
-    ? 'Manual benchmark-overfit review'
-    : 'Copy review'
+  if (item.original.deferred_review) return REVIEW_KIND_COPY.deferred_source_review.type
+  return REVIEW_KIND_COPY[item.original.review_kind].type
 }
 
 function rejectionDescription(item: Pick<CopyReviewConsoleItem, 'original'>) {
-  if (item.original.review_kind === 'copy') return 'rejected as a confirmed copy'
-  if (item.original.review_kind === 'deferred_source_review') {
-    return 'rejected after score-qualified source review'
-  }
-  return 'rejected after benchmark-overfit review'
+  return REVIEW_KIND_COPY[item.original.review_kind].rejection
 }
 
 function triggerLabel(value: string) {
@@ -412,14 +435,18 @@ export function CopyReviewPanel({
                     <td className="px-4 py-3 text-xs">{formatDate(item.opened_at)}</td>
                     <td className="max-w-[18rem] px-4 py-3 text-xs" title={item.original.reason ?? undefined}>
                       {item.original.deferred_review || item.original.review_kind === 'deferred_source_review' ? (
-                        <span className="block truncate font-medium">score-qualified source review</span>
-                      ) : item.original.review_kind === 'benchmark_overfit' ? (
-                        <span className="block truncate font-medium">manual benchmark review</span>
+                        <span className="block truncate font-medium">
+                          {REVIEW_KIND_COPY.deferred_source_review.queue}
+                        </span>
                       ) : matchedSubmissionPhrase(item) ? (
                         <span className="block truncate font-medium">
                           {matchedSubmissionPhrase(item)}
                         </span>
-                      ) : null}
+                      ) : (
+                        <span className="block truncate font-medium">
+                          {REVIEW_KIND_COPY[item.original.review_kind].queue}
+                        </span>
+                      )}
                       <span className="block truncate text-[var(--muted-strong)]">
                         {item.original.reason ?? 'No stored reason'}
                       </span>
