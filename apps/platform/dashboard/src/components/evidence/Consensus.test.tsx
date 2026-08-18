@@ -201,9 +201,20 @@ describe("Consensus · the recorded three-validator cohort", () => {
     expect(cases[0]?.querySelector("summary")?.textContent).toBe(
       "Per-question results · 281 cases",
     );
-    // Grouped by category, and each group is collapsed too.
-    expect(cases[0]?.querySelectorAll("details.cgroup").length).toBeGreaterThan(1);
-    expect(cases[0]?.querySelector<HTMLDetailsElement>("details.cgroup")?.open).toBe(false);
+    // Closed details must not mount the grouped rows — a live v11 card has
+    // ~350 cases × 3 scores and that tree froze the agent drawer.
+    expect(cases[0]?.querySelectorAll("details.cgroup")).toHaveLength(0);
+    expect(cases[0]?.querySelectorAll(".crow")).toHaveLength(0);
+    const firstCases = cases[0] as HTMLDetailsElement;
+    firstCases.open = true;
+    firstCases.dispatchEvent(new Event("toggle"));
+    expect(firstCases.querySelectorAll("details.cgroup").length).toBeGreaterThan(1);
+    expect(firstCases.querySelector<HTMLDetailsElement>("details.cgroup")?.open).toBe(false);
+    expect(firstCases.querySelectorAll(".crow")).toHaveLength(0);
+    const firstGroup = firstCases.querySelector("details.cgroup") as HTMLDetailsElement;
+    firstGroup.open = true;
+    firstGroup.dispatchEvent(new Event("toggle"));
+    expect(firstGroup.querySelectorAll(".crow").length).toBeGreaterThan(0);
   });
 });
 

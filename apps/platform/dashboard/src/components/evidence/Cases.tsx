@@ -4,7 +4,7 @@
 // payload; a missing key falls back to the raw slug, exactly as the
 // original's "missing key falls back to the raw string" contract. Redacted:
 // category / kind / score / verdict / latency / notes — never the answer key.
-import { For, Show } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { fmtMs, fx } from "../../lib/format";
@@ -71,6 +71,53 @@ function TallyBadges(props: { tally: Tally }): JSX.Element {
   );
 }
 
+/** Closed <details> still paint their children in Solid. A scored v11 run
+ * carries hundreds of cases across three validator scores; mounting every
+ * row when the agent card opens freezes the tab. Open state is the only
+ * thing that should create that tree. */
+function detailsOpen(): {
+  open: () => boolean;
+  onToggle: (event: Event) => void;
+} {
+  const [open, setOpen] = createSignal(false);
+  return {
+    open,
+    onToggle: (event: Event) => {
+      setOpen((event.currentTarget as HTMLDetailsElement).open);
+    },
+  };
+}
+
+function CategoryGroup(props: {
+  group: { cat: string; cases: CaseResult[]; tally: Tally };
+  glossary: () => GlossaryPayload | undefined;
+}): JSX.Element {
+  const category = detailsOpen();
+  const info = () => categoryInfo(props.glossary(), props.group.cat);
+  const kind = () => (props.group.cases[0] as CaseResult).kind;
+  return (
+    <details class="cgroup" onToggle={category.onToggle}>
+      <summary class="cgsum">
+        <span class={"ckind " + kind()}>{kind()}</span>
+        <span class="cgname" title={info().purpose}>
+          {info().label} <span class="muted">×{props.group.cases.length}</span>
+        </span>
+        <span class="cgtally">
+          <TallyBadges tally={props.group.tally} />
+          <span class={"cgmean " + scoreClass(props.group.tally.mean)}>
+            {fx(props.group.tally.mean)}
+          </span>
+        </span>
+      </summary>
+      <Show when={category.open()}>
+        <For each={props.group.cases}>
+          {(c) => <CaseRow c={c} info={categoryInfo(props.glossary(), c.category)} />}
+        </For>
+      </Show>
+    </details>
+  );
+}
+
 function CaseRow(props: { c: CaseResult; info: CategoryInfo }): JSX.Element {
   const verdict = () => caseVerdict(props.c);
   return (
@@ -112,7 +159,8 @@ export function CasesSection(props: {
   glossary: () => GlossaryPayload | undefined;
 }): JSX.Element {
   const cases = () => props.caseResults || [];
-  const groups = (): { cat: string; cases: CaseResult[]; tally: Tally }[] => {
+  const section = detailsOpen();
+  const groups = createMemo(() => {
     const byCategory: Record<string, CaseResult[]> = {};
     cases().forEach((c) => {
       (byCategory[c.category] = byCategory[c.category] || []).push(c);
@@ -130,55 +178,33 @@ export function CasesSection(props: {
         const group = (byCategory[cat] as CaseResult[]).slice().sort((a, b) => a.score - b.score);
         return { cat, cases: group, tally: caseTally(group) };
       });
-  };
-  const totals = (): { pass: number; fail: number; partial: number } => {
+  });
+  const totals = createMemo(() => {
     const out = { pass: 0, fail: 0, partial: 0 };
-    groups().forEach((g) => {
-      out.pass += g.tally.pass;
-      out.fail += g.tally.fail;
-      out.partial += g.tally.partial;
+    cases().forEach((c) => {
+      out[caseVerdict(c)] += 1;
     });
     return out;
-  };
+  });
   return (
     <Show when={cases().length}>
-      <details class="cases">
+      <details class="cases" onToggle={section.onToggle}>
         <summary>
           Per-question results <span class="muted">· {cases().length} cases</span>
         </summary>
-        <div class="coverview">
-          {cases().length} cases · <span class="good">{totals().pass} pass</span> ·{" "}
-          <span class="danger">{totals().fail} fail</span>
-          <Show when={totals().partial}>
-            {" "}
-            · <span class="muted">{totals().partial} partial</span>
-          </Show>
-        </div>
-        <For each={groups()}>
-          {(group) => {
-            const info = () => categoryInfo(props.glossary(), group.cat);
-            const kind = (group.cases[0] as CaseResult).kind;
-            return (
-              <details class="cgroup">
-                <summary class="cgsum">
-                  <span class={"ckind " + kind}>{kind}</span>
-                  <span class="cgname" title={info().purpose}>
-                    {info().label} <span class="muted">×{group.cases.length}</span>
-                  </span>
-                  <span class="cgtally">
-                    <TallyBadges tally={group.tally} />
-                    <span class={"cgmean " + scoreClass(group.tally.mean)}>
-                      {fx(group.tally.mean)}
-                    </span>
-                  </span>
-                </summary>
-                <For each={group.cases}>
-                  {(c) => <CaseRow c={c} info={categoryInfo(props.glossary(), c.category)} />}
-                </For>
-              </details>
-            );
-          }}
-        </For>
+        <Show when={section.open()}>
+          <div class="coverview">
+            {cases().length} cases · <span class="good">{totals().pass} pass</span> ·{" "}
+            <span class="danger">{totals().fail} fail</span>
+            <Show when={totals().partial}>
+              {" "}
+              · <span class="muted">{totals().partial} partial</span>
+            </Show>
+          </div>
+          <For each={groups()}>
+            {(group) => <CategoryGroup group={group} glossary={props.glossary} />}
+          </For>
+        </Show>
       </details>
     </Show>
   );

@@ -224,6 +224,18 @@ type PanelView =
   | { tenant: "agent"; key: string; entry: AgentEvidenceEntry }
   | { tenant: "agent-state"; key: string; id: string; message: string; state: "loading" | "error" };
 
+function samePanelView(a: PanelView | null, b: PanelView | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.tenant !== b.tenant || a.key !== b.key) return false;
+  if (a.tenant === "agent") return b.tenant === "agent" && a.entry === b.entry;
+  if (a.tenant === "agent-state") {
+    return b.tenant === "agent-state" && a.state === b.state && a.message === b.message;
+  }
+  if (a.tenant === "miner") return b.tenant === "miner" && a.entry === b.entry;
+  if (a.tenant === "miner-profile") return b.tenant === "miner-profile" && a.id === b.id;
+  return b.tenant === "validator" && a.hotkey === b.hotkey && a.entry === b.entry;
+}
+
 export interface EntityPanelProps {
   /** Ranked leaderboard entries (last successful payload, display order). */
   entries: () => RankedEntry[];
@@ -246,7 +258,7 @@ function close(): void {
 }
 
 export function EntityPanel(props: EntityPanelProps): JSX.Element {
-  const [view, setView] = createSignal<PanelView | null>(null);
+  const [view, setView] = createSignal<PanelView | null>(null, { equals: samePanelView });
   const [full, setFull] = createSignal(false);
 
   let modalEl: HTMLElement | undefined;
@@ -304,8 +316,15 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
   function resolveAgent(route: EntityRoute): void {
     const key = route.key;
     const current = untrack(view);
-    if (current && current.key === key && current.tenant === "agent") return;
+    // Once the shell has the summary, ignore later query-store ticks
+    // (isFetching, dataUpdatedAt). A new view object remounts AgentEvidence
+    // and rebuilds every per-question row — a scored v11 card has a
+    // thousand of them and that rewrite loop freezes the tab.
+    if (current?.tenant === "agent" && current.key === key) return;
     if (agentSummary.isError) {
+      if (current?.tenant === "agent-state" && current.key === key && current.state === "error") {
+        return;
+      }
       setView({
         tenant: "agent-state",
         key,
@@ -317,6 +336,9 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     }
     if (!agentSummary.isPending && agentSummary.data) {
       setView({ tenant: "agent", key, entry: agentSummary.data });
+      return;
+    }
+    if (current?.tenant === "agent-state" && current.key === key && current.state === "loading") {
       return;
     }
     setView({
@@ -338,8 +360,11 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
     // Legacy URL forms (real-query params, plural hash/path routes) are
     // recognized once and normalized to the canonical hash-query form.
     if (route.legacy) {
-      history.replaceState((history.state as unknown) ?? {}, "", entityHref(route.kind, route.id));
-      syncFromLocation();
+      const href = entityHref(route.kind, route.id);
+      if (location.pathname + location.search + location.hash !== href) {
+        history.replaceState((history.state as unknown) ?? {}, "", href);
+        syncFromLocation();
+      }
       return;
     }
     setFull(route.full);
@@ -349,12 +374,11 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       // and page signals in sequence, so this effect may observe the entity
       // before the page has caught up and must re-run when it does.
       if (currentPage() !== "operations") {
-        history.replaceState(
-          (history.state as unknown) ?? {},
-          "",
-          entityHref(route.kind, route.id, "operations"),
-        );
-        syncFromLocation();
+        const href = entityHref(route.kind, route.id, "operations");
+        if (location.pathname + location.search + location.hash !== href) {
+          history.replaceState((history.state as unknown) ?? {}, "", href);
+          syncFromLocation();
+        }
         return;
       }
       if (route.kind === "validator") {
@@ -384,7 +408,8 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
   });
 
   // Open/close side effects: focus capture + restore, background inert, the
-  // full-page body mode, scroll reset.
+  // full-page body mode, scroll reset. Depend on tenant+key, not view
+  // object identity — a rewritten entry must not steal focus or reset scroll.
   createEffect(() => {
     const current = view();
     const fullPage = full();

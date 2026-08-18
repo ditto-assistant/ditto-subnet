@@ -224,6 +224,27 @@ describe("EntityPanel agent tenant", () => {
     spy.mockRestore();
   });
 
+  it("does not mount per-question rows or restomp focus when a scored agent opens", async () => {
+    renderPanel();
+    const close = document.getElementById("modal-close") as HTMLButtonElement;
+    let focuses = 0;
+    close.addEventListener("focus", () => {
+      focuses += 1;
+    });
+    visit("/#/submissions?agent=" + FIXTURE_TOP_AGENT_ID);
+    await waitFor(() => expect(document.getElementById("pipeline-validator-history")).toBeTruthy());
+    expect(document.querySelectorAll("#modal details.cases").length).toBeGreaterThan(0);
+    expect(document.querySelectorAll("#modal .crow")).toHaveLength(0);
+    expect(document.querySelectorAll("#modal details.cgroup")).toHaveLength(0);
+    const firstCases = document.querySelector("#modal details.cases") as HTMLDetailsElement;
+    firstCases.open = true;
+    firstCases.dispatchEvent(new Event("toggle"));
+    expect(document.querySelectorAll("#modal details.cgroup").length).toBeGreaterThan(1);
+    expect(document.querySelectorAll("#modal .crow")).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(focuses).toBeLessThan(5);
+  });
+
   it("shows the loading state while an overlay route resolves, not only a full page", async () => {
     renderPanel();
     visit("/#/submissions?agent=" + FIXTURE_TOP_AGENT_ID);
