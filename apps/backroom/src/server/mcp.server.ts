@@ -156,6 +156,7 @@ import {
   setConfirmationBundleSettings,
   fetchConfirmationBundles,
   fetchConfirmationBundle,
+  fetchConfirmationLaneDiagnosis,
   authorizeConfirmationBundleRetest,
 } from './admin.service'
 
@@ -464,6 +465,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Apply a complete bounded confirmation policy with revision guard, reason, and exact mode phrase. Does not activate rewards.',
   list_confirmation_bundles:
     'Page LongMem evidence, spend, ablations, subjects, and failure diagnostics.',
+  get_confirmation_lane_diagnosis:
+    'Diagnose LongMem issuance vs execution: counts, failure histograms, lease age, and likely_cause. Read-only.',
   get_confirmation_bundle:
     'Read one complete confirmation root, signature, typed evidence, tickets, and subject projections.',
   authorize_confirmation_bundle_retest:
@@ -1443,6 +1446,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchConfirmationBundles(input)),
+  )
+
+  registerTool(
+    'get_confirmation_lane_diagnosis',
+    {
+      title: 'Diagnose LongMem confirmation lane',
+      description:
+        'Aggregate LongMem confirmation settings, every lifecycle count, sampled failure_class/failure_stage histograms, leased-ticket age, and validator fleet versions into one read-only diagnosis. likely_cause is derived only from those allowlisted fields: leftover_validator_v9_identity_pin is the issuing-but-immediate-platform-unknown signature, execution_after_preparing means the validator accepted the lease, and unknown_execution_outage means issuance is on with zero completions but no known histogram. This does not change settings, authorize a retest, or activate rewards. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchConfirmationLaneDiagnosis()),
   )
 
   registerTool(

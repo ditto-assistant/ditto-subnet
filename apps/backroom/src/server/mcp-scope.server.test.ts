@@ -315,6 +315,7 @@ describe('MCP scope challenges', () => {
     for (const name of [
       'get_confirmation_bundle_settings',
       'list_confirmation_bundles',
+      'get_confirmation_lane_diagnosis',
       'get_confirmation_bundle',
     ]) {
       const request = new Request('https://backroom.dittobench.ai/mcp', {

@@ -60,6 +60,7 @@ import {
   fetchConfirmationBundle,
   fetchConfirmationBundles,
   fetchConfirmationBundleSettings,
+  fetchConfirmationLaneDiagnosis,
   setConfirmationBundleSettings,
 } from './admin.service'
 import { deriveRequestId } from '../lib/idempotency'
@@ -393,6 +394,40 @@ describe('Bench v9 confirmation bundle administration', () => {
     expect(parsed.shadow_calibration.measured_base_cost_microusd).toBe(130_000)
     expect(parsed.shadow_calibration.projected_epoch_spend_microusd).toBeNull()
     expect(parsed.items[0].settings_checksum).toBe(digest)
+  })
+
+  it('diagnoses the confirmation lane without a new Platform endpoint', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn(async (url: string) => {
+      const parsed = new URL(url)
+      if (parsed.pathname.endsWith('/confirmation-bundle-settings')) {
+        return Response.json(settingsControl)
+      }
+      if (parsed.pathname.endsWith('/public/validators')) {
+        return Response.json({
+          generated_at: timestamp,
+          active_bench_version: 11,
+          validators: [],
+        })
+      }
+      return Response.json(listResponse)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const diagnosis = await fetchConfirmationLaneDiagnosis()
+    expect(diagnosis.policy.mode).toBe('shadow')
+    expect(diagnosis.counts.pending).toBe(1)
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(8)
+    expect(
+      fetchMock.mock.calls.some(([called]) =>
+        String(called).includes('/admin/confirmation-bundle-settings'),
+      ),
+    ).toBe(true)
+    expect(
+      fetchMock.mock.calls.some(([called]) =>
+        String(called).includes('/admin/confirmation-bundles?'),
+      ),
+    ).toBe(true)
   })
 
   it('reads one exact bundle id and fails closed on stale audit visibility', async () => {

@@ -81,6 +81,7 @@ describe('Backroom MCP tools', () => {
         'get_continual_retest_settings',
         'get_confirmation_bundle_settings',
         'get_confirmation_bundle',
+        'get_confirmation_lane_diagnosis',
         'get_efficiency_bonus_settings',
         'get_inference_concurrency_settings',
         'get_inference_runtime_metrics',
@@ -428,6 +429,188 @@ describe('Backroom MCP tools', () => {
       'https://platform-api.heyditto.ai/api/v1/admin/confirmation-bundle-settings',
       expect.objectContaining({ method: 'GET' }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('diagnoses the confirmation lane from settings, bundle states, and fleet', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const digest = 'a'.repeat(64)
+    const settings = {
+      mode: 'shadow',
+      eligibility_mode: 'rank',
+      top_n: 5,
+      min_base_score_micros: 950_000,
+      daily_bundle_cap: 10,
+      daily_dollar_cap_microusd: 1_000_000,
+      per_bundle_request_cap: 100,
+      per_bundle_token_cap: 10_000,
+      profile_revision: 'confirmation-v9-1',
+      profile_checksum: digest,
+      challenger_z: 1.64,
+    }
+    const revision = {
+      revision: 15,
+      parent_revision: 14,
+      scope: '*',
+      settings,
+      checksum: digest,
+      reason: 'keep shadow issuance while diagnosing execution',
+      actor: 'operator@example.com',
+      created_at: '2026-08-18T12:00:00Z',
+    }
+    const settingsControl = {
+      current: [revision],
+      history: [revision],
+      default: {
+        ...settings,
+        mode: 'off',
+        daily_bundle_cap: 0,
+        daily_dollar_cap_microusd: 0,
+        per_bundle_request_cap: 0,
+        per_bundle_token_cap: 0,
+        profile_revision: null,
+        profile_checksum: null,
+      },
+      effective: {
+        revision: 15,
+        scope: '*',
+        settings,
+        checksum: digest,
+        source: 'revision',
+        configured: true,
+        issuance_active: true,
+        max_top_n: 10,
+        max_daily_bundle_cap: 1_000,
+        max_daily_dollar_microusd: 1_000_000_000,
+        max_bundle_request_cap: 100_000,
+        max_bundle_token_cap: 100_000_000,
+      },
+    }
+    const failedBundle = {
+      bundle_id: '10000000-0000-4000-8000-000000000001',
+      artifact_sha256: digest,
+      bench_version: 11,
+      profile_revision: 'confirmation-v9-1',
+      profile_checksum: digest,
+      retest_generation: 0,
+      generation_reason: 'initial',
+      source_bundle_id: null,
+      state: 'failed',
+      settings_revision: 15,
+      settings_checksum: digest,
+      qualification_status: null,
+      completion_mode: null,
+      completion_ticket_id: null,
+      evidence_sha256: null,
+      reporter_hotkey: null,
+      bundle_signature: null,
+      evidence_root: null,
+      verified_at: null,
+      completed_at: null,
+      created_at: '2026-08-18T19:54:00.000Z',
+      updated_at: '2026-08-18T19:54:02.000Z',
+      subjects: [],
+      dimensions: [],
+      tickets: [
+        {
+          ticket_id: '20000000-0000-4000-8000-000000000001',
+          validator_hotkey: '5ValidatorHotkeyAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+          slot_id: 'longmem-0',
+          status: 'expired',
+          attempt: 1,
+          issued_at: '2026-08-18T19:54:00.000Z',
+          deadline: '2026-08-18T21:54:00.000Z',
+          failure_reason: 'confirmation_execution_failed',
+          failure_class: 'platform',
+          failure_stage: 'unknown',
+          failed_at: '2026-08-18T19:54:02.000Z',
+        },
+      ],
+    }
+    const emptyList = {
+      items: [] as Array<typeof failedBundle>,
+      count: 0,
+      budget: {
+        utc_day: '2026-08-18',
+        revision: 15,
+        issued_attempts: 9,
+        outstanding_reserved_microusd: 0,
+        settled_microusd: 0,
+      },
+      shadow_calibration: {
+        observed_from_utc_day: null,
+        observed_through_utc_day: null,
+        observation_days: 0,
+        confirmation_profile_revision: 'confirmation-v9-1',
+        confirmation_profile_checksum: digest,
+        base_run_count: 0,
+        measured_base_cost_microusd: null,
+        confirmation_bundle_count: 0,
+        measured_bundle_cost_microusd: null,
+        bench_version: 11,
+        completed_bundle_count: 0,
+        superseded_bundle_count: 0,
+        failed_bundle_count: 0,
+        qualified_bundle_count: 0,
+        promotion_rate_bps: null,
+        projected_daily_spend_microusd: null,
+        epoch_duration_seconds: null,
+        projected_epoch_spend_microusd: null,
+        epoch_projection_unavailable_reason:
+          'Bench v11 has no configured epoch duration; no projection was guessed.',
+      },
+    }
+    const failedList = {
+      ...emptyList,
+      items: Array.from({ length: 5 }, (_, index) => ({
+        ...failedBundle,
+        bundle_id: `10000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+        tickets: [
+          {
+            ...failedBundle.tickets[0],
+            ticket_id: `20000000-0000-4000-8000-${String(index + 1).padStart(12, '0')}`,
+          },
+        ],
+      })),
+      count: 9,
+      shadow_calibration: {
+        ...emptyList.shadow_calibration,
+        failed_bundle_count: 9,
+      },
+    }
+    const fetchMock = vi.fn(async (url: string) => {
+      const parsed = new URL(url)
+      if (parsed.pathname.endsWith('/confirmation-bundle-settings')) {
+        return Response.json(settingsControl)
+      }
+      if (parsed.pathname.endsWith('/public/validators')) {
+        return Response.json({
+          generated_at: '2026-08-18T20:00:00.000Z',
+          active_bench_version: 11,
+          validators: [],
+        })
+      }
+      if (parsed.searchParams.get('state') === 'failed') {
+        return Response.json(failedList)
+      }
+      return Response.json(emptyList)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_confirmation_lane_diagnosis',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      policy: { mode: 'shadow', issuance_active: true, settings_revision: 15 },
+      counts: { failed: 9, completed: 0 },
+      likely_cause: { code: 'leftover_validator_v9_identity_pin' },
+    })
+    expect(fetchMock).toHaveBeenCalled()
 
     await client.close()
     await server.close()

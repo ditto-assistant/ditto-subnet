@@ -69,6 +69,7 @@ from ditto.validator.signing import (
     v9_confirmation_prepare_wire_sha256,
     verify_ledger_entry,
 )
+from ditto_screening_protocol.bench_v9 import supports_confirmation
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -289,7 +290,8 @@ class PlatformClient:
         if (
             artifact.agent_id != job.agent_id
             or artifact.sha256 != job.artifact_sha256
-            or artifact.bench_version != 9
+            or not supports_confirmation(artifact.bench_version)
+            or artifact.bench_version != job.bench_version
         ):
             raise PlatformError("v9 confirmation artifact identity mismatch")
         return artifact

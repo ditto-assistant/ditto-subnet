@@ -171,6 +171,11 @@ import {
   setConfirmationBundleSettingsInputSchema,
 } from '../lib/admin.schemas'
 import {
+  CONFIRMATION_LANE_STATES,
+  diagnoseConfirmationLane,
+  type ConfirmationLanePage,
+} from './confirmation-lane-diagnosis'
+import {
   PlatformAdminError,
   isPlatformPublicNotFound,
   platformAdminBinaryRequest,
@@ -638,6 +643,69 @@ export async function fetchConfirmationBundle(rawInput: unknown) {
     `${CONFIRMATION_BUNDLES_PATH}/${encodeURIComponent(input.bundleId)}`,
   )
   return confirmationBundleViewSchema.parse(payload)
+}
+
+function confirmationLanePage(list: {
+  count: number
+  items: Array<{
+    bundle_id: string
+    bench_version: number
+    state: string
+    created_at: string
+    tickets: ConfirmationLanePage['items'][number]['tickets']
+  }>
+  budget: ConfirmationLanePage['budget']
+  shadow_calibration: {
+    completed_bundle_count: number
+    failed_bundle_count: number
+    superseded_bundle_count: number
+    bench_version: number
+  }
+}): ConfirmationLanePage {
+  return {
+    count: list.count,
+    items: list.items.map((bundle) => ({
+      bundle_id: bundle.bundle_id,
+      bench_version: bundle.bench_version,
+      state: bundle.state,
+      created_at: bundle.created_at,
+      tickets: bundle.tickets,
+    })),
+    budget: list.budget,
+    shadow_calibration: {
+      completed_bundle_count: list.shadow_calibration.completed_bundle_count,
+      failed_bundle_count: list.shadow_calibration.failed_bundle_count,
+      superseded_bundle_count: list.shadow_calibration.superseded_bundle_count,
+      bench_version: list.shadow_calibration.bench_version,
+    },
+  }
+}
+
+export async function fetchConfirmationLaneDiagnosis() {
+  const [settings, fleet, ...lists] = await Promise.all([
+    fetchConfirmationBundleSettings(),
+    fetchValidatorFleet(),
+    ...CONFIRMATION_LANE_STATES.map((state) =>
+      fetchConfirmationBundles({ state, limit: 100, offset: 0 }),
+    ),
+  ])
+  const pages = Object.fromEntries(
+    CONFIRMATION_LANE_STATES.map((state, index) => [
+      state,
+      confirmationLanePage(lists[index]!),
+    ]),
+  ) as Record<(typeof CONFIRMATION_LANE_STATES)[number], ConfirmationLanePage>
+  return diagnoseConfirmationLane({
+    observedAt: new Date().toISOString(),
+    mode: settings.effective.settings.mode,
+    issuanceActive: settings.effective.issuance_active,
+    settingsRevision: settings.effective.revision,
+    dailyBundleCap: settings.effective.settings.daily_bundle_cap,
+    dailyDollarCapMicrousd: settings.effective.settings.daily_dollar_cap_microusd,
+    profileRevision: settings.effective.settings.profile_revision,
+    fleet,
+    pages,
+  })
 }
 
 export async function authorizeConfirmationBundleRetest(

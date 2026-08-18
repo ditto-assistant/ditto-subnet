@@ -120,6 +120,7 @@ from ditto.validator.weights import (
     resolve_miner_emission_share,
     select_champion,
 )
+from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
 )
@@ -1983,9 +1984,15 @@ class ValidatorWorker:
                 )
                 if job is None:
                     return
+                # Publish before the identity check so a leftover pin or
+                # claim mismatch reports failure_stage=preparing instead of
+                # unknown. The lane used to fail closed on bench_version!=9
+                # before any progress, which made v10+ issuance look like an
+                # opaque platform outage.
+                await self._publish_confirmation_progress(job, "preparing")
                 if (
                     job.purpose != "v9_confirmation_bundle"
-                    or job.bench_version != 9
+                    or not supports_confirmation(job.bench_version)
                     or job.slot_id != slot_id
                     or job.execution_profile.revision != readiness.profile_revision
                     or job.execution_profile.checksum != readiness.profile_checksum
@@ -1998,7 +2005,6 @@ class ValidatorWorker:
                     raise LeaseDeadlineError(
                         "v9 confirmation lease cannot preserve its reporting margin"
                     )
-                await self._publish_confirmation_progress(job, "preparing")
 
                 await self._dittobench.activate_confirmation_inference_session(
                     inference_session,

@@ -59,6 +59,7 @@ from ditto.validator.errors import (
     SandboxOomError,
     ValidatorInfrastructureError,
 )
+from ditto_screening_protocol.bench_v9 import supports_confirmation
 
 if TYPE_CHECKING:
     from ditto.validator.config import ValidatorConfig
@@ -534,10 +535,11 @@ class DittobenchClient:
         """Execute one costly bundle through the protected local control plane."""
         if (
             job.purpose != "v9_confirmation_bundle"
-            or job.bench_version != 9
+            or not supports_confirmation(job.bench_version)
             or artifact.agent_id != job.agent_id
             or artifact.sha256 != job.artifact_sha256
-            or artifact.bench_version != 9
+            or not supports_confirmation(artifact.bench_version)
+            or artifact.bench_version != job.bench_version
         ):
             raise DittobenchError("v9 confirmation job/artifact identity mismatch")
         screened_identity = (
@@ -573,7 +575,7 @@ class DittobenchClient:
             screened_image_size_bytes=artifact.screened_image_size_bytes,
             screened_image_id=artifact.screened_image_id,
             screened_image_ref=artifact.screened_image_ref,
-            bench_version=9,
+            bench_version=job.bench_version,
             deadline=job.deadline,
             profile_revision=job.execution_profile.revision,
             profile_checksum=job.execution_profile.checksum,

@@ -181,6 +181,7 @@ def _job(
     suffix: int = 1,
     deadline: datetime | None = None,
     profile: ConfirmationExecutionProfile | None = None,
+    bench_version: int = 9,
 ) -> V9ConfirmationJobResponse:
     return V9ConfirmationJobResponse(
         purpose="v9_confirmation_bundle",
@@ -191,7 +192,7 @@ def _job(
         slot_id=slot_id,
         deadline=deadline or datetime.now(UTC) + timedelta(hours=2),
         artifact_sha256=_ARTIFACT_SHA,
-        bench_version=9,
+        bench_version=bench_version,
         settings_revision=7,
         settings_checksum="99" * 32,
         retest_generation=2,
@@ -240,7 +241,7 @@ def _artifact(job: V9ConfirmationJobResponse) -> ArtifactResponse:
         screened_image_size_bytes=42_000,
         screened_image_id=f"sha256:{image_sha}",
         screened_image_ref="ditto-screen/agent:v9",
-        bench_version=9,
+        bench_version=job.bench_version,
         screening_policy_version=9,
     )
 
@@ -489,6 +490,28 @@ class TestV9ConfirmationExecution:
         assert str(job.bundle_id) in signing_text
         assert str(job.ticket_id) in signing_text
         assert _prepared(job).evidence_sha256 in signing_text
+        _assert_score_lanes_untouched(platform)
+
+    @pytest.mark.parametrize("bench_version", [10, 11, 12])
+    async def test_carried_forward_confirmation_bench_executes(
+        self, bench_version: int
+    ) -> None:
+        worker, platform, dittobench, _ = _worker(capacity=1)
+        job = _job("longmem-0", bench_version=bench_version)
+        artifact = _artifact(job)
+        platform.request_v9_confirmation_job.return_value = job
+        platform.get_v9_confirmation_artifact.return_value = artifact
+
+        await worker._run_v9_confirmation_lane()
+
+        platform.get_v9_confirmation_artifact.assert_awaited_once_with(job)
+        dittobench.execute_v9_confirmation.assert_awaited_once_with(
+            job=job,
+            artifact=artifact,
+            inference_session_id="confirmation-session-0001",
+        )
+        platform.submit_v9_confirmation_report.assert_awaited_once()
+        platform.fail_v9_confirmation_job.assert_not_awaited()
         _assert_score_lanes_untouched(platform)
 
     async def test_long_execution_keeps_validator_live_without_claiming_canonical_state(

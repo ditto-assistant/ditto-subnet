@@ -486,6 +486,48 @@ async def test_scorer_failure_diagnostic_rejects_header_drift(
     assert forbidden not in str(raised.value)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bench_version", [10, 11, 12])
+async def test_execute_forwards_the_job_confirmation_bench_version(
+    bench_version: int,
+) -> None:
+    job = _job().model_copy(
+        update={
+            "bench_version": bench_version,
+            "deadline": datetime.now(UTC) + timedelta(hours=1),
+        }
+    )
+    artifact = ArtifactResponse.model_validate(
+        {**_artifact_payload(), "bench_version": bench_version}
+    )
+    posted: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        posted.update(json.loads(request.content))
+        return httpx.Response(
+            422, json={"error": "confirmation execution failed at dimension_execution"}
+        )
+
+    config = cast(
+        Any,
+        SimpleNamespace(
+            dittobench_api_url="http://dittobench.test",
+            dittobench_control_token="control-token",
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)
+        with pytest.raises(DittobenchError, match="confirmation execution rejected"):
+            await client.execute_v9_confirmation(
+                job=job,
+                artifact=artifact,
+                inference_session_id=_CONFIRMATION_SESSION.session_id,
+            )
+
+    assert posted["bench_version"] == bench_version
+    assert posted["purpose"] == "v9_confirmation_bundle"
+
+
 def _submit_response(*, replayed: bool = False) -> dict[str, Any]:
     return {
         "bundle_id": str(_BUNDLE_ID),
@@ -1299,6 +1341,28 @@ async def test_artifact_fetch_uses_bundle_route_and_ticket_bound_signature() -> 
     assert artifact.bench_version == 9
 
 
+@pytest.mark.parametrize("bench_version", [10, 11, 12])
+async def test_artifact_fetch_accepts_matching_confirmation_bench_version(
+    bench_version: int,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    job = _job().model_copy(update={"bench_version": bench_version})
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        body = _artifact_payload()
+        body["bench_version"] = bench_version
+        return httpx.Response(200, json=body)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        artifact = await PlatformClient(
+            _config(keypair.ss58_address), http, keypair
+        ).get_v9_confirmation_artifact(job)
+
+    assert artifact.bench_version == bench_version
+    assert artifact.agent_id == job.agent_id
+    assert artifact.sha256 == job.artifact_sha256
+
+
 @pytest.mark.parametrize(
     "identity_change",
     [
@@ -1306,6 +1370,7 @@ async def test_artifact_fetch_uses_bundle_route_and_ticket_bound_signature() -> 
         {"sha256": "ff" * 32},
         {"bench_version": 8},
         {"bench_version": None},
+        {"bench_version": 11},
     ],
 )
 async def test_artifact_fetch_rejects_every_identity_mismatch(
