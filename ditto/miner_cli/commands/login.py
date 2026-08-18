@@ -24,7 +24,7 @@ from ditto.miner_cli.miner_session import (
 )
 from ditto.miner_cli.network import resolve_network
 from ditto.miner_cli.preferences import clear_miner_session, save_miner_session
-from ditto.miner_cli.wallet import load_wallet
+from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 
 if TYPE_CHECKING:
     from ditto.miner_cli.miner_session import KeyKind
@@ -89,7 +89,10 @@ def _wallet_flags(parser: argparse.ArgumentParser) -> None:
         "--hotkey",
         dest="hotkey_name",
         default=os.environ.get("HOTKEY_NAME"),
-        help="Hotkey name. Flag or HOTKEY_NAME env.",
+        help=(
+            "Hotkey name. Flag or HOTKEY_NAME env. Omit both wallet flags "
+            "to search ~/.bittensor/wallets (fzf if installed)."
+        ),
     )
     parser.add_argument(
         "--key-kind",
@@ -164,9 +167,14 @@ def _logout(args: argparse.Namespace) -> int:
 
 def _approve(args: argparse.Namespace) -> int:
     network = resolve_network(args.network)
-    handle, wallet = load_wallet(
+    coldkey_name, hotkey_name = resolve_wallet_names(
         coldkey_name=args.coldkey_name,
         hotkey_name=args.hotkey_name,
+        interactive=sys.stdin.isatty() and not bool(args.yes),
+    )
+    handle, wallet = load_wallet(
+        coldkey_name=coldkey_name,
+        hotkey_name=hotkey_name,
     )
     key_kind: KeyKind = args.key_kind
     signer = signer_address(live_wallet=wallet, key_kind=key_kind)

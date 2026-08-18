@@ -99,6 +99,17 @@ class SchemaDriftError(MinerCliError):
 # --- Wallet errors ---
 
 
+class WalletSelectionCancelledError(MinerCliError):
+    """Raised when the miner declines interactive wallet discovery.
+
+    This can happen when:
+    - The miner answers no to the local-wallet search prompt.
+    - ``fzf`` or the numbered picker is cancelled with an empty selection.
+    """
+
+    pass
+
+
 class WalletNotFoundError(MinerCliError):
     """Raised when the named wallet cannot be located on disk.
 

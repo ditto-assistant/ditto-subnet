@@ -644,19 +644,26 @@ ATH queue — that public hold list now lives at
 becomes your private console: profile picture and socials, every submission
 from this hotkey, your ATH holds and disputes, and the hosted miner MCP.
 
-The login is a device-authorization flow. The page prints a command; you
-run it against the wallet that owns your SN118 hotkey. Signing does not
-transfer TAO. You choose the session lifetime (1 hour to 30 days) and the
-scopes: read, profile, download, upload, handle, and challenges.
+The login is a device-authorization flow. The page prints a `uvx` command
+that installs the CLI from this repo into a cache — no clone required.
+Omit `--coldkey` / `--hotkey`: the CLI asks to search
+`~/.bittensor/wallets` and uses `fzf` when it is installed. Signing does
+not transfer TAO. You choose the session lifetime (1 hour to 30 days) and
+the scopes: read, profile, download, upload, handle, and challenges.
 
 ```sh
 # Approve the code shown on dittobench.ai/#/reviews
-uv run ditto --network finney login --code ABCD-EFGH \
-  --coldkey miner --hotkey default
+uvx --from git+https://github.com/ditto-assistant/ditto-subnet.git \
+  ditto --network finney login --code ABCD-EFGH
+
+# Or from a clone
+git clone https://github.com/ditto-assistant/ditto-subnet.git
+cd ditto-subnet && uv sync
+uv run ditto --network finney login --code ABCD-EFGH
 
 # Start a CLI-only session and print the matching dashboard URL
-uv run ditto --network finney login --hours 24 \
-  --scopes read,profile,download
+uvx --from git+https://github.com/ditto-assistant/ditto-subnet.git \
+  ditto --network finney login --hours 24 --scopes read,profile,download
 
 uv run ditto login status
 uv run ditto login logout
@@ -676,10 +683,12 @@ for a later sign-in-with-Ditto step.
 
 **How do I sign in on dittobench.ai?** Open
 [dittobench.ai/#/reviews](https://dittobench.ai/#/reviews) (sidebar: Miner
-sign-in — not ATH reviews, which moved to `#/ath`). Run the printed
-`ditto login --code …` against the same `--coldkey` / `--hotkey` you use
-for upload. Signing does not transfer TAO. `ditto name` and `ditto avatar`
-still work without a session.
+sign-in — not ATH reviews, which moved to `#/ath`). Copy the printed
+`uvx --from git+https://github.com/ditto-assistant/ditto-subnet.git ditto
+login --code …` command. You do not need `--coldkey` / `--hotkey`; the
+CLI offers to find them under `~/.bittensor/wallets`. Signing does not
+transfer TAO. `ditto name` and `ditto avatar` still work without a
+session.
 
 **How much does evaluation cost?** The Backroom-controlled fee is denominated in
 TAO and is currently **0.04 TAO (40,000,000 rao)**. The CLI fetches and shows

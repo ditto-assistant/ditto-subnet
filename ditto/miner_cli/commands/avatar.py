@@ -26,7 +26,7 @@ from ditto.miner_cli.miner_avatar import (
     signer_address,
 )
 from ditto.miner_cli.network import resolve_network
-from ditto.miner_cli.wallet import load_wallet
+from ditto.miner_cli.wallet import load_wallet, resolve_wallet_names
 
 if TYPE_CHECKING:
     from ditto.miner_cli.miner_avatar import KeyKind
@@ -124,11 +124,13 @@ def _add_clear(subparsers: argparse._SubParsersAction) -> None:
 def run(args: argparse.Namespace) -> int:
     """Dispatch ``ditto avatar`` subcommands."""
     network = resolve_network(args.network)
-    if not args.coldkey_name or not args.hotkey_name:
-        raise MinerCliError("wallet name and hotkey are required")
-
+    coldkey_name, hotkey_name = resolve_wallet_names(
+        coldkey_name=args.coldkey_name,
+        hotkey_name=args.hotkey_name,
+        interactive=sys.stdin.isatty() and not bool(args.yes),
+    )
     handle, wallet = load_wallet(
-        coldkey_name=args.coldkey_name, hotkey_name=args.hotkey_name
+        coldkey_name=coldkey_name, hotkey_name=hotkey_name
     )
     key_kind: KeyKind = args.key_kind
     nonce = uuid4()

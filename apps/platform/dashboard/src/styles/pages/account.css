@@ -56,6 +56,8 @@
 .account-list pre {
   margin: 8px 0;
   overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   font-family: var(--mono);
   font-size: 12px;
 }

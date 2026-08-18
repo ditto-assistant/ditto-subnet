@@ -39,6 +39,7 @@ interface DeviceStart {
   user_code: string;
   poll_token: string;
   login_command: string;
+  login_clone?: string | null;
   verification_uri_complete: string;
   scopes: string[];
   ttl_seconds: number;
@@ -48,6 +49,7 @@ interface DevicePublic {
   user_code: string;
   status: string;
   login_command: string;
+  login_clone?: string | null;
   scopes?: string[];
   ttl_seconds?: number;
   miner_hotkey?: string | null;
@@ -196,6 +198,7 @@ function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.
           user_code: publicDevice.user_code,
           poll_token: pollToken,
           login_command: publicDevice.login_command,
+          login_clone: publicDevice.login_clone,
           verification_uri_complete: location.href,
           scopes: publicDevice.scopes || [],
           ttl_seconds: publicDevice.ttl_seconds || 0,
@@ -306,9 +309,9 @@ function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.
         <p class="ath-eyebrow">Miner console</p>
         <h2>Sign in with your hotkey</h2>
         <p>
-          Copy a <code>ditto login</code> command, run it against the wallet that owns your SN118
-          hotkey, and this page becomes your private backroom. No TAO moves. The session lasts as
-          long as you choose.
+          Copy the <code>uvx</code> command, run it, and this page becomes your private
+          backroom. No clone required. The CLI will offer to pick your coldkey and hotkey
+          from <code>~/.bittensor/wallets</code>. No TAO moves.
         </p>
       </div>
       <div class="account-grid">
@@ -359,6 +362,18 @@ function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.
           <div>
             <span class="ath-eyebrow">Run this locally</span>
             <pre>{command()}</pre>
+            <p class="muted">
+              Omit <code>--coldkey</code> / <code>--hotkey</code> — the CLI asks to search your
+              local wallets and uses <code>fzf</code> when it is installed.
+            </p>
+            <Show when={pending()?.login_clone}>
+              {(clone) => (
+                <>
+                  <span class="ath-eyebrow">Or clone the repo</span>
+                  <pre>{clone()}</pre>
+                </>
+              )}
+            </Show>
             <p class="muted">Status: {status()}</p>
           </div>
           <button

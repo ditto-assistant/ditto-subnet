@@ -44,6 +44,7 @@ from ditto.api_server.miner_avatar import (
 )
 from ditto.api_server.miner_session import (
     MinerSessionRejected,
+    ditto_uvx_command,
     normalize_discord_handle,
     normalize_github_url,
     normalize_x_url,
@@ -136,9 +137,9 @@ def miner_commands(*, network: str, scopes: str) -> list[MinerCommand]:
         commands.append(
             MinerCommand(
                 action="upload",
-                command=(
-                    f"ditto --network {network} upload "
-                    "--path ./dittobench-submission.tgz"
+                command=ditto_uvx_command(
+                    network=network,
+                    argv="upload --path ./dittobench-submission.tgz",
                 ),
                 reason="Uploading spends TAO and must be signed locally.",
                 submit_url="/api/v1/upload/agent",
@@ -148,7 +149,9 @@ def miner_commands(*, network: str, scopes: str) -> list[MinerCommand]:
         commands.append(
             MinerCommand(
                 action="name-claim",
-                command=f"ditto --network {network} name claim --name <handle>",
+                command=ditto_uvx_command(
+                    network=network, argv="name claim --name <handle>"
+                ),
                 reason="Handle reservation is a signed one-shot action.",
                 submit_url="/api/v1/name-claims",
             )
@@ -157,7 +160,9 @@ def miner_commands(*, network: str, scopes: str) -> list[MinerCommand]:
         commands.append(
             MinerCommand(
                 action="avatar-set",
-                command=f"ditto --network {network} avatar set --file ./pfp.png",
+                command=ditto_uvx_command(
+                    network=network, argv="avatar set --file ./pfp.png"
+                ),
                 reason="You can also upload a picture from the signed-in dashboard.",
                 submit_url="/api/v1/me/avatar",
             )

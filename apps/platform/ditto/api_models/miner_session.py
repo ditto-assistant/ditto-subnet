@@ -36,6 +36,7 @@ class MinerDeviceStartResponse(BaseModel):
     scopes: list[MinerScope]
     ttl_seconds: int
     login_command: str
+    login_clone: str | None = None
 
 
 class MinerDevicePublicResponse(BaseModel):
@@ -48,6 +49,7 @@ class MinerDevicePublicResponse(BaseModel):
     ttl_seconds: int
     expires_in: int
     login_command: str
+    login_clone: str | None = None
     miner_hotkey: str | None = None
     oauth: bool = False
     oauth_client_id: str | None = None

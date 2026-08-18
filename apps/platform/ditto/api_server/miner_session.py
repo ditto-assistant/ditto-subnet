@@ -224,8 +224,32 @@ def verify_signed_action(
         raise MinerSessionRejected("signature did not verify")
 
 
+DITTO_GIT_FROM = "git+https://github.com/ditto-assistant/ditto-subnet.git"
+DITTO_CLONE_URL = "https://github.com/ditto-assistant/ditto-subnet.git"
+
+
+def ditto_uvx_command(*, network: str, argv: str) -> str:
+    """One-shot installer command. ``uvx`` caches the git checkout."""
+    return f"uvx --from {DITTO_GIT_FROM} ditto --network {network} {argv}"
+
+
+def ditto_clone_command(*, network: str, argv: str) -> str:
+    """Fallback when the miner already wants a working tree."""
+    return (
+        f"git clone {DITTO_CLONE_URL}\n"
+        "cd ditto-subnet && uv sync\n"
+        f"uv run ditto --network {network} {argv}"
+    )
+
+
 def login_command(*, user_code: str, network: str = "finney") -> str:
-    return f"ditto --network {network} login --code {normalize_user_code(user_code)}"
+    code = normalize_user_code(user_code)
+    return ditto_uvx_command(network=network, argv=f"login --code {code}")
+
+
+def login_clone_command(*, user_code: str, network: str = "finney") -> str:
+    code = normalize_user_code(user_code)
+    return ditto_clone_command(network=network, argv=f"login --code {code}")
 
 
 def normalize_x_url(raw: str | None) -> str | None:

@@ -45,7 +45,7 @@ describe("miner sign-in page", () => {
     });
     const text = document.body.textContent ?? "";
     expect(text).toContain("Sign in with your hotkey");
-    expect(text).toContain("ditto login");
+    expect(text).toContain("uvx");
     expect(text).toContain("#/ath");
     expect(text).toContain("Permissions");
   });
@@ -58,7 +58,10 @@ describe("miner sign-in page", () => {
           JSON.stringify({
             user_code: "ABCD-EFGH",
             poll_token: "secret-poll",
-            login_command: "ditto --network local login --code ABCD-EFGH",
+            login_command:
+              "uvx --from git+https://github.com/ditto-assistant/ditto-subnet.git ditto --network local login --code ABCD-EFGH",
+            login_clone:
+              "git clone https://github.com/ditto-assistant/ditto-subnet.git\ncd ditto-subnet && uv sync\nuv run ditto --network local login --code ABCD-EFGH",
             verification_uri_complete: "http://localhost/#/reviews?code=ABCD-EFGH",
             scopes: ["read", "profile"],
             ttl_seconds: 3600,
@@ -71,7 +74,10 @@ describe("miner sign-in page", () => {
           JSON.stringify({
             user_code: "ABCD-EFGH",
             status: "pending",
-            login_command: "ditto --network local login --code ABCD-EFGH",
+            login_command:
+              "uvx --from git+https://github.com/ditto-assistant/ditto-subnet.git ditto --network local login --code ABCD-EFGH",
+            login_clone:
+              "git clone https://github.com/ditto-assistant/ditto-subnet.git\ncd ditto-subnet && uv sync\nuv run ditto --network local login --code ABCD-EFGH",
             scopes: ["read", "profile"],
             ttl_seconds: 3600,
           }),

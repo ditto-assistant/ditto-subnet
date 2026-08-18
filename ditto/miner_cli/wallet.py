@@ -15,15 +15,171 @@ This module exists to:
 from __future__ import annotations
 
 import logging
+import os
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ditto.miner_cli.errors import WalletNotFoundError
+from ditto.miner_cli.errors import (
+    WalletNotFoundError,
+    WalletSelectionCancelledError,
+)
 from ditto.miner_cli.models import WalletHandle
 
 if TYPE_CHECKING:
     import bittensor
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class WalletPair:
+    """A coldkey/hotkey name pair found under the local wallets directory."""
+
+    coldkey_name: str
+    hotkey_name: str
+
+    def label(self) -> str:
+        return f"{self.coldkey_name} / {self.hotkey_name}"
+
+
+def wallets_root() -> Path:
+    """Directory btcli uses for named wallets."""
+    override = os.environ.get("BT_WALLET_PATH") or os.environ.get(
+        "BITTENSOR_WALLET_PATH"
+    )
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".bittensor" / "wallets"
+
+
+def list_local_wallet_pairs(*, root: Path | None = None) -> list[WalletPair]:
+    """Return every ``hotkeys/<name>`` file or directory under each coldkey."""
+    base = root if root is not None else wallets_root()
+    if not base.is_dir():
+        return []
+    pairs: list[WalletPair] = []
+    for cold in sorted(base.iterdir(), key=lambda path: path.name.lower()):
+        if not cold.is_dir() or cold.name.startswith("."):
+            continue
+        hot_dir = cold / "hotkeys"
+        if not hot_dir.is_dir():
+            continue
+        for hot in sorted(hot_dir.iterdir(), key=lambda path: path.name.lower()):
+            name = hot.name
+            if name.startswith(".") or name.endswith("pub.txt"):
+                continue
+            if hot.is_file() or hot.is_dir():
+                pairs.append(
+                    WalletPair(coldkey_name=cold.name, hotkey_name=name)
+                )
+    return pairs
+
+
+def _ask_yes(prompt: str) -> bool:
+    try:
+        answer = input(prompt).strip().lower()
+    except EOFError as exc:
+        raise WalletSelectionCancelledError(
+            "wallet selection cancelled: EOF on stdin"
+        ) from exc
+    return answer in {"", "y", "yes"}
+
+
+def _pick_with_fzf(pairs: list[WalletPair]) -> WalletPair | None:
+    if shutil.which("fzf") is None:
+        return None
+    lines = "\n".join(pair.label() for pair in pairs)
+    try:
+        completed = subprocess.run(
+            [
+                "fzf",
+                "--prompt=wallet> ",
+                "--height=40%",
+                "--reverse",
+                "--info=inline",
+            ],
+            input=lines,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    chosen = completed.stdout.strip()
+    for pair in pairs:
+        if pair.label() == chosen:
+            return pair
+    return None
+
+
+def _pick_from_list(pairs: list[WalletPair]) -> WalletPair:
+    print("Local wallets:", file=sys.stderr)
+    for index, pair in enumerate(pairs, start=1):
+        print(f"  {index}) {pair.label()}", file=sys.stderr)
+    try:
+        raw = input("Select a wallet [1]: ").strip()
+    except EOFError as exc:
+        raise WalletSelectionCancelledError(
+            "wallet selection cancelled: EOF on stdin"
+        ) from exc
+    if raw == "":
+        return pairs[0]
+    if raw.isdigit():
+        index = int(raw)
+        if 1 <= index <= len(pairs):
+            return pairs[index - 1]
+    if "/" in raw:
+        cold, _, hot = raw.partition("/")
+        cold, hot = cold.strip(), hot.strip()
+        for pair in pairs:
+            if pair.coldkey_name == cold and pair.hotkey_name == hot:
+                return pair
+    raise WalletSelectionCancelledError(f"not a wallet selection: {raw!r}")
+
+
+def resolve_wallet_names(
+    *,
+    coldkey_name: str | None,
+    hotkey_name: str | None,
+    interactive: bool,
+    root: Path | None = None,
+) -> tuple[str, str]:
+    """Return coldkey/hotkey names, prompting to search locally when omitted."""
+    if coldkey_name and hotkey_name:
+        return coldkey_name, hotkey_name
+    if not interactive:
+        raise WalletNotFoundError(
+            "wallet name and hotkey are required "
+            "(pass --coldkey/--hotkey, or run without --yes to pick locally)"
+        )
+    base = root if root is not None else wallets_root()
+    if not _ask_yes(f"Search {base} for a local wallet? [Y/n]: "):
+        raise WalletSelectionCancelledError(
+            "pass --coldkey NAME --hotkey NAME to skip discovery"
+        )
+    pairs = list_local_wallet_pairs(root=base)
+    if coldkey_name:
+        pairs = [pair for pair in pairs if pair.coldkey_name == coldkey_name]
+    if hotkey_name:
+        pairs = [pair for pair in pairs if pair.hotkey_name == hotkey_name]
+    if not pairs:
+        raise WalletNotFoundError(f"no wallets found under {base}")
+    if len(pairs) == 1:
+        pair = pairs[0]
+        if not _ask_yes(f"Use {pair.label()}? [Y/n]: "):
+            raise WalletSelectionCancelledError("wallet selection cancelled")
+        return pair.coldkey_name, pair.hotkey_name
+    picked = _pick_with_fzf(pairs)
+    if picked is None:
+        picked = _pick_from_list(pairs)
+    print(f"using {picked.label()}", file=sys.stderr)
+    return picked.coldkey_name, picked.hotkey_name
 
 
 def load_wallet(

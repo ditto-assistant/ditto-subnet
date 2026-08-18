@@ -27,6 +27,7 @@ from ditto.api_server.miner_session import (
     clamp_ttl_seconds,
     has_scope,
     hash_secret,
+    login_clone_command,
     login_command,
     login_message,
     new_token,
@@ -201,6 +202,9 @@ async def start_device(
         login_command=login_command(
             user_code=user_code, network=_network_for_command(request)
         ),
+        login_clone=login_clone_command(
+            user_code=user_code, network=_network_for_command(request)
+        ),
     )
 
 
@@ -232,6 +236,9 @@ async def public_device(
         ttl_seconds=grant.ttl_seconds,
         expires_in=remaining,
         login_command=login_command(
+            user_code=grant.user_code, network=_network_for_command(request)
+        ),
+        login_clone=login_clone_command(
             user_code=grant.user_code, network=_network_for_command(request)
         ),
         miner_hotkey=grant.miner_hotkey,

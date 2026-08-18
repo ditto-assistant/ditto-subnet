@@ -30,6 +30,17 @@ def test_user_code_round_trip() -> None:
         normalize_user_code("short")
 
 
+def test_login_command_uses_uvx_from_git() -> None:
+    from ditto.api_server.miner_session import login_clone_command, login_command
+
+    one = login_command(user_code="abcd efgh", network="finney")
+    assert one.startswith("uvx --from git+https://github.com/ditto-assistant/ditto-subnet.git ")
+    assert one.endswith("ditto --network finney login --code ABCD-EFGH")
+    clone = login_clone_command(user_code="ABCD-EFGH", network="finney")
+    assert "git clone https://github.com/ditto-assistant/ditto-subnet.git" in clone
+    assert "uv run ditto --network finney login --code ABCD-EFGH" in clone
+
+
 def test_social_normalization() -> None:
     assert normalize_x_url("x.com/jupiter") == "https://x.com/jupiter"
     assert normalize_github_url("github.com/ditto-assistant") == (
