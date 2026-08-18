@@ -593,6 +593,9 @@ def test_confirmation_median_and_paired_seed_band_match_validator_fold() -> None
     assert decision.challenger_lead == pytest.approx(0.004)
     assert decision.margin_lead == pytest.approx(0.007)
     assert decision.dethrones is False
+    assert decision.shared_seed_count == 3
+    assert decision.paired_standard_error is not None
+    assert decision.seed_differences == pytest.approx((0.004, 0.004, 0.004))
 
 
 def test_efficiency_bonus_applies_inside_paired_seed_comparison() -> None:
@@ -641,9 +644,9 @@ def test_bounded_factor_scales_each_paired_seeds_headroom_before_comparison() ->
     statistic = _paired_statistic(challenger, incumbent)
 
     assert statistic is not None
-    mean_difference, champion_reference, _standard_error = statistic
-    assert champion_reference == pytest.approx((0.991 + 0.955 + 0.91) / 3)
-    assert mean_difference == pytest.approx(1.0 - champion_reference)
+    assert statistic.champion_reference == pytest.approx((0.991 + 0.955 + 0.91) / 3)
+    assert statistic.mean_difference == pytest.approx(1.0 - statistic.champion_reference)
+    assert len(statistic.differences) == 3
 
 
 def test_empty_or_non_positive_pool_has_no_projection() -> None:

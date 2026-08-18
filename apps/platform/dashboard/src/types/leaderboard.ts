@@ -31,10 +31,19 @@ export interface RawLeaderDecision {
   method?: string;
   challenger_lead: number;
   required_lead: number;
+  margin_lead?: number;
+  statistical_lead?: number | null;
   required_score?: number;
   score_ceiling?: number;
   /** Required score has passed the top of the score domain: nothing can win. */
   ceiling_deadlocked?: boolean;
+  dethrones?: boolean;
+  /** SEM of per-seed challenger-minus-champion diffs. Paired only. */
+  paired_standard_error?: number | null;
+  /** Shared confirmation seeds in the paired comparison. */
+  shared_seed_count?: number | null;
+  /** Per-seed challenger minus champion, sorted by seed id. */
+  seed_differences?: number[] | null;
 }
 
 /** KOTH emissions fold parameters. Consensus constants are always read from

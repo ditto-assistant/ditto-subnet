@@ -74,6 +74,16 @@ class KothEntry:
 
 
 @dataclass(frozen=True)
+class PairedStatistic:
+    """Shared-seed head-to-head used by the paired dethrone rule."""
+
+    mean_difference: float
+    champion_reference: float
+    standard_error: float
+    differences: tuple[float, ...]
+
+
+@dataclass(frozen=True)
 class DethroneDecision:
     """Why the raw score leader did or did not clear the incumbent."""
 
@@ -86,6 +96,9 @@ class DethroneDecision:
     required_score: float
     score_ceiling: float
     ceiling_deadlocked: bool
+    paired_standard_error: float | None = None
+    shared_seed_count: int | None = None
+    seed_differences: tuple[float, ...] | None = None
 
 
 @dataclass(frozen=True)
@@ -775,7 +788,7 @@ def _seed_composites(entry: KothEntry) -> dict[int, float] | None:
 
 def _paired_statistic(
     challenger: KothEntry, champion: KothEntry
-) -> tuple[float, float, float] | None:
+) -> PairedStatistic | None:
     challenger_by_seed = _seed_composites(challenger)
     champion_by_seed = _seed_composites(champion)
     if challenger_by_seed is None or champion_by_seed is None:
@@ -796,7 +809,12 @@ def _paired_statistic(
     variance = sum(
         (difference - mean_difference) ** 2 for difference in differences
     ) / (len(differences) - 1)
-    return mean_difference, champion_reference, math.sqrt(variance / len(differences))
+    return PairedStatistic(
+        mean_difference=mean_difference,
+        champion_reference=champion_reference,
+        standard_error=math.sqrt(variance / len(differences)),
+        differences=tuple(differences),
+    )
 
 
 def _weight_tied(candidate: KothEntry, anchor: KothEntry) -> bool:
@@ -810,8 +828,7 @@ def _weight_tied(candidate: KothEntry, anchor: KothEntry) -> bool:
     paired = _paired_statistic(candidate, anchor)
     if paired is None:
         return False
-    mean_difference, _anchor_reference, standard_error = paired
-    return abs(mean_difference) <= KOTH_DETHRONE_Z * standard_error
+    return abs(paired.mean_difference) <= KOTH_DETHRONE_Z * paired.standard_error
 
 
 def _dethrone_decision(
@@ -823,24 +840,23 @@ def _dethrone_decision(
     score_ceiling = _effective_score_ceiling(challenger)
     paired = _paired_statistic(challenger, champion)
     if paired is not None:
-        lead, champion_reference, standard_error = paired
         margin_lead = KOTH_MARGIN
-        paired_statistical_lead = KOTH_DETHRONE_Z * standard_error
+        paired_statistical_lead = KOTH_DETHRONE_Z * paired.standard_error
         required = max(margin_lead, paired_statistical_lead) * _dethrone_band_scale(
-            challenger, champion, champion_reference
+            challenger, champion, paired.champion_reference
         )
         required = _ceiling_capped_band(
             required,
             challenger,
             champion,
-            champion_reference,
+            paired.champion_reference,
             active=ceiling_band_clamp,
         )
-        observed_score = champion_reference + lead
-        required_score = champion_reference + required
+        observed_score = paired.champion_reference + paired.mean_difference
+        required_score = paired.champion_reference + required
         dethrones = observed_score > required_score
         return DethroneDecision(
-            challenger_lead=lead,
+            challenger_lead=paired.mean_difference,
             required_lead=required,
             margin_lead=margin_lead,
             statistical_lead=paired_statistical_lead,
@@ -849,6 +865,9 @@ def _dethrone_decision(
             required_score=required_score,
             score_ceiling=score_ceiling,
             ceiling_deadlocked=(not dethrones and required_score >= score_ceiling),
+            paired_standard_error=paired.standard_error,
+            shared_seed_count=len(paired.differences),
+            seed_differences=paired.differences,
         )
 
     challenger_composite = _effective_composite(challenger)

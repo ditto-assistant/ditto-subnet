@@ -2398,6 +2398,9 @@ def _public_koth_emissions(
                 required_score=decision.required_score,
                 score_ceiling=decision.score_ceiling,
                 ceiling_deadlocked=decision.ceiling_deadlocked,
+                paired_standard_error=decision.paired_standard_error,
+                shared_seed_count=decision.shared_seed_count,
+                seed_differences=decision.seed_differences,
             )
             if decision is not None
             else None
@@ -2413,6 +2416,9 @@ def _public_koth_emissions(
                 required_score=defense.required_score,
                 score_ceiling=defense.score_ceiling,
                 ceiling_deadlocked=defense.ceiling_deadlocked,
+                paired_standard_error=defense.paired_standard_error,
+                shared_seed_count=defense.shared_seed_count,
+                seed_differences=defense.seed_differences,
             )
             if defense is not None
             else None

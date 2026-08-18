@@ -900,22 +900,21 @@ describe("held-crown standing clarity", () => {
     await waitFor(() => expect(el("koth-standing").classList.contains("show")).toBe(true));
     const callout = el("koth-standing");
     expect(callout).toHaveAttribute("role", "note");
-    expect(callout.textContent).toContain((rawLeaderEntry.agent_name as string) + " is rank #1");
+    expect(callout.textContent).toContain("Rank is not the crown");
+    expect(callout.textContent).toContain(
+      (rawLeaderEntry.agent_name as string) + " is #1 on score",
+    );
     expect(callout.textContent).toContain(championEntry.agent_name as string);
-    expect(callout.textContent).toContain("remains champion");
+    expect(callout.textContent).toContain("is still champion");
     expect(callout.textContent).toContain(
-      "Rank / KOTH score" + fxScore(displayComposite(rawLeaderEntry)),
+      "Head-to-head lead+" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
     );
     expect(callout.textContent).toContain(
-      "Paired-seed lead+" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
+      "Needed to take crown+" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
     );
-    expect(callout.textContent).toContain(
-      "Lead required>+" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
-    );
-    expect(callout.textContent).toContain(
-      fxScore(rawLeaderEntry.composite) + " raw quorum median is not the crown score",
-    );
-    expect(callout.textContent).toContain("Paired shared-seed comparison");
+    expect(callout.textContent).toContain("flat margin is not the gate");
+    expect(callout.textContent).toContain("own-seed median is the rank score, not the crown test");
+    expect(callout.textContent).toContain("head-to-head on shared confirmation seeds");
   });
 
   it("dims every higher-scoring row and notes it outscores without dethroning", async () => {
@@ -930,12 +929,17 @@ describe("held-crown standing clarity", () => {
     // The dimmed leader keeps its tail badge (it still earns tail emissions)
     // and gains the not-dethroned note with the exact decision in its tooltip.
     const note = dimmed.querySelector(".above-champion-note") as HTMLElement;
-    expect(note.textContent).toBe("#1 challenger · crown held");
-    expect(note.getAttribute("data-tooltip")).toContain(
-      "KOTH lead is +" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
+    expect(note.textContent).toBe(
+      "#1 · +" +
+        fxScore(emissions?.raw_leader_decision?.challenger_lead as number) +
+        " / need +" +
+        fxScore(emissions?.raw_leader_decision?.required_lead as number),
     );
     expect(note.getAttribute("data-tooltip")).toContain(
-      "requires more than +" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
+      "Head-to-head lead is +" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
+    );
+    expect(note.getAttribute("data-tooltip")).toContain(
+      "needs +" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
     );
     expect(dimmed.getAttribute("aria-label")).toContain(
       "outscores the champion but has not cleared the dethrone band",
@@ -972,18 +976,18 @@ describe("held-crown standing clarity", () => {
     });
     await waitForBoard();
     await waitFor(() =>
-      expect(el("koth-standing-copy").textContent).toContain("Unpaired uncertainty band"),
+      expect(el("koth-standing-copy").textContent).toContain("Not enough shared seeds yet"),
     );
     const copy = el("koth-standing-copy").textContent;
     expect(copy).toContain("Current lead+0.018572");
-    expect(copy).toContain("Lead required>+0.046305");
+    expect(copy).toContain("Needed to take crown+0.046305");
     expect(copy).toContain("Dethrone score>0.750175");
     expect(copy).not.toContain("beat 0.710");
   });
 
   it("pins the dimming and hover-restore rules in the stylesheet", () => {
     expect(cssNorm).toContain(
-      "tbody tr.above-champion > td { opacity: 0.55; transition: opacity 0.15s ease; }",
+      "tbody tr.above-champion > td { opacity: 0.82; transition: opacity 0.15s ease; }",
     );
     expect(cssNorm).toContain(
       "tbody tr.above-champion:hover > td, tbody tr.above-champion:focus-visible > td { opacity: 1; }",

@@ -25,6 +25,9 @@ import {
   shortKey,
 } from "../../lib/format";
 import {
+  crownContest,
+  crownSeedDiffsText,
+  crownWhyHigh,
   dethroneBandScale,
   dethroneFloor,
   displayComposite,
@@ -32,6 +35,7 @@ import {
   isEligible,
   isFinalized,
   rolloutQuorum,
+  signedScore,
 } from "../../lib/scoring";
 import type { BandDecayParams } from "../../lib/scoring";
 import { Tip } from "../ui/Tooltip";
@@ -293,12 +297,12 @@ function VersionSwitch(props: { store: LeaderboardStore }): JSX.Element {
 
 function crownComparisonNote(method: string | undefined): string {
   if (method === "paired") {
-    return "Paired shared-seed comparison: dataset difficulty is removed from the crown decision.";
+    return "Rank is each agent's own-seed score. The crown is a head-to-head on shared confirmation seeds, so a lucky private dataset cannot take the title.";
   }
   if (method === "unpaired") {
-    return "Unpaired uncertainty band: shared-seed evidence is not yet sufficient for a paired comparison, so more shared retests can change this threshold.";
+    return "Not enough shared seeds yet for a paired comparison, so the fold uses an unpaired uncertainty band. More shared retests can change this threshold.";
   }
-  return "Fixed protection margin: the first-seen incumbent holds until the challenger clears it.";
+  return "The first-seen incumbent holds until a challenger clears the flat protection margin.";
 }
 
 function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
@@ -378,65 +382,86 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                       </>
                     }
                   >
-                    {(current) => (
-                      <>
-                        <div class="koth-standing-title">
-                          <b>
-                            <EntityButton
-                              kind="agent"
-                              id={current().leader.agent_id}
-                              label={agentName(current().leader.agent_name)}
-                            />
-                            {" is rank #1. "}
-                            <EntityButton
-                              kind="agent"
-                              id={current().champion.agent_id}
-                              label={agentName(current().champion.agent_name)}
-                            />
-                            {" remains champion."}
-                          </b>
-                        </div>
-                        <dl class="koth-standing-metrics">
-                          <div>
-                            <dt>Rank / KOTH score</dt>
-                            <dd>
-                              {fxScore(displayComposite(current().leader, store.settledView()))}
-                            </dd>
+                    {(current) => {
+                      const contest = () => crownContest(current().decision, current().emissions);
+                      return (
+                        <>
+                          <div class="koth-standing-title">
+                            <b>
+                              Rank is not the crown.{" "}
+                              <EntityButton
+                                kind="agent"
+                                id={current().leader.agent_id}
+                                label={agentName(current().leader.agent_name)}
+                              />
+                              {" is #1 on score. "}
+                              <EntityButton
+                                kind="agent"
+                                id={current().champion.agent_id}
+                                label={agentName(current().champion.agent_name)}
+                              />
+                              {" is still champion."}
+                            </b>
                           </div>
-                          <div>
-                            <dt>
-                              {current().decision.method === "paired"
-                                ? "Paired-seed lead"
-                                : "Current lead"}
-                            </dt>
-                            <dd>{"+" + fxScore(current().decision.challenger_lead)}</dd>
-                          </div>
-                          <div>
-                            <dt>Lead required</dt>
-                            <dd>{">+" + fxScore(current().decision.required_lead)}</dd>
-                          </div>
-                          <Show when={current().decision.required_score}>
-                            {(score) => (
-                              <div>
-                                <dt>Dethrone score</dt>
-                                <dd>{">" + fxScore(score())}</dd>
-                              </div>
+                          <Show when={contest()}>
+                            {(held) => (
+                              <>
+                                <dl class="koth-standing-metrics">
+                                  <div>
+                                    <dt>
+                                      {held().method === "paired"
+                                        ? "Head-to-head lead"
+                                        : "Current lead"}
+                                    </dt>
+                                    <dd>{signedScore(held().challengerLead)}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Needed to take crown</dt>
+                                    <dd>{signedScore(held().requiredLead)}</dd>
+                                  </div>
+                                  <div>
+                                    <dt>Still short</dt>
+                                    <dd>{signedScore(held().shortfall)}</dd>
+                                  </div>
+                                  <Show when={held().pairedStandardError}>
+                                    {(se) => (
+                                      <div>
+                                        <dt>Paired SE</dt>
+                                        <dd>{fxScore(se())}</dd>
+                                      </div>
+                                    )}
+                                  </Show>
+                                  <Show when={current().decision.required_score}>
+                                    {(score) => (
+                                      <div>
+                                        <dt>Dethrone score</dt>
+                                        <dd>{">" + fxScore(score())}</dd>
+                                      </div>
+                                    )}
+                                  </Show>
+                                </dl>
+                                <div class="koth-standing-detail">{crownWhyHigh(held())}</div>
+                                <Show when={held().seedDifferences}>
+                                  {(diffs) => (
+                                    <div class="koth-standing-diffs">
+                                      {crownSeedDiffsText(diffs())}
+                                    </div>
+                                  )}
+                                </Show>
+                              </>
                             )}
                           </Show>
-                        </dl>
-                        <div class="koth-standing-detail">
-                          <Show when={rawMedianDiffers(current().leader)}>
-                            {"The " +
-                              fxScore(current().leader.composite) +
-                              " raw quorum median is not the crown score; ranking and KOTH use " +
-                              (current().leader.aggregate_method === "continual_mean"
-                                ? "the official continual score after accepted retests. "
-                                : "the official score shown above. ")}
-                          </Show>
-                          {crownComparisonNote(current().decision.method)}
-                        </div>
-                      </>
-                    )}
+                          <div class="koth-standing-detail">
+                            <Show when={rawMedianDiffers(current().leader)}>
+                              {"The " +
+                                fxScore(current().leader.composite) +
+                                " own-seed median is the rank score, not the crown test. "}
+                            </Show>
+                            {crownComparisonNote(current().decision.method)}
+                          </div>
+                        </>
+                      );
+                    }}
                   </Show>
                 }
               >

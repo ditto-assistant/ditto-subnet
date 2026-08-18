@@ -7,7 +7,7 @@ import { Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { fx, pct, publicDisplayName, relTime, shortKey } from "../../lib/format";
-import { displayComposite } from "../../lib/scoring";
+import { crownContest, crownWhyHigh, displayComposite, signedScore } from "../../lib/scoring";
 import { ChipTip } from "../board/chips";
 import { leaderboardVersionView } from "../board/board-state";
 import { EntityButton } from "../ui/EntityButton";
@@ -173,14 +173,34 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
           </Show>
           <Show when={!scoreCeilingPool() && ((championEntry()?.rank as number) || 1) > 1}>
             <div class="champion-note" id="champion-note">
-              {"Holds the crown from raw #" +
-                championEntry()?.rank +
-                ": " +
-                ((championEntry()?.rank as number) - 1 === 1
-                  ? "1 agent scores higher"
-                  : (championEntry()?.rank as number) - 1 + " agents score higher") +
-                ", but none by more than the dethrone band. The crown — and the champion share — " +
-                "moves only when the first-seen incumbent is decisively beaten."}
+              {(() => {
+                const contest = crownContest(emissions()?.raw_leader_decision, emissions());
+                const rank = championEntry()?.rank as number;
+                const above = rank - 1;
+                const aboveText =
+                  above === 1 ? "1 agent scores higher" : above + " agents score higher";
+                if (!contest) {
+                  return (
+                    "Holds the crown from raw #" +
+                    rank +
+                    ": " +
+                    aboveText +
+                    ", but none by enough on the shared-seed head-to-head. Rank is not the crown."
+                  );
+                }
+                return (
+                  "Holds the crown from raw #" +
+                  rank +
+                  ". " +
+                  aboveText +
+                  ", but the head-to-head lead is " +
+                  signedScore(contest.challengerLead) +
+                  " and the crown needs " +
+                  signedScore(contest.requiredLead) +
+                  ". " +
+                  crownWhyHigh(contest)
+                );
+              })()}
             </div>
           </Show>
         </Show>

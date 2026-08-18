@@ -13184,6 +13184,21 @@ export interface components {
             score_ceiling: number;
             /** Statistical Lead */
             statistical_lead?: number | null;
+            /**
+             * Paired Standard Error
+             * @description Standard error of the per-seed challenger-minus-champion differences. Present only on a paired comparison.
+             */
+            paired_standard_error?: number | null;
+            /**
+             * Shared Seed Count
+             * @description How many shared confirmation seeds entered the paired comparison.
+             */
+            shared_seed_count?: number | null;
+            /**
+             * Seed Differences
+             * @description Per-seed challenger minus champion composites, sorted by seed id.
+             */
+            seed_differences?: number[] | null;
         };
         /**
          * PublicEfficiencyCohortMember

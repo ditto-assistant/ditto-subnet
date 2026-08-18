@@ -5256,6 +5256,9 @@ export const publicDethroneDecisionSchema = z.object({
   statistical_lead: z.number().nonnegative().nullable().optional(),
   method: z.enum(['flat', 'unpaired', 'paired']),
   dethrones: z.boolean(),
+  paired_standard_error: z.number().nonnegative().nullable().optional(),
+  shared_seed_count: z.number().int().nonnegative().nullable().optional(),
+  seed_differences: z.array(z.number()).nullable().optional(),
 })
 
 export const publicEmissionRecipientSchema = z.object({

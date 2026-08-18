@@ -351,7 +351,7 @@ describe("overview leaderboard block (row 1 slice)", () => {
     const note = el("champion-note");
     expect(note.textContent).toContain("Holds the crown from raw #" + championEntry.rank);
     expect(note.textContent).toContain("1 agent scores higher");
-    expect(note.textContent).toContain("dethrone band");
+    expect(note.textContent).toContain("head-to-head");
     // The shared block's held-crown callout renders on this mount too, and
     // the overview's strip-hiding rules must never swallow it.
     await waitFor(() => expect(el("koth-standing").classList.contains("show")).toBe(true));
@@ -362,7 +362,7 @@ describe("overview leaderboard block (row 1 slice)", () => {
       (championEntry.rank as number) - 1,
     );
     expect(el("koth-standing").textContent).toContain(
-      "Lead required>+" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
+      "Needed to take crown+" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
     );
     expect(cssNorm).toContain(
       ".overview-main #board .above-champion-note { white-space: normal; }",

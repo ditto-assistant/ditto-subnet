@@ -2244,6 +2244,9 @@ class TestPublicLeaderboard:
         )
         assert decision["method"] == "unpaired"
         assert decision["dethrones"] is False
+        assert decision["paired_standard_error"] is None
+        assert decision["shared_seed_count"] is None
+        assert decision["seed_differences"] is None
         assert decision["required_score"] == pytest.approx(
             0.50 + decision["required_lead"]
         )

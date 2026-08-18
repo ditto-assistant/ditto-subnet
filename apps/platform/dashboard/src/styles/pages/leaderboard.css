@@ -102,6 +102,13 @@
   max-width: 75ch;
   color: var(--text-dim);
 }
+.koth-standing-diffs {
+  margin-top: 5px;
+  max-width: 75ch;
+  color: var(--text);
+  font: 600 12px/1.45 var(--mono);
+  font-variant-numeric: tabular-nums;
+}
 
 @media (max-width: 680px) {
   .koth-standing-metrics {
@@ -1230,7 +1237,7 @@ tbody tr.chain-weighted:not(.champion):focus-visible {
    above it lead, but not by more than the dethrone band). Hover or focus
    restores full strength; the per-row note chip states the rule. */
 tbody tr.above-champion > td {
-  opacity: 0.55;
+  opacity: 0.82;
   transition: opacity 0.15s ease;
 }
 tbody tr.above-champion:hover > td,

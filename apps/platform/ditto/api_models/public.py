@@ -1301,6 +1301,8 @@ class PublicEmissionRecipient(BaseModel):
 class PublicDethroneDecision(BaseModel):
     """The raw leader's comparison against the incumbent KOTH champion."""
 
+    model_config = ConfigDict(extra="ignore")
+
     challenger_lead: float
     required_lead: Annotated[float, Field(ge=0.0)]
     margin_lead: Annotated[float, Field(ge=0.0)]
@@ -1310,6 +1312,41 @@ class PublicDethroneDecision(BaseModel):
     required_score: float
     score_ceiling: Annotated[float, Field(gt=0.0)]
     ceiling_deadlocked: bool
+    paired_standard_error: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            description=(
+                "Standard error of the per-seed challenger-minus-champion "
+                "differences. Present only on a paired comparison. The "
+                "statistical term is dethrone_z times this value, before "
+                "high-score decay and the ceiling cap."
+            ),
+        ),
+    ] = None
+    shared_seed_count: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "How many shared confirmation seeds entered the paired "
+                "comparison. Null when the fold used the unpaired or flat rule."
+            ),
+        ),
+    ] = None
+    seed_differences: Annotated[
+        tuple[float, ...] | None,
+        Field(
+            default=None,
+            description=(
+                "Per-seed challenger minus champion composites, sorted by "
+                "seed id. These are score differences, not case answers. "
+                "Null when the fold is not a paired comparison."
+            ),
+        ),
+    ] = None
 
 
 class PublicKothEmissions(BaseModel):

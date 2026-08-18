@@ -21,6 +21,9 @@ import {
   shortKey,
 } from "../../lib/format";
 import {
+  crownContest,
+  crownHeldRowLabel,
+  crownWhyHigh,
   displayComposite,
   chainWeightLabel,
   errBandBounds,
@@ -28,6 +31,7 @@ import {
   isFinalized,
   isRegistered,
   showsCompositeErrBand,
+  signedScore,
   unrankedKind,
 } from "../../lib/scoring";
 import { pushEntityRoute } from "../../stores/routeStore";
@@ -388,32 +392,34 @@ function BoardRow(props: {
     (e().rank as number) < props.championRank;
   const aboveChampionTip = (): string => {
     const emissions = props.store.emissions();
-    const decision = emissions?.raw_leader_decision;
     const isRawLeader = String(emissions?.raw_leader_agent_id) === String(e().agent_id);
-    if (decision && isRawLeader) {
+    const contest = crownContest(emissions?.raw_leader_decision, emissions);
+    if (contest && isRawLeader) {
       const threshold =
-        typeof decision.required_score === "number" && Number.isFinite(decision.required_score)
-          ? " The challenger score must exceed " + fxScore(decision.required_score) + "."
+        typeof emissions?.raw_leader_decision?.required_score === "number" &&
+        Number.isFinite(emissions.raw_leader_decision.required_score)
+          ? " The challenger score must exceed " +
+            fxScore(emissions.raw_leader_decision.required_score) +
+            "."
           : "";
       return (
-        "Rank #1 challenger, not champion. Its KOTH lead is +" +
-        fxScore(decision.challenger_lead) +
-        "; the current fold requires more than +" +
-        fxScore(decision.required_lead) +
-        "." +
+        "Rank #1 is not champion. Head-to-head lead is " +
+        signedScore(contest.challengerLead) +
+        "; needs " +
+        signedScore(contest.requiredLead) +
+        " to take the crown. " +
+        crownWhyHigh(contest) +
         threshold
       );
     }
-    return (
-      "Scores above the reigning champion, but the exact fold decision has not moved the crown. " +
-      "Raw rank alone never replaces the first-seen incumbent."
-    );
+    return "Scores above the reigning champion, but the crown only moves on the shared-seed head-to-head, not on rank.";
   };
   const aboveChampionLabel = (): string => {
     const emissions = props.store.emissions();
-    return String(emissions?.raw_leader_agent_id) === String(e().agent_id)
-      ? "#1 challenger · crown held"
-      : "outscores · crown held";
+    const isRawLeader = String(emissions?.raw_leader_agent_id) === String(e().agent_id);
+    const contest = crownContest(emissions?.raw_leader_decision, emissions);
+    if (contest && isRawLeader) return crownHeldRowLabel(contest, true);
+    return isRawLeader ? "#1 · crown held" : "outscores · crown held";
   };
   // Rank medals (r1–r3) require live emission eligibility:
   // e.emission_eligible === true, never a looser truthiness.

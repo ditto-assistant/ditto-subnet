@@ -8,7 +8,7 @@
 // over module state (rolloutSettledView, desiredBench, …); these ports take
 // that state as explicit arguments and stay pure.
 
-import { fx } from "./format";
+import { fx, fxScore, num } from "./format";
 import type {
   ChainWeight,
   ChainWeightInfo,
@@ -16,6 +16,7 @@ import type {
   CompositeBreakdown,
   EmissionsFold,
   LeaderboardPayload,
+  RawLeaderDecision,
   RolloutState,
   TokenEfficiency,
 } from "../types";
@@ -463,6 +464,150 @@ export function emissionsSplit(emissions: EmissionsFold | null | undefined): Emi
     margin,
     dethroneZ: typeof z === "number" && Number.isFinite(z) && z > 0 ? z : null,
   };
+}
+
+/** Miner-facing breakdown of a held-crown dethrone decision. */
+export interface CrownContest {
+  method: string;
+  challengerLead: number;
+  requiredLead: number;
+  shortfall: number;
+  marginLead: number | null;
+  statisticalLead: number | null;
+  pairedStandardError: number | null;
+  sharedSeedCount: number | null;
+  seedDifferences: number[] | null;
+  bindingTerm: "margin" | "statistical" | "unknown";
+}
+
+function finiteOrNull(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/**
+ * Read the fold decision the way a miner needs it: lead vs required, and
+ * whether the flat margin or the seed-to-seed noise band is the gate.
+ * Falls back to deriving paired SE as statistical_lead / dethrone_z when
+ * an older payload omits paired_standard_error.
+ */
+export function crownContest(
+  decision: RawLeaderDecision | null | undefined,
+  emissions?: EmissionsFold | null,
+): CrownContest | null {
+  if (!decision) return null;
+  const challengerLead = finiteOrNull(decision.challenger_lead);
+  const requiredLead = finiteOrNull(decision.required_lead);
+  if (challengerLead == null || requiredLead == null) return null;
+  const marginLead = finiteOrNull(decision.margin_lead);
+  const statisticalLead = finiteOrNull(decision.statistical_lead);
+  const z = finiteOrNull(emissions?.dethrone_z);
+  let pairedStandardError = finiteOrNull(decision.paired_standard_error);
+  if (
+    pairedStandardError == null &&
+    decision.method === "paired" &&
+    statisticalLead != null &&
+    z != null &&
+    z > 0
+  ) {
+    pairedStandardError = statisticalLead / z;
+  }
+  const sharedSeedCount =
+    typeof decision.shared_seed_count === "number" && Number.isFinite(decision.shared_seed_count)
+      ? decision.shared_seed_count
+      : null;
+  const seedDifferences = Array.isArray(decision.seed_differences)
+    ? decision.seed_differences.filter((value) => Number.isFinite(value))
+    : null;
+  let bindingTerm: CrownContest["bindingTerm"] = "unknown";
+  if (marginLead != null && statisticalLead != null) {
+    bindingTerm = statisticalLead > marginLead ? "statistical" : "margin";
+  } else if (decision.method === "paired" || decision.method === "unpaired") {
+    bindingTerm = "statistical";
+  } else if (decision.method === "flat") {
+    bindingTerm = "margin";
+  }
+  return {
+    method: decision.method || "flat",
+    challengerLead,
+    requiredLead,
+    shortfall: requiredLead - challengerLead,
+    marginLead,
+    statisticalLead,
+    pairedStandardError,
+    sharedSeedCount,
+    seedDifferences: seedDifferences && seedDifferences.length ? seedDifferences : null,
+    bindingTerm,
+  };
+}
+
+export function signedScore(value: number): string {
+  return (value >= 0 ? "+" : "") + fxScore(value);
+}
+
+/** One-line reason the required lead is larger than the flat margin. */
+export function crownWhyHigh(contest: CrownContest): string {
+  if (contest.bindingTerm === "statistical" && contest.method === "paired") {
+    const n =
+      contest.sharedSeedCount != null
+        ? contest.sharedSeedCount +
+          (contest.sharedSeedCount === 1 ? " shared seed" : " shared seeds")
+        : "the shared confirmation seeds";
+    const se =
+      contest.pairedStandardError != null
+        ? "the paired standard error is " + fxScore(contest.pairedStandardError)
+        : "seed-to-seed variance is high";
+    const band =
+      contest.statisticalLead != null
+        ? ", so the 95% band (1.64 × SE) starts at " + fxScore(contest.statisticalLead)
+        : "";
+    const margin = contest.marginLead != null ? num(contest.marginLead) : "the flat margin";
+    return (
+      "The " +
+      margin +
+      " flat margin is not the gate. On " +
+      n +
+      " " +
+      se +
+      band +
+      " before the high-score curve."
+    );
+  }
+  if (contest.bindingTerm === "statistical") {
+    return (
+      "The required lead is the statistical uncertainty band, not the " +
+      (contest.marginLead != null ? num(contest.marginLead) + " " : "") +
+      "flat margin. More shared-seed retests can shrink this."
+    );
+  }
+  return (
+    "The incumbent holds until a challenger leads by more than the " +
+    (contest.marginLead != null ? num(contest.marginLead) + " " : "") +
+    "flat protection margin."
+  );
+}
+
+/** Compact list of per-seed leads, or a range once the list would overflow. */
+export function crownSeedDiffsText(diffs: readonly number[]): string {
+  if (!diffs.length) return "";
+  if (diffs.length <= 8) {
+    return "Shared-seed diffs: " + diffs.map(signedScore).join(" · ");
+  }
+  let min = diffs[0] as number;
+  let max = diffs[0] as number;
+  for (const value of diffs) {
+    if (value < min) min = value;
+    if (value > max) max = value;
+  }
+  return diffs.length + " shared-seed diffs range " + signedScore(min) + " to " + signedScore(max);
+}
+
+export function crownHeldRowLabel(contest: CrownContest, isRawLeader: boolean): string {
+  return (
+    (isRawLeader ? "#1 · " : "") +
+    signedScore(contest.challengerLead) +
+    " / need " +
+    signedScore(contest.requiredLead)
+  );
 }
 
 // ── Rollout quorum readers (monolith 3746–3759) ──────────────

@@ -23,6 +23,10 @@ import {
   compositeEquationText,
   continualSampleCount,
   continualWaves,
+  crownContest,
+  crownHeldRowLabel,
+  crownSeedDiffsText,
+  crownWhyHigh,
   curveV3ScoreAdjustment,
   efficiencyTieBreakChipLabel,
   efficiencyBoardStatus,
@@ -235,6 +239,46 @@ describe("dethroneFloor", () => {
     expect(dethroneFloor({ margin: 0.02, dethrone_z: 1.96 }, { composite: 0.9 })?.z).toBe(1.96);
     expect(dethroneFloor({ margin: 0.02, dethrone_z: 0 }, { composite: 0.9 })?.z).toBeNull();
     expect(dethroneFloor({ margin: 0.02 }, { composite: 0.9 })?.z).toBeNull();
+  });
+
+  it("names the statistical band, not the flat margin, as the held-crown gate", () => {
+    const contest = crownContest(
+      {
+        method: "paired",
+        challenger_lead: 0.046535,
+        required_lead: 0.070822,
+        margin_lead: 0.007,
+        statistical_lead: 0.13927208,
+        paired_standard_error: 0.084922,
+        shared_seed_count: 2,
+        seed_differences: [0.167, -0.074],
+      },
+      { dethrone_z: 1.64 },
+    );
+    expect(contest?.bindingTerm).toBe("statistical");
+    expect(contest?.shortfall).toBeCloseTo(0.024287, 6);
+    expect(crownWhyHigh(contest!)).toContain("0.007 flat margin is not the gate");
+    expect(crownWhyHigh(contest!)).toContain("2 shared seeds");
+    expect(crownWhyHigh(contest!)).toContain("0.084922");
+    expect(crownSeedDiffsText(contest!.seedDifferences!)).toBe(
+      "Shared-seed diffs: +0.167000 · -0.074000",
+    );
+    expect(crownHeldRowLabel(contest!, true)).toBe("#1 · +0.046535 / need +0.070822");
+  });
+
+  it("derives paired SE from statistical_lead when the payload omits it", () => {
+    const contest = crownContest(
+      {
+        method: "paired",
+        challenger_lead: 0.005047,
+        required_lead: 0.005458,
+        margin_lead: 0.007,
+        statistical_lead: 0.0164,
+      },
+      { dethrone_z: 1.64 },
+    );
+    expect(contest?.pairedStandardError).toBeCloseTo(0.01, 12);
+    expect(contest?.bindingTerm).toBe("statistical");
   });
 
   it("measures the champion by its settled composite mid-rollout", () => {
