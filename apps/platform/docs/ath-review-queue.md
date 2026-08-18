@@ -21,6 +21,7 @@ parameter:
 | `copy` | the anti-copy gate at quorum, or a manual operator hold |
 | `benchmark_overfit` | the transform audit |
 | `deferred_source_review` | the score-qualified source review, in enforce mode |
+| `anomalous_score` | the out-of-band composite escalation at finalization (bench v12+), in enforce mode |
 
 `review_kind` postdates the holds it describes, so the oldest rows carry no key
 at all and both the projection and the filter treat a missing or unrecognized

@@ -32,7 +32,7 @@ func TestGenerateForVersionUsesExplicitV9Stream(t *testing.T) {
 	if v9.GeneratedAt != v9Epoch.Format("2006-01-02T15:04:05Z07:00") {
 		t.Fatalf("v9 epoch = %q, want %q", v9.GeneratedAt, v9Epoch)
 	}
-	if _, err := GenerateForVersion(seed, 30, protocol.BenchVersionV11+1); err == nil {
+	if _, err := GenerateForVersion(seed, 30, protocol.BenchVersionV12+1); err == nil {
 		t.Fatal("unsupported benchmark version accepted")
 	}
 }

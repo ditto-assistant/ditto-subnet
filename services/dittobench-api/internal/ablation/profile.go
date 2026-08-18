@@ -62,7 +62,7 @@ func (p CoordinatorPolicy) validate() error {
 }
 
 func (p FrozenProfile) validate() error {
-	if p.ContractVersion != ProfileContractVersion || p.BenchVersion != BenchVersionV9 {
+	if p.ContractVersion != ProfileContractVersion || !ConfirmationBenchVersionSupported(p.BenchVersion) {
 		return fmt.Errorf("invalid frozen ablation profile contract")
 	}
 	if !validateRevision(p.Revision) {

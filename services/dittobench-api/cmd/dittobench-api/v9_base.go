@@ -216,9 +216,49 @@ func applyV9BaseEvidence(
 			"v9 case attribution unavailable: trusted relay windows did not settle",
 		)
 	}
-	gates, err := v9base.BuildGateEvidence(req.BenchVersion, perCase, model, true)
+	dependence := v9DependenceTelemetryForVersion(req.BenchVersion, perCase, transcripts)
+	gates, err := v9base.BuildGateEvidence(req.BenchVersion, perCase, model, true, dependence...)
 	if err != nil {
 		return protocol.ScoreReport{}, fmt.Errorf("build v9 score-gate evidence: %w", err)
+	}
+	// Layer the v12 inference-latency review gate on top (no-op for v9..v11). It
+	// reads the trusted per-case wall time and flags a run whose inference-
+	// required, model-reached cases are mostly sub-floor -- an in-memory parser
+	// emulating the model. Under the default review posture it never zeroes the
+	// composite; it emits signed evidence and a review routing signal.
+	latencyCfg := v12LatencyGateConfigFromEnv()
+	latency := v12InferenceLatencyTelemetry(req.BenchVersion, perCase, transcripts, latencyCfg.FloorMS)
+	gates, err = v9base.AttachInferenceLatencyGate(req.BenchVersion, gates, latency, latencyCfg)
+	if err != nil {
+		return protocol.ScoreReport{}, fmt.Errorf("attach v12 inference-latency gate: %w", err)
+	}
+	if req.BenchVersion >= protocol.BenchVersionV12 && gates.InferenceLatency.Result == scoregates.ResultLatencyImplausible {
+		log.Printf(
+			"run %s: v12 inference-latency %s: %d/%d eligible case(s) sub-%dms (%d bps >= %d bps threshold)",
+			report.RunID, gates.InferenceLatency.Posture,
+			gates.InferenceLatency.FlaggedCases, gates.InferenceLatency.EligibleCases,
+			gates.InferenceLatency.FloorMS, gates.InferenceLatency.SubFloorBPS, gates.InferenceLatency.ThresholdBPS,
+		)
+	}
+	// Layer the v12 Class-D answer-stuffing gate on top (no-op for v9..v11). It
+	// reads the two per-case telemetry fields the scorer's provenance pass wrote
+	// and flags a run whose COMPUTED-answer cases were fed the finished answer
+	// through the model input above the run-level stuffed-share threshold. Under
+	// the default enforce posture it zeroes the composite; the gate is fail-open on
+	// incomplete capture and excludes verbatim-recall cases entirely.
+	stuffingCfg := v12AnswerStuffingConfigFromEnv()
+	stuffing := v12AnswerStuffingTelemetry(req.BenchVersion, perCase, transcripts)
+	gates, err = v9base.AttachAnswerStuffingGate(req.BenchVersion, gates, stuffing, stuffingCfg)
+	if err != nil {
+		return protocol.ScoreReport{}, fmt.Errorf("attach v12 answer-stuffing gate: %w", err)
+	}
+	if req.BenchVersion >= protocol.BenchVersionV12 && gates.AnswerStuffing.Result == scoregates.ResultAnswerStuffed {
+		log.Printf(
+			"run %s: v12 answer-stuffing %s: %d/%d computed case(s) stuffed (%d bps >= %d bps threshold)",
+			report.RunID, gates.AnswerStuffing.Posture,
+			gates.AnswerStuffing.StuffedCases, gates.AnswerStuffing.EligibleCases,
+			gates.AnswerStuffing.StuffedBPS, gates.AnswerStuffing.ThresholdBPS,
+		)
 	}
 	details, digest, effective, err := v9base.Build(v9base.Inputs{
 		RunID: report.RunID, BenchVersion: req.BenchVersion, ArtifactSHA256: artifactSHA256,
@@ -260,4 +300,176 @@ func v9AggregateModelTelemetry(
 		DistinctCaseAttributionComplete: attributionComplete,
 		SuccessfulDistinctCases:         successfulCases,
 	}
+}
+
+// v9DependenceTelemetryForVersion is the SINGLE integration point for the Bench
+// v12 causal model-dependence gate (issue #532). For every model-reached,
+// non-excluded scored case it reads the relay's counterfactual verdict
+// (CaseExecution.ModelCounterfactualObserved / ModelCounterfactualDependent):
+// the case was re-run under FULL model ablation (no usable completion) and its
+// answer graded against the same expected answer. The verdict is
+// CORRECTNESS-preserved:
+//
+//   - ModelCounterfactualObserved=true, ModelCounterfactualDependent=&true:
+//     administered, clean-correct, ablated INCORRECT -> DEPENDENT (the agent
+//     needed the model). Counted in EligibleCases AND DependentCases.
+//   - ...Dependent=&false: administered, clean-correct, ablated STILL correct ->
+//     INDEPENDENT (a launderer recovered the answer with no working model).
+//     Counted in EligibleCases only.
+//   - ...Observed=true, Dependent=nil: administered but the clean run was already
+//     incorrect -> excluded from the dependent/independent tally (kept out of the
+//     denominator), yet it still counts toward slice-attribution completeness.
+//   - ...Observed=false: NOT administered -> pending; the reader keeps
+//     SliceAttributionComplete false so the gate fails closed.
+//
+// A launderer stays correct under ablation, so DependentCases stays low against
+// EligibleCases and the dependent share falls below threshold -> the gate floors
+// the composite; a genuine agent's correctness collapses under ablation, so
+// DependentCases dominates and it passes.
+//
+// The gate consumes this aggregate as trusted evidence. SliceAttributionComplete
+// is the one trust bit that requires the relay: it is true only once EVERY
+// eligible model-reached case has been administered a verdict. Until the relay
+// populates the per-case CaseExecution fields, at least one eligible case lacks a
+// verdict (or none exist), SliceAttributionComplete is false, and the gate
+// publishes insufficient_evidence with factor 0 -- a signed, finalizable 0.00
+// rather than a spurious pass. Returns an empty slice for bench_version<12 so
+// v9..v11 evidence is byte-identical.
+func v9DependenceTelemetryForVersion(
+	benchVersion int,
+	perCase []protocol.CaseScore,
+	transcripts []transcriptCase,
+) []v9base.ModelDependenceTelemetry {
+	if benchVersion < protocol.BenchVersionV12 {
+		return nil
+	}
+	// Misaligned transcripts cannot be trusted to attribute counterfactuals;
+	// leave telemetry incomplete so BuildGateEvidence fails closed.
+	if len(perCase) != len(transcripts) {
+		return []v9base.ModelDependenceTelemetry{{}}
+	}
+	eligible, dependent, pending, modelReached := 0, 0, 0, 0
+	for index, score := range perCase {
+		if v9base.ExcludedFromModelPopulation(score) {
+			continue
+		}
+		execution := transcripts[index].Execution
+		if !execution.ModelInferenceObserved {
+			// A case that never reached the model cannot depend on it; it is not
+			// part of the counterfactual slice.
+			continue
+		}
+		modelReached++
+		if !execution.ModelCounterfactualObserved {
+			// The counterfactual was never administered for this case.
+			pending++
+			continue
+		}
+		// Administered. A nil verdict is an administered-but-clean-incorrect case,
+		// excluded from the dependent/independent tally but NOT pending.
+		if execution.ModelCounterfactualDependent != nil {
+			eligible++
+			if *execution.ModelCounterfactualDependent {
+				dependent++
+			}
+		}
+	}
+	return []v9base.ModelDependenceTelemetry{{
+		EligibleCases:            eligible,
+		DependentCases:           dependent,
+		TelemetryComplete:        true,
+		SliceAttributionComplete: modelReached > 0 && pending == 0,
+	}}
+}
+
+// v12AnswerStuffingTelemetry is the SINGLE integration point for the Bench v12
+// Class-D answer-stuffing gate. For every model-reached, non-excluded scored case
+// it reads the two per-case telemetry fields the scorer's provenance pass wrote
+// (CaseExecution.AnswerStuffObserved / AnswerStuffed):
+//
+//   - Observed=false: the broker's clean-pass I/O for this model-reached case was
+//     unavailable or truncated -> PENDING; the reader keeps AttributionComplete
+//     false so the gate fails OPEN (a detection gate never penalizes an honest run
+//     for missing capture).
+//   - Observed=true, AnswerStuffed=nil: settled, but the case is verbatim-recall
+//     (non-computed) -> excluded from the stuffed/clean tally (kept out of the
+//     denominator), yet counted as settled.
+//   - Observed=true, AnswerStuffed=&true: a COMPUTED case whose finished answer
+//     appeared in a model input before any completion -> EligibleCases AND
+//     StuffedCases.
+//   - Observed=true, AnswerStuffed=&false: a COMPUTED case with clean provenance
+//     -> EligibleCases only.
+//   - Observed=true, AnswerStuffReviewRequired=true: a COMPUTED case whose capture
+//     overflowed the per-side ceiling (a prompt beyond the model's full context
+//     window). NOT pending (it does not fail the run open) but sets ReviewRequired,
+//     routing the run to human review with a full factor. A legitimate full-context
+//     prompt can never reach the ceiling, so this never fires on honest deep-RAG.
+//
+// Returns an empty slice's zero aggregate for bench_version<12 so v9..v11 evidence
+// is byte-identical. Unlike model_dependence, an all-clean run (0 stuffed) is a
+// PASS: this gate detects a bad thing rather than proving a good thing, so absence
+// of stuffing is not fail-closed.
+func v12AnswerStuffingTelemetry(
+	benchVersion int,
+	perCase []protocol.CaseScore,
+	transcripts []transcriptCase,
+) v9base.AnswerStuffingTelemetry {
+	if benchVersion < protocol.BenchVersionV12 {
+		return v9base.AnswerStuffingTelemetry{}
+	}
+	telemetry := v9base.AnswerStuffingTelemetry{
+		AdministeredCases: len(perCase),
+		TelemetryComplete: true,
+	}
+	if len(perCase) != len(transcripts) {
+		// Misaligned transcripts cannot attribute provenance; leave attribution
+		// incomplete so the gate fails open.
+		return telemetry
+	}
+	pending := 0
+	for index, score := range perCase {
+		if v9base.ExcludedFromModelPopulation(score) {
+			continue
+		}
+		execution := transcripts[index].Execution
+		if !execution.ModelInferenceObserved {
+			// A case that never reached the model cannot be an answer-stuffing case.
+			continue
+		}
+		if !execution.AnswerStuffObserved {
+			// Provenance was not settled for this model-reached case (a genuine capture
+			// gap). Fail OPEN.
+			pending++
+			continue
+		}
+		if execution.AnswerStuffReviewRequired {
+			// Settled as "capture overflowed the per-side ceiling on a COMPUTED case"
+			// (a pathological prompt beyond the model's full context window). Not
+			// pending -- so it does not fail the run open -- but it routes the run to
+			// human review with a full factor. A legitimate full-context prompt can
+			// never reach the ceiling, so this never fires on honest deep-RAG.
+			telemetry.ReviewRequired = true
+			continue
+		}
+		// Settled. A nil verdict is a verbatim-recall (non-computed) case, excluded
+		// from the tally but NOT pending.
+		if execution.AnswerStuffed != nil {
+			telemetry.EligibleCases++
+			if *execution.AnswerStuffed {
+				telemetry.StuffedCases++
+			}
+		}
+		// The LOOSE systematic-review signal is a superset of the provable slice: it
+		// counts every COMPUTED (not verbatim-recall) case, regardless of whether the
+		// answer value also appears in seeded memory. A coinciding-value stuffer that
+		// the provable slice excludes still lands here, so the run can route to review.
+		if execution.AnswerStuffLoose != nil {
+			telemetry.LooseEligibleCases++
+			if *execution.AnswerStuffLoose {
+				telemetry.LooseStuffedCases++
+			}
+		}
+	}
+	telemetry.AttributionComplete = pending == 0
+	return telemetry
 }

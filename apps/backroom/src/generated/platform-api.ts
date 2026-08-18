@@ -5396,7 +5396,7 @@ export interface components {
              * @default copy
              * @enum {string}
              */
-            review_kind: "copy" | "benchmark_overfit" | "deferred_source_review";
+            review_kind: "copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score";
         };
         /** AdminCopyReviewItem */
         AdminCopyReviewItem: {
@@ -5465,7 +5465,7 @@ export interface components {
             /** Offset */
             offset: number;
             /** Review Kind */
-            review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review") | null;
+            review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
             /** Rollout Bench Version */
             rollout_bench_version?: number | null;
         };
@@ -15256,7 +15256,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11;
+            bench_version: 9 | 10 | 11 | 12;
             score_gates: components["schemas"]["PublicV9ScoreGateEvidence"];
         };
         /**
@@ -18280,7 +18280,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11;
+            bench_version: 9 | 10 | 11 | 12;
             /** Dataset Sha256 */
             dataset_sha256: string;
             /** Effective Composite Micros */
@@ -18781,7 +18781,7 @@ export interface components {
              * Bench Version
              * @enum {integer}
              */
-            bench_version: 9 | 10 | 11;
+            bench_version: 9 | 10 | 11 | 12;
             model_use: components["schemas"]["V9ModelUseGate"];
             /**
              * Rollout Mode
@@ -19906,7 +19906,7 @@ export interface operations {
                 offset?: number;
                 include?: "current_comparison" | null;
                 generation?: "active" | "rollout" | "history" | "all";
-                review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review") | null;
+                review_kind?: ("copy" | "benchmark_overfit" | "deferred_source_review" | "anomalous_score") | null;
             };
             header?: {
                 authorization?: string | null;

@@ -9,7 +9,7 @@ import (
 
 func TestHandleGenerateRequiresSupportedVersion(t *testing.T) {
 	for _, path := range []string{
-		"/generate?seed=42&run_size=small&bench_version=12",
+		"/generate?seed=42&run_size=small&bench_version=13",
 		"/generate?seed=42&run_size=small&bench_version=garbage",
 	} {
 		rr := httptest.NewRecorder()

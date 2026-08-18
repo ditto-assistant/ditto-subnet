@@ -99,6 +99,23 @@ import (
 //   - per-seed composed stored-instruction injection markers instead of the
 //     fixed marker list.
 //
+// v12 is the ANTI-KV-SUBSTRATE release. It keeps every v11 program semantic and
+// hardens the one surface a template-fitting harness still parsed instead of
+// reading: the byte-stable key=value ledger. All levers are gated on
+// bench_version >= 12 so v11 and earlier regenerate byte-identically:
+//   - amounts move entirely into composed prose (no label=amount ledger row),
+//     and the record order is a per-seed permutation, so role binding requires
+//     reading randomized prose rather than counting rows;
+//   - uniform value formatting removes the v11 shape tells (no %+d sign, no
+//     second -> correction token);
+//   - the larger-minus-settled shape is rebalanced so max genuinely differs
+//     from the plain subtract on every such case;
+//   - descriptive subject binding is universal and relational (the workstream
+//     carrying a settled payment), never an alias echo or a printed value;
+//   - injection markers and tool-routing cues are assembled compositionally per
+//     seed instead of drawn from finite variant banks, and labels sample a
+//     widened superset with opaque, role-free session identifiers.
+//
 // The deterministic grader, run sizes, inference boundary, LongMemEval
 // deep-history floors, and the v9 signed-evidence/score-gate/curve-v3
 // efficiency stack all carry forward unchanged.
@@ -113,6 +130,7 @@ const (
 	BenchVersionV9      = 9
 	BenchVersionV10     = 10
 	BenchVersionV11     = 11
+	BenchVersionV12     = 12
 	CurrentBenchVersion = BenchVersionV8
 
 	// BenchVersion is retained as a source-compatible alias for consumers that
@@ -132,6 +150,7 @@ var (
 	datasetEpochV9  = time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV10 = time.Date(2027, 2, 1, 0, 0, 0, 0, time.UTC)
 	datasetEpochV11 = time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+	datasetEpochV12 = time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC)
 
 	// DatasetEpoch and DatasetEpochRFC3339 retain the v2 values for legacy
 	// package callers. Canonical versioned generation uses DatasetEpochForVersion.
@@ -145,7 +164,8 @@ func SupportedBenchVersion(version int) bool {
 		version == BenchVersionV4 || version == BenchVersionV5 ||
 		version == BenchVersionV6 || version == BenchVersionV7 ||
 		version == BenchVersionV8 || version == BenchVersionV9 ||
-		version == BenchVersionV10 || version == BenchVersionV11
+		version == BenchVersionV10 || version == BenchVersionV11 ||
+		version == BenchVersionV12
 }
 
 // DatasetEpochForVersion returns the immutable reference instant for version.
@@ -171,8 +191,10 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 		return datasetEpochV10, nil
 	case BenchVersionV11:
 		return datasetEpochV11, nil
+	case BenchVersionV12:
+		return datasetEpochV12, nil
 	default:
-		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)", version)
+		return time.Time{}, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)", version)
 	}
 }
 
@@ -180,7 +202,7 @@ func DatasetEpochForVersion(version int) (time.Time, error) {
 // It is deterministic and retains the exact historical v2 mixing function.
 func RotateSeedForVersion(seed int64, version int) (int64, error) {
 	if !SupportedBenchVersion(version) {
-		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)", version)
+		return 0, fmt.Errorf("unsupported bench_version %d (supported: 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)", version)
 	}
 	v := uint64(version)
 	x := uint64(seed) ^ (v * 0x9E3779B97F4A7C15)

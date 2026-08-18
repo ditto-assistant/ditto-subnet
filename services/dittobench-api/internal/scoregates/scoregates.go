@@ -20,6 +20,7 @@ const (
 	BenchVersionV9  = 9
 	BenchVersionV10 = 10
 	BenchVersionV11 = 11
+	BenchVersionV12 = 12
 	BasisPointScale = 10_000
 	MaxCaseCount    = 10_000_000
 	MaxUsageCount   = uint64(9_007_199_254_740_991)
@@ -27,9 +28,12 @@ const (
 
 // SupportedBenchVersion reports whether the gate contract applies to a bench
 // version. The v9 contract carries forward unchanged to v10 and v11; the
-// evidence records the run's actual version so digests stay version-bound.
+// evidence records the run's actual version so digests stay version-bound. v12
+// adds the causal model-dependence gate on top of the identical v9 stack: the
+// extra gate is emitted, canonicalized, and multiplied into the composite only
+// for bench_version>=12, so v9..v11 evidence and digests stay byte-identical.
 func SupportedBenchVersion(benchVersion int) bool {
-	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV11
+	return benchVersion >= BenchVersionV9 && benchVersion <= BenchVersionV12
 }
 
 var (
@@ -65,6 +69,11 @@ type Thresholds struct {
 	Profile                      ThresholdProfile `json:"profile"`
 	ModelUseCoverageBPS          int              `json:"model_use_coverage_bps"`
 	AuthoritativeToolCoverageBPS int              `json:"authoritative_tool_coverage_bps"`
+	// ModelDependenceCoverageBPS is the minimum fraction of the counterfactual
+	// slice whose scored answer must CHANGE under a perturbed model completion.
+	// It is defined only for bench_version>=12; pre-v12 thresholds must leave it
+	// zero so their evidence and digests stay byte-identical.
+	ModelDependenceCoverageBPS int `json:"model_dependence_coverage_bps,omitempty"`
 }
 
 type ExclusionCounts struct {
@@ -96,6 +105,28 @@ type AuthoritativeToolInput struct {
 	MatchedExecutions    int  `json:"matched_executions"`
 	UnexpectedExecutions int  `json:"unexpected_executions"`
 	TelemetryComplete    bool `json:"telemetry_complete"`
+}
+
+// ModelDependenceInput carries the trusted counterfactual observations that
+// prove a run's scored answers are causally downstream of the model's
+// completions (issue #532). On a deterministic seeded slice of scored cases,
+// the relay records the scored answer under the clean model completion and
+// again under a deterministically perturbed completion; a case is DEPENDENT
+// when those two answers differ. A harness that computes answers in
+// deterministic code (e.g. a KV-parser) ignores the completion, so its clean
+// and counterfactual answers are identical and DependentCases stays zero.
+//
+// This gate is defined only for bench_version>=12. SliceAttributionComplete is
+// the single trust bit the relay/validator must set: it is true only when the
+// counterfactual comparison settled for every eligible slice case. Until the
+// relay populates real per-case counterfactual evidence it stays false, and the
+// gate fails closed (insufficient_evidence -> factor 0).
+type ModelDependenceInput struct {
+	AdministeredCases        int  `json:"administered_cases"`
+	EligibleCases            int  `json:"eligible_cases"`
+	DependentCases           int  `json:"dependent_cases"`
+	TelemetryComplete        bool `json:"telemetry_complete"`
+	SliceAttributionComplete bool `json:"slice_attribution_complete"`
 }
 
 type ModelUseEvidence struct {
@@ -131,6 +162,24 @@ type AuthoritativeToolEvidence struct {
 	FactorBPS            int    `json:"factor_bps"`
 }
 
+// ModelDependenceEvidence is the signed, pure evidence for the v12 causal
+// model-dependence gate. It mirrors the model_use schema so the public
+// projection and validator consume it uniformly. DependenceBPS is the fraction
+// of the eligible counterfactual slice whose scored answer changed under a
+// perturbed completion. For bench_version<12 every field is the zero value and
+// the gate is neither canonicalized nor multiplied into the composite.
+type ModelDependenceEvidence struct {
+	AdministeredCases        int    `json:"administered_cases"`
+	EligibleCases            int    `json:"eligible_cases"`
+	DependentCases           int    `json:"dependent_cases"`
+	IndependentCases         int    `json:"independent_cases"`
+	SliceAttributionComplete bool   `json:"slice_attribution_complete"`
+	DependenceBPS            int    `json:"dependence_bps"`
+	ThresholdBPS             int    `json:"threshold_bps"`
+	Result                   Result `json:"result"`
+	FactorBPS                int    `json:"factor_bps"`
+}
+
 type Evidence struct {
 	SchemaVersion     int                       `json:"schema_version"`
 	BenchVersion      int                       `json:"bench_version"`
@@ -138,6 +187,21 @@ type Evidence struct {
 	ThresholdProfile  ThresholdProfile          `json:"threshold_profile"`
 	ModelUse          ModelUseEvidence          `json:"model_use"`
 	AuthoritativeTool AuthoritativeToolEvidence `json:"authoritative_tool"`
+	// ModelDependence is emitted only for bench_version>=12; it is the zero
+	// value for v9..v11 and is excluded from those versions' canonical bytes.
+	ModelDependence ModelDependenceEvidence `json:"model_dependence,omitzero"`
+	// InferenceLatency is the v12 inference-latency review gate (see
+	// inference_latency.go). It is attached after Build via AttachInferenceLatency
+	// for bench_version>=12; it is the zero value ("not administered") for v9..v11
+	// and for a v12 Evidence built without the gate, and in both cases it is
+	// excluded from the canonical bytes and never affects the combined factor.
+	InferenceLatency InferenceLatencyEvidence `json:"inference_latency,omitzero"`
+	// AnswerStuffing is the v12 Class-D answer-stuffing detection gate (see
+	// answer_stuffing.go). It is attached after Build via AttachAnswerStuffing for
+	// bench_version>=12; it is the zero value ("not administered") for v9..v11 and
+	// for a v12 Evidence built without the gate, and in both cases it is excluded
+	// from the canonical bytes and never affects the combined factor.
+	AnswerStuffing AnswerStuffingEvidence `json:"answer_stuffing,omitzero"`
 }
 
 type Score struct {
@@ -145,15 +209,23 @@ type Score struct {
 	CompositeStderr float64
 }
 
-func Build(benchVersion int, model ModelUseInput, tool AuthoritativeToolInput, thresholds Thresholds, mode RolloutMode) (Evidence, error) {
+// Build assembles trusted, version-bound gate evidence. The optional dependence
+// argument carries the v12 counterfactual observations: it must be absent for
+// bench_version<12 and present exactly once for bench_version>=12. Keeping it
+// variadic leaves every v9..v11 caller source- and behavior-identical.
+func Build(benchVersion int, model ModelUseInput, tool AuthoritativeToolInput, thresholds Thresholds, mode RolloutMode, dependence ...ModelDependenceInput) (Evidence, error) {
 	if !SupportedBenchVersion(benchVersion) {
 		return Evidence{}, fmt.Errorf("%w: bench=%d", ErrUnsupportedVersion, benchVersion)
 	}
-	if err := validateThresholds(thresholds); err != nil {
+	if err := validateThresholds(thresholds, benchVersion); err != nil {
 		return Evidence{}, err
 	}
 	if mode != RolloutShadow && mode != RolloutEnforce {
 		return Evidence{}, invalid("rollout mode must be shadow or enforce")
+	}
+	dependenceEvidence, err := buildModelDependenceForVersion(benchVersion, thresholds.ModelDependenceCoverageBPS, dependence)
+	if err != nil {
+		return Evidence{}, err
 	}
 	modelEvidence, err := buildModelUse(model, thresholds.ModelUseCoverageBPS)
 	if err != nil {
@@ -167,7 +239,77 @@ func Build(benchVersion int, model ModelUseInput, tool AuthoritativeToolInput, t
 		SchemaVersion: SchemaVersion, BenchVersion: benchVersion,
 		RolloutMode: mode, ThresholdProfile: thresholds.Profile,
 		ModelUse: modelEvidence, AuthoritativeTool: toolEvidence,
+		ModelDependence: dependenceEvidence,
 	}, nil
+}
+
+// buildModelDependenceForVersion enforces the version contract for the optional
+// dependence input and delegates to buildModelDependence for bench_version>=12.
+func buildModelDependenceForVersion(benchVersion, threshold int, dependence []ModelDependenceInput) (ModelDependenceEvidence, error) {
+	if benchVersion < BenchVersionV12 {
+		if len(dependence) != 0 {
+			return ModelDependenceEvidence{}, invalid("model-dependence evidence is defined only for bench v%d and later", BenchVersionV12)
+		}
+		return ModelDependenceEvidence{}, nil
+	}
+	if len(dependence) != 1 {
+		return ModelDependenceEvidence{}, fmt.Errorf("%w: model-dependence", ErrTelemetryUnavailable)
+	}
+	return buildModelDependence(dependence[0], threshold)
+}
+
+// buildModelDependence turns the trusted counterfactual slice observations into
+// pure, version-bound evidence. It fails closed on incomplete telemetry, and
+// publishes a zero factor whenever the answers did not move (a KV-parser and
+// any other model-independent harness) or the counterfactual comparison did not
+// settle for every eligible case.
+func buildModelDependence(in ModelDependenceInput, threshold int) (ModelDependenceEvidence, error) {
+	if !in.TelemetryComplete {
+		return ModelDependenceEvidence{}, fmt.Errorf("%w: model-dependence", ErrTelemetryUnavailable)
+	}
+	caseCounts := []struct {
+		name  string
+		count int
+	}{
+		{"dependence.administered_cases", in.AdministeredCases},
+		{"dependence.eligible_cases", in.EligibleCases},
+		{"dependence.dependent_cases", in.DependentCases},
+	}
+	for _, item := range caseCounts {
+		if err := validateBoundedCases(item.name, item.count); err != nil {
+			return ModelDependenceEvidence{}, err
+		}
+	}
+	if in.EligibleCases > in.AdministeredCases {
+		return ModelDependenceEvidence{}, invalid("dependence eligible_cases exceed administered_cases")
+	}
+	if in.DependentCases > in.EligibleCases {
+		return ModelDependenceEvidence{}, invalid("dependence dependent_cases exceed eligible_cases")
+	}
+	e := ModelDependenceEvidence{
+		AdministeredCases: in.AdministeredCases, EligibleCases: in.EligibleCases,
+		DependentCases: in.DependentCases, IndependentCases: in.EligibleCases - in.DependentCases,
+		SliceAttributionComplete: in.SliceAttributionComplete, ThresholdBPS: threshold,
+	}
+	if !in.SliceAttributionComplete {
+		// Fail closed: without a settled per-case counterfactual comparison the
+		// run has not proven its answers depend on the model at all.
+		e.Result, e.FactorBPS, e.DependenceBPS = ResultInsufficientEvidence, 0, 0
+		return e, nil
+	}
+	if in.EligibleCases == 0 {
+		// The counterfactual slice settled but had no scored model cases to
+		// perturb; the model_use gate already governs the zero-inference outcome.
+		e.DependenceBPS, e.Result, e.FactorBPS = BasisPointScale, ResultNotApplicable, BasisPointScale
+		return e, nil
+	}
+	e.DependenceBPS = coverageBPS(in.DependentCases, in.EligibleCases)
+	if e.DependenceBPS < threshold {
+		e.Result, e.FactorBPS = ResultBelowThreshold, 0
+	} else {
+		e.Result, e.FactorBPS = ResultPassed, BasisPointScale
+	}
+	return e, nil
 }
 
 func buildModelUse(in ModelUseInput, threshold int) (ModelUseEvidence, error) {
@@ -288,6 +430,16 @@ func (e Evidence) Validate() error {
 	if e.SchemaVersion != SchemaVersion || !SupportedBenchVersion(e.BenchVersion) {
 		return fmt.Errorf("%w: schema=%d bench=%d", ErrUnsupportedVersion, e.SchemaVersion, e.BenchVersion)
 	}
+	var dependence []ModelDependenceInput
+	if e.BenchVersion >= BenchVersionV12 {
+		dependence = []ModelDependenceInput{{
+			AdministeredCases:        e.ModelDependence.AdministeredCases,
+			EligibleCases:            e.ModelDependence.EligibleCases,
+			DependentCases:           e.ModelDependence.DependentCases,
+			TelemetryComplete:        true,
+			SliceAttributionComplete: e.ModelDependence.SliceAttributionComplete,
+		}}
+	}
 	want, err := Build(
 		e.BenchVersion,
 		ModelUseInput{
@@ -308,11 +460,63 @@ func (e Evidence) Validate() error {
 			Profile:                      e.ThresholdProfile,
 			ModelUseCoverageBPS:          e.ModelUse.ThresholdBPS,
 			AuthoritativeToolCoverageBPS: e.AuthoritativeTool.ThresholdBPS,
+			ModelDependenceCoverageBPS:   e.ModelDependence.ThresholdBPS,
 		},
 		e.RolloutMode,
+		dependence...,
 	)
 	if err != nil {
 		return err
+	}
+	// The inference-latency gate is attached after Build (AttachInferenceLatency),
+	// so reconstruct it here from its own echoed inputs and fold it into want
+	// before the equality check. A zero-value ("not administered") latency
+	// evidence is left untouched, so a v12 Evidence built without the gate still
+	// matches want exactly.
+	if e.BenchVersion >= BenchVersionV12 && e.InferenceLatency.administered() {
+		lat, latErr := buildInferenceLatency(InferenceLatencyInput{
+			AdministeredCases:   e.InferenceLatency.AdministeredCases,
+			EligibleCases:       e.InferenceLatency.EligibleCases,
+			FlaggedCases:        e.InferenceLatency.FlaggedCases,
+			FloorMS:             e.InferenceLatency.FloorMS,
+			ShareThresholdBPS:   e.InferenceLatency.ThresholdBPS,
+			Posture:             e.InferenceLatency.Posture,
+			TelemetryComplete:   true,
+			AttributionComplete: e.InferenceLatency.AttributionComplete,
+		})
+		if latErr != nil {
+			return latErr
+		}
+		want.InferenceLatency = lat
+	} else if e.InferenceLatency != (InferenceLatencyEvidence{}) {
+		return invalid("inference-latency gate is defined only for bench v%d and later", BenchVersionV12)
+	}
+	// The answer-stuffing gate is likewise attached after Build
+	// (AttachAnswerStuffing); reconstruct it from its own echoed inputs and fold it
+	// into want before the equality check. A zero-value ("not administered")
+	// answer-stuffing evidence is left untouched, so a v12 Evidence built without
+	// the gate still matches want exactly.
+	if e.BenchVersion >= BenchVersionV12 && e.AnswerStuffing.administered() {
+		stuffing, stuffErr := buildAnswerStuffing(AnswerStuffingInput{
+			AdministeredCases:       e.AnswerStuffing.AdministeredCases,
+			EligibleCases:           e.AnswerStuffing.EligibleCases,
+			StuffedCases:            e.AnswerStuffing.StuffedCases,
+			MinCases:                e.AnswerStuffing.MinCases,
+			ShareThresholdBPS:       e.AnswerStuffing.ThresholdBPS,
+			LooseEligibleCases:      e.AnswerStuffing.LooseEligibleCases,
+			LooseStuffedCases:       e.AnswerStuffing.LooseStuffedCases,
+			ReviewShareThresholdBPS: e.AnswerStuffing.ReviewShareThresholdBPS,
+			Posture:                 e.AnswerStuffing.Posture,
+			TelemetryComplete:       true,
+			AttributionComplete:     e.AnswerStuffing.AttributionComplete,
+			ReviewRequired:          e.AnswerStuffing.ReviewRequired,
+		})
+		if stuffErr != nil {
+			return stuffErr
+		}
+		want.AnswerStuffing = stuffing
+	} else if e.AnswerStuffing != (AnswerStuffingEvidence{}) {
+		return invalid("answer-stuffing gate is defined only for bench v%d and later", BenchVersionV12)
 	}
 	if e != want {
 		return invalid("derived evidence does not match trusted inputs")
@@ -327,7 +531,29 @@ func (e Evidence) CombinedFactorBPS() (int, error) {
 	if e.ModelUse.FactorBPS == 0 || e.AuthoritativeTool.FactorBPS == 0 {
 		return 0, nil
 	}
-	return BasisPointScale, nil
+	// The causal model-dependence gate multiplies in alongside model_use and
+	// authoritative_tool, but only for bench_version>=12 where it is emitted.
+	if e.BenchVersion >= BenchVersionV12 && e.ModelDependence.FactorBPS == 0 {
+		return 0, nil
+	}
+	// The inference-latency and answer-stuffing gates MULTIPLY in when administered
+	// (bench_version>=12) rather than only zeroing, so a graduated factor reduces the
+	// composite proportionally. Latency is binary today (full under review, zero
+	// under enforce). Answer-stuffing is graduated under its default PENALIZE posture:
+	// a capped, share-proportional factor that REDUCES -- never zeroes -- the
+	// composite (zero only under the opt-in enforce posture; full under review). The
+	// product preserves the binary gates (a full 10000 factor is identity, a 0 zeroes
+	// the run) while letting the penalize factor scale the score.
+	combined := BasisPointScale
+	if e.BenchVersion >= BenchVersionV12 {
+		if e.InferenceLatency.administered() {
+			combined = combined * e.InferenceLatency.FactorBPS / BasisPointScale
+		}
+		if e.AnswerStuffing.administered() {
+			combined = combined * e.AnswerStuffing.FactorBPS / BasisPointScale
+		}
+	}
+	return combined, nil
 }
 
 func ApplyForVersion(benchVersion int, score Score, evidence *Evidence) (Score, error) {
@@ -359,7 +585,13 @@ func ApplyForVersion(benchVersion int, score Score, evidence *Evidence) (Score, 
 	if factor == 0 {
 		return Score{}, nil
 	}
-	return score, nil
+	if factor >= BasisPointScale {
+		return score, nil
+	}
+	// Graduated penalty (answer-stuffing penalize posture): scale the composite by
+	// the combined factor rather than passing it through unchanged.
+	scale := float64(factor) / float64(BasisPointScale)
+	return Score{Composite: score.Composite * scale, CompositeStderr: score.CompositeStderr * scale}, nil
 }
 
 func (e Evidence) CanonicalBytes() ([]byte, error) {
@@ -375,6 +607,28 @@ func (e Evidence) CanonicalBytes() ([]byte, error) {
 	fmt.Fprintf(&b, "model.case_attribution_complete=%t\nmodel.request_coverage_bps=%d\nmodel.coverage_bps=%d\nmodel.threshold_bps=%d\nmodel.result=%s\nmodel.factor_bps=%d\n", e.ModelUse.CaseAttributionComplete, e.ModelUse.RequestCoverageBPS, e.ModelUse.CoverageBPS, e.ModelUse.ThresholdBPS, e.ModelUse.Result, e.ModelUse.FactorBPS)
 	fmt.Fprintf(&b, "tool.expected_executions=%d\ntool.matched_executions=%d\ntool.missing_executions=%d\ntool.unexpected_executions=%d\ntool.observed_executions=%d\n", e.AuthoritativeTool.ExpectedExecutions, e.AuthoritativeTool.MatchedExecutions, e.AuthoritativeTool.MissingExecutions, e.AuthoritativeTool.UnexpectedExecutions, e.AuthoritativeTool.ObservedExecutions)
 	fmt.Fprintf(&b, "tool.coverage_bps=%d\ntool.threshold_bps=%d\ntool.result=%s\ntool.factor_bps=%d\n", e.AuthoritativeTool.CoverageBPS, e.AuthoritativeTool.ThresholdBPS, e.AuthoritativeTool.Result, e.AuthoritativeTool.FactorBPS)
+	// The v12 causal model-dependence gate is appended only for bench_version>=12
+	// so v9..v11 canonical bytes, digests, and signatures stay byte-identical.
+	if e.BenchVersion >= BenchVersionV12 {
+		fmt.Fprintf(&b, "model_dependence.administered_cases=%d\nmodel_dependence.eligible_cases=%d\nmodel_dependence.dependent_cases=%d\nmodel_dependence.independent_cases=%d\n", e.ModelDependence.AdministeredCases, e.ModelDependence.EligibleCases, e.ModelDependence.DependentCases, e.ModelDependence.IndependentCases)
+		fmt.Fprintf(&b, "model_dependence.slice_attribution_complete=%t\nmodel_dependence.dependence_bps=%d\nmodel_dependence.threshold_bps=%d\nmodel_dependence.result=%s\nmodel_dependence.factor_bps=%d\n", e.ModelDependence.SliceAttributionComplete, e.ModelDependence.DependenceBPS, e.ModelDependence.ThresholdBPS, e.ModelDependence.Result, e.ModelDependence.FactorBPS)
+	}
+	// The v12 inference-latency gate is appended only for bench_version>=12 AND
+	// only when administered, so v9..v11 canonical bytes -- and a v12 Evidence
+	// built without the gate -- stay byte-identical.
+	if e.BenchVersion >= BenchVersionV12 && e.InferenceLatency.administered() {
+		fmt.Fprintf(&b, "inference_latency.administered_cases=%d\ninference_latency.eligible_cases=%d\ninference_latency.flagged_cases=%d\ninference_latency.unflagged_cases=%d\n", e.InferenceLatency.AdministeredCases, e.InferenceLatency.EligibleCases, e.InferenceLatency.FlaggedCases, e.InferenceLatency.UnflaggedCases)
+		fmt.Fprintf(&b, "inference_latency.floor_ms=%d\ninference_latency.attribution_complete=%t\ninference_latency.posture=%s\ninference_latency.sub_floor_bps=%d\ninference_latency.threshold_bps=%d\ninference_latency.result=%s\ninference_latency.factor_bps=%d\n", e.InferenceLatency.FloorMS, e.InferenceLatency.AttributionComplete, e.InferenceLatency.Posture, e.InferenceLatency.SubFloorBPS, e.InferenceLatency.ThresholdBPS, e.InferenceLatency.Result, e.InferenceLatency.FactorBPS)
+	}
+	// The v12 answer-stuffing gate is appended only for bench_version>=12 AND only
+	// when administered, so v9..v11 canonical bytes -- and a v12 Evidence built
+	// without the gate -- stay byte-identical.
+	if e.BenchVersion >= BenchVersionV12 && e.AnswerStuffing.administered() {
+		fmt.Fprintf(&b, "answer_stuffing.administered_cases=%d\nanswer_stuffing.eligible_cases=%d\nanswer_stuffing.stuffed_cases=%d\nanswer_stuffing.clean_cases=%d\n", e.AnswerStuffing.AdministeredCases, e.AnswerStuffing.EligibleCases, e.AnswerStuffing.StuffedCases, e.AnswerStuffing.CleanCases)
+		fmt.Fprintf(&b, "answer_stuffing.attribution_complete=%t\nanswer_stuffing.review_required=%t\nanswer_stuffing.posture=%s\nanswer_stuffing.stuffed_bps=%d\nanswer_stuffing.threshold_bps=%d\nanswer_stuffing.min_cases=%d\n", e.AnswerStuffing.AttributionComplete, e.AnswerStuffing.ReviewRequired, e.AnswerStuffing.Posture, e.AnswerStuffing.StuffedBPS, e.AnswerStuffing.ThresholdBPS, e.AnswerStuffing.MinCases)
+		fmt.Fprintf(&b, "answer_stuffing.loose_eligible_cases=%d\nanswer_stuffing.loose_stuffed_cases=%d\nanswer_stuffing.loose_stuffed_bps=%d\nanswer_stuffing.review_share_threshold_bps=%d\n", e.AnswerStuffing.LooseEligibleCases, e.AnswerStuffing.LooseStuffedCases, e.AnswerStuffing.LooseStuffedBPS, e.AnswerStuffing.ReviewShareThresholdBPS)
+		fmt.Fprintf(&b, "answer_stuffing.result=%s\nanswer_stuffing.factor_bps=%d\n", e.AnswerStuffing.Result, e.AnswerStuffing.FactorBPS)
+	}
 	return b.Bytes(), nil
 }
 
@@ -402,7 +656,7 @@ func (e Evidence) SignatureInput() (string, error) {
 	return "score-gates-v1:" + digest, nil
 }
 
-func validateThresholds(t Thresholds) error {
+func validateThresholds(t Thresholds, benchVersion int) error {
 	if !profileIDPattern.MatchString(t.Profile.ID) {
 		return invalid("threshold profile id must match %s", profileIDPattern)
 	}
@@ -417,6 +671,13 @@ func validateThresholds(t Thresholds) error {
 	}
 	if t.AuthoritativeToolCoverageBPS < 1 || t.AuthoritativeToolCoverageBPS > BasisPointScale {
 		return invalid("authoritative-tool threshold must be in [1,%d]", BasisPointScale)
+	}
+	if benchVersion >= BenchVersionV12 {
+		if t.ModelDependenceCoverageBPS < 1 || t.ModelDependenceCoverageBPS > BasisPointScale {
+			return invalid("model-dependence threshold must be in [1,%d]", BasisPointScale)
+		}
+	} else if t.ModelDependenceCoverageBPS != 0 {
+		return invalid("model-dependence threshold is defined only for bench v%d and later", BenchVersionV12)
 	}
 	return nil
 }

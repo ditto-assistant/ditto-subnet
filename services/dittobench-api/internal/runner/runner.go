@@ -331,6 +331,72 @@ type CaseExecution struct {
 	// evidence only: published for calibration, never consulted by scoring.
 	RelayInjectedDelayMs int64 `json:"relay_injected_delay_ms,omitempty"`
 	RelayDelayConsistent *bool `json:"relay_delay_consistent,omitempty"`
+	// ModelCounterfactualObserved reports that the trusted relay administered the
+	// Bench v12 causal-dependence counterfactual for this case: it re-ran the case
+	// under FULL model ablation (a completion with no usable content) and graded the
+	// result against the same expected answer. ModelCounterfactualDependent is the
+	// correctness-based verdict — true when the clean run was correct and the
+	// ablated run was INCORRECT (correctness collapsed, so the answer genuinely
+	// depended on the model), false when the clean run was correct and the ablated
+	// run was STILL correct (the agent recovered the answer with no working model,
+	// the launderer signature). It is nil in two distinct cases distinguished by
+	// ModelCounterfactualObserved: Observed=false means the counterfactual was NOT
+	// administered (pending); Observed=true with a nil verdict means it WAS
+	// administered but the clean run was already incorrect, so the case is excluded
+	// from the dependent/independent tally while still counting toward
+	// slice-attribution completeness. Populated only by the v12 relay path; consumed
+	// at cmd/dittobench-api/v9_base.go v9DependenceTelemetryForVersion, the single
+	// model-dependence integration point. Until the relay sets these, the v12 gate
+	// fails closed.
+	ModelCounterfactualObserved  bool  `json:"model_counterfactual_observed,omitempty"`
+	ModelCounterfactualDependent *bool `json:"model_counterfactual_dependent,omitempty"`
+	// AnswerStuffObserved reports that the trusted relay captured this case's
+	// ordered clean-pass model I/O (bounded/normalized) and the scorer settled the
+	// Bench v12 Class-D answer-stuffing provenance check for it. AnswerStuffed is
+	// the verdict for a COMPUTED-answer case: true when the finished answer value
+	// appeared in a model INPUT the harness sent BEFORE it appeared in any model
+	// COMPLETION (the harness fed the model its own computed answer to copy), false
+	// when the value's provenance is clean (only ever in a completion, or first
+	// produced by an earlier completion and reused later -- legit multi-turn). It
+	// is nil in two distinct cases distinguished by AnswerStuffObserved:
+	// Observed=false means the I/O was NOT captured/settled (pending); Observed=true
+	// with a nil verdict means the case is NOT part of the computed slice (its
+	// answer is verbatim-recall, or it never reached the model), so it is kept out
+	// of the stuffed/clean tally while still counting toward attribution
+	// completeness. The provenance value tokens are never stored here: only the
+	// bounded verdict is published, so the answer key and prompt never enter the
+	// transcript. Populated only by the v12 relay/scorer path; consumed at
+	// cmd/dittobench-api/v9_base.go v12AnswerStuffingTelemetry. Until the relay and
+	// scorer settle these, the v12 answer-stuffing gate fails OPEN (a detection
+	// gate never penalizes an honest run for missing capture).
+	AnswerStuffObserved bool  `json:"answer_stuff_observed,omitempty"`
+	AnswerStuffed       *bool `json:"answer_stuffed,omitempty"`
+	// AnswerStuffLoose is the "loose" answer-stuffing verdict for a COMPUTED case
+	// (an answer that is not verbatim-recall), set REGARDLESS of whether the answer
+	// value also appears elsewhere in the run's seeded memory: true when the finished
+	// answer value appeared in a model INPUT before any model COMPLETION. It is a
+	// SUPERSET of AnswerStuffed -- a case whose answer value ALSO appears in memory (a
+	// coinciding-value stuffer) cannot be auto-proven against RAG, so AnswerStuffed
+	// stays nil (excluded from the provable auto-gate) while this loose verdict is
+	// still recorded. Aggregated at cmd/dittobench-api/v9_base.go
+	// v12AnswerStuffingTelemetry into the loose systematic-review signal, which only
+	// ROUTES a run to human review (never an auto-zero). It is set only for a settled,
+	// fully-captured, computed, model-reached case by the v12 scorer path; nil
+	// otherwise. Populated only for bench_version>=12.
+	AnswerStuffLoose *bool `json:"answer_stuff_loose,omitempty"`
+	// AnswerStuffReviewRequired marks a COMPUTED, model-reached case whose clean-pass
+	// model I/O was captured but overflowed the per-side value-token ceiling (a
+	// prompt larger than the model's full context window -- pathological, not
+	// anything a legitimate deep-RAG agent can produce). Provenance could not be
+	// settled, so instead of leaving the case pending (fail OPEN, the prior
+	// truncation bug) or auto-zeroing (which would risk an honest giant-context
+	// agent) the scorer sets this bit; the v12 answer-stuffing gate then routes the
+	// whole run to human REVIEW with a full factor (ResultReviewRequired). It is set
+	// only alongside AnswerStuffObserved=true with a nil AnswerStuffed verdict, and
+	// only by the v12 relay/scorer path; consumed at cmd/dittobench-api/v9_base.go
+	// v12AnswerStuffingTelemetry. Prompt size is never itself a signal -- this bit is
+	// a last-resort safety net, never expected to fire on normal full-context use.
+	AnswerStuffReviewRequired bool `json:"answer_stuff_review_required,omitempty"`
 }
 
 // RunCase POSTs one tool OR memory case to <harnessURL>/run. For a tool case,

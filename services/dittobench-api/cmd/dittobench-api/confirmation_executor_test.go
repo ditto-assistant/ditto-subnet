@@ -241,6 +241,59 @@ func validInstalledConfirmationProfile(t *testing.T) (confirmationExecutionProfi
 	return profile, raw
 }
 
+func TestConfirmationProfileV9DefaultsBenchVersion(t *testing.T) {
+	profile, _ := validInstalledConfirmationProfile(t)
+	if profile.BenchVersion != 0 {
+		t.Fatalf("v9 profile must omit the bench_version field, got %d", profile.BenchVersion)
+	}
+	if got := profile.benchVersion(); got != confirmationBenchVersion {
+		t.Fatalf("v9 profile benchVersion() = %d, want %d", got, confirmationBenchVersion)
+	}
+	if got := profile.longMemProfile().BenchVersion; got != 9 {
+		t.Fatalf("v9 longmem profile bench version = %d, want 9", got)
+	}
+	if got := profile.ablationProfile().BenchVersion; got != 9 {
+		t.Fatalf("v9 ablation profile bench version = %d, want 9", got)
+	}
+	if err := profile.validate(); err != nil {
+		t.Fatalf("v9 profile must validate: %v", err)
+	}
+}
+
+func TestConfirmationProfileV12BindsBenchVersionAndDeepHistoryFloors(t *testing.T) {
+	profile, _ := validInstalledConfirmationProfile(t)
+	// Promote the v9 launch profile to a v12 confirmation profile: declare the
+	// version and the bench v10+ deep-history floors the longmem contract
+	// requires. The dataset stays the official cleaned condition; the selection
+	// floors carve out the deep-history subset.
+	profile.BenchVersion = 12
+	profile.LongMemCasesPerCapability = longmemeval.V10MinCasesPerCapability
+	profile.LongMemMinHistorySessions = longmemeval.V10MinHistorySessions
+	profile.LongMemMinHistoryBytes = longmemeval.V10MinHistoryBytes
+	refreshConfirmationProfileChecksums(t, &profile)
+
+	if got := profile.benchVersion(); got != 12 {
+		t.Fatalf("v12 profile benchVersion() = %d, want 12", got)
+	}
+	if err := profile.validate(); err != nil {
+		t.Fatalf("v12 confirmation profile must validate: %v", err)
+	}
+	longMem := profile.longMemProfile()
+	if longMem.BenchVersion != 12 || longMem.MinHistorySessions != longmemeval.V10MinHistorySessions ||
+		longMem.MinHistoryBytes != longmemeval.V10MinHistoryBytes {
+		t.Fatalf("v12 longmem profile did not carry the threaded version and floors: %+v", longMem)
+	}
+	if err := longMem.Validate(); err != nil {
+		t.Fatalf("v12 longmem profile must satisfy the deep-history floors: %v", err)
+	}
+	if got := profile.ablationProfile().BenchVersion; got != 12 {
+		t.Fatalf("v12 ablation profile bench version = %d, want 12", got)
+	}
+	if !longmemeval.IsOfficialCleanedDataset(longMem) {
+		t.Fatal("v12 longmem profile must remain the official cleaned dataset condition")
+	}
+}
+
 func TestConfirmationExecutionProfileCrossLanguageFixture(t *testing.T) {
 	raw, err := os.ReadFile("testdata/confirmation_execution_profile_v9.json")
 	if err != nil {

@@ -56,7 +56,7 @@ func TestCapabilitiesReportBoundReleaseIdentity(t *testing.T) {
 		t.Fatalf("wrong feature set: %v", got.Features)
 	}
 	want := []int{}
-	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11} {
+	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
 		if efficiency.ProductionReadyForVersion(version) {
 			want = append(want, version)
 		}
@@ -111,7 +111,7 @@ func TestV9AndV10CapabilitiesShareQualityAuthorityWithoutChangingCurrentVersion(
 		}
 	}
 	got := capabilitiesOf(t, &server{softwareVersion: "0.10.0", sourceRevision: testSourceRevision})
-	want := []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11}
+	want := []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12}
 	if !reflect.DeepEqual(got.SupportedBenchVersions, want) {
 		t.Fatalf("supported versions = %v, want %v", got.SupportedBenchVersions, want)
 	}

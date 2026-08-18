@@ -926,7 +926,7 @@ async def test_v10_submit_forwards_platform_stamped_runtime_policy() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [None, 0, 1, 6, 12])
+@pytest.mark.parametrize("bench_version", [None, 0, 1, 6, 13])
 async def test_submit_rejects_missing_or_unsupported_benchmark_version(
     bench_version: int | None,
 ) -> None:
@@ -1398,7 +1398,7 @@ async def test_current_poll_returns_v8_version_bound_report() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 6, 12])
+@pytest.mark.parametrize("expected_bench_version", [None, 0, 1, 6, 13])
 async def test_poll_rejects_missing_or_unsupported_expected_version(
     expected_bench_version: int | None,
 ) -> None:

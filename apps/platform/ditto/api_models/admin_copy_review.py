@@ -33,7 +33,9 @@ class AdminDeferredReviewEvidence(BaseModel):
 
 
 class AdminCopyReviewEvidence(BaseModel):
-    review_kind: Literal["copy", "benchmark_overfit", "deferred_source_review"] = "copy"
+    review_kind: Literal[
+        "copy", "benchmark_overfit", "deferred_source_review", "anomalous_score"
+    ] = "copy"
     duplicate_of: UUID | None
     reason: str | None
     policy_version: int
@@ -150,7 +152,10 @@ class AdminCopyReviewList(BaseModel):
     limit: int
     offset: int
     review_kind: (
-        Literal["copy", "benchmark_overfit", "deferred_source_review"] | None
+        Literal[
+            "copy", "benchmark_overfit", "deferred_source_review", "anomalous_score"
+        ]
+        | None
     ) = None
     """Echo of the applied ``review_kind`` filter; ``None`` means every kind."""
 

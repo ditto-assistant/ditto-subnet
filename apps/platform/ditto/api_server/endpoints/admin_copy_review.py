@@ -114,11 +114,7 @@ def _item(
 ) -> AdminCopyReviewItem:
     provenance = review.algorithm_provenance
     review_kind = provenance.get("review_kind")
-    if review_kind not in (
-        "copy",
-        "benchmark_overfit",
-        "deferred_source_review",
-    ):
+    if review_kind not in _KNOWN_REVIEW_KINDS:
         review_kind = "copy"
     deferred_raw = review.original_evidence.get("deferred_review")
     deferred_review = (
@@ -143,7 +139,12 @@ def _item(
         resolution_reason=review.resolution_reason,
         original=AdminCopyReviewEvidence(
             review_kind=cast(
-                Literal["copy", "benchmark_overfit", "deferred_source_review"],
+                Literal[
+                    "copy",
+                    "benchmark_overfit",
+                    "deferred_source_review",
+                    "anomalous_score",
+                ],
                 review_kind,
             ),
             duplicate_of=review.original_duplicate_of,
@@ -402,7 +403,12 @@ def _canonical_ledger_row(
     )
 
 
-_KNOWN_REVIEW_KINDS = ("copy", "benchmark_overfit", "deferred_source_review")
+_KNOWN_REVIEW_KINDS = (
+    "copy",
+    "benchmark_overfit",
+    "deferred_source_review",
+    "anomalous_score",
+)
 
 
 def _review_kind_filter(review_kind: str) -> ColumnElement[bool]:
@@ -462,7 +468,9 @@ async def list_copy_reviews(
     offset: Annotated[int, Query(ge=0)] = 0,
     include: Literal["current_comparison"] | None = None,
     generation: Literal["active", "rollout", "history", "all"] = "active",
-    review_kind: Literal["copy", "benchmark_overfit", "deferred_source_review"]
+    review_kind: Literal[
+        "copy", "benchmark_overfit", "deferred_source_review", "anomalous_score"
+    ]
     | None = None,
 ) -> AdminCopyReviewList:
     active_version = await active_bench_version(session)

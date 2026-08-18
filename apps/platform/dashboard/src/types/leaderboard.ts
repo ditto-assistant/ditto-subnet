@@ -259,7 +259,7 @@ export interface V9AuthoritativeToolGate {
  * union must track `V9EvidenceBenchVersion` in the shared protocol package.
  */
 export interface V9BaseEvidence {
-  bench_version: 9 | 10 | 11;
+  bench_version: 9 | 10 | 11 | 12;
   score_gates: {
     rollout_mode: "shadow" | "enforce";
     model_use: V9ModelUseGate;

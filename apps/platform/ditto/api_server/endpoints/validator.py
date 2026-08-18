@@ -167,6 +167,12 @@ from ditto.api_server.koth import (
 )
 from ditto.api_server.model_use import evaluate_model_use, model_use_policy
 from ditto.api_server.onchain_seed import derive_validator_seed
+from ditto.api_server.outlier_escalation import (
+    OUTLIER_ALGORITHM_VERSION,
+    OUTLIER_REVIEW_KIND,
+    OutlierEscalationSettings,
+    evaluate_score_outlier,
+)
 from ditto.api_server.queue_policy_settings import (
     DEFAULT_SETTINGS as QUEUE_POLICY_DEFAULTS,
 )
@@ -372,6 +378,58 @@ TRANSFORM_AUDIT_REVIEW_REASON = "transform_audit_brittleness"
 TRANSFORM_AUDIT_ENFORCE = os.environ.get(
     "DITTO_TRANSFORM_AUDIT_ENFORCE", "false"
 ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+# Out-of-band composite escalation to ATH review (issue #476). Env-driven like
+# the transform-audit toggle above so the safety net can be rolled out
+# observe-first and enabled without a code change. Ships in ``off`` mode: the
+# gate is a no-op until an operator sets ``DITTO_OUTLIER_ESCALATION_MODE`` to
+# ``observe`` (record would-be holds) or ``enforce`` (open them). The bench-
+# version floor keeps v8-v11 behaviour byte-identical.
+def _outlier_escalation_settings_from_env() -> OutlierEscalationSettings:
+    """Build the escalation policy from the environment, falling back to shipped
+    defaults for any variable that is unset or unparseable (fail-safe: a bad
+    value degrades to the conservative default rather than crashing scoring)."""
+    defaults = OutlierEscalationSettings()
+
+    mode = (
+        os.environ.get("DITTO_OUTLIER_ESCALATION_MODE", defaults.mode).strip().lower()
+    )
+    if mode not in {"off", "observe", "enforce"}:
+        mode = defaults.mode
+
+    def _int(name: str, fallback: int) -> int:
+        try:
+            return int(os.environ[name])
+        except (KeyError, ValueError):
+            return fallback
+
+    def _float(name: str, fallback: float) -> float:
+        try:
+            return float(os.environ[name])
+        except (KeyError, ValueError):
+            return fallback
+
+    return OutlierEscalationSettings(
+        mode=mode,
+        min_bench_version=_int(
+            "DITTO_OUTLIER_ESCALATION_MIN_BENCH_VERSION", defaults.min_bench_version
+        ),
+        min_cohort_size=_int(
+            "DITTO_OUTLIER_ESCALATION_MIN_COHORT_SIZE", defaults.min_cohort_size
+        ),
+        modified_z_threshold=_float(
+            "DITTO_OUTLIER_ESCALATION_MODIFIED_Z_THRESHOLD",
+            defaults.modified_z_threshold,
+        ),
+        min_composite_floor=_float(
+            "DITTO_OUTLIER_ESCALATION_MIN_COMPOSITE_FLOOR",
+            defaults.min_composite_floor,
+        ),
+    )
+
+
+OUTLIER_ESCALATION_SETTINGS = _outlier_escalation_settings_from_env()
 
 
 def _binomial_tail(k: int, n: int, p: float = 0.5) -> float:
@@ -795,6 +853,129 @@ async def _evaluate_and_record_deferred_review(
             score_count=score_counts.get(row.agent_id, 0),
             now=now,
         )
+
+
+async def _evaluate_and_record_outlier_escalation(
+    session: AsyncSession,
+    *,
+    agent: Agent,
+    bench_version: int,
+    composite: float,
+    cohort: Sequence[float],
+    settings: OutlierEscalationSettings,
+    now: datetime,
+) -> None:
+    """Escalate an out-of-band composite to ATH review (issue #476).
+
+    The safety net for a gamed fresh contract: on the score-finalization
+    transition, a composite that is a robust upward outlier of its comparable
+    same-benchmark cohort is routed to ``ATH_PENDING_REVIEW`` for operator
+    adjudication instead of being ranked. This reuses the exact hold mechanism
+    the copy and transform-audit holds use -- ``agents.status`` +
+    ``agents.review_reason`` + a pending ``ath_reviews`` row carrying the
+    immutable evidence snapshot -- so the operator queue, resolution flow and
+    ledger exclusion all work unchanged.
+
+    Auto-HOLD, never auto-reject. ``mode="observe"`` records a would-be hold on
+    the append-only audit chain without touching status; ``mode="enforce"``
+    opens the hold. Bench-version scoped so v8-v11 are untouched, and gated on
+    ``SCORED`` so a copy / transform-audit hold that already fired this
+    transition wins outright (this path never re-holds an already-held agent).
+    """
+    if settings.mode == "off":
+        return
+    if bench_version < settings.min_bench_version:
+        return
+    # A copy or transform-audit hold that already fired moved the agent out of
+    # SCORED; the deferred path acts only on SCORED/LIVE for the same reason.
+    if agent.status != AgentStatus.SCORED:
+        return
+
+    decision = evaluate_score_outlier(
+        composite=composite, cohort=cohort, settings=settings
+    )
+    if not decision.held:
+        # In-band, below the floor, or an insufficient cohort. Rank normally and
+        # leave no hold; the "why not" lives in the decision evidence, which is
+        # only persisted when a would-be hold fires (below), matching the other
+        # holds' record-on-trigger discipline.
+        return
+
+    if settings.mode == "observe":
+        # Record the would-be hold on the durable audit chain without holding,
+        # so a later switch to enforce leaves no gap in the evidence. AthReview
+        # is unique-per-agent and may carry unrelated resolved history, so the
+        # append-only chain -- not that row -- is the authoritative observe log.
+        await append_audit_entry(
+            session,
+            agent_id=agent.agent_id,
+            validator_hotkey=None,
+            event=EVENT_AUDIT,
+            payload={
+                "audit_kind": OUTLIER_REVIEW_KIND,
+                "enforced": False,
+                "qualified": True,
+                "bench_version": bench_version,
+                "evidence": decision.evidence,
+            },
+            recorded_at=now,
+        )
+        logger.info(
+            "agent %s: out-of-band composite would hold (observe mode): %s",
+            agent.agent_id,
+            decision.reason,
+        )
+        return
+
+    # enforce -- open the hold. Idempotency: the unique (agent_id) row means a
+    # pending review already covering this agent must not be duplicated. A fresh
+    # first-quorum finalization has none; the guard protects any re-entry.
+    existing = await session.scalar(
+        select(AthReview).where(AthReview.agent_id == agent.agent_id).with_for_update()
+    )
+    if existing is not None:
+        return
+
+    agent.status = AgentStatus.ATH_PENDING_REVIEW
+    agent.review_reason = decision.reason
+    session.add(
+        AthReview(
+            review_id=uuid4(),
+            agent_id=agent.agent_id,
+            status="pending",
+            opened_at=now,
+            original_reason=decision.reason,
+            original_policy_version=agent.screening_policy_version,
+            original_evidence=decision.evidence,
+            algorithm_provenance={
+                "snapshot": "score-finalization",
+                "review_kind": OUTLIER_REVIEW_KIND,
+                "algorithm_version": OUTLIER_ALGORITHM_VERSION,
+                "opened_by": "platform",
+                "backfilled": False,
+                "opened_at_source": "outlier_escalation",
+            },
+        )
+    )
+    await append_audit_entry(
+        session,
+        agent_id=agent.agent_id,
+        validator_hotkey=None,
+        event=EVENT_AUDIT,
+        payload={
+            "audit_kind": OUTLIER_REVIEW_KIND,
+            "enforced": True,
+            "qualified": True,
+            "bench_version": bench_version,
+            "evidence": decision.evidence,
+        },
+        recorded_at=now,
+    )
+    logger.warning(
+        "agent %s held for out-of-band score review: %s",
+        agent.agent_id,
+        decision.reason,
+    )
 
 
 async def _fresh_submission_lane_due(
@@ -4951,7 +5132,7 @@ async def submit_top5_confirmation_score(
                     detail="confirmation report does not match the leased wave seed",
                 )
             if (
-                canonical_version == 9
+                supports_confirmation(canonical_version)
                 and cost_evidence_bound
                 and ticket.dataset_sha256 is not None
                 and _reported_dataset_sha256(report) != ticket.dataset_sha256
@@ -5000,7 +5181,7 @@ async def submit_top5_confirmation_score(
         v9_efficiency_token_total: int | None = None
         v9_efficiency_cost_eligible: bool | None = None
         if (
-            canonical_version == 9
+            supports_confirmation(canonical_version)
             and cost_evidence_bound
             and ticket.seed is not None
             and seeds == [ticket.seed]
@@ -6267,6 +6448,25 @@ async def submit_score(
                         },
                         recorded_at=audit_now,
                     )
+                # Out-of-band composite escalation (issue #476). After the
+                # anti-copy and transform-audit gates have had their say, a
+                # composite that is a robust upward outlier of its comparable
+                # same-benchmark cohort is routed to ATH review instead of
+                # ranked -- the safety net for a gamed fresh contract whose
+                # spike outruns the other gates. Bench-version scoped (v12+),
+                # so v8-v11 are untouched, and a no-op unless an operator turns
+                # it on. The cohort is the eligible ledger read above, which is
+                # one row per owner and excludes this still-evaluating
+                # candidate, held agents, and banned agents.
+                await _evaluate_and_record_outlier_escalation(
+                    session,
+                    agent=agent,
+                    bench_version=ticket.bench_version,
+                    composite=median_composite,
+                    cohort=[row.composite for row in eligible],
+                    settings=OUTLIER_ESCALATION_SETTINGS,
+                    now=audit_now,
+                )
                 deferred_settings = queue_policy.deferred_source_review
                 await _evaluate_and_record_deferred_review(
                     session,

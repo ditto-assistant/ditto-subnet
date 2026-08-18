@@ -281,7 +281,7 @@ func ProductionReadyForVersion(benchVersion int) bool {
 	case protocol.BenchVersionV7:
 		return ReadyForV7QualityOnly(productionV7Manifest)
 	case protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10,
-		protocol.BenchVersionV11:
+		protocol.BenchVersionV11, protocol.BenchVersionV12:
 		return ReadyForV8QualityOnly(productionV8Contract)
 	default:
 		return false

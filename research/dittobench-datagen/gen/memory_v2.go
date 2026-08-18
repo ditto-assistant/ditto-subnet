@@ -78,6 +78,19 @@ type MemorySuite struct {
 	// business universe. They replace simpler main-pool cases inside the fixed
 	// case budget; zero for v7 and earlier.
 	WorldCases int
+	// ParserDivergenceCases counts the v12 parser-divergence canary cases
+	// (gen/divergence.go): cases whose surface/template reading diverges from the
+	// correct reading (negation, retraction, hypothetical, reported speech). They
+	// are carved out of the world-question budget, so the total memory envelope is
+	// unchanged. Zero for pre-v12 contracts. Advisory telemetry.
+	ParserDivergenceCases int
+	// FamilyCompilerCases counts the v12 anti-family-compiler cases
+	// (gen/familycompiler.go): record-determined operation, family-ambiguity, and
+	// counterfactual-pair cases whose required computation is not recoverable from
+	// the question surface. Like the divergence family they are carved out of the
+	// world-question budget, so the total memory envelope is unchanged. Zero for
+	// pre-v12 contracts. Advisory telemetry.
+	FamilyCompilerCases int
 	// LexicalGap is the query↔needle overlap telemetry (NoLiMa): how much
 	// content wording the emitted questions share with their evidence, before and
 	// after the low-overlap rewrite.
@@ -655,13 +668,36 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 	if benchVersion >= protocol.BenchVersionV10 {
 		v10Count = v10ProgramCaseCount(n)
 	}
-	plans, err := world.QuestionPlans(budget - v10Count)
+	// v12 spends a bounded share of the same fixed envelope on parser-divergence
+	// canary cases (gen/divergence.go). They are carved out of the world-question
+	// budget here, so the total memory-case count is unchanged from v10/v11.
+	divergenceCount := 0
+	familyCompilerCount := 0
+	if benchVersion >= protocol.BenchVersionV12 {
+		divergenceCount = v12DivergenceCaseCount(n)
+		// v12 also spends a bounded share of the same fixed envelope on the
+		// anti-family-compiler families (gen/familycompiler.go). Like divergence they
+		// are carved out of the world-question budget here, so the total memory-case
+		// count is unchanged from v10/v11.
+		familyCompilerCount = v12FamilyCompilerCaseCount(n)
+	}
+	plans, err := world.QuestionPlans(budget - v10Count - divergenceCount - familyCompilerCount)
 	if err != nil {
 		return MemorySuite{}, fmt.Errorf("v8 world questions: %w", err)
 	}
 	var v10Programs []universe.V10GeneratedCase
 	if v10Count > 0 {
-		if benchVersion >= protocol.BenchVersionV11 {
+		if benchVersion >= protocol.BenchVersionV12 {
+			// The v12 contract keeps the v11 program semantics but carries every
+			// amount in shuffled prose (no positionally-bindable KV ledger),
+			// binds the subject relationally for every group, and removes the
+			// v11 format tells. The case budget and metamorphic-group structure
+			// are unchanged.
+			v10Programs, err = universe.GenerateV12Programs(seed, v10Count)
+			if err != nil {
+				return MemorySuite{}, fmt.Errorf("v12 open programs: %w", err)
+			}
+		} else if benchVersion >= protocol.BenchVersionV11 {
 			// The v11 contract replaces the single fixed balance program with
 			// sampled program shapes and a compositional surface grammar. The
 			// case budget and metamorphic-group structure are unchanged.
@@ -708,6 +744,20 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, generated.Pairs...)
 	}
 	suite.Cases = append(suite.Cases, integrity...)
+	if divergenceCount > 0 {
+		divergence, divergencePairs := buildParserDivergence(seed, divergenceCount)
+		suite.Cases = append(suite.Cases, divergence...)
+		suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, divergencePairs...)
+		suite.ParserDivergenceCases = len(divergence)
+	}
+	if familyCompilerCount > 0 {
+		family := buildFamilyCompiler(seed, familyCompilerCount)
+		for _, fc := range family {
+			suite.Cases = append(suite.Cases, fc.Staged)
+			suite.Waves[0].Pairs = append(suite.Waves[0].Pairs, fc.Pairs...)
+		}
+		suite.FamilyCompilerCases = len(family)
+	}
 	suite.WritingNoiseQuestions, suite.WritingNoisePairs = applyV8MemoryWritingNoise(seed, suite.Cases, suite.Waves)
 	return suite, nil
 }

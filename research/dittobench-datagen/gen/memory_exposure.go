@@ -80,6 +80,18 @@ func AuditV10MemoryExposure(artifact DatasetArtifact) (MemoryExposureResult, err
 	return result, nil
 }
 
+// AnswerVerbatimInEvidence reports whether answer can be copied as a contiguous,
+// token-boundary-aligned sequence out of evidence. It is the per-case primitive
+// behind AuditV10MemoryExposure, exported so the runtime scorer can decide, for
+// one memory case, whether its expected answer is verbatim-recall (present in the
+// case's seeded evidence) or COMPUTED (absent, and therefore in the Bench v12
+// answer-stuffing slice). A verbatim-recall answer that a harness legitimately
+// retrieves is never in the computed slice, which is what keeps the answer-
+// stuffing gate off normal RAG.
+func AnswerVerbatimInEvidence(evidence, answer string) bool {
+	return containsWholeAnswer(evidence, answer)
+}
+
 func containsWholeAnswer(evidence, answer string) bool {
 	haystack := []rune(strings.ToLower(strings.Join(strings.Fields(evidence), " ")))
 	needle := []rune(strings.ToLower(strings.Join(strings.Fields(answer), " ")))

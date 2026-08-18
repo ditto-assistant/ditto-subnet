@@ -1337,7 +1337,29 @@ func applyV10StateDependentActions(seed int64, benchVersion int, cases []protoco
 		planningPrompt := fmt.Sprintf("Planning decision for dependency-risk work on %q at %s.", project.Alias, project.Client)
 		prompt := fmt.Sprintf("Handle the dependency-risk review for %q using the operating choice I approved in our planning note. Start that work now.", project.Alias)
 		routePrefix := "Approved route: "
-		if benchVersion >= protocol.BenchVersionV11 {
+		if benchVersion >= protocol.BenchVersionV12 {
+			// v12 COMPOSES every routing cue from independent component banks, so
+			// the reachable surface is a product of the banks rather than a short
+			// enumerable list a rule engine could match. The decision's semantics
+			// and the expected tool outcome are untouched.
+			planningPrompt = fmt.Sprintf(
+				v12ToolPick(seed, i, "plan",
+					[]string{"Decision log", "Where we landed", "Outcome of our scoping chat", "Notes from planning"},
+					[]string{" for the risk review on", " about the dependency work for", " covering the review of"},
+				)+" %q"+v12ToolPick(seed, i, "plantail",
+					[]string{" at %s.", " (%s).", " for %s."},
+				), project.Alias, project.Client)
+			prompt = fmt.Sprintf(
+				v12ToolPick(seed, i, "asklead",
+					[]string{"Kick off", "Time to start", "Please begin", "Go ahead and start"},
+				)+" the dependency-risk review for %q "+v12ToolPick(seed, i, "asktail",
+					[]string{"the way we already agreed. Start now.", "exactly as we settled earlier. Begin.", "following what we decided together. Proceed."},
+				), project.Alias)
+			routePrefix = v12ToolPick(seed, i, "route",
+				[]string{"What we settled on", "Agreed path", "Our decision", "The plan we set"},
+				[]string{": ", " — ", " is: ", ", "},
+			)
+		} else if benchVersion >= protocol.BenchVersionV11 {
 			// v11 rotates every literal cue the measured rule engines matched
 			// ("planning note", "operating choice", "Approved route:"). The
 			// decision's semantics and the expected tool outcome are untouched.
@@ -2116,4 +2138,18 @@ func v11ToolPick(seed int64, index int, salt string, bank []string) string {
 	h := fnv.New64a()
 	_, _ = fmt.Fprintf(h, "dittobench-v11-tool:%d:%d:%s", seed, index, salt)
 	return bank[h.Sum64()%uint64(len(bank))]
+}
+
+// v12ToolPick assembles a routing cue by concatenating one seeded choice from
+// each supplied component bank. Because the result is a product of the banks,
+// the reachable cue surface is not a short enumerable list. It hashes outside
+// the shared toolMixRNG stream so route outcomes stay byte-identical to v10.
+func v12ToolPick(seed int64, index int, salt string, banks ...[]string) string {
+	var sb strings.Builder
+	for part, bank := range banks {
+		h := fnv.New64a()
+		_, _ = fmt.Fprintf(h, "dittobench-v12-tool:%d:%d:%s:%d", seed, index, salt, part)
+		sb.WriteString(bank[h.Sum64()%uint64(len(bank))])
+	}
+	return sb.String()
 }

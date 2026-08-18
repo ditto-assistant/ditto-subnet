@@ -85,8 +85,12 @@ func (p Profile) Validate() error {
 	if strings.TrimSpace(p.Revision) == "" || strings.TrimSpace(p.DatasetRevision) == "" {
 		return errors.New("profile revision and dataset revision are required")
 	}
-	if p.BenchVersion != 9 && p.BenchVersion != 10 && p.BenchVersion != 11 {
-		return errors.New("LongMemEval confirmation profile must select bench_version 9, 10, or 11")
+	// LongMemEval is a permanent competition fixture from bench_version 9 upward:
+	// accept every v9-and-later contract open-endedly rather than an enumerated
+	// whitelist that must be hand-extended (and silently fails closed) on each
+	// bench bump. Versions below 9 have no LongMemEval confirmation profile.
+	if p.BenchVersion < 9 {
+		return errors.New("LongMemEval confirmation profile must select bench_version 9 or higher")
 	}
 	if !validSHA256(p.DatasetSHA256) {
 		return errors.New("dataset_sha256 must be 64 lowercase hexadecimal characters")

@@ -4634,7 +4634,9 @@ export const unavailableCopyReviewComparison = (reason: string) =>
   })
 
 export const copyReviewOriginalSchema = z.object({
-  review_kind: z.enum(['copy', 'benchmark_overfit', 'deferred_source_review']).default('copy'),
+  review_kind: z
+    .enum(['copy', 'benchmark_overfit', 'deferred_source_review', 'anomalous_score'])
+    .default('copy'),
   duplicate_of: z.string().uuid().nullable(),
   reason: z.string().nullable(),
   policy_version: z.number().int(),
@@ -4693,6 +4695,7 @@ export const athReviewKindSchema = z.enum([
   'copy',
   'benchmark_overfit',
   'deferred_source_review',
+  'anomalous_score',
 ])
 
 export const copyReviewListSchema = z.object({

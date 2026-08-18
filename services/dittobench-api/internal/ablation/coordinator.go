@@ -86,6 +86,11 @@ func (l Lane) intervention() Intervention {
 // the caller's concrete *Responder; arbitrary implementations are not accepted.
 type SyntheticResponder interface {
 	Chat(model string, requestBytes uint64) (ChatCompletion, error)
+	// AblatedChat serves the Bench v12 counterfactual full-ablation completion
+	// (no usable content). The v9 confirmation coordinator never invokes it; it is
+	// part of the capability so the scored-path broker can serve the ablated
+	// completion through the same narrow interface.
+	AblatedChat(model string, requestBytes uint64) (ChatCompletion, error)
 	Embeddings(inputs []string) (EmbeddingResponse, error)
 }
 
@@ -304,8 +309,9 @@ type rankedCase struct {
 }
 
 func (c *Coordinator) selectCases(population EligiblePopulation) ([]EligibleCase, string, error) {
-	if population.BenchVersion != BenchVersionV9 || !population.Confirmation {
-		return nil, "", fmt.Errorf("paired ablation requires an eligible v9 confirmation population")
+	if !ConfirmationBenchVersionSupported(population.BenchVersion) || !population.Confirmation ||
+		population.BenchVersion != c.profile.BenchVersion {
+		return nil, "", fmt.Errorf("paired ablation requires an eligible confirmation population matching the frozen profile version")
 	}
 	if len(population.Cases) < c.config.SampleSize || len(population.Cases) > maximumEligibleCases {
 		return nil, "", fmt.Errorf("invalid eligible population size")
@@ -434,6 +440,15 @@ func (r *scopedResponder) Chat(model string, requestBytes uint64) (ChatCompletio
 		return ChatCompletion{}, context.Canceled
 	}
 	return r.responder.Chat(model, requestBytes)
+}
+
+func (r *scopedResponder) AblatedChat(model string, requestBytes uint64) (ChatCompletion, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if !r.active {
+		return ChatCompletion{}, context.Canceled
+	}
+	return r.responder.AblatedChat(model, requestBytes)
 }
 
 func (r *scopedResponder) Embeddings(inputs []string) (EmbeddingResponse, error) {
@@ -708,7 +723,7 @@ func (c *Coordinator) Coordinate(
 		return CoordinationReport{}, err
 	}
 	report := CoordinationReport{
-		ContractVersion: ContractVersion, BenchVersion: BenchVersionV9,
+		ContractVersion: ContractVersion, BenchVersion: c.profile.BenchVersion,
 		ArtifactSHA256: c.artifactSHA256, DatasetSHA256: c.profile.DatasetSHA256,
 		ThresholdManifestSHA256: c.profile.ThresholdManifestSHA256,
 		AblationProfileSHA256:   c.profileSHA256, CoordinatorPolicy: c.policy,

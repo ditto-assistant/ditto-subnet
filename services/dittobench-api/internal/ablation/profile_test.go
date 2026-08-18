@@ -22,6 +22,44 @@ func TestFrozenProfileWireContractIsArtifactIndependent(t *testing.T) {
 	}
 }
 
+func TestConfirmationBenchVersionSupportedAllowList(t *testing.T) {
+	t.Parallel()
+	for version, want := range map[int]bool{
+		8: false, 9: true, 10: false, 11: false, 12: true, 13: false, 0: false,
+	} {
+		if got := ConfirmationBenchVersionSupported(version); got != want {
+			t.Fatalf("ConfirmationBenchVersionSupported(%d) = %v, want %v", version, got, want)
+		}
+	}
+}
+
+func TestFrozenProfileAcceptsV12AndRejectsUnbuiltVersions(t *testing.T) {
+	t.Parallel()
+	base := coordinatorConfig(2).FrozenProfile
+	v12 := base
+	v12.BenchVersion = BenchVersionV12
+	v12SHA, err := FrozenProfileSHA256(v12)
+	if err != nil {
+		t.Fatalf("v12 frozen ablation profile must validate: %v", err)
+	}
+	v9SHA, err := FrozenProfileSHA256(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v12SHA == v9SHA {
+		t.Fatal("v12 bench_version must move the frozen ablation profile checksum")
+	}
+	// v10 and v11 never had a confirmation ablation contract built; they must
+	// still fail closed even though the string contract name is unchanged.
+	for _, version := range []int{8, 10, 11, 13} {
+		unbuilt := base
+		unbuilt.BenchVersion = version
+		if _, err := FrozenProfileSHA256(unbuilt); err == nil {
+			t.Fatalf("frozen ablation profile must reject bench_version %d", version)
+		}
+	}
+}
+
 func TestFrozenProfileChecksumMovesForEveryFrozenDigestAndPolicy(t *testing.T) {
 	t.Parallel()
 	base := coordinatorConfig(2).FrozenProfile

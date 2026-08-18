@@ -3,6 +3,7 @@
 # mapped below nor listed here makes release planning fail closed so new
 # production inputs cannot silently bypass semantic release.
 ignored_paths = [
+  "localstack/**",
   ".env.example",
   ".agents/**",
   ".claude/**",

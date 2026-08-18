@@ -337,28 +337,28 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 			mutate: func(request *confirmationExecutionRequest) {
 				request.Purpose = "canonical_quorum"
 			},
-			message: "confirmation execution requires the internal bench v9 purpose",
+			message: "confirmation execution requires a supported confirmation bench version",
 		},
 		{
 			name: "empty purpose",
 			mutate: func(request *confirmationExecutionRequest) {
 				request.Purpose = ""
 			},
-			message: "confirmation execution requires the internal bench v9 purpose",
+			message: "confirmation execution requires a supported confirmation bench version",
 		},
 		{
 			name: "v8 version",
 			mutate: func(request *confirmationExecutionRequest) {
 				request.BenchVersion = 8
 			},
-			message: "confirmation execution requires the internal bench v9 purpose",
+			message: "confirmation execution requires a supported confirmation bench version",
 		},
 		{
 			name: "future version",
 			mutate: func(request *confirmationExecutionRequest) {
 				request.BenchVersion = 10
 			},
-			message: "confirmation execution requires the internal bench v9 purpose",
+			message: "confirmation execution requires a supported confirmation bench version",
 		},
 		{
 			name: "missing bundle identity",
@@ -1060,8 +1060,8 @@ func TestConfirmationExecutorDoesNotControlOrdinaryV9Capability(t *testing.T) {
 	if err := json.Unmarshal(qualifiedRecorder.Body.Bytes(), &capabilities); err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(capabilities.SupportedBenchVersions, []int{8, 9, 10, 11}) {
-		t.Fatalf("supported versions = %v, want ordinary v8 through v11", capabilities.SupportedBenchVersions)
+	if !reflect.DeepEqual(capabilities.SupportedBenchVersions, []int{8, 9, 10, 11, 12}) {
+		t.Fatalf("supported versions = %v, want ordinary v8 through v12", capabilities.SupportedBenchVersions)
 	}
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(qualifiedRecorder.Body.Bytes(), &raw); err != nil {

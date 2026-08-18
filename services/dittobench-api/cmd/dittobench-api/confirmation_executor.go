@@ -81,17 +81,28 @@ type confirmationCompositeProfile struct {
 }
 
 type confirmationExecutionProfileWire struct {
-	SchemaVersion                   int                               `json:"schema_version"`
-	Revision                        string                            `json:"revision"`
-	Checksum                        string                            `json:"checksum"`
-	LongMemProfileRevision          string                            `json:"longmem_profile_revision"`
-	LongMemProfileChecksum          string                            `json:"longmem_profile_checksum"`
-	LongMemDatasetRevision          string                            `json:"longmem_dataset_revision"`
-	LongMemDatasetSHA256            string                            `json:"longmem_dataset_sha256"`
-	LongMemSelectorRevision         string                            `json:"longmem_selector_revision"`
-	LongMemSelectionSeed            uint64                            `json:"longmem_selection_seed"`
-	LongMemCasesPerCapability       int                               `json:"longmem_cases_per_capability"`
-	LongMemSeedBatchPairs           int                               `json:"longmem_seed_batch_pairs"`
+	SchemaVersion int    `json:"schema_version"`
+	Revision      string `json:"revision"`
+	Checksum      string `json:"checksum"`
+	// BenchVersion selects which bench contract this confirmation profile runs
+	// under. It is omitempty and defaults to confirmationBenchVersion (9) so a
+	// v9 profile's canonical JSON and checksum are byte-identical to before this
+	// field existed. A v12 profile sets it explicitly (see benchVersion()).
+	BenchVersion              int    `json:"bench_version,omitempty"`
+	LongMemProfileRevision    string `json:"longmem_profile_revision"`
+	LongMemProfileChecksum    string `json:"longmem_profile_checksum"`
+	LongMemDatasetRevision    string `json:"longmem_dataset_revision"`
+	LongMemDatasetSHA256      string `json:"longmem_dataset_sha256"`
+	LongMemSelectorRevision   string `json:"longmem_selector_revision"`
+	LongMemSelectionSeed      uint64 `json:"longmem_selection_seed"`
+	LongMemCasesPerCapability int    `json:"longmem_cases_per_capability"`
+	LongMemSeedBatchPairs     int    `json:"longmem_seed_batch_pairs"`
+	// LongMemMinHistorySessions/Bytes are the bench v10+ deep-history floors.
+	// omitempty keeps them absent (and thus 0) for a v9 profile, which
+	// longmemeval.Profile.Validate requires; a v12 profile sets them at or above
+	// V10MinHistorySessions / V10MinHistoryBytes.
+	LongMemMinHistorySessions       int                               `json:"longmem_min_history_sessions,omitempty"`
+	LongMemMinHistoryBytes          int                               `json:"longmem_min_history_bytes,omitempty"`
 	LongMemProjectionKeySHA256      string                            `json:"longmem_projection_key_sha256"`
 	ProviderLanes                   []confirmationProviderLaneProfile `json:"provider_lanes"`
 	EmbeddingLane                   confirmationEmbeddingLaneProfile  `json:"embedding_lane"`
@@ -112,6 +123,7 @@ type confirmationExecutionProfileWire struct {
 type confirmationExecutionProfilePayload struct {
 	SchemaVersion                   int                               `json:"schema_version"`
 	Revision                        string                            `json:"revision"`
+	BenchVersion                    int                               `json:"bench_version,omitempty"`
 	LongMemProfileRevision          string                            `json:"longmem_profile_revision"`
 	LongMemProfileChecksum          string                            `json:"longmem_profile_checksum"`
 	LongMemDatasetRevision          string                            `json:"longmem_dataset_revision"`
@@ -120,6 +132,8 @@ type confirmationExecutionProfilePayload struct {
 	LongMemSelectionSeed            uint64                            `json:"longmem_selection_seed"`
 	LongMemCasesPerCapability       int                               `json:"longmem_cases_per_capability"`
 	LongMemSeedBatchPairs           int                               `json:"longmem_seed_batch_pairs"`
+	LongMemMinHistorySessions       int                               `json:"longmem_min_history_sessions,omitempty"`
+	LongMemMinHistoryBytes          int                               `json:"longmem_min_history_bytes,omitempty"`
 	LongMemProjectionKeySHA256      string                            `json:"longmem_projection_key_sha256"`
 	ProviderLanes                   []confirmationProviderLaneProfile `json:"provider_lanes"`
 	EmbeddingLane                   confirmationEmbeddingLaneProfile  `json:"embedding_lane"`
@@ -137,11 +151,12 @@ type confirmationExecutionProfilePayload struct {
 
 func (p confirmationExecutionProfileWire) payload() confirmationExecutionProfilePayload {
 	return confirmationExecutionProfilePayload{
-		SchemaVersion: p.SchemaVersion, Revision: p.Revision,
+		SchemaVersion: p.SchemaVersion, Revision: p.Revision, BenchVersion: p.BenchVersion,
 		LongMemProfileRevision: p.LongMemProfileRevision, LongMemProfileChecksum: p.LongMemProfileChecksum,
 		LongMemDatasetRevision: p.LongMemDatasetRevision, LongMemDatasetSHA256: p.LongMemDatasetSHA256,
 		LongMemSelectorRevision: p.LongMemSelectorRevision, LongMemSelectionSeed: p.LongMemSelectionSeed,
 		LongMemCasesPerCapability: p.LongMemCasesPerCapability, LongMemSeedBatchPairs: p.LongMemSeedBatchPairs,
+		LongMemMinHistorySessions: p.LongMemMinHistorySessions, LongMemMinHistoryBytes: p.LongMemMinHistoryBytes,
 		LongMemProjectionKeySHA256: p.LongMemProjectionKeySHA256,
 		ProviderLanes:              append([]confirmationProviderLaneProfile(nil), p.ProviderLanes...),
 		EmbeddingLane:              p.EmbeddingLane,
@@ -156,6 +171,17 @@ func (p confirmationExecutionProfileWire) payload() confirmationExecutionProfile
 	}
 }
 
+// benchVersion resolves the confirmation contract version this profile runs
+// under. A profile whose bench_version field is omitted (v9) defaults to the
+// legacy confirmationBenchVersion so v9 canonical JSON and checksums are
+// unchanged; a v12 profile carries 12 explicitly.
+func (p confirmationExecutionProfileWire) benchVersion() int {
+	if p.BenchVersion == 0 {
+		return confirmationBenchVersion
+	}
+	return p.BenchVersion
+}
+
 func (p confirmationExecutionProfileWire) longMemProfile() longmemeval.Profile {
 	providers := make([]longmemeval.ProviderPolicy, len(p.ProviderLanes))
 	for index, lane := range p.ProviderLanes {
@@ -168,9 +194,10 @@ func (p confirmationExecutionProfileWire) longMemProfile() longmemeval.Profile {
 	}
 	return longmemeval.Profile{
 		SchemaVersion: longmemeval.ProfileSchemaVersion, Revision: p.LongMemProfileRevision,
-		BenchVersion: confirmationBenchVersion, DatasetRevision: p.LongMemDatasetRevision,
+		BenchVersion: p.benchVersion(), DatasetRevision: p.LongMemDatasetRevision,
 		DatasetSHA256: p.LongMemDatasetSHA256, SelectorRevision: p.LongMemSelectorRevision,
 		SelectionSeed: p.LongMemSelectionSeed, CasesPerCapability: p.LongMemCasesPerCapability,
+		MinHistorySessions: p.LongMemMinHistorySessions, MinHistoryBytes: p.LongMemMinHistoryBytes,
 		Providers: providers,
 	}
 }
@@ -178,7 +205,7 @@ func (p confirmationExecutionProfileWire) longMemProfile() longmemeval.Profile {
 func (p confirmationExecutionProfileWire) ablationProfile() ablation.FrozenProfile {
 	return ablation.FrozenProfile{
 		ContractVersion: ablation.ProfileContractVersion, Revision: p.AblationProfileRevision,
-		BenchVersion: confirmationBenchVersion, DatasetSHA256: p.AblationDatasetSHA256,
+		BenchVersion: p.benchVersion(), DatasetSHA256: p.AblationDatasetSHA256,
 		ThresholdManifestSHA256: p.AblationThresholdManifestSHA256,
 		SelectionKeySHA256:      p.AblationSelectionKeySHA256,
 		ProjectionKeySHA256:     p.AblationProjectionKeySHA256,
@@ -199,6 +226,14 @@ func (b confirmationAblationBudget) ablationBudget() ablation.Budget {
 }
 
 func microsToScore(value uint64) float64 { return float64(value) / 1_000_000 }
+
+// confirmationBenchVersionSupported is the single main-package gate for which
+// bench versions a confirmation bundle may run under. It defers to the ablation
+// package so the scorer request validator, profile validator, inference broker,
+// and frozen ablation contract can never drift on the allow-list ({9, 12}).
+func confirmationBenchVersionSupported(benchVersion int) bool {
+	return ablation.ConfirmationBenchVersionSupported(benchVersion)
+}
 
 type confirmationRuntimeIdentity struct {
 	BundleID           string
@@ -337,8 +372,8 @@ func (runtime *confirmationRuntime) validate(profile confirmationExecutionProfil
 		len(runtime.AblationProjectionKey) < 32 {
 		return errors.New("confirmation runtime keys are incomplete")
 	}
-	if runtime.AblationPopulation.BenchVersion != confirmationBenchVersion || !runtime.AblationPopulation.Confirmation {
-		return errors.New("confirmation ablation population is not a v9 confirmation population")
+	if runtime.AblationPopulation.BenchVersion != profile.benchVersion() || !runtime.AblationPopulation.Confirmation {
+		return errors.New("confirmation ablation population does not match the profile confirmation version")
 	}
 	return nil
 }
@@ -415,7 +450,7 @@ func (executor *trustedConfirmationExecutor) Execute(
 		return confirmationExecutionResult{}, fmt.Errorf("confirmation request profile: %w", err)
 	}
 	if !reflect.DeepEqual(requested, executor.profile) || request.ProfileRevision != executor.profile.Revision ||
-		request.ProfileChecksum != executor.profile.Checksum {
+		request.ProfileChecksum != executor.profile.Checksum || request.BenchVersion != executor.profile.benchVersion() {
 		return confirmationExecutionResult{}, errors.New("confirmation request does not match the installed launch profile")
 	}
 	deadline, ok := ctx.Deadline()
@@ -620,7 +655,7 @@ func evaluateConfirmationAblation(
 		threshold = frozen.EmbeddingThreshold
 	}
 	evaluation, err := ablation.Evaluate(ablation.EvaluateInput{
-		BenchVersion: confirmationBenchVersion, ArtifactSHA256: artifactSHA256,
+		BenchVersion: profile.benchVersion(), ArtifactSHA256: artifactSHA256,
 		Intervention: intervention, Mode: mode, ProfileRevision: frozen.Revision,
 		ThresholdManifestSHA256: frozen.ThresholdManifestSHA256, DatasetSHA256: frozen.DatasetSHA256,
 		Threshold: threshold, Baseline: population.Baseline, Ablated: population.Ablated,
@@ -728,6 +763,9 @@ func (p confirmationExecutionProfileWire) validate() error {
 	if p.SchemaVersion != confirmationProfileSchemaVersion || !validRevision(p.Revision) ||
 		!canonicalConfirmationSHA256(p.Checksum) {
 		return errors.New("confirmation profile identity is invalid")
+	}
+	if !confirmationBenchVersionSupported(p.benchVersion()) {
+		return errors.New("confirmation profile bench version is unsupported")
 	}
 	if len(p.ProviderLanes) != 2 || !sort.SliceIsSorted(p.ProviderLanes, func(i, j int) bool {
 		return p.ProviderLanes[i].Lane < p.ProviderLanes[j].Lane

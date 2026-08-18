@@ -49,6 +49,38 @@ class _StaticRule:
     roles: tuple[_Role, ...]
 
 
+@dataclass(frozen=True)
+class _Fingerprint:
+    """A bench-v12 anti-emulation fingerprint over served-path source.
+
+    Each fingerprint is a high-signal *review lead*, not a verdict. It fires on a
+    greppable bypass shape that the four post-crowning emulator holds shared and
+    that CI could not catch. A finding names the matched fingerprint (``kind``), a
+    ``severity``, the ``benchmark_emulation`` category, and ``path``/``line``/
+    ``role`` locations only -- never the matched source text. The agentic reviewer
+    must still prove reachability and the two-location causal bar before promoting
+    a fingerprint to a quarantine finding.
+
+    ``roles`` must all co-occur within ``window`` lines of a shared anchor, and any
+    ``suppressor`` match in-window drops the lead (the honest look-alike). When
+    ``min_hits`` exceeds 1 the fingerprint is an aggregate single-role count rule
+    (used for literal dispatch registries). ``languages`` restricts a fingerprint
+    to source files whose tell is language-specific (e.g. the sync/async answer
+    distinction only exists where model calls are awaited). ``scan`` selects the
+    comment-masked code view (``"code"``) or the raw view that also sees comments
+    and strings (``"raw"``).
+    """
+
+    kind: str
+    severity: str
+    roles: tuple[_Role, ...]
+    window: int = 6
+    suppressors: tuple[_Role, ...] = ()
+    scan: str = "code"
+    languages: frozenset[str] = frozenset()
+    min_hits: int = 1
+
+
 def _words(value: str) -> re.Pattern[str]:
     return re.compile(value, re.IGNORECASE)
 
@@ -747,6 +779,450 @@ _STATIC_MALICIOUS_RULES = (
 )
 
 
+# --- bench-v12 anti-emulation fingerprints -----------------------------------
+# Four benchmark-emulator agents (lets_5.0, kaelith, Crown, Hannibal) reached the
+# top of the board and were caught only by MANUAL review AFTER crowning. Their
+# bypass shapes are greppable. These fingerprints automate them so at least three
+# of the four would have raised a finding BEFORE scoring. Every fingerprint stays
+# a location-only review lead (finding, not auto-reject); the agentic reviewer and
+# operator retain decision authority.
+#
+# Language awareness: fingerprints whose tell is language-specific carry a
+# ``languages`` set. The sync/async answer distinction (A1) only exists where a
+# model completion is awaited, so it is scoped to Rust/Python/TS and never fires
+# on Go, where a real model call blocks synchronously. Version-gate, zero-token,
+# edit-distance, registry, generator-path, and family-label tells are
+# language-agnostic and run across Rust/Python/TS/Go alike.
+_ANSWER_LANGUAGES = frozenset({"rust", "python", "ts"})
+
+_EMULATION_FINGERPRINTS = (
+    _Fingerprint(
+        # E1 (near-conclusive): a per-benchmark-version behavior switch. A served
+        # path that compares the running bench version against a literal is close
+        # to definitionally emulation -- a general agent has no reason to branch on
+        # which benchmark revision is scoring it.
+        kind="bench-version-equality-gate",
+        severity="high",
+        roles=(
+            _Role(
+                "bench-version-token",
+                re.compile(
+                    r"\bbench(?:mark)?[_ ]?version\b|\bbench[_ ]?ver\b|"
+                    r"\bbenchmark[_ ]?revision\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "version-equality-literal",
+                re.compile(
+                    r"(?:==|===|!=)\s*\d{1,2}\b|\b\d{1,2}\s*(?:==|===|!=)|"
+                    r"\b\d{1,2}\s*=>",
+                ),
+            ),
+        ),
+        window=3,
+    ),
+    _Fingerprint(
+        # A1: a synchronous function that produces the scored answer cannot have
+        # awaited a model completion. Language-aware: Rust `fn` (not `async fn`),
+        # Python `def` (not `async def`), TS `function` (not `async function`) that
+        # returns/builds an answer, with NO await/model call in the body.
+        kind="sync-answer-constructor",
+        severity="medium",
+        roles=(
+            _Role(
+                "sync-answer-fn",
+                re.compile(
+                    r"(?<!async )\bfn\s+[A-Za-z0-9_]*"
+                    r"(?:answer|respond|resolve|solve|run_case|handle_case|"
+                    r"serve_case|score_case)[A-Za-z0-9_]*\s*[(<]"
+                    r"|(?<!async )\bdef\s+[A-Za-z0-9_]*"
+                    r"(?:answer|respond|resolve|solve|run_case|handle_case)"
+                    r"[A-Za-z0-9_]*\s*\("
+                    r"|(?<!async )\bfunction\s+[A-Za-z0-9_]*"
+                    r"(?:answer|respond|resolve|solve)[A-Za-z0-9_]*\s*\(",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "answer-return-or-struct",
+                re.compile(
+                    r"\b(?:Answer|Response|CaseResult|RunResult|RunResponse|Reply)"
+                    r"\s*\{"
+                    r"|\breturn\b[^\n]*\banswer\b"
+                    r"|[\"']answer[\"']\s*:"
+                    r"|\.answer\s*=(?!=)"
+                    r"|\banswer\s*=\s*[\"'A-Za-z0-9_]",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=24,
+        suppressors=(
+            _Role(
+                "model-call-or-await",
+                re.compile(
+                    r"\bawait\b|\.await\b"
+                    r"|\b(?:call|invoke|run|complete|generate|chat)[_ ]?"
+                    r"(?:model|completion|chat|llm|inference)\b"
+                    r"|\bopenai\b|\bopenrouter\b|\breqwest\b|\bhttpx\b"
+                    r"|\bclient\.(?:chat|responses|completions)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        languages=_ANSWER_LANGUAGES,
+    ),
+    _Fingerprint(
+        # A2/A3: a response/answer constructor that sets literal zero token counts
+        # beside a populated answer field. Zero tokens next to a real answer means
+        # no model completion was ever produced -- the answer was fabricated.
+        kind="zero-token-answer-constructor",
+        severity="high",
+        roles=(
+            _Role(
+                "zero-token-literal",
+                re.compile(
+                    r"\b(?:prompt|output|completion|input|total)[_ ]?tokens?\b"
+                    r"[\"']?\s*[:=]\s*0\b"
+                    r"|\b(?:tokens[_ ]?used|token[_ ]?count|num[_ ]?tokens|"
+                    r"usage[_ ]?tokens)\b[\"']?\s*[:=]\s*0\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "populated-answer-field",
+                re.compile(
+                    r"\b(?:answer|final_answer|response_text|reply|output_text)\b"
+                    r"[\"']?\s*[:=]\s*"
+                    r"(?!0\b|None\b|null\b|nil\b|\"\"|''|,|\}|\)|;|$)"
+                    r"[\"'A-Za-z0-9_\[]",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=10,
+    ),
+    _Fingerprint(
+        # F2: edit-distance / typo-tolerant token comparison near question or case
+        # parsing -- a tell of absorbing the private typo projector so misspelled
+        # scored questions still match a hardcoded family.
+        kind="typo-tolerant-token-compare",
+        severity="medium",
+        roles=(
+            _Role(
+                "edit-distance-helper",
+                re.compile(
+                    r"\blevenshtein\b|\bedit[_ ]?distance\b|\bdamerau\b"
+                    r"|\bone[_ ]?typo(?:[_ ]?apart)?\b|\btypo[_ ]?word[_ ]?eq\b"
+                    r"|\btypo[_ ]?(?:tolerant|apart|eq)\b"
+                    r"|\bfuzzy[_ ]?(?:match|eq|cmp)\b"
+                    r"|\bosa[_ ]?distance\b|\bhamming[_ ]?distance\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "question-parse-context",
+                re.compile(
+                    r"\b(?:question|case[_ ]?id|prompt|query|token|word|needle|"
+                    r"subject|phrase|utterance)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=12,
+    ),
+    _Fingerprint(
+        # Registry pattern (lets_5.0): a large table of literal scored-question
+        # phrasings used as dispatch keys. Aggregate rule -- a served file that
+        # switches on many verbatim question strings is a phrase-table solver.
+        kind="literal-question-registry",
+        severity="medium",
+        roles=(
+            _Role(
+                "question-literal-dispatch",
+                re.compile(
+                    r"[\"'][^\"']{0,200}\?[\"']\s*(?:=>|:)"
+                    r"|\bcase\s+[\"'][^\"']{0,200}\?[\"']"
+                    r"|(?:==|===|\.eq\(|\.equals\(|startswith\(|starts_with\(|"
+                    r"contains\()\s*[\"'][^\"']{0,200}\?[\"']",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        min_hits=4,
+    ),
+    _Fingerprint(
+        # B1/B6 (self-documented): comments or strings on the served path citing
+        # the private generator/grader source tree. A general agent has no reason
+        # to reference the generator's internal file layout.
+        kind="generator-source-citation",
+        severity="medium",
+        roles=(
+            _Role(
+                "generator-source-path",
+                re.compile(
+                    r"\buniverse/world\.go\b|\bconversational\.go\b"
+                    r"|\bmemory_v2\.go\b|\bworld\.go\b"
+                    r"|(?:^|[\s(\"'])(?:gen|grade|grader|generator|universe)/[A-Za-z0-9_]"
+                    r"|/(?:gen|grade|grader|generator|universe)/"
+                    r"|\bworld[_ ]?gen\b|\bgenerator[_ ]?template\b"
+                    r"|\bquestion[_ ]?generator\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    _Fingerprint(
+        # B5: internal scored-family label strings hardcoded on the served path.
+        # These `world-*` / `conversational-*` labels are the generator's private
+        # question-type taxonomy and appear nowhere a general agent would need.
+        kind="scored-family-label",
+        severity="medium",
+        roles=(
+            _Role(
+                "scored-family-label-literal",
+                re.compile(
+                    r"[\"'](?:world-canary"
+                    r"|world-[a-z]+-[a-z][a-z-]*"
+                    r"|conversational-[a-z][a-z-]*)[\"']",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    # --- Rev7 (2026-08-18) FAMILY COMPILER fingerprints -----------------------
+    # The now-dominant threat is a trained/baked classifier that routes a scored
+    # bench question into a closed DittoBench family, then applies a hardcoded
+    # per-family recipe. These fingerprints target the greppable seams the four
+    # Rev7 holds shared -- the baked router artifact, the "copy this value
+    # exactly" directive, computed totals smuggled into the notes prompt, the
+    # closed program/evidence markers, the reject-until-match copy loop, the
+    # compacted context that replaces retrieved records, and the glossary /
+    # verified-result zero-token block. Each stays a location-only review lead:
+    # the agentic reviewer proves reachability and the two-location causal bar
+    # before any of them becomes a quarantine finding.
+    _Fingerprint(
+        # baked-family-router (Hogwarts v19 `fc051473`): a baked `.json` classifier
+        # loaded via `include_str!`/`load` whose keys are DittoBench family labels,
+        # routed through a `family_of` / `family::classify` dispatch. A general
+        # agent never ships a compiled question->family table.
+        kind="baked-family-router",
+        severity="high",
+        roles=(
+            _Role(
+                "family-router-loader",
+                re.compile(
+                    r"family[-_ ]?router\.json"
+                    r"|include_str!\s*\([^)]*family"
+                    r"|\b(?:load|read|read_to_string|include|from_str)\b"
+                    r"[^\n]*family[^\n]*\.json"
+                    r"|\bfn\s+family_of\b"
+                    r"|\bfamily::classify\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "dittobench-family-key",
+                re.compile(
+                    r"[\"'](?:world-story-[a-z][a-z-]*"
+                    r"|world-project-outstanding"
+                    r"|world-trip-[a-z][a-z-]*"
+                    r"|world-[a-z]+-[a-z][a-z-]*"
+                    r"|conversational-[a-z][a-z-]*)[\"']",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=14,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # do-not-recompute-directive (Hogwarts v19 guidance, Aceron_v4): a prompt
+        # directive ordering the model to emit a precomputed value verbatim rather
+        # than reason. An honest agent never tells the model to copy a value
+        # exactly instead of solving.
+        kind="do-not-recompute-directive",
+        severity="high",
+        roles=(
+            _Role(
+                "exact-value-directive",
+                re.compile(
+                    r"\bdo not recompute\b"
+                    r"|\breply with exactly\b"
+                    r"|\banswer with the parenthesized decimal exactly\b"
+                    r"|\bcopy its value exactly\b"
+                    r"|\bstate this exact resolved value\b"
+                    r"|\bEXACT_VALUE_PROMPT\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+    _Fingerprint(
+        # compiled-totals-as-notes (Aceron_v4 `src/story.rs`, A11): source that
+        # writes a locally computed total / reconciled value into the memory/notes
+        # prompt the model then reads back, especially beside withheld record
+        # sentences. The computed answer is smuggled in as if it were retrieved.
+        kind="compiled-totals-as-notes",
+        severity="high",
+        roles=(
+            _Role(
+                "reconciled-total-marker",
+                re.compile(
+                    r"\bwhat is still outstanding is\b"
+                    r"|\bauthor_reconciled_value\b"
+                    r"|\bsettled_without_operation\b"
+                    r"|\b(?:reconciled|computed|resolved|settled)[_ ]?"
+                    r"(?:total|value|balance|amount|outstanding)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "memory-or-notes-sink",
+                re.compile(
+                    r"\b(?:notes|memory_block|memories|context_block|note_block|"
+                    r"notes_prompt|memory_prompt)\b\s*"
+                    r"(?:\.\s*push(?:_str)?|\.\s*append|\.\s*insert|\+=|=(?!=))",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=12,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # open-program-evidence-marker (Omar v20/v21): the closed `Program` tree
+        # and `v10_open_program_evidence` marker of a baked solver dressed up as
+        # "open program" evidence. A general agent has no enumerated Program tree
+        # nor a try_solve shortcut over a fixed family.
+        kind="open-program-evidence-marker",
+        severity="high",
+        roles=(
+            _Role(
+                "open-program-marker",
+                re.compile(
+                    r"\bv10_open_program(?:_evidence)?\b"
+                    r"|\btry_solve\b"
+                    r"|\benum\s+[A-Za-z0-9_]*Program\b"
+                    r"|\b[A-Za-z0-9_]*Program\s*::\s*[A-Za-z0-9_]+",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="code",
+    ),
+    _Fingerprint(
+        # copy-retry-loop (reject-until-match; lets_5.x / Crown / unione): a bounded
+        # loop wrapping a model call that re-prompts until the reply matches a
+        # locally established value. Distinct from an honest transient retry, which
+        # loops on a network/timeout error, not on a value mismatch -- so a genuine
+        # backoff retry is suppressed.
+        kind="copy-retry-loop",
+        severity="medium",
+        roles=(
+            _Role(
+                "bounded-retry-loop",
+                re.compile(
+                    r"\bfor\s+attempt\s+in\s+1\s*\.\.=?"
+                    r"|\bfor\s+attempt\s+in\b"
+                    r"|\bfor\s+_\s+in\s+0\s*\.\.\s*[A-Za-z0-9_]"
+                    r"|\bwhile\s+attempt\b"
+                    r"|\bfor\s+attempt\s+in\s+range\b"
+                    r"|\bfor\s*\(\s*(?:let|var|int)?\s*attempt\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "in-loop-model-call",
+                re.compile(
+                    r"\b(?:call|invoke|run|complete|generate|chat)[_ ]?"
+                    r"(?:model|completion|chat|llm|inference)\b"
+                    r"|\bmodel::(?:chat|complete|generate)\b"
+                    r"|\bclient\.(?:chat|completions|responses)\b"
+                    r"|\.await\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "established-value-gate",
+                re.compile(
+                    r"\bestablished_for_prompt\b"
+                    r"|\b(?:established|expected|reference|target|derived)"
+                    r"[_ ]?(?:value|answer|result)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=16,
+        scan="code",
+        suppressors=(
+            _Role(
+                "transient-error-retry",
+                re.compile(
+                    r"\b(?:timeout|timed?[_ ]?out|rate[_ ]?limit|429|5\d\d|"
+                    r"connection|network|transient|backoff|ECONNRESET|"
+                    r"ServiceUnavailable)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+    ),
+    _Fingerprint(
+        # compact-system-prompt-replacement (D3 context replacement, red-dragon v39
+        # `baseline.rs`): the system prompt / memory block is assigned a compacted /
+        # derived-only value that replaces the retrieved records outright, so the
+        # served context is engine-authored rather than retrieved.
+        kind="compact-system-prompt-replacement",
+        severity="medium",
+        roles=(
+            _Role(
+                "prompt-or-memory-target",
+                re.compile(
+                    r"\b(?:system_prompt|system_message|memory_block|context_block|"
+                    r"memory_prompt)\b\s*=(?!=)",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "compacted-derived-value",
+                re.compile(
+                    r"=(?!=)\s*[^\n]*\b(?:compact|compacted|summariz|distill|"
+                    r"derived[_ ]?only|condensed|digest|reduce[d]?)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=3,
+        scan="code",
+    ),
+    _Fingerprint(
+        # glossary-verified-result-marker (Hogwarts v16): the glossary / verified-
+        # result zero-token block markers of a baked phrase solver. These strings
+        # and identifiers are the tell of a pre-baked answer table dressed as a
+        # "verified result".
+        kind="glossary-verified-result-marker",
+        severity="medium",
+        roles=(
+            _Role(
+                "glossary-verified-marker",
+                re.compile(
+                    r"\bVERIFIED RESULT\b"
+                    r"|\bglossary_block\b"
+                    r"|\bRole::PHRASES\b"
+                    r"|\bWJFAST\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="raw",
+    ),
+)
+
+
 def find_source_review_leads(
     files: Iterable[tuple[str, str]],
 ) -> list[dict[str, object]]:
@@ -887,6 +1363,155 @@ def find_decisive_malicious_source(
             if len(findings) >= _MAX_STATIC_FINDINGS:
                 return findings
     return findings
+
+
+_MAX_FINGERPRINT_FINDINGS = 24
+_MAX_FINGERPRINT_PER_RULE_FILE = 4
+_FINGERPRINT_LANGUAGE_BY_SUFFIX = {
+    "rs": "rust",
+    "py": "python",
+    "pyx": "python",
+    "go": "go",
+    "ts": "ts",
+    "tsx": "ts",
+    "mts": "ts",
+    "cts": "ts",
+    "js": "ts",
+    "jsx": "ts",
+    "mjs": "ts",
+    "cjs": "ts",
+}
+
+
+def _fingerprint_language(path: str) -> str | None:
+    name = path.rsplit("/", 1)[-1]
+    suffix = name.rsplit(".", 1)[-1].casefold() if "." in name else ""
+    return _FINGERPRINT_LANGUAGE_BY_SUFFIX.get(suffix)
+
+
+def find_benchmark_emulation_fingerprints(
+    files: Iterable[tuple[str, str]],
+) -> list[dict[str, object]]:
+    """Return bench-v12 anti-emulation fingerprints as location-only review leads.
+
+    Each finding names the matched fingerprint (``kind``), a ``severity``, and the
+    ``benchmark_emulation`` category, with ``path``/``line``/``role`` locations
+    only. No source text or matched literal ever leaves the archive: the reviewer
+    receives which fingerprint fired and where, and must still prove reachability
+    and the two-location causal bar before promoting it to a quarantine finding.
+
+    Only executable/served source is scanned (tests, docs, and fixtures are
+    excluded), matching the requirement that these tells be reachable from the
+    serve/run entrypoint. Scanning is language-aware: each file is classified from
+    its suffix, and a fingerprint whose tell is language-specific runs only on the
+    languages it applies to.
+    """
+    findings: list[dict[str, object]] = []
+    for path, text in sorted(files, key=lambda item: _path_priority(item[0])):
+        if not _is_executable_source_path(path):
+            continue
+        language = _fingerprint_language(path)
+        if language is None:
+            continue
+        raw_lines = text.splitlines()
+        if not raw_lines:
+            continue
+        code_lines = _mask_comments(text).splitlines()
+        code_lines.extend([""] * (len(raw_lines) - len(code_lines)))
+        for fingerprint in _EMULATION_FINGERPRINTS:
+            if fingerprint.languages and language not in fingerprint.languages:
+                continue
+            scan_lines = code_lines if fingerprint.scan == "code" else raw_lines
+            if fingerprint.min_hits > 1:
+                findings.extend(_aggregate_fingerprint(fingerprint, path, scan_lines))
+            else:
+                findings.extend(
+                    _cooccurrence_fingerprint(fingerprint, path, scan_lines, raw_lines)
+                )
+            if len(findings) >= _MAX_FINGERPRINT_FINDINGS:
+                return findings[:_MAX_FINGERPRINT_FINDINGS]
+    return findings
+
+
+def _fingerprint_finding(
+    fingerprint: _Fingerprint, locations: list[dict[str, object]]
+) -> dict[str, object]:
+    return {
+        "category": "benchmark_emulation",
+        "kind": fingerprint.kind,
+        "severity": fingerprint.severity,
+        "locations": locations,
+    }
+
+
+def _cooccurrence_fingerprint(
+    fingerprint: _Fingerprint,
+    path: str,
+    scan_lines: list[str],
+    raw_lines: list[str],
+) -> list[dict[str, object]]:
+    role_hits = {
+        role.name: [
+            line_number
+            for line_number, line in enumerate(scan_lines, 1)
+            if role.pattern.search(line[:4096])
+        ]
+        for role in fingerprint.roles
+    }
+    if any(not hits for hits in role_hits.values()):
+        return []
+    # Suppressors read the raw view so an honest look-alike (a genuine model call
+    # or awaited completion in the same body) reliably clears the lead.
+    suppressor_hits = [
+        line_number
+        for suppressor in fingerprint.suppressors
+        for line_number, line in enumerate(raw_lines, 1)
+        if suppressor.pattern.search(line[:4096])
+    ]
+    findings: list[dict[str, object]] = []
+    seen: set[tuple[tuple[str, int], ...]] = set()
+    anchors = sorted({line for hits in role_hits.values() for line in hits})
+    for anchor in anchors:
+        locations: list[dict[str, object]] = []
+        signature: list[tuple[str, int]] = []
+        for role in fingerprint.roles:
+            nearby = min(
+                role_hits[role.name],
+                key=lambda line: (abs(line - anchor), line),
+            )
+            if abs(nearby - anchor) > fingerprint.window:
+                break
+            signature.append((role.name, nearby))
+            locations.append({"path": path, "line": nearby, "role": role.name})
+        else:
+            if any(abs(hit - anchor) <= fingerprint.window for hit in suppressor_hits):
+                continue
+            normalized = tuple(signature)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            findings.append(_fingerprint_finding(fingerprint, locations))
+            if len(seen) >= _MAX_FINGERPRINT_PER_RULE_FILE:
+                break
+    return findings
+
+
+def _aggregate_fingerprint(
+    fingerprint: _Fingerprint, path: str, scan_lines: list[str]
+) -> list[dict[str, object]]:
+    role = fingerprint.roles[0]
+    hits = [
+        line_number
+        for line_number, line in enumerate(scan_lines, 1)
+        if role.pattern.search(line[:4096])
+    ]
+    if len(hits) < fingerprint.min_hits:
+        return []
+    locations = [
+        {"path": path, "line": line_number, "role": role.name}
+        for line_number in hits[: _MAX_FINGERPRINT_PER_RULE_FILE + 2]
+    ]
+    return [_fingerprint_finding(fingerprint, locations)]
 
 
 def _static_role_search_text(
@@ -1201,6 +1826,7 @@ def mask_comments(text: str) -> str:
 
 
 __all__ = [
+    "find_benchmark_emulation_fingerprints",
     "find_decisive_malicious_source",
     "find_source_review_leads",
     "is_executable_source_path",

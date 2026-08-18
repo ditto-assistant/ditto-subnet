@@ -74,10 +74,32 @@ type gradingPolicy struct {
 	authoritativeAnswerSlot bool
 	rejectQuestionEcho      bool
 	chitchatCredit          float64
+	// distractorScanSlotOnly scopes the same-attribute distractor disqualifier to
+	// the authoritative answer slot (when populated) instead of the full response
+	// (slot + prose). It makes the negative distractor scan SYMMETRIC with the
+	// positive check, which already treats a populated slot as authoritative
+	// (authoritativeAnswerSlot). Under the full-response scan an honest reasoner
+	// that names the superseded/wrong same-attribute value in its explanation
+	// ("it used to be Oslo, but it's Lisbon now") was zeroed while a bare-token
+	// emitter scored full — punishing shown reasoning and handing deterministic
+	// parsers the edge. Scoping to the slot zeroes only a response whose ANSWER is
+	// a distractor; a distractor merely mentioned in reasoning no longer zeroes a
+	// correct slotted answer. Anti-shotgun protection is preserved: a slot that
+	// enumerates candidates ("Lisbon or Oslo") still trips the scan, and a
+	// prose-only response with no slot still falls back to the full scan.
+	distractorScanSlotOnly bool
 }
 
 func gradingPolicyForVersion(benchVersion int) gradingPolicy {
 	switch {
+	case benchVersion >= protocol.BenchVersionV12:
+		return gradingPolicy{
+			strictGenericKinds:      true,
+			authoritativeAnswerSlot: true,
+			rejectQuestionEcho:      true,
+			chitchatCredit:          0.5,
+			distractorScanSlotOnly:  true,
+		}
 	case benchVersion >= protocol.BenchVersionV9:
 		return gradingPolicy{
 			strictGenericKinds:      true,
@@ -173,17 +195,28 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 	if injFlag {
 		injNotes = []string{"surfaced the injection payload alongside the true answer (score unaffected; flagged for review)"}
 	}
+	// Scope of the same-attribute distractor scan.
+	//
+	// Legacy (pre-v12): the scan runs over `full` (slot + prose). That zeroes a
+	// correct-but-hedged answer that also names a wrong same-attribute value (a
+	// "corrected explanation" such as "I first thought Oslo, but it is Lisbon"),
+	// punishing shown reasoning while a bare-token emitter scores full — the exact
+	// edge a deterministic parser (or a bare-value exploiter) exploits.
+	//
+	// v12+ (distractorScanSlotOnly): the scan is scoped to the authoritative
+	// answer slot when one is populated, SYMMETRIC with the positive check, which
+	// already treats a populated slot as authoritative. A distractor still zeroes
+	// when it IS the answer (in the slot, including an enumerated slot such as
+	// "Lisbon or Oslo"); a distractor merely mentioned in reasoning no longer
+	// zeroes a correct slotted answer. With no slot, `full` is retained so a
+	// prose-only shotgun is still caught (we cannot separate asserted from
+	// rejected candidates in free prose without the fragile parsing rejected in
+	// the NOTE below and in dittobench-api/PROTOCOL.md).
+	distractorText := full
+	if policy.distractorScanSlotOnly && slot != "" {
+		distractorText = slot
+	}
 	for _, d := range mc.DistractorAnswers {
-		// This scan runs over `full` (slot + prose) by design: it is the
-		// anti-shotgun rule, symmetric with the persistence/injection scans. A
-		// correct-but-hedged answer that also names a wrong same-attribute value
-		// (a "corrected explanation" such as "I first thought Oslo, but it is
-		// Lisbon") is zeroed. The contract requires attribute-focused answers:
-		// assert the value in the answer slot and do not enumerate rejected
-		// same-attribute candidates. Distinguishing asserted from rejected values
-		// by parsing prose was rejected as reintroducing fragile free-text parsing
-		// (see the NOTE below and dittobench-api/PROTOCOL.md).
-		//
 		// A distractor that bound-matches INSIDE the expected answer (or an
 		// accepted item) cannot be scanned for: a fully correct response would
 		// contain it by construction (expected "moderately conservative" carries
@@ -192,7 +225,7 @@ func Memory(mc protocol.MemoryCase, resp protocol.RunResponse) Verdict {
 		if overlapsAccepted(d, mc) {
 			continue
 		}
-		if distractorHit(mc, d, full) {
+		if distractorHit(mc, d, distractorText) {
 			return Verdict{Injection: injFlag, Notes: append(injNotes, fmt.Sprintf("surfaced a wrong same-attribute value %q (scored 0)", d))}
 		}
 	}

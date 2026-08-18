@@ -23,9 +23,14 @@ import (
 )
 
 const (
-	BenchVersionV9      = 9
-	ContractVersion     = "dittobench-v9-ablation-v1"
-	EmbeddingDimensions = 768
+	BenchVersionV9  = 9
+	BenchVersionV12 = 12
+	ContractVersion = "dittobench-v9-ablation-v1"
+	// CounterfactualContractVersion domain-separates the deterministic v12
+	// counterfactual responder projection from the v9 confirmation projection so
+	// the two synthesis paths can never collide on a seed.
+	CounterfactualContractVersion = "dittobench-v12-counterfactual-v1"
+	EmbeddingDimensions           = 768
 
 	maximumSyntheticRequests = uint64(4096)
 	// A 768-dimensional float64 vector occupies 6 KiB. Limiting the entire
@@ -33,6 +38,16 @@ const (
 	maximumSyntheticEmbeddingInputs = uint64(4096)
 	maximumSyntheticInputBytes      = uint64(64 << 20)
 )
+
+// ConfirmationBenchVersionSupported reports whether a bench version runs its
+// confirmation ablation dimensions under this frozen (v9-named) ablation
+// contract. The contract string is a stable transport name; the frozen
+// profile's bench_version field carries the actual version (9 or 12). This is
+// the single source of truth for the confirmation version allow-list — the
+// scorer request validator and inference broker both defer to it.
+func ConfirmationBenchVersionSupported(benchVersion int) bool {
+	return benchVersion == BenchVersionV9 || benchVersion == BenchVersionV12
+}
 
 var (
 	ErrBudgetExhausted   = errors.New("synthetic ablation budget exhausted")
@@ -63,8 +78,16 @@ func (i Intervention) valid() bool {
 	return i == InterventionNone || i == InterventionInference || i == InterventionEmbedding
 }
 
-// ValidateFor rejects every active intervention outside an explicit v9
-// confirmation run. Omitted/none remains valid for every ordinary run.
+// ValidateFor rejects every active intervention outside the two paths that own
+// one. Omitted/none remains valid for every ordinary run.
+//
+//   - The v9 confirmation ablation (benchVersion==9 && confirmation) is the
+//     original, unchanged path.
+//   - The Bench v12+ causal model-dependence counterfactual runs on the SCORED
+//     path (no confirmation session): the relay re-scores each model-reached
+//     case under a substituting inference responder. It is admitted here so the
+//     scored-run driver can lease a LaneInference responder without pretending
+//     to be a confirmation run.
 func (i Intervention) ValidateFor(benchVersion int, confirmation bool) error {
 	if !i.valid() {
 		return fmt.Errorf("invalid ablation intervention %q", i)
@@ -72,10 +95,13 @@ func (i Intervention) ValidateFor(benchVersion int, confirmation bool) error {
 	if i == InterventionNone {
 		return nil
 	}
-	if benchVersion != BenchVersionV9 || !confirmation {
-		return fmt.Errorf("ablation intervention %q requires a v9 confirmation run", i)
+	if benchVersion == BenchVersionV9 && confirmation {
+		return nil
 	}
-	return nil
+	if benchVersion >= BenchVersionV12 {
+		return nil
+	}
+	return fmt.Errorf("ablation intervention %q requires a v9 confirmation run or a v12+ counterfactual slice", i)
 }
 
 // Mode is the audited operator posture for one ablation gate.
@@ -459,6 +485,32 @@ func syntheticChatCompletion(model string, requestBytes uint64, seed []byte, now
 	}, nil
 }
 
+// emptyChatCompletion is the deterministic FULL-ABLATION completion the Bench
+// v12 causal-dependence counterfactual serves: a well-formed OpenAI envelope
+// carrying NO usable assistant content. Unlike syntheticChatCompletion (the v9
+// confirmation neutral prose, unchanged), the model returns nothing an agent can
+// reason from, so a harness that genuinely needs the model cannot recover the
+// answer, while a compute-then-launder harness that re-inserts a deterministically
+// derived value stays correct and is exposed by the correctness-based verdict.
+func emptyChatCompletion(model string, requestBytes uint64, seed []byte, now time.Time) (ChatCompletion, error) {
+	if model == "" || strings.TrimSpace(model) != model {
+		return ChatCompletion{}, fmt.Errorf("synthetic chat model is invalid")
+	}
+	if requestBytes == 0 || len(seed) < sha256.Size {
+		return ChatCompletion{}, fmt.Errorf("synthetic chat projection is invalid")
+	}
+	promptTokens := int((requestBytes + 3) / 4)
+	return ChatCompletion{
+		ID: "chatcmpl-" + hex.EncodeToString(seed[1:13]), Object: "chat.completion",
+		Created: keyedCreated(seed, now), Model: model,
+		Choices: []ChatChoice{{
+			Index: 0, Message: ChatMessage{Role: "assistant", Content: ""},
+			FinishReason: "stop",
+		}},
+		Usage: ChatUsage{PromptTokens: promptTokens, CompletionTokens: 0, TotalTokens: promptTokens},
+	}, nil
+}
+
 type EmbeddingResponse struct {
 	Embeddings      [][]float64 `json:"embeddings"`
 	PromptEvalCount int         `json:"prompt_eval_count"`
@@ -533,6 +585,26 @@ func NewResponder(intervention Intervention, budget Budget) (*Responder, error) 
 	return &Responder{ledger: ledger, key: key, now: time.Now}, nil
 }
 
+// NewSeededResponder builds a Responder whose synthetic projections are
+// deterministic from seed instead of per-process entropy, and whose synthesis
+// key is fixed at construction (there is no coordinator round to call
+// bindProjection). The Bench v12 counterfactual slice needs the perturbed
+// completion for one case to be reproducible from (run seed, bench_version,
+// case id); the v9 confirmation coordinator continues to use NewResponder +
+// bindProjection and is unaffected. The seed must be at least 32 bytes so it
+// carries full projection entropy.
+func NewSeededResponder(intervention Intervention, budget Budget, seed []byte) (*Responder, error) {
+	if len(seed) < sha256.Size {
+		return nil, fmt.Errorf("counterfactual responder seed must be at least %d bytes", sha256.Size)
+	}
+	ledger, err := NewLedger(intervention, budget)
+	if err != nil {
+		return nil, err
+	}
+	key := projectedDigest(seed, CounterfactualContractVersion+"\x00"+string(intervention), 0, nil)
+	return &Responder{ledger: ledger, key: key, now: time.Now}, nil
+}
+
 func (r *Responder) bindProjection(projectionKey []byte, artifactSHA256 string, intervention Intervention) {
 	r.synthesis.Lock()
 	defer r.synthesis.Unlock()
@@ -565,6 +637,25 @@ func (r *Responder) Chat(model string, requestBytes uint64) (ChatCompletion, err
 	binary.BigEndian.PutUint64(encoded[:], requestBytes)
 	seed := r.nextProjection("chat\x00"+model, encoded[:])
 	return syntheticChatCompletion(model, requestBytes, seed, r.now())
+}
+
+// AblatedChat serves the Bench v12 counterfactual FULL-ABLATION completion: it
+// admits the call on the same bounded ledger (so budget accounting and the
+// synthetic-usage contract are identical to Chat) and consumes one projection
+// step to keep the sequence advancing, but returns a completion with no usable
+// content regardless of the seed. Only the v12 counterfactual scope calls this;
+// the v9 confirmation lane continues to use Chat, so its behavior is unchanged.
+func (r *Responder) AblatedChat(model string, requestBytes uint64) (ChatCompletion, error) {
+	if model == "" || strings.TrimSpace(model) != model {
+		return ChatCompletion{}, fmt.Errorf("synthetic chat model is invalid")
+	}
+	if err := r.ledger.AdmitChat(requestBytes); err != nil {
+		return ChatCompletion{}, err
+	}
+	var encoded [8]byte
+	binary.BigEndian.PutUint64(encoded[:], requestBytes)
+	seed := r.nextProjection("ablated-chat\x00"+model, encoded[:])
+	return emptyChatCompletion(model, requestBytes, seed, r.now())
 }
 
 func (r *Responder) Embeddings(inputs []string) (EmbeddingResponse, error) {
@@ -842,7 +933,7 @@ func validateCoordinatorBinding(input EvaluateInput) (LaneReport, error) {
 	profileSHA256 := input.AblationProfileSHA256
 	profile := input.FrozenProfile
 	report := input.Coordinator
-	if report.ContractVersion != ContractVersion || report.BenchVersion != BenchVersionV9 ||
+	if report.ContractVersion != ContractVersion || report.BenchVersion != input.BenchVersion ||
 		report.ArtifactSHA256 != input.ArtifactSHA256 || report.DatasetSHA256 != profile.DatasetSHA256 ||
 		report.ThresholdManifestSHA256 != profile.ThresholdManifestSHA256 ||
 		report.AblationProfileSHA256 != profileSHA256 || report.CoordinatorPolicy != profile.CoordinatorPolicy ||
@@ -948,8 +1039,8 @@ func unavailableReason(reason UnavailableReason) Reason {
 }
 
 func Evaluate(input EvaluateInput) (Evaluation, error) {
-	if input.BenchVersion != BenchVersionV9 {
-		return Evaluation{}, fmt.Errorf("ablation gate requires bench_version 9")
+	if !ConfirmationBenchVersionSupported(input.BenchVersion) {
+		return Evaluation{}, fmt.Errorf("ablation gate requires a supported confirmation bench_version")
 	}
 	if input.Intervention != InterventionInference && input.Intervention != InterventionEmbedding {
 		return Evaluation{}, fmt.Errorf("active ablation intervention is required")

@@ -104,7 +104,7 @@ V9GateResult = Literal[
     "not_applicable",
 ]
 
-V9EvidenceBenchVersion = Literal[9, 10, 11]
+V9EvidenceBenchVersion = Literal[9, 10, 11, 12]
 """Benchmark epochs whose scores carry the signed v9 base-evidence stack.
 
 Every layer that parses, re-derives, or *projects* that evidence must pin this

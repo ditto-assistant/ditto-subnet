@@ -396,9 +396,51 @@ func TestV10KnownVector(t *testing.T) {
 	}
 }
 
+// TestV12KnownVector pins the private, pre-activation anti-template-fitting
+// substrate contract without changing the currently advertised benchmark
+// version. It is the byte-identity guard for v12: any change to the shuffled
+// prose substrate, the compositional markers, or the routing cues moves this
+// hash and must be a deliberate, reviewed new-contract decision.
+func TestV12KnownVector(t *testing.T) {
+	const (
+		seed = int64(123456789)
+		// Re-pinned after v12 dropped the v11 safelisted typo projector (F1/C5:
+		// a partial projector hands the adversary a stable clause-verb anchor).
+		//
+		// Re-pinned again when the v12 parser-divergence canary family landed
+		// (gen/divergence.go, countermeasure C11): a bounded share of the v12
+		// memory mix is now spent on cases whose surface/template reading diverges
+		// from the correct one (negation, retraction, hypothetical, reported
+		// speech). They are carved out of the world-question budget, so the total
+		// memory envelope is unchanged, but the dataset bytes move. v2..v11 vectors
+		// above are untouched — the family is gated on bench_version >= 12.
+		//
+		// Re-pinned again when the anti-family-compiler families landed
+		// (gen/familycompiler.go, countermeasure C12): record-determined operation,
+		// family-ambiguity, and counterfactual-pair cases whose required computation
+		// is not recoverable from the question surface. Also carved out of the
+		// world-question budget, so the total memory envelope is unchanged; the
+		// dataset bytes move. v2..v11 vectors above are untouched — the family is
+		// gated on bench_version >= 12.
+		want = "775e0eaf2d41c0cf4647c51f19c56ecc3bb6db37a780538bb7db745811ab91bb"
+	)
+	prof, _ := ProfileForVersion("full", protocol.BenchVersionV12)
+	artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV12)
+	if err != nil {
+		t.Fatalf("generate: %v", err)
+	}
+	got, _, err := artifact.SHA256Hex()
+	if err != nil {
+		t.Fatalf("hash: %v", err)
+	}
+	if got != want {
+		t.Fatalf("v12 known-vector hash drift for seed %d full:\n got %s\nwant %s", seed, got, want)
+	}
+}
+
 func TestUnsupportedVersionRejected(t *testing.T) {
 	prof, _ := ProfileFor("small")
-	if _, err := GenerateDataset(42, prof, 12); err == nil {
+	if _, err := GenerateDataset(42, prof, protocol.BenchVersionV12+1); err == nil {
 		t.Fatal("unsupported version accepted")
 	}
 }
@@ -406,7 +448,7 @@ func TestUnsupportedVersionRejected(t *testing.T) {
 // TestSameSeedSameBytes is the core determinism guarantee: one seed, one artifact.
 func TestSameSeedSameBytes(t *testing.T) {
 	prof, _ := ProfileFor("full")
-	for _, version := range []int{protocol.BenchVersionV2, protocol.BenchVersionV3, protocol.BenchVersionV4, protocol.BenchVersionV5, protocol.BenchVersionV6, protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10} {
+	for _, version := range []int{protocol.BenchVersionV2, protocol.BenchVersionV3, protocol.BenchVersionV4, protocol.BenchVersionV5, protocol.BenchVersionV6, protocol.BenchVersionV7, protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
 		artifactA, err := GenerateDataset(42, prof, version)
 		if err != nil {
 			t.Fatalf("v%d generate a: %v", version, err)

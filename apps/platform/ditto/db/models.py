@@ -1121,9 +1121,11 @@ class ConfirmationScore(Base):
     v9_efficiency_token_total: Mapped[int | None] = mapped_column(
         BigInteger, nullable=True
     )
-    """Prompt-plus-completion token cost for a protocol-19 single-seed v9
-    retest, whose base-evidence digest is bound into this row's signature.
-    Null for historical, multi-seed, and non-v9 confirmation rows."""
+    """Prompt-plus-completion token cost for a protocol-19 single-seed
+    continual retest, whose signed v9 base-evidence digest is bound into this
+    row's signature. Populated for any bench epoch that carries that evidence
+    stack (v9 and every version after it). Null for historical, multi-seed, and
+    non-confirmation rows."""
 
     v9_efficiency_cost_eligible: Mapped[bool | None] = mapped_column(
         Boolean, nullable=True
@@ -1173,7 +1175,7 @@ class ConfirmationScore(Base):
             "(v9_efficiency_cost_eligible = false "
             "AND v9_efficiency_token_total IS NULL) OR "
             "(v9_efficiency_cost_eligible = true "
-            "AND bench_version = 9 AND v9_efficiency_token_total > 0)",
+            "AND bench_version >= 9 AND v9_efficiency_token_total > 0)",
             name="confirmation_scores_efficiency_cost_check",
         ),
         Index("confirmation_scores_agent_version_idx", "agent_id", "bench_version"),

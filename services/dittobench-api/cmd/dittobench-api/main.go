@@ -381,8 +381,8 @@ func supportedBenchVersions() []int {
 	if !efficiency.ValidV8Readiness(efficiency.V8Readiness()) {
 		return nil
 	}
-	versions := make([]int, 0, 4)
-	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11} {
+	versions := make([]int, 0, 5)
+	for _, version := range []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12} {
 		if protocol.SupportedBenchVersion(version) && efficiency.ProductionReadyForVersion(version) {
 			versions = append(versions, version)
 		}
@@ -1090,14 +1090,14 @@ func (s *server) handleScoreRequest(w http.ResponseWriter, r *http.Request) {
 
 func requestedBenchVersion(requested int) (int, string) {
 	if requested == 0 {
-		return 0, "bench_version is required (supported: 8, 9, 10, 11)"
+		return 0, "bench_version is required (supported: 8, 9, 10, 11, 12)"
 	}
 	for _, version := range supportedBenchVersions() {
 		if requested == version {
 			return requested, ""
 		}
 	}
-	return 0, "unsupported bench_version (supported: 8, 9, 10, 11)"
+	return 0, "unsupported bench_version (supported: 8, 9, 10, 11, 12)"
 }
 
 func toolPrerequisiteWave(toolCases []protocol.ToolCase) (protocol.SeedRequest, error) {
@@ -1817,11 +1817,22 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	//    written per index so the report order is identical to sequential
 	//    execution regardless of completion order.
 	observedTool, cappedTool := 0, 0
+	// captureCounterfactualSpecs is set for scored v12+ runs: the shadow
+	// counterfactual pass (Bench v12 causal model-dependence) re-runs each
+	// model-reached case, so it must capture each case's re-run inputs (wire id,
+	// prompt, tools, per-case tool endpoint, user) alongside the transcript.
+	captureCounterfactualSpecs := scope == scorer.ScopeScored && req.BenchVersion >= protocol.BenchVersionV12
 	s.store.SetStage(runID, store.StatusRunning, 0, total)
 	toolResults := make([]protocol.CaseScore, len(toolCases))
 	toolWasObserved := make([]bool, len(toolCases))
 	toolWasCapped := make([]bool, len(toolCases))
 	toolTranscripts := make([]transcriptCase, len(toolCases))
+	toolCounterfactualSpecs := make([]counterfactualCaseSpec, len(toolCases))
+	// Bench v12 answer-stuffing specs (per-case computed-answer provenance data).
+	// Tool cases have no scalar expected answer, so they are never in the computed
+	// slice (computed=false -> excluded); the entry is still allocated so the spec
+	// slice stays index-aligned with perCase/transcripts.
+	toolAnswerStuffingSpecs := make([]answerStuffingCaseSpec, len(toolCases))
 	var projectionFailure error
 	var projectionFailureOnce sync.Once
 	recordProjectionFailure := func(err error) {
@@ -1889,6 +1900,32 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			cs.CaseID = transcriptID
 		}
 		toolTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindTool, Response: transcriptResponse, Observed: transcriptObserved, Execution: execution}
+		if captureCounterfactualSpecs {
+			// Bench v12 counterfactual grader for THIS tool case: re-scores any
+			// RunResponse against the case's expected answer with the same
+			// deterministic scorer the clean pass used. Scope-practice + self-report
+			// (observed=nil) so both the clean and the ablated responses are graded on
+			// the same footing (the scored unobserved cap would otherwise zero every
+			// ablated tool answer and manufacture false dependence). The closure
+			// captures the settled fixture, so result-usage cases keep grading the
+			// served needle/decoy.
+			cfCase := c
+			cfFixture := fixture
+			cfVersion := req.BenchVersion
+			grade := func(r protocol.RunResponse) float64 {
+				g := scorer.ScoreToolCaseObservedForVersion(cfCase, r, true, nil, scorer.ScopePractice, cfVersion)
+				if datagen.IsResultUsage(cfCase.Category) {
+					g = scorer.ComposeResultUsageForVersion(cfVersion, g, r.FinalText, cfFixture.NeedleValue(), cfFixture.DecoyValue())
+				} else {
+					g = scorer.FinishTool(g)
+				}
+				return g.Score
+			}
+			toolCounterfactualSpecs[i] = counterfactualCaseSpec{caseID: c.ID, prompt: c.Prompt, tools: tools, toolEndpoint: caseToolEndpoint, userID: toolRunUserID, grade: grade}
+			// A tool case has no scalar expected answer to stuff: keep it out of both
+			// the provable and the loose computed slices while preserving index alignment.
+			toolAnswerStuffingSpecs[i] = answerStuffingCaseSpec{caseID: c.ID, computed: false, computedLoose: false}
+		}
 		toolResults[i] = cs
 		s.store.AppendPartial(runID, cs) // store append is mutex-guarded
 	})
@@ -1912,6 +1949,29 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 	}
 	transcripts := append(make([]transcriptCase, 0, total), toolTranscripts...)
+	counterfactualSpecs := append(make([]counterfactualCaseSpec, 0, total), toolCounterfactualSpecs...)
+	answerStuffingSpecs := append(make([]answerStuffingCaseSpec, 0, total), toolAnswerStuffingSpecs...)
+	// Per-case seeded evidence text, keyed by pair id, so a memory case's expected
+	// answer can be tested for verbatim presence in its own declared evidence. A
+	// COMPUTED answer (absent from that evidence) is in the v12 answer-stuffing
+	// slice; a verbatim-recall answer is excluded. Unresolved evidence is treated
+	// conservatively as non-computed (excluded) downstream.
+	seededEvidenceByPairID := make(map[string]string)
+	addSeededPairs := func(pairs []protocol.MemoryPair) {
+		for _, pair := range pairs {
+			seededEvidenceByPairID[pair.PairID] = pair.Prompt + " " + pair.Response
+		}
+	}
+	for _, seedWave := range memSuite.Waves {
+		addSeededPairs(seedWave.Pairs)
+	}
+	addSeededPairs(iso.SecondaryWave.Pairs)
+	// Value-token hash union over the ENTIRE run's retrievable seeded memory, so a
+	// memory case's expected answer can be tested for presence ANYWHERE in memory
+	// (Change-1 provability): a computed answer that appears nowhere in seeded memory
+	// could not have been legitimately retrieved, while one that numerically equals an
+	// operand already in memory is excluded here as a coincidence.
+	seededMemoryValues := buildSeededMemoryValueSet(seededEvidenceByPairID)
 
 	// Historical local-embedding versions retain their frozen boundary: tool
 	// cases may overlap, then the embedding-heavy seed/query phase is admitted.
@@ -1975,6 +2035,8 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		waveCases := casesByWave[w]
 		waveResults := make([]protocol.CaseScore, len(waveCases))
 		waveTranscripts := make([]transcriptCase, len(waveCases))
+		waveCounterfactualSpecs := make([]counterfactualCaseSpec, len(waveCases))
+		waveAnswerStuffingSpecs := make([]answerStuffingCaseSpec, len(waveCases))
 		runBounded(ctx, len(waveCases), effectiveCaseConcurrency, func(i int) {
 			sc := waveCases[i]
 			mc := sc.Case
@@ -2033,6 +2095,36 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				cs.CaseID = transcriptID
 			}
 			waveTranscripts[i] = transcriptCase{CaseID: transcriptID, Kind: protocol.KindMemory, UserID: transcriptUser, Response: transcriptResponse, Observed: transcriptObserved, Execution: execution}
+			if captureCounterfactualSpecs {
+				// Bench v12 counterfactual grader for THIS memory case: the public
+				// deterministic memory grader over any RunResponse, scoring its answer
+				// against the case's expected answer. The clean and ablated responses go
+				// through the same grader so the verdict measures whether correctness
+				// survived full model ablation.
+				cfMemCase := mc
+				grade := func(r protocol.RunResponse) float64 {
+					return scorer.GradeMemory(cfMemCase, r).Score
+				}
+				waveCounterfactualSpecs[i] = counterfactualCaseSpec{caseID: mc.ID, prompt: mc.Question, tools: tools, toolEndpoint: caseToolEndpoint, userID: uid, grade: grade}
+				// Bench v12 answer-stuffing spec for THIS memory case. The answer enters the
+				// flagged slice only when it is PROVABLY computed: NOT verbatim in the case's
+				// own declared evidence (normal RAG / verbatim recall excluded) AND absent
+				// from the ENTIRE run's retrievable seeded memory values (so no legitimate
+				// retrieval could surface it, which also excludes the operand-equals-answer
+				// coincidence). Any unresolved evidence pin conservatively marks the case
+				// non-computed so an honest retrieval is never flagged.
+				caseCandidates := answerStuffingCandidates(mc)
+				waveAnswerStuffingSpecs[i] = answerStuffingCaseSpec{
+					caseID:   mc.ID,
+					computed: memoryAnswerIsProvablyComputed(mc, sc.RequiredPairIDs, seededEvidenceByPairID, seededMemoryValues, caseCandidates),
+					// computedLoose is the weaker "not verbatim-recall" flag (regardless of
+					// whether the answer value also appears elsewhere in seeded memory), so a
+					// coinciding-value stuffer the provable slice excludes still feeds the
+					// loose systematic-review signal.
+					computedLoose:    memoryAnswerIsComputed(mc, sc.RequiredPairIDs, seededEvidenceByPairID),
+					answerCandidates: caseCandidates,
+				}
+			}
 			waveResults[i] = cs
 			s.store.AppendPartial(runID, cs) // store append is mutex-guarded
 		})
@@ -2048,10 +2140,22 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 		perCase = append(perCase, waveResults...)
 		transcripts = append(transcripts, waveTranscripts...)
+		counterfactualSpecs = append(counterfactualSpecs, waveCounterfactualSpecs...)
+		answerStuffingSpecs = append(answerStuffingSpecs, waveAnswerStuffingSpecs...)
 	}
 	// Close broker access before scoring/accounting. The once-guarded deferred
 	// cleanup still handles every early return, cancel, and panic above.
-	endEmbeddingPhase()
+	//
+	// A scored v12 run defers this close: the Bench v12 counterfactual pass below
+	// still needs the live embedding lane for its (chat-substituted) re-runs. It
+	// runs AFTER the clean relay accounting is snapshotted, so its provider
+	// activity is outside that snapshot; the deferred endEmbeddingPhase() (or this
+	// explicit call after the pass) tears the lane down.
+	runV12Counterfactual := scope == scorer.ScopeScored && req.BenchVersion >= protocol.BenchVersionV12 &&
+		inferenceSessionID != "" && s.broker != nil
+	if !runV12Counterfactual {
+		endEmbeddingPhase()
+	}
 
 	// The relay owns authoritative provider-delivery evidence. Check it before
 	// scoring or persistence: any upstream infrastructure failure during this
@@ -2087,6 +2191,28 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			s.failRelayUnavailable(runID, err)
 			return
 		}
+	}
+
+	// Bench v12 causal model-dependence: SHADOW counterfactual pass (issue #532).
+	// It runs ONLY after the clean relay accounting above is captured into
+	// tokenUsage/relayExecution, so its re-runs — synthetic (provider-free) chat
+	// plus live embeddings — cannot move token usage, relay execution evidence,
+	// the model_use gate, or any per-case score. It writes ONLY the two per-case
+	// counterfactual telemetry fields on the transcript slice, which the v12
+	// dependence gate reads in applyV9BaseEvidence below.
+	if runV12Counterfactual {
+		populateV12Counterfactual(ctx, runID, seed, req.BenchVersion, perCase, transcripts, counterfactualSpecs,
+			&brokerCounterfactualRunner{
+				server: s, inferenceSessionID: inferenceSessionID, runID: runID,
+				harnessURL: harnessURL, benchVersion: req.BenchVersion,
+			})
+		// Bench v12 Class-D answer-stuffing: PASSIVE provenance pass over the broker's
+		// recorded clean-pass model I/O. It settles the two per-case telemetry fields
+		// the answer-stuffing gate reads and never re-runs the harness or touches any
+		// score input; it must run before the broker session is torn down below.
+		populateV12AnswerStuffing(runID, req.BenchVersion, perCase, transcripts, answerStuffingSpecs,
+			&brokerCaseModelIOSource{server: s, inferenceSessionID: inferenceSessionID})
+		endEmbeddingPhase()
 	}
 
 	// 6. scoring — aggregate + finish. Protocol reachability probes are

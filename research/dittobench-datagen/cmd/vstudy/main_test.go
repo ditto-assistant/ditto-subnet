@@ -161,7 +161,7 @@ func TestParseBenchVersions(t *testing.T) {
 	if !reflect.DeepEqual(got, []int{protocol.BenchVersionV8, protocol.BenchVersionV9, protocol.BenchVersionV10}) {
 		t.Fatalf("versions=%v, want [8 9 10]", got)
 	}
-	for _, raw := range []string{"", ",", "9,garbage", "12"} {
+	for _, raw := range []string{"", ",", "9,garbage", "13"} {
 		if _, err := parseBenchVersions(raw); err == nil {
 			t.Errorf("parseBenchVersions(%q) unexpectedly succeeded", raw)
 		}

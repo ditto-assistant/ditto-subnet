@@ -31,6 +31,7 @@ from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.source_causality import analyze_static_candidates_v2
 from ditto_screener.source_reachability import analyze_reachability
 from ditto_screener.source_signals import (
+    find_benchmark_emulation_fingerprints,
     find_decisive_malicious_source,
     find_source_review_leads,
     is_executable_source_path,
@@ -720,6 +721,34 @@ and the two-location evidence bar before citing anything:
   answers the canary shape, so a fixture keyed to the request user is cleared
   even at high density.
 
+The inventory also carries "emulation_fingerprints": bench-v12 anti-emulation
+leads over served/executable source, each naming a matched fingerprint kind, a
+severity, and location-only path:line roles. They automate the greppable bypass
+shapes that four emulator agents used to reach the top of the board before manual
+review caught them. Treat every fingerprint as a high-priority lead, never a
+verdict: read the cited runtime source, confirm the tell is reachable from the
+serve/run entrypoint, and apply the same two-location causal bar before citing.
+- bench-version-equality-gate: a served comparison of the running benchmark
+  version against a literal is near-conclusive emulation -- a general agent does
+  not branch on which benchmark revision scores it. Confirm the compared value is
+  the live bench version and the branch changes the served answer/tool path.
+- sync-answer-constructor: a synchronous function that builds the served answer
+  cannot have awaited a model completion. Verify no awaited/blocking model call
+  authors the returned answer; a real completion on the path clears it.
+- zero-token-answer-constructor: literal zero prompt/output token counts beside a
+  populated answer field mean no completion was produced. Confirm the answer is
+  served and the zeroed usage is not an unreached default or a genuine cache hit.
+- typo-tolerant-token-compare: edit-distance/typo-tolerant matching near question
+  or case parsing suggests absorbing the private typo projector to map misspelled
+  scored questions onto a fixed family. Distinguish generic fuzzy retrieval.
+- literal-question-registry: a table of verbatim scored-question phrasings used as
+  dispatch keys is a phrase-table solver. Confirm the keys drive the served answer
+  rather than logging, analytics, or tests.
+- generator-source-citation / scored-family-label: served-path references to the
+  private generator/grader tree or its internal question-type taxonomy are
+  self-documented mirroring. Comments/labels alone are not a verdict; connect them
+  to a reachable deterministic answer path before citing benchmark_emulation.
+
 For every medium/high category, cite at least one exact reachable path:line for
 that category. For benchmark_emulation or scorer_contract_manipulation, cite at
 least two distinct reachable locations covering the input/decision trigger and
@@ -1371,6 +1400,7 @@ class TarSourceRepository:
             "items": [*find_source_review_leads(readable), *static_advisories][
                 :_MAX_LEAD_SCAN_FILES
             ],
+            "emulation_fingerprints": find_benchmark_emulation_fingerprints(readable),
             "unmatchable_category_guards": guard_report(
                 find_unmatchable_category_guards(
                     (path, mask_comments(text)) for path, text in readable

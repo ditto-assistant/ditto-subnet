@@ -159,7 +159,13 @@ func BuildArtifactForVersion(seed int64, benchVersion int, toolCases []protocol.
 			return DatasetArtifact{}, err
 		}
 	}
-	V11ApplyArtifactSurfaceNoise(seed, benchVersion, &artifact)
+	// v12 supersedes the v11 surface pass with compositional stored-directive
+	// markers; both leave every value byte-exact, so grading is unaffected.
+	if benchVersion >= protocol.BenchVersionV12 {
+		V12ApplyArtifactSurfaceNoise(seed, benchVersion, &artifact)
+	} else {
+		V11ApplyArtifactSurfaceNoise(seed, benchVersion, &artifact)
+	}
 	return artifact, nil
 }
 

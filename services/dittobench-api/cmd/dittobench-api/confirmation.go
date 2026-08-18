@@ -91,8 +91,8 @@ func validBrokerSlot(value string) bool {
 }
 
 func (request confirmationExecutionRequest) validate(now time.Time, readiness confirmationReadiness) error {
-	if request.Purpose != confirmationPurpose || request.BenchVersion != confirmationBenchVersion {
-		return errors.New("confirmation execution requires the internal bench v9 purpose")
+	if request.Purpose != confirmationPurpose || !confirmationBenchVersionSupported(request.BenchVersion) {
+		return errors.New("confirmation execution requires a supported confirmation bench version")
 	}
 	if strings.TrimSpace(request.BundleID) == "" || strings.TrimSpace(request.TicketID) == "" ||
 		strings.TrimSpace(request.AgentID) == "" || !validLongMemSlot(request.SlotID) || len(request.InferenceSessionID) < 16 ||

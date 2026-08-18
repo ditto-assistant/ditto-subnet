@@ -137,6 +137,7 @@ type confirmationLongMemHarness struct {
 	image         string
 	sessionID     string
 	runID         string
+	benchVersion  int
 	healthTimeout time.Duration
 	binding       *confirmationSourceBinding
 	current       *sandbox.Handle
@@ -170,7 +171,7 @@ func (h *confirmationLongMemHarness) startCaseLocked(ctx context.Context) error 
 		return errors.New("confirmation LongMem source capability unavailable")
 	}
 	env, err := harnessSandboxEnvWithCapability(
-		nil, confirmationBenchVersion, platformLockedProvider, h.sessionID, capability,
+		nil, h.benchVersion, platformLockedProvider, h.sessionID, capability,
 	)
 	if err != nil {
 		_ = h.broker.revokeSourceCapability(h.sessionID, h.runID, capability)
@@ -824,7 +825,7 @@ func (factory *screenedConfirmationRuntimeFactory) installBrokerSession(
 	session.requestModel = readerPolicy.Model
 	session.profileRevision = readerPolicy.ProfileRevision
 	session.boundRunID = runID
-	session.benchVersion = confirmationBenchVersion
+	session.benchVersion = factory.profile.benchVersion()
 	if session.embeddingCalls == nil {
 		session.embeddingCalls = make(map[chan struct{}]context.CancelFunc)
 	}
@@ -955,7 +956,7 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 		)
 	}
 	env, err := harnessSandboxEnvWithCapability(
-		nil, confirmationBenchVersion, platformLockedProvider, sessionID, preflightCapability,
+		nil, factory.profile.benchVersion(), platformLockedProvider, sessionID, preflightCapability,
 	)
 	if err != nil {
 		return nil, wrapConfirmationExecutionFailure(
@@ -1007,11 +1008,11 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 	binding := &confirmationSourceBinding{}
 	longMemHarness := &confirmationLongMemHarness{
 		sandbox: factory.sandbox, broker: factory.broker, image: image, sessionID: sessionID, runID: runID,
-		healthTimeout: factory.healthTimeout, binding: binding,
+		benchVersion: factory.profile.benchVersion(), healthTimeout: factory.healthTimeout, binding: binding,
 	}
 	caseRunner := &screenedAblationCaseRunner{
 		sandbox: factory.sandbox, broker: factory.broker, image: image, sessionID: sessionID, runID: runID,
-		healthTimeout: factory.healthTimeout, dataset: ablationDataset, binding: binding,
+		benchVersion: factory.profile.benchVersion(), healthTimeout: factory.healthTimeout, dataset: ablationDataset, binding: binding,
 	}
 	closer := &confirmationRuntimeCloser{
 		sandbox: factory.sandbox, broker: factory.broker, image: image, sessionID: sessionID, runID: runID,
@@ -1030,7 +1031,7 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 		LongMemHarness: longMemHarness,
 		LongMemJudge:   provider.Judge(), LongMemMeter: provider,
 		LongMemProjectionKey:  longMemProjectionKey,
-		AblationPopulation:    ablation.EligiblePopulation{BenchVersion: confirmationBenchVersion, Confirmation: true, Cases: population},
+		AblationPopulation:    ablation.EligiblePopulation{BenchVersion: factory.profile.benchVersion(), Confirmation: true, Cases: population},
 		AblationCaseRunner:    caseRunner,
 		AblationSelectionKey:  ablationSelectionKey,
 		AblationProjectionKey: ablationProjectionKey,
@@ -1055,6 +1056,7 @@ type screenedAblationCaseRunner struct {
 	image             string
 	sessionID         string
 	runID             string
+	benchVersion      int
 	healthTimeout     time.Duration
 	dataset           confirmationAblationDataset
 	current           *sandbox.Handle
@@ -1218,7 +1220,7 @@ func (runnerAdapter *screenedAblationCaseRunner) RunCase(
 		return ablation.CaseRunResult{}, errors.New("confirmation ablation source capability unavailable")
 	}
 	env, err := harnessSandboxEnvWithCapability(
-		nil, confirmationBenchVersion, platformLockedProvider,
+		nil, runnerAdapter.benchVersion, platformLockedProvider,
 		runnerAdapter.sessionID, capability,
 	)
 	if err != nil {
@@ -1279,7 +1281,7 @@ func (runnerAdapter *screenedAblationCaseRunner) RunCase(
 	caseID := confirmationOpaqueUUID("case", item.CaseID)
 	response, err := harness.Run(ctx, protocol.RunRequest{
 		CaseID: caseID, SystemPrompt: item.SystemPrompt, UserInput: item.Question,
-		Tools: longmemeval.NativeMemoryTools(), BenchVersion: confirmationBenchVersion, UserID: userID,
+		Tools: longmemeval.NativeMemoryTools(), BenchVersion: runnerAdapter.benchVersion, UserID: userID,
 	})
 	if finishErr := runnerAdapter.stopCurrentLocked(); finishErr != nil {
 		return ablation.CaseRunResult{}, finishErr
@@ -1288,7 +1290,7 @@ func (runnerAdapter *screenedAblationCaseRunner) RunCase(
 		return ablation.CaseRunResult{}, ablation.MarkRetryable(errors.New("confirmation ablation case failed"))
 	}
 	score := scorer.GradeMemory(protocol.MemoryCase{
-		BenchVersion: confirmationBenchVersion, ID: caseID, QuestionID: item.CaseID,
+		BenchVersion: runnerAdapter.benchVersion, ID: caseID, QuestionID: item.CaseID,
 		QuestionType: item.QuestionType, Question: item.Question, ExpectedAnswer: item.ExpectedAnswer,
 		AnswerKind: item.AnswerKind, AcceptAny: append([]string(nil), item.AcceptAny...),
 		DistractorAnswers: append([]string(nil), item.DistractorAnswers...), ForbiddenAnswer: item.ForbiddenAnswer,

@@ -23,7 +23,7 @@ func TestV10DeepProfileFailsClosedBelowEveryFloor(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*Profile){
-		"version":  func(profile *Profile) { profile.BenchVersion = 12 },
+		"version":  func(profile *Profile) { profile.BenchVersion = 8 },
 		"cases":    func(profile *Profile) { profile.CasesPerCapability-- },
 		"sessions": func(profile *Profile) { profile.MinHistorySessions-- },
 		"bytes":    func(profile *Profile) { profile.MinHistoryBytes-- },

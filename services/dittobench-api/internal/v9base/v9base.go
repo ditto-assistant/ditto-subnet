@@ -26,6 +26,15 @@ const (
 	ContractManifest       = `{"schema_version":1,"revision":"v9-base-enforce-efficiency-v1","bench_version":9,"rollout_mode":"enforce","model_use_coverage_bps":1,"authoritative_tool_coverage_bps":1}`
 	ContractManifestSHA256 = "861d161cd031d5c40a4c50f0ae0c3d4a4f99a8513ff7fc87239f22104ebe3bb8"
 	MicrosScale            = int64(1_000_000)
+
+	// ModelDependenceCoverageBPS is the v12 causal model-dependence threshold.
+	// It follows the v9 base "prove ANY" discipline (model-use and
+	// authoritative-tool are both pinned at 1 bp): a run must prove at least one
+	// scored answer in the counterfactual slice is causally downstream of the
+	// model. It is bound into the signed root through ScoreGatesSHA256, not the
+	// compiled contract manifest, so the v9..v11 manifest/checksum are untouched.
+	// A stricter fraction is a future threshold-profile calibration decision.
+	ModelDependenceCoverageBPS = 1
 )
 
 var ErrInvalidEvidence = errors.New("invalid v9 base evidence")
@@ -91,6 +100,10 @@ func Build(input Inputs) (protocol.V9BaseDetails, string, scoregates.Score, erro
 	if input.Gates.ModelUse.ThresholdBPS != ContractThresholds().ModelUseCoverageBPS ||
 		input.Gates.AuthoritativeTool.ThresholdBPS != ContractThresholds().AuthoritativeToolCoverageBPS {
 		return protocol.V9BaseDetails{}, "", scoregates.Score{}, invalid("score gate thresholds do not use the compiled contract")
+	}
+	if input.BenchVersion >= scoregates.BenchVersionV12 &&
+		input.Gates.ModelDependence.ThresholdBPS != ModelDependenceCoverageBPS {
+		return protocol.V9BaseDetails{}, "", scoregates.Score{}, invalid("model-dependence gate threshold does not use the compiled contract")
 	}
 	semantic, err := input.Gates.CombinedFactorBPS()
 	if err != nil {
@@ -283,6 +296,95 @@ func toWireEvidence(e scoregates.Evidence) protocol.V9ScoreGateEvidence {
 			ObservedExecutions: e.AuthoritativeTool.ObservedExecutions, CoverageBPS: e.AuthoritativeTool.CoverageBPS,
 			ThresholdBPS: e.AuthoritativeTool.ThresholdBPS, Result: string(e.AuthoritativeTool.Result), FactorBPS: e.AuthoritativeTool.FactorBPS,
 		},
+		ModelDependence:  toWireModelDependence(e.BenchVersion, e.ModelDependence),
+		InferenceLatency: toWireInferenceLatency(e.BenchVersion, e.InferenceLatency),
+		AnswerStuffing:   toWireAnswerStuffing(e.BenchVersion, e.AnswerStuffing),
+	}
+}
+
+// toWireAnswerStuffing emits the v12 answer-stuffing gate only for
+// bench_version>=12 AND only when administered, so v9..v11 wire evidence carries
+// the zero value (omitted) and stays byte-identical.
+func toWireAnswerStuffing(benchVersion int, a scoregates.AnswerStuffingEvidence) protocol.V9AnswerStuffingGateEvidence {
+	if benchVersion < scoregates.BenchVersionV12 || a == (scoregates.AnswerStuffingEvidence{}) {
+		return protocol.V9AnswerStuffingGateEvidence{}
+	}
+	return protocol.V9AnswerStuffingGateEvidence{
+		AdministeredCases: a.AdministeredCases, EligibleCases: a.EligibleCases,
+		StuffedCases: a.StuffedCases, CleanCases: a.CleanCases,
+		AttributionComplete: a.AttributionComplete, ReviewRequired: a.ReviewRequired,
+		Posture: string(a.Posture), StuffedBPS: a.StuffedBPS, ThresholdBPS: a.ThresholdBPS,
+		MinCases:                a.MinCases,
+		LooseEligibleCases:      a.LooseEligibleCases,
+		LooseStuffedCases:       a.LooseStuffedCases,
+		LooseStuffedBPS:         a.LooseStuffedBPS,
+		ReviewShareThresholdBPS: a.ReviewShareThresholdBPS,
+		Result:                  string(a.Result), FactorBPS: a.FactorBPS,
+	}
+}
+
+func fromWireAnswerStuffing(a protocol.V9AnswerStuffingGateEvidence) scoregates.AnswerStuffingEvidence {
+	return scoregates.AnswerStuffingEvidence{
+		AdministeredCases: a.AdministeredCases, EligibleCases: a.EligibleCases,
+		StuffedCases: a.StuffedCases, CleanCases: a.CleanCases,
+		AttributionComplete: a.AttributionComplete, ReviewRequired: a.ReviewRequired,
+		Posture: scoregates.AnswerStuffingPosture(a.Posture), StuffedBPS: a.StuffedBPS, ThresholdBPS: a.ThresholdBPS,
+		MinCases:                a.MinCases,
+		LooseEligibleCases:      a.LooseEligibleCases,
+		LooseStuffedCases:       a.LooseStuffedCases,
+		LooseStuffedBPS:         a.LooseStuffedBPS,
+		ReviewShareThresholdBPS: a.ReviewShareThresholdBPS,
+		Result:                  scoregates.Result(a.Result), FactorBPS: a.FactorBPS,
+	}
+}
+
+// toWireInferenceLatency emits the v12 inference-latency gate only for
+// bench_version>=12 AND only when administered, so v9..v11 wire evidence carries
+// the zero value (omitted) and stays byte-identical.
+func toWireInferenceLatency(benchVersion int, l scoregates.InferenceLatencyEvidence) protocol.V9InferenceLatencyGateEvidence {
+	if benchVersion < scoregates.BenchVersionV12 || l == (scoregates.InferenceLatencyEvidence{}) {
+		return protocol.V9InferenceLatencyGateEvidence{}
+	}
+	return protocol.V9InferenceLatencyGateEvidence{
+		AdministeredCases: l.AdministeredCases, EligibleCases: l.EligibleCases,
+		FlaggedCases: l.FlaggedCases, UnflaggedCases: l.UnflaggedCases,
+		FloorMS: l.FloorMS, AttributionComplete: l.AttributionComplete,
+		Posture: string(l.Posture), SubFloorBPS: l.SubFloorBPS,
+		ThresholdBPS: l.ThresholdBPS, Result: string(l.Result), FactorBPS: l.FactorBPS,
+	}
+}
+
+func fromWireInferenceLatency(l protocol.V9InferenceLatencyGateEvidence) scoregates.InferenceLatencyEvidence {
+	return scoregates.InferenceLatencyEvidence{
+		AdministeredCases: l.AdministeredCases, EligibleCases: l.EligibleCases,
+		FlaggedCases: l.FlaggedCases, UnflaggedCases: l.UnflaggedCases,
+		FloorMS: l.FloorMS, AttributionComplete: l.AttributionComplete,
+		Posture: scoregates.LatencyPosture(l.Posture), SubFloorBPS: l.SubFloorBPS,
+		ThresholdBPS: l.ThresholdBPS, Result: scoregates.Result(l.Result), FactorBPS: l.FactorBPS,
+	}
+}
+
+// toWireModelDependence emits the v12 dependence gate only for bench_version>=12
+// so v9..v11 wire evidence carries the zero value (omitted) and stays
+// byte-identical.
+func toWireModelDependence(benchVersion int, d scoregates.ModelDependenceEvidence) protocol.V9ModelDependenceGateEvidence {
+	if benchVersion < scoregates.BenchVersionV12 {
+		return protocol.V9ModelDependenceGateEvidence{}
+	}
+	return protocol.V9ModelDependenceGateEvidence{
+		AdministeredCases: d.AdministeredCases, EligibleCases: d.EligibleCases,
+		DependentCases: d.DependentCases, IndependentCases: d.IndependentCases,
+		SliceAttributionComplete: d.SliceAttributionComplete, DependenceBPS: d.DependenceBPS,
+		ThresholdBPS: d.ThresholdBPS, Result: string(d.Result), FactorBPS: d.FactorBPS,
+	}
+}
+
+func fromWireModelDependence(d protocol.V9ModelDependenceGateEvidence) scoregates.ModelDependenceEvidence {
+	return scoregates.ModelDependenceEvidence{
+		AdministeredCases: d.AdministeredCases, EligibleCases: d.EligibleCases,
+		DependentCases: d.DependentCases, IndependentCases: d.IndependentCases,
+		SliceAttributionComplete: d.SliceAttributionComplete, DependenceBPS: d.DependenceBPS,
+		ThresholdBPS: d.ThresholdBPS, Result: scoregates.Result(d.Result), FactorBPS: d.FactorBPS,
 	}
 }
 
@@ -310,6 +412,9 @@ func fromWireEvidence(e protocol.V9ScoreGateEvidence) (scoregates.Evidence, erro
 			ObservedExecutions: e.AuthoritativeTool.ObservedExecutions, CoverageBPS: e.AuthoritativeTool.CoverageBPS,
 			ThresholdBPS: e.AuthoritativeTool.ThresholdBPS, Result: scoregates.Result(e.AuthoritativeTool.Result), FactorBPS: e.AuthoritativeTool.FactorBPS,
 		},
+		ModelDependence:  fromWireModelDependence(e.ModelDependence),
+		InferenceLatency: fromWireInferenceLatency(e.InferenceLatency),
+		AnswerStuffing:   fromWireAnswerStuffing(e.AnswerStuffing),
 	}
 	if err := result.Validate(); err != nil {
 		return scoregates.Evidence{}, err

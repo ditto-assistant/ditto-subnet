@@ -275,6 +275,11 @@ func TestInterventionParsingAndVersionGate(t *testing.T) {
 		{version: 8, confirmation: true, wantError: true},
 		{version: 9, confirmation: false, wantError: true},
 		{version: 10, confirmation: true, wantError: true},
+		{version: 11, confirmation: false, wantError: true},
+		// v12+ counterfactual slice runs on the scored path (no confirmation).
+		{version: 12, confirmation: false},
+		{version: 12, confirmation: true},
+		{version: 13, confirmation: false},
 	} {
 		err := InterventionInference.ValidateFor(testCase.version, testCase.confirmation)
 		if (err != nil) != testCase.wantError {
@@ -283,6 +288,53 @@ func TestInterventionParsingAndVersionGate(t *testing.T) {
 	}
 	if err := Intervention("future").ValidateFor(9, true); err == nil {
 		t.Fatal("unknown intervention accepted")
+	}
+}
+
+func TestNewSeededResponderIsDeterministic(t *testing.T) {
+	budget := Budget{MaxChatRequests: 8, MaxChatInputBytes: 1 << 16}
+	seedA := sha256.Sum256([]byte("case-a"))
+	seedB := sha256.Sum256([]byte("case-b"))
+
+	first, err := NewSeededResponder(InterventionInference, budget, seedA[:])
+	if err != nil {
+		t.Fatalf("NewSeededResponder(a) error = %v", err)
+	}
+	second, err := NewSeededResponder(InterventionInference, budget, seedA[:])
+	if err != nil {
+		t.Fatalf("NewSeededResponder(a') error = %v", err)
+	}
+	other, err := NewSeededResponder(InterventionInference, budget, seedB[:])
+	if err != nil {
+		t.Fatalf("NewSeededResponder(b) error = %v", err)
+	}
+
+	// Same seed -> byte-identical synthesized completion content (the answer the
+	// harness would read), so a re-run draws the same perturbation.
+	a1, err := first.Chat("test-model", 128)
+	if err != nil {
+		t.Fatalf("first.Chat error = %v", err)
+	}
+	a2, err := second.Chat("test-model", 128)
+	if err != nil {
+		t.Fatalf("second.Chat error = %v", err)
+	}
+	if a1.Choices[0].Message.Content != a2.Choices[0].Message.Content {
+		t.Fatalf("same seed produced different completions:\n%q\n%q",
+			a1.Choices[0].Message.Content, a2.Choices[0].Message.Content)
+	}
+	// A different seed must (with overwhelming probability) perturb differently.
+	b1, err := other.Chat("test-model", 128)
+	if err != nil {
+		t.Fatalf("other.Chat error = %v", err)
+	}
+	if a1.Choices[0].Message.Content == b1.Choices[0].Message.Content {
+		t.Fatalf("distinct seeds collided on completion content: %q", a1.Choices[0].Message.Content)
+	}
+
+	// A short seed is rejected.
+	if _, err := NewSeededResponder(InterventionInference, budget, []byte("short")); err == nil {
+		t.Fatal("short seed accepted")
 	}
 }
 

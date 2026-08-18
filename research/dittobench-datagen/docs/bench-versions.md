@@ -22,6 +22,8 @@ applied to an existing version. It ships as a new one.
 | 8 | `2026-12-01` | The answering-machine-proof release: natural requests whose route depends on seeded prior context, semantic enum/identifier resolution without magic free-form strings, a larger computed-memory share, and stricter deterministic answer grading. |
 | 9 (pre-activation) | `2027-01-01` | A qualification contract for the Bench v9 family mix and launch gates. Explicit generation, offline audit, and ordinary runtime execution are available; Platform activation remains separate and v8 stays current until rollout. |
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
+| 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
+| 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
 
 ## V10 generator-as-spec contract
 
@@ -415,6 +417,63 @@ byte-identically:
 Run sizes, the deterministic grader, the inference boundary, LongMemEval
 deep-history floors, and the v9 signed-evidence/score-gate/curve-v3 efficiency
 stack all carry forward unchanged.
+
+## Bench v12 (private, anti-KV-substrate)
+
+v12 keeps every v11 program semantic — the same four sampled query shapes, the
+same metamorphic groups, the same per-seed schema, the same renderers, and the
+same validator-side provenance — and hardens the one surface a template-fitting
+harness still gripped: the byte-stable `key=value` ledger. A harness that scored
+0.997 on v11 never read the randomized prose; it parsed the fixed-order KV rows,
+fired a model call only to satisfy the attribution gate, and computed a balance
+positionally. Every v12 lever is gated on `bench_version >= 12`, so v11 and
+earlier regenerate byte-identically (the v2–v11 known-vector tests are
+unchanged). The levers:
+
+- **Prose-only amounts with shuffled record order (Gap 1).** No record carries a
+  `label=amount` pair — the only `=` in a scenario binds an entity to its alias
+  and carries no value. Every monetary figure (draft, approved, settled payment,
+  adjustment, superseding correction) lives inside a composed prose sentence, and
+  the record order is a per-seed Fisher-Yates permutation. Binding a role to a
+  value now requires reading randomized prose, not counting rows. The `V12`
+  known-vector test asserts no record exposes a `=`-adjacent number and that the
+  binding record lands in more than one slot across a run.
+- **No format tells (Gap 2).** v11 leaked the shape through a `%+d` sign on the
+  adjustment row and a second `->` on the latest-correction row. v12 never emits
+  either: a signed adjustment is stated as "raises/lowers that figure by N" over
+  the absolute magnitude, and supersession is stated in prose ("a later revision
+  supersedes it at N"). The operative value is interleaved into randomized prose,
+  so the shape is not detectable from row structure.
+- **Larger-minus-settled rebalanced (Gap 2b).** v11 made the approved figure
+  exceed the draft on ~60% of cases, so `max==approved==plain subtract` was free.
+  v12 draws the approved figure below the draft for most cases and forces
+  `approved < draft` whenever the sampled shape is larger-minus-settled, so `max`
+  genuinely differs from the plain subtract and the plain-subtract result is a
+  planted distractor.
+- **Universal relational subject binding (Gap 3).** v11 bound the subject
+  descriptively only for even groups, and even then by a unique draft number that
+  also appeared verbatim in the rows. v12 binds the subject descriptively for
+  every group by a relational role — the workstream that carries a settled
+  payment — which resolves through the glossary and against the unrelated decoy
+  (which carries only an approved figure). The question never names the subject
+  alias, so an alias-echo resolver cannot even locate the records.
+- **Compositional injection markers and routing cues (Gaps 4/7).** v11 rewrote
+  each fixed stored-directive marker into one of a frozen ≤5-variant bank, and
+  rotated the tool-routing cues through fixed banks. v12 assembles both from
+  independent component banks, so the reachable surface is a product of the banks
+  (hundreds to thousands of forms) rather than a short enumerable list. The
+  attack semantics and the route outcomes are byte-identical to before.
+- **Widened label superset and opaque session IDs (issues #492/#499/#537).** v12
+  labels sample a 24×16×20 superset per seed, and session identifiers are opaque
+  hashes rather than `v12-conversation-3`, so no generator role name leaks into
+  the wire and no fixed dispatch table keyed on a label pays.
+
+The wire/artifact schema is unchanged: v12 still emits `MemoryCase` /
+`ToolCase` / `DatasetArtifact` in the same shapes, with the same
+grading-authoritative `ExpectedAnswer`, `DistractorAnswers`, `AnswerKind`, and
+expected tool specs. v12 changes what competence a run must demonstrate, not the
+transport. Run sizes, the deterministic grader, the inference boundary,
+LongMemEval floors, and the v9 efficiency stack all carry forward unchanged.
 
 ## Auditing an old score
 

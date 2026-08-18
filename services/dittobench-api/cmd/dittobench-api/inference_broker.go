@@ -194,14 +194,22 @@ type brokerSession struct {
 	// a background request is still inside the broker's bounded recovery loop;
 	// run-wide counter deltas cannot distinguish that tail from the next case.
 	// Generation-local counters keep the tail attached to its original window.
-	caseGeneration        uint64
-	activeCaseGeneration  uint64
-	activeCaseID          string
-	caseSnapshots         map[uint64]brokerCaseSnapshot
-	caseToolCalls         map[uint64][]brokerModelToolCall
-	caseCapabilities      map[string]uint64
-	caseCapabilityTokens  map[uint64]string
-	caseIDs               map[string]uint64
+	caseGeneration       uint64
+	activeCaseGeneration uint64
+	activeCaseID         string
+	caseSnapshots        map[uint64]brokerCaseSnapshot
+	caseToolCalls        map[uint64][]brokerModelToolCall
+	caseCapabilities     map[string]uint64
+	caseCapabilityTokens map[uint64]string
+	caseIDs              map[string]uint64
+	// Bench v12 answer-stuffing capture. answerIO records, per active case
+	// generation, the ordered bounded/normalized clean-pass model I/O (value
+	// tokens only -- never the answer key or raw prose). answerIOByCaseID holds
+	// the SAME pointers keyed by wire case id so the scorer can read one case's
+	// log post-run. Both are populated only for bench_version>=12, so v9..v11 are
+	// byte-identical and unaffected.
+	answerIO              map[uint64]*caseModelIOLog
+	answerIOByCaseID      map[string]*caseModelIOLog
 	embeddingPhaseStarted bool
 	embeddingPhaseActive  bool
 	embeddingInFlight     int
@@ -290,6 +298,13 @@ type brokerAblationScope struct {
 	embeddingCursor     int
 	draining            bool
 	activeHandlers      int
+	// counterfactual marks a Bench v12 causal-dependence LaneInference scope. It
+	// substitutes ONLY the chat completion (the perturbed model output) and
+	// leaves embeddings on their live platform lane, because the v12 scored path
+	// records no paired ordinary trace to replay from. The v9 confirmation
+	// coordinator never sets this, so its replay-based inference lane is
+	// byte-identical.
+	counterfactual bool
 }
 
 type brokerAblationCall struct {
@@ -451,32 +466,55 @@ func (b *inferenceBroker) beginAblationCase(
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	now := time.Now()
-	if session.boundRunID != runID || session.benchVersion != ablation.BenchVersionV9 ||
+	// Bench v12 admits the LaneInference counterfactual on the scored path in
+	// addition to the confirmation ablation. Both still require the run-bound,
+	// source-active session. The counterfactual is a SCORED-path construct, so a
+	// confirmation session is never a counterfactual even at v12 — otherwise its
+	// embedding ablation lane (below) would be rejected. A confirmation session
+	// runs the paired inference+embedding ablation under the frozen v9-named
+	// contract at any supported confirmation version ({9, 12}); the v9 branch's
+	// admission is unchanged (v9 short-circuits before the confirmation clause).
+	counterfactual := session.benchVersion >= ablation.BenchVersionV12 && !session.confirmationSession
+	allowedVersion := session.benchVersion == ablation.BenchVersionV9 || counterfactual ||
+		(session.confirmationSession && ablation.ConfirmationBenchVersionSupported(session.benchVersion))
+	if session.boundRunID != runID || !allowedVersion ||
 		(!session.activeLocked(now) && !session.confirmationUnboundActiveLocked(now)) || session.ablation != nil {
 		return nil, fmt.Errorf("inference session is not available for ablation")
+	}
+	// The v12 counterfactual substitutes only chat and never replays an ordinary
+	// trace, so it neither requires nor records one. It is LaneInference only.
+	if counterfactual && request.Lane != ablation.LaneInference {
+		return nil, fmt.Errorf("v12 counterfactual scope requires the inference lane")
 	}
 	if session.ablationTraces == nil {
 		session.ablationTraces = make(map[string]*brokerAblationTrace)
 	}
 	trace := session.ablationTraces[request.CaseID]
-	if request.Lane == ablation.LaneOrdinary {
-		if trace != nil {
-			trace.mu.Lock()
-			released := trace.storedBytes
-			trace.mu.Unlock()
-			if released > session.ablationBytes {
-				return nil, fmt.Errorf("ordinary ablation trace accounting is invalid")
+	if !counterfactual {
+		if request.Lane == ablation.LaneOrdinary {
+			if trace != nil {
+				trace.mu.Lock()
+				released := trace.storedBytes
+				trace.mu.Unlock()
+				if released > session.ablationBytes {
+					return nil, fmt.Errorf("ordinary ablation trace accounting is invalid")
+				}
+				session.ablationBytes -= released
 			}
-			session.ablationBytes -= released
+			trace = &brokerAblationTrace{}
+			session.ablationTraces[request.CaseID] = trace
+		} else if trace == nil {
+			return nil, fmt.Errorf("ordinary ablation trace is unavailable")
 		}
-		trace = &brokerAblationTrace{}
-		session.ablationTraces[request.CaseID] = trace
 	} else if trace == nil {
-		return nil, fmt.Errorf("ordinary ablation trace is unavailable")
+		// A counterfactual scope needs a trace object only so the shared replay
+		// plumbing has a non-nil target; it is never populated or replayed from.
+		trace = &brokerAblationTrace{}
 	}
 	scope := &brokerAblationScope{
 		lane: request.Lane, caseID: request.CaseID,
-		opaqueUserNamespace: request.OpaqueUserNamespace, responder: request.Responder, trace: trace, session: session,
+		opaqueUserNamespace: request.OpaqueUserNamespace, responder: request.Responder,
+		trace: trace, session: session, counterfactual: counterfactual,
 	}
 	session.ablation = scope
 	return &brokerAblationLease{session: session, scope: scope}, nil
@@ -2935,7 +2973,7 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 		writeJSON(w, http.StatusOK, decoded)
 		return
 	}
-	if ablationScope != nil && ablationScope.lane == ablation.LaneInference {
+	if ablationScope != nil && ablationScope.lane == ablation.LaneInference && !ablationScope.counterfactual {
 		replayed, replayErr := ablationScope.replayCall(false, body)
 		if replayErr != nil {
 			writeError(w, http.StatusServiceUnavailable, "ordinary embedding replay unavailable")
@@ -2947,6 +2985,8 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 		_, _ = w.Write(replayed)
 		return
 	}
+	// A v12 counterfactual inference scope perturbs only the model completion; its
+	// embeddings fall through to the live platform lane below, unchanged.
 
 	// The model is a property of the ticket, not of the request -- the same
 	// premise #102 applied to the chat door, now applied to this one.
@@ -3629,12 +3669,20 @@ func (b *inferenceBroker) proxy(
 	requestModel := session.requestModel
 	if ablationScope != nil && ablationScope.lane == ablation.LaneInference {
 		responder := ablationScope.responder
+		counterfactual := ablationScope.counterfactual
 		session.mu.Unlock()
 		if r.Context().Err() != nil {
 			writeError(w, http.StatusRequestTimeout, "synthetic inference cancelled")
 			return
 		}
+		// A Bench v12 counterfactual scope FULLY ABLATES the model: it serves a
+		// completion with no usable content so a harness that genuinely reasons over
+		// the model output cannot recover the answer, while the v9 confirmation lane
+		// keeps serving its neutral prose via Chat (byte-identical).
 		completion, responseErr := responder.Chat(requestModel, uint64(len(body)))
+		if counterfactual {
+			completion, responseErr = responder.AblatedChat(requestModel, uint64(len(body)))
+		}
 		if responseErr != nil {
 			writeError(w, http.StatusServiceUnavailable, "synthetic inference unavailable")
 			return
@@ -3986,6 +4034,10 @@ func (b *inferenceBroker) proxy(
 		session.caseSnapshots[caseGeneration] = snapshot
 	}
 	recordModelToolCallsLocked(session, caseGeneration, responseBody)
+	// Bench v12 answer-stuffing capture: record this call's bounded/normalized
+	// input and completion value tokens in call order. `body` is the normalized
+	// model INPUT; `responseBody` is the COMPLETION. No-op for bench_version<12.
+	recordAnswerIOLocked(session, caseGeneration, body, responseBody)
 	session.providerLatency += totalLatency
 	if usageOK {
 		session.usageAvailable++
@@ -4162,6 +4214,7 @@ func (b *inferenceBroker) beginCaseCapability(id, caseID string) (uint64, broker
 	session.caseCapabilities[capability] = generation
 	session.caseCapabilityTokens[generation] = capability
 	session.caseIDs[caseID] = generation
+	registerAnswerIOLocked(session, generation, caseID)
 	return generation, snapshot, capability, nil
 }
 
@@ -4221,6 +4274,7 @@ func (b *inferenceBroker) beginCaseSnapshot(id string, caseIDs ...string) (uint6
 	session.caseSnapshots[generation] = brokerCaseSnapshot{
 		ToolEvidenceComplete: session.benchVersion >= protocol.BenchVersionV10,
 	}
+	registerAnswerIOLocked(session, generation, caseID)
 	snapshot := session.caseSnapshots[generation]
 	return generation, snapshot, nil
 }
@@ -4296,6 +4350,80 @@ func (b *inferenceBroker) waitConfirmationCaseDrained(
 		case <-ticker.C:
 		}
 	}
+}
+
+// recordAnswerIOLocked captures one successful clean-pass model call's bounded,
+// normalized value tokens for the Bench v12 answer-stuffing gate. It runs under
+// the session lock (called from proxy's success path) and only for
+// bench_version>=12 with an active case generation that opened a capture log. It
+// records ONLY value tokens (never the answer key or raw prose), and marks the
+// log truncated -- which the scorer reads as unsettled (fail open) -- when a body
+// is unparseable or any capture bound is exceeded. requestBody is the normalized
+// model INPUT the harness sent; responseBody is the model COMPLETION.
+func recordAnswerIOLocked(session *brokerSession, caseGeneration uint64, requestBody, responseBody []byte) {
+	if session.benchVersion < protocol.BenchVersionV12 || caseGeneration == 0 || session.answerIO == nil {
+		return
+	}
+	log := session.answerIO[caseGeneration]
+	if log == nil {
+		return
+	}
+	if len(log.calls) >= answerIOMaxCalls {
+		log.truncated = true
+		return
+	}
+	inputText, okIn := parseChatInputText(requestBody)
+	completionText, okOut := parseChatCompletionText(responseBody)
+	if !okIn || !okOut {
+		log.truncated = true
+		return
+	}
+	inputTokens, trIn := valueTokenSet(inputText)
+	completionTokens, trOut := valueTokenSet(completionText)
+	if trIn || trOut {
+		log.truncated = true
+	}
+	log.calls = append(log.calls, caseModelCall{inputTokens: inputTokens, completionTokens: completionTokens})
+}
+
+// registerAnswerIOLocked opens a v12 answer-stuffing capture log for one case
+// generation, keyed by both generation (for proxy-time appends) and wire case id
+// (for the post-run scorer read). Both maps hold the same pointer. It is a no-op
+// for bench_version<12 or a missing case id, so v9..v11 sessions never allocate
+// capture state.
+func registerAnswerIOLocked(session *brokerSession, generation uint64, caseID string) {
+	if session.benchVersion < protocol.BenchVersionV12 || generation == 0 || caseID == "" {
+		return
+	}
+	if session.answerIO == nil {
+		session.answerIO = make(map[uint64]*caseModelIOLog)
+		session.answerIOByCaseID = make(map[string]*caseModelIOLog)
+	}
+	log := &caseModelIOLog{}
+	session.answerIO[generation] = log
+	session.answerIOByCaseID[caseID] = log
+}
+
+// caseModelIO returns the trusted clean-pass model I/O the broker recorded for
+// one case. ok=false when no capture log exists (pre-v12, unknown case, or a case
+// that never reached the model), which the scorer treats as unsettled (fail
+// open). The returned log is a shallow snapshot; the caller only reads it.
+func (b *inferenceBroker) caseModelIO(id, caseID string) (caseModelIOLog, bool) {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return caseModelIOLog{}, false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	log := session.answerIOByCaseID[caseID]
+	if log == nil {
+		return caseModelIOLog{}, false
+	}
+	calls := make([]caseModelCall, len(log.calls))
+	copy(calls, log.calls)
+	return caseModelIOLog{calls: calls, truncated: log.truncated}, true
 }
 
 func toolProvenanceEvidence(snapshot brokerCaseSnapshot) *protocol.ToolProvenanceEvidence {
