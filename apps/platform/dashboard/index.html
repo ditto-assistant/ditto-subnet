@@ -13,23 +13,10 @@
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="Ditto" />
     <meta property="og:locale" content="en_US" />
-    <meta
-      property="og:image"
-      content="https://platform-api.heyditto.ai/assets/paperditto-512.png"
-    />
-    <meta property="og:image:type" content="image/png" />
-    <meta property="og:image:width" content="512" />
-    <meta property="og:image:height" content="512" />
-    <meta property="og:image:alt" content="Ditto paper mascot" />
 
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:site" content="@heydittoai" />
     <meta name="twitter:creator" content="@heydittoai" />
-    <meta
-      name="twitter:image"
-      content="https://platform-api.heyditto.ai/assets/paperditto-512.png"
-    />
-    <meta name="twitter:image:alt" content="Ditto paper mascot" />
 
     <link
       rel="apple-touch-icon"
@@ -44,9 +31,10 @@
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
 
     <!--
-      Variable SEO (title, description, canonical, JSON-LD). Static defaults
-      below keep a standalone dist host crawlable; the platform replaces this
-      block at serve time with a 30s snapshot of the live public board.
+      Variable SEO (title, description, canonical, OG image, JSON-LD). Static
+      defaults below keep a standalone dist host crawlable; the platform
+      replaces this block at serve time with a 30s snapshot of the live board
+      (miner pages swap og:image for the public avatar when one exists).
     -->
     <!--ditto:seo-head-->
     <title>Ditto SN118 · Subnet Leaderboard</title>
@@ -61,11 +49,24 @@
       content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
     />
     <meta property="og:url" content="https://platform-api.heyditto.ai/" />
+    <meta
+      property="og:image"
+      content="https://platform-api.heyditto.ai/assets/paperditto-512.png"
+    />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="512" />
+    <meta property="og:image:height" content="512" />
+    <meta property="og:image:alt" content="Ditto paper mascot" />
     <meta name="twitter:title" content="Ditto SN118 · Subnet Leaderboard" />
     <meta
       name="twitter:description"
       content="Live Ditto SN118 leaderboard scores, submission progress, and validator health."
     />
+    <meta
+      name="twitter:image"
+      content="https://platform-api.heyditto.ai/assets/paperditto-512.png"
+    />
+    <meta name="twitter:image:alt" content="Ditto paper mascot" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",

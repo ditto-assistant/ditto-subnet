@@ -90,6 +90,8 @@ _ENTITY_PATH = re.compile(
 _STATIC_DESCRIPTION = (
     "Live Ditto SN118 leaderboard scores, submission progress, and validator health."
 )
+_DEFAULT_OG_IMAGE = "/assets/paperditto-512.png"
+_DEFAULT_OG_ALT = "Ditto paper mascot"
 
 
 @dataclass(frozen=True)
@@ -102,6 +104,7 @@ class SeoMiner:
     miner_hotkey: str
     official_composite: float
     handle: str | None
+    avatar_url: str | None = None
 
     @property
     def label(self) -> str:
@@ -388,6 +391,7 @@ def snapshot_from_leaderboard(board: PublicLeaderboardResponse) -> SeoSnapshot:
                 miner_hotkey=entry.miner_hotkey,
                 official_composite=entry.official_composite,
                 handle=handle,
+                avatar_url=getattr(entry, "avatar_url", None),
             )
         )
     champion_hotkey = None
@@ -492,12 +496,48 @@ def inject_live_seo(
     )
 
 
+def _normalize_path(path: str) -> str:
+    clean = path if path.startswith("/") else "/" + path
+    if clean != "/" and clean.endswith("/"):
+        return clean.rstrip("/")
+    return clean
+
+
+def _entity_miner(path: str, snapshot: SeoSnapshot | None) -> SeoMiner | None:
+    if snapshot is None:
+        return None
+    match = _ENTITY_PATH.match(_normalize_path(path))
+    if match is None:
+        return None
+    return snapshot.miner_for(match.group("ident"))
+
+
+def _absolute_url(origin: str, url: str) -> str:
+    if url.startswith("https://") or url.startswith("http://"):
+        return url
+    if not url.startswith("/"):
+        return origin + "/" + url
+    return origin + url
+
+
+def _og_image(
+    origin: str, path: str, snapshot: SeoSnapshot | None
+) -> tuple[str, str, bool]:
+    """Return ``(url, alt, is_default_logo)``.
+
+    Miner / handle / agent pages use the public avatar when the board has
+    one. Board pages and miners without a picture keep the paper mascot.
+    """
+    miner = _entity_miner(path, snapshot)
+    if miner is not None and miner.avatar_url:
+        return _absolute_url(origin, miner.avatar_url), miner.label, False
+    return origin + _DEFAULT_OG_IMAGE, _DEFAULT_OG_ALT, True
+
+
 def _page_meta(
     origin: str, path: str, snapshot: SeoSnapshot | None
 ) -> tuple[str, str, str, str]:
-    clean = path if path.startswith("/") else "/" + path
-    if clean != "/" and clean.endswith("/"):
-        clean = clean.rstrip("/")
+    clean = _normalize_path(path)
     title = "Ditto SN118 · Subnet Leaderboard"
     description = _STATIC_DESCRIPTION
     robots = "index, follow, max-image-preview:large"
@@ -510,9 +550,8 @@ def _page_meta(
         description = "Sign in with your SN118 miner hotkey to manage submissions."
         robots = "noindex, nofollow"
     entity = _ENTITY_PATH.match(clean)
+    miner = _entity_miner(clean, snapshot)
     if entity is not None:
-        ident = entity.group("ident")
-        miner = snapshot.miner_for(ident) if snapshot is not None else None
         if miner is not None and snapshot is not None:
             title = f"{miner.label} · SN118 rank #{miner.rank}"
             description = (
@@ -521,7 +560,7 @@ def _page_meta(
                 f"{snapshot.bench_version}."
             )
         else:
-            title = f"{ident} · Ditto SN118"
+            title = f"{entity.group('ident')} · Ditto SN118"
     elif snapshot is not None and clean in {"/", "/overview", "/leaderboard"}:
         description = _live_description(snapshot)
         champion = snapshot.champion()
@@ -558,7 +597,17 @@ def _render_head(
     esc_title = html.escape(title, quote=True)
     esc_desc = html.escape(description, quote=True)
     esc_canonical = html.escape(canonical, quote=True)
-    image = html.escape(origin + "/assets/paperditto-512.png", quote=True)
+    image_url, image_alt, is_logo = _og_image(origin, path, snapshot)
+    image = html.escape(image_url, quote=True)
+    alt = html.escape(image_alt, quote=True)
+    if is_logo:
+        image_extras = (
+            '    <meta property="og:image:type" content="image/png" />\n'
+            '    <meta property="og:image:width" content="512" />\n'
+            '    <meta property="og:image:height" content="512" />\n'
+        )
+    else:
+        image_extras = ""
     schemas = [_organization_schema(origin), _website_schema(origin, description)]
     if snapshot is not None and robots.startswith("index"):
         schemas.append(_dataset_schema(origin, snapshot))
@@ -568,9 +617,6 @@ def _render_head(
         '    <script type="application/ld+json">' + _json_ld(schema) + "</script>"
         for schema in schemas
     )
-    # path is accepted so a future per-route extra tag can key off it without
-    # another signature change; the live title/description already vary by path.
-    del path
     return f"""    <title>{esc_title}</title>
     <meta name="description" content="{esc_desc}" />
     <meta name="robots" content="{html.escape(robots, quote=True)}" />
@@ -579,9 +625,11 @@ def _render_head(
     <meta property="og:description" content="{esc_desc}" />
     <meta property="og:url" content="{esc_canonical}" />
     <meta property="og:image" content="{image}" />
+{image_extras}    <meta property="og:image:alt" content="{alt}" />
     <meta name="twitter:title" content="{esc_title}" />
     <meta name="twitter:description" content="{esc_desc}" />
     <meta name="twitter:image" content="{image}" />
+    <meta name="twitter:image:alt" content="{alt}" />
 {json_ld}"""
 
 

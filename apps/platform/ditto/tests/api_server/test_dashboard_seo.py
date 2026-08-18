@@ -64,6 +64,10 @@ def _snapshot() -> SeoSnapshot:
                 miner_hotkey="5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
                 official_composite=0.912345,
                 handle="jupiter",
+                avatar_url=(
+                    "/api/v1/public/miners/"
+                    "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty/avatar"
+                ),
             ),
             SeoMiner(
                 rank=2,
@@ -131,6 +135,7 @@ class TestSnapshotFromLeaderboard:
                     miner_hotkey="5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty",
                     official_composite=0.9,
                     name_handle=SimpleNamespace(status="reserved", stem="jupiter"),
+                    avatar_url="/api/v1/public/miners/hk/avatar",
                 ),
                 SimpleNamespace(
                     rank=None,
@@ -148,6 +153,7 @@ class TestSnapshotFromLeaderboard:
         assert snapshot.miners[0].profile_path == "/h/jupiter"
         assert snapshot.champion_hotkey is not None
         assert snapshot.champion_hotkey.endswith("694ty")
+        assert snapshot.miners[0].avatar_url == "/api/v1/public/miners/hk/avatar"
 
 
 class TestInjectLiveSeo:
@@ -188,6 +194,56 @@ class TestInjectLiveSeo:
         assert "jupiter · SN118 rank #1" in html
         assert 'href="https://platform-api.heyditto.ai/h/jupiter"' in html
         assert 'rel="canonical"' in html
+
+    def test_miner_opengraph_uses_the_public_avatar(self) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML,
+            origin=_ORIGIN,
+            path="/h/jupiter",
+            snapshot=_snapshot(),
+        )
+        avatar = (
+            "https://platform-api.heyditto.ai/api/v1/public/miners/"
+            "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty/avatar"
+        )
+        assert f'property="og:image" content="{avatar}"' in html
+        assert f'name="twitter:image" content="{avatar}"' in html
+        assert 'property="og:image:alt" content="jupiter"' in html
+        og_image = html.split('property="og:image"')[1].split(">")[0]
+        assert "paperditto-512.png" not in og_image
+        assert "og:image:width" not in html
+
+    def test_home_opengraph_keeps_the_mascot_even_if_champion_has_an_avatar(
+        self,
+    ) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML, origin=_ORIGIN, path="/", snapshot=_snapshot()
+        )
+        mascot = "https://platform-api.heyditto.ai/assets/paperditto-512.png"
+        assert f'property="og:image" content="{mascot}"' in html
+        assert f'name="twitter:image" content="{mascot}"' in html
+
+    def test_agent_path_uses_the_owning_miner_avatar(self) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML,
+            origin=_ORIGIN,
+            path="/agent/aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            snapshot=_snapshot(),
+        )
+        assert (
+            "/api/v1/public/miners/"
+            in html.split('property="og:image"')[1].split(">")[0]
+        )
+
+    def test_miner_without_avatar_falls_back_to_the_mascot(self) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML,
+            origin=_ORIGIN,
+            path="/miner/5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+            snapshot=_snapshot(),
+        )
+        assert "paperditto-512.png" in html
+        assert "og:image:width" in html
 
     def test_reviews_is_noindex(self) -> None:
         html = inject_live_seo(
