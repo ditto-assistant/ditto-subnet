@@ -1261,8 +1261,13 @@ def main() -> int:
                 # successfully verified image. Runtime smoke then qualifies
                 # that exact archive before source review uses spare capacity.
                 handled = run_one_submission(settings, client, submission_control)
-                if not handled and settings.runtime_smoke_enabled:
-                    handled = run_one_runtime_smoke(settings, client, runtime_control)
+                # Smoke the just-finished archive even when another miner
+                # build is already queued. Waiting for an empty Kaniko queue
+                # lets GCE consume the archive first.
+                if settings.runtime_smoke_enabled:
+                    handled = run_one_runtime_smoke(
+                        settings, client, runtime_control
+                    ) or handled
                 if not handled and settings.source_review_enabled:
                     handled = run_one_source_review(
                         settings, client, source_review_control

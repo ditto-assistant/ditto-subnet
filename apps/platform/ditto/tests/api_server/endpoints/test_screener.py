@@ -1015,7 +1015,7 @@ class TestFederatedScreenerNodes:
             row = await session.get(SubmissionImageBuild, UUID(build_id))
             assert row is not None and row.status == "consumed"
 
-    async def test_consuming_succeeded_build_skips_pending_runtime(
+    async def test_consuming_succeeded_build_keeps_pending_runtime_archive(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -1050,16 +1050,29 @@ class TestFederatedScreenerNodes:
         )
 
         assert consumed.status_code == 204, consumed.text
-        storage.delete_object.assert_awaited_with(
-            key=f"remote-builds/{build_id}/image.tar"
-        )
+        storage.delete_object.assert_not_awaited()
         async with session_maker() as session:
             row = await session.get(SubmissionImageBuild, UUID(build_id))
             assert row is not None
             assert row.status == "consumed"
-            assert row.runtime_status == "skipped"
-            assert row.runtime_error_code == "TARGON_RUNTIME_SKIPPED_BUILD_CONSUMED"
-            assert row.runtime_completed_at is not None
+            assert row.runtime_status == "pending"
+            assert row.runtime_error_code is None
+            assert row.runtime_completed_at is None
+
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        runtime = await client.post(
+            "/api/v1/screener/controller/submission-runtime-smokes/claim",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={"environment": "prod", "controller_epoch": "prod:epoch"},
+        )
+        assert runtime.status_code == 200, runtime.text
+        assert runtime.json()["artifact"]["build_id"] == build_id
 
     async def test_consuming_succeeded_build_keeps_in_flight_runtime_archive(
         self,

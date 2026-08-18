@@ -1387,16 +1387,16 @@ async def consume_submission_image_build(
             raise AgentNotScreenableError("remote build is not discardable")
         output_key = row.output_key
         now = datetime.now(UTC)
-        runtime_in_flight = row.runtime_status == "running"
-        if row.runtime_status == "pending":
+        # Keep a pending runtime archive too. The builder only smokes after
+        # the Kaniko rental returns, so GCE often consumes first and used to
+        # delete the archive before dest-auth could claim it.
+        runtime_in_flight = row.runtime_status in {"pending", "running"}
+        if row.runtime_status == "pending" and active:
             row.runtime_status = "skipped"
-            row.runtime_error_code = (
-                "TARGON_RUNTIME_SKIPPED_BUILD_CANCELED"
-                if active
-                else "TARGON_RUNTIME_SKIPPED_BUILD_CONSUMED"
-            )
+            row.runtime_error_code = "TARGON_RUNTIME_SKIPPED_BUILD_CANCELED"
             row.runtime_completed_at = now
             row.updated_at = now
+            runtime_in_flight = False
         if active:
             row.status = "canceled"
             row.completed_at = now
@@ -1641,7 +1641,7 @@ async def claim_submission_runtime_smoke(
             select(SubmissionImageBuild)
             .where(
                 SubmissionImageBuild.environment == payload.environment,
-                SubmissionImageBuild.status == "succeeded",
+                SubmissionImageBuild.status.in_(("succeeded", "consumed")),
                 or_(
                     SubmissionImageBuild.runtime_status == "pending",
                     (
