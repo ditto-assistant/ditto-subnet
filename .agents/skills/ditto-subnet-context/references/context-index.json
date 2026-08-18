@@ -26,6 +26,18 @@
       "related": ["overview"]
     },
     {
+      "id": "dependabot-review",
+      "title": "Dependabot and dependency-PR security review",
+      "keywords": ["dependabot", "dependency pr", "deps", "lockfile", "upstream review", "ignore this major version", "chore(deps)"],
+      "summary": "Review dependency PRs against upstream source, then squash-merge or drive Dependabot with ignore/close comments.",
+      "owns": [".agents/skills/ditto-subnet-dependabot-review", ".github/dependabot.yml"],
+      "read": [".agents/skills/ditto-subnet-dependabot-review/SKILL.md", ".github/dependabot.yml"],
+      "search": ["gh pr list --author app/dependabot --state open", "rg -n 'package-ecosystem|directory:' .github/dependabot.yml"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/ditto-subnet-dependabot-review"],
+      "invariants": ["Do not merge a dependency PR from its Dependabot summary; inspect upstream source and the owning-component check.", "Never merge unless the user separately authorizes it."],
+      "related": ["worktrees", "release-delivery"]
+    },
+    {
       "id": "validator-miner",
       "title": "Validator, miner CLI, chain, and Compose runtime",
       "keywords": ["validator", "miner", "weights", "chain", "pylon", "heartbeat", "lease", "compose", "hotkey", "wallet"],

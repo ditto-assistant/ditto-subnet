@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dependabot security review"
+  short_description: "Review and land dependency PRs from upstream source"
+  default_prompt: "Use $ditto-subnet-dependabot-review to security-review open Dependabot PRs against upstream and squash-merge only the approved ones."

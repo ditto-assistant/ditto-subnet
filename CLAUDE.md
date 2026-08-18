@@ -21,6 +21,8 @@ Load only the returned anchors and the relevant specialized skill:
 - `.agents/skills/wandb-ops` for live W&B run, metric, and table diagnosis;
 - `.agents/skills/ditto-subnet-worktree` plus `.agents/skills/github` for
   isolation and stacked PRs;
+- `.agents/skills/ditto-subnet-dependabot-review` for Dependabot and other
+  dependency-PR security review;
 - `.agents/skills/backroom-review` for quarantine triage, high-score ATH
   review, and precedents.
 
@@ -41,6 +43,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Terraform and Ansible | `infra/` |
 | Release ownership graph | `release/components.toml` |
 | Backroom quarantine and ATH review | `.agents/skills/backroom-review/` |
+| Dependabot / dependency-PR review | `.agents/skills/ditto-subnet-dependabot-review/` |
 
 ## Cross-component changes
 
