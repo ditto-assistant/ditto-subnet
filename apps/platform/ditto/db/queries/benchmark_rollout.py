@@ -665,18 +665,17 @@ async def append_rollout_member(
 async def _live_desired_authority_ready(
     session: AsyncSession, rollout: BenchmarkRollout
 ) -> bool:
-    """Whether the open rollout currently satisfies the first desired flip."""
+    """Whether the open rollout currently satisfies the first desired flip.
+
+    This is only the first-flip predicate. It must not depend on leftover
+    wider-cohort membership: expanding a frozen rescore target or leaving
+    a tail unfinished cannot unlive a bench that already has a finished
+    priority prefix and a full desired emission set. Once that flip is
+    recorded, :func:`desired_authority_earned` is the sticky source and
+    later holds or rejects cannot roll authority back.
+    """
     from ditto.db.queries.scores import count_ranked_quorum_agents
 
-    member_ids = set(
-        await session.scalars(
-            select(BenchmarkRolloutMember.agent_id).where(
-                BenchmarkRolloutMember.rollout_id == rollout.rollout_id
-            )
-        )
-    )
-    if len(member_ids) != rollout.cohort_size:
-        return False
     if not await rollout_cohort_score_complete(
         session,
         rollout=rollout,
@@ -707,6 +706,33 @@ async def desired_authority_earned(
     )
 
 
+async def preserve_desired_authority(
+    session: AsyncSession,
+    *,
+    now: datetime,
+    inference_requirements: InferenceActivationRequirements | None = None,
+) -> bool:
+    """Seal a live desired era before a hold, reject, or leftover close.
+
+    Records the first flip if the live predicates hold, then closes leftover
+    collecting work. Call this *before* any status change that removes an
+    agent from the scored set. Returns True when desired authority is sealed.
+    """
+    rollout = await open_rollout(session)
+    if rollout is None:
+        return False
+    await maybe_record_desired_authority(session, rollout, now=now)
+    if not await desired_authority_earned(session, rollout):
+        return False
+    await maybe_activate_rollout(
+        session,
+        rollout,
+        now=now,
+        inference_requirements=inference_requirements,
+    )
+    return True
+
+
 async def maybe_record_desired_authority(
     session: AsyncSession,
     rollout: BenchmarkRollout,
@@ -715,10 +741,11 @@ async def maybe_record_desired_authority(
 ) -> bool:
     """Record that desired authority was earned, if the live flip now holds.
 
-    Idempotent. Write-path callers (score ingest, activation, reject) persist
-    this so a later ban cannot yank ``active_bench_version`` back to the
-    previous era. Read-only sessions that never commit still see desired
-    authority from the live predicate.
+    Idempotent. Write-path callers (score ingest, activation, hold, reject)
+    persist this so a later status change cannot yank
+    ``active_bench_version`` back to the previous era. Read-only sessions
+    that never commit still see desired authority from the live predicate
+    until the next write seals it.
     """
     if await desired_authority_earned(session, rollout):
         return True
@@ -770,17 +797,12 @@ async def active_bench_version(
     if open_transition is _UNRESOLVED_ROLLOUT:
         open_transition = await open_rollout(session)
     assert open_transition is None or isinstance(open_transition, BenchmarkRollout)
-    # Authority and background rescoring are deliberately separate gates.
-    # The operator freezes both widths at rollout start: the priority prefix
-    # must finish before the target may own weights, while the wider rescore
-    # cohort continues through the still-open rollout after that flip.
-    # Re-reading live policy here would move either finish line mid-rollout.
-    # MIN_DESIRED_AUTHORITY_AGENTS stays a constant on purpose. It is the
-    # KOTH emission-set size, so it is a consensus quantity, not queue
-    # policy: below it the *first* ledger flip would have fewer recipients
-    # than the emission split expects. Once earned, the flip is sticky.
-    # ``maybe_activate_rollout`` separately closes the durable rollout only
-    # after the wider rescore cohort finishes.
+    # The first flip needs a finished priority prefix and a full desired
+    # emission set. After that flip is recorded, leftover wider-cohort
+    # rescoring and later holds or rejects are enforcement, not liveness:
+    # they must not resurrect the previous-version board. Closing the
+    # collecting row once authority is earned drops that leftover work so
+    # the next rollout can open.
     if open_transition is not None and (
         await desired_authority_earned(session, open_transition)
         or await _live_desired_authority_ready(session, open_transition)
@@ -2009,6 +2031,59 @@ async def _terminal_exhausted_rollout_tail(
     return set(incomplete_ids)
 
 
+async def _activate_earned_rollout(
+    session: AsyncSession,
+    rollout: BenchmarkRollout,
+    *,
+    now: datetime,
+) -> bool:
+    """Close a live era's leftover collecting work.
+
+    Authority is already sticky. Frozen tails, later holds, and later
+    rejects are not activation gates: leaving the row open occupies the
+    single open-rollout slot and recreates a hybrid state operators have
+    to tiptoe around.
+    """
+    from ditto.db.queries.scores import count_ranked_quorum_agents
+
+    count_rows = (
+        await session.execute(
+            select(BenchmarkRolloutMember.agent_id, func.count(Score.validator_hotkey))
+            .outerjoin(
+                Score,
+                (Score.agent_id == BenchmarkRolloutMember.agent_id)
+                & (Score.bench_version == rollout.desired_version),
+            )
+            .where(BenchmarkRolloutMember.rollout_id == rollout.rollout_id)
+            .group_by(BenchmarkRolloutMember.agent_id)
+        )
+    ).all()
+    counts = {agent_id: int(count) for agent_id, count in count_rows}
+    ranked_cohort_agents = await count_ranked_quorum_agents(
+        session,
+        bench_version=rollout.desired_version,
+        require_v9_semantic_pass=rollout.desired_version == 9,
+    )
+    rollout.status = "activated"
+    rollout.activated_at = now
+    rollout.blocked_reason = None
+    await _audit(
+        session,
+        rollout,
+        "activated",
+        {
+            "bench_version": rollout.desired_version,
+            "score_counts": {str(key): value for key, value in counts.items()},
+            "ranked_quorum_agents": ranked_cohort_agents,
+            "suppressed_tail_agent_ids": [],
+            "close_reason": "desired_authority_earned",
+        },
+        now=now,
+    )
+    await session.flush()
+    return True
+
+
 async def maybe_activate_rollout(
     session: AsyncSession,
     rollout: BenchmarkRollout,
@@ -2016,18 +2091,20 @@ async def maybe_activate_rollout(
     now: datetime,
     inference_requirements: InferenceActivationRequirements | None = None,
 ) -> bool:
-    """Close after the frozen cohort finishes or its terminal tail is suppressed."""
+    """Close after authority is earned, or after leftover tails are suppressed."""
     # A superseded (or already activated) rollout is terminal and must never be
     # revived by a refresh sweep that still holds a stale reference to it.
     if rollout.status not in ("collecting", "blocked_ineligible"):
         return False
+    # Seal first, before leftover-membership checks. Expanding a rescore
+    # target or leaving a tail unfinished must not prevent the flip from
+    # becoming durable, and must not keep a live bench in hybrid state.
+    await maybe_record_desired_authority(session, rollout, now=now)
+    if await desired_authority_earned(session, rollout):
+        return await _activate_earned_rollout(session, rollout, now=now)
     if not await _validate_frozen_members(session, rollout, now=now):
         await session.flush()
         return False
-    # Persist hybrid authority as soon as the first-flip predicates hold, even
-    # when the wider cohort or inference gate still blocks durable close. A
-    # later reject must not resurrect the previous-version settled board.
-    await maybe_record_desired_authority(session, rollout, now=now)
     count_rows = (
         await session.execute(
             select(BenchmarkRolloutMember.agent_id, func.count(Score.validator_hotkey))

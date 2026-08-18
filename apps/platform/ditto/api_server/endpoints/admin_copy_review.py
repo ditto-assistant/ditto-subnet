@@ -53,7 +53,11 @@ from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE,
     record_artifact_fetch,
 )
-from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollout
+from ditto.db.queries.benchmark_rollout import (
+    active_bench_version,
+    open_rollout,
+    preserve_desired_authority,
+)
 from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
     get_miner_coldkeys_for_agents,
@@ -838,6 +842,7 @@ async def open_copy_review(
                 )
 
             reopened_at = datetime.now(UTC)
+            await preserve_desired_authority(session, now=reopened_at)
             previous_status = agent.status.value
             if reconsidering_rejection:
                 # A rejected ATH review is the operation that put this exact
@@ -896,6 +901,7 @@ async def open_copy_review(
             )
 
         opened_at = datetime.now(UTC)
+        await preserve_desired_authority(session, now=opened_at)
         review = AthReview(
             review_id=uuid4(),
             agent_id=agent.agent_id,
@@ -1011,16 +1017,7 @@ async def resolve_copy_review(
             else review.original_evidence.get("previous_status")
         )
         if canonical != "clear":
-            from ditto.db.queries.benchmark_rollout import (
-                maybe_record_desired_authority,
-                open_rollout,
-            )
-
-            open_transition = await open_rollout(session)
-            if open_transition is not None:
-                await maybe_record_desired_authority(
-                    session, open_transition, now=datetime.now(UTC)
-                )
+            await preserve_desired_authority(session, now=datetime.now(UTC))
         agent.status = (
             AgentStatus.LIVE
             if canonical == "clear" and previous_status == AgentStatus.LIVE.value

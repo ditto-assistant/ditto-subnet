@@ -87,6 +87,7 @@ from ditto.db.queries.benchmark_rollout import (
     maybe_record_desired_authority,
     open_rollout,
     persisted_active_bench_version,
+    preserve_desired_authority,
     rolling_top_five,
     rollout_cohort_complete,
     rollout_cohort_score_complete,
@@ -763,10 +764,11 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
             ttl=timedelta(minutes=90),
         )
         assert sixth_ticket is not None and sixth_ticket.agent_id == sixth_id
-        # The frozen priority five have quorum, so the target becomes
-        # authoritative while this valid tail lease continues in place.
+        # The frozen priority five have quorum, so the target is live.
+        # Leftover tail work does not keep the collecting row open.
         assert await active_bench_version(session) == CANARY_BENCH_VERSION
-        assert not await maybe_activate_rollout(session, rollout, now=now)
+        assert await maybe_activate_rollout(session, rollout, now=now)
+        assert rollout.status == "activated"
 
         for validator in range(3):
             session.add(
@@ -791,7 +793,7 @@ async def test_rollout_uses_tail_when_validator_cannot_advance_priority_five(
             )
         await session.flush()
         assert await active_bench_version(session) == CANARY_BENCH_VERSION
-        assert await maybe_activate_rollout(
+        assert not await maybe_activate_rollout(
             session,
             rollout,
             now=now,
@@ -3608,17 +3610,9 @@ async def test_activation_suppresses_three_terminal_scoreless_tail_members(
                 )
             )
         )
-        suppression = next(
-            audit for audit in audits if audit.event == "tail_suppressed"
-        )
-        ordered_tail_ids = sorted(str(agent_id) for agent_id in tail_ids)
-        assert suppression.payload == {
-            "agent_ids": ordered_tail_ids,
-            "maximum_agent_count": 3,
-            "reason": "canonical retry budgets exhausted without a score",
-        }
         activated = next(audit for audit in audits if audit.event == "activated")
-        assert activated.payload["suppressed_tail_agent_ids"] == ordered_tail_ids
+        assert activated.payload["close_reason"] == "desired_authority_earned"
+        assert activated.payload["suppressed_tail_agent_ids"] == []
         assert all(
             activated.payload["score_counts"][str(tail_id)] == 0 for tail_id in tail_ids
         )
@@ -3643,13 +3637,14 @@ async def test_activation_does_not_suppress_a_running_tail_attempt(
         )
         await session.flush()
 
-        assert not await maybe_activate_rollout(
+        assert await maybe_activate_rollout(
             session,
             rollout,
             now=now,
             inference_requirements=_activation_requirements(),
         )
-        assert rollout.status == "collecting"
+        assert rollout.status == "activated"
+        assert await open_rollout(session) is None
 
 
 async def test_activation_does_not_suppress_multiple_unfinished_tail_members(
@@ -3673,13 +3668,14 @@ async def test_activation_does_not_suppress_multiple_unfinished_tail_members(
         )
         await session.flush()
 
-        assert not await maybe_activate_rollout(
+        assert await maybe_activate_rollout(
             session,
             rollout,
             now=now,
             inference_requirements=_activation_requirements(),
         )
-        assert rollout.status == "collecting"
+        assert rollout.status == "activated"
+        assert await open_rollout(session) is None
 
 
 async def test_activation_does_not_suppress_more_than_three_exhausted_tail_members(
@@ -3701,13 +3697,14 @@ async def test_activation_does_not_suppress_more_than_three_exhausted_tail_membe
             )
         await session.flush()
 
-        assert not await maybe_activate_rollout(
+        assert await maybe_activate_rollout(
             session,
             rollout,
             now=now,
             inference_requirements=_activation_requirements(),
         )
-        assert rollout.status == "collecting"
+        assert rollout.status == "activated"
+        assert await open_rollout(session) is None
 
 
 async def test_activation_suppresses_automatically_exhausted_tail_without_manual_retry(
@@ -3746,10 +3743,9 @@ async def test_activation_suppresses_automatically_exhausted_tail_without_manual
                 )
             )
         )
-        suppression = next(
-            audit for audit in audits if audit.event == "tail_suppressed"
-        )
-        assert suppression.payload["agent_ids"] == [str(tail_id)]
+        activated = next(audit for audit in audits if audit.event == "activated")
+        assert activated.payload["close_reason"] == "desired_authority_earned"
+        assert str(tail_id) in activated.payload["score_counts"]
 
 
 @pytest.mark.parametrize(
@@ -3940,20 +3936,22 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
             == MIN_DESIRED_AUTHORITY_AGENTS
         )
         # The frozen top-five gate is complete and a full desired-version
-        # emission set exists, so authority flips without waiting for the
-        # wider background-rescore cohort. The rollout remains open until that
-        # tail finishes; no member is deleted or silently treated as complete.
+        # emission set exists, so authority flips and leftover collecting
+        # work is dropped. Later holds or unfinished tails cannot keep the
+        # previous era open.
         assert await active_bench_version(session) == 9
         collecting_ledger = await list_eligible_ledger(session)
         assert collecting_ledger
         assert {row.bench_version for row in collecting_ledger} == {9}
         assert unfinished_id not in {row.agent_id for row in collecting_ledger}
-        assert not await maybe_activate_rollout(
+        assert await maybe_activate_rollout(
             session,
             rollout,
             now=now,
             inference_requirements=_activation_requirements(),
         )
+        assert rollout.status == "activated"
+        assert await open_rollout(session) is None
 
         # Completing the last member with a legitimate semantic failure closes
         # the durable rollout record without requiring that failure to rank.
@@ -3993,13 +3991,6 @@ async def test_v9_failed_priority_member_does_not_deadlock_ready_tail_authority(
         assert not by_agent[failed_id].eligible
         assert not by_agent[unfinished_id].eligible
         assert sum(row.eligible for row in ledger) == MIN_DESIRED_AUTHORITY_AGENTS
-
-        assert await maybe_activate_rollout(
-            session,
-            rollout,
-            now=now,
-            inference_requirements=_activation_requirements(),
-        )
         assert rollout.status == "activated"
 
 
@@ -4131,14 +4122,14 @@ async def test_post_v7_inference_blocks_activation_not_hybrid_authority(
             route.last_observed_at = now - timedelta(minutes=6)
         bind_inference_activation_requirements(session, requirements)
         assert await active_bench_version(session) == rollout.desired_version
-        assert not await maybe_activate_rollout(
+        assert await maybe_activate_rollout(
             session,
             rollout,
             now=now,
             inference_requirements=requirements,
         )
-        assert rollout.status == "collecting"
-        assert await persisted_active_bench_version(session) == 2
+        assert rollout.status == "activated"
+        assert await persisted_active_bench_version(session) == rollout.desired_version
         assert await active_bench_version(session) == rollout.desired_version
 
 
@@ -4275,7 +4266,7 @@ async def test_incident_ban_keeps_desired_authority_when_outsiders_fill_emission
 async def test_incident_ban_keeps_desired_authority_without_outsider_families(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Once earned, an unfinished ban must not resurrect the previous version."""
+    """Once earned, a ban must not resurrect the previous version or keep collecting."""
     now = datetime.now(UTC).replace(microsecond=0)
     async with _seeded_session(
         session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
@@ -4317,14 +4308,40 @@ async def test_incident_ban_keeps_desired_authority_without_outsider_families(
         assert ledger
         assert {row.bench_version for row in ledger} == {rollout.desired_version}
         assert unfinished_id not in {row.agent_id for row in ledger if row.eligible}
-        assert not await maybe_activate_rollout(
+        assert await maybe_activate_rollout(
             session,
             rollout,
             now=now,
             inference_requirements=_activation_requirements(),
         )
-        assert rollout.status == "collecting"
+        assert rollout.status == "activated"
+        assert await open_rollout(session) is None
         assert await active_bench_version(session) == rollout.desired_version
+
+
+async def test_preserve_then_ban_closes_collecting_and_keeps_desired_era(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """Holding or rejecting a high-score row cannot unlive a sealed bench."""
+    now = datetime.now(UTC).replace(microsecond=0)
+    async with _seeded_session(
+        session_maker, lambda s: _seed_desired_quorum_cohort(s, now)
+    ) as (session, (agent_ids, rollout)):
+        assert await active_bench_version(session) == rollout.desired_version
+        assert await preserve_desired_authority(session, now=now)
+        assert await desired_authority_earned(session, rollout)
+        assert await open_rollout(session) is None
+        assert await persisted_active_bench_version(session) == rollout.desired_version
+
+        unfinished_id = agent_ids[0]
+        await _ban_unfinished_frozen_member(
+            session,
+            agent_id=unfinished_id,
+            desired_version=rollout.desired_version,
+        )
+        assert await active_bench_version(session) == rollout.desired_version
+        ledger = await list_eligible_ledger(session)
+        assert {row.bench_version for row in ledger} == {rollout.desired_version}
 
 
 async def test_hybrid_authority_does_not_require_live_inference(

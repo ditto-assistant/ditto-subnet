@@ -232,6 +232,7 @@ from ditto.db.queries.benchmark_rollout import (
     heartbeat_supports_version,
     issue_rollout_ticket,
     open_rollout,
+    preserve_desired_authority,
     rollout_cohort_complete,
 )
 from ditto.db.queries.confirmation_scores import (
@@ -680,6 +681,7 @@ async def _record_deferred_review_decision(
                 created_at=now,
             )
         )
+    await preserve_desired_authority(session, now=now)
     agent.status = AgentStatus.ATH_PENDING_REVIEW
     agent.duplicate_of = None
     agent.review_reason = DEFERRED_REVIEW_REASON
@@ -6067,6 +6069,7 @@ async def submit_score(
                     if resubmission.held:
                         decision = resubmission
                 if decision.held:
+                    await preserve_desired_authority(session, now=audit_now)
                     reference_provenance = reference_corpus_provenance()
                     agent.status = AgentStatus.ATH_PENDING_REVIEW
                     agent.duplicate_of = decision.duplicate_of
@@ -6189,6 +6192,7 @@ async def submit_score(
                     and TRANSFORM_AUDIT_ENFORCE
                     and agent.status == AgentStatus.SCORED
                 ):
+                    await preserve_desired_authority(session, now=audit_now)
                     agent.status = AgentStatus.ATH_PENDING_REVIEW
                     agent.review_reason = TRANSFORM_AUDIT_REVIEW_REASON
                     session.add(
