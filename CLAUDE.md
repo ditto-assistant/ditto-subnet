@@ -16,6 +16,8 @@ Load only the returned anchors and the relevant specialized skill:
   and Backroom;
 - `.agents/skills/ditto-subnet-benchmark` for validator, scoring, DittoBench,
   datagen, and adapters;
+- `.agents/skills/ditto-subnet-bench-version-bump` for shipping, activating, or
+  auditing a `bench_version` contract across every layer;
 - `.agents/skills/ditto-subnet-release-ops` for releases, deployments,
   screeners, Targon/GCE, GCP, Cloudflare, Terraform, and Ansible;
 - `.agents/skills/wandb-ops` for live W&B run, metric, and table diagnosis;
