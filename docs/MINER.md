@@ -24,6 +24,8 @@ improving the best artifact, not for serving live inference.
 - [What counts as cheating](#what-counts-as-cheating)
 - [Link a rotated hotkey](#link-a-rotated-hotkey)
 - [Claim a public handle](#claim-a-public-handle)
+- [Set a profile picture](#set-a-profile-picture)
+- [Sign in to the public miner console](#sign-in-to-the-public-miner-console)
 - [Common questions](#common-questions)
 
 ## Build and practice locally
@@ -151,13 +153,21 @@ context.
 
 ## Install the submission CLI
 
-Return to the `ditto-subnet` root when you are ready to verify, upload, or check
-status:
+Return to the `ditto-subnet` root when you are ready to verify, upload, check
+status, claim a handle, set a profile picture, or sign in to the public
+console:
 
 ```sh
 cd ../..
 uv sync
+uv run ditto -h
 ```
+
+`upload`, `attest`, `name`, and `avatar` each sign one request with the local
+wallet (`--coldkey` / `--hotkey`, or `--wallet.name` / `--wallet.hotkey`).
+`ditto login` is the separate device grant for the
+[dittobench.ai](https://dittobench.ai/#/reviews) miner console and hosted MCP.
+It does not replace those one-shot commands.
 
 Miner submission does not require the validator's `.env` or Docker Compose
 stack.
@@ -593,8 +603,8 @@ signed JSON and submit nothing.
 ## Set a profile picture
 
 Miners can attach a PNG, JPEG, or WebP image to their hotkey. The image is
-stored in a Hippius bucket and shown on the public dashboard next to the
-hotkey. Signing does not transfer TAO. Maximum size is 512 KiB.
+stored in a private Hippius bucket and shown on the public dashboard next to
+that hotkey. Signing does not transfer TAO. Maximum size is 512 KiB.
 
 ```sh
 # Upload a picture signed by this hotkey.
@@ -606,14 +616,29 @@ uv run ditto --network finney avatar clear \
   --coldkey miner --hotkey default
 ```
 
+Add `-y` to skip the confirmation prompt, or `--print-only` to print the
+signed JSON and submit nothing.
+
+After a successful set the circle appears on
+[dittobench.ai](https://dittobench.ai) in the champion box, leaderboard,
+activity, and miner overlay. Public profile pages are
+`https://dittobench.ai/miner/<hotkey>` and, after a reserved handle,
+`https://dittobench.ai/h/<handle>`. Until a picture is set the board looks
+unchanged: `avatar_url` is empty and no circle is drawn.
+
+A signed-in session with the `profile` scope can also change the picture
+from [dittobench.ai/#/reviews](https://dittobench.ai/#/reviews) without
+another wallet signature. `ditto avatar set` still works without logging in.
+
 The dashboard loads the picture from
-`/api/v1/public/miners/<hotkey>/avatar`. The Hippius bucket stays private;
-clients never need a world-readable Hippius URL. If Hippius is not
-configured on the Platform, set/clear return 503 and no picture is shown.
+`/api/v1/public/miners/<hotkey>/avatar`. Clients never need a world-readable
+Hippius URL. A missing picture is `404`. If Hippius is not configured on the
+Platform, set/clear return `503`.
 
 ## Sign in to the public miner console
 
-`https://dittobench.ai/#/reviews` is the miner sign-in page. It is not the
+The sidebar item is **Miner sign-in**
+([dittobench.ai/#/reviews](https://dittobench.ai/#/reviews)). It is not the
 ATH queue — that public hold list now lives at
 [`#/ath`](https://dittobench.ai/#/ath). After you sign in, the same page
 becomes your private console: profile picture and socials, every submission
@@ -632,6 +657,9 @@ uv run ditto --network finney login --code ABCD-EFGH \
 # Start a CLI-only session and print the matching dashboard URL
 uv run ditto --network finney login --hours 24 \
   --scopes read,profile,download
+
+uv run ditto login status
+uv run ditto login logout
 ```
 
 While that session is live, the dashboard can update your picture and
@@ -645,6 +673,13 @@ and Discord are optional. Connecting a Ditto product account is reserved
 for a later sign-in-with-Ditto step.
 
 ## Common questions
+
+**How do I sign in on dittobench.ai?** Open
+[dittobench.ai/#/reviews](https://dittobench.ai/#/reviews) (sidebar: Miner
+sign-in — not ATH reviews, which moved to `#/ath`). Run the printed
+`ditto login --code …` against the same `--coldkey` / `--hotkey` you use
+for upload. Signing does not transfer TAO. `ditto name` and `ditto avatar`
+still work without a session.
 
 **How much does evaluation cost?** The Backroom-controlled fee is denominated in
 TAO and is currently **0.04 TAO (40,000,000 rao)**. The CLI fetches and shows
