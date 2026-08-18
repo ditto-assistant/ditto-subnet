@@ -22,7 +22,7 @@
   },
   "devDependencies": {
     "@solidjs/testing-library": "0.8.10",
-    "@testing-library/jest-dom": "7.0.0",
+    "@testing-library/jest-dom": "7.0.1",
     "@types/node": "26.2.0",
     "jsdom": "30.0.1",
     "oxlint": "1.77.0",
