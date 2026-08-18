@@ -1,4 +1,4 @@
-# Board-review techniques
+# Source inspection techniques
 
 ## Resolve identity first
 
@@ -28,7 +28,7 @@ what actually changed.
 ## Download when the path is large
 
 `get_screening_artifact` URLs expire in minutes. Pipe them through
-`backroom-submission-triage/scripts/prepare_artifact.py` so the digest is
+`backroom-review/scripts/prepare_artifact.py` so the digest is
 checked and the tree stays temporary. Downloading every high-rank agent in
 a full-board pass is faster than six MCP windows per file.
 

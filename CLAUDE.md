@@ -21,8 +21,8 @@ Load only the returned anchors and the relevant specialized skill:
 - `.agents/skills/wandb-ops` for live W&B run, metric, and table diagnosis;
 - `.agents/skills/ditto-subnet-worktree` plus `.agents/skills/github` for
   isolation and stacked PRs;
-- `.agents/skills/backroom-board-review` for high-score ATH review and
-  precedents.
+- `.agents/skills/backroom-review` for quarantine triage, high-score ATH
+  review, and precedents.
 
 ## Ownership map
 
@@ -40,7 +40,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Miner starter kit | `miners/dittobench-starter-kit/` |
 | Terraform and Ansible | `infra/` |
 | Release ownership graph | `release/components.toml` |
-| High-score ATH board review | `.agents/skills/backroom-board-review/` |
+| Backroom quarantine and ATH review | `.agents/skills/backroom-review/` |
 
 ## Cross-component changes
 

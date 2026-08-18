@@ -257,10 +257,12 @@ def test_wandb_query_routes_to_operations_without_hijacking_generic_run_verbs() 
     assert "wandb-operations" not in generic
 
 
-def test_submission_triage_skill_requires_public_backroom_and_guarded_writes() -> None:
-    skill = ROOT / ".agents" / "skills" / "backroom-submission-triage"
+def test_backroom_review_skill_covers_both_courts() -> None:
+    skill = ROOT / ".agents" / "skills" / "backroom-review"
     body = (skill / "SKILL.md").read_text()
     metadata = (skill / "agents" / "openai.yaml").read_text()
+    agents_root = ROOT / ".agents" / "skills"
+    claude_link = ROOT / ".claude" / "skills" / "backroom-review"
 
     assert "https://backroom.dittobench.ai/mcp" in body
     assert "https://backroom.dittobench.ai/mcp" in metadata
@@ -270,3 +272,23 @@ def test_submission_triage_skill_requires_public_backroom_and_guarded_writes() -
     assert "execute_screening_quarantine_batch" in body
     assert "confirmed: true" in body
     assert "Agent-returned tool-call traces are not proof" in body
+    assert "search_ath_precedents" in body
+    assert "open_ath_review" in body
+    assert "resolve_ath_review" in body
+    assert (skill / "scripts" / "prepare_artifact.py").is_file()
+    assert (skill / "scripts" / "search-precedents.py").is_file()
+    assert (skill / "references" / "review-rules.md").is_file()
+    assert (skill / "references" / "review-bar.md").is_file()
+    assert claude_link.is_symlink()
+    assert (claude_link.parent / claude_link.readlink()).resolve() == skill.resolve()
+    assert not (agents_root / "backroom-board-review").exists()
+    assert not (agents_root / "backroom-submission-triage").exists()
+
+
+def test_quarantine_and_ath_queries_route_to_backroom_review() -> None:
+    for query in (
+        "review the screening quarantine queue and release false positives",
+        "ATH board review of high-score family compiler agents",
+    ):
+        topic_ids = [str(topic["id"]) for topic in lookup(query)]
+        assert topic_ids[0] == "backroom-review", query
