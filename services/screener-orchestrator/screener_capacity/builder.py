@@ -692,9 +692,12 @@ def _promote_runtime_archive(
             timeout=60,
         )
         if inspect.returncode != 0:
-            raise ControllerError(
-                f"runtime image promotion failed: {_skopeo_detail(inspect)}"
+            inspect_error = subprocess.CalledProcessError(
+                inspect.returncode, inspect.args, inspect.stdout, inspect.stderr
             )
+            raise ControllerError(
+                f"runtime image promotion failed: {_skopeo_detail(inspect_error)}"
+            ) from inspect_error
     except ControllerError:
         raise
     except (OSError, subprocess.SubprocessError) as error:

@@ -150,6 +150,32 @@ def test_promote_includes_redacted_skopeo_stderr(
     assert "[oauth]" in str(raised.value)
 
 
+def test_promote_inspect_failure_includes_redacted_skopeo_stderr(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "image.tar"
+    _write_tar(archive, ["manifest.json"])
+
+    def _run(argv: list[str], **_kwargs: object) -> _Proc:
+        if argv[1] == "copy":
+            return _Proc()
+        return _Proc(
+            returncode=1,
+            stderr="inspect denied ya29.super-secret-token",
+            args=argv,
+        )
+
+    monkeypatch.setattr("screener_capacity.builder.subprocess.run", _run)
+    with pytest.raises(ControllerError, match="inspect denied") as raised:
+        _promote_runtime_archive(
+            archive=archive,
+            destination="us-central1-docker.pkg.dev/p/candidates/miner:build-test",
+            access_token="token",
+        )
+    assert "ya29." not in str(raised.value)
+    assert "[oauth]" in str(raised.value)
+
+
 def test_skopeo_detail_redacts_oauth_noise() -> None:
     error = type("Err", (), {"stderr": "push failed ya29.abcDEF123", "stdout": ""})()
     assert _skopeo_detail(error) == "push failed [oauth]"
