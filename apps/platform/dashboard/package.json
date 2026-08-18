@@ -28,7 +28,7 @@
     "oxlint": "1.77.0",
     "prettier": "3.8.0",
     "typescript": "7.0.2",
-    "vite": "8.2.0",
+    "vite": "8.2.1",
     "vite-plugin-solid": "2.11.14",
     "vitest": "4.1.10"
   }
