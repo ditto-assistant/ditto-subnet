@@ -1,0 +1,3 @@
+{"display_name":"Compatibility Maintainer","known_repositories":["practice-ledger","practice-config"],"summary":"Preserves public identifiers, configuration precedence, and stable behavior.","user_id":"P01"}
+{"display_name":"Regression Investigator","known_repositories":["practice-config","practice-cache"],"summary":"Reproduces failures, validates strict parsing, and protects negative cases.","user_id":"P02"}
+{"display_name":"Deterministic Systems Engineer","known_repositories":["practice-cache","practice-ledger"],"summary":"Maintains stable allocation, cache identity, and deterministic eviction.","user_id":"P03"}
