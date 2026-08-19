@@ -16,7 +16,7 @@ from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.confirmation_bundles import (
@@ -303,25 +303,39 @@ def _execution_profile(
 
 # Failed LongMem tickets used to be re-claimed on the next validator poll,
 # which turned an identity-pin or scorer reject into a 16-attempt, $52.50
-# storm in two minutes. A bounded per-bundle cooldown keeps the daily cap
-# available for a later healthy executor without hiding a genuine later retry.
+# storm in two minutes. A bounded per-bundle cooldown applies only to those
+# immediate execution failures so a 90-minute lease expiry can still retry
+# on the next poll.
 CONFIRMATION_FAILED_REISSUE_COOLDOWN = timedelta(minutes=15)
+_CONFIRMATION_IMMEDIATE_FAIL = timedelta(seconds=30)
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 async def _bundle_reissue_cooling_down(
     session: AsyncSession, *, bundle_id: UUID, now: datetime
 ) -> bool:
-    last_failed_at = await session.scalar(
-        select(func.max(ConfirmationBundleTicket.failed_at)).where(
+    ticket = await session.scalar(
+        select(ConfirmationBundleTicket)
+        .where(
             ConfirmationBundleTicket.bundle_id == bundle_id,
             ConfirmationBundleTicket.failed_at.is_not(None),
         )
+        .order_by(
+            ConfirmationBundleTicket.failed_at.desc(),
+            ConfirmationBundleTicket.ticket_id.desc(),
+        )
+        .limit(1)
     )
-    if last_failed_at is None:
+    if ticket is None or ticket.failed_at is None:
         return False
-    if last_failed_at.tzinfo is None:
-        last_failed_at = last_failed_at.replace(tzinfo=UTC)
-    return last_failed_at + CONFIRMATION_FAILED_REISSUE_COOLDOWN > now
+    failed_at = _aware(ticket.failed_at)
+    issued_at = _aware(ticket.issued_at)
+    if failed_at - issued_at > _CONFIRMATION_IMMEDIATE_FAIL:
+        return False
+    return failed_at + CONFIRMATION_FAILED_REISSUE_COOLDOWN > now
 
 
 async def _subject_agent_id(session: AsyncSession, *, bundle_id: UUID) -> UUID | None:

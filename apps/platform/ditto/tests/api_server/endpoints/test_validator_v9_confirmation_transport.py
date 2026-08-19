@@ -3743,7 +3743,9 @@ class TestV9ConfirmationFailureRecovery:
             "CONFIRMATION_FAILED_REISSUE_COOLDOWN",
             timedelta(0),
         ):
-            reclaimed = await _claim(client, payload=_claim_payload(slot_id="longmem-0"))
+            reclaimed = await _claim(
+                client, payload=_claim_payload(slot_id="longmem-0")
+            )
 
         assert reclaimed.status_code == 200, reclaimed.text
         assert reclaimed.json()["ticket_id"] != str(first_ticket.ticket_id)
