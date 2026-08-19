@@ -50,7 +50,10 @@ from ditto.tests.confirmation_evidence_fixtures import (
     signed_report,
     verification_profile,
 )
-from ditto_screening_protocol.bench_v9 import V9ScoreGateEvidence
+from ditto_screening_protocol.bench_v9 import (
+    CONFIRMATION_BENCH_VERSIONS,
+    V9ScoreGateEvidence,
+)
 
 pytestmark = pytest.mark.asyncio
 
@@ -282,7 +285,7 @@ async def test_background_reconciliation_yields_to_contended_policy_write(
 
 # The evidence stack itself is pinned by ``V9EvidenceBenchVersion``; these are
 # every epoch that currently carries it.
-@pytest.mark.parametrize("live_version", [9, 10, 11])
+@pytest.mark.parametrize("live_version", CONFIRMATION_BENCH_VERSIONS)
 async def test_confirmation_follows_the_live_benchmark(
     session: AsyncSession, live_version: int
 ) -> None:
