@@ -141,7 +141,7 @@ Keep it short:
 - merge, deploy, Terraform, or operator steps still required
 ```
 
-Use a valid semantic-release type (`feat:`, `fix:`, `chore:`, and repository-supported scopes). Test-only changes use `chore(tests):`, never `test:`. Imperative mood, lowercase after the prefix, no trailing period, ≤72 characters.
+Use a valid semantic-release type (`feat:`, `fix:`, `chore:`, `docs:`, `perf:`, and repository-supported scopes). `docs:` bumps like `chore:` (no release); `perf:` bumps like `fix:` (patch). Test-only changes use `chore(tests):`, never `test:`. Imperative mood, lowercase after the prefix, no trailing period, ≤72 characters.
 
 After `gh stack submit --auto`, set the body with `gh pr edit` and verify exact heads and checks.
 

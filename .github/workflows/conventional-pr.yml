@@ -15,7 +15,8 @@ jobs:
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [[ ! "$PR_TITLE" =~ ^(fix|feat|chore)(\([^\)]+\))?\!?:\ .+ ]]; then
-            echo "PR titles must start with fix:, feat:, or chore: (optional scope and ! are supported)."
+          if [[ ! "$PR_TITLE" =~ ^(fix|feat|chore|docs|perf)(\([^\)]+\))?\!?:\ .+ ]]; then
+            echo "PR titles must start with fix:, feat:, chore:, docs:, or perf: (optional scope and ! are supported)."
+            echo "docs: releases like chore: (no version bump); perf: releases like fix: (patch)."
             exit 1
           fi
