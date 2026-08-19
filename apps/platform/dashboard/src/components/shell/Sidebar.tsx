@@ -1,5 +1,5 @@
 // The sidebar shell (monolith 2536–2605): brand + bench badge, the
-// hash-routed nav with its inline SVG icons, the theme switcher, and the
+// path-routed nav with its inline SVG icons, the theme switcher, and the
 // side-foot controls (wandb telemetry link, platform source link, manual
 // refresh). SiteFooter is the open-source repository footer (2995–3007) that
 // renders on the benchmark page; it lives here because the shell owns the

@@ -74,23 +74,19 @@ API and links out to wandb for the per-epoch deep dive. This is Surface 3 in
   which names the upgrade — and its deep link, which unfolds the section. Status
   counts in the side ledger stay whole-fleet, and the closed summary names every
   fold reason and its count.
-- **Stable object links** — all SPA state (popup/selected-row params, the
-  submissions filters (including `downloadable=true`), and both pagers) lives
-  in a query string inside the hash,
-  on whatever page it was opened from (`#/submissions?agent={id}`,
-  `#/overview?miner={hotkey}`, `#/operations?validator={hotkey}`,
-  `#/submissions?status=rejected&page=2`, `#/overview?page=2` for the
-  leaderboard page). Page-scoped view state (the filters and either pager's
+- **Stable object links** — the pathname is the sidebar page and SPA state
+  (popup/selected-row params, the submissions filters including
+  `downloadable=true`, and both pagers) lives in the real query:
+  `/submissions?agent={id}`, `/?miner={hotkey}`, `/operations?validator={hotkey}`,
+  `/submissions?status=rejected&page=2`, `/?page=2` for the overview
+  leaderboard pager. Page-scoped view state (the filters and either pager's
   `page`) is cleared when you navigate to a different page, so it never trails
   along as stale state — which is also why both pagers can share the `page` key
-  without colliding.
-  The real query string carries only deploy/config knobs (`?api=`, `?wandb=`),
-  so the document URL — and its HTTP cache entry — stays stable while the SPA
-  navigates. Agent and miner popovers link to dedicated `/agent/{id}` and
+  without colliding. Deploy/config knobs (`?api=`, `?wandb=`) share that query.
+  Agent and miner popovers link to dedicated `/agent/{id}` and
   `/miner/{hotkey}` pages. Direct visits and browser back/forward navigation
-  restore the same state; older link forms (`?agent={id}#/submissions`
-  real-query state, plural pathname and hash routes) are recognized and
-  normalized to the current form.
+  restore the same state; older hash-route forms (`#/operations?validator=…`,
+  `#/agents/{id}`, plural pathnames) are recognized and normalized.
 - **Anti-overfit assurance** — explains that seeds are fixed only after the
   submission is committed, rotate per submission, and can reproduce a completed
   evaluation without changing the already-submitted artifact.

@@ -10,9 +10,10 @@ import { ActivityBoard } from "../components/pipeline/ActivityBoard";
 import { createActivityStore } from "../components/pipeline/activity-store";
 import { agentCardOpen, hydrateOnAgentCardClose } from "../data/useEndpoint";
 import { REFRESH_MS } from "../lib/config";
+import { currentPageName } from "../lib/router";
 
 function onSubmissionsRoute(): boolean {
-  return (location.hash || "").startsWith("#/submissions");
+  return currentPageName() === "submissions";
 }
 
 export function SubmissionsPage(): JSX.Element {

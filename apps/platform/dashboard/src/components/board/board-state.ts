@@ -4,10 +4,10 @@
 // and this module is what makes the two mounts the same instrument: tab,
 // sort, filter, expanded families, and the selected bench view live at module
 // scope so navigating between the two homes never resets them (the page
-// number is hash-owned, mirroring restoreBoardPage/writeBoardPage 3894–3928).
+// number is query-owned, mirroring restoreBoardPage/writeBoardPage 3894–3928).
 import { createSignal } from "solid-js";
 
-import { currentPageName, parseHashRoute, spaHref } from "../../lib/router";
+import { currentPageName, spaHref, spaQuery } from "../../lib/router";
 
 export type BoardTab = "all" | "scored" | "provisional";
 export type BoardSortKey = "rank" | "composite" | "cost" | "latency" | "first_seen";
@@ -67,14 +67,13 @@ export function resetBoardState(): void {
 // written only on the page that owns it and navigation between pages clears
 // the page-scoped params (dashboardHref).
 
-/** Re-read boardPage from the hash. Returns true when the URL carried junk
+/** Re-read boardPage from the page query. Returns true when the URL carried junk
  * that should be rewritten out (page=1 or a non-canonical integer). */
 export function restoreBoardPage(): boolean {
   // The board lives on two pages (overview pane and the dedicated
   // Leaderboard page); both own the "page" param.
   const owner = currentPageName();
-  const requested =
-    owner === "overview" || owner === "leaderboard" ? parseHashRoute().query.get("page") : null;
+  const requested = owner === "overview" || owner === "leaderboard" ? spaQuery().get("page") : null;
   const parsed = Number(requested);
   setPage(
     requested !== null && /^[1-9][0-9]*$/.test(requested) && Number.isSafeInteger(parsed)
@@ -90,10 +89,10 @@ export function writeBoardPage(push: boolean): void {
   const owner = currentPageName();
   if (owner !== "overview" && owner !== "leaderboard") return;
   if (/^\/(agent|miner)s?\//.test(location.pathname)) return;
-  const hashQuery = parseHashRoute().query;
-  if (page() > 1) hashQuery.set("page", String(page()));
-  else hashQuery.delete("page");
-  history[push ? "pushState" : "replaceState"]({}, "", spaHref(owner, hashQuery));
+  const query = spaQuery();
+  if (page() > 1) query.set("page", String(page()));
+  else query.delete("page");
+  history[push ? "pushState" : "replaceState"]({}, "", spaHref(owner, query));
 }
 
 export function navigateBoardPage(next: number): void {

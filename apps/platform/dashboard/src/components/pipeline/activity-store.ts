@@ -2,9 +2,9 @@
 // paging, quick filters, and the fenced loader. Ports monolith 3313–3447
 // (restoreActivityUrl, writeActivityUrl, navigateActivityPage, filterCount,
 // activityRequestPath, applyActivityFilter, lockActivityFrameHeight) and
-// loadActivity 9401–9432. The filter/page state lives in the HASH query
-// (PAGE_SCOPED_PARAMS); the real query carries only deploy knobs. Legacy
-// real-query filters are honored once and normalized into the hash form.
+// loadActivity 9401–9432. The filter/page state lives in the real query
+// (PAGE_SCOPED_PARAMS) on `/submissions`. Leftover hash-query filters are
+// honored once and flattened into the path+query form.
 import { batch, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 
@@ -16,6 +16,7 @@ import {
   parseHashRoute,
   readEntityRoute,
   spaHref,
+  spaQuery,
 } from "../../lib/router";
 import type { ActivityPayload } from "../../types/pipeline";
 import { ACTIVITY_FILTERS, ACTIVITY_PAGE_SIZE, ACTIVITY_STATUSES } from "./status";
@@ -42,7 +43,7 @@ export interface ActivityStore {
   filterSelected: (name: string) => boolean;
   /** Re-derive state from the URL; true means the URL needed sanitizing. */
   restore: () => boolean;
-  /** Write the current state into the hash query (push or replace). */
+  /** Write the current state into the page query (push or replace). */
   write: (push: boolean) => void;
   applyFilter: (name: string) => void;
   navigatePage: (page: number, anchor: HTMLElement | null, push: boolean, user: boolean) => void;
@@ -83,15 +84,12 @@ export function createActivityStore(): ActivityStore {
   }
 
   // Port of restoreActivityUrl (3315–3347): canonical filters live in the
-  // hash query; legacy links carried them in the real query, honored once
-  // and reported for normalization. "page" is shared with the board pager,
-  // so it is read only while the submissions view owns it.
+  // real query. A leftover `#/submissions?status=…` is flattened by write().
+  // "page" is shared with the board pager, so it is read only while the
+  // submissions view owns it.
   function restore(): boolean {
-    const hashQuery = parseHashRoute().query;
-    const searchQuery = new URLSearchParams(location.search);
-    const hasIn = (q: URLSearchParams): boolean => PAGE_SCOPED_PARAMS.some((key) => q.has(key));
-    const legacy = !hasIn(hashQuery) && hasIn(searchQuery);
-    const source = legacy ? searchQuery : hashQuery;
+    const source = spaQuery();
+    const leftoverHash = parseHashRoute().page !== null;
     const values: string[] = [];
     source.getAll("status").forEach((value) => {
       value.split(",").forEach((part) => values.push(part.trim()));
@@ -120,7 +118,7 @@ export function createActivityStore(): ActivityStore {
     const pageNeedsSanitizing =
       requestedPage !== null && (nextPage === 1 || String(nextPage) !== requestedPage);
     return (
-      legacy ||
+      leftoverHash ||
       valid.length !== values.length ||
       (source.has("downloadable") && !nextDownloadable) ||
       nextQuery !== (source.get("q") || "") ||
@@ -133,7 +131,7 @@ export function createActivityStore(): ActivityStore {
   // is kept in the URL.
   function write(push: boolean): void {
     if (/^\/(agent|miner)s?\//.test(location.pathname)) return;
-    const urlQuery = parseHashRoute().query;
+    const urlQuery = spaQuery();
     urlQuery.delete("status");
     statuses().forEach((status) => urlQuery.append("status", status));
     if (downloadable()) urlQuery.set("downloadable", "true");

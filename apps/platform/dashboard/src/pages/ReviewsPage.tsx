@@ -1,4 +1,4 @@
-// Miner sign-in and private console. The public ATH queue moved to #/ath.
+// Miner sign-in and private console. The public ATH queue moved to /ath.
 import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js";
 import type { JSX } from "solid-js";
 
@@ -7,7 +7,7 @@ import { MinerAvatar } from "../components/ui/MinerAvatar";
 import { API_BASE } from "../lib/config";
 import { authJSON, postJSON } from "../lib/api";
 import { copyText } from "../lib/copy";
-import { dashboardHref, fullEntityHref, spaHref } from "../lib/router";
+import { dashboardHref, fullEntityHref, spaHref, spaQuery } from "../lib/router";
 import {
   clearMinerSession,
   minerSession,
@@ -124,8 +124,8 @@ interface StoredPollGrant {
   expires_at: number;
 }
 
-function hashParams(): URLSearchParams {
-  return new URLSearchParams(location.hash.split("?")[1] || "");
+function loginParams(): URLSearchParams {
+  return spaQuery();
 }
 
 function persistPollGrant(userCode: string, pollToken: string): void {
@@ -164,7 +164,7 @@ function writeLoginHash(userCode: string, completeToken?: string): void {
 }
 
 export function ReviewsPage(): JSX.Element {
-  const params = () => hashParams();
+  const params = () => loginParams();
   const presetCode = () => params().get("code") || params().get("login") || "";
   const completeToken = () => params().get("complete") || "";
 

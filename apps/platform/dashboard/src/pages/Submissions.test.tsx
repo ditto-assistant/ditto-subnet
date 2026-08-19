@@ -170,7 +170,7 @@ describe("server-backed quick filters (row 10)", () => {
     expect(last.getAll("status")).toEqual(["rejected"]);
     expect(last.get("page")).toBe("1");
     expect(last.get("limit")).toBe("10");
-    expect(location.hash).toBe("#/submissions?status=rejected");
+    expect(location.pathname + location.search).toBe("/submissions?status=rejected");
     // The user-initiated load flashes "Updating submissions…" (aria-busy),
     // then the live region lands on the match count.
     await waitFor(() =>
@@ -198,7 +198,7 @@ describe("server-backed quick filters (row 10)", () => {
     const last = activityRequests().pop() as URLSearchParams;
     expect(last.get("downloadable")).toBe("true");
     expect(last.get("page")).toBe("1");
-    expect(location.hash).toBe("#/submissions?downloadable=true");
+    expect(location.pathname + location.search).toBe("/submissions?downloadable=true");
   });
 
   it("states unavailability outright — never sample rows", async () => {
@@ -289,7 +289,7 @@ describe("URL filter/page restore and sanitize (row 12)", () => {
     history.replaceState(
       null,
       "",
-      "/#/submissions?status=under_review,rejected&downloadable=true&q=bolt&page=3",
+      "/submissions?status=under_review,rejected&downloadable=true&q=bolt&page=3",
     );
     const store = createActivityStore();
     expect(store.restore()).toBe(false);
@@ -324,7 +324,9 @@ describe("URL filter/page restore and sanitize (row 12)", () => {
     expect(replaceSpy).toHaveBeenCalled();
     // Param order follows the URL's surviving keys (q predates the re-added
     // status), exactly as the monolith's delete-then-append write behaves.
-    expect(location.hash).toBe("#/submissions?q=" + "x".repeat(200) + "&status=rejected");
+    expect(location.pathname + location.search).toBe(
+      "/submissions?q=" + "x".repeat(200) + "&status=rejected",
+    );
     pushSpy.mockRestore();
     replaceSpy.mockRestore();
   });
@@ -334,7 +336,7 @@ describe("URL filter/page restore and sanitize (row 12)", () => {
     const store = createActivityStore();
     expect(store.restore()).toBe(true);
     store.write(false);
-    expect(location.hash).toBe("#/submissions");
+    expect(location.pathname + location.search).toBe("/submissions");
 
     history.replaceState(null, "", "/#/submissions?page=99999999999999999999");
     const unsafe = createActivityStore();
@@ -350,9 +352,10 @@ describe("URL filter/page restore and sanitize (row 12)", () => {
     expect(store.statuses()).toEqual(["rejected"]);
     expect(store.page()).toBe(2);
     store.write(false);
-    // The real query carries only deploy knobs; state moved into the hash.
-    expect(location.search).toBe("");
-    expect(location.hash).toBe("#/submissions?status=rejected&page=2");
+    expect(location.pathname).toBe("/submissions");
+    expect(location.hash).toBe("");
+    expect(new URLSearchParams(location.search).get("status")).toBe("rejected");
+    expect(new URLSearchParams(location.search).get("page")).toBe("2");
   });
 
   it("redirects an out-of-range page to the last page with a replace", async () => {
@@ -375,7 +378,7 @@ describe("URL filter/page restore and sanitize (row 12)", () => {
     expect(pages).toEqual(["9", "4"]);
     // The redirect is a replace: no history entry is minted for page 9.
     expect(pushSpy).not.toHaveBeenCalled();
-    expect(location.hash).toBe("#/submissions?page=4");
+    expect(location.pathname + location.search).toBe("/submissions?page=4");
     pushSpy.mockRestore();
   });
 
@@ -385,7 +388,9 @@ describe("URL filter/page restore and sanitize (row 12)", () => {
       '[data-activity-filter="rejected"]',
     ) as HTMLButtonElement;
     fireEvent.click(rejected);
-    await waitFor(() => expect(location.hash).toBe("#/submissions?status=rejected"));
+    await waitFor(() =>
+      expect(location.pathname + location.search).toBe("/submissions?status=rejected"),
+    );
     // The browser travels back to the unfiltered URL.
     history.replaceState(null, "", "/#/submissions");
     window.dispatchEvent(new PopStateEvent("popstate"));

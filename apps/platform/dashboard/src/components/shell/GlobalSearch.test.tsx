@@ -97,7 +97,7 @@ describe("GlobalSearch accessibility (row 32)", () => {
     renderSearch();
     type(topMiner.miner_hotkey);
     fireEvent.keyDown(input(), { key: "Enter" });
-    expect(location.hash).toBe("#/overview?miner=" + topMiner.miner_hotkey);
+    expect(location.pathname + location.search).toBe("/?miner=" + topMiner.miner_hotkey);
   });
 
   it("opens a submission match on the submissions page", () => {
@@ -107,7 +107,8 @@ describe("GlobalSearch accessibility (row 32)", () => {
     const first = options()[0];
     expect(first?.querySelector(".search-result-kind")?.textContent).toBe("Submission");
     fireEvent.keyDown(input(), { key: "Enter" });
-    expect(location.hash).toMatch(/^#\/submissions\?agent=/);
+    expect(location.pathname).toBe("/submissions");
+    expect(location.search).toMatch(/^\?agent=/);
   });
 
   it("closes with Escape", () => {

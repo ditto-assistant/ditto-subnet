@@ -97,7 +97,15 @@ describe("PAGES registry", () => {
     expect(ENTITY_PAGES.miner).toBe("overview");
     expect(ENTITY_PAGES.validator).toBe("operations");
     expect(ENTITY_PAGES.screener).toBe("operations");
-    expect(PAGE_SCOPED_PARAMS).toEqual(["status", "downloadable", "q", "page", "code", "login"]);
+    expect(PAGE_SCOPED_PARAMS).toEqual([
+      "status",
+      "downloadable",
+      "q",
+      "page",
+      "code",
+      "login",
+      "complete",
+    ]);
   });
 });
 
@@ -173,30 +181,33 @@ describe("configSearch", () => {
 });
 
 describe("spaHref", () => {
-  it("mints '/' + '#/overview' so homepage unfurlers still fetch /", () => {
-    expect(spaHref("overview")).toBe("/#/overview");
+  it("mints overview as /", () => {
+    expect(spaHref("overview")).toBe("/");
   });
 
-  it("puts other pages in the pathname so unfurlers see that page's OG tags", () => {
-    expect(spaHref("operations")).toBe("/operations#/operations");
-    expect(spaHref("leaderboard")).toBe("/leaderboard#/leaderboard");
+  it("puts other pages in the pathname", () => {
+    expect(spaHref("operations")).toBe("/operations");
+    expect(spaHref("leaderboard")).toBe("/leaderboard");
   });
 
-  it("appends the hash query when non-empty", () => {
+  it("appends overlay and filter params to the real query", () => {
     expect(spaHref("submissions", new URLSearchParams("status=rejected&page=2"))).toBe(
-      "/submissions#/submissions?status=rejected&page=2",
+      "/submissions?status=rejected&page=2",
     );
   });
 
   it("omits the '?' for an empty query object", () => {
-    expect(spaHref("overview", new URLSearchParams())).toBe("/#/overview");
+    expect(spaHref("overview", new URLSearchParams())).toBe("/");
   });
 
-  it("keeps the real query config-only so the document URL stays stable", () => {
+  it("re-applies boot config knobs and drops stray search junk", () => {
     setBoot("api=x");
     setLocation("/agents/a1?utm=1#/whatever?noise=1");
-    expect(spaHref("overview")).toBe("/?api=x#/overview");
-    expect(spaHref("operations")).toBe("/operations?api=x#/operations");
+    expect(spaHref("overview")).toBe("/?api=x");
+    expect(spaHref("operations")).toBe("/operations?api=x");
+    expect(spaHref("operations", new URLSearchParams("validator=v1"))).toBe(
+      "/operations?api=x&validator=v1",
+    );
   });
 });
 
@@ -229,9 +240,9 @@ describe("currentPageName", () => {
     expect(pageFromPathname()).toBe("leaderboard");
   });
 
-  it("lets a hash page win over a crawlable pathname", () => {
+  it("prefers the pathname over a leftover hash page", () => {
     setLocation("/leaderboard#/benchmark");
-    expect(currentPageName()).toBe("benchmark");
+    expect(currentPageName()).toBe("leaderboard");
   });
 });
 
@@ -251,45 +262,41 @@ describe("handle profile path", () => {
 describe("entityHref", () => {
   it("keeps the current page and appends the entity param", () => {
     setLocation("/#/operations");
-    expect(entityHref("agent", "a1")).toBe("/operations#/operations?agent=a1");
+    expect(entityHref("agent", "a1")).toBe("/operations?agent=a1");
   });
 
-  it("preserves the rest of the hash state (activity filters)", () => {
+  it("preserves the rest of the page query (activity filters)", () => {
     setLocation("/#/submissions?status=rejected&page=2");
-    expect(entityHref("agent", "a1")).toBe(
-      "/submissions#/submissions?status=rejected&page=2&agent=a1",
-    );
+    expect(entityHref("agent", "a1")).toBe("/submissions?status=rejected&page=2&agent=a1");
   });
 
   it("replaces any other open entity param (one entity at a time)", () => {
     setLocation("/#/overview?miner=hk1");
-    expect(entityHref("agent", "a1")).toBe("/#/overview?agent=a1");
+    expect(entityHref("agent", "a1")).toBe("/?agent=a1");
   });
 
   it("falls back to ENTITY_PAGES for cold links with no page route", () => {
     setLocation("/");
-    expect(entityHref("agent", "a1")).toBe("/submissions#/submissions?agent=a1");
-    expect(entityHref("miner", "hk")).toBe("/#/overview?miner=hk");
-    expect(entityHref("validator", "v1")).toBe("/operations#/operations?validator=v1");
-    expect(entityHref("screener", "s1")).toBe("/operations#/operations?screener=s1");
+    expect(entityHref("agent", "a1")).toBe("/submissions?agent=a1");
+    expect(entityHref("miner", "hk")).toBe("/?miner=hk");
+    expect(entityHref("validator", "v1")).toBe("/operations?validator=v1");
+    expect(entityHref("screener", "s1")).toBe("/operations?screener=s1");
   });
 
   it("falls back to ENTITY_PAGES on a dedicated entity page", () => {
     setLocation("/agent/a1");
-    expect(entityHref("agent", "a1")).toBe("/submissions#/submissions?agent=a1");
+    expect(entityHref("agent", "a1")).toBe("/submissions?agent=a1");
   });
 
   it("honors an explicit page argument", () => {
     setLocation("/#/overview");
-    expect(entityHref("validator", "v1", "operations")).toBe(
-      "/operations#/operations?validator=v1",
-    );
+    expect(entityHref("validator", "v1", "operations")).toBe("/operations?validator=v1");
   });
 
   it("carries the boot config knobs in the real query", () => {
     setBoot("api=x");
     setLocation("/?api=x#/operations");
-    expect(entityHref("miner", "hk")).toBe("/operations?api=x#/operations?miner=hk");
+    expect(entityHref("miner", "hk")).toBe("/operations?api=x&miner=hk");
   });
 });
 
@@ -309,29 +316,27 @@ describe("fullEntityHref", () => {
 describe("dashboardHref", () => {
   it("keeps page-scoped view state on same-page navigation", () => {
     setLocation("/#/submissions?status=rejected&q=needle&page=3");
-    expect(dashboardHref("submissions")).toBe(
-      "/submissions#/submissions?status=rejected&q=needle&page=3",
-    );
+    expect(dashboardHref("submissions")).toBe("/submissions?status=rejected&q=needle&page=3");
   });
 
   it("drops page-scoped view state on cross-page navigation", () => {
     setLocation("/#/submissions?status=rejected&q=needle&page=3");
-    expect(dashboardHref("overview")).toBe("/#/overview");
+    expect(dashboardHref("overview")).toBe("/");
   });
 
   it("clears entity params even on same-page navigation (overlay close)", () => {
     setLocation("/#/submissions?agent=a1&status=rejected");
-    expect(dashboardHref("submissions")).toBe("/submissions#/submissions?status=rejected");
+    expect(dashboardHref("submissions")).toBe("/submissions?status=rejected");
   });
 
   it("drops the leaderboard pager page when leaving overview", () => {
     setLocation("/#/overview?page=4");
-    expect(dashboardHref("submissions")).toBe("/submissions#/submissions");
+    expect(dashboardHref("submissions")).toBe("/submissions");
   });
 
   it("treats a dedicated entity page as cross-page (no page route present)", () => {
     setLocation("/agent/a1");
-    expect(dashboardHref("submissions")).toBe("/submissions#/submissions");
+    expect(dashboardHref("submissions")).toBe("/submissions");
   });
 });
 
@@ -394,21 +399,21 @@ describe("readEntityRoute", () => {
     });
   });
 
-  describe("form 2: entity param in the hash query (canonical)", () => {
-    it("resolves with legacy=false", () => {
+  describe("form 2: leftover entity param in the hash query", () => {
+    it("resolves and marks legacy so the router can flatten it", () => {
       setLocation("/#/operations?agent=a1");
       expect(readEntityRoute()).toEqual({
         kind: "agent",
         id: "a1",
         key: "agent:a1",
         full: false,
-        legacy: false,
+        legacy: true,
       });
     });
 
     it("keeps working with other hash state present", () => {
       setLocation("/#/submissions?status=rejected&miner=hk&page=2");
-      expect(readEntityRoute()).toMatchObject({ kind: "miner", id: "hk", legacy: false });
+      expect(readEntityRoute()).toMatchObject({ kind: "miner", id: "hk", legacy: true });
     });
 
     it("prefers agent over miner over validator over screener", () => {
@@ -424,8 +429,8 @@ describe("readEntityRoute", () => {
     });
   });
 
-  describe("form 3: entity param in the real query (legacy)", () => {
-    it("resolves with legacy=true", () => {
+  describe("form 3: entity param in the real query (canonical)", () => {
+    it("still flattens when a leftover hash page is present", () => {
       setLocation("/?agent=a1#/submissions");
       expect(readEntityRoute()).toEqual({
         kind: "agent",
@@ -436,9 +441,13 @@ describe("readEntityRoute", () => {
       });
     });
 
-    it("works without any hash", () => {
-      setLocation("/?validator=v1");
-      expect(readEntityRoute()).toMatchObject({ kind: "validator", id: "v1", legacy: true });
+    it("is canonical without any hash", () => {
+      setLocation("/operations?validator=v1");
+      expect(readEntityRoute()).toMatchObject({
+        kind: "validator",
+        id: "v1",
+        legacy: false,
+      });
     });
 
     it("a present-but-empty first param blocks here too", () => {
@@ -505,9 +514,9 @@ describe("readEntityRoute", () => {
       expect(readEntityRoute()).toMatchObject({ kind: "miner", id: "hk1", full: true });
     });
 
-    it("hash query (2) beats real query (3)", () => {
+    it("hash query overlays real query while flattening", () => {
       setLocation("/?miner=hk#/overview?agent=a1");
-      expect(readEntityRoute()).toMatchObject({ kind: "agent", id: "a1", legacy: false });
+      expect(readEntityRoute()).toMatchObject({ kind: "agent", id: "a1", legacy: true });
     });
 
     it("real query (3) beats legacy hash (4)", () => {

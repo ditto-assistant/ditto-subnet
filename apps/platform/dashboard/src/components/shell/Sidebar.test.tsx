@@ -44,10 +44,7 @@ describe("Sidebar routes every section (row 28)", () => {
     pages.forEach((page) => {
       const item = document.querySelector(`.nav-item[data-page="${page}"]`);
       expect(item, page).toBeTruthy();
-      expect(item).toHaveAttribute(
-        "href",
-        page === "overview" ? "/#/overview" : `/${page}#/${page}`,
-      );
+      expect(item).toHaveAttribute("href", page === "overview" ? "/" : `/${page}`);
     });
   });
 
@@ -66,7 +63,7 @@ describe("Sidebar routes every section (row 28)", () => {
     );
     if (!leaderboard) throw new Error("missing leaderboard nav item");
     fireEvent.click(leaderboard);
-    expect(location.pathname + location.hash).toBe("/leaderboard#/leaderboard");
+    expect(location.pathname + location.search + location.hash).toBe("/leaderboard");
     expect(currentPage()).toBe("leaderboard");
     expect(leaderboard).toHaveAttribute("aria-current", "page");
     expect(overview?.classList.contains("active")).toBe(false);

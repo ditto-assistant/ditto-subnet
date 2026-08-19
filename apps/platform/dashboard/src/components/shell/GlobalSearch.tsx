@@ -16,7 +16,7 @@ import {
   relTime,
   shortKey,
 } from "../../lib/format";
-import { dashboardHref } from "../../lib/router";
+import { currentPageName, dashboardHref } from "../../lib/router";
 import { pushEntityRoute, syncFromLocation } from "../../stores/routeStore";
 import { activityStage } from "../pipeline/status";
 import type { LeaderboardEntry } from "../../types/leaderboard";
@@ -34,7 +34,7 @@ function searchText(value: unknown): string {
 }
 
 function onSubmissionsPage(): boolean {
-  return (location.hash || "").startsWith("#/submissions");
+  return currentPageName() === "submissions";
 }
 
 interface SearchItem {
@@ -52,7 +52,7 @@ export interface GlobalSearchProps {
   /** Operations activity feed entries (the last successful payload). */
   submissions: () => PipelineEntry[];
   /** Optional hook for the submissions page's server-side search: called
-   * (debounced 250ms) with the query while #/submissions is active. */
+   * (debounced 250ms) with the query while /submissions is active. */
   onServerSearch?: (query: string) => void;
 }
 
@@ -181,7 +181,7 @@ export function GlobalSearch(props: GlobalSearchProps): JSX.Element {
     setValue(input ? input.value : "");
     updateSearch();
     setOpen(true);
-    // On #/submissions the same field doubles as the server-side submission
+    // On /submissions the same field doubles as the server-side submission
     // search (250ms debounce), owned by the submissions page via this hook.
     if (!props.onServerSearch) return;
     if (!onSubmissionsPage()) return;

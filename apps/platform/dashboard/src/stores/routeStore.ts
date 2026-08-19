@@ -11,8 +11,9 @@ import {
   entityHref,
   isPageName,
   pageFromPathname,
-  pagePathname,
   readEntityRoute,
+  spaHref,
+  spaQuery,
 } from "../lib/router";
 import type { EntityKind, EntityRoute, PageName } from "../lib/router";
 
@@ -33,44 +34,29 @@ function sameEntityRoute(a: EntityRoute | null, b: EntityRoute | null): boolean 
 
 // Resolve the page the URL addresses. `current` is null only for the boot
 // resolve, which must always compute a page so nav/title state initializes.
+function hrefNow(): string {
+  return location.pathname + location.search + location.hash;
+}
+
 function derivePage(current: PageName | null): PageName {
   const hash = location.hash || "";
   const m = /^#\/([a-z]+)/.exec(hash);
   const entity = readEntityRoute();
   const routeHash = hash.indexOf("#/") === 0;
-  // A "#/…"-shaped hash is a page route; leave any other non-empty fragment
-  // (e.g. the skip link's "#main-content") alone so it isn't hijacked.
+  // A "#/…"-shaped hash is a leftover page route. Leave any other non-empty
+  // fragment (e.g. the skip link's "#main-content") alone so it isn't hijacked.
   if (!entity && !m && hash && !routeHash && current !== null) return current;
-  // The hash owns the page. An entity param is an overlay on top of that
-  // page, not a page itself; ENTITY_PAGES only decides where a cold link
-  // with no page route lands. (Hash must win or the URL and the sidebar
-  // disagree after closing an overlay.)
   const candidate = m?.[1];
   const hashPage = candidate !== undefined && isPageName(candidate) ? candidate : null;
   const pathPage = pageFromPathname();
   const page: PageName =
     hashPage ?? pathPage ?? (entity ? (ENTITY_PAGES[entity.kind] ?? "overview") : "overview");
-  // An unknown "#/…" route (e.g. "#/bogus", "#/") resolves to overview both
-  // at boot and after; normalize the URL so it doesn't advertise a route that
-  // doesn't exist. Entity routes own their hash and are left untouched.
-  if (!entity && hash && routeHash && !hashPage) {
-    history.replaceState(
-      (history.state as unknown) ?? {},
-      "",
-      location.pathname + location.search + "#/" + page,
-    );
-  } else if (hashPage && !entity?.full) {
-    // Hash-only shares (`/#/operations?validator=…`) look like `/` to Discord.
-    // Lift the page into the pathname so the address bar, and the next paste,
-    // unfurl that page's OG tags instead of the homepage champion card.
-    const wantPath = pagePathname(hashPage);
-    if (location.pathname !== wantPath) {
-      history.replaceState(
-        (history.state as unknown) ?? {},
-        "",
-        wantPath + location.search + location.hash,
-      );
-    }
+  if (entity?.full) return page;
+  // Legacy #/agents/{id} owns the hash until EntityPanel normalizes it.
+  if (entity?.legacy && routeHash && !hashPage) return page;
+  const target = spaHref(page, spaQuery());
+  if (hrefNow() !== target) {
+    history.replaceState((history.state as unknown) ?? {}, "", target);
   }
   return page;
 }
@@ -80,14 +66,14 @@ const [entitySignal, setEntitySignal] = createSignal<EntityRoute | null>(readEnt
   equals: sameEntityRoute,
 });
 
-// Driven by the hash; defaults to "overview".
+// Driven by the document URL; defaults to "overview".
 export const currentPage: Accessor<PageName> = pageSignal;
 export const entityRoute: Accessor<EntityRoute | null> = entitySignal;
 
 // Recompute both signals from the current location.
 export function syncFromLocation(): void {
-  setEntitySignal(readEntityRoute());
   setPageSignal((prev) => derivePage(prev));
+  setEntitySignal(readEntityRoute());
 }
 
 // Sidebar navigation: route through dashboardHref so an open overlay is
@@ -128,8 +114,8 @@ export function closeEntityRoute(): void {
       history.back();
       return;
     }
-    // Return to the page the overlay was opened over (the hash still holds
-    // it); ENTITY_PAGES is only the fallback when no page route is present.
+    // Return to the page the overlay was opened over; ENTITY_PAGES is only
+    // the fallback when no page route is present.
     history.replaceState(
       {},
       "",

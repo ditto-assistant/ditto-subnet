@@ -165,7 +165,7 @@ describe("EntityPanel miner tenant", () => {
     expect(modal().classList.contains("open")).toBe(true);
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await waitFor(() => expect(modal().classList.contains("open")).toBe(false));
-    expect(location.hash).toBe("#/overview");
+    expect(location.pathname + location.search).toBe("/");
     expect(modal()).toHaveAttribute("aria-hidden", "true");
   });
 
@@ -322,7 +322,9 @@ describe("EntityPanel validator tenant (row 26 shell slice)", () => {
   it("normalizes a validator route onto the operations page", async () => {
     renderPanel();
     visit("/#/overview?validator=" + validatorHotkey);
-    await waitFor(() => expect(location.hash).toBe("#/operations?validator=" + validatorHotkey));
+    await waitFor(() =>
+      expect(location.pathname + location.search).toBe("/operations?validator=" + validatorHotkey),
+    );
     expect(modal().classList.contains("open")).toBe(true);
   });
 });

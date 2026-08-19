@@ -1,14 +1,12 @@
 // URL logic for the SPA router.
 //
-// The document pathname is the sidebar page (`/operations`, `/leaderboard`).
-// Overlay and filter state lives in a query string INSIDE the hash
-// (`#/operations?validator=…`), and the real query carries only deploy/config
-// knobs (`?api=`, `?wandb=`). That keeps each page's HTTP cache entry stable
-// during in-page navigation while Discord/Slack/Twitter — which never see
-// the fragment — fetch `/operations` instead of the homepage OG card.
-// Hash-only links (`/#/operations`) still resolve; the router canonicalizes
-// them onto the crawlable pathname. Legacy links with SPA state in the real
-// query are recognized once and normalized into the hash form.
+// Pathname is the sidebar page (`/operations`, `/leaderboard`). Overlay and
+// filter state lives in the real query (`/operations?validator=…`). Config
+// knobs (`?api=`, `?wandb=`) share that query and are re-applied from the
+// boot snapshot so minted URLs never keep stray search junk. The only hash
+// that is not a leftover to flatten is a skip-link (`#main-content`).
+// Hash-only bookmarks (`/#/operations?validator=…`) still resolve; the
+// router canonicalizes them onto the path+query form.
 import { bootParams } from "./config";
 
 export type PageName =
@@ -116,10 +114,29 @@ export const PAGE_SCOPED_PARAMS: string[] = [
   "page",
   "code",
   "login",
+  "complete",
 ];
 
 // The config knobs allowed to appear in the real query string.
 const CONFIG_KEYS = ["api", "wandb"] as const;
+const CONFIG_KEY_SET = new Set<string>(CONFIG_KEYS);
+const SPA_QUERY_KEYS = new Set<string>([
+  ...PAGE_SCOPED_PARAMS,
+  "agent",
+  "miner",
+  "validator",
+  "screener",
+]);
+
+function isConfigKey(key: string): boolean {
+  return CONFIG_KEY_SET.has(key);
+}
+
+function copySpaParams(from: URLSearchParams, into: URLSearchParams): void {
+  from.forEach((value, key) => {
+    if (SPA_QUERY_KEYS.has(key)) into.append(key, value);
+  });
+}
 
 // Entity param precedence when more than one is present (original key order).
 const KIND_PRECEDENCE: readonly EntityKind[] = ["agent", "miner", "validator", "screener"];
@@ -154,8 +171,26 @@ export function parseHashRoute(hash?: string): HashRoute {
   };
 }
 
-// The real query string of every SPA-minted URL: config knobs only, taken
-// from the boot-time params so stray query junk is never carried forward.
+/** Overlay/filter params from the current URL (config knobs stripped).
+ * A leftover `#/page?…` hash still wins on colliding keys so one canonicalize
+ * pass can flatten it into the real query. */
+export function spaQuery(): URLSearchParams {
+  const query = new URLSearchParams();
+  copySpaParams(new URLSearchParams(location.search), query);
+  const hashRoute = parseHashRoute();
+  if (hashRoute.page === null) return query;
+  const seen = new Set<string>();
+  hashRoute.query.forEach((_, key) => {
+    if (isConfigKey(key) || seen.has(key)) return;
+    seen.add(key);
+    query.delete(key);
+  });
+  copySpaParams(hashRoute.query, query);
+  return query;
+}
+
+// Config knobs taken from the boot-time snapshot so stray query junk is
+// never carried forward on minted URLs.
 export function configSearch(): string {
   const config = new URLSearchParams();
   for (const key of CONFIG_KEYS) {
@@ -167,30 +202,37 @@ export function configSearch(): string {
 }
 
 export function spaHref(page: string, query?: URLSearchParams): string {
-  const qs = query ? query.toString() : "";
-  // Pathname is what unfurlers fetch. Keep the hash page too so parseHashRoute
-  // and hash-only bookmarks keep working after a copy-paste.
-  return pagePathname(page) + configSearch() + "#/" + page + (qs ? "?" + qs : "");
+  const search = new URLSearchParams();
+  for (const key of CONFIG_KEYS) {
+    const value = bootParams.get(key);
+    if (value !== null) search.set(key, value);
+  }
+  if (query) copySpaParams(query, search);
+  const qs = search.toString();
+  return pagePathname(page) + (qs ? "?" + qs : "");
 }
 
-// The page currently addressed by the hash, or by a crawlable pathname
-// (`/leaderboard`). Null on a dedicated /agent/{id} page with no page route.
+// Pathname is canonical (`/leaderboard`). A leftover `#/page` still counts
+// so a hash-only bookmark resolves before canonicalize. Null on a dedicated
+// /agent/{id} page with no page route.
 export function currentPageName(): PageName | null {
-  const page = parseHashRoute().page;
-  if (page !== null && page !== "" && isPageName(page)) return page;
-  return pageFromPathname();
+  const pathPage = pageFromPathname();
+  if (pathPage) return pathPage;
+  const hashPage = parseHashRoute().page;
+  if (hashPage !== null && hashPage !== "" && isPageName(hashPage)) return hashPage;
+  return null;
 }
 
 export function entityHref(kind: EntityKind, identifier: string, page?: string): string {
   const plural = ENTITY_PATHS[kind] || kind;
-  // Keep the rest of the hash state (activity filters) so opening an
+  // Keep the rest of the page query (activity filters) so opening an
   // overlay never resets the page under it.
-  const query = parseHashRoute().query;
+  const query = spaQuery();
   clearEntityParams(query);
   query.set(ENTITY_PARAMS[plural] ?? kind, String(identifier));
-  // Drilldowns are overlays: they open over whatever page is active, so the
-  // hash keeps the current page. ENTITY_PAGES is only the fallback for cold
-  // links minted where no page route is present (dedicated entity pages).
+  // Drilldowns are overlays over whatever page is active. ENTITY_PAGES is
+  // only the fallback for cold links minted where no page route is present
+  // (dedicated entity pages).
   return spaHref(page || currentPageName() || ENTITY_PAGES[plural] || "overview", query);
 }
 
@@ -212,7 +254,7 @@ export function fullEntityHref(kind: EntityKind, identifier: string): string {
 }
 
 export function dashboardHref(page: PageName): string {
-  const query = parseHashRoute().query;
+  const query = spaQuery();
   clearEntityParams(query);
   // Same page (e.g. closing an overlay) keeps that page's view state; moving
   // to a different page drops it so it never reappears as stale filters or a
@@ -240,8 +282,8 @@ function entityIn(query: URLSearchParams): EntityRoute | null {
 }
 
 // Resolve which entity (if any) the URL addresses, across 5 forms in
-// precedence order: full path /agent|miner/{id} → hash-query param
-// (canonical) → real-query param (legacy) → legacy hash #/agents/{id} →
+// precedence order: full path /agent|miner/{id} → real-query param
+// (canonical) → leftover hash-query param → legacy hash #/agents/{id} →
 // legacy path /agents/{id}.
 export function readEntityRoute(): EntityRoute | null {
   let match = /^\/(agent|miner)\/([^/]+)\/?$/.exec(location.pathname);
@@ -265,14 +307,13 @@ export function readEntityRoute(): EntityRoute | null {
     }
   }
 
-  // Canonical: entity params in the hash query ("#/operations?agent=…").
-  const hashEntity = entityIn(parseHashRoute().query);
-  if (hashEntity) return hashEntity;
-
-  // Legacy: entity params in the real query ("?agent=…#/submissions").
-  // Marked legacy so the entity resolver normalizes the URL to the hash form.
-  const searchEntity = entityIn(new URLSearchParams(location.search));
-  if (searchEntity) return { ...searchEntity, legacy: true };
+  const overlay = entityIn(spaQuery());
+  if (overlay) {
+    // A leftover `#/page?entity=` (or `?entity=#/page`) still needs a
+    // flatten onto pathname + real query.
+    const leftoverHashPage = parseHashRoute().page !== null;
+    return leftoverHashPage ? { ...overlay, legacy: true } : overlay;
+  }
 
   match = /^#\/(agents|miners|validators|screeners)\/([^/?#]+)\/?$/.exec(location.hash);
   if (!match) {

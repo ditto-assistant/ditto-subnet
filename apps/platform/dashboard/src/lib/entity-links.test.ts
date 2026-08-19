@@ -21,7 +21,7 @@ import {
   entityBackHref,
   hasFullEntityPage,
 } from "./entity-links";
-import { parseHashRoute, readEntityRoute } from "./router";
+import { readEntityRoute } from "./router";
 
 function setLocation(url: string): void {
   history.replaceState(null, "", url);
@@ -45,7 +45,7 @@ describe("entityAnchorAttrs", () => {
     const attrs = entityAnchorAttrs("agent", "agent-1", "My agent");
     expect(attrs).toEqual({
       class: "entity-link",
-      href: "/submissions#/submissions?agent=agent-1",
+      href: "/submissions?agent=agent-1",
       "data-entity-link": "agent",
       label: "My agent",
     });
@@ -54,35 +54,31 @@ describe("entityAnchorAttrs", () => {
   it("keeps the page's hash state so opening an overlay never resets it", () => {
     setLocation("/#/submissions?status=rejected&q=probe&page=3");
     const attrs = entityAnchorAttrs("agent", "agent-1");
-    const route = parseHashRoute(new URL(attrs?.href ?? "", location.href).hash);
-    expect(route.page).toBe("submissions");
-    expect(route.query.get("status")).toBe("rejected");
-    expect(route.query.get("q")).toBe("probe");
-    expect(route.query.get("page")).toBe("3");
-    expect(route.query.get("agent")).toBe("agent-1");
+    const query = new URL(attrs?.href ?? "", location.href).searchParams;
+    expect(new URL(attrs?.href ?? "", location.href).pathname).toBe("/submissions");
+    expect(query.get("status")).toBe("rejected");
+    expect(query.get("q")).toBe("probe");
+    expect(query.get("page")).toBe("3");
+    expect(query.get("agent")).toBe("agent-1");
   });
 
   it("replaces any other entity param instead of stacking overlays", () => {
     setLocation("/#/operations?validator=5Val");
     const attrs = entityAnchorAttrs("screener", "5Scr");
-    const route = parseHashRoute(new URL(attrs?.href ?? "", location.href).hash);
-    expect(route.query.get("validator")).toBeNull();
-    expect(route.query.get("screener")).toBe("5Scr");
+    const query = new URL(attrs?.href ?? "", location.href).searchParams;
+    expect(query.get("validator")).toBeNull();
+    expect(query.get("screener")).toBe("5Scr");
   });
 
   it("falls back to ENTITY_PAGES only for cold links with no page route", () => {
     // No "#/page" in the URL: each kind lands on its home page.
-    expect(entityAnchorAttrs("agent", "a1")?.href).toBe("/submissions#/submissions?agent=a1");
-    expect(entityAnchorAttrs("miner", "5Miner")?.href).toBe("/#/overview?miner=5Miner");
-    expect(entityAnchorAttrs("validator", "5Val")?.href).toBe(
-      "/operations#/operations?validator=5Val",
-    );
-    expect(entityAnchorAttrs("screener", "5Scr")?.href).toBe(
-      "/operations#/operations?screener=5Scr",
-    );
+    expect(entityAnchorAttrs("agent", "a1")?.href).toBe("/submissions?agent=a1");
+    expect(entityAnchorAttrs("miner", "5Miner")?.href).toBe("/?miner=5Miner");
+    expect(entityAnchorAttrs("validator", "5Val")?.href).toBe("/operations?validator=5Val");
+    expect(entityAnchorAttrs("screener", "5Scr")?.href).toBe("/operations?screener=5Scr");
     // With a live page route, the overlay opens over the current page.
     setLocation("/#/leaderboard");
-    expect(entityAnchorAttrs("agent", "a1")?.href).toBe("/leaderboard#/leaderboard?agent=a1");
+    expect(entityAnchorAttrs("agent", "a1")?.href).toBe("/leaderboard?agent=a1");
   });
 
   it("uses the identifier as the label fallback and appends extra classes", () => {
@@ -109,7 +105,8 @@ describe("entityAnchorAttrs", () => {
     setLocation("/?api=https%3A%2F%2Fapi.example#/submissions");
     const href = entityAnchorAttrs("agent", "a1")?.href ?? "";
     expect(href.startsWith("/submissions?api=")).toBe(true);
-    expect(new URL(href, location.href).hash).toBe("#/submissions?agent=a1");
+    expect(new URL(href, location.href).searchParams.get("agent")).toBe("a1");
+    expect(new URL(href, location.href).hash).toBe("");
   });
 });
 
@@ -152,23 +149,23 @@ describe("entityActions / full-page routes", () => {
 
   it("points back at the page under the overlay", () => {
     setLocation("/#/operations?validator=5Val");
-    expect(entityBackHref("validator")).toBe("/operations#/operations");
-    expect(entityActions("validator", "5Val").backHref).toBe("/operations#/operations");
+    expect(entityBackHref("validator")).toBe("/operations");
+    expect(entityActions("validator", "5Val").backHref).toBe("/operations");
   });
 
   it("falls back to the entity's home page for cold links", () => {
     // A dedicated /agent/{id} page has no hash page route.
     setLocation("/agent/a1");
-    expect(entityBackHref("agent")).toBe("/submissions#/submissions");
-    expect(entityBackHref("miner")).toBe("/#/overview");
-    expect(entityBackHref("validator")).toBe("/operations#/operations");
+    expect(entityBackHref("agent")).toBe("/submissions");
+    expect(entityBackHref("miner")).toBe("/");
+    expect(entityBackHref("validator")).toBe("/operations");
   });
 
   it("keeps the page's view state and drops only the entity param on close", () => {
     // dashboardHref semantics: closing an overlay stays on the same page, so
     // its filters and page number survive; only the overlay param goes away.
     setLocation("/#/submissions?status=rejected&page=2&agent=a1");
-    expect(entityBackHref("agent")).toBe("/submissions#/submissions?status=rejected&page=2");
-    expect(entityBackHref("miner")).toBe("/submissions#/submissions?status=rejected&page=2");
+    expect(entityBackHref("agent")).toBe("/submissions?status=rejected&page=2");
+    expect(entityBackHref("miner")).toBe("/submissions?status=rejected&page=2");
   });
 });

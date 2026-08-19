@@ -357,8 +357,8 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       setFull(false);
       return;
     }
-    // Legacy URL forms (real-query params, plural hash/path routes) are
-    // recognized once and normalized to the canonical hash-query form.
+    // Legacy URL forms (hash-query params, plural hash/path routes) are
+    // recognized once and normalized to the canonical path+query form.
     if (route.legacy) {
       const href = entityHref(route.kind, route.id);
       if (location.pathname + location.search + location.hash !== href) {
@@ -638,7 +638,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
           <a
             class="btn ghost back-dashboard"
             id="d-back-dashboard"
-            href={actions()?.backHref ?? "/#/overview"}
+            href={actions()?.backHref ?? "/"}
           >
             ← Dashboard
           </a>

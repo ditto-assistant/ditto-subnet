@@ -797,7 +797,7 @@ describe("board view controls (row 1 slice)", () => {
     expect(row.hasAttribute("role")).toBe(false);
     fireEvent.click(row);
     await waitFor(() =>
-      expect(location.hash).toContain("miner=" + (ranked[0] as LeaderboardEntry).miner_hotkey),
+      expect(location.search).toContain("miner=" + (ranked[0] as LeaderboardEntry).miner_hotkey),
     );
   });
 });

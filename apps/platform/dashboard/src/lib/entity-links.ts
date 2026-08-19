@@ -1,7 +1,7 @@
 // Entity link construction on top of the router primitives. Entity params
-// live in the hash query (the real query carries config knobs only);
-// drilldowns are overlays over the current page, and ENTITY_PAGES is only
-// the cold-link fallback when no page route is present. Ports of the
+// live in the page query next to config knobs; drilldowns are overlays over
+// the current page, and ENTITY_PAGES is only the cold-link fallback when no
+// page route is present. Ports of the
 // original's entityAnchor (monolith 3234–3238), canonicalEntityUrl
 // (6063–6065) and configureEntityActions (3297–3304); the router half
 // (entityHref / fullEntityHref / readEntityRoute) lives in lib/router and is
