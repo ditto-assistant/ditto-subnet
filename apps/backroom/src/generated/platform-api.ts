@@ -1105,6 +1105,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-failures": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Summarize Screening Failures
+         * @description Group currently screening / screening_failed agents by reason_code.
+         */
+        get: operations["summarize_screening_failures_api_v1_admin_screening_failures_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-quarantines": {
         parameters: {
             query?: never;
@@ -6993,6 +7013,59 @@ export interface components {
             /** Agent Status */
             agent_status: string;
             dispute: components["schemas"]["AdminScreeningDisputeItem"];
+        };
+        /**
+         * AdminScreeningFailureExample
+         * @description One currently failed or running screening row in a reason-code group.
+         */
+        AdminScreeningFailureExample: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Agent Status */
+            agent_status: string;
+            /** Agent Version */
+            agent_version?: number | null;
+            /**
+             * Submitted At
+             * Format: date-time
+             */
+            submitted_at: string;
+        };
+        /**
+         * AdminScreeningFailureGroup
+         * @description Live screening jam for one (status, reason_code) pair.
+         */
+        AdminScreeningFailureGroup: {
+            /** Agent Status */
+            agent_status: string;
+            /** Count */
+            count: number;
+            /** Examples */
+            examples: components["schemas"]["AdminScreeningFailureExample"][];
+            /** Reason Code */
+            reason_code: string | null;
+        };
+        /**
+         * AdminScreeningFailureSummary
+         * @description Operator view of the live screening pipeline jam, grouped by cause.
+         */
+        AdminScreeningFailureSummary: {
+            /**
+             * Generated At
+             * Format: date-time
+             */
+            generated_at: string;
+            /** Groups */
+            groups: components["schemas"]["AdminScreeningFailureGroup"][];
+            /** Screening */
+            screening: number;
+            /** Screening Failed */
+            screening_failed: number;
         };
         /** AdminScreeningRescreenRequest */
         AdminScreeningRescreenRequest: {
@@ -21408,6 +21481,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminScreeningDisputeResolveResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    summarize_screening_failures_api_v1_admin_screening_failures_get: {
+        parameters: {
+            query?: {
+                example_limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminScreeningFailureSummary"];
                 };
             };
             /** @description Validation Error */

@@ -59,6 +59,9 @@ from ditto.api_models.admin_quarantine import (
     AdminScreeningDisputeList,
     AdminScreeningDisputeResolveRequest,
     AdminScreeningDisputeResolveResponse,
+    AdminScreeningFailureExample,
+    AdminScreeningFailureGroup,
+    AdminScreeningFailureSummary,
     AdminScreeningRescreenRequest,
     AdminScreeningRescreenResponse,
     AdminScreeningRetryNowRequest,
@@ -1623,6 +1626,66 @@ async def list_screening_submissions(
             )
             for agent in agents
         ],
+    )
+
+
+@router.get("/screening-failures", response_model=AdminScreeningFailureSummary)
+async def summarize_screening_failures(
+    _admin: AdminDep,
+    session: SessionDep,
+    example_limit: Annotated[int, Query(ge=1, le=10)] = 3,
+) -> AdminScreeningFailureSummary:
+    """Group currently screening / screening_failed agents by reason_code."""
+    agents = (
+        (
+            await session.execute(
+                select(Agent)
+                .where(
+                    Agent.status.in_(
+                        (AgentStatus.SCREENING, AgentStatus.SCREENING_FAILED)
+                    )
+                )
+                .order_by(Agent.created_at.desc(), Agent.agent_id.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+    grouped: dict[tuple[str, str | None], list[Agent]] = defaultdict(list)
+    screening = 0
+    screening_failed = 0
+    for agent in agents:
+        if agent.status == AgentStatus.SCREENING:
+            screening += 1
+        else:
+            screening_failed += 1
+        grouped[(agent.status, agent.screening_reason_code)].append(agent)
+    groups = [
+        AdminScreeningFailureGroup(
+            agent_status=status,
+            reason_code=reason_code,
+            count=len(rows),
+            examples=[
+                AdminScreeningFailureExample(
+                    agent_id=row.agent_id,
+                    agent_name=row.name,
+                    agent_version=row.version,
+                    agent_status=row.status,
+                    submitted_at=row.created_at,
+                )
+                for row in rows[:example_limit]
+            ],
+        )
+        for (status, reason_code), rows in sorted(
+            grouped.items(),
+            key=lambda item: (-len(item[1]), item[0][0], item[0][1] or ""),
+        )
+    ]
+    return AdminScreeningFailureSummary(
+        generated_at=datetime.now(UTC),
+        screening=screening,
+        screening_failed=screening_failed,
+        groups=groups,
     )
 
 

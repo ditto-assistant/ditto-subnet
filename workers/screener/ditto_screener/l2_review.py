@@ -4463,6 +4463,93 @@ def _served_generator_hold(
     )
 
 
+# Static ``ValueError`` messages on this path are operator-owned, not miner
+# input. Mapping them keeps the miner-visible public reason unchanged while
+# giving Platform/Backroom a cause instead of collapsing everything into
+# ``l2-valueerror``. Unmapped messages still degrade to the historical shape.
+_L2_FAILURE_CODES: Mapping[str, str] = {
+    "L2 analyzer CPU limit must be between 0.25 and 2.0": "analyzer-cpu-limit",
+    "L2 analyzer exceeded lease budget": "analyzer-lease-budget",
+    "L2 analyzer exceeded output budget": "analyzer-output-budget",
+    "L2 analyzer rejected its request": "analyzer-rejected",
+    "L2 analyzer returned invalid JSON": "analyzer-invalid-json",
+    "L2 analyzer timed out": "analyzer-timeout",
+    "L2 requested a non-allowlisted analyzer": "analyzer-not-allowlisted",
+    "L2 dossier analyzer returned invalid JSON": "dossier-invalid-json",
+    "L2 archive exceeds extraction budget": "archive-too-large",
+    "L2 archive member is truncated": "archive-member-truncated",
+    "L2 archive member is unreadable": "archive-member-unreadable",
+    "L2 archive member path is unsafe": "archive-member-unsafe",
+    "L2 arguments are invalid": "model-tool-call-invalid",
+    "L2 arguments are not an object": "model-tool-call-invalid",
+    "L2 function call is invalid": "model-tool-call-invalid",
+    "L2 tool call is invalid": "model-tool-call-invalid",
+    "L2 tool call is missing a call ID": "model-tool-call-invalid",
+    "L2 response cost is invalid": "model-response-invalid",
+    "L2 response is not an object": "model-response-invalid",
+    "L2 response lacks output or usage": "model-response-invalid",
+    "L2 response model is invalid": "model-response-invalid",
+    "L2 response token details are invalid": "model-response-invalid",
+    "L2 response usage detail is invalid": "model-response-invalid",
+    "L2 response usage is invalid": "model-response-invalid",
+    "L2 call graph has invalid collections": "call-graph-invalid",
+    "L2 call graph is not an object": "call-graph-invalid",
+    "Kimi K3 analyst reasoning effort must be model_default": "config-invalid",
+    "L2 critic reasoning effort must be low or medium": "config-invalid",
+    "at least one starter provenance manifest is required": "config-invalid",
+    "invalid L2 mode": "config-invalid",
+    "L2 review exceeded lease budget": "lease-budget-exhausted",
+    "L2 analyzed-file digest does not match artifact": "evidence-not-bound",
+    "L2 analyzed-file item is invalid": "evidence-not-bound",
+    "L2 causal path is not artifact-bound": "evidence-not-bound",
+    "L2 causal role binding is not evidence-bound": "evidence-not-bound",
+    "L2 evidence is not artifact-bound": "evidence-not-bound",
+    "L2 generator component is not artifact-bound": "evidence-not-bound",
+    "L2 did not analyze every L1 evidence file": "l1-evidence-unanalyzed",
+    "L2 causal authority transition is invalid": "inconsistent-verdict",
+    "L2 causal evidence has no elevated causal category": "inconsistent-verdict",
+    "L2 causal evidence is invalid": "inconsistent-verdict",
+    "L2 causal evidence schema version is invalid": "inconsistent-verdict",
+    "L2 causal path is invalid": "inconsistent-verdict",
+    "L2 causal role binding is invalid": "inconsistent-verdict",
+    "L2 causal role bindings are invalid": "inconsistent-verdict",
+    "L2 evidence is invalid": "inconsistent-verdict",
+    "L2 evidence line is invalid": "inconsistent-verdict",
+    "L2 generator component is invalid": "inconsistent-verdict",
+    "L2 inconclusive result cannot contain causal evidence": "inconsistent-verdict",
+    "L2 none category must be exclusive": "inconsistent-verdict",
+    "L2 resolution basis contradicts its categories": "inconsistent-verdict",
+    "L2 result analyzed_files are invalid": "inconsistent-verdict",
+    "L2 result categories are invalid": "inconsistent-verdict",
+    "L2 result causal_path is invalid": "inconsistent-verdict",
+    "L2 result confidence is invalid": "inconsistent-verdict",
+    "L2 result disposition is invalid": "inconsistent-verdict",
+    "L2 result evidence collection is invalid": "inconsistent-verdict",
+    "L2 result generator_components is invalid": "inconsistent-verdict",
+    "L2 result has unexpected fields": "inconsistent-verdict",
+    "L2 result resolution basis is invalid": "inconsistent-verdict",
+    "L2 result risk is invalid": "inconsistent-verdict",
+    "L2 result summary is invalid": "inconsistent-verdict",
+    "L2 safe result cannot contain causal evidence": "inconsistent-verdict",
+    "L2 safe result contains contradictory evidence": "inconsistent-verdict",
+    "L2 safe result contains prohibited risk": "inconsistent-verdict",
+    "L2 safe result has a non-safe resolution basis": "inconsistent-verdict",
+    "L2 scorer-visible effect is invalid": "inconsistent-verdict",
+    "L2 violation has a non-violation resolution basis": "inconsistent-verdict",
+    "L2 violation is missing category evidence": "inconsistent-verdict",
+    "L2 violation is not elevated": "inconsistent-verdict",
+    "L2 violation lacks a causal trigger/effect path": "inconsistent-verdict",
+    "L2 violation lacks multi-location evidence": "inconsistent-verdict",
+    (
+        "generator_components are valid only for generator_mirroring"
+    ): "inconsistent-verdict",
+    (
+        "generator_mirroring requires two causal input-construction components; "
+        "output-only registries are benchmark replacement"
+    ): "inconsistent-verdict",
+}
+
+
 def _failure(code: str, disposition: str) -> SourceReviewObservation:
     return SourceReviewObservation(
         ok=False,
@@ -4472,6 +4559,21 @@ def _failure(code: str, disposition: str) -> SourceReviewObservation:
         error_code=code,
         failure_disposition=disposition,
     )
+
+
+def _classified_suffix(error: BaseException) -> str | None:
+    message = str(error).strip()
+    mapped = _L2_FAILURE_CODES.get(message)
+    if mapped is not None:
+        return mapped
+    if message.startswith("L2 analyzer exited with code "):
+        suffix = message.rsplit(" ", 1)[-1]
+        if suffix.lstrip("-").isdigit():
+            return f"analyzer-exited-{suffix}"
+        return "analyzer-exited"
+    if message.startswith("L2 model exceeded token or cost budget"):
+        return "model-budget-exhausted"
+    return None
 
 
 def _error_code(prefix: str, error: BaseException) -> str:
@@ -4491,6 +4593,9 @@ def _error_code(prefix: str, error: BaseException) -> str:
                         ).strip("-")[:48]
                     )
         return f"{prefix}-http-{response.status_code}{upstream}"
+    classified = _classified_suffix(error)
+    if classified is not None:
+        return f"{prefix}-{classified}"[:64]
     return f"{prefix}-{type(error).__name__.lower()}"
 
 

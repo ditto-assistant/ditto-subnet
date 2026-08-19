@@ -126,6 +126,7 @@ describe('Backroom MCP tools', () => {
         'list_screening_disputes',
         'list_screening_source_files',
         'list_screening_submissions',
+        'summarize_screening_failures',
         'read_screening_source_file',
         'search_screening_source',
         'rebuild_screened_image',
@@ -177,7 +178,7 @@ describe('Backroom MCP tools', () => {
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(86_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      20_500,
+      20_700,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

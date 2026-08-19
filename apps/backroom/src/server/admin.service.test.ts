@@ -13,6 +13,7 @@ import {
   fetchBenchmarkContractMigration,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
+  fetchScreeningFailureSummary,
   fetchOwnerAttestations,
   fetchScreeningDisputes,
   fetchValidationRetry,
@@ -629,10 +630,19 @@ describe('screening submission admin service', () => {
       .fn()
       .mockResolvedValueOnce(Response.json({ items: [], count: 294 }))
       .mockResolvedValueOnce(Response.json({ items: [], count: 73 }))
+      .mockResolvedValueOnce(
+        Response.json({
+          generated_at: '2026-08-19T14:00:00Z',
+          screening: 1,
+          screening_failed: 2,
+          groups: [],
+        }),
+      )
     vi.stubGlobal('fetch', fetchMock)
 
     await fetchScreeningSubmissions(50, 100)
     await fetchScreeningDisputes('pending', 50, 50)
+    await fetchScreeningFailureSummary({ exampleLimit: 2 })
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
@@ -642,6 +652,11 @@ describe('screening submission admin service', () => {
     expect(fetchMock).toHaveBeenNthCalledWith(
       2,
       'https://platform-api.heyditto.ai/api/v1/admin/screening-disputes?status=pending&limit=50&offset=50',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      'https://platform-api.heyditto.ai/api/v1/admin/screening-failures?example_limit=2',
       expect.objectContaining({ method: 'GET' }),
     )
   })

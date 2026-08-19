@@ -161,6 +161,40 @@ class AdminScreeningSubmissionList(BaseModel):
     count: int
 
 
+class AdminScreeningFailureExample(BaseModel):
+    """One currently failed or running screening row in a reason-code group."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    agent_name: str
+    agent_version: int | None = None
+    agent_status: str
+    submitted_at: datetime
+
+
+class AdminScreeningFailureGroup(BaseModel):
+    """Live screening jam for one (status, reason_code) pair."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    agent_status: str
+    reason_code: str | None
+    count: int
+    examples: list[AdminScreeningFailureExample]
+
+
+class AdminScreeningFailureSummary(BaseModel):
+    """Operator view of the live screening pipeline jam, grouped by cause."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    generated_at: datetime
+    screening: int
+    screening_failed: int
+    groups: list[AdminScreeningFailureGroup]
+
+
 class AdminScreeningRescreenRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -735,6 +769,9 @@ __all__ = [
     "AdminScreeningDisputeList",
     "AdminScreeningDisputeResolveRequest",
     "AdminScreeningDisputeResolveResponse",
+    "AdminScreeningFailureExample",
+    "AdminScreeningFailureGroup",
+    "AdminScreeningFailureSummary",
     "AdminScreeningSubmission",
     "AdminScreeningSubmissionList",
     "AdminScreeningRescreenRequest",

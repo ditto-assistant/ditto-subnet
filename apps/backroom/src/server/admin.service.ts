@@ -46,6 +46,8 @@ import {
   screeningSubmissionLookupInputSchema,
   screeningSubmissionSchema,
   screeningSubmissionListSchema,
+  summarizeScreeningFailuresInputSchema,
+  screeningFailureSummarySchema,
   sourceDiffFileDetailSchema,
   sourceDiffFileInputSchema,
   sourceDiffInputSchema,
@@ -1352,6 +1354,17 @@ export async function fetchScreeningSubmission(rawInput: unknown) {
     `/api/v1/admin/screening-submissions/${encodeURIComponent(input.agentId)}`,
   )
   return screeningSubmissionSchema.parse(payload)
+}
+
+export async function fetchScreeningFailureSummary(rawInput: unknown = {}) {
+  const input = summarizeScreeningFailuresInputSchema.parse(rawInput)
+  const query = new URLSearchParams({
+    example_limit: String(input.exampleLimit),
+  })
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-failures?${query.toString()}`,
+  )
+  return screeningFailureSummarySchema.parse(payload)
 }
 
 /**

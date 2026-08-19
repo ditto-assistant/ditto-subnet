@@ -4482,6 +4482,64 @@ class TestQuarantineAdmin:
             "expires_in": 300,
         }
 
+    async def test_screening_failure_summary_groups_live_pipeline_by_reason_code(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        failed_a = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING_FAILED, name="jam-a"
+        )
+        failed_b = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING_FAILED, name="jam-b"
+        )
+        running = await _seed_agent(
+            session_maker, status=AgentStatus.SCREENING, name="in-flight"
+        )
+        scored = await _seed_agent(
+            session_maker, status=AgentStatus.SCORED, name="already-through"
+        )
+        async with session_maker() as session, session.begin():
+            for agent_id, code in (
+                (failed_a, "l2-analyzer-exited-125"),
+                (failed_b, "l2-analyzer-exited-125"),
+                (running, None),
+                (scored, "l2-valueerror"),
+            ):
+                agent = await session.get(Agent, agent_id)
+                assert agent is not None
+                agent.screening_reason_code = code
+        _install_db(app, session_maker)
+        headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+        }
+
+        response = await client.get(
+            "/api/v1/admin/screening-failures?example_limit=1", headers=headers
+        )
+
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["screening"] == 1
+        assert payload["screening_failed"] == 2
+        assert [group["reason_code"] for group in payload["groups"]] == [
+            "l2-analyzer-exited-125",
+            None,
+        ]
+        analyzer = payload["groups"][0]
+        assert analyzer["agent_status"] == "screening_failed"
+        assert analyzer["count"] == 2
+        assert len(analyzer["examples"]) == 1
+        assert {example["agent_name"] for example in analyzer["examples"]} <= {
+            "jam-a",
+            "jam-b",
+        }
+
     async def test_exact_screening_submission_requires_auth_and_returns_404(
         self,
         app: FastAPI,

@@ -3291,6 +3291,32 @@ export const screeningSubmissionListSchema = z.object({
   count: z.number().int().nonnegative(),
 })
 
+export const summarizeScreeningFailuresInputSchema = z.object({
+  exampleLimit: z.number().int().min(1).max(10).default(3),
+})
+
+export const screeningFailureExampleSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  agent_version: z.number().int().positive().nullish().default(null),
+  agent_status: z.string(),
+  submitted_at: z.string(),
+})
+
+export const screeningFailureGroupSchema = z.object({
+  agent_status: z.string(),
+  reason_code: z.string().nullable(),
+  count: z.number().int().nonnegative(),
+  examples: z.array(screeningFailureExampleSchema),
+})
+
+export const screeningFailureSummarySchema = z.object({
+  generated_at: z.string(),
+  screening: z.number().int().nonnegative(),
+  screening_failed: z.number().int().nonnegative(),
+  groups: z.array(screeningFailureGroupSchema),
+})
+
 export const rescreenRejectedSubmissionInputSchema = z.object({
   agentId: z.string().uuid(),
   reason: auditReasonSchema(3),

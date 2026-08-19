@@ -73,6 +73,7 @@ import {
   updateSubmissionSettingsInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   retryFailedScreeningNowInputSchema,
+  summarizeScreeningFailuresInputSchema,
   confirmationBundleStateSchema,
   confirmationBundleDetailInputSchema,
   setConfirmationBundleSettingsInputSchema,
@@ -96,6 +97,7 @@ import {
   fetchScreeningDisputes,
   fetchScreeningSubmission,
   fetchScreeningSubmissions,
+  fetchScreeningFailureSummary,
   fetchOwnerAttestations,
   executeScreeningQuarantineBatch,
   previewScreeningQuarantineBatch,
@@ -425,6 +427,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Page newest-first through platform-ended validator leases. evidence is WHOLE AND UNTYPED validator_lease_audit context; response can include operator_evicted rows and preserve exact verdict strings. AN EMPTY RESULT IS A FINDING, NOT AN UNWIRED FEATURE. Use filters to narrow the audit.',
   list_stuck_submissions:
     'Page the compact platform triage order for stuck submissions. Returns ticket-state counts and silent_expiry_count; use get_validation_retry for one submission\'s complete ticket history, including infra_retry_grants. This urgency queue is intentionally not newest-first.',
+  summarize_screening_failures:
+    'Group live screening / screening_failed agents by reason_code. Use get_screening_submission for one row.',
   get_queue_policy_settings:
     'Read effective queue policy, rollout-locked fields, defaults, and optionally paged newest-first revision history. Open-rollout targets are snapshots: settings do not resize an in-flight rollout. historyLimit defaults to 0.',
   get_continual_retest_settings:
@@ -893,6 +897,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
           linked_hotkeys: { pin: ['hotkey'] },
         }),
       ),
+  )
+
+  registerTool(
+    'summarize_screening_failures',
+    {
+      title: 'Summarize live screening failures',
+      description:
+        'Group agents currently in screening or screening_failed by screening_reason_code so a pipeline jam is visible without paging list_screening_submissions. Counts are live status, not historical attempt storms: a retry that is running again is under screening with a null reason_code, and a scored agent drops out. Named L2 codes such as l2-analyzer-exited-125 replace the opaque l2-valueerror collapse. exampleLimit (1-10, default 3) is newest-first examples per group. Use get_screening_submission for one agent\'s attempt history. Requires backroom:read and exposes no miner source.',
+      inputSchema: summarizeScreeningFailuresInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchScreeningFailureSummary(input)),
   )
 
   registerTool(
