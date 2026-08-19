@@ -5,6 +5,9 @@ coding score or reserve a production `bench_version`.
 
 Project: [DittoBench Coding](https://github.com/orgs/ditto-assistant/projects/7)
 
+The detailed [private execution protocol](PRIVATE-EXECUTION-PROTOCOL.md) is the
+authority for component ownership and future wire fields.
+
 ## Benchmark definition
 
 DittoBench Coding evaluates whether an AI coding agent can produce a correct

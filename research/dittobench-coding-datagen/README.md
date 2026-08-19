@@ -77,4 +77,7 @@ build contexts.
 
 See [the shadow contract](docs/SHADOW-CONTRACT.md) for the future task lease,
 authoring/grading boundary, binary repair result, signed evidence root, quorum,
-and activation gates.
+and activation gates. The detailed
+[private execution protocol](docs/PRIVATE-EXECUTION-PROTOCOL.md) fixes ownership,
+wire, scoped miner memory, Luna routing, workspace tools, evidence, failure, and
+retirement decisions for subsequent implementation PRs.
