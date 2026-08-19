@@ -309,11 +309,17 @@ became authoritative is `validator_infrastructure`.
   "ticket_id": "opaque-ticket-id",
   "case_id": "opaque-case-id",
   "profile_capability_id": "opaque-profile-id",
+  "repository_epoch": "opaque-repository-epoch",
   "visible_bundle_sha256": "lowercase-sha256",
   "issue": {
     "title": "Correct streaming boundary handling",
     "description": "The parser drops an incomplete trailing sequence.",
     "constraints": ["Do not add a runtime dependency."]
+  },
+  "runtime_policy": {
+    "editable_paths": ["src/parser.py"],
+    "test_command_ids": ["visible-parser-tests"],
+    "build_command_ids": ["typecheck-parser"]
   },
   "workspace_capability_url": "http://coding-runner.invalid/capability",
   "inference_base_url": "http://ticket-broker.invalid/v1/inference",
@@ -337,6 +343,15 @@ The harness response is advisory and bounded:
   }
 }
 ```
+
+`repository_epoch` is the opaque current snapshot identity used to interpret
+visible memories' `valid_from_epoch` and `valid_until_epoch`. It is not a public
+commit hash and must match the selected visible bundle.
+
+`runtime_policy` tells the model which visible paths and opaque command IDs are
+available. It is bounded advisory context, not an authorization decision: the
+signed task manifest and validator-owned runner independently enforce the
+actual path and command allowlists.
 
 It does not carry the authoritative patch, test evidence, memory/tool trace IDs,
 or score. The validator-owned runner and freezer produce those values.

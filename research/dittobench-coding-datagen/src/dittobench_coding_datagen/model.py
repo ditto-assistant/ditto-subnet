@@ -14,6 +14,9 @@ PRACTICE_AGENT_INSTRUCTION = (
     "Resolve the issue in the supplied checkout. Use available user memory only "
     "when relevant; current instructions, code, and tests are authoritative."
 )
+PRACTICE_EDITABLE_PATHS = ("app.py",)
+PRACTICE_TEST_COMMAND_IDS = ("visible-unit",)
+PRACTICE_BUILD_COMMAND_IDS = ("python-compile",)
 
 type MemoryCondition = Literal[
     "required_constraint",
