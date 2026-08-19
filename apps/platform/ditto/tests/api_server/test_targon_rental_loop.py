@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import select
@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.targon_rental_loop import TargonRentalLoop
-from ditto.db.models import Agent, SubmissionImageBuild
+from ditto.db.models import Agent, SubmissionImageBuild, SubmissionSourceReview
 from ditto.tests.api_server.endpoints.test_screener import (
     _SCREENER_HOTKEY,
     _seed_agent,
@@ -143,3 +143,71 @@ async def test_tick_launches_runtime_smoke_after_kaniko_archive(
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
         assert build is not None
         assert build.runtime_status == "succeeded"
+        assert build.runtime_provider_resource_id is None
+    assert "wrk-2" in targon.deleted
+
+
+@pytest.mark.asyncio
+async def test_reaps_terminal_kaniko_rental_and_skips_running(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    assert targon.deleted == []
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.status = "succeeded"
+        build.completed_at = datetime.now(UTC)
+    assert await loop.tick() is True
+    assert targon.deleted == ["wrk-1"]
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.provider_resource_id is None
+
+
+@pytest.mark.asyncio
+async def test_reaps_terminal_source_review_rental(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        session.add(
+            SubmissionSourceReview(
+                review_id=uuid4(),
+                agent_id=build.agent_id,
+                attempt_id=build.attempt_id,
+                environment="prod",
+                artifact_sha256=build.artifact_sha256,
+                status="succeeded",
+                provider="targon",
+                provider_resource_id="wrk-source-leftover",
+            )
+        )
+    targon.deleted.clear()
+    assert await loop.tick() is True
+    assert "wrk-source-leftover" in targon.deleted
+    async with session_maker() as session:
+        review = await session.scalar(select(SubmissionSourceReview).limit(1))
+        assert review is not None
+        assert review.provider_resource_id is None

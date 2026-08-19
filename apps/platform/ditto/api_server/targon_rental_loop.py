@@ -13,7 +13,7 @@ import secrets
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import httpx
 from sqlalchemy import select
@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 _BUILD_LEASE = timedelta(minutes=50)
 _JOB_TTL = timedelta(minutes=45)
 _SOURCE_LEASE = timedelta(minutes=35)
+_REAP_LIMIT = 16
+_TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
+_TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
@@ -117,7 +120,7 @@ class TargonRentalLoop:
 
     async def tick(self) -> bool:
         """Admit work and launch at most one job per lane. Returns if any ran."""
-        handled = False
+        handled = await self._reap_finished_rentals()
         async with self._session_maker() as session, session.begin():
             await admit_targon_screening_work(
                 session,
@@ -210,7 +213,7 @@ class TargonRentalLoop:
                     stored.error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
                     stored.updated_at = datetime.now(UTC)
             if uid is not None:
-                await self._safe_delete(uid)
+                await self._delete_rental(uid)
             return True
 
     async def _launch_smoke(self) -> bool:
@@ -244,7 +247,6 @@ class TargonRentalLoop:
             output_key = row.output_key
             destination = f"{_CANDIDATE_REGISTRY}:build-{build_id.hex}"
         uid: str | None = None
-        keep = False
         try:
             writer = await self._mint_token(self._config.candidate_writer_sa)
             image_reference = await self._promote_archive(
@@ -279,7 +281,6 @@ class TargonRentalLoop:
                 if healthy:
                     stored.runtime_status = "succeeded"
                     stored.runtime_completed_at = datetime.now(UTC)
-                    keep = True
                     attempt = await session.get(ScreeningAttempt, stored.attempt_id)
                     if attempt is not None and not attempt.build_only:
                         await session.execute(
@@ -311,8 +312,10 @@ class TargonRentalLoop:
                     stored.updated_at = datetime.now(UTC)
             return True
         finally:
-            if uid is not None and not keep:
-                await self._safe_delete(uid)
+            # L1 reads the source tarball on a separate trusted-screener
+            # rental. The miner runtime image is not needed after /health.
+            if uid is not None and await self._delete_rental(uid):
+                await self._clear_resource_id("runtime", build_id)
 
     async def _launch_source_review(self) -> bool:
         if (
@@ -435,7 +438,7 @@ class TargonRentalLoop:
                     stored.error_code = "TARGON_SOURCE_REVIEW_PROVIDER_ERROR"
                     stored.updated_at = datetime.now(UTC)
             if uid is not None:
-                await self._safe_delete(uid)
+                await self._delete_rental(uid)
             return True
 
     async def _wait_for_health(self, uid: str) -> bool:
@@ -463,8 +466,94 @@ class TargonRentalLoop:
             await asyncio.sleep(1)
         return False
 
-    async def _safe_delete(self, uid: str) -> None:
+    async def _reap_finished_rentals(self) -> bool:
+        """DELETE one-shots whose Platform job is already terminal.
+
+        Kaniko and L1 stay up until the job posts completion. Runtime smoke
+        is deleted in `_launch_smoke`; this also drains leftovers from before
+        that change.
+        """
+        pending: list[tuple[str, UUID, str]] = []
+        async with self._session_maker() as session, session.begin():
+            builds = (
+                await session.scalars(
+                    select(SubmissionImageBuild)
+                    .where(
+                        SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.status.in_(_TERMINAL_JOB),
+                        SubmissionImageBuild.provider_resource_id.is_not(None),
+                    )
+                    .order_by(SubmissionImageBuild.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in builds:
+                uid = row.provider_resource_id
+                if uid:
+                    pending.append(("build", row.build_id, uid))
+            runtimes = (
+                await session.scalars(
+                    select(SubmissionImageBuild)
+                    .where(
+                        SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.runtime_status.in_(_TERMINAL_RUNTIME),
+                        SubmissionImageBuild.runtime_provider_resource_id.is_not(None),
+                    )
+                    .order_by(SubmissionImageBuild.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in runtimes:
+                uid = row.runtime_provider_resource_id
+                if uid:
+                    pending.append(("runtime", row.build_id, uid))
+            reviews = (
+                await session.scalars(
+                    select(SubmissionSourceReview)
+                    .where(
+                        SubmissionSourceReview.environment == self._config.environment,
+                        SubmissionSourceReview.status.in_(_TERMINAL_JOB),
+                        SubmissionSourceReview.provider_resource_id.is_not(None),
+                    )
+                    .order_by(SubmissionSourceReview.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in reviews:
+                uid = row.provider_resource_id
+                if uid:
+                    pending.append(("review", row.review_id, uid))
+        handled = False
+        for kind, row_id, uid in pending:
+            if await self._delete_rental(uid):
+                await self._clear_resource_id(kind, row_id)
+                handled = True
+        return handled
+
+    async def _clear_resource_id(self, kind: str, row_id: UUID) -> None:
+        async with self._session_maker() as session, session.begin():
+            if kind in {"build", "runtime"}:
+                stored = await session.get(SubmissionImageBuild, row_id)
+                if stored is None:
+                    return
+                if kind == "build":
+                    stored.provider_resource_id = None
+                else:
+                    stored.runtime_provider_resource_id = None
+                stored.updated_at = datetime.now(UTC)
+                return
+            stored_review = await session.get(SubmissionSourceReview, row_id)
+            if stored_review is not None:
+                stored_review.provider_resource_id = None
+                stored_review.updated_at = datetime.now(UTC)
+
+    async def _delete_rental(self, uid: str) -> bool:
         try:
             await self._targon.delete(uid)
         except TargonAPIError:
             logger.warning("targon delete failed uid=%s", uid, exc_info=True)
+            return False
+        return True
