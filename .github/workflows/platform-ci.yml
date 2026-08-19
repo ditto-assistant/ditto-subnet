@@ -10,6 +10,10 @@ on:
       - "!apps/platform/package.json"
       - "!apps/platform/package-lock.json"
       - packages/ditto-screening-protocol/**
+      # The static job checks the generated confirmation release assets
+      # against this generator's constants, so a generator-only change must
+      # reach that job.
+      - scripts/generate_confirmation_installation.py
       - .github/workflows/platform-ci.yml
       - .github/workflows/platform-verify.yml
 permissions:
