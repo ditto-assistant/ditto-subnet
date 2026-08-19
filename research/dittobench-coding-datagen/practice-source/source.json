@@ -1,0 +1,273 @@
+{
+  "schema": "dittobench-coding-practice-v1",
+  "coding_contract_version": 1,
+  "practice_pack_id": "coding-practice-3x3-v1",
+  "weight_eligible": false,
+  "users": [
+    {
+      "user_id": "P01",
+      "display_name": "Compatibility Maintainer",
+      "summary": "Preserves public identifiers, configuration precedence, and stable behavior.",
+      "known_repositories": ["practice-ledger", "practice-config"]
+    },
+    {
+      "user_id": "P02",
+      "display_name": "Regression Investigator",
+      "summary": "Reproduces failures, validates strict parsing, and protects negative cases.",
+      "known_repositories": ["practice-config", "practice-cache"]
+    },
+    {
+      "user_id": "P03",
+      "display_name": "Deterministic Systems Engineer",
+      "summary": "Maintains stable allocation, cache identity, and deterministic eviction.",
+      "known_repositories": ["practice-cache", "practice-ledger"]
+    }
+  ],
+  "memories": [
+    {
+      "memory_id": "P01-M001",
+      "owner_user_id": "P01",
+      "content": "Identifiers in the ledger are opaque strings; normalization must never coerce them to numbers.",
+      "repository_id": "practice-ledger",
+      "valid_from_revision": "practice-ledger-v2",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P01-M002",
+      "owner_user_id": "P01",
+      "content": "When cents do not divide evenly, assign the remainder from the first participant forward to keep allocation stable.",
+      "repository_id": "practice-ledger",
+      "valid_from_revision": "practice-ledger-v1",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P01-M003",
+      "owner_user_id": "P01",
+      "content": "The original configuration prototype let packaged defaults replace environment values.",
+      "repository_id": "practice-config",
+      "valid_from_revision": "practice-config-v1",
+      "valid_until_revision": "practice-config-v1",
+      "supersedes": []
+    },
+    {
+      "memory_id": "P01-M004",
+      "owner_user_id": "P01",
+      "content": "Configuration revision two made environment values authoritative while retaining missing defaults.",
+      "repository_id": "practice-config",
+      "valid_from_revision": "practice-config-v2",
+      "valid_until_revision": null,
+      "supersedes": ["P01-M003"]
+    },
+    {
+      "memory_id": "P01-M005",
+      "owner_user_id": "P01",
+      "content": "Canonical signed service endpoints omit a trailing slash even when a display URL includes one.",
+      "repository_id": "practice-config",
+      "valid_from_revision": "practice-config-v2",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P01-M006",
+      "owner_user_id": "P01",
+      "content": "Before finalizing a patch, run focused tests and inspect the final changed-file list for unrelated edits.",
+      "repository_id": null,
+      "valid_from_revision": "practice-v1",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P02-M001",
+      "owner_user_id": "P02",
+      "content": "The first parser accepted true, yes, and one as equivalent enabled values.",
+      "repository_id": "practice-config",
+      "valid_from_revision": "practice-config-v1",
+      "valid_until_revision": "practice-config-v1",
+      "supersedes": []
+    },
+    {
+      "memory_id": "P02-M002",
+      "owner_user_id": "P02",
+      "content": "Configuration revision two accepts only true or false and raises an error for every other boolean spelling.",
+      "repository_id": "practice-config",
+      "valid_from_revision": "practice-config-v2",
+      "valid_until_revision": null,
+      "supersedes": ["P02-M001"]
+    },
+    {
+      "memory_id": "P02-M003",
+      "owner_user_id": "P02",
+      "content": "Negative cache lifetimes represent an already-expired item and are normalized to zero.",
+      "repository_id": "practice-cache",
+      "valid_from_revision": "practice-cache-v2",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P02-M004",
+      "owner_user_id": "P02",
+      "content": "A regression test should distinguish the reported behavior from the nearest plausible incomplete fix.",
+      "repository_id": null,
+      "valid_from_revision": "practice-v1",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P02-M005",
+      "owner_user_id": "P02",
+      "content": "Cache tests must cover both expired and unexpired entries without depending on wall-clock time.",
+      "repository_id": "practice-cache",
+      "valid_from_revision": "practice-cache-v1",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P02-M006",
+      "owner_user_id": "P02",
+      "content": "An earlier display integration preferred service endpoints with a trailing slash, before signature canonicalization was introduced.",
+      "repository_id": "practice-config",
+      "valid_from_revision": "practice-config-v1",
+      "valid_until_revision": "practice-config-v1",
+      "supersedes": []
+    },
+    {
+      "memory_id": "P03-M001",
+      "owner_user_id": "P03",
+      "content": "Cache namespaces are case-insensitive, while item identifiers remain case-sensitive.",
+      "repository_id": "practice-cache",
+      "valid_from_revision": "practice-cache-v2",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P03-M002",
+      "owner_user_id": "P03",
+      "content": "Eviction chooses the smallest last-access sequence number and must not depend on input ordering.",
+      "repository_id": "practice-cache",
+      "valid_from_revision": "practice-cache-v1",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P03-M003",
+      "owner_user_id": "P03",
+      "content": "Ledger balance compares debit and credit totals, not the number of entries on each side.",
+      "repository_id": "practice-ledger",
+      "valid_from_revision": "practice-ledger-v1",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P03-M004",
+      "owner_user_id": "P03",
+      "content": "Stable algorithms should define their tie order explicitly rather than inheriting map iteration order.",
+      "repository_id": null,
+      "valid_from_revision": "practice-v1",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P03-M005",
+      "owner_user_id": "P03",
+      "content": "Allocation output must conserve the original total before any performance optimization is considered.",
+      "repository_id": "practice-ledger",
+      "valid_from_revision": "practice-ledger-v1",
+      "valid_until_revision": null,
+      "supersedes": []
+    },
+    {
+      "memory_id": "P03-M006",
+      "owner_user_id": "P03",
+      "content": "A negative cache lifetime means the entry is already expired and should normalize to zero before storage.",
+      "repository_id": "practice-cache",
+      "valid_from_revision": "practice-cache-v2",
+      "valid_until_revision": null,
+      "supersedes": []
+    }
+  ],
+  "tasks": [
+    {
+      "task_id": "PRACTICE-LEDGER-001",
+      "repository_id": "practice-ledger",
+      "active_user_id": "P01",
+      "base_revision": "practice-ledger-v2",
+      "memory_condition": "required_constraint",
+      "fixture": "ledger-reference",
+      "problem_statement": "Reference normalization removes surrounding whitespace but currently changes valid reference identity. Preserve the reference while normalizing it."
+    },
+    {
+      "task_id": "PRACTICE-LEDGER-002",
+      "repository_id": "practice-ledger",
+      "active_user_id": "P03",
+      "base_revision": "practice-ledger-v2",
+      "memory_condition": "relevant_nonrequired",
+      "fixture": "ledger-allocation",
+      "problem_statement": "The allocation helper loses cents when the total is not evenly divisible. Return a deterministic allocation that conserves the total."
+    },
+    {
+      "task_id": "PRACTICE-LEDGER-003",
+      "repository_id": "practice-ledger",
+      "active_user_id": "P02",
+      "base_revision": "practice-ledger-v2",
+      "memory_condition": "irrelevant",
+      "fixture": "ledger-balance",
+      "problem_statement": "The ledger reports equal-length debit and credit lists as balanced even when their totals differ. Correct the balance check."
+    },
+    {
+      "task_id": "PRACTICE-CONFIG-001",
+      "repository_id": "practice-config",
+      "active_user_id": "P01",
+      "base_revision": "practice-config-v2",
+      "memory_condition": "required_constraint",
+      "fixture": "config-precedence",
+      "problem_statement": "Configuration merging produces the wrong value when a default and an environment value share a key. Preserve missing defaults and the current precedence contract."
+    },
+    {
+      "task_id": "PRACTICE-CONFIG-002",
+      "repository_id": "practice-config",
+      "active_user_id": "P02",
+      "base_revision": "practice-config-v2",
+      "memory_condition": "stale_conflicting",
+      "fixture": "config-boolean",
+      "problem_statement": "Boolean parsing must reject unsupported spellings instead of silently treating them as disabled. Preserve the current accepted values."
+    },
+    {
+      "task_id": "PRACTICE-CONFIG-003",
+      "repository_id": "practice-config",
+      "active_user_id": "P02",
+      "base_revision": "practice-config-v2",
+      "memory_condition": "current_override",
+      "fixture": "config-endpoint",
+      "problem_statement": "Current signature canonicalization requires service endpoints without a trailing slash, even though display URLs historically included one."
+    },
+    {
+      "task_id": "PRACTICE-CACHE-001",
+      "repository_id": "practice-cache",
+      "active_user_id": "P03",
+      "base_revision": "practice-cache-v2",
+      "memory_condition": "required_constraint",
+      "fixture": "cache-key",
+      "problem_statement": "Equivalent namespace spellings currently create distinct cache entries. Correct namespace normalization without changing item identity."
+    },
+    {
+      "task_id": "PRACTICE-CACHE-002",
+      "repository_id": "practice-cache",
+      "active_user_id": "P03",
+      "base_revision": "practice-cache-v2",
+      "memory_condition": "relevant_nonrequired",
+      "fixture": "cache-ttl",
+      "problem_statement": "The cache accepts negative normalized lifetimes. Correct expiration normalization while preserving positive lifetimes."
+    },
+    {
+      "task_id": "PRACTICE-CACHE-003",
+      "repository_id": "practice-cache",
+      "active_user_id": "P01",
+      "base_revision": "practice-cache-v2",
+      "memory_condition": "irrelevant",
+      "fixture": "cache-eviction",
+      "problem_statement": "The eviction helper removes the newest entry instead of the oldest one. Select the correct candidate independently of input order."
+    }
+  ]
+}

@@ -67,3 +67,8 @@ updates:
     directory: /packages/ditto-screening-protocol
     schedule:
       interval: weekly
+
+  - package-ecosystem: pip
+    directory: /research/dittobench-coding-datagen
+    schedule:
+      interval: weekly

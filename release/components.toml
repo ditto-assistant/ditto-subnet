@@ -125,6 +125,13 @@ paths = [
   "research/dittobench-datagen/**",
 ]
 
+[components.dittobench_coding_datagen]
+description = "Shadow-only coding-repair corpus compiler and public practice pack"
+paths = [
+  "research/dittobench-coding-datagen/**",
+  ".github/workflows/coding-datagen-ci.yml",
+]
+
 [components.platform_api]
 description = "Subnet API, database migrations, relays, and control plane"
 depends_on = ["screening_protocol"]

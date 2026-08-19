@@ -24,6 +24,8 @@ grader now live in [`research/dittobench-datagen`](research/dittobench-datagen).
 - `ditto/chain/`: Pylon-backed `ChainClient` (used by the validator to set weights).
 - `services/dittobench-api/`: the Go scorer used by validators and hosted practice.
 - `research/dittobench-datagen/`: deterministic datasets, grader, and research tools.
+- `research/dittobench-coding-datagen/`: shadow-only coding-repair capsule compiler,
+  curation auditor, and disjoint public practice pack.
 - `services/screener-orchestrator/`: Targon-first screener capacity and build control.
 - `apps/platform/`: the subnet API, durable queue, dashboard, and control plane.
 - `apps/backroom/`: the public-source SN118 operations console.
