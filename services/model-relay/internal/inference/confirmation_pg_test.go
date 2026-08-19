@@ -168,6 +168,102 @@ func TestLockedConfirmationChatPayloadPreservesLaneTokenField(t *testing.T) {
 	}
 }
 
+func TestLockedConfirmationChatPayloadAppliesGptOssReasoningContract(t *testing.T) {
+	provider := confirmationProviderPreferences("deepinfra")
+	grant := postgres.ConfirmationInferenceGrant{
+		Lane: "reader", Model: "openai/gpt-oss-20b", RouteProvider: "deepinfra",
+	}
+
+	t.Run("omitted reasoning defaults to medium exclude", func(t *testing.T) {
+		payload := map[string]any{
+			"model": "openai/gpt-oss-20b",
+			"messages": []any{
+				map[string]any{"role": "user", "content": "memory"},
+			},
+			"max_tokens": json.Number("64"),
+			"user":       "miner",
+			"metadata":   map[string]any{"k": "v"},
+			"provider":   provider,
+		}
+		upstream, maxTokens, herr := lockedConfirmationChatPayload(payload, &grant, 128)
+		if herr != nil || maxTokens != 64 {
+			t.Fatalf("payload err=%v max=%d", herr, maxTokens)
+		}
+		reasoning, _ := upstream["reasoning"].(map[string]any)
+		if reasoning["effort"] != "medium" || reasoning["exclude"] != true {
+			t.Fatalf("reasoning=%v", upstream["reasoning"])
+		}
+		if _, found := upstream["user"]; found {
+			t.Fatalf("dropped user leaked: %v", upstream)
+		}
+		if _, found := upstream["metadata"]; found {
+			t.Fatalf("dropped metadata leaked: %v", upstream)
+		}
+		if _, found := upstream["reasoning_effort"]; found {
+			t.Fatalf("reasoning_effort alias leaked: %v", upstream)
+		}
+		lockedProvider, _ := upstream["provider"].(map[string]any)
+		if lockedProvider["zdr"] != true {
+			t.Fatalf("lost ZDR: %v", lockedProvider)
+		}
+	})
+
+	t.Run("reasoning_effort alias is canonicalized", func(t *testing.T) {
+		payload := map[string]any{
+			"model":            "openai/gpt-oss-20b",
+			"messages":         []any{map[string]any{"role": "user", "content": "memory"}},
+			"max_tokens":       json.Number("64"),
+			"reasoning_effort": "high",
+			"provider":         provider,
+		}
+		upstream, _, herr := lockedConfirmationChatPayload(payload, &grant, 128)
+		if herr != nil {
+			t.Fatalf("payload err=%v", herr)
+		}
+		if _, found := upstream["reasoning_effort"]; found {
+			t.Fatalf("reasoning_effort alias leaked: %v", upstream)
+		}
+		reasoning, _ := upstream["reasoning"].(map[string]any)
+		if reasoning["effort"] != "high" || reasoning["exclude"] != true {
+			t.Fatalf("reasoning=%v", upstream["reasoning"])
+		}
+	})
+
+	t.Run("conflicting aliases fail closed", func(t *testing.T) {
+		payload := map[string]any{
+			"model":            "openai/gpt-oss-20b",
+			"messages":         []any{map[string]any{"role": "user", "content": "memory"}},
+			"max_tokens":       json.Number("64"),
+			"reasoning":        map[string]any{"effort": "low"},
+			"reasoning_effort": "high",
+			"provider":         provider,
+		}
+		_, _, herr := lockedConfirmationChatPayload(payload, &grant, 128)
+		if herr == nil || herr.status != 400 || herr.message != "conflicting reasoning effort" {
+			t.Fatalf("conflict err=%v", herr)
+		}
+	})
+
+	t.Run("non-oss judge keeps no reasoning block", func(t *testing.T) {
+		judge := postgres.ConfirmationInferenceGrant{
+			Lane: "judge", Model: confirmationTestModel, RouteProvider: confirmationTestProvider,
+		}
+		payload := map[string]any{
+			"model":      confirmationTestModel,
+			"messages":   []any{map[string]any{"role": "user", "content": "memory"}},
+			"max_tokens": json.Number("64"),
+			"provider":   confirmationProviderPreferences(confirmationTestProvider),
+		}
+		upstream, _, herr := lockedConfirmationChatPayload(payload, &judge, 128)
+		if herr != nil {
+			t.Fatalf("payload err=%v", herr)
+		}
+		if _, found := upstream["reasoning"]; found {
+			t.Fatalf("judge gained reasoning: %v", upstream)
+		}
+	})
+}
+
 // fakeConfirmationUpstream returns a valid completion for the confirmation
 // model and records the last upstream request payload.
 func fakeConfirmationUpstream(t *testing.T, captured *map[string]any) *httptest.Server {

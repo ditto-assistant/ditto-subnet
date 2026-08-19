@@ -25,6 +25,7 @@ from ditto.api_server.endpoints.inference import (
     _complete_chat_with_recovery,
     _estimated_tokens,
     _exchange_message,
+    _locked_confirmation_chat_payload,
     _locked_grant_model,
     _locked_upstream_payload,
     _max_chargeable_tokens,
@@ -837,6 +838,86 @@ def test_v7_upstream_profile_pins_medium_reasoning_without_changing_v6() -> None
 
     v6 = _locked_upstream_payload(payload, model="qwen/qwen3-32b", max_tokens=256)
     assert "reasoning" not in v6
+
+
+def _confirmation_grant(*, lane: str, model: str) -> SimpleNamespace:
+    return SimpleNamespace(lane=lane, model=model, route_provider="deepinfra")
+
+
+def _confirmation_reader_payload(model: str, **extra: Any) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": [{"role": "user", "content": "memory"}],
+        "max_tokens": 64,
+        "provider": {
+            "only": ["deepinfra"],
+            "order": ["deepinfra"],
+            "allow_fallbacks": False,
+            "require_parameters": True,
+            "data_collection": "deny",
+        },
+    }
+    payload.update(extra)
+    return payload
+
+
+def test_confirmation_reader_applies_v9_gpt_oss_reasoning_contract() -> None:
+    grant = _confirmation_grant(lane="reader", model="openai/gpt-oss-20b")
+    upstream, max_tokens = _locked_confirmation_chat_payload(
+        _confirmation_reader_payload(
+            "openai/gpt-oss-20b", user="miner", metadata={"k": "v"}
+        ),
+        grant=grant,
+        max_output_tokens=128,
+    )
+    assert max_tokens == 64
+    assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
+    assert "reasoning_effort" not in upstream
+    assert "user" not in upstream
+    assert "metadata" not in upstream
+    assert upstream["provider"]["zdr"] is True
+    assert upstream["provider"]["only"] == ["deepinfra"]
+    assert upstream["usage"] == {"include": True}
+
+
+def test_confirmation_reader_canonicalizes_reasoning_effort_alias() -> None:
+    grant = _confirmation_grant(lane="reader", model="openai/gpt-oss-20b")
+    upstream, _ = _locked_confirmation_chat_payload(
+        _confirmation_reader_payload("openai/gpt-oss-20b", reasoning_effort="high"),
+        grant=grant,
+        max_output_tokens=128,
+    )
+    assert "reasoning_effort" not in upstream
+    assert upstream["reasoning"] == {"effort": "high", "exclude": True}
+
+
+def test_confirmation_reader_rejects_conflicting_reasoning_aliases() -> None:
+    grant = _confirmation_grant(lane="reader", model="openai/gpt-oss-20b")
+    with pytest.raises(HTTPException) as raised:
+        _locked_confirmation_chat_payload(
+            _confirmation_reader_payload(
+                "openai/gpt-oss-20b",
+                reasoning={"effort": "low"},
+                reasoning_effort="high",
+            ),
+            grant=grant,
+            max_output_tokens=128,
+        )
+    assert raised.value.status_code == 400
+    assert raised.value.detail == "conflicting reasoning effort"
+
+
+def test_confirmation_judge_does_not_gain_gpt_oss_reasoning() -> None:
+    grant = _confirmation_grant(lane="judge", model="openai/gpt-4o-2024-08-06")
+    payload = _confirmation_reader_payload("openai/gpt-4o-2024-08-06")
+    payload["model"] = "openai/gpt-4o-2024-08-06"
+    upstream, max_tokens = _locked_confirmation_chat_payload(
+        payload, grant=grant, max_output_tokens=128
+    )
+    assert max_tokens == 64
+    assert "reasoning" not in upstream
+    assert "max_tokens" not in upstream
+    assert upstream["max_completion_tokens"] == 64
 
 
 def test_caller_reasoning_is_accepted_then_overwritten_with_the_pinned_effort() -> None:

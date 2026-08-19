@@ -2471,6 +2471,7 @@ def _confirmation_headers(
 def _locked_confirmation_chat_payload(
     payload: Any, *, grant: Any, max_output_tokens: int
 ) -> tuple[dict[str, Any], int]:
+    """Lock the confirmation chat route and apply the scoring-lane gpt-oss contract."""
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="invalid confirmation request")
     provider = payload.get("provider")
@@ -2495,6 +2496,28 @@ def _locked_confirmation_chat_payload(
         )
     max_tokens = _output_token_limit(without_provider, max_output_tokens)
     upstream = dict(without_provider)
+    # Same sanitization as the ordinary scoring lane. Confirmation pins
+    # ``require_parameters`` plus one ZDR provider; forwarding scoring-lane
+    # aliases or dropped fields makes OpenRouter exclude that endpoint or
+    # hard-400 gpt-oss-20b before any receipt exists.
+    for field in _DROPPED_REQUEST_FIELDS:
+        upstream.pop(field, None)
+    for field in (
+        "best_of",
+        "reasoning_effort",
+        "include_reasoning",
+        "service_tier",
+        "prompt_cache_key",
+    ):
+        upstream.pop(field, None)
+    messages = upstream.get("messages")
+    if isinstance(messages, list):
+        upstream["messages"] = [
+            {key: value for key, value in message.items() if key != "name"}
+            if isinstance(message, dict) and message.get("role") == "tool"
+            else message
+            for message in messages
+        ]
     upstream["model"] = grant.model
     if grant.lane == "judge":
         upstream["max_completion_tokens"] = max_tokens
@@ -2504,6 +2527,13 @@ def _locked_confirmation_chat_payload(
         upstream.pop("max_completion_tokens", None)
     upstream["n"] = 1
     upstream["stream"] = False
+    reasoning = _benchmark_reasoning_for_request(
+        without_provider, model=grant.model, bench_version=9
+    )
+    if reasoning is None:
+        upstream.pop("reasoning", None)
+    else:
+        upstream["reasoning"] = reasoning
     upstream["provider"] = {**expected_provider, "zdr": True}
     upstream["usage"] = {"include": True}
     return upstream, max_tokens

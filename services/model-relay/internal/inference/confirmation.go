@@ -136,12 +136,20 @@ func confirmationProviderPreferences(routeProvider string) map[string]any {
 	}
 }
 
+// confirmationInstrumentBenchVersion is the LongMem confirmation profile's
+// instrument epoch. The reader model is openai/gpt-oss-20b, which OpenRouter
+// hard-400s unless the scoring-lane reasoning contract is applied: nested
+// reasoning.effort with exclude=true, and no sibling reasoning_effort alias.
+const confirmationInstrumentBenchVersion int32 = 9
+
 // lockedConfirmationChatPayload mirrors _locked_confirmation_chat_payload:
 // exact provider-pin equality, schema validation of the remainder, the
 // grant-locked model, and the forced upstream shape (zdr added, usage
-// included, n=1, stream false). Unlike the ordinary lane it does NOT strip
-// dropped request fields or tool-message names, and applies no reasoning
-// contract — the Python helper forwards the remainder as-is.
+// included, n=1, stream false). It also applies the same gpt-oss reasoning
+// contract and inert-field stripping as the ordinary scoring lane. Confirmation
+// pins require_parameters + a single ZDR provider; forwarding scoring-lane
+// aliases or dropped fields makes OpenRouter exclude that endpoint or 400
+// before any receipt exists.
 func lockedConfirmationChatPayload(decoded any, grant *postgres.ConfirmationInferenceGrant, maxOutputTokens int) (map[string]any, int, *httpError) {
 	payload, isObject := decoded.(map[string]any)
 	if !isObject {
@@ -171,6 +179,32 @@ func lockedConfirmationChatPayload(decoded any, grant *postgres.ConfirmationInfe
 	for key, value := range withoutProvider {
 		upstream[key] = value
 	}
+	for field := range droppedRequestFields {
+		delete(upstream, field)
+	}
+	for _, field := range []string{
+		"best_of", "reasoning_effort", "include_reasoning", "service_tier", "prompt_cache_key",
+	} {
+		delete(upstream, field)
+	}
+	if messages, ok := upstream["messages"].([]any); ok {
+		stripped := make([]any, len(messages))
+		for i, raw := range messages {
+			message, ok := raw.(map[string]any)
+			if ok && message["role"] == "tool" {
+				clean := make(map[string]any, len(message))
+				for k, v := range message {
+					if k != "name" {
+						clean[k] = v
+					}
+				}
+				stripped[i] = clean
+			} else {
+				stripped[i] = raw
+			}
+		}
+		upstream["messages"] = stripped
+	}
 	upstream["model"] = grant.Model
 	if grant.Lane == "judge" {
 		upstream["max_completion_tokens"] = maxTokens
@@ -181,6 +215,17 @@ func lockedConfirmationChatPayload(decoded any, grant *postgres.ConfirmationInfe
 	}
 	upstream["n"] = 1
 	upstream["stream"] = false
+	reasoning, herr := benchmarkReasoningForRequest(
+		withoutProvider, grant.Model, confirmationInstrumentBenchVersion,
+	)
+	if herr != nil {
+		return nil, 0, herr
+	}
+	if reasoning == nil {
+		delete(upstream, "reasoning")
+	} else {
+		upstream["reasoning"] = reasoning
+	}
 	pinned := make(map[string]any, len(expectedProvider)+1)
 	for key, value := range expectedProvider {
 		pinned[key] = value
