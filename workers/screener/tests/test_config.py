@@ -43,6 +43,7 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.container_port == 8080
     assert cfg.image_build_memory == "8g"
     assert cfg.remote_build_timeout_seconds == 1500
+    assert cfg.remote_build_mode == "prefer"
     assert cfg.gh_token_file is None
     # Must default to (at least) the platform's 20 MiB upload cap, else the gate
     # false-fails legitimately-uploaded tarballs.
@@ -120,6 +121,11 @@ def test_remote_build_timeout_is_independent_and_configurable(
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS",
             "60",
             "between 300 and 2400",
+        ),
+        (
+            "SCREENER_REMOTE_BUILD_MODE",
+            "always",
+            "off, prefer, or require",
         ),
     ],
 )

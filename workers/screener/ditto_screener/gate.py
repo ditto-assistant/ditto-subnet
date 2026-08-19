@@ -11,14 +11,12 @@ Flow for one agent:
 2. **Contract check.** Reject unsafe archive entries and require a root
    ``Dockerfile`` before any build is attempted. The implementation language is
    deliberately unconstrained; the image must satisfy the HTTP harness contract.
-3. **Build.** ``docker build`` reads a metadata-normalized copy of the validated
-   tarball on stdin. File bytes, paths, modes, and timestamps are preserved, but
-   archive-owner IDs are reset before BuildKit sees them so a tarball created in
-   a user namespace cannot fail on a different screener host. The screener never
-   extracts submission files onto its host filesystem. Bounded by
-   ``build_timeout_seconds``.
-4. **Serve smoke.** Run the image detached with a memory + pids cap and poll
-   ``GET /health`` until it returns 2xx.
+3. **Build.** Prefer the attempt-bound Targon Kaniko archive. When its runtime
+   smoke already succeeded, the worker never docker-loads or rebuilds. Local
+   ``docker build`` is residual fallback for ``prefer``/``off`` only.
+4. **Serve smoke.** Reuse the Targon rental ``GET /health`` when that lane
+   succeeded. Otherwise run the image detached with a memory + pids cap and
+   poll ``GET /health`` until it returns 2xx.
 5. **Private policy.** The default v8 manifest performs bounded Luna source
    review after health. A rotating
    private manifest may use timing, random-control, fingerprint, and behavioral
@@ -670,15 +668,9 @@ class BuildGate:
         gateway_state_dir, _ = _prepare_gateway_state()
         tmp_path: str | None = None
         review_task: asyncio.Task[SourceReviewObservation] | None = None
+        used_local_docker = False
+        remote_archive: RemoteImageArchive | None = None
         try:
-            executor_error = await self._verify_executor()
-            if executor_error is not None:
-                return core_decision(
-                    ScreeningOutcome.RETRYABLE_INFRA,
-                    code="executor-isolation-unavailable",
-                    summary="screener executor isolation is unavailable",
-                    detail=f"screener error: {executor_error}",
-                )
             report("downloading")
             if (exhausted := self._lease_exhausted(deadline, "download")) is not None:
                 return exhausted
@@ -826,6 +818,7 @@ class BuildGate:
                     async def review_with_provider_fallback() -> (
                         SourceReviewObservation
                     ):
+                        remote_only = self._config.remote_build_mode == "require"
                         if remote_source_review is not None:
                             try:
                                 remote = await remote_source_review()
@@ -837,7 +830,22 @@ class BuildGate:
                                 )
                             else:
                                 if remote is not None:
-                                    return remote
+                                    certified = (
+                                        remote.ok
+                                        and remote.risk_level == "low"
+                                        and remote.clearance_certified
+                                    )
+                                    if certified or remote_only:
+                                        return remote
+                        if remote_only:
+                            return SourceReviewObservation(
+                                ok=False,
+                                risk_level=None,
+                                finding_digest=None,
+                                categories=(),
+                                error_code="targon-source-review-unavailable",
+                                failure_disposition="retryable_infra",
+                            )
                         return await self._source_reviewer.review(
                             tmp_path,
                             artifact_sha256=sha256.lower(),
@@ -866,7 +874,7 @@ class BuildGate:
             built = False
             build_detail = ""
             built_image_id: str | None = None
-            remote_archive: RemoteImageArchive | None = None
+            targon_runtime_ok = False
             if remote_build is not None:
                 try:
                     remote_archive = await remote_build()
@@ -875,7 +883,37 @@ class BuildGate:
                         "remote builder raised unexpectedly; using local Docker",
                         exc_info=True,
                     )
-            if remote_archive is not None:
+            targon_runtime_ok = (
+                remote_archive is not None
+                and remote_archive.runtime_status == "succeeded"
+            )
+            if targon_runtime_ok:
+                # Targon already booted this exact archive as a Rental and
+                # probed /health. Do not import or rebuild it on GCE.
+                assert remote_archive is not None
+                built = True
+                built_image_id = f"sha256:{remote_archive.sha256}"
+                build_detail = "targon-runtime-health"
+            elif self._config.remote_build_mode == "require":
+                return core_decision(
+                    ScreeningOutcome.RETRYABLE_INFRA,
+                    code="targon-runtime-unavailable",
+                    summary="Targon runtime smoke did not admit this archive",
+                    detail=(
+                        "screener error: remote-only screening requires a "
+                        "succeeded Targon runtime health result"
+                    ),
+                )
+            elif remote_archive is not None:
+                executor_error = await self._verify_executor()
+                if executor_error is not None:
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="executor-isolation-unavailable",
+                        summary="screener executor isolation is unavailable",
+                        detail=f"screener error: {executor_error}",
+                    )
+                used_local_docker = True
                 try:
                     built, build_detail, built_image_id = await self._load_remote_image(
                         remote_archive.path,
@@ -885,9 +923,6 @@ class BuildGate:
                 finally:
                     with contextlib.suppress(OSError):
                         os.unlink(remote_archive.path)
-                    if remote_build_consumed is not None:
-                        with contextlib.suppress(Exception):
-                            await remote_build_consumed(remote_archive.build_id)
                 if not built:
                     logger.warning(
                         "verified remote archive could not be imported (%s); "
@@ -895,6 +930,15 @@ class BuildGate:
                         _log_tail(build_detail),
                     )
             if not built:
+                executor_error = await self._verify_executor()
+                if executor_error is not None:
+                    return core_decision(
+                        ScreeningOutcome.RETRYABLE_INFRA,
+                        code="executor-isolation-unavailable",
+                        summary="screener executor isolation is unavailable",
+                        detail=f"screener error: {executor_error}",
+                    )
+                used_local_docker = True
                 remaining = self._lease_remaining(deadline)
                 local_timeout = self._config.build_timeout_seconds
                 if remaining is not None:
@@ -933,14 +977,25 @@ class BuildGate:
             if exhausted is not None:
                 return exhausted
             started = asyncio.get_running_loop().time()
-            serve_result, audit_runtime = await self._run_and_probe(
-                built_image_id,
-                container,
-                gateway_container=gateway_container,
-                network=network,
-                gateway_state_dir=gateway_state_dir,
-                progress=report,
-            )
+            audit_runtime: _AuditRuntime | None
+            if targon_runtime_ok:
+                report("health_check")
+                serve_result = _StageResult(True, "")
+                audit_runtime = _AuditRuntime(
+                    harness_base="",
+                    gateway_response_token="",
+                    oracle_answer="",
+                    gateway_state_file="",
+                )
+            else:
+                serve_result, audit_runtime = await self._run_and_probe(
+                    built_image_id,
+                    container,
+                    gateway_container=gateway_container,
+                    network=network,
+                    gateway_state_dir=gateway_state_dir,
+                    progress=report,
+                )
             health_elapsed_ms = round(
                 (asyncio.get_running_loop().time() - started) * 1000
             )
@@ -1009,6 +1064,7 @@ class BuildGate:
                 context,
                 build_only=build_only,
                 deferred_source_review=deferred_source_review,
+                skip_challenges=targon_runtime_ok,
             )
             if (
                 decision.outcome == ScreeningOutcome.PASS
@@ -1049,11 +1105,19 @@ class BuildGate:
                 ) is not None:
                     return exhausted
                 try:
-                    image = await self._export_image(
-                        built_image_id,
-                        image_ref=image_ref,
-                        deadline=deadline,
-                    )
+                    if targon_runtime_ok:
+                        assert remote_archive is not None
+                        image = await self._export_remote_archive(
+                            remote_archive,
+                            image_ref=image_ref,
+                            deadline=deadline,
+                        )
+                    else:
+                        image = await self._export_image(
+                            built_image_id,
+                            image_ref=image_ref,
+                            deadline=deadline,
+                        )
                 except _ScreenedImageTooLargeError as error:
                     return core_decision(
                         ScreeningOutcome.DETERMINISTIC_REJECT,
@@ -1127,13 +1191,20 @@ class BuildGate:
                 with contextlib.suppress(BaseException):
                     await review_task
             teardown_started = loop.time()
-            await self._teardown(
-                container,
-                build_tag,
-                gateway_container=gateway_container,
-                network=network,
-            )
+            if used_local_docker:
+                await self._teardown(
+                    container,
+                    build_tag,
+                    gateway_container=gateway_container,
+                    network=network,
+                )
             shutil.rmtree(gateway_state_dir, ignore_errors=True)
+            if remote_archive is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(remote_archive.path)
+                if remote_build_consumed is not None:
+                    with contextlib.suppress(Exception):
+                        await remote_build_consumed(remote_archive.build_id)
             if tmp_path is not None:
                 with contextlib.suppress(OSError):
                     os.unlink(tmp_path)
@@ -1420,6 +1491,51 @@ class BuildGate:
             path=destination_path,
             image_id=f"sha256:{config_hex}",
         )
+
+    async def _export_remote_archive(
+        self,
+        archive: RemoteImageArchive,
+        *,
+        image_ref: str,
+        deadline: float | None,
+    ) -> BuiltImageArtifact:
+        """Publish the Platform-verified Kaniko tar without a local docker save."""
+        if archive.size_bytes > _MAX_SCREENED_IMAGE_BYTES:
+            raise _ScreenedImageTooLargeError(
+                f"screened image exceeds {_MAX_SCREENED_IMAGE_BYTES} byte cap"
+            )
+        fd, created_path = tempfile.mkstemp(
+            prefix="ditto-portable-image-", suffix=".tar"
+        )
+        os.close(fd)
+        portable_path: str | None = created_path
+        try:
+            portable = await asyncio.to_thread(
+                self._portable_image_archive,
+                archive.path,
+                created_path,
+                deadline=deadline,
+            )
+            portable_path = None
+            size_bytes = os.path.getsize(portable.path)
+            if size_bytes > _MAX_SCREENED_IMAGE_BYTES:
+                raise _ScreenedImageTooLargeError(
+                    "screened image archive exceeds "
+                    f"{_MAX_SCREENED_IMAGE_BYTES} byte cap"
+                )
+            sha256 = await self._hash_image_archive(portable.path, deadline=deadline)
+            return BuiltImageArtifact(
+                path=portable.path,
+                sha256=sha256,
+                size_bytes=size_bytes,
+                image_id=portable.image_id,
+                image_ref=image_ref,
+            )
+        except BaseException:
+            if portable_path is not None:
+                with contextlib.suppress(OSError):
+                    os.unlink(portable_path)
+            raise
 
     async def _export_image(
         self,

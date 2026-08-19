@@ -326,13 +326,13 @@ async def test_targon_build_digest_mismatch_discards_and_falls_back(
                 "ok": True,
                 "risk_level": "medium",
                 "categories": ["suspicious"],
-                "clearance_certified": True,
+                "clearance_certified": False,
             },
-            False,
+            True,
         ),
     ],
 )
-async def test_targon_source_review_only_accepts_certified_low_risk(
+async def test_targon_source_review_returns_succeeded_observation(
     make_config: Callable[..., ScreenerConfig],
     observation: dict[str, object],
     accepted: bool,

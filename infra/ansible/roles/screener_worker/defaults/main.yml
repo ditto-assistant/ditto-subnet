@@ -51,6 +51,9 @@ screener_build_timeout_seconds: 2700
 # Keep independent from screener_build_timeout_seconds: the 70-minute Platform
 # lease budgets both stages and stale local overrides must not shorten Targon.
 screener_remote_build_timeout_seconds: 1500
+# Screening does not build on GCE. Targon Kaniko plus runtime smoke are
+# authoritative; local Docker remains only if an operator sets prefer/off.
+screener_remote_build_mode: require
 screener_run_timeout_seconds: 120
 screener_build_memory: 2g
 # The untrusted build runs one-at-a-time and needs enough bounded headroom for

@@ -745,6 +745,7 @@ def run_one_runtime_smoke(
     build_id = str(artifact.get("build_id", ""))
     uid: str | None = None
     archive: Path | None = None
+    keep_rental = False
     try:
         inventory = {
             str(row.get("name")): int(row.get("available", 0))
@@ -808,6 +809,11 @@ def run_one_runtime_smoke(
                                     provider_resource_id=uid,
                                     image_reference=image_reference,
                                 )
+                                # Keep the promoted miner rental so screening
+                                # can reuse the isolated /health (and later a
+                                # screener-to-agent prompt tool). Sweep still
+                                # bounds billing after the inflight grace.
+                                keep_rental = True
                                 return True
                     except (OSError, urllib.error.URLError):
                         pass
@@ -834,7 +840,7 @@ def run_one_runtime_smoke(
     finally:
         if archive is not None:
             archive.unlink(missing_ok=True)
-        if uid is not None and not _delete_rental(client, uid):
+        if uid is not None and not keep_rental and not _delete_rental(client, uid):
             with contextlib.suppress(ControllerError):
                 control.cleanup_required(build_id, provider_resource_id=uid)
 

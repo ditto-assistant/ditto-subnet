@@ -90,6 +90,8 @@ class RemoteImageArchive:
     path: str
     sha256: str
     size_bytes: int
+    runtime_status: str = "skipped"
+    runtime_image_reference: str | None = None
 
 
 class PlatformClient:
@@ -471,6 +473,8 @@ class PlatformClient:
                 path=path,
                 sha256=actual,
                 size_bytes=total,
+                runtime_status=build.runtime_status,
+                runtime_image_reference=build.runtime_image_reference,
             )
         except (httpx.HTTPError, OSError, PlatformError) as error:
             with contextlib.suppress(OSError):
@@ -532,17 +536,18 @@ class PlatformClient:
             while asyncio.get_running_loop().time() < deadline:
                 if review.status == "succeeded":
                     observation = review.observation
+                    if observation is None:
+                        return None
                     if (
-                        observation is not None
-                        and observation.ok
+                        observation.ok
                         and observation.risk_level == "low"
                         and observation.clearance_certified
                     ):
                         return observation
-                    logger.info(
-                        "remote source review requires authoritative local follow-up"
-                    )
-                    return None
+                    # Elevated or uncertified L1 still has a typed finding.
+                    # Prefer-mode callers fall back to local L2; require-mode
+                    # screening uses this observation without nested Docker.
+                    return observation
                 if review.status in {"fallback_required", "canceled", "consumed"}:
                     logger.warning(
                         "remote source review unavailable code=%s; "

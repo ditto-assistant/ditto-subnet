@@ -38,6 +38,7 @@ from ditto_screener.gate import (
     dockerfile_at_root,
     image_binding_advisory,
 )
+from ditto_screener.platform import RemoteImageArchive
 from ditto_screener.policy import (
     CORE_ONLY_MANIFEST,
     AgenticSourceReviewModule,
@@ -266,6 +267,94 @@ async def test_export_image_hashes_exact_docker_archive(
             assert portable.extractfile(manifest[0]["Layers"][0]).read() == layer
     finally:
         os.unlink(exported.path)
+
+
+async def test_targon_runtime_success_skips_docker_and_exports_archive(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    tarball = _valid_tar()
+    archive_bytes, config_id, _ = _oci_image_save_archive()
+    archive_path = tmp_path / "remote.tar"
+    archive_path.write_bytes(archive_bytes)
+    calls: list[list[str]] = []
+    published: list[BuiltImageArtifact] = []
+    consumed: list[UUID] = []
+
+    async def run(args: list[str], **_: Any) -> tuple[int, str]:
+        calls.append(args)
+        raise AssertionError(f"local Docker must not run: {args}")
+
+    async def remote_build() -> RemoteImageArchive:
+        return RemoteImageArchive(
+            build_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            path=str(archive_path),
+            sha256=hashlib.sha256(archive_bytes).hexdigest(),
+            size_bytes=len(archive_bytes),
+            runtime_status="succeeded",
+            runtime_image_reference=(
+                "us-central1-docker.pkg.dev/ditto-app-dev/"
+                "ditto-screening-candidates/miner@sha256:" + "ab" * 32
+            ),
+        )
+
+    async def remote_build_consumed(build_id: UUID) -> None:
+        consumed.append(build_id)
+
+    async def publish(image: BuiltImageArtifact) -> None:
+        published.append(image)
+
+    gate = _gate_with(
+        make_config(require_rootless_docker=True, remote_build_mode="require"),
+        run,
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            publish_image=publish,
+            remote_build=remote_build,
+            remote_build_consumed=remote_build_consumed,
+        )
+    assert result.outcome == ScreeningOutcome.PASS
+    assert calls == []
+    assert [image.image_id for image in published] == [config_id]
+    assert consumed == [UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")]
+
+
+async def test_remote_require_does_not_local_build_without_targon_health(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    tarball = _valid_tar()
+    calls: list[list[str]] = []
+
+    async def run(args: list[str], **_: Any) -> tuple[int, str]:
+        calls.append(args)
+        return 0, ""
+
+    async def remote_build() -> None:
+        return None
+
+    gate = _gate_with(
+        make_config(require_rootless_docker=True, remote_build_mode="require"),
+        run,
+        tarball=tarball,
+    )
+    async with gate._client:
+        result = await gate.screen(
+            agent_id=_AGENT,
+            attempt_id=_ATTEMPT,
+            miner_hotkey=_MINER,
+            sha256=hashlib.sha256(tarball).hexdigest(),
+            download_url=_URL,
+            remote_build=remote_build,
+        )
+    assert result.outcome == ScreeningOutcome.RETRYABLE_INFRA
+    assert result.evidence[-1].code == "targon-runtime-unavailable"
+    assert calls == []
 
 
 async def test_export_rejects_oversize_before_save(

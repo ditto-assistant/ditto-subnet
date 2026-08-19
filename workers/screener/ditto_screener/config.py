@@ -170,7 +170,13 @@ class ScreenerConfig:
     review_settings_cache_file: str
     review_settings_max_stale_seconds: int
     remote_build_mode: str = "prefer"
-    """``prefer`` tries the attempt-bound Targon Kaniko queue before Docker."""
+    """How the gate uses Targon Kaniko + runtime smoke.
+
+    ``prefer`` tries the attempt-bound remote archive before local Docker.
+    ``require`` never builds or loads on the worker: screening reads the
+    source tarball and reuses the already-smoked Targon rental. ``off``
+    keeps the historical local Docker path.
+    """
     remote_build_timeout_seconds: float = 1500.0
     """Maximum time to wait for a Targon Kaniko submission build.
 
@@ -490,8 +496,10 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_REVIEW_SETTINGS_MAX_STALE_SECONDS must be between 60 and 86400"
         )
-    if config.remote_build_mode not in {"off", "prefer"}:
-        raise ScreenerConfigError("SCREENER_REMOTE_BUILD_MODE must be off or prefer")
+    if config.remote_build_mode not in {"off", "prefer", "require"}:
+        raise ScreenerConfigError(
+            "SCREENER_REMOTE_BUILD_MODE must be off, prefer, or require"
+        )
     if not 300 <= config.remote_build_timeout_seconds <= 2400:
         raise ScreenerConfigError(
             "SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS must be between 300 and 2400"

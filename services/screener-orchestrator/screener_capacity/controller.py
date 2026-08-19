@@ -84,6 +84,15 @@ class ProviderRouting:
             and self.source_review_provider_priority[0] == "targon"
         )
 
+    @property
+    def targon_decomposed_enabled(self) -> bool:
+        # Kaniko, runtime smoke, and L1 source-review do not need nested Docker.
+        return (
+            bool(self.build_provider_priority)
+            and self.build_provider_priority[0] == "targon"
+            and self.targon_screeners_enabled
+        )
+
 
 def desired_slots(*, runnable: int, active: int, jobs_per_slot: int, cap: int) -> int:
     """Keep every active lease supplied and add bounded catch-up capacity."""
@@ -93,9 +102,23 @@ def desired_slots(*, runnable: int, active: int, jobs_per_slot: int, cap: int) -
 
 
 def fallback_target(
-    *, demand: int, targon: ProviderCounts, capability: Capability
+    *,
+    demand: int,
+    targon: ProviderCounts,
+    capability: Capability,
+    decomposed_targon: bool = False,
 ) -> int:
-    """Return residual GCE capacity; NOGO/unknown routes all demand to GCE."""
+    """Return residual GCE fleet capacity.
+
+    Nested-Docker ``nogo`` does not own screening when the three decomposed
+    Targon lanes are already first. Those lanes compile, smoke ``/health``,
+    and read source; GCE remains only as the nested-worker fallback after a
+    fresh ``go`` attestation, or as the full GCE-only cutover.
+    """
+    if decomposed_targon:
+        if capability != "go":
+            return 0
+        return max(0, demand - targon.supplied)
     if capability != "go":
         return demand
     return max(0, demand - targon.supplied)
@@ -972,6 +995,7 @@ def reconcile(settings: Settings) -> dict[str, Any]:
         demand=demand.desired,
         targon=planned_counts,
         capability="go" if targon_allowed else "nogo",
+        decomposed_targon=provider_routing.targon_decomposed_enabled,
     )
     if target < current_target and demand.active > 0:
         # Never remove GCE capacity while any provider still owns a live lease.

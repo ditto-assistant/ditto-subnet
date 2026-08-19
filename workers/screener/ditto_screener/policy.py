@@ -939,6 +939,7 @@ class PolicyEngine:
         *,
         build_only: bool = False,
         deferred_source_review: bool = False,
+        skip_challenges: bool = False,
     ) -> ScreeningDecision:
         if deferred_source_review and not build_only:
             raise ValueError("deferred source review requires the mechanical lane")
@@ -982,7 +983,13 @@ class PolicyEngine:
         # harness cannot behave only during a ~5% audit. It still runs for a
         # qualifying submission's deferred review; mechanical admission above
         # only establishes that an image is ready for validator scoring.
-        challenges = tuple(m for m in self.modules if m.phase == "challenge")
+        # Targon runtime smoke has no isolated fake-gateway sidecar, so the
+        # oracle is skipped until a screener-to-rental prompt tool exists.
+        challenges = (
+            ()
+            if skip_challenges
+            else tuple(m for m in self.modules if m.phase == "challenge")
+        )
         cleared = False
         for module in challenges:
             result = await module.evaluate(context)

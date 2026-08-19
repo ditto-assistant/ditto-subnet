@@ -348,7 +348,7 @@ class ScreenerWorker:
                     )
 
                     async def remote_build():  # type: ignore[no-untyped-def]
-                        if self._config.remote_build_mode != "prefer":
+                        if self._config.remote_build_mode == "off":
                             return None
                         # The remote and local caps are separate on purpose.
                         # A normal 70-minute lease budgets 25 minutes for

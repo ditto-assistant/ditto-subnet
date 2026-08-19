@@ -1,6 +1,7 @@
 import base64
 import json
 import shutil
+import urllib.error
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -479,9 +480,10 @@ def test_runtime_smoke_launches_promoted_image_directly(monkeypatch) -> None:
     )
     assert control.updates[-1][1]["status"] == "succeeded"
     assert control.updates[-1][1]["image_reference"] == image
+    assert targon.deleted == []
 
 
-def test_runtime_smoke_delete_failure_is_suspended_and_audited(monkeypatch) -> None:
+def test_runtime_smoke_failure_deletes_rental(monkeypatch) -> None:
     build_id = "550e8400-e29b-41d4-a716-446655440000"
     artifact = {
         "build_id": build_id,
@@ -507,25 +509,21 @@ def test_runtime_smoke_delete_failure_is_suspended_and_audited(monkeypatch) -> N
         lambda **_values: "registry.example/candidates/miner@sha256:" + "d" * 64,
     )
 
-    class _Health:
-        status = 200
-
-        def __enter__(self):  # type: ignore[no-untyped-def]
-            return self
-
-        def __exit__(self, *_args):  # type: ignore[no-untyped-def]
-            return False
+    def _unhealthy(*_args: object, **_kwargs: object) -> object:
+        raise urllib.error.URLError("health down")
 
     monkeypatch.setattr(
         "screener_capacity.builder.urllib.request.urlopen",
-        lambda *_args, **_kwargs: _Health(),
+        _unhealthy,
     )
+    monkeypatch.setattr("screener_capacity.builder.time.sleep", lambda _seconds: None)
 
     assert run_one_runtime_smoke(_settings(), targon, control)
 
     assert targon.deleted == ["wrk-build-1", "wrk-build-1"]
     assert targon.suspended == []
     assert control.cleanup == [(build_id, "wrk-build-1")]
+    assert control.updates[-1][1]["status"] == "fallback_required"
 
 
 def test_submission_rental_receives_only_attempt_capability_and_pinned_image() -> None:

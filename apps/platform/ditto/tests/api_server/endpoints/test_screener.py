@@ -1015,6 +1015,66 @@ class TestFederatedScreenerNodes:
             row = await session.get(SubmissionImageBuild, UUID(build_id))
             assert row is not None and row.status == "consumed"
 
+    async def test_runtime_success_queues_source_review(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        _install_storage(app)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        attempt_id = claim.json()["items"][0]["attempt_id"]
+        queued = await client.post(
+            f"/api/v1/screener/agent/{agent_id}/submission-image-builds",
+            headers=_AUTH_HEADER,
+            json={"attempt_id": attempt_id},
+        )
+        assert queued.status_code == 200, queued.text
+        build_id = queued.json()["build_id"]
+        async with session_maker() as session, session.begin():
+            row = await session.get(SubmissionImageBuild, UUID(build_id))
+            assert row is not None
+            row.status = "succeeded"
+            row.output_sha256 = "12" * 32
+            row.output_size_bytes = 123
+            row.runtime_status = "running"
+            row.controller_epoch = "builder:test"
+            row.completed_at = datetime.now(UTC)
+        finished = await client.post(
+            f"/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "status": "succeeded",
+                "provider_resource_id": "wrk-runtime",
+                "image_reference": (
+                    "us-central1-docker.pkg.dev/ditto-app-dev/"
+                    "ditto-screening-candidates/miner@sha256:" + "ab" * 32
+                ),
+            },
+        )
+        assert finished.status_code == 204, finished.text
+        async with session_maker() as session:
+            review = await session.scalar(
+                select(SubmissionSourceReview).where(
+                    SubmissionSourceReview.attempt_id == UUID(attempt_id)
+                )
+            )
+            assert review is not None
+            assert review.status == "queued"
+            assert review.artifact_sha256 == _SHA256
+
     async def test_consuming_succeeded_build_keeps_pending_runtime_archive(
         self,
         app: FastAPI,

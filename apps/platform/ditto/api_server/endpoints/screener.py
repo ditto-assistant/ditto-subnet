@@ -1726,6 +1726,36 @@ async def complete_submission_runtime_smoke(
             row.runtime_completed_at = now
             if row.consumed_at is not None:
                 output_key = row.output_key
+        if payload.status == "succeeded":
+            _, provider_settings = await resolve_screener_provider_settings(
+                session, environment=row.environment
+            )
+            attempt = await session.get(
+                ScreeningAttempt, row.attempt_id, with_for_update=True
+            )
+            deadline = attempt.deadline if attempt is not None else now
+            if deadline.tzinfo is None:
+                deadline = deadline.replace(tzinfo=UTC)
+            if (
+                _targon_first(provider_settings.source_review_provider_priority)
+                and attempt is not None
+                and attempt.status == "running"
+                and now < deadline
+            ):
+                await session.execute(
+                    pg_insert(SubmissionSourceReview)
+                    .values(
+                        review_id=uuid4(),
+                        agent_id=row.agent_id,
+                        attempt_id=row.attempt_id,
+                        environment=row.environment,
+                        artifact_sha256=row.artifact_sha256,
+                        status="queued",
+                    )
+                    .on_conflict_do_nothing(
+                        constraint="submission_source_reviews_attempt_key"
+                    )
+                )
     if output_key is not None and await storage.object_exists(key=output_key):
         await storage.delete_object(key=output_key)
 

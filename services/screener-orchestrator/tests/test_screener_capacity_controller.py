@@ -76,6 +76,10 @@ class _Platform:
             "targon",
             "gcp",
         ),
+        build_priority: tuple[Literal["targon", "gcp"], ...] = (
+            "targon",
+            "gcp",
+        ),
     ) -> None:
         self._demand = demand
         self._nodes = nodes or {}
@@ -84,6 +88,7 @@ class _Platform:
         self.fences = 0
         self._image = image
         self._screening_priority = screening_priority
+        self._build_priority = build_priority
 
     def demand(self, **_kwargs: object) -> Demand:
         return self._demand
@@ -93,7 +98,7 @@ class _Platform:
             revision=0,
             runtime_provider_priority=self._screening_priority,
             source_review_provider_priority=self._screening_priority,
-            build_provider_priority=("targon", "gcp"),
+            build_provider_priority=self._build_priority,
         )
 
     def renew(self, snapshot: dict[str, object]) -> dict[str, object]:
@@ -346,6 +351,17 @@ class CapacityDecisionTests(unittest.TestCase):
             5,
         )
 
+    def test_decomposed_targon_nogo_does_not_spin_gce_fleet(self) -> None:
+        self.assertEqual(
+            fallback_target(
+                demand=5,
+                targon=ProviderCounts(healthy=3, pending=1),
+                capability="nogo",
+                decomposed_targon=True,
+            ),
+            0,
+        )
+
     def test_targon_ready_requires_current_platform_heartbeat(self) -> None:
         rows = [
             {
@@ -419,7 +435,7 @@ class CapacityDecisionTests(unittest.TestCase):
             command,
         )
 
-    def test_nogo_queue_scales_gce_up_then_back_to_zero(self) -> None:
+    def test_nogo_decomposed_lanes_do_not_scale_gce_fleet(self) -> None:
         with TemporaryDirectory() as directory:
             root = Path(directory)
             token_file = root / "controller-token"
@@ -484,8 +500,8 @@ class CapacityDecisionTests(unittest.TestCase):
                 patch("screener_capacity.controller.GCEFleet", return_value=gce),
             ):
                 snapshot = reconcile(settings)
-            self.assertEqual(snapshot["gce_target"], 3)
-            self.assertEqual(resized, [3])
+            self.assertEqual(snapshot["gce_target"], 0)
+            self.assertEqual(resized, [])
 
             platform.demand = lambda **_kwargs: Demand(runnable=0, active=0, desired=0)
             gce.target = lambda: 3
@@ -498,7 +514,7 @@ class CapacityDecisionTests(unittest.TestCase):
             ):
                 snapshot = reconcile(settings)
             self.assertEqual(snapshot["gce_target"], 0)
-            self.assertEqual(resized, [3, 0])
+            self.assertEqual(resized, [0])
 
     def test_gcp_first_policy_prevents_targon_scale_up(self) -> None:
         with TemporaryDirectory() as directory:
@@ -633,7 +649,11 @@ class CapacityDecisionTests(unittest.TestCase):
                     "active_lease": False,
                 }
             }
-            platform = _Platform(Demand(runnable=4, active=0, desired=2), nodes)
+            platform = _Platform(
+                Demand(runnable=4, active=0, desired=2),
+                nodes,
+                build_priority=("gcp",),
+            )
             gce = _GCE(operations=operations)
             targon = _Targon(
                 rows=[

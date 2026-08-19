@@ -43,11 +43,15 @@ that rootful Docker cannot mount its required kernel filesystems, rootless
 Docker cannot create its user namespace, BuildKit cannot perform the first bind
 mount, and plain Rentals expose neither `/dev/fuse` nor `/dev/kvm`. These are
 provider sandbox limits, not missing worker glue. A missing, invalid, expired,
-or `nogo` attestation routes full-worker demand to GCE. It does not disable the
-three decomposed jobs. Targon may compile a miner submission, launch the exact
-Platform-verified image directly as a Rental, and perform bounded read-only L1
-review. It may not make an elevated source verdict or replace the GCE-owned
-isolated fake-gateway health/oracle gate, signing, and upload.
+or `nogo` attestation still disables nested-Docker workers on Targon. It does
+not send screening demand to the GCE fleet when the three decomposed lanes are
+Targon-first. Screening on Targon is Kaniko compile, direct-image `/health`
+smoke of that exact archive, and read-only L1 review of the source tarball in a
+separate screener rental. The worker that signs the policy-9 verdict stays on
+GCE (controller/pet) and does not docker-load or rebuild the miner. Elevated L1
+findings quarantine rather than running GCE L2/L3 until that path is rewritten.
+A screener-to-smoke-rental prompt tool is a later issue; isolated fake-gateway
+oracle remains GCE-only until then.
 
 Targon VMs expose a stronger kernel boundary, but they are not an acceptable
 autoscaling substitute yet: the live inventory is GPU-only, bootstrap is SSH
