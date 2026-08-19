@@ -8,10 +8,11 @@ similar JSON Schema.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from enum import StrEnum
 from ipaddress import ip_address
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
 from uuid import UUID
 
@@ -19,12 +20,19 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    GetJsonSchemaHandler,
+    SerializerFunctionWrapHandler,
     StringConstraints,
     field_validator,
+    model_serializer,
     model_validator,
 )
+from pydantic.json_schema import JsonSchemaValue
 
-from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
+from ditto_screening_protocol.bench_v9 import (
+    MIN_CONFIRMATION_BENCH_VERSION,
+    V9EvidenceBenchVersion,
+)
 from ditto_screening_protocol.confirmation import (
     AblationBudget,
     AblationDimensionEnvelope,
@@ -38,6 +46,15 @@ SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 MAX_BUNDLE_REQUEST_CAP = 100_000
 MAX_BUNDLE_TOKEN_CAP = 100_000_000
 LONGMEM_SLOT_PATTERN = r"^longmem-[0-3]$"
+
+# Deep-history floors for every confirmation epoch after v9, mirroring
+# ``internal/longmemeval/profile.go`` (``V10Min*``). Go validates the profile it
+# receives against exactly these numbers, so a profile Python considers valid
+# but Go does not is a lease that fails after the ticket is already spent.
+LONGMEM_DEEP_HISTORY_FLOOR_BENCH_VERSION = 10
+LONGMEM_V10_MIN_CASES_PER_CAPABILITY = 8
+LONGMEM_V10_MIN_HISTORY_SESSIONS = 55
+LONGMEM_V10_MIN_HISTORY_BYTES = 400_000
 
 LongMemSlotId = Annotated[str, Field(pattern=LONGMEM_SLOT_PATTERN)]
 
@@ -146,6 +163,18 @@ class ConfirmationCompositeProfile(BaseModel):
     checksum: Sha256
 
 
+def _without_model_serialization(schema: object) -> object:
+    """Copy a core schema with the model node's custom serializer removed."""
+    if not isinstance(schema, Mapping):
+        return schema
+    copied = {
+        key: value for key, value in schema.items() if key != "serialization"
+    }
+    if "schema" in copied:
+        copied["schema"] = _without_model_serialization(copied["schema"])
+    return copied
+
+
 class ConfirmationExecutionProfile(BaseModel):
     """Complete non-secret profile needed by the trusted local executor."""
 
@@ -154,6 +183,14 @@ class ConfirmationExecutionProfile(BaseModel):
     schema_version: Literal[1]
     revision: Annotated[str, Field(min_length=1, max_length=128)]
     checksum: Sha256
+    # ``bench_version`` and the two deep-history floors below are additive, and
+    # are serialized only when they leave their v9 values (see
+    # ``_omit_v9_defaults``). Go declares them ``omitempty`` on both the wire
+    # struct and the checksummed payload mirror, and recomputes the outer
+    # profile checksum from that payload, so emitting ``"bench_version": 9``
+    # for a v9 profile would break checksum equality and installed-profile
+    # identity against every released executor.
+    bench_version: V9EvidenceBenchVersion = 9
     longmem_profile_revision: Annotated[str, Field(min_length=1, max_length=128)]
     longmem_profile_checksum: Sha256
     longmem_dataset_revision: Annotated[str, Field(min_length=1, max_length=128)]
@@ -162,6 +199,8 @@ class ConfirmationExecutionProfile(BaseModel):
     longmem_selection_seed: Annotated[int, Field(ge=0, le=(1 << 64) - 1)]
     longmem_cases_per_capability: Annotated[int, Field(ge=2)]
     longmem_seed_batch_pairs: Annotated[int, Field(gt=0)]
+    longmem_min_history_sessions: Annotated[int, Field(ge=0)] = 0
+    longmem_min_history_bytes: Annotated[int, Field(ge=0)] = 0
     longmem_projection_key_sha256: Sha256
     provider_lanes: list[ConfirmationProviderLaneProfile]
     embedding_lane: ConfirmationEmbeddingLaneProfile
@@ -175,6 +214,65 @@ class ConfirmationExecutionProfile(BaseModel):
     inference_ablation: ConfirmationAblationProfile
     embedding_ablation: ConfirmationAblationProfile
     composite: ConfirmationCompositeProfile
+
+    @model_serializer(mode="wrap")
+    def _omit_v9_defaults(
+        self, handler: SerializerFunctionWrapHandler
+    ) -> dict[str, object]:
+        """Mirror Go's ``omitempty`` on the three additive profile fields.
+
+        A v9 profile must serialize to exactly the bytes it did before these
+        fields existed, because Go recomputes the outer profile checksum from
+        its own payload marshal and compares the decoded profile to the
+        installed one field by field.
+        """
+        payload = handler(self)
+        if self.bench_version == MIN_CONFIRMATION_BENCH_VERSION:
+            payload.pop("bench_version", None)
+        if not self.longmem_min_history_sessions:
+            payload.pop("longmem_min_history_sessions", None)
+        if not self.longmem_min_history_bytes:
+            payload.pop("longmem_min_history_bytes", None)
+        return payload
+
+    @classmethod
+    def __get_pydantic_json_schema__(
+        cls, core_schema: Mapping[str, Any], handler: GetJsonSchemaHandler
+    ) -> JsonSchemaValue:
+        """Publish the real field set even in serialization mode.
+
+        The ``model_serializer`` above attaches a ``dict[str, Any]`` return
+        schema, which collapses every serialization-mode JSON Schema for this
+        model -- including the OpenAPI document Backroom's client is generated
+        from -- into a free-form object. Dropping the serializer's schema here
+        keeps the published contract describing the profile itself; the runtime
+        omission of the three v9-default keys is unaffected.
+        """
+        return handler(_without_model_serialization(core_schema))
+
+    @model_validator(mode="after")
+    def longmem_history_floors_match_the_epoch(self) -> ConfirmationExecutionProfile:
+        """Reject a profile Go's ``longmemeval.Profile.Validate`` would reject.
+
+        Failing here costs nothing; failing in Go costs a claimed ticket, a
+        spent slot, and a hand-back the operator sees only as an opaque
+        infrastructure error.
+        """
+        if self.bench_version < LONGMEM_DEEP_HISTORY_FLOOR_BENCH_VERSION:
+            if self.longmem_min_history_sessions or self.longmem_min_history_bytes:
+                raise ValueError(
+                    "bench_version 9 does not define LongMem deep-history floors"
+                )
+            return self
+        if (
+            self.longmem_cases_per_capability < LONGMEM_V10_MIN_CASES_PER_CAPABILITY
+            or self.longmem_min_history_sessions < LONGMEM_V10_MIN_HISTORY_SESSIONS
+            or self.longmem_min_history_bytes < LONGMEM_V10_MIN_HISTORY_BYTES
+        ):
+            raise ValueError(
+                "confirmation profile is below the LongMem deep-history floor"
+            )
+        return self
 
     @model_validator(mode="after")
     def ablation_roles_are_not_swappable(self) -> ConfirmationExecutionProfile:

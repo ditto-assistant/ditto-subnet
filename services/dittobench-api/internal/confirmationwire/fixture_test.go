@@ -2,6 +2,7 @@ package confirmationwire
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -9,17 +10,40 @@ import (
 
 func TestCommittedFixtureMatchesProductionEvidence(t *testing.T) {
 	t.Parallel()
-	want, err := MarshalFixture()
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join("testdata", "go_confirmation_evidence_v9.json")
-	got, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v\nwant:\n%s", path, err, want)
-	}
-	if !bytes.Equal(got, want) {
-		t.Fatalf("%s drifted from the production Go evidence contracts\nwant:\n%s", path, want)
+	// One committed vector per confirmation epoch. The v9 bytes are frozen —
+	// four Python suites replay them — and the v12 vector is what proves the
+	// Python wire converter carries the producer's bench_version instead of
+	// pinning it, using evidence Go actually produced rather than a
+	// Python-side hand edit of the v9 bytes.
+	for _, benchVersion := range []int{9, 12} {
+		t.Run(fmt.Sprintf("bench_version_%d", benchVersion), func(t *testing.T) {
+			t.Parallel()
+			want, err := MarshalFixtureForBenchVersion(benchVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join("testdata", fmt.Sprintf("go_confirmation_evidence_v%d.json", benchVersion))
+			got, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("read %s: %v\nwant:\n%s", path, err, want)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("%s drifted from the production Go evidence contracts\nwant:\n%s", path, want)
+			}
+			fixture, err := BuildFixtureForBenchVersion(benchVersion)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fixture.LongMemEval.Evidence.BenchVersion != benchVersion ||
+				fixture.InferenceAblation.Evidence.BenchVersion != benchVersion ||
+				fixture.EmbeddingAblation.Evidence.BenchVersion != benchVersion {
+				t.Fatal("producer evidence does not carry the run's bench_version")
+			}
+			if fixture.FixtureSchema != "dittobench-v9-confirmation-go-evidence-v1" ||
+				fixture.InferenceAblation.Evidence.ContractVersion != ablationContractVersion {
+				t.Fatal("frozen transport contract labels must not move with the epoch")
+			}
+		})
 	}
 }
 

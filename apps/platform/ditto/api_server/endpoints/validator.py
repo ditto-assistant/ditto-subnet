@@ -3785,7 +3785,8 @@ async def _current_koth_entries(
     raw_scores = {
         row.agent_id: (
             row.v9_confirmation["full_effective_micros"] / 1_000_000
-            if row.bench_version == 9 and row.v9_confirmation is not None
+            if supports_confirmation(row.bench_version)
+            and row.v9_confirmation is not None
             else row.composite
         )
         for row in rows
@@ -3797,7 +3798,8 @@ async def _current_koth_entries(
             agent_id=row.agent_id,
             composite=(
                 row.v9_confirmation["full_effective_micros"] / 1_000_000
-                if row.bench_version == 9 and row.v9_confirmation is not None
+                if supports_confirmation(row.bench_version)
+                and row.v9_confirmation is not None
                 else row.composite
             ),
             first_seen=row.fold_first_seen,
@@ -3805,7 +3807,8 @@ async def _current_koth_entries(
             bench_version=row.bench_version,
             composite_stderr=(
                 row.v9_confirmation["full_stderr_micros"] / 1_000_000
-                if row.bench_version == 9 and row.v9_confirmation is not None
+                if supports_confirmation(row.bench_version)
+                and row.v9_confirmation is not None
                 else _ledger_stderr(
                     row.details if isinstance(row.details, dict) else {},
                     quorum.get(row.agent_id, []),
@@ -3839,7 +3842,9 @@ async def _current_koth_entries(
     entries: list[KothEntry] = []
     for rank, row in enumerate(rows, start=1):
         details = row.details if isinstance(row.details, dict) else {}
-        v9_confirmed = row.bench_version == 9 and row.v9_confirmation is not None
+        v9_confirmed = (
+            supports_confirmation(row.bench_version) and row.v9_confirmation is not None
+        )
         v9_receipt = row.v9_confirmation if v9_confirmed else None
         merged: dict[int, float] = {}
         legacy_seeds = None if v9_confirmed else _confirmation_seeds(details)

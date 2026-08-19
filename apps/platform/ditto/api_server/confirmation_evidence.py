@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal, localcontext
 
 from ditto.api_models.confirmation_bundles import (
+    MIN_CONFIRMATION_BENCH_VERSION,
     AblationBudget,
     AblationDimensionEnvelope,
     ConfirmationBundleMode,
@@ -22,11 +23,18 @@ from ditto.api_models.confirmation_bundles import (
     ConfirmationEvidenceRoot,
     ConfirmationUsageTotals,
     LongMemDimensionEnvelope,
+    supports_confirmation,
 )
 from ditto_screening_protocol.confirmation import (
     CAPABILITY_ORDER,
     canonical_json,
     evidence_digest,
+)
+from ditto_screening_protocol.confirmation_transport import (
+    LONGMEM_DEEP_HISTORY_FLOOR_BENCH_VERSION,
+    LONGMEM_V10_MIN_CASES_PER_CAPABILITY,
+    LONGMEM_V10_MIN_HISTORY_BYTES,
+    LONGMEM_V10_MIN_HISTORY_SESSIONS,
 )
 
 SCORE_SCALE = 1_000_000
@@ -242,12 +250,24 @@ class ConfirmationVerificationProfile:
     inference_ablation: AblationVerificationPolicy
     embedding_ablation: AblationVerificationPolicy
     composite: CompositeVerificationPolicy
+    # Additive, defaulted to the v9 contract so every v9 construction site,
+    # checksum, and frozen release asset is byte-identical. ``payload()`` omits
+    # all three at their v9 values, mirroring Go's ``omitempty``; Go recomputes
+    # this exact payload's SHA-256 as the outer profile checksum.
+    bench_version: int = 9
+    longmem_min_history_sessions: int = 0
+    longmem_min_history_bytes: int = 0
 
     def payload(self) -> dict[str, object]:
         lanes = sorted(self.provider_lanes, key=lambda lane: lane.lane)
         return {
             "schema_version": self.schema_version,
             "revision": self.revision,
+            **(
+                {"bench_version": self.bench_version}
+                if self.bench_version != MIN_CONFIRMATION_BENCH_VERSION
+                else {}
+            ),
             "longmem_profile_revision": self.longmem_profile_revision,
             "longmem_profile_checksum": self.longmem_profile_checksum,
             "longmem_dataset_revision": self.longmem_dataset_revision,
@@ -256,6 +276,16 @@ class ConfirmationVerificationProfile:
             "longmem_selection_seed": self.longmem_selection_seed,
             "longmem_cases_per_capability": self.longmem_cases_per_capability,
             "longmem_seed_batch_pairs": self.longmem_seed_batch_pairs,
+            **(
+                {"longmem_min_history_sessions": self.longmem_min_history_sessions}
+                if self.longmem_min_history_sessions
+                else {}
+            ),
+            **(
+                {"longmem_min_history_bytes": self.longmem_min_history_bytes}
+                if self.longmem_min_history_bytes
+                else {}
+            ),
             "longmem_projection_key_sha256": self.longmem_projection_key_sha256,
             "provider_lanes": [lane.payload() for lane in lanes],
             "embedding_lane": self.embedding_lane.payload(),
@@ -280,6 +310,25 @@ class ConfirmationVerificationProfile:
     def validate(self) -> None:
         if self.schema_version != 1:
             raise ConfirmationEvidenceError("confirmation profile schema must be 1")
+        if not supports_confirmation(self.bench_version):
+            raise ConfirmationEvidenceError(
+                "confirmation profile targets an unsupported bench_version"
+            )
+        # Mirror ``longmemeval.Profile.Validate``. Rejecting here costs nothing;
+        # the same rejection inside the scorer costs a claimed ticket.
+        if self.bench_version < LONGMEM_DEEP_HISTORY_FLOOR_BENCH_VERSION:
+            if self.longmem_min_history_sessions or self.longmem_min_history_bytes:
+                raise ConfirmationEvidenceError(
+                    "bench_version 9 does not define LongMem deep-history floors"
+                )
+        elif (
+            self.longmem_cases_per_capability < LONGMEM_V10_MIN_CASES_PER_CAPABILITY
+            or self.longmem_min_history_sessions < LONGMEM_V10_MIN_HISTORY_SESSIONS
+            or self.longmem_min_history_bytes < LONGMEM_V10_MIN_HISTORY_BYTES
+        ):
+            raise ConfirmationEvidenceError(
+                "confirmation profile is below the LongMem deep-history floor"
+            )
         _require_text(self.revision, "confirmation profile revision")
         _require_text(self.longmem_profile_revision, "LongMem profile revision")
         _require_sha256(self.longmem_profile_checksum, "LongMem profile checksum")
@@ -351,17 +400,35 @@ class ConfirmationVerificationProfile:
             raise ConfirmationEvidenceError("composite weights must sum to 10000")
 
     def longmem_checksum(self) -> str:
+        """Mirror ``longmemeval.Profile.Checksum`` field for field.
+
+        Go marshals its real ``BenchVersion`` and its two ``omitempty``
+        deep-history floors here. Pinning 9 in Python made the two languages
+        agree only for v9 and silently disagree for every later epoch, which
+        surfaces as "confirmation LongMem profile checksum mismatch" after the
+        validator has already claimed the ticket.
+        """
         lanes = sorted(self.provider_lanes, key=lambda lane: lane.lane)
         return _digest(
             {
                 "schema_version": 1,
                 "revision": self.longmem_profile_revision,
-                "bench_version": 9,
+                "bench_version": self.bench_version,
                 "dataset_revision": self.longmem_dataset_revision,
                 "dataset_sha256": self.longmem_dataset_sha256,
                 "selector_revision": self.longmem_selector_revision,
                 "selection_seed": self.longmem_selection_seed,
                 "cases_per_capability": self.longmem_cases_per_capability,
+                **(
+                    {"min_history_sessions": self.longmem_min_history_sessions}
+                    if self.longmem_min_history_sessions
+                    else {}
+                ),
+                **(
+                    {"min_history_bytes": self.longmem_min_history_bytes}
+                    if self.longmem_min_history_bytes
+                    else {}
+                ),
                 "providers": [lane.longmem_profile_payload() for lane in lanes],
             }
         )
@@ -371,7 +438,8 @@ class ConfirmationVerificationProfile:
             (
                 ("contract_version", ABLATION_PROFILE_CONTRACT_VERSION),
                 ("revision", self.ablation_profile_revision),
-                ("bench_version", 9),
+                # Go builds this from ``p.benchVersion()``; see longmem_checksum.
+                ("bench_version", self.bench_version),
                 ("dataset_sha256", self.ablation_dataset_sha256),
                 (
                     "threshold_manifest_sha256",
@@ -497,7 +565,11 @@ def rebuild_confirmation_evidence(
     root = ConfirmationEvidenceRoot(
         schema_version=1,
         artifact_sha256=artifact_sha256,
-        bench_version=9,
+        # Bit-for-bit paired with ``ditto/validator/signing.py``: the validator
+        # rebuilds this exact root and compares digests. Both sides read the
+        # version off the same leased profile, so v9 roots keep their existing
+        # digest and a v12 root is version-bound instead of claiming to be v9.
+        bench_version=profile.bench_version,
         confirmation_profile_revision=profile_revision,
         confirmation_profile_checksum=profile_checksum,
         settings_revision=settings_revision,

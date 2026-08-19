@@ -34,6 +34,39 @@ _CONFIRMATION_LANE = (
     "db/queries/confirmation_bundles.py",
 )
 
+# Modules that *project* confirmation state -- ranking, the emission-adjacent
+# KOTH entries, the public board, and the frozen profile digests. These were
+# outside the sweep above, which is exactly why seven ``== 9`` literals here
+# survived the v10 and v11 carry-forwards and ranked confirmed rows on their
+# unconfirmed composite. They also contain deliberate era floors (``>= 9`` /
+# ``< 9``) and unrelated axes, so only equality against a literal is banned,
+# and each surviving exception is named below rather than tolerated by shape.
+_CONFIRMATION_PROJECTION = (
+    "api_server/confirmation_evidence.py",
+    "api_server/confirmation_profile_installation.py",
+    "api_server/endpoints/public.py",
+    "api_server/endpoints/validator.py",
+    "api_server/endpoints/validator_confirmation.py",
+    "db/queries/score_ranking.py",
+)
+
+_EQUALITY_COMPARISON = re.compile(r"bench_version\s*(==|!=)\s*\d+")
+
+# Documented non-confirmation uses of an exact bench-version literal. Each entry
+# is (module, exact source line). Adding one is a decision, not a formality.
+_PROJECTION_EXCEPTIONS = {
+    (
+        "api_server/endpoints/public.py",
+        "if bench_version == 9 or v9_base is not None",
+    ): (
+        "Selects which model-use factor family a row uses. Bench 9 always "
+        "carries a signed root; later epochs are covered by the "
+        "'or v9_base is not None' arm, and rows scored before the evidence "
+        "contract carried forward deliberately keep the legacy platform "
+        "factor instead of misreporting an enforcement zero."
+    ),
+}
+
 # A bare comparison of a bench version against a literal. This is the shape that
 # caused the outage; the lane must express the rule through the shared helper.
 _BARE_COMPARISON = re.compile(
@@ -84,3 +117,40 @@ def test_lane_never_restates_the_version_rule(relative_path: str) -> None:
     assert not offenders, (
         f"{relative_path} restates the confirmation benchmark rule: {offenders}"
     )
+
+
+@pytest.mark.parametrize("relative_path", _CONFIRMATION_PROJECTION)
+def test_projection_never_compares_a_bench_version_to_a_literal(
+    relative_path: str,
+) -> None:
+    """Ranking and display must ask the shared rule, not a remembered number.
+
+    An era floor (``>= 9``) is a different statement from "this epoch can be
+    confirmed" and stays legal here; equality against a literal is the shape
+    that silently strands the lane one epoch behind the network.
+    """
+    source = (_PLATFORM_ROOT / relative_path).read_text()
+    offenders = sorted(
+        {
+            line.strip()
+            for line in source.splitlines()
+            if _EQUALITY_COMPARISON.search(line)
+            and (relative_path, line.strip()) not in _PROJECTION_EXCEPTIONS
+        }
+    )
+    assert not offenders, (
+        f"{relative_path} restates the confirmation benchmark rule: {offenders}. "
+        "Call supports_confirmation (or confirmation_capable for SQL); if the "
+        "literal is genuinely a different axis, add it to "
+        "_PROJECTION_EXCEPTIONS with the reason."
+    )
+
+
+def test_every_declared_projection_exception_still_exists() -> None:
+    """A stale allowlist entry is a silent hole in the guard above."""
+    for (relative_path, line), reason in _PROJECTION_EXCEPTIONS.items():
+        source = (_PLATFORM_ROOT / relative_path).read_text()
+        assert any(candidate.strip() == line for candidate in source.splitlines()), (
+            f"{relative_path} no longer contains the allowlisted line {line!r} "
+            f"({reason}); remove the exception."
+        )

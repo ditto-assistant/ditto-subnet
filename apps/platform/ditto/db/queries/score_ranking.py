@@ -40,6 +40,7 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.continual_retest_settings import (
     DEFAULT_WAVE_MEMBERSHIP,
     ContinualRetestSettings,
@@ -290,7 +291,9 @@ def official_composites(
     def authoritative_quality(row: FinalizedRow) -> float:
         """The quality scalar efficiency multiplies for this benchmark era."""
         confirmation = getattr(row, "v9_confirmation", None)
-        if row.bench_version == 9 and isinstance(confirmation, Mapping):
+        if supports_confirmation(row.bench_version) and isinstance(
+            confirmation, Mapping
+        ):
             micros = confirmation.get("full_effective_micros")
             if (
                 isinstance(micros, int)
@@ -313,7 +316,7 @@ def official_composites(
             bench_version=row.bench_version,
             quorum_composites=(
                 ()
-                if row.bench_version == 9
+                if supports_confirmation(row.bench_version)
                 and getattr(row, "v9_confirmation", None) is not None
                 else tuple(quorum.get(row.agent_id, ()))
             ),
@@ -322,7 +325,7 @@ def official_composites(
                 for _seed, value in sorted(
                     (
                         {}
-                        if row.bench_version == 9
+                        if supports_confirmation(row.bench_version)
                         and getattr(row, "v9_confirmation", None) is not None
                         else completed_waves.get(row.agent_id, {})
                     ).items()

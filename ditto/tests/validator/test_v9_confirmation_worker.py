@@ -70,7 +70,9 @@ def _profile(
     *,
     revision: str = _PROFILE_REVISION,
     checksum: str = _PROFILE_CHECKSUM,
+    bench_version: int = 9,
 ) -> ConfirmationExecutionProfile:
+    deep_history = bench_version >= 10
     budget = {
         "max_chat_requests": 20,
         "max_chat_input_bytes": 20_000,
@@ -89,8 +91,11 @@ def _profile(
             "longmem_dataset_sha256": "55" * 32,
             "longmem_selector_revision": "longmemeval-s-stratified-sha256-v1",
             "longmem_selection_seed": 118,
-            "longmem_cases_per_capability": 2,
+            "longmem_cases_per_capability": 8 if deep_history else 2,
             "longmem_seed_batch_pairs": 2,
+            "bench_version": bench_version,
+            "longmem_min_history_sessions": 55 if deep_history else 0,
+            "longmem_min_history_bytes": 400_000 if deep_history else 0,
             "longmem_projection_key_sha256": "e" * 64,
             "provider_lanes": [
                 {
@@ -501,7 +506,6 @@ class TestV9ConfirmationExecution:
         artifact = _artifact(job)
         platform.request_v9_confirmation_job.return_value = job
         platform.get_v9_confirmation_artifact.return_value = artifact
-
         await worker._run_v9_confirmation_lane()
 
         platform.get_v9_confirmation_artifact.assert_awaited_once_with(job)

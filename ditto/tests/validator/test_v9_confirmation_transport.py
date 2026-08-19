@@ -116,7 +116,7 @@ def _config(hotkey: str = _HOTKEY) -> Any:
     )
 
 
-def _execution_profile() -> dict[str, Any]:
+def _execution_profile(bench_version: int = 9) -> dict[str, Any]:
     budget = {
         "max_chat_requests": 17,
         "max_chat_input_bytes": 18_000,
@@ -134,8 +134,17 @@ def _execution_profile() -> dict[str, Any]:
         "longmem_dataset_sha256": "f6" * 32,
         "longmem_selector_revision": "longmemeval-s-stratified-sha256-v1",
         "longmem_selection_seed": 8675309,
-        "longmem_cases_per_capability": 2,
+        "longmem_cases_per_capability": 2 if bench_version == 9 else 8,
         "longmem_seed_batch_pairs": 3,
+        **(
+            {}
+            if bench_version == 9
+            else {
+                "bench_version": bench_version,
+                "longmem_min_history_sessions": 55,
+                "longmem_min_history_bytes": 400_000,
+            }
+        ),
         "longmem_projection_key_sha256": "e" * 64,
         "provider_lanes": [
             {
@@ -199,7 +208,7 @@ def _execution_profile() -> dict[str, Any]:
     }
 
 
-def _job_payload() -> dict[str, Any]:
+def _job_payload(bench_version: int = 9) -> dict[str, Any]:
     return {
         "purpose": "v9_confirmation_bundle",
         "bundle_id": str(_BUNDLE_ID),
@@ -209,14 +218,14 @@ def _job_payload() -> dict[str, Any]:
         "slot_id": "longmem-3",
         "deadline": _DEADLINE.isoformat(),
         "artifact_sha256": _ARTIFACT_SHA,
-        "bench_version": 9,
+        "bench_version": bench_version,
         "settings_revision": 7,
         "settings_checksum": _SETTINGS_CHECKSUM,
         "retest_generation": 2,
         "mode": "shadow",
         "per_bundle_request_cap": 100,
         "per_bundle_token_cap": 250_000,
-        "execution_profile": _execution_profile(),
+        "execution_profile": _execution_profile(bench_version),
         "inference_grants": [
             {
                 "lane": lane,
@@ -246,8 +255,8 @@ def _job_payload() -> dict[str, Any]:
     }
 
 
-def _job() -> V9ConfirmationJobResponse:
-    return V9ConfirmationJobResponse.model_validate(_job_payload())
+def _job(bench_version: int = 9) -> V9ConfirmationJobResponse:
+    return V9ConfirmationJobResponse.model_validate(_job_payload(bench_version))
 
 
 def _report() -> V9ConfirmationCompletionReport:
@@ -261,16 +270,22 @@ def _report() -> V9ConfirmationCompletionReport:
     )
 
 
-def _scorer_result() -> V9ConfirmationScorerResult:
-    fixture_path = (
+def _scorer_result(bench_version: int = 9) -> V9ConfirmationScorerResult:
+    testdata = (
         Path(__file__).resolve().parents[3]
         / "services"
         / "dittobench-api"
         / "internal"
         / "confirmationwire"
         / "testdata"
-        / "go_confirmation_evidence_v9.json"
     )
+    # Go produces confirmation evidence only for the epochs its own
+    # ConfirmationBenchVersionSupported allows, so there is a committed vector
+    # for those and not for the intermediate carried-forward epochs. Those
+    # still exercise the transport and lease path against the v9 vector.
+    fixture_path = testdata / f"go_confirmation_evidence_v{bench_version}.json"
+    if not fixture_path.is_file():
+        fixture_path = testdata / "go_confirmation_evidence_v9.json"
     fixture = json.loads(fixture_path.read_text())
     dimensions = {
         name: V9ConfirmationRawDimension.model_validate(fixture[name])
@@ -316,7 +331,14 @@ def _worker_prepared_report(
     V9ConfirmationEvidenceRoot,
     str,
 ]:
-    scorer_result = _scorer_result()
+    """Stand in for Platform's prepare endpoint.
+
+    This mirrors ``rebuild_confirmation_evidence`` on the Platform side; the
+    root it builds is the one the validator's own rebuild must reproduce
+    digest-for-digest, so the ``bench_version`` source must be the same leased
+    profile on both sides.
+    """
+    scorer_result = _scorer_result(job.execution_profile.bench_version)
     normalized = completion_report_from_go_dimensions(
         ablation_coordinator_latency_ms=(scorer_result.ablation_coordinator_latency_ms),
         longmemeval=scorer_result.longmemeval.model_dump(mode="json"),
@@ -328,7 +350,7 @@ def _worker_prepared_report(
     expected_root = V9ConfirmationEvidenceRoot(
         schema_version=1,
         artifact_sha256=job.artifact_sha256,
-        bench_version=9,
+        bench_version=job.execution_profile.bench_version,
         confirmation_profile_revision=job.execution_profile.revision,
         confirmation_profile_checksum=job.execution_profile.checksum,
         settings_revision=job.settings_revision,
@@ -491,6 +513,9 @@ async def test_scorer_failure_diagnostic_rejects_header_drift(
 async def test_execute_forwards_the_job_confirmation_bench_version(
     bench_version: int,
 ) -> None:
+    # A later subject epoch confirmed by the installed profile: LongMemEval is
+    # a permanent fixture, so the instrument does not have to be re-versioned
+    # for every benchmark epoch it measures.
     job = _job().model_copy(
         update={
             "bench_version": bench_version,
@@ -1743,16 +1768,26 @@ async def test_v9_flow_never_invokes_legacy_top5_or_canonical_artifact_methods()
     submit_top5_confirmation_score.assert_not_awaited()
 
 
+@pytest.mark.parametrize("bench_version", [9, 12])
 async def test_worker_independently_rebuilds_every_signed_root_field(
     monkeypatch: pytest.MonkeyPatch,
+    bench_version: int,
 ) -> None:
-    job = _job().model_copy(
+    """The whole lane, end to end, on every epoch it can run under.
+
+    Claim -> scorer execute result -> Go-native wire conversion -> independently
+    rebuilt signed evidence root -> digest equality with Platform's prepared
+    root -> signature. Each of those was separately pinned to bench 9, and each
+    time the layer above was widened the next one down still refused, so the
+    lane has to be exercised as one unit rather than per boundary.
+    """
+    job = _job(bench_version).model_copy(
         update={
             "slot_id": "longmem-0",
             "deadline": datetime.now(UTC) + timedelta(hours=1),
         }
     )
-    scorer_result = _scorer_result()
+    scorer_result = _scorer_result(bench_version)
     prepared, expected_root, expected_digest = _worker_prepared_report(job)
     assert scorer_result.evidence_sha256 != expected_digest
     artifact = ArtifactResponse.model_validate(_artifact_payload())
@@ -1823,7 +1858,7 @@ async def test_worker_independently_rebuilds_every_signed_root_field(
     assert len(type(rebuilt_root).model_fields) == 14
     assert rebuilt_root.schema_version == 1
     assert rebuilt_root.artifact_sha256 == job.artifact_sha256
-    assert rebuilt_root.bench_version == 9
+    assert rebuilt_root.bench_version == bench_version
     assert rebuilt_root.confirmation_profile_revision == job.execution_profile.revision
     assert rebuilt_root.confirmation_profile_checksum == job.execution_profile.checksum
     assert rebuilt_root.settings_revision == job.settings_revision
@@ -1834,13 +1869,15 @@ async def test_worker_independently_rebuilds_every_signed_root_field(
     assert rebuilt_root.longmemeval == prepared.longmemeval
     assert rebuilt_root.inference_ablation == prepared.inference_ablation
     assert rebuilt_root.embedding_ablation == prepared.embedding_ablation
-    assert rebuilt_root.totals.model_dump() == {
-        "request_count": 24,
-        "input_tokens": 2_200,
-        "output_tokens": 220,
-        "provider_cost_microusd": 22_345,
-        "latency_ms": 4_358,
-    }
+    if bench_version == 9:
+        # Frozen v9 arithmetic; the v12 totals are covered by root equality.
+        assert rebuilt_root.totals.model_dump() == {
+            "request_count": 24,
+            "input_tokens": 2_200,
+            "output_tokens": 220,
+            "provider_cost_microusd": 22_345,
+            "latency_ms": 4_358,
+        }
     signing_spy.assert_called_once()
     assert signing_spy.call_args.kwargs["evidence_sha256"] == expected_digest
     assert signing_spy.call_args.kwargs["evidence_sha256"] != (
@@ -2164,3 +2201,37 @@ async def test_worker_cancellation_hands_back_then_reraises() -> None:
     platform.fail_v9_confirmation_job.assert_awaited_once_with(
         job, reason="cancelled", failure_class=None, failure_stage=None
     )
+
+
+def test_signed_root_digest_is_bound_to_the_confirmation_epoch() -> None:
+    """A v12 receipt can never be replayed as a v9 one, or the reverse.
+
+    ``bench_version`` is inside the canonical root, so it is inside
+    ``evidence_sha256``, which is itself inside the bundle signing message.
+    That transitive binding is why the ``:9:`` literal in the signing message
+    itself is left frozen: moving it would add a second bit-paired break
+    surface across Platform and the fleet for binding the signature already
+    has.
+    """
+    _, v9_root, v9_digest = _worker_prepared_report(_job(9))
+    _, v12_root, v12_digest = _worker_prepared_report(_job(12))
+
+    assert v9_root.bench_version == 9
+    assert v12_root.bench_version == 12
+    assert v9_digest != v12_digest
+
+
+def test_the_signed_root_records_the_instrument_epoch_not_the_subject_epoch() -> None:
+    """LongMemEval is a permanent fixture measured by the installed profile.
+
+    A bench-12 score confirmed by the installed bench-9 profile produces
+    bench-9 confirmation evidence, so the root must say 9 -- otherwise the root
+    would contradict the LongMem and ablation envelopes it contains, which Go
+    stamps from the profile it actually ran.
+    """
+    job = _job(9).model_copy(update={"bench_version": 12})
+    _, root, _ = _worker_prepared_report(job)
+
+    assert job.bench_version == 12
+    assert root.bench_version == 9
+    assert root.longmemeval.evidence.bench_version == 9

@@ -9366,6 +9366,12 @@ export interface components {
             ablation_selection_key_sha256: string;
             /** Ablation Threshold Manifest Sha256 */
             ablation_threshold_manifest_sha256: string;
+            /**
+             * Bench Version
+             * @default 9
+             * @enum {integer}
+             */
+            bench_version: 9 | 10 | 11 | 12;
             /** Checksum */
             checksum: string;
             composite: components["schemas"]["ConfirmationCompositeProfile"];
@@ -9378,6 +9384,16 @@ export interface components {
             longmem_dataset_revision: string;
             /** Longmem Dataset Sha256 */
             longmem_dataset_sha256: string;
+            /**
+             * Longmem Min History Bytes
+             * @default 0
+             */
+            longmem_min_history_bytes: number;
+            /**
+             * Longmem Min History Sessions
+             * @default 0
+             */
+            longmem_min_history_sessions: number;
             /** Longmem Profile Checksum */
             longmem_profile_checksum: string;
             /** Longmem Profile Revision */

@@ -66,7 +66,16 @@ class BaseProofKwargs(TypedDict):
     base_tool_factor_bps: int
 
 
-def verification_profile() -> ConfirmationVerificationProfile:
+def verification_profile(
+    bench_version: int = 9,
+) -> ConfirmationVerificationProfile:
+    """The frozen test profile, for any epoch the confirmation lane runs on.
+
+    Defaults to 9 so every existing caller keeps its exact fixtures; a
+    deep-history epoch adds the floors ``longmemeval.Profile.Validate``
+    requires, which is what makes the checksums differ from v9's.
+    """
+    deep_history = bench_version >= 10
     inference_budget = SyntheticBudgetPolicy(
         max_chat_requests=8,
         max_chat_input_bytes=4096,
@@ -90,8 +99,11 @@ def verification_profile() -> ConfirmationVerificationProfile:
         longmem_dataset_sha256=LONGMEM_DATASET_SHA256,
         longmem_selector_revision=LONGMEM_SELECTOR_REVISION_V1,
         longmem_selection_seed=387,
-        longmem_cases_per_capability=2,
+        longmem_cases_per_capability=8 if deep_history else 2,
         longmem_seed_batch_pairs=64,
+        bench_version=bench_version,
+        longmem_min_history_sessions=55 if deep_history else 0,
+        longmem_min_history_bytes=400_000 if deep_history else 0,
         longmem_projection_key_sha256="e" * 64,
         provider_lanes=(
             ProviderLanePolicy(
@@ -411,7 +423,7 @@ def base_proof_kwargs(
 
 
 def longmem_envelope(
-    *, artifact_sha256: str = ARTIFACT_SHA256
+    *, artifact_sha256: str = ARTIFACT_SHA256, bench_version: int = 9
 ) -> LongMemDimensionEnvelope:
     scores = [
         LongMemCapabilityScore(
@@ -461,8 +473,8 @@ def longmem_envelope(
     evidence = LongMemEvidence(
         schema_version=2,
         artifact_sha256=artifact_sha256,
-        bench_version=9,
-        profile_checksum=verification_profile().longmem_profile_checksum,
+        bench_version=bench_version,
+        profile_checksum=verification_profile(bench_version).longmem_profile_checksum,
         case_set_digest=CASE_SET_SHA256,
         dataset_revision="longmemeval-s-test-1",
         dataset_sha256=LONGMEM_DATASET_SHA256,
@@ -493,8 +505,9 @@ def ablation_envelope(
     mode: ConfirmationBundleMode = ConfirmationBundleMode.SHADOW,
     status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
     artifact_sha256: str = ARTIFACT_SHA256,
+    bench_version: int = 9,
 ) -> AblationDimensionEnvelope:
-    profile = verification_profile()
+    profile = verification_profile(bench_version)
     policy = (
         profile.inference_ablation
         if intervention == "inference"
@@ -540,7 +553,7 @@ def ablation_envelope(
     )
     evidence = AblationEvidence(
         contract_version=policy.contract_version,
-        bench_version=9,
+        bench_version=bench_version,
         artifact_sha256=artifact_sha256,
         intervention=intervention,
         mode=mode.value,
@@ -594,21 +607,26 @@ def unsigned_report(
     mode: ConfirmationBundleMode = ConfirmationBundleMode.SHADOW,
     inference_status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
     embedding_status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
+    bench_version: int = 9,
 ) -> ConfirmationCompletionReport:
     return ConfirmationCompletionReport(
         ablation_coordinator_latency_ms=200,
-        longmemeval=longmem_envelope(artifact_sha256=artifact_sha256),
+        longmemeval=longmem_envelope(
+            artifact_sha256=artifact_sha256, bench_version=bench_version
+        ),
         inference_ablation=ablation_envelope(
             "inference",
             mode=mode,
             status=inference_status,
             artifact_sha256=artifact_sha256,
+            bench_version=bench_version,
         ),
         embedding_ablation=ablation_envelope(
             "embedding",
             mode=mode,
             status=embedding_status,
             artifact_sha256=artifact_sha256,
+            bench_version=bench_version,
         ),
         bundle_signature="00",
     )
@@ -623,6 +641,8 @@ def signed_report(
     embedding_status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
     keypair: bittensor.Keypair = VALIDATOR_KEYPAIR,
 ) -> ConfirmationCompletionReport:
+    # The installed profile is the instrument; the bundle's own bench_version
+    # is the subject score's epoch and does not re-version it.
     profile = verification_profile()
     report = unsigned_report(
         artifact_sha256=bundle.artifact_sha256,

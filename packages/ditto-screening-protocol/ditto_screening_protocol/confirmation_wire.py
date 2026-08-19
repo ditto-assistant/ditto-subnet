@@ -15,6 +15,7 @@ import math
 from collections.abc import Mapping, Sequence
 from decimal import Decimal
 
+from ditto_screening_protocol.bench_v9 import supports_confirmation
 from ditto_screening_protocol.confirmation import (
     CAPABILITY_ORDER,
     AblationDimensionEnvelope,
@@ -207,8 +208,17 @@ def longmem_envelope_from_go(
     _verify_go_digest(canonical, dimension["go_evidence_sha256"], "LongMem")
     if _integer(canonical["schema_version"], "LongMem schema_version") != 2:
         raise ConfirmationWireError("LongMem evidence schema must be 2")
-    if _integer(canonical["bench_version"], "LongMem bench_version") != 9:
-        raise ConfirmationWireError("LongMem evidence must target bench_version 9")
+    # The Go producer stamps the run's real epoch here. Carry it through rather
+    # than pinning it: the ``dittobench-v9-*`` contract labels below are frozen
+    # transport names that every confirmation epoch emits verbatim, so the
+    # bench_version *field* is the only thing that distinguishes v9 from v12.
+    longmem_bench_version = _integer(
+        canonical["bench_version"], "LongMem bench_version"
+    )
+    if not supports_confirmation(longmem_bench_version):
+        raise ConfirmationWireError(
+            "LongMem evidence targets an unsupported bench_version"
+        )
     latency_ms = _integer(canonical["latency_ms"], "LongMem latency_ms")
     if latency_ms != _integer(dimension["latency_ms"], "LongMem envelope latency"):
         raise ConfirmationWireError("LongMem latency drift")
@@ -239,7 +249,7 @@ def longmem_envelope_from_go(
         {
             "schema_version": 2,
             "artifact_sha256": canonical["artifact_sha256"],
-            "bench_version": 9,
+            "bench_version": longmem_bench_version,
             "profile_checksum": canonical["profile_checksum"],
             "case_set_digest": canonical["case_set_digest"],
             "dataset_revision": canonical["dataset_revision"],
@@ -292,8 +302,13 @@ def ablation_envelope_from_go(
     )
     if canonical["contract_version"] != "dittobench-v9-ablation-v1":
         raise ConfirmationWireError("unsupported Go ablation evidence contract")
-    if _integer(canonical["bench_version"], "ablation bench_version") != 9:
-        raise ConfirmationWireError("ablation evidence must target bench_version 9")
+    ablation_bench_version = _integer(
+        canonical["bench_version"], "ablation bench_version"
+    )
+    if not supports_confirmation(ablation_bench_version):
+        raise ConfirmationWireError(
+            "ablation evidence targets an unsupported bench_version"
+        )
     if canonical["intervention"] != expected_intervention:
         raise ConfirmationWireError("ablation intervention drift")
     status = canonical["status"]
@@ -336,7 +351,7 @@ def ablation_envelope_from_go(
     evidence = AblationEvidence.model_validate(
         {
             "contract_version": canonical["contract_version"],
-            "bench_version": 9,
+            "bench_version": ablation_bench_version,
             "artifact_sha256": canonical["artifact_sha256"],
             "intervention": canonical["intervention"],
             "mode": canonical["mode"],

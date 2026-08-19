@@ -43,11 +43,22 @@ type Fixture struct {
 // BuildFixture constructs genuine validated producer evidence and serializes
 // it with encoding/json, matching what the Go service puts on the wire.
 func BuildFixture() (Fixture, error) {
-	longMem, longMemDigest, err := buildLongMemEvidence()
+	return BuildFixtureForBenchVersion(ablation.BenchVersionV9)
+}
+
+// BuildFixtureForBenchVersion builds the same contract vector for any epoch the
+// confirmation lane runs under. The frozen "v9" contract labels are unchanged
+// across epochs by design; only the bench_version *field* moves, which is
+// precisely the thing the Python wire converter must carry rather than pin.
+func BuildFixtureForBenchVersion(benchVersion int) (Fixture, error) {
+	if !ablation.ConfirmationBenchVersionSupported(benchVersion) {
+		return Fixture{}, fmt.Errorf("unsupported confirmation bench version %d", benchVersion)
+	}
+	longMem, longMemDigest, err := buildLongMemEvidence(benchVersion)
 	if err != nil {
 		return Fixture{}, err
 	}
-	inference, embedding, err := buildAblationEvidence()
+	inference, embedding, err := buildAblationEvidence(benchVersion)
 	if err != nil {
 		return Fixture{}, err
 	}
@@ -75,7 +86,12 @@ func BuildFixture() (Fixture, error) {
 // review diffs. Evidence digests still cover each producer's compact canonical
 // JSON, not this presentation wrapper.
 func MarshalFixture() ([]byte, error) {
-	fixture, err := BuildFixture()
+	return MarshalFixtureForBenchVersion(ablation.BenchVersionV9)
+}
+
+// MarshalFixtureForBenchVersion is MarshalFixture for one confirmation epoch.
+func MarshalFixtureForBenchVersion(benchVersion int) ([]byte, error) {
+	fixture, err := BuildFixtureForBenchVersion(benchVersion)
 	if err != nil {
 		return nil, err
 	}
@@ -86,16 +102,26 @@ func MarshalFixture() ([]byte, error) {
 	return append(raw, '\n'), nil
 }
 
-func buildLongMemEvidence() (longmemeval.Evidence, string, error) {
+func buildLongMemEvidence(benchVersion int) (longmemeval.Evidence, string, error) {
+	casesPerCapability := 2
+	minHistorySessions := 0
+	minHistoryBytes := 0
+	if benchVersion >= 10 {
+		casesPerCapability = longmemeval.V10MinCasesPerCapability
+		minHistorySessions = longmemeval.V10MinHistorySessions
+		minHistoryBytes = longmemeval.V10MinHistoryBytes
+	}
 	profile := longmemeval.Profile{
 		SchemaVersion:      longmemeval.ProfileSchemaVersion,
 		Revision:           "longmem-launch-v1",
-		BenchVersion:       9,
+		BenchVersion:       benchVersion,
 		DatasetRevision:    "longmemeval-s-2026-08-08",
 		DatasetSHA256:      longMemDatasetSHA256,
 		SelectorRevision:   longmemeval.SelectorRevisionV1,
 		SelectionSeed:      387,
-		CasesPerCapability: 2,
+		CasesPerCapability: casesPerCapability,
+		MinHistorySessions: minHistorySessions,
+		MinHistoryBytes:    minHistoryBytes,
 		Providers: []longmemeval.ProviderPolicy{
 			{
 				Lane:                "judge",
@@ -134,6 +160,9 @@ func buildLongMemEvidence() (longmemeval.Evidence, string, error) {
 		{QuestionID: "preference-b", QuestionType: "single-session-preference"},
 		{QuestionID: "abstention-a_abs", QuestionType: "single-session-user"},
 		{QuestionID: "abstention-b_abs", QuestionType: "single-session-user"},
+	}
+	if casesPerCapability != 2 {
+		cases = deepHistoryCases(casesPerCapability)
 	}
 	selection, err := longmemeval.Select(profile, cases)
 	if err != nil {
@@ -239,7 +268,31 @@ func (fixtureRunner) RunCase(
 	}
 }
 
-func buildAblationEvidence() (ablation.Evaluation, ablation.Evaluation, error) {
+func deepHistoryCases(casesPerCapability int) []longmemeval.Case {
+	// One deterministic question type per capability, mirroring the v9 list.
+	types := []string{
+		"single-session-user",
+		"multi-session",
+		"temporal-reasoning",
+		"knowledge-update",
+		"single-session-preference",
+		"single-session-user",
+	}
+	names := []string{"extraction", "multi", "temporal", "knowledge", "preference", "abstention"}
+	cases := make([]longmemeval.Case, 0, len(names)*casesPerCapability)
+	for index, name := range names {
+		for ordinal := range casesPerCapability {
+			id := fmt.Sprintf("%s-%02d", name, ordinal)
+			if name == "abstention" {
+				id += "_abs"
+			}
+			cases = append(cases, longmemeval.Case{QuestionID: id, QuestionType: types[index]})
+		}
+	}
+	return cases
+}
+
+func buildAblationEvidence(benchVersion int) (ablation.Evaluation, ablation.Evaluation, error) {
 	selectionKey := []byte("selection-key-32-bytes-long-fixed!")
 	projectionKey := []byte("projection-key-32-bytes-long-fixed")
 	policy := ablation.CoordinatorPolicy{
@@ -258,7 +311,7 @@ func buildAblationEvidence() (ablation.Evaluation, ablation.Evaluation, error) {
 	profile := ablation.FrozenProfile{
 		ContractVersion:         ablation.ProfileContractVersion,
 		Revision:                "ablation-launch-v1",
-		BenchVersion:            ablation.BenchVersionV9,
+		BenchVersion:            benchVersion,
 		DatasetSHA256:           ablationDatasetSHA256,
 		ThresholdManifestSHA256: thresholdManifestSHA256,
 		SelectionKeySHA256:      bytesSHA256(selectionKey),
@@ -299,7 +352,7 @@ func buildAblationEvidence() (ablation.Evaluation, ablation.Evaluation, error) {
 	report, err := coordinator.Coordinate(
 		context.Background(),
 		ablation.EligiblePopulation{
-			BenchVersion: ablation.BenchVersionV9,
+			BenchVersion: benchVersion,
 			Confirmation: true,
 			Cases: []ablation.EligibleCase{
 				{CaseID: "case-a", UserID: "private-user-a"},
@@ -319,7 +372,7 @@ func buildAblationEvidence() (ablation.Evaluation, ablation.Evaluation, error) {
 			return ablation.Evaluation{}, gateErr
 		}
 		return ablation.Evaluate(ablation.EvaluateInput{
-			BenchVersion:            ablation.BenchVersionV9,
+			BenchVersion:            benchVersion,
 			ArtifactSHA256:          artifactSHA256,
 			Intervention:            intervention,
 			Mode:                    ablation.ModeShadow,

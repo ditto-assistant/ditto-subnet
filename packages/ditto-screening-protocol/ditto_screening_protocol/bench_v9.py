@@ -48,7 +48,10 @@ def normalize_v9_score_report_omitempty(value: object) -> object:
 
     if not isinstance(value, Mapping):
         return value
-    if value.get("bench_version") not in (9, 10, 11) or "composite_stderr" in value:
+    if (
+        value.get("bench_version") not in V9_EVIDENCE_BENCH_VERSIONS
+        or "composite_stderr" in value
+    ):
         return value
     details = value.get("details")
     if not isinstance(details, Mapping):
@@ -115,7 +118,17 @@ score a carried-forward validator reported. Extend the alias when the evidence
 contract reaches a new epoch, and every consumer moves with it.
 """
 
-CONFIRMATION_BENCH_VERSIONS: tuple[int, ...] = get_args(V9EvidenceBenchVersion)
+V9_EVIDENCE_BENCH_VERSIONS: tuple[int, ...] = get_args(V9EvidenceBenchVersion)
+"""Every epoch whose reports carry the signed v9 base-evidence stack.
+
+Derived from the alias, never restated. ``normalize_v9_score_report_omitempty``
+above reads this: an enforced gate can zero both the composite and its stderr,
+Go omits the zero stderr, and a report whose epoch is missing here therefore
+fails ``ScoreReport`` validation instead of landing as the zero the gate found.
+A hand-written ``(9, 10, 11)`` there is what stranded bench 12 in that state.
+"""
+
+CONFIRMATION_BENCH_VERSIONS: tuple[int, ...] = V9_EVIDENCE_BENCH_VERSIONS
 """Every epoch the confirmation lane can run on, derived from the alias above.
 
 Derived, never restated. The LongMem confirmation lane projects the signed base

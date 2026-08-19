@@ -45,8 +45,15 @@ _ZERO_LONGMEM_FIXTURE_PATH = (
 )
 
 
+_V12_FIXTURE_PATH = _FIXTURE_PATH.with_name("go_confirmation_evidence_v12.json")
+
+
 def _fixture() -> dict[str, object]:
     return json.loads(_FIXTURE_PATH.read_text())
+
+
+def _v12_fixture() -> dict[str, object]:
+    return json.loads(_V12_FIXTURE_PATH.read_text())
 
 
 def _report() -> ConfirmationCompletionReport:
@@ -321,3 +328,79 @@ def test_counterfactual_reason_cannot_label_a_completed_result() -> None:
 
     with pytest.raises(ValidationError, match="active unavailable"):
         AblationEvidence.model_validate(evidence)
+
+
+def test_go_evidence_carries_its_own_bench_version_through_the_wire() -> None:
+    """The converter is the boundary the whole v12 lane died at.
+
+    ``signing.py`` runs every scorer confirmation result through this converter
+    before the validator will sign anything, so a pinned ``!= 9`` here failed
+    every v12 bundle as "scorer confirmation native evidence is invalid" after
+    the ticket, the slot, and the provider spend were already consumed. The
+    fixture is evidence Go actually produced at bench 12, not a hand edit of
+    the v9 bytes, so this also proves the two producers agree on the field.
+    """
+    report = completion_report_from_go_fixture(
+        _v12_fixture(),
+        ablation_coordinator_latency_ms=444,
+    )
+
+    assert report.longmemeval.evidence.bench_version == 12
+    assert report.inference_ablation.evidence.bench_version == 12
+    assert report.embedding_ablation.evidence.bench_version == 12
+
+
+def test_frozen_transport_labels_do_not_move_with_the_epoch() -> None:
+    """The version travels in a field; the contract names stay put.
+
+    Renaming ``dittobench-v9-ablation-v1`` or the ``dittobench.v9.ablation.*``
+    telemetry namespace would be a coordinated multi-component break, and Go
+    emits both verbatim for v12.
+    """
+    report = completion_report_from_go_fixture(
+        _v12_fixture(),
+        ablation_coordinator_latency_ms=444,
+    )
+
+    assert report.inference_ablation.evidence.contract_version == (
+        "dittobench-v9-ablation-v1"
+    )
+    assert report.embedding_ablation.evidence.contract_version == (
+        "dittobench-v9-ablation-v1"
+    )
+
+
+def test_evidence_from_an_unconfirmable_epoch_is_refused() -> None:
+    """Widening must not become "accept whatever the producer claims".
+
+    The producer's own digest is re-derived here so the rejection is proved on
+    the bench_version check itself, not incidentally on a digest mismatch.
+    """
+    raw = _v12_fixture()
+    longmem = raw["longmemeval"]
+    assert isinstance(longmem, dict)
+    evidence = longmem["evidence"]
+    assert isinstance(evidence, dict)
+    evidence["bench_version"] = 8
+    longmem["go_evidence_sha256"] = hashlib.sha256(
+        json.dumps(evidence, ensure_ascii=False, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    with pytest.raises(ConfirmationWireError, match="unsupported bench_version"):
+        longmem_envelope_from_go(longmem)
+
+
+def test_v9_and_v12_evidence_digests_are_distinct() -> None:
+    """The epoch is inside the signed digest, so the two can never be swapped."""
+    v9 = completion_report_from_go_fixture(
+        _fixture(), ablation_coordinator_latency_ms=444
+    )
+    v12 = completion_report_from_go_fixture(
+        _v12_fixture(), ablation_coordinator_latency_ms=444
+    )
+
+    assert v9.longmemeval.evidence_sha256 != v12.longmemeval.evidence_sha256
+    assert (
+        v9.inference_ablation.evidence_sha256
+        != v12.inference_ablation.evidence_sha256
+    )

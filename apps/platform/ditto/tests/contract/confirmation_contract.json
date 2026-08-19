@@ -303,6 +303,16 @@
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
       },
+      "bench_version": {
+        "default": 9,
+        "enum": [
+          9,
+          10,
+          11,
+          12
+        ],
+        "type": "integer"
+      },
       "checksum": {
         "maxLength": 64,
         "minLength": 64,
@@ -335,6 +345,16 @@
         "minLength": 64,
         "pattern": "^[0-9a-f]{64}$",
         "type": "string"
+      },
+      "longmem_min_history_bytes": {
+        "default": 0,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "longmem_min_history_sessions": {
+        "default": 0,
+        "minimum": 0,
+        "type": "integer"
       },
       "longmem_profile_checksum": {
         "maxLength": 64,
@@ -829,6 +849,16 @@
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
           },
+          "bench_version": {
+            "default": 9,
+            "enum": [
+              9,
+              10,
+              11,
+              12
+            ],
+            "type": "integer"
+          },
           "checksum": {
             "maxLength": 64,
             "minLength": 64,
@@ -861,6 +891,16 @@
             "minLength": 64,
             "pattern": "^[0-9a-f]{64}$",
             "type": "string"
+          },
+          "longmem_min_history_bytes": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "longmem_min_history_sessions": {
+            "default": 0,
+            "minimum": 0,
+            "type": "integer"
           },
           "longmem_profile_checksum": {
             "maxLength": 64,

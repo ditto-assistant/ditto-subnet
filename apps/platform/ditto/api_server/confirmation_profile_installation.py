@@ -8,6 +8,7 @@ short-lived capabilities attached to one signed validator lease.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from fnmatch import fnmatch
 from importlib.resources import files
 from types import MappingProxyType
 
@@ -26,6 +27,7 @@ from ditto_screening_protocol.confirmation_transport import (
 )
 
 _PROFILE_RESOURCE = "confirmation_execution_profile_v9_shadow.json"
+_PROFILE_RESOURCE_GLOB = "confirmation_execution_profile_v*_shadow.json"
 
 
 class ConfirmationProfileInstallationError(ValueError):
@@ -76,6 +78,9 @@ def decode_confirmation_verification_profile(
             longmem_selection_seed=wire.longmem_selection_seed,
             longmem_cases_per_capability=wire.longmem_cases_per_capability,
             longmem_seed_batch_pairs=wire.longmem_seed_batch_pairs,
+            bench_version=wire.bench_version,
+            longmem_min_history_sessions=wire.longmem_min_history_sessions,
+            longmem_min_history_bytes=wire.longmem_min_history_bytes,
             longmem_projection_key_sha256=wire.longmem_projection_key_sha256,
             provider_lanes=provider_lanes,
             embedding_lane=embedding_lane,
@@ -113,19 +118,41 @@ def decode_confirmation_verification_profile(
 def installed_confirmation_verification_profiles() -> Mapping[
     tuple[str, str], ConfirmationVerificationProfile
 ]:
-    """Return the immutable registry supported by this Platform release."""
+    """Return the immutable registry supported by this Platform release.
+
+    Every ``confirmation_execution_profile_v*_shadow.json`` shipped in the
+    protocol data package is installed, keyed by its own (revision, checksum).
+    One epoch per release asset: shipping a later epoch's lane is dropping in
+    its reviewed asset, not editing this module. The v9 asset is required, so a
+    release that loses it fails loudly instead of serving an empty registry.
+    """
+    resources = files("ditto_screening_protocol.data")
     try:
-        raw = (
-            files("ditto_screening_protocol.data")
-            .joinpath(_PROFILE_RESOURCE)
-            .read_bytes()
+        names = sorted(
+            entry.name
+            for entry in resources.iterdir()
+            if entry.is_file() and fnmatch(entry.name, _PROFILE_RESOURCE_GLOB)
         )
-    except (FileNotFoundError, ModuleNotFoundError) as error:
+    except (FileNotFoundError, ModuleNotFoundError, OSError) as error:
         raise ConfirmationProfileInstallationError(
             "confirmation execution profile release asset is unavailable"
         ) from error
-    profile = decode_confirmation_verification_profile(raw)
-    return MappingProxyType({(profile.revision, profile.checksum()): profile})
+    if _PROFILE_RESOURCE not in names:
+        raise ConfirmationProfileInstallationError(
+            "confirmation execution profile release asset is unavailable"
+        )
+    registry: dict[tuple[str, str], ConfirmationVerificationProfile] = {}
+    for name in names:
+        profile = decode_confirmation_verification_profile(
+            resources.joinpath(name).read_bytes()
+        )
+        key = (profile.revision, profile.checksum())
+        if key in registry:
+            raise ConfirmationProfileInstallationError(
+                "confirmation execution profile identity is installed twice"
+            )
+        registry[key] = profile
+    return MappingProxyType(registry)
 
 
 __all__ = [

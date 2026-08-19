@@ -42,10 +42,29 @@ DATA = (
     ROOT / "packages" / "ditto-screening-protocol" / "ditto_screening_protocol" / "data"
 )
 ABLATION_DATASET = DATA / "confirmation_ablation_v9_shadow.json"
-THRESHOLD_MANIFEST = DATA / "confirmation_ablation_thresholds_v9_shadow.json"
-EXECUTION_PROFILE = DATA / "confirmation_execution_profile_v9_shadow.json"
-LAUNCH_MANIFEST = DATA / "confirmation_launch_manifest_v9_shadow.json"
-INSTALLATION = DATA / "confirmation_installation_v9_shadow.json"
+
+# The v9 assets are frozen release data: the compose SHA-256 pin, the installed
+# Platform registry, and the Go runtime factory all read these exact bytes. A
+# later epoch is written as a *sibling* set, never by mutating these.
+BENCH_VERSION_V9 = 9
+
+
+def _asset_paths(bench_version: int) -> tuple[Path, Path, Path, Path]:
+    suffix = f"v{bench_version}_shadow"
+    return (
+        DATA / f"confirmation_ablation_thresholds_{suffix}.json",
+        DATA / f"confirmation_execution_profile_{suffix}.json",
+        DATA / f"confirmation_launch_manifest_{suffix}.json",
+        DATA / f"confirmation_installation_{suffix}.json",
+    )
+
+
+(
+    THRESHOLD_MANIFEST,
+    EXECUTION_PROFILE,
+    LAUNCH_MANIFEST,
+    INSTALLATION,
+) = _asset_paths(BENCH_VERSION_V9)
 
 LONGMEM_DATASET_SHA256 = (
     "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
@@ -59,6 +78,14 @@ LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-12-zdr-v3"
 ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-4-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
 STARTER_MAX_AGENT_TURNS = 24
+
+# Deep-history floors every epoch after v9 must meet, mirroring
+# ``internal/longmemeval/profile.go``. The scorer validates the profile it is
+# handed against exactly these numbers.
+DEEP_HISTORY_FLOOR_BENCH_VERSION = 10
+V10_MIN_CASES_PER_CAPABILITY = 8
+V10_MIN_HISTORY_SESSIONS = 55
+V10_MIN_HISTORY_BYTES = 400_000
 
 
 def _sha256(raw: bytes) -> str:
@@ -80,7 +107,54 @@ def _json_bytes(value: Any) -> bytes:
     return (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 
 
-def _outputs() -> dict[Path, bytes]:
+def _scale_for_deep_history(
+    profile: ConfirmationVerificationProfile, bench_version: int
+) -> ConfirmationVerificationProfile:
+    """Lift a v9 profile onto a deep-history epoch by derivation, not invention.
+
+    Every rail below is the v9 rail multiplied by the growth in selected cases,
+    so the per-case budget policy an operator already approved for v9 is
+    carried forward unchanged rather than re-guessed. The absolute cost this
+    implies is materially larger than v9's, which is exactly why the resulting
+    asset is a reviewable artifact and not something this script writes by
+    default.
+    """
+    growth, remainder = divmod(
+        V10_MIN_CASES_PER_CAPABILITY, profile.longmem_cases_per_capability
+    )
+    if remainder or growth < 1:
+        raise ValueError("deep-history case count must be a multiple of the v9 count")
+    return replace(
+        profile,
+        bench_version=bench_version,
+        longmem_cases_per_capability=V10_MIN_CASES_PER_CAPABILITY,
+        longmem_min_history_sessions=V10_MIN_HISTORY_SESSIONS,
+        longmem_min_history_bytes=V10_MIN_HISTORY_BYTES,
+        provider_lanes=tuple(
+            replace(
+                lane,
+                max_requests=lane.max_requests * growth,
+                max_prompt_tokens=lane.max_prompt_tokens * growth,
+                max_completion_tokens=lane.max_completion_tokens * growth,
+                max_total_tokens=lane.max_total_tokens * growth,
+                max_cost_usd_micros=lane.max_cost_usd_micros * growth,
+            )
+            for lane in profile.provider_lanes
+        ),
+        embedding_lane=replace(
+            profile.embedding_lane,
+            max_requests=profile.embedding_lane.max_requests * growth,
+            max_input_tokens=profile.embedding_lane.max_input_tokens * growth,
+            max_cost_usd_micros=profile.embedding_lane.max_cost_usd_micros * growth,
+        ),
+    )
+
+
+def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
+    threshold_path, profile_path, launch_path, installation_path = _asset_paths(
+        bench_version
+    )
+    tag = f"v{bench_version}"
     ablation_sha = _file_sha256(ABLATION_DATASET)
     thresholds = {
         "schema_version": 1,
@@ -196,6 +270,14 @@ def _outputs() -> dict[Path, bytes]:
             longmem_weight_bps=3_000,
         ),
     )
+    if bench_version != BENCH_VERSION_V9:
+        profile = replace(
+            _scale_for_deep_history(profile, bench_version),
+            revision=PROFILE_REVISION.replace("v9-", f"{tag}-", 1),
+            longmem_profile_revision=LONGMEM_PROFILE_REVISION.replace(
+                "-v9-", f"-{tag}-", 1
+            ),
+        )
     profile = replace(
         profile,
         longmem_profile_checksum=profile.longmem_checksum(),
@@ -214,7 +296,11 @@ def _outputs() -> dict[Path, bytes]:
 
     launch = {
         "schema_version": 1,
-        "revision": "v9-confirmation-shadow-launch-2026-08-15-zdr-v3",
+        "revision": "v9-confirmation-shadow-launch-2026-08-15-zdr-v3".replace(
+            "v9-", f"{tag}-", 1
+        )
+        if bench_version != BENCH_VERSION_V9
+        else "v9-confirmation-shadow-launch-2026-08-15-zdr-v3",
         "mode": "shadow",
         "execution_profile_revision": profile.revision,
         "execution_profile_checksum": profile.checksum(),
@@ -227,11 +313,23 @@ def _outputs() -> dict[Path, bytes]:
         },
         "issuance_caps": {
             "daily_bundles": 1,
-            "daily_cost_microusd": 5_000_000,
+            # v9's caps are frozen literals with their arithmetic in a comment;
+            # a deep-history epoch derives the same quantities from its own
+            # frozen lanes so the cost of the larger case set is explicit.
+            "daily_cost_microusd": 5_000_000
+            if bench_version == BENCH_VERSION_V9
+            else profile.embedding_lane.max_cost_usd_micros
+            + sum(lane.max_cost_usd_micros for lane in profile.provider_lanes),
             # embedding 5,000 + reader 288 + judge 12.
-            "requests_per_bundle": 5_300,
+            "requests_per_bundle": 5_300
+            if bench_version == BENCH_VERSION_V9
+            else profile.embedding_lane.max_requests
+            + sum(lane.max_requests for lane in profile.provider_lanes),
             # embedding 5m + reader 4.176m + judge 26k, rounded up.
-            "tokens_per_bundle": 9_300_000,
+            "tokens_per_bundle": 9_300_000
+            if bench_version == BENCH_VERSION_V9
+            else profile.embedding_lane.max_input_tokens
+            + sum(lane.max_total_tokens for lane in profile.provider_lanes),
         },
         "guarantees": {
             "changes_canonical_scores": False,
@@ -256,9 +354,7 @@ def _outputs() -> dict[Path, bytes]:
         "schema_version": 1,
         "execution_profile": execution_payload,
         "launch_manifest_sha256": _sha256(launch_raw),
-        "launch_manifest_path": (
-            "/opt/ditto/confirmation/confirmation_launch_manifest_v9_shadow.json"
-        ),
+        "launch_manifest_path": f"/opt/ditto/confirmation/{launch_path.name}",
         "longmem_dataset_path": ("/opt/ditto/confirmation/longmemeval_s_cleaned.json"),
         "ablation_dataset_path": (
             "/opt/ditto/confirmation/confirmation_ablation_v9_shadow.json"
@@ -267,10 +363,10 @@ def _outputs() -> dict[Path, bytes]:
     }
     installation_raw = _json_bytes(installation)
     return {
-        THRESHOLD_MANIFEST: threshold_raw,
-        EXECUTION_PROFILE: profile_raw,
-        LAUNCH_MANIFEST: launch_raw,
-        INSTALLATION: installation_raw,
+        threshold_path: threshold_raw,
+        profile_path: profile_raw,
+        launch_path: launch_raw,
+        installation_path: installation_raw,
     }
 
 
@@ -281,8 +377,20 @@ def main() -> int:
         action="store_true",
         help="fail if checked-in generated assets do not have exact bytes",
     )
+    parser.add_argument(
+        "--bench-version",
+        type=int,
+        default=BENCH_VERSION_V9,
+        help=(
+            "confirmation epoch to freeze. The v9 assets are the shipped "
+            "release data; a later epoch writes a sibling asset set whose "
+            "provider rails are the v9 per-case rails scaled by the "
+            "deep-history case growth, and is a cost decision to review "
+            "before it is committed or installed."
+        ),
+    )
     args = parser.parse_args()
-    outputs = _outputs()
+    outputs = _outputs(args.bench_version)
     failures: list[str] = []
     for path, raw in outputs.items():
         if args.check:

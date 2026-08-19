@@ -144,6 +144,7 @@ from ditto.api_models import bench_glossary as bench_glossary_data
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgressStage
+from ditto.api_models.confirmation_bundles import supports_confirmation
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.model_use import ModelUseVerdict
 from ditto.api_models.public import (
@@ -1993,7 +1994,7 @@ def _public_entry(
     # model-use factor instead of misreporting an enforcement zero.
     platform_model_use_factor = (
         1.0
-        if bench_version == 9
+        if supports_confirmation(bench_version)
         and v9_confirmation is not None
         and v9_confirmation.result_status == "full_confirmed"
         else (
@@ -2043,7 +2044,7 @@ def _public_entry(
     return PublicLeaderboardEntry(
         rank=(
             None
-            if bench_version == 9
+            if supports_confirmation(bench_version)
             and not finalized
             and (
                 v9_confirmation is None
@@ -2074,7 +2075,7 @@ def _public_entry(
         v9_confirmation_status=(
             v9_confirmation.result_status
             if v9_confirmation is not None
-            else ("base_only" if bench_version == 9 else None)
+            else ("base_only" if supports_confirmation(bench_version) else None)
         ),
         v9_full_confirmed_composite=(
             v9_confirmation.full_confirmed_composite
@@ -2267,7 +2268,9 @@ def _public_koth_emissions(
 
     fold_entries = []
     for raw_rank, row in enumerate(candidates, start=1):
-        v9_confirmed = row.bench_version == 9 and row.v9_confirmation is not None
+        v9_confirmed = (
+            supports_confirmation(row.bench_version) and row.v9_confirmation is not None
+        )
         details = row.details if isinstance(row.details, dict) else {}
         merged_confirmations: dict[int, float] = {}
         legacy_seeds = (
@@ -2681,7 +2684,7 @@ async def build_public_leaderboard(
     # for public visibility: these rows are appended only to the provisional
     # section below, so they cannot rank, appear finalized, or earn emissions.
     v9_display_rows: list[LedgerRow] = []
-    if display_version == 9 and v9_confirmation_mode == "enforce":
+    if supports_confirmation(display_version) and v9_confirmation_mode == "enforce":
         authoritative_ids = {row.agent_id for row in ledger_rows}
         v9_display_rows = [
             replace(row, eligible=False)
@@ -2690,7 +2693,7 @@ async def build_public_leaderboard(
                 include_fingerprints=False,
                 include_details=False,
                 include_family_members=True,
-                bench_version=9,
+                bench_version=display_version,
                 owner_score="canonical",
                 apply_v9_confirmation_policy=False,
             )
@@ -2709,7 +2712,8 @@ async def build_public_leaderboard(
     fold_stderrs = {
         row.agent_id: (
             row.v9_confirmation["full_stderr_micros"] / 1_000_000
-            if row.bench_version == 9 and row.v9_confirmation is not None
+            if supports_confirmation(row.bench_version)
+            and row.v9_confirmation is not None
             else _ledger_stderr(
                 (
                     {"composite_stderr": row.stored_composite_stderr}
@@ -3006,7 +3010,9 @@ async def build_public_leaderboard(
     rows = finalized_rows + [row for row, _count in provisional_rows]
     v9_confirmations = await v9_confirmation_public_projections(
         session,
-        agent_ids=[row.agent_id for row in rows if row.bench_version == 9],
+        agent_ids=[
+            row.agent_id for row in rows if supports_confirmation(row.bench_version)
+        ],
     )
     # The run ledger is append-only for its retention window, and a grant never
     # records its own outcome: ``status`` tracks budget and revocation, so it is
@@ -4425,7 +4431,9 @@ def _submission_scores(
             v9_confirmation.result_status
             if v9_confirmation is not None
             else (
-                "base_only" if any(s.bench_version == 9 for s in row.scores) else None
+                "base_only"
+                if any(supports_confirmation(s.bench_version) for s in row.scores)
+                else None
             )
         ),
         v9_full_confirmed_composite=(

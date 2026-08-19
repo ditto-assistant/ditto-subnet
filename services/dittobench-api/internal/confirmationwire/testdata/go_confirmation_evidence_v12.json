@@ -1,0 +1,190 @@
+{
+  "fixture_schema": "dittobench-v9-confirmation-go-evidence-v1",
+  "longmemeval": {
+    "go_evidence_sha256": "de9d0033f61192c4ef5a707da7baec38b2d0342a40704b3c6ac154febf2c9c79",
+    "latency_ms": 4321,
+    "evidence": {
+      "schema_version": 2,
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "bench_version": 12,
+      "profile_checksum": "b9d31d1c60e7fc740757d72c11ade3951e637843e80efda23db90cee1df95d7a",
+      "case_set_digest": "6271a10b48c924cb026ddc4cd80b4d6b36b9d316c1d90e0a5c727fc40f35698b",
+      "dataset_revision": "longmemeval-s-2026-08-08",
+      "dataset_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "latency_ms": 4321,
+      "score": {
+        "longmem_mean": 0.5,
+        "longmem_stderr": 0.077152,
+        "case_count": 48,
+        "per_capability": [
+          {
+            "capability": "extraction",
+            "correct": 4,
+            "count": 8,
+            "mean": 0.5
+          },
+          {
+            "capability": "multi_session_reasoning",
+            "correct": 4,
+            "count": 8,
+            "mean": 0.5
+          },
+          {
+            "capability": "temporal_reasoning",
+            "correct": 4,
+            "count": 8,
+            "mean": 0.5
+          },
+          {
+            "capability": "knowledge_update",
+            "correct": 4,
+            "count": 8,
+            "mean": 0.5
+          },
+          {
+            "capability": "preference",
+            "correct": 4,
+            "count": 8,
+            "mean": 0.5
+          },
+          {
+            "capability": "abstention",
+            "correct": 4,
+            "count": 8,
+            "mean": 0.5
+          }
+        ]
+      },
+      "provider_evidence": [
+        {
+          "lane": "judge",
+          "cost_source": "provider_receipt_v1",
+          "currency": "USD",
+          "provider": "openrouter",
+          "profile_revision": "longmem-judge-v1",
+          "model": "openai/gpt-oss-20b",
+          "fallback_used": false,
+          "requests": 12,
+          "successes": 12,
+          "receipted_requests": 12,
+          "prompt_tokens": 1200,
+          "completion_tokens": 120,
+          "total_tokens": 1320,
+          "cost_usd_micros": 12345,
+          "receipt_set_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+        },
+        {
+          "lane": "reader",
+          "cost_source": "provider_receipt_v1",
+          "currency": "USD",
+          "provider": "openrouter",
+          "profile_revision": "longmem-reader-v1",
+          "model": "openai/gpt-oss-20b",
+          "fallback_used": false,
+          "requests": 12,
+          "successes": 12,
+          "receipted_requests": 12,
+          "prompt_tokens": 1000,
+          "completion_tokens": 100,
+          "total_tokens": 1100,
+          "cost_usd_micros": 10000,
+          "receipt_set_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+        }
+      ]
+    }
+  },
+  "inference_ablation": {
+    "go_evidence_sha256": "6a8aadee75f687cc09e43b8738139d3be41df30607541f3df2c44c1b8136a473",
+    "latency_ms": 111,
+    "evidence": {
+      "contract_version": "dittobench-v9-ablation-v1",
+      "bench_version": 12,
+      "intervention": "inference",
+      "mode": "shadow",
+      "status": "failed",
+      "reason": "delta_below_threshold",
+      "profile_revision": "ablation-launch-v1",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ablation_profile_sha256": "5e333116021a2540c1fbf4b8f3151ca7c4560d3501a67557b6adf9de74e23ec3",
+      "coordinator_sha256": "951c40d9463889e30ada2e305fe000a1547ded4c52b0f81ce4eff4fe2e9fffcc",
+      "selected_cases_sha256": "7486b50c34ba6375ce44de83e4ffcfc6a4d98b55581e18eefeaf7555db226094",
+      "threshold_manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "dataset_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "case_set_sha256": "0acfb9b6566c0ce2d4d628352cfbaa6871dec4a2b9de242d32a2407e3d529d7e",
+      "baseline_scores_sha256": "9a22d3df4610e0fd29ba35e1f3b91f46449d60b37eef872b1fcd5eab6749e33a",
+      "ablated_scores_sha256": "6012d5a68bdb034ef16be983da3fbd781b0eb60cebbb0797ecbc45ccd5a0714c",
+      "baseline_mean": 0.9,
+      "ablated_mean": 0.8,
+      "delta": 0.1,
+      "threshold": 0.2,
+      "sample_count": 2,
+      "affected_call_count": 4,
+      "semantic_factor": 0,
+      "applied_factor": 1,
+      "synthetic_usage": {
+        "synthetic": true,
+        "telemetry_namespace": "dittobench.v9.ablation.inference",
+        "intervention": "inference",
+        "budget": {
+          "max_chat_requests": 4,
+          "max_chat_input_bytes": 256
+        },
+        "chat_attempts": 4,
+        "chat_applied": 4,
+        "chat_input_bytes": 80,
+        "upstream_requests": 0,
+        "upstream_input_tokens": 0,
+        "upstream_output_tokens": 0,
+        "upstream_provider_cost_microusd": 0
+      }
+    }
+  },
+  "embedding_ablation": {
+    "go_evidence_sha256": "11440ceafee52bc28be1eeada32acbb72b8cbb8a10e9cecc56753008219a2795",
+    "latency_ms": 222,
+    "evidence": {
+      "contract_version": "dittobench-v9-ablation-v1",
+      "bench_version": 12,
+      "intervention": "embedding",
+      "mode": "shadow",
+      "status": "failed",
+      "reason": "delta_below_threshold",
+      "profile_revision": "ablation-launch-v1",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ablation_profile_sha256": "5e333116021a2540c1fbf4b8f3151ca7c4560d3501a67557b6adf9de74e23ec3",
+      "coordinator_sha256": "951c40d9463889e30ada2e305fe000a1547ded4c52b0f81ce4eff4fe2e9fffcc",
+      "selected_cases_sha256": "7486b50c34ba6375ce44de83e4ffcfc6a4d98b55581e18eefeaf7555db226094",
+      "threshold_manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "dataset_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "case_set_sha256": "0acfb9b6566c0ce2d4d628352cfbaa6871dec4a2b9de242d32a2407e3d529d7e",
+      "baseline_scores_sha256": "9a22d3df4610e0fd29ba35e1f3b91f46449d60b37eef872b1fcd5eab6749e33a",
+      "ablated_scores_sha256": "6012d5a68bdb034ef16be983da3fbd781b0eb60cebbb0797ecbc45ccd5a0714c",
+      "baseline_mean": 0.9,
+      "ablated_mean": 0.8,
+      "delta": 0.1,
+      "threshold": 0.2,
+      "sample_count": 2,
+      "affected_call_count": 4,
+      "semantic_factor": 0,
+      "applied_factor": 1,
+      "synthetic_usage": {
+        "synthetic": true,
+        "telemetry_namespace": "dittobench.v9.ablation.embedding",
+        "intervention": "embedding",
+        "budget": {
+          "max_embedding_requests": 4,
+          "max_embedding_inputs": 4,
+          "max_embedding_input_bytes": 256
+        },
+        "embedding_attempts": 4,
+        "embedding_applied": 4,
+        "embedding_inputs": 4,
+        "embedding_input_bytes": 72,
+        "upstream_requests": 0,
+        "upstream_input_tokens": 0,
+        "upstream_output_tokens": 0,
+        "upstream_provider_cost_microusd": 0
+      }
+    }
+  }
+}

@@ -12,6 +12,9 @@ from pydantic import BaseModel, ValidationError
 
 from ditto_screening_protocol.confirmation_transport import (
     ConfirmationAblationCoordinatorProfile,
+    LONGMEM_V10_MIN_CASES_PER_CAPABILITY,
+    LONGMEM_V10_MIN_HISTORY_BYTES,
+    LONGMEM_V10_MIN_HISTORY_SESSIONS,
     ConfirmationExecutionProfile,
     ConfirmationInferenceGrantOffer,
     V9ConfirmationClaimRequest,
@@ -28,6 +31,9 @@ _PROFILE_FIXTURE_PATH = (
     / "dittobench-api"
     / "testdata"
     / "confirmation_execution_profile_v9.json"
+)
+_V12_PROFILE_PATH = _PROFILE_FIXTURE_PATH.with_name(
+    "confirmation_execution_profile_v12_shadow.json"
 )
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _UUID = "10000000-0000-0000-0000-000000000001"
@@ -282,3 +288,69 @@ def test_claim_json_bytes_preserve_declared_field_order() -> None:
         f'"nonce":"{_UUID}","requested_at":"2026-08-10T10:00:00Z",'
         '"signature":"aa"}'
     )
+
+
+def _v12_execution_profile_payload() -> dict[str, Any]:
+    return json.loads(_V12_PROFILE_PATH.read_text())
+
+
+def test_v9_execution_profile_serializes_without_the_additive_fields() -> None:
+    """A v9 profile's bytes must be exactly what they were before v12 existed.
+
+    Go declares ``bench_version`` and the two deep-history floors ``omitempty``
+    on both its wire struct and its checksummed payload mirror, and it
+    recomputes the outer profile checksum from that mirror while comparing the
+    requested profile to the installed one field by field. Emitting
+    ``"bench_version": 9`` would therefore break both checksum equality and
+    installed-profile identity on every released executor.
+    """
+    profile = ConfirmationExecutionProfile.model_validate(
+        _execution_profile_payload()
+    )
+
+    assert profile.bench_version == 9
+    assert profile.longmem_min_history_sessions == 0
+    assert profile.longmem_min_history_bytes == 0
+    dumped = profile.model_dump(mode="json")
+    assert "bench_version" not in dumped
+    assert "longmem_min_history_sessions" not in dumped
+    assert "longmem_min_history_bytes" not in dumped
+    assert dumped == _execution_profile_payload()
+
+
+def test_v12_execution_profile_round_trips_its_epoch_and_floors() -> None:
+    """The v12 profile was inexpressible in Python before this.
+
+    ``extra="ignore"`` silently dropped all three keys at Platform's
+    ``model_validate`` and again at the validator's ``model_dump``, so the
+    scorer received a stripped profile, defaulted to bench 9, and died on
+    "confirmation LongMem profile checksum mismatch" after the ticket was
+    already claimed.
+    """
+    payload = _v12_execution_profile_payload()
+    profile = ConfirmationExecutionProfile.model_validate(payload)
+
+    assert profile.bench_version == 12
+    assert profile.longmem_min_history_sessions >= LONGMEM_V10_MIN_HISTORY_SESSIONS
+    assert profile.longmem_min_history_bytes >= LONGMEM_V10_MIN_HISTORY_BYTES
+    assert profile.longmem_cases_per_capability >= (
+        LONGMEM_V10_MIN_CASES_PER_CAPABILITY
+    )
+    assert profile.model_dump(mode="json") == payload
+
+
+def test_deep_history_epoch_below_the_go_floor_is_refused_here() -> None:
+    """Fail on the wire model, not inside the scorer after the spend."""
+    payload = _v12_execution_profile_payload()
+    payload["longmem_min_history_sessions"] = LONGMEM_V10_MIN_HISTORY_SESSIONS - 1
+
+    with pytest.raises(ValidationError, match="deep-history floor"):
+        ConfirmationExecutionProfile.model_validate(payload)
+
+
+def test_v9_epoch_may_not_declare_deep_history_floors() -> None:
+    payload = _execution_profile_payload()
+    payload["longmem_min_history_sessions"] = LONGMEM_V10_MIN_HISTORY_SESSIONS
+
+    with pytest.raises(ValidationError, match="does not define"):
+        ConfirmationExecutionProfile.model_validate(payload)

@@ -282,7 +282,13 @@ def rebuild_v9_confirmation_evidence_root(
         {
             "schema_version": 1,
             "artifact_sha256": job.artifact_sha256,
-            "bench_version": 9,
+            # Bit-for-bit paired with Platform's
+            # ``confirmation_evidence.rebuild_confirmation_evidence``: the
+            # digest comparison below is what makes the pair load-bearing.
+            # Both sides read this off the same leased execution profile, so a
+            # v9 root keeps its existing digest byte for byte and a v12 root is
+            # bound to v12 instead of claiming to be a v9 run.
+            "bench_version": job.execution_profile.bench_version,
             "confirmation_profile_revision": job.execution_profile.revision,
             "confirmation_profile_checksum": job.execution_profile.checksum,
             "settings_revision": job.settings_revision,

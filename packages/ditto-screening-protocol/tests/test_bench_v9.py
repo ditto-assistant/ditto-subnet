@@ -4,12 +4,16 @@ from __future__ import annotations
 
 import copy
 import hashlib
+from typing import get_args
 
 import pytest
 from pydantic import ValidationError
 
 from ditto_screening_protocol.bench_v9 import (
+    CONFIRMATION_BENCH_VERSIONS,
+    V9_EVIDENCE_BENCH_VERSIONS,
     V9BaseEvidence,
+    V9EvidenceBenchVersion,
     V9ModelUseGate,
     V9ScoreGateEvidence,
     normalize_v9_score_report_omitempty,
@@ -285,6 +289,42 @@ def test_base_evidence_rejects_gate_bench_version_mismatch() -> None:
 
     with pytest.raises(ValidationError, match="bench_version"):
         V9BaseEvidence.model_validate(base)
+
+
+@pytest.mark.parametrize("bench_version", V9_EVIDENCE_BENCH_VERSIONS)
+def test_omitempty_normalization_covers_every_evidence_epoch(
+    bench_version: int,
+) -> None:
+    """A zeroed gate must land as a zero score, not as a parse failure.
+
+    Go omits a zero ``composite_stderr``. If the epoch is missing from the
+    normalization set, ``ScoreReport`` rejects the report on both the validator
+    and Platform, so the anti-emulation zero never lands and the caught agent
+    keeps its previous ceiling. This is parametrized over the alias so it can
+    never lag it again: a hand-written ``(9, 10, 11)`` here is what stranded
+    bench 12 in exactly that state.
+    """
+    raw = {
+        "bench_version": bench_version,
+        "details": {"v9_base": {"effective_stderr_micros": 0}},
+    }
+
+    assert normalize_v9_score_report_omitempty(raw) == {
+        **raw,
+        "composite_stderr": 0.0,
+    }
+
+
+def test_omitempty_normalization_is_derived_from_the_alias() -> None:
+    assert V9_EVIDENCE_BENCH_VERSIONS == get_args(V9EvidenceBenchVersion)
+    assert CONFIRMATION_BENCH_VERSIONS is V9_EVIDENCE_BENCH_VERSIONS
+    unsupported = max(V9_EVIDENCE_BENCH_VERSIONS) + 1
+    raw = {
+        "bench_version": unsupported,
+        "details": {"v9_base": {"effective_stderr_micros": 0}},
+    }
+
+    assert normalize_v9_score_report_omitempty(raw) == raw
 
 
 def test_omitempty_normalization_covers_v10_reports() -> None:
