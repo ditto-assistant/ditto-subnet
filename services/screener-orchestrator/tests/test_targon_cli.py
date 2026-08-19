@@ -7,7 +7,6 @@ from screener_capacity.targon_cli import (
     _source_review_probe_archive,
     command_agent_probe,
     command_kaniko_probe,
-    command_rootless_probe,
     command_source_review_probe,
 )
 
@@ -93,31 +92,6 @@ def test_lost_delete_response_reconciles_deleted_state() -> None:
     assert result["phase"] == "deleted"
     assert result["deleted"] is True
     assert client.suspended == []
-
-
-def test_rootless_exec_failure_returns_nogo_even_when_delete_fails(
-    monkeypatch, capsys
-) -> None:
-    client = _Targon(exec_fails=True)
-    monkeypatch.setattr(
-        "screener_capacity.targon_cli._client", lambda *_args, **_kwargs: client
-    )
-    monkeypatch.setattr(
-        "screener_capacity.targon_cli.time.sleep", lambda _seconds: None
-    )
-    args = Namespace(
-        resource="cpu-small",
-        image="docker:27.5-dind-rootless",
-        provision_timeout_seconds=1,
-        keep=False,
-    )
-
-    assert command_rootless_probe(args) == 5
-
-    output = capsys.readouterr().out
-    assert '"capability_gate": "NOGO"' in output
-    assert "Targon POST exec failed (500): HTTP error" in output
-    assert '"phase": "cleanup-required"' in output
 
 
 def test_agent_probe_pins_binaries_and_cleans_up(monkeypatch, capsys) -> None:

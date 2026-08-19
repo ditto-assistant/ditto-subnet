@@ -105,24 +105,6 @@
     - restart screener capacity controller
     - restart trusted image builder
 
-- name: Write the expiring hostile-runtime capability attestation
-  ansible.builtin.template:
-    src: targon-capability.json.j2
-    dest: "{{ screener_capacity_config_dir }}/targon-capability.json"
-    owner: "{{ screener_capacity_owner }}"
-    group: "{{ screener_capacity_group }}"
-    mode: "0600"
-  notify: restart screener capacity controller
-
-- name: Write non-secret federated worker settings
-  ansible.builtin.copy:
-    content: "{{ screener_capacity_worker_env | to_json }}\n"
-    dest: "{{ screener_capacity_config_dir }}/worker-env.json"
-    owner: "{{ screener_capacity_owner }}"
-    group: "{{ screener_capacity_group }}"
-    mode: "0600"
-  notify: restart screener capacity controller
-
 - name: Install capacity-controller systemd unit
   ansible.builtin.template:
     src: ditto-screener-capacity.service.j2

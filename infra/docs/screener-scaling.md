@@ -7,62 +7,48 @@ and screener fleet MIG are retired on this path.
 
 ## Provider order and safety gate
 
-For each reconciliation, desired slots are bounded by the global cap and include
-every active lease. The controller then:
+Nested-Docker Targon screener slots are retired. There is no GO/NOGO
+hostile-runtime attestation and no persistent `ditto-screener-prod-*` worker
+lane. For each reconciliation the controller:
 
 1. reads the current Platform demand and renews its fenced lease;
-2. reads the audited Backroom provider revision and uses Targon only when it is
-   first in the relevant provider list; full workers additionally require a
-   fresh `go` hostile-runtime capability attestation;
-3. resizes the GCE regional MIG for the residual demand;
-4. drains nodes before deletion and scales both providers to zero only when
-   Platform reports no active screening leases.
+2. reads the audited Backroom provider revision;
+3. keeps the GCE MIG at zero when all three decomposed lanes are Targon-first,
+   or resizes it to residual demand for a GCE-only / mixed revision;
+4. drains leftover nested-Docker Targon slots before deletion and scales GCE
+   to zero only when Platform reports no active screening leases.
 
 Backroom controls build, direct-image runtime smoke, and source review as three
 independent provider lists. Each list always retains GCP as the safety fallback.
 Production has two postures, not a working hybrid:
 
-- **Targon-first** (`['targon', 'gcp']`): Targon claims new work for that lane.
-- **GCE-only cutover** (`['gcp']`): Targon is disabled for that lane. Queued
-  Targon work is immediately terminalized as `fallback_required` / runtime
-  `skipped`. This is the old GCE screening path and does not require a deploy.
+- **Targon-first** (`['targon', 'gcp']`): Platform claims new one-shot Targon
+  work for that lane.
+- **GCE-only** (`['gcp']`): Targon is disabled for that lane. Queued Targon
+  work is immediately terminalized as `fallback_required` / runtime `skipped`.
+  This is the old GCE screening path and does not require a deploy.
 
 The first provider wins. A stored `['gcp', 'targon']` list is accepted because
 GCP is present, but it is not a working "GCP first then Targon fallback"; it
-behaves exactly like `['gcp']`. Backroom therefore exposes only Targon-first and
-Targon-off, plus an emergency "Cut over to GCE only" control that drafts all
-three lanes to `['gcp']` for the existing audited apply.
+behaves exactly like `['gcp']`. Backroom exposes per-lane Targon-first and
+Targon-off controls.
 
 A revisioned write requires compare-and-swap, an audit reason, and an exact
 confirmation string covering all three lists. In-progress one-shot jobs finish;
-new and queued jobs follow the new revision. After Targon is validated, remove
-the cutover UI and delete the GCE VMs/MIG via Terraform. Do not delete them now.
+new and queued jobs follow the new revision.
 
-The current Targon Rentals attestation is `nogo`. Live disposable probes found
-that rootful Docker cannot mount its required kernel filesystems, rootless
-Docker cannot create its user namespace, BuildKit cannot perform the first bind
-mount, and plain Rentals expose neither `/dev/fuse` nor `/dev/kvm`. These are
-provider sandbox limits, not missing worker glue. A missing, invalid, expired,
-or `nogo` attestation still disables nested-Docker workers on Targon. It does
-not send screening demand to the GCE fleet when the three decomposed lanes are
-Targon-first. Screening on Targon is Kaniko compile, direct-image `/health`
-smoke of that exact archive, and read-only L1 review of the source tarball in a
-separate screener rental. Platform admits the screening attempt and attests the verdict. Elevated L1
-findings quarantine rather than running GCE L2/L3. A screener-to-smoke-rental
-prompt tool is a later issue; isolated fake-gateway oracle is skipped until
-then.
+Screening on Targon is Kaniko compile, direct-image `/health` smoke of that
+exact archive, and read-only L1 review of the source tarball in a separate
+screener rental. Platform admits the screening attempt and attests the verdict.
+Elevated L1 findings quarantine rather than running GCE L2/L3. A
+screener-to-smoke-rental prompt tool is a later issue; isolated fake-gateway
+oracle is skipped until then.
 
-The GCE screener fleet and the capacity-controller VM are not part of this
-path. Platform itself creates Targon rentals from a background loop in the API
-process. Scale the screener MIG to zero and stop `ditto-screener-capacity` and
-`ditto-image-builder`.
-
-Targon VMs expose a stronger kernel boundary, but they are not an acceptable
-autoscaling substitute yet: the live inventory is GPU-only, bootstrap is SSH
-and password based, and a disposable VM delete returned a provider error after
-entering termination. Keep the VM probe operator-only until CPU inventory and a
-reliable delete lifecycle exist. Never turn that exploratory path into managed
-capacity merely because its nested-runtime probe passes.
+The GCE screener fleet and the capacity-controller VM are leftover from the
+nested-Docker path except for trusted-image builds and GCE-only cutover. Platform
+itself creates Targon one-shot rentals from a background loop in the API
+process. With Targon-first lanes, scale the screener MIG to zero. Do not recreate
+persistent Targon screener slots.
 
 Ordinary agent workloads do work in Rentals. The secret-free `agent-probe`
 installs pinned OpenCode and Pi releases, executes both binaries, and then
@@ -119,7 +105,8 @@ One-shot builder rentals use this Targon contract (vendor-confirmed
 - Do not send `experiments.persistent-workload`. That key is config-gated
   and Targon rejects it with HTTP 400.
 
-Screener slot rentals stay persistent and are never swept.
+Leftover nested-Docker screener slot rentals are drained by the capacity
+controller and are never swept by `sweep-oneshots`.
 
 ```bash
 scripts/targon-smoke.sh sweep-oneshots
@@ -140,9 +127,10 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
   rental env except the attempt-bound job tokens already required for Kaniko/L1.
 - GCE screener workers, `ditto-image-builder`, and the capacity-controller VM
   are leftover from the nested-Docker path and are not required.
-- Federated Targon workers get a one-time Platform registration grant and a
-  30-minute token for `ditto-screener-bootstrap`, which can read only the
-  source-review secret. No service-account key crosses the provider boundary.
+- Federated nested-Docker Targon workers are retired. Source-review one-shots
+  still receive a 30-minute token for `ditto-screener-bootstrap`, which can
+  read only the source-review secret. No service-account key crosses the
+  provider boundary.
 - Submitted builds receive none of these credentials. GCE hostile builds run
   behind the dedicated rootless executor and metadata/egress guards. A Targon
   submission-builder rental receives only one expiring Platform capability
@@ -209,33 +197,27 @@ infra stacks merge, use this order:
      infra/ansible/playbooks/gcp-screener-capacity.yml
    ```
 
-5. Verify Platform Backroom reports the controller heartbeat, desired slots,
-   applied provider revision, Targon capability/reason, GCE target/health,
-   capacity events, and trusted build state. Exercise each Backroom lane control
-   in a disposable environment before using it in production. Queue one release
-   image and prove Targon output by immutable
+5. Verify Platform Backroom reports the applied provider revision, one-shot
+   provider jobs, capacity events, and trusted build state. Exercise each
+   Backroom lane control in a disposable environment before using it in
+   production. Queue one release image and prove Targon output by immutable
    digest; if Rental inventory is empty, prove the audited GCP fallback instead.
-   With the
-   current NOGO attestation, real demand must choose GCE and an empty queue must
-   return the MIG to zero.
-   Then enqueue one audited miner rebuild. Prove the submission-builder image is
-   digest pinned, Platform verifies the complete tar SHA-256, GCE imports and
-   finishes the normal screening gates, the temporary object is consumed, and
-   the Targon rental is deleted (or leaves a cleanup-required event).
+   With Targon-first decomposed lanes, an empty queue must return the MIG to
+   zero. Then enqueue one audited miner rebuild. Prove the submission-builder
+   image is digest pinned, Platform verifies the complete tar SHA-256, the
+   Targon rental is deleted (or leaves a cleanup-required event).
    The artifact bucket's `remote-builds/` lifecycle is the final one-day bound
    for a canceled presigned upload that races normal cleanup.
-6. Only after a fresh hostile-runtime probe returns GO may an operator update
-   the expiring Targon attestation and immutable worker image reference. Observe
-   one shadow node through enrollment, heartbeat, a real lease, drain, and
-   deletion before raising the cap.
+6. Do not re-enable nested-Docker Targon screener workers. Drain leftover
+   `ditto-screener-prod-*` slots through the capacity controller.
 
 ## Rollback
 
-Set the runtime attestation to `nogo` to drain Targon after active leases finish;
-the controller immediately plans GCE for residual demand. Stop the controller
-unit only after explicitly setting the GCE MIG to a safe nonzero target or
-confirming the queue is empty. The `ONLY_SCALE_OUT` watchdog is intentionally
-incapable of deleting workers during a controller outage.
+Draft all three lanes to GCE-only to restore the GCE screening path after the
+audited apply. Stop the controller unit only after explicitly setting the GCE
+MIG to a safe nonzero target or confirming the queue is empty. The
+`ONLY_SCALE_OUT` watchdog is intentionally incapable of deleting workers during
+a controller outage.
 
 Do not retire the pet VM until the zero-idle GCE fallback has handled a real
 burst and the exact-sha monorepo deploy has been verified. Retirement remains a

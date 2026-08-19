@@ -96,7 +96,7 @@ const navigation = [
   {
     to: '/screener-capacity' as const,
     label: 'Screener capacity',
-    description: 'Targon & GCE fleet state',
+    description: 'One-shot Targon lanes & GCE fallback',
     icon: ServerCog,
   },
   {

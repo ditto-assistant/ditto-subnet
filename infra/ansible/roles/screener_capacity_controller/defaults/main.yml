@@ -13,14 +13,11 @@ screener_capacity_builder_unit: ditto-image-builder
 
 screener_capacity_environment: prod
 screener_capacity_platform_url: https://platform-api.heyditto.ai
-screener_capacity_targon_platform_url: "{{ screener_capacity_platform_url }}"
 screener_capacity_global_cap: 6
 screener_capacity_jobs_per_slot: 6
 screener_capacity_interval_seconds: 30
 screener_capacity_targon_org_slug: ditto
 screener_capacity_targon_prefix: ditto-screener-prod-
-screener_capacity_targon_resource: cpu-medium
-screener_capacity_targon_provisioning_timeout_seconds: 600
 screener_capacity_gce_project: ditto-app-dev
 screener_capacity_gce_region: us-central1
 screener_capacity_gce_mig: ditto-screener-fleet
@@ -38,21 +35,3 @@ screener_capacity_runtime_timeout_seconds: 180
 
 screener_capacity_targon_api_key_secret: TARGON_API_KEY
 screener_capacity_platform_token_secret: screener-controller-api-token-prod
-screener_capacity_targon_runtime_capability: nogo
-screener_capacity_targon_runtime_reason: TARGON_CAPABILITY_NOT_ATTESTED
-screener_capacity_targon_runtime_capability_expires_at: "1970-01-01T00:00:00Z"
-
-# Non-secret worker settings. Registration, the rotating node bearer, generated
-# signing mnemonic, and the short-lived source-review bootstrap token are added
-# per workload by the controller.
-screener_capacity_worker_env:
-  SCREENER_POLL_SECONDS: "10"
-  SCREENER_QUEUE_LIMIT: "20"
-  SCREENER_BUILD_TIMEOUT_SECONDS: "2700"
-  SCREENER_REMOTE_BUILD_TIMEOUT_SECONDS: "1500"
-  SCREENER_RUN_TIMEOUT_SECONDS: "120"
-  SCREENER_BUILD_MEMORY: "2g"
-  SCREENER_IMAGE_BUILD_MEMORY: "8g"
-  SCREENER_PIDS_LIMIT: "512"
-  NETUID: "118"
-  SUBTENSOR_NETWORK: finney

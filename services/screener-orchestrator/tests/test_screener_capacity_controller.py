@@ -12,33 +12,24 @@ from screener_capacity.controller import (
     Demand,
     GCEFleet,
     GCPBootstrapTokenMinter,
-    PlatformControl,
     ProviderCounts,
     ProviderRouting,
     Settings,
     _targon_counts,
-    _validate_public_worker_env,
     desired_slots,
-    fallback_target,
+    gce_residual,
     reconcile,
 )
 from screener_capacity.targon import TargonAPIError
 
 
-def _settings(root: Path, *, capability: str = "go") -> Settings:
+def _settings(root: Path) -> Settings:
     token_file = root / "controller-token"
     token_file.write_text("x" * 48)
     key_file = root / "targon-key"
     key_file.write_text("y" * 48)
-    capability_file = root / "capability.json"
-    capability_file.write_text(
-        '{"result":"'
-        + capability
-        + '","reason_code":"TEST","expires_at":"2099-01-01T00:00:00Z"}'
-    )
     return Settings(
         platform_url="https://platform.invalid",
-        targon_platform_url="https://public-platform.invalid",
         platform_token_file=token_file,
         environment="test",
         epoch="test:epoch",
@@ -46,16 +37,9 @@ def _settings(root: Path, *, capability: str = "go") -> Settings:
         global_cap=6,
         jobs_per_slot=2,
         interval_seconds=30,
-        targon_capability_file=capability_file,
         targon_api_key_file=key_file,
         targon_org_slug="ditto",
         targon_prefix="ditto-screener-test-",
-        targon_resource="cpu-small",
-        targon_worker_env_file=None,
-        gcp_bootstrap_service_account="node@test.iam.gserviceaccount.com",
-        gcp_bootstrap_delegate_service_account=None,
-        source_review_secret_resource="projects/test/secrets/source-review",
-        targon_provisioning_timeout_seconds=600,
         state_file=root / "state.json",
         gce_project="test-project",
         gce_region="test-region",
@@ -71,7 +55,6 @@ class _Platform:
         self,
         demand: Demand,
         nodes: dict[str, dict[str, object]] | None = None,
-        image: str = "registry.invalid/screener@sha256:" + "a" * 64,
         screening_priority: tuple[Literal["targon", "gcp"], ...] = (
             "targon",
             "gcp",
@@ -86,7 +69,6 @@ class _Platform:
         self.renewed: list[dict[str, object]] = []
         self.drained: list[str] = []
         self.fences = 0
-        self._image = image
         self._screening_priority = screening_priority
         self._build_priority = build_priority
 
@@ -111,17 +93,11 @@ class _Platform:
     def node_states(self) -> dict[str, dict[str, object]]:
         return self._nodes
 
-    def latest_screener_image(self) -> str:
-        return self._image
-
     def drain_node(
         self, *, node_id: str, epoch: str, reason: str = "capacity scale-down"
     ) -> None:
         del epoch, reason
         self.drained.append(node_id)
-
-    def bootstrap_grant(self, **_kwargs: object) -> str:
-        return "r" * 48
 
 
 class _GCE:
@@ -269,7 +245,7 @@ class CapacityDecisionTests(unittest.TestCase):
 
     def test_reconcile_reports_watchdog_recovery_failure(self) -> None:
         with TemporaryDirectory() as directory:
-            settings = _settings(Path(directory), capability="nogo")
+            settings = _settings(Path(directory))
             platform = _Platform(Demand(runnable=0, active=0, desired=0))
             gce = _GCE()
 
@@ -293,43 +269,6 @@ class CapacityDecisionTests(unittest.TestCase):
                 "GCE_WATCHDOG_RESTORE_FAILED",
             )
 
-    def test_provider_visible_worker_env_rejects_durable_credentials(self) -> None:
-        _validate_public_worker_env({"LOG_LEVEL": "info", "PUBLIC_MODE": "true"})
-        with self.assertRaisesRegex(ControllerError, "SOURCE_API_TOKEN"):
-            _validate_public_worker_env(
-                {"LOG_LEVEL": "info", "SOURCE_API_TOKEN": "must-not-leave-gcp"}
-            )
-
-    def test_latest_successful_build_becomes_digest_bound_worker_image(self) -> None:
-        platform = PlatformControl(
-            base_url="https://platform.invalid", token="x" * 48, environment="prod"
-        )
-        with patch(
-            "screener_capacity.controller._json_request",
-            return_value={
-                "status": "succeeded",
-                "destination": (
-                    "us-central1-docker.pkg.dev/ditto-app-dev/"
-                    "ditto-public-runtime/screener:sha-release"
-                ),
-                "image_digest": "sha256:" + "b" * 64,
-            },
-        ):
-            image = platform.latest_screener_image()
-
-        self.assertEqual(
-            image,
-            "us-central1-docker.pkg.dev/ditto-app-dev/"
-            "ditto-public-runtime/screener@sha256:" + "b" * 64,
-        )
-
-    def test_unpublished_worker_image_does_not_promote(self) -> None:
-        platform = PlatformControl(
-            base_url="https://platform.invalid", token="x" * 48, environment="prod"
-        )
-        with patch("screener_capacity.controller._json_request", return_value=None):
-            self.assertIsNone(platform.latest_screener_image())
-
     def test_zero_idle_capacity_is_valid(self) -> None:
         self.assertEqual(desired_slots(runnable=0, active=0, jobs_per_slot=6, cap=6), 0)
 
@@ -341,26 +280,11 @@ class CapacityDecisionTests(unittest.TestCase):
             desired_slots(runnable=200, active=3, jobs_per_slot=1, cap=6), 6
         )
 
-    def test_targon_nogo_routes_all_demand_to_gce(self) -> None:
-        self.assertEqual(
-            fallback_target(
-                demand=5,
-                targon=ProviderCounts(healthy=3, pending=1),
-                capability="nogo",
-            ),
-            5,
-        )
+    def test_targon_first_keeps_gce_at_zero(self) -> None:
+        self.assertEqual(gce_residual(demand=5, targon_first=True), 0)
 
-    def test_decomposed_targon_nogo_does_not_spin_gce_fleet(self) -> None:
-        self.assertEqual(
-            fallback_target(
-                demand=5,
-                targon=ProviderCounts(healthy=3, pending=1),
-                capability="nogo",
-                decomposed_targon=True,
-            ),
-            0,
-        )
+    def test_gce_only_revision_takes_all_demand(self) -> None:
+        self.assertEqual(gce_residual(demand=5, targon_first=False), 5)
 
     def test_targon_ready_requires_current_platform_heartbeat(self) -> None:
         rows = [
@@ -370,7 +294,7 @@ class CapacityDecisionTests(unittest.TestCase):
                 "state": {"status": "running", "ready_replicas": 1},
             }
         ]
-        self.assertEqual(_targon_counts(rows, {}, set()).pending, 1)
+        self.assertEqual(_targon_counts(rows, {}).pending, 1)
         counts = _targon_counts(
             rows,
             {
@@ -380,11 +304,10 @@ class CapacityDecisionTests(unittest.TestCase):
                     "ready": True,
                 }
             },
-            set(),
         )
         self.assertEqual(counts, ProviderCounts(healthy=1))
 
-    def test_outdated_worker_image_is_draining_not_healthy(self) -> None:
+    def test_draining_leftover_worker_is_not_healthy(self) -> None:
         rows = [
             {
                 "uid": "wk-1",
@@ -397,25 +320,12 @@ class CapacityDecisionTests(unittest.TestCase):
             {
                 "wk-1": {
                     "node_id": "slot-01-wk1",
-                    "status": "active",
+                    "status": "draining",
                     "ready": True,
-                    "image_reference": "registry.invalid/screener@sha256:" + "a" * 64,
                 }
             },
-            set(),
-            desired_image="registry.invalid/screener@sha256:" + "b" * 64,
         )
         self.assertEqual(counts, ProviderCounts(draining=1))
-
-    def test_go_counts_pending_targon_before_gce_residual(self) -> None:
-        self.assertEqual(
-            fallback_target(
-                demand=5,
-                targon=ProviderCounts(healthy=2, pending=1),
-                capability="go",
-            ),
-            2,
-        )
 
     @patch("screener_capacity.controller.subprocess.run")
     def test_worker_secret_bootstrap_uses_delegated_short_lived_token(
@@ -435,43 +345,14 @@ class CapacityDecisionTests(unittest.TestCase):
             command,
         )
 
-    def test_nogo_decomposed_lanes_do_not_scale_gce_fleet(self) -> None:
+    def test_targon_first_lanes_do_not_scale_gce_fleet(self) -> None:
         with TemporaryDirectory() as directory:
-            root = Path(directory)
-            token_file = root / "controller-token"
-            token_file.write_text("x" * 48)
-            capability_file = root / "capability.json"
-            capability_file.write_text(
-                '{"result":"nogo","reason_code":"TEST_NOGO",'
-                '"expires_at":"2099-01-01T00:00:00Z"}'
-            )
+            settings = _settings(Path(directory))
             settings = Settings(
-                platform_url="https://platform.invalid",
-                targon_platform_url="https://public-platform.invalid",
-                platform_token_file=token_file,
-                environment="test",
-                epoch="test:epoch",
-                source_sha="a" * 40,
-                global_cap=6,
-                jobs_per_slot=2,
-                interval_seconds=30,
-                targon_capability_file=capability_file,
-                targon_api_key_file=None,
-                targon_org_slug="ditto",
-                targon_prefix="ditto-screener-test-",
-                targon_resource="cpu-small",
-                targon_worker_env_file=None,
-                gcp_bootstrap_service_account=None,
-                gcp_bootstrap_delegate_service_account=None,
-                source_review_secret_resource=None,
-                targon_provisioning_timeout_seconds=600,
-                state_file=root / "state.json",
-                gce_project="test-project",
-                gce_region="test-region",
-                gce_mig="test-mig",
-                gce_impersonate_service_account=None,
-                lock_file=root / "lock",
-                dry_run=False,
+                **{
+                    **settings.__dict__,
+                    "targon_api_key_file": None,
+                }
             )
 
             platform = SimpleNamespace(
@@ -570,14 +451,12 @@ class CapacityDecisionTests(unittest.TestCase):
                 "PROVIDER_ROUTING_UNAVAILABLE",
             )
 
-    def test_targon_failure_preserves_active_lease_floor_and_reports_not_ready(
-        self,
-    ) -> None:
+    def test_retired_lane_never_creates_targon_workers(self) -> None:
         with TemporaryDirectory() as directory:
             settings = _settings(Path(directory))
-            platform = _Platform(Demand(runnable=0, active=2, desired=2))
+            platform = _Platform(Demand(runnable=4, active=0, desired=2))
             gce = _GCE()
-            targon = _Targon(fail_create=True)
+            targon = _Targon()
             with (
                 patch(
                     "screener_capacity.controller.PlatformControl",
@@ -585,60 +464,18 @@ class CapacityDecisionTests(unittest.TestCase):
                 ),
                 patch("screener_capacity.controller.GCEFleet", return_value=gce),
                 patch("screener_capacity.controller.TargonClient", return_value=targon),
-                patch.object(GCPBootstrapTokenMinter, "mint", return_value="z" * 120),
-                self.assertRaisesRegex(ControllerError, "Targon scale-up failed"),
             ):
-                reconcile(settings)
-
-            self.assertEqual(gce.resized, [2])
-            self.assertGreaterEqual(platform.fences, 2)
-            self.assertTrue(
-                all(not heartbeat["provider_ready"] for heartbeat in platform.renewed)
-            )
+                snapshot = reconcile(settings)
+            self.assertEqual(gce.resized, [])
+            self.assertNotIn("targon:create", targon.operations)
+            self.assertEqual(snapshot["targon_capability"], "nogo")
             self.assertEqual(
-                platform.renewed[-1]["last_provider_error_code"],
-                "TARGON_SCALE_UP_FAILED",
+                snapshot["fallback_reason"], "TARGON_NESTED_DOCKER_WORKER_LANE_RETIRED"
             )
-
-            retry_start = len(platform.renewed)
-            with (
-                patch(
-                    "screener_capacity.controller.PlatformControl",
-                    return_value=platform,
-                ),
-                patch("screener_capacity.controller.GCEFleet", return_value=gce),
-                patch("screener_capacity.controller.TargonClient", return_value=targon),
-                patch.object(GCPBootstrapTokenMinter, "mint", return_value="z" * 120),
-                self.assertRaisesRegex(ControllerError, "Targon scale-up failed"),
-            ):
-                reconcile(settings)
-            self.assertTrue(
-                all(
-                    not heartbeat["provider_ready"]
-                    for heartbeat in platform.renewed[retry_start:]
-                )
-            )
-
-            targon.fail_create = False
-            recovery_start = len(platform.renewed)
-            with (
-                patch(
-                    "screener_capacity.controller.PlatformControl",
-                    return_value=platform,
-                ),
-                patch("screener_capacity.controller.GCEFleet", return_value=gce),
-                patch("screener_capacity.controller.TargonClient", return_value=targon),
-                patch.object(GCPBootstrapTokenMinter, "mint", return_value="z" * 120),
-            ):
-                recovered = reconcile(settings)
-            self.assertFalse(platform.renewed[recovery_start]["provider_ready"])
-            self.assertTrue(platform.renewed[-1]["provider_ready"])
-            self.assertTrue(recovered["provider_ready"])
-            self.assertIsNone(recovered["last_provider_error_code"])
 
     def test_gce_scale_up_is_independent_of_targon_teardown(self) -> None:
         with TemporaryDirectory() as directory:
-            settings = _settings(Path(directory), capability="nogo")
+            settings = _settings(Path(directory))
             operations: list[str] = []
             nodes = {
                 "workload-1": {
@@ -726,7 +563,7 @@ class CapacityDecisionTests(unittest.TestCase):
                 ),
             ):
                 reconcile(settings)
-            self.assertEqual(first_platform.drained, ["node-2"])
+            self.assertEqual(first_platform.drained, ["node-1", "node-2"])
             self.assertEqual(first_targon.deleted, [])
 
             second_nodes = {
@@ -754,13 +591,11 @@ class CapacityDecisionTests(unittest.TestCase):
                 reconcile(settings)
             self.assertEqual(second_targon.deleted, ["workload-2"])
 
-    def test_image_rollout_replaces_idle_node_while_other_node_has_a_lease(
+    def test_leftover_idle_slot_is_deleted_without_replacement(
         self,
     ) -> None:
         with TemporaryDirectory() as directory:
             settings = _settings(Path(directory))
-            old_image = "registry.invalid/screener@sha256:" + "a" * 64
-            new_image = "registry.invalid/screener@sha256:" + "b" * 64
             rows = [
                 {
                     "uid": f"workload-{index}",
@@ -776,7 +611,6 @@ class CapacityDecisionTests(unittest.TestCase):
                     "status": "draining",
                     "ready": False,
                     "active_lease": True,
-                    "image_reference": old_image,
                 },
                 "workload-2": {
                     "node_id": "node-2",
@@ -784,12 +618,9 @@ class CapacityDecisionTests(unittest.TestCase):
                     "status": "draining",
                     "ready": False,
                     "active_lease": False,
-                    "image_reference": old_image,
                 },
             }
-            platform = _Platform(
-                Demand(runnable=2, active=1, desired=2), nodes, image=new_image
-            )
+            platform = _Platform(Demand(runnable=2, active=1, desired=2), nodes)
             targon = _Targon(rows=rows)
             with (
                 patch(
@@ -798,13 +629,12 @@ class CapacityDecisionTests(unittest.TestCase):
                 ),
                 patch("screener_capacity.controller.GCEFleet", return_value=_GCE()),
                 patch("screener_capacity.controller.TargonClient", return_value=targon),
-                patch.object(GCPBootstrapTokenMinter, "mint", return_value="z" * 120),
             ):
                 reconcile(settings)
 
             self.assertNotIn("workload-1", targon.deleted)
             self.assertIn("workload-2", targon.deleted)
-            self.assertIn("targon:create", targon.operations)
+            self.assertNotIn("targon:create", targon.operations)
 
 
 if __name__ == "__main__":

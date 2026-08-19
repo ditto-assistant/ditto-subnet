@@ -244,7 +244,7 @@ describe('admin API schemas', () => {
         targon_capability: 'nogo', targon_available: 6,
         targon_healthy: 0, targon_pending: 0, targon_draining: 0,
         gce_target: 2, gce_healthy: 1, gce_pending: 1, gce_draining: 0,
-        fallback_reason: 'ROOTLESSKIT_OPERATION_NOT_PERMITTED',
+        fallback_reason: 'TARGON_NESTED_DOCKER_WORKER_LANE_RETIRED',
         last_provider_success_at: '2026-08-02T00:00:00Z',
         last_provider_error_code: null, last_provider_error_at: null,
         events: [], controller_heartbeat_at: '2026-08-02T00:00:00Z',

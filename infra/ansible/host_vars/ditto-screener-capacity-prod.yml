@@ -1,7 +1,6 @@
 ---
 screener_capacity_environment: prod
 screener_capacity_platform_url: https://platform-api.heyditto.ai
-screener_capacity_targon_platform_url: https://platform-api.heyditto.ai
 screener_capacity_targon_org_slug: ditto
 screener_capacity_gce_project: ditto-app-dev
 screener_capacity_gce_region: us-central1
@@ -12,13 +11,3 @@ screener_capacity_builder_registry_service_account: ditto-image-builder@ditto-ap
 screener_capacity_candidate_registry_service_account: ditto-screening-candidate-pull@ditto-app-dev.iam.gserviceaccount.com
 screener_capacity_candidate_registry_writer_service_account: ditto-screening-candidate-push@ditto-app-dev.iam.gserviceaccount.com
 screener_capacity_builder_kaniko_image: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/kaniko-executor:v1.25.16
-
-# Current live evidence: the nested RootlessKit hostile-runtime probe failed.
-# This file is an expiring fail-closed attestation, not an enable flag. A GO
-# requires a fresh operator probe and reviewed expiry.
-screener_capacity_targon_runtime_capability: nogo
-screener_capacity_targon_runtime_reason: TARGON_ROOTLESSKIT_NESTED_RUNTIME_FAILED
-screener_capacity_targon_runtime_capability_expires_at: "2026-08-09T00:00:00Z"
-
-# Populated only after the monorepo publishes the reviewed worker image. A
-# missing value is another independent fail-closed runtime gate.

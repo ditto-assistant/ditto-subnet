@@ -4,8 +4,8 @@ DELETE of a running rental returns 204, then the record often flips to
 `error` / exit 137 (SIGKILL). Targon confirmed that flip is expected.
 Do not redeploy those tombstones. DELETE of `suspended`/`error`/`registered`
 still returns HTTP 500, so real leftovers are patched onto a public sleep
-image and brought to `running` only long enough for DELETE. Screener slot
-rentals are never touched.
+image and brought to `running` only long enough for DELETE. Nested-Docker
+screener slot rentals are retired by the capacity controller, not this sweep.
 """
 
 from __future__ import annotations
@@ -47,6 +47,8 @@ DELETE_ATTEMPTS = 3
 # original crashing job — that crash-loops and keeps the billing meter on.
 HOLD_IMAGE = "busybox:1.37.0"
 HOLD_COMMANDS = ["sleep", "3600"]
+# Persistent nested-Docker screener slots (ditto-screener-prod-*) are retired
+# by the capacity controller, not this sweep.
 
 
 def is_oneshot_name(name: str) -> bool:

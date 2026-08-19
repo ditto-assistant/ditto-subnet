@@ -1,19 +1,18 @@
 # Screener orchestrator
 
-This process is the sole normal writer of screener capacity. It reads runnable
-demand from Platform, acquires a fenced controller lease, and applies the
-audited Backroom revision: Targon-first when a lane starts with `targon`, or
-the old GCE-only path otherwise. A stored `['gcp', 'targon']` list is not a
-working hybrid; first-provider wins, so that list disables Targon for the lane.
-The GCE MIG stays as the safety path until Targon is validated. Both providers
-may return to zero when the queue and active leases are empty.
+This process is the sole normal writer of GCE screener capacity. It reads
+runnable demand from Platform, acquires a fenced controller lease, and applies
+the audited Backroom revision: Targon-first decomposed lanes keep the GCE MIG
+at zero, and a GCE-only cutover scales residual demand onto the fleet. A stored
+`['gcp', 'targon']` list is not a working hybrid; first-provider wins, so that
+list disables Targon for the lane. Nested-Docker Targon screener slots are
+retired: leftover `ditto-screener-*-slot-*` rentals are drained and deleted,
+never created.
 
-Targon Rentals have three independently controlled jobs: credential-minimal
-Kaniko builds, direct-image runtime health checks, and bounded read-only L1
-source review. Hostile full-worker execution remains fail-closed behind an
-expiring capability attestation because the nested RootlessKit probe failed.
-GCE remains authoritative: it imports each verified miner archive and reruns
-the isolated fake-gateway health/oracle and any elevated L2/L3 source review.
+Targon Rentals have three independently controlled one-shot jobs owned by
+Platform: credential-minimal Kaniko builds, direct-image runtime health checks,
+and bounded read-only L1 source review. GCE remains the safety path for a
+GCE-only revision and for elevated L2/L3 source review.
 
 Provider credentials are accepted only through mode-0600 files. The operator
 smoke wrapper streams `TARGON_API_KEY` directly from GCP Secret Manager to the
@@ -24,15 +23,10 @@ process over stdin; it never exports or prints the value.
 Targon controls the rental runtime and can inspect every workload environment
 variable, command, mounted file, process, and memory page. Workload env is not a
 secret boundary. The controller therefore never sends the Targon API key or a
-long-lived GCP credential to a rental. The only authorities injected during
-bootstrap are a node-bound single-use registration capability and a 30-minute
-GCP access token scoped to one Secret Manager resource; the worker consumes
-them into mode-0600 files and removes them from its environment immediately.
-
-Values supplied through `--targon-worker-env-file` must be treated as public to
-the provider. Long-lived API keys, service-account JSON, mnemonics, database
-URLs, and controller credentials are prohibited there. This design limits
-credential replay; it does not make a provider-controlled machine confidential.
+long-lived GCP credential to a rental. Trusted-builder and source-review
+one-shots mint only a 30-minute GCP access token scoped to one Secret Manager
+resource; the helper consumes it into a mode-0600 file and removes it from the
+environment immediately.
 
 ```bash
 uv sync --group dev
@@ -59,8 +53,8 @@ Trusted monorepo image builds run in the separate
 component, exact SHA, Dockerfile, and destination. The builder mints a 30-minute
 Artifact Registry writer token, starts one Kaniko rental, stores only the digest
 and redacted status, and deletes the rental. Provider failure becomes
-`fallback_required` for the existing build runner and never changes the hostile
-screener-runtime capability gate.
+`fallback_required` for the existing build runner and never recreates
+nested-Docker Targon screener workers.
 
 Miner submission builds use the same separately locked process but a different
 contract. Platform mints a short-lived capability bound to one build, screening

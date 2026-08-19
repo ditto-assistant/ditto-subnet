@@ -2,14 +2,11 @@ import { useServerFn } from '@tanstack/react-start'
 import {
   AlertTriangle,
   CheckCircle2,
-  Cloud,
-  Container,
   Hammer,
   Route,
   RefreshCw,
-  ServerCog,
 } from 'lucide-react'
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState } from 'react'
 import type {
   ScreenerCapacityNode,
   ScreenerCapacityView,
@@ -69,16 +66,6 @@ function providerJobTone(status: string) {
     return 'bg-[var(--red-dim)] text-[var(--red)]'
   }
   return 'bg-[var(--cyan-dim)] text-[var(--cyan)]'
-}
-
-function capabilityGuidance(reason: string | null) {
-  if (reason === 'TARGON_CAPABILITY_ATTESTATION_EXPIRED') {
-    return 'The safety record expired; this is not a Targon API outage. A fresh hostile-runtime probe and reviewed GO result are required before full workers can start.'
-  }
-  if (reason?.includes('ROOTLESSKIT') || reason?.includes('NESTED_RUNTIME')) {
-    return 'The nested hostile-runtime boundary did not pass its safety probe. Keep full workers on GCE until a fresh probe returns GO.'
-  }
-  return 'A fresh reviewed hostile-runtime capability is required before full workers can start.'
 }
 
 type ProviderMode = 'targon-first' | 'gcp-only'
@@ -167,15 +154,6 @@ function ProviderRoutingControl({
     setConfirmation('')
   }
 
-  const draftAllLanes = (priority: ('targon' | 'gcp')[]) => {
-    setSettings({
-      build_provider_priority: priority,
-      runtime_provider_priority: priority,
-      source_review_provider_priority: priority,
-    })
-    setConfirmation('')
-  }
-
   const posture = routingPosture(settings)
   const chip = postureChip(posture)
 
@@ -220,39 +198,14 @@ function ProviderRoutingControl({
             </span>
           </div>
           <p className="mt-1 max-w-[78ch] text-xs leading-5 text-[var(--muted)]">
-            Builds, runtime smoke, and source review are independent lanes. Targon is enabled only
-            when a lane starts with Targon. Any other list, including legacy <code>gcp&gt;targon</code>,
-            is GCE only. GCP VMs stay as the safety path until Targon is validated; then this
-            cutover UI and the GCE MIGs can be removed.
+            Builds, runtime smoke, and source review are independent one-shot lanes. Targon is
+            enabled only when a lane starts with Targon. Any other list, including legacy{' '}
+            <code>gcp&gt;targon</code>, is GCE only. Nested-Docker Targon screener workers are
+            retired; these controls do not start persistent Targon slots.
           </p>
         </div>
       </div>
       <div className="space-y-5 p-4 sm:p-5">
-        <div className="rounded-lg border border-[var(--amber)]/40 bg-[var(--amber-dim)] p-4">
-          <p className="text-xs font-semibold text-[var(--amber)]">Emergency cutover</p>
-          <p className="mt-1 max-w-[78ch] text-xs leading-5 text-[var(--muted-strong)]">
-            Restores the old GCE screening path immediately after the existing audited apply; no
-            deploy. Targon rentals stop being claimed; GCE workers remain the authority.
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            <button
-              type="button"
-              disabled={readOnly || loading}
-              onClick={() => draftAllLanes(GCE_ONLY_PRIORITY)}
-              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-[var(--amber)] px-3 text-xs font-semibold text-[var(--amber)] disabled:opacity-40"
-            >
-              Cut over to GCE only
-            </button>
-            <button
-              type="button"
-              disabled={readOnly || loading}
-              onClick={() => draftAllLanes(TARGON_FIRST_PRIORITY)}
-              className="inline-flex min-h-11 items-center justify-center rounded-lg border border-[var(--line)] px-3 text-xs font-semibold text-[var(--muted-strong)] hover:bg-white/5 disabled:opacity-40"
-            >
-              Restore Targon-first
-            </button>
-          </div>
-        </div>
         <div className="grid gap-4 lg:grid-cols-3">
           {([
             ['build', 'Remote image builders', settings.build_provider_priority],
@@ -330,9 +283,6 @@ export function ScreenerCapacityPanel({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const snapshot = state.snapshot
-  const leaseFresh = snapshot
-    ? new Date(snapshot.controller_lease_expires_at).getTime() > Date.now()
-    : false
   const cleanupEvents = state.events.filter(
     (event) => event.provider === 'targon' && event.event_type === 'provider_cleanup_required',
   )
@@ -340,19 +290,9 @@ export function ScreenerCapacityPanel({
   const visibleProviderJobs = state.provider_jobs.filter(
     (job) => !(job.lane === 'runtime' && job.status === 'skipped'),
   )
-  const runtimeMode = providerMode(
-    state.provider_control.current.settings.runtime_provider_priority,
-  )
   const buildMode = providerMode(
     state.provider_control.current.settings.build_provider_priority,
   )
-  const sourceReviewMode = providerMode(
-    state.provider_control.current.settings.source_review_provider_priority,
-  )
-  const targonWorkerBlocked =
-    snapshot?.targon_capability !== 'go'
-    || runtimeMode !== 'targon-first'
-    || sourceReviewMode !== 'targon-first'
 
   async function refresh() {
     setLoading(true)
@@ -380,7 +320,8 @@ export function ScreenerCapacityPanel({
           <h2 className="mt-3 text-base font-semibold">Capacity controller has not checked in</h2>
           <p className="mt-2 max-w-[70ch] text-sm leading-6 text-[var(--muted-strong)]">
             The independent GCE watchdog is eligible to scale out when queue depth is nonzero.
-            No Targon workload will be started without a valid capability attestation.
+            Nested-Docker Targon screener workers are retired; one-shot Kaniko, runtime, and L1
+            rentals are created by Platform.
           </p>
         </section>
       </div>
@@ -395,100 +336,17 @@ export function ScreenerCapacityPanel({
         readOnly={readOnly}
         onApplied={(provider_control) => setState((current) => ({ ...current, provider_control }))}
       />
-      <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
-        <div className="flex flex-col gap-4 border-b border-[var(--line)] p-4 sm:flex-row sm:items-start sm:justify-between sm:p-5">
-          <div className="flex items-start gap-3">
-            <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-[var(--cyan-dim)] text-[var(--cyan)]">
-              <ServerCog className="h-4 w-4" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold">Controller authority</h2>
-              <p className="mt-1 max-w-[72ch] text-xs leading-5 text-[var(--muted)]">
-                One fenced writer applies provider revision {snapshot.provider_settings_revision}
-                {' '}and sends only residual demand to the lower-priority lane. The GCP watchdog
-                may scale out only after this lease expires.
-              </p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => void refresh()}
-            disabled={loading}
-            className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-[var(--line)] px-3 text-xs font-medium text-[var(--muted-strong)] transition-colors hover:border-[var(--line-strong)] hover:bg-white/5 disabled:opacity-40"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh capacity
-          </button>
-        </div>
-
-        <div className="p-4 sm:p-5">
-          <div
-            className={`flex items-start gap-3 rounded-lg border p-4 ${
-              leaseFresh
-                ? 'border-[#46552f] bg-[var(--acid-dim)]'
-                : 'border-[var(--red)]/30 bg-[var(--red-dim)]'
-            }`}
-          >
-            {leaseFresh ? (
-              <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-[var(--acid)]" />
-            ) : (
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--red)]" />
-            )}
-            <div>
-              <p className="text-sm font-medium">
-                {leaseFresh ? 'Normal writer lease is healthy' : 'Normal writer lease is stale'}
-              </p>
-              <p className="mt-1 text-xs leading-5 text-[var(--muted-strong)]">
-                Epoch {shortIdentity(snapshot.controller_epoch)} · heartbeat{' '}
-                {formatWhen(snapshot.controller_heartbeat_at)} · lease expires{' '}
-                {formatWhen(snapshot.controller_lease_expires_at)}
-              </p>
-            </div>
-          </div>
-
-          {targonWorkerBlocked ? (
-            <div className="mt-4 flex items-start gap-3 rounded-lg border border-[var(--amber)]/30 bg-[var(--amber-dim)] p-4">
-              <Container className="mt-0.5 h-4 w-4 shrink-0 text-[var(--amber)]" />
-              <div>
-                <p className="text-sm font-medium">Full Targon worker lane is blocked</p>
-                <p className="mt-1 break-words text-xs leading-5 text-[var(--muted-strong)]">
-                  Capability is {snapshot.targon_capability.toUpperCase()} and the configured lane
-                  is runtime {runtimeMode.replaceAll('-', ' ')} / source review{' '}
-                  {sourceReviewMode.replaceAll('-', ' ')}. This blocks full Targon screener
-                  workers, not the independently controlled credential-minimal Kaniko build lane.
-                  GCE receives all screening-worker demand and completes the health, source, and
-                  policy gates. Reason:{' '}
-                  <span className="break-all">
-                    {snapshot.fallback_reason ?? 'No current capability attestation'}
-                  </span>
-                  .
-                </p>
-                {snapshot.targon_capability !== 'go' ? (
-                  <p className="mt-2 text-xs leading-5 text-[var(--muted-strong)]">
-                    {capabilityGuidance(snapshot.fallback_reason)}
-                  </p>
-                ) : null}
-              </div>
-            </div>
-          ) : null}
-
-          <dl className="mt-5 grid gap-px overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--line)] sm:grid-cols-3 lg:grid-cols-6">
-            {[
-              ['Runnable', snapshot.runnable_backlog],
-              ['Active leases', snapshot.active_leases],
-              ['Desired slots', snapshot.desired_slots],
-              ['Global cap', snapshot.global_cap],
-              ['Targon ready', snapshot.targon_healthy],
-              ['GCE target', snapshot.gce_target],
-            ].map(([label, value]) => (
-              <div key={label} className="bg-[var(--panel-soft)] px-4 py-3">
-                <dt className="text-[11px] text-[var(--muted)]">{label}</dt>
-                <dd className="mt-1 text-lg font-semibold tabular-nums">{value}</dd>
-              </div>
-            ))}
-          </dl>
-        </div>
-      </section>
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => void refresh()}
+          disabled={loading}
+          className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-lg border border-[var(--line)] px-3 text-xs font-medium text-[var(--muted-strong)] transition-colors hover:border-[var(--line-strong)] hover:bg-white/5 disabled:opacity-40"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh capacity
+        </button>
+      </div>
 
       {latestCleanup ? (
         <section className="rounded-xl border border-[var(--amber)]/30 bg-[var(--amber-dim)] p-4 sm:p-5">
@@ -629,43 +487,10 @@ export function ScreenerCapacityPanel({
 
       <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
         <div className="border-b border-[var(--line)] px-4 py-4 sm:px-5">
-          <h2 className="text-sm font-semibold">Provider allocation</h2>
-          <p className="mt-1 text-xs text-[var(--muted)]">
-            Pending capacity is counted before fallback so Targon and GCE never both scale to
-            the full queue. Advertised inventory is available supply, not an active worker count;
-            zero healthy workers is expected when desired slots are zero.
-          </p>
-        </div>
-        <div className="divide-y divide-[var(--line)]">
-          <ProviderRow
-            icon={<Container className="h-4 w-4" />}
-            name="Targon"
-            detail={`${snapshot.targon_available} CPU rentals advertised; full workers require a GO capability`}
-            values={{
-              healthy: snapshot.targon_healthy,
-              pending: snapshot.targon_pending,
-              draining: snapshot.targon_draining,
-            }}
-          />
-          <ProviderRow
-            icon={<Cloud className="h-4 w-4" />}
-            name="Google Compute Engine"
-            detail="Regional managed instance group; zero is the steady idle target"
-            values={{
-              healthy: snapshot.gce_healthy,
-              pending: snapshot.gce_pending,
-              draining: snapshot.gce_draining,
-            }}
-          />
-        </div>
-      </section>
-
-      <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
-        <div className="border-b border-[var(--line)] px-4 py-4 sm:px-5">
           <h2 className="text-sm font-semibold">Enrolled workers</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">
-            Each worker has a unique hotkey and rotating bearer authority. Draining and revoked
-            nodes cannot claim new jobs.
+            GCE workers have a unique hotkey and rotating bearer authority. Leftover nested-Docker
+            Targon slots are drained and cannot claim new jobs.
           </p>
         </div>
         {state.nodes.length === 0 ? (
@@ -746,46 +571,6 @@ export function ScreenerCapacityPanel({
           {error}
         </p>
       ) : null}
-    </div>
-  )
-}
-
-function ProviderRow({
-  icon,
-  name,
-  detail,
-  values,
-}: {
-  icon: ReactNode
-  name: string
-  detail: string
-  values: { healthy: number; pending: number; draining: number }
-}) {
-  return (
-    <div className="flex flex-col gap-4 px-4 py-4 sm:flex-row sm:items-center sm:px-5">
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white/[0.05] text-[var(--muted-strong)]">
-          {icon}
-        </span>
-        <div>
-          <p className="text-sm font-medium">{name}</p>
-          <p className="mt-0.5 text-xs text-[var(--muted)]">{detail}</p>
-        </div>
-      </div>
-      <dl className="flex gap-6 text-xs sm:text-right">
-        <div>
-          <dt className="text-[var(--muted)]">Healthy</dt>
-          <dd className="mt-1 font-semibold tabular-nums">{values.healthy}</dd>
-        </div>
-        <div>
-          <dt className="text-[var(--muted)]">Pending</dt>
-          <dd className="mt-1 font-semibold tabular-nums">{values.pending}</dd>
-        </div>
-        <div>
-          <dt className="text-[var(--muted)]">Draining</dt>
-          <dd className="mt-1 font-semibold tabular-nums">{values.draining}</dd>
-        </div>
-      </dl>
     </div>
   )
 }

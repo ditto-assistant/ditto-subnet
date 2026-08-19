@@ -1,6 +1,6 @@
 # Managed by Ansible (screener_capacity_controller role).
 [Unit]
-Description=Ditto Targon-first screener capacity controller
+Description=Ditto GCE residual screener capacity controller
 After=network-online.target
 Wants=network-online.target
 
@@ -12,21 +12,14 @@ WorkingDirectory={{ screener_capacity_service_dir }}
 Environment=CLOUDSDK_CONFIG={{ screener_capacity_state_dir }}/gcloud
 ExecStart={{ screener_capacity_venv }}/bin/python -m screener_capacity.controller \
   --platform-url {{ screener_capacity_platform_url }} \
-  --targon-platform-url {{ screener_capacity_targon_platform_url }} \
   --platform-token-file {{ screener_capacity_config_dir }}/platform-controller-token \
   --environment {{ screener_capacity_environment }} \
   --global-cap {{ screener_capacity_global_cap }} \
   --jobs-per-slot {{ screener_capacity_jobs_per_slot }} \
   --interval-seconds {{ screener_capacity_interval_seconds }} \
-  --targon-capability-file {{ screener_capacity_config_dir }}/targon-capability.json \
   --targon-api-key-file {{ screener_capacity_config_dir }}/targon-api-key \
   --targon-org-slug {{ screener_capacity_targon_org_slug }} \
   --targon-prefix {{ screener_capacity_targon_prefix }} \
-  --targon-resource {{ screener_capacity_targon_resource }} \
-  --targon-worker-env-file {{ screener_capacity_config_dir }}/worker-env.json \
-  --gcp-bootstrap-service-account {{ screener_capacity_gcp_bootstrap_service_account }} \
-  --source-review-secret-resource {{ screener_capacity_source_review_secret_resource }} \
-  --targon-provisioning-timeout-seconds {{ screener_capacity_targon_provisioning_timeout_seconds }} \
   --state-file {{ screener_capacity_state_dir }}/state.json \
   --gce-project {{ screener_capacity_gce_project }} \
   --gce-region {{ screener_capacity_gce_region }} \
