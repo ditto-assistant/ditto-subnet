@@ -3,6 +3,11 @@
 This component is a shadow-only coding-repair corpus compiler. It must not
 change DittoBench scores, validator weights, or the active `bench_version`.
 
+`docs/PRIVATE-EXECUTION-PROTOCOL.md` is the authority for future private
+catalog, miner-memory, coding-runner, Luna relay, grading, evidence, and
+retirement boundaries. Change that decision record before implementing a
+different ownership or trust model.
+
 Keep public practice data disjoint from evaluation data. Production corpus
 bytes, upstream instance identifiers, gold patches, hidden tests, credentials,
 and decryption keys must never enter this public tree or a normal build context.
