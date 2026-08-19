@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import logging
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ditto.api_server.storage.errors import (
@@ -578,6 +579,38 @@ class S3StorageClient:
                 f"key={key!r} cause={e}"
             ) from e
         return b"".join(chunks)
+
+    async def download_object_to_path(self, *, key: str, dest: Path) -> None:
+        """Stream ``key`` to ``dest`` without loading the object into memory.
+
+        Used to promote a Platform-verified Kaniko archive with skopeo. Miner
+        images can be hundreds of megabytes; an in-memory read would compete
+        with the API event loop.
+        """
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        try:
+            async with self._session.client(
+                "s3",
+                endpoint_url=self._config.endpoint_url,
+                use_ssl=self._config.use_tls,
+                config=self._client_config,
+            ) as s3:
+                response = await s3.get_object(Bucket=self._config.bucket, Key=key)
+                stream = response["Body"]
+                with dest.open("wb") as handle:
+                    dest.chmod(0o600)
+                    while True:
+                        chunk = await stream.read(_DOWNLOAD_CHUNK_BYTES)
+                        if not chunk:
+                            break
+                        handle.write(chunk)
+        except (ClientError, BotoCoreError, OSError) as error:
+            dest.unlink(missing_ok=True)
+            raise ObjectDownloadFailedError(
+                f"download_object_to_path failed: bucket={self._config.bucket!r} "
+                f"key={key!r} dest={str(dest)!r} cause={error}"
+            ) from error
 
     async def copy_object(self, *, source_key: str, dest_key: str) -> None:
         """Server-side copy inside the private bucket.

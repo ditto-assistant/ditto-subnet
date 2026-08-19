@@ -6,6 +6,7 @@ Per-test instantiation (no module-level ``app =`` global) keeps
 
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import os
@@ -294,6 +295,10 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                 and config.screener_auth.hotkey
             ):
                 from ditto.api_server.targon_client import AsyncTargonClient
+                from ditto.api_server.targon_promote import (
+                    mint_access_token,
+                    promote_runtime_archive,
+                )
                 from ditto.api_server.targon_rental_loop import TargonRentalLoop
 
                 targon_client = AsyncTargonClient(
@@ -301,11 +306,27 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     org_slug=config.targon.org_slug,
                 )
                 stack.push_async_callback(targon_client.aclose)
+
+                async def mint_token(service_account: str) -> str:
+                    return await asyncio.to_thread(mint_access_token, service_account)
+
+                async def promote_archive(
+                    source_key: str, destination: str, writer_token: str
+                ) -> str:
+                    return await promote_runtime_archive(
+                        storage=storage,
+                        source_key=source_key,
+                        destination=destination,
+                        access_token=writer_token,
+                    )
+
                 targon_loop = TargonRentalLoop(
                     session_maker=app.state.session_maker,
                     config=config.targon,
                     targon=targon_client,
                     screener_hotkey=config.screener_auth.hotkey,
+                    promote_archive=promote_archive,
+                    mint_token=mint_token,
                 )
                 stack.push_async_callback(targon_loop.aclose)
                 await targon_loop.start()

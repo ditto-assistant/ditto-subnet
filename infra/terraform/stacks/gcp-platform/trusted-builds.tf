@@ -141,6 +141,18 @@ resource "google_service_account_iam_member" "screener_controller_mint_candidate
   member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
 
+resource "google_service_account_iam_member" "platform_api_mint_candidate_push_tokens" {
+  service_account_id = google_service_account.screening_candidate_push.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${local.platform_api_sa_email}"
+}
+
+resource "google_service_account_iam_member" "platform_api_mint_candidate_pull_tokens" {
+  service_account_id = google_service_account.screening_candidate_pull.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${local.platform_api_sa_email}"
+}
+
 resource "google_service_account" "subnet_build" {
   project      = var.project
   account_id   = "github-actions-subnet-build"

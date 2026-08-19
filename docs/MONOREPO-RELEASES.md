@@ -180,8 +180,9 @@ static GCP key is used.
 
 The release job reads `screener-controller-api-token-prod` through its dedicated
 WIF identity into a mode-0600 runner file. The Targon key is never a GitHub
-secret: only the private capacity VM may read `TARGON_API_KEY` from Secret
-Manager, and the build rental receives a 30-minute registry-only token.
+secret: only the Platform API identity (and the leftover capacity VM, while it
+exists) may read `TARGON_API_KEY` from Secret Manager, and the build rental
+receives a 30-minute registry-only token.
 
 Backroom application secrets are not Terraform values. Bootstrap them once
 with `apps/backroom/scripts/bootstrap-worker-secrets.sh`; the script consumes

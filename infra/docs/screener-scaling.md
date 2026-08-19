@@ -133,9 +133,11 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
 ## Identity boundaries
 
 - Platform API uses `ditto-platform-api`. It admits Targon screens, creates
-  rentals, and attests verdicts. The Targon API key is an in-memory file read
-  at boot (`DITTO_TARGON_API_KEY_FILE`); it is never logged or placed in rental
-  env except the attempt-bound job tokens already required for Kaniko/L1.
+  rentals, and attests verdicts. Terraform grants that identity
+  `secretAccessor` on `TARGON_API_KEY`. Ansible reads the version at converge
+  under `no_log` and renders `DITTO_TARGON_API_KEY` into the platform `.env`
+  like every other platform secret. The value is never logged or placed in
+  rental env except the attempt-bound job tokens already required for Kaniko/L1.
 - GCE screener workers, `ditto-image-builder`, and the capacity-controller VM
   are leftover from the nested-Docker path and are not required.
 - Federated Targon workers get a one-time Platform registration grant and a
@@ -162,12 +164,14 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
   runner fallback and publishing the reviewed Kaniko executor.
 
 `TARGON_API_KEY` is never a Terraform value. Terraform resolves only the Secret
-Manager resource metadata. Ansible reads the version with the capacity VM's
-attached identity under `no_log` and writes a mode-0600 file. Local operator
-probes use the monorepo's `services/screener-orchestrator/scripts/targon-smoke.sh`,
-which streams the secret directly from Secret Manager to the client process.
-The provider client uses Targon's organization-scoped v3 workload API and pins
-the non-secret production organization slug to `ditto`.
+Manager resource metadata and grants `ditto-platform-api` (and the leftover
+capacity VM, while it exists) `secretAccessor`. Ansible reads the version with
+the Platform VM's attached identity under `no_log` and renders it into `.env`.
+Local operator probes use the monorepo's
+`services/screener-orchestrator/scripts/targon-smoke.sh`, which streams the
+secret directly from Secret Manager to the client process. The provider client
+uses Targon's organization-scoped v3 workload API and pins the non-secret
+production organization slug to `ditto`.
 
 The three one-shot lanes have separate disposable smoke commands: a Kaniko
 `--roundtrip` build, a direct-image `runtime-probe`, and a

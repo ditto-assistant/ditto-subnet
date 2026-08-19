@@ -171,6 +171,17 @@ secret_github_deploy_key: platform-github-deploy-key
 secret_admin_api_token: ADMIN_API_PASSWORD
 # Separate bearer used only by the provider-mutating capacity controller.
 secret_screener_controller_api_token: ""
+# Targon Rentals. Empty public URL disables the in-process rental loop.
+secret_targon_api_key: TARGON_API_KEY
+platform_targon_public_url: ""
+platform_targon_submission_builder_image: ""
+platform_targon_org_slug: ditto
+platform_targon_resource: cpu-small
+platform_targon_candidate_push_sa: ""
+platform_targon_candidate_pull_sa: ""
+platform_targon_bootstrap_sa: ""
+platform_targon_source_review_secret: ""
+platform_targon_environment: prod
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
 platform_inference_proxy_enabled: false

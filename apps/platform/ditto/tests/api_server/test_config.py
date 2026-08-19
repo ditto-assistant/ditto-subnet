@@ -42,6 +42,10 @@ def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TAO_PRICE_OVERRIDE_USD", raising=False)
     monkeypatch.delenv("DITTO_TAOSTATS_VALIDATOR_NAMES_URL", raising=False)
     monkeypatch.delenv("DITTO_TAOSTATS_API_KEY", raising=False)
+    monkeypatch.delenv("DITTO_TARGON_API_KEY", raising=False)
+    monkeypatch.delenv("DITTO_TARGON_API_KEY_FILE", raising=False)
+    monkeypatch.delenv("DITTO_TARGON_PUBLIC_PLATFORM_URL", raising=False)
+    monkeypatch.delenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", raising=False)
 
 
 class TestParseApiServerConfigFromEnv:
@@ -510,6 +514,67 @@ class TestInferenceRequestBudgetBound:
 
         at_bound = replace(config.inference_proxy, token_budget=MAX_CHAT_TOKEN_BUDGET)
         check_config(replace(config, inference_proxy=at_bound))
+
+
+class TestTargonRentalConfig:
+    """Targon screening is opt-in via Secret Manager-backed env, not a key file."""
+
+    _COMMIT = "ab" * 20
+    _KEY = "t" * 32
+    _BUILDER = (
+        "us-central1-docker.pkg.dev/ditto-app-dev/"
+        "ditto-public-builders/submission-builder"
+    )
+
+    def test_absent_key_disables_targon(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
+        assert config.targon is None
+
+    def test_env_key_enables_targon(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
+        monkeypatch.setenv(
+            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
+        )
+        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
+        monkeypatch.setenv(
+            "DITTO_TARGON_CANDIDATE_PUSH_SA",
+            "push@ditto-app-dev.iam.gserviceaccount.com",
+        )
+        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
+        assert config.targon is not None
+        assert config.targon.enabled is True
+        assert config.targon.api_key == self._KEY
+        assert (
+            config.targon.submission_builder_image
+            == f"{self._BUILDER}:sha-{self._COMMIT}"
+        )
+        assert self._KEY not in repr(config.targon)
+
+    def test_short_key_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_TARGON_API_KEY", "too-short")
+        with pytest.raises(ApiServerConfigError, match="DITTO_TARGON_API_KEY"):
+            parse_api_server_config_from_env(commit_hash=self._COMMIT)
+
+    def test_key_file_still_accepted(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        key_file = tmp_path / "targon.key"
+        key_file.write_text(self._KEY, encoding="utf-8")
+        monkeypatch.setenv("DITTO_TARGON_API_KEY_FILE", str(key_file))
+        monkeypatch.setenv(
+            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
+        )
+        monkeypatch.setenv(
+            "DITTO_TARGON_SUBMISSION_BUILDER_IMAGE",
+            f"{self._BUILDER}@sha256:{'cd' * 32}",
+        )
+        config = parse_api_server_config_from_env(commit_hash="abc")
+        assert config.targon is not None
+        assert config.targon.api_key == self._KEY
 
     def test_the_default_is_an_actual_raise_over_the_number_it_replaced(self):
         """1024 was the ceiling a legitimate heavy strategy hit at check ~266.

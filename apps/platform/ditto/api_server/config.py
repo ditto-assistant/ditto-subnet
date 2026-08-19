@@ -397,18 +397,29 @@ class ApiServerConfig:
     """In-process Targon rental loop. Disabled when the API key is absent."""
 
 
-def _parse_targon_rental_config_from_env() -> TargonRentalConfig | None:
-    key_file = os.environ.get("DITTO_TARGON_API_KEY_FILE", "").strip()
-    if not key_file:
-        return None
-    try:
-        api_key = Path(key_file).read_text().strip()
-    except OSError as error:
-        raise ApiServerConfigError("DITTO_TARGON_API_KEY_FILE is unreadable") from error
+def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig | None:
+    api_key = os.environ.get("DITTO_TARGON_API_KEY", "").strip()
+    if not api_key:
+        key_file = os.environ.get("DITTO_TARGON_API_KEY_FILE", "").strip()
+        if not key_file:
+            return None
+        try:
+            api_key = Path(key_file).read_text().strip()
+        except OSError as error:
+            raise ApiServerConfigError(
+                "DITTO_TARGON_API_KEY_FILE is unreadable"
+            ) from error
     if len(api_key) < 32:
-        raise ApiServerConfigError("DITTO_TARGON_API_KEY_FILE is invalid")
+        raise ApiServerConfigError("DITTO_TARGON_API_KEY is invalid")
     public_url = os.environ.get("DITTO_TARGON_PUBLIC_PLATFORM_URL", "").strip()
     builder_image = os.environ.get("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", "").strip()
+    image_name = builder_image.rsplit("/", 1)[-1]
+    if builder_image and "@" not in image_name and ":" not in image_name:
+        if not re.fullmatch(r"[0-9a-f]{40}", commit_hash):
+            raise ApiServerConfigError(
+                "Targon builder image tag requires a 40-character commit hash"
+            )
+        builder_image = f"{builder_image}:sha-{commit_hash}"
     if not public_url.startswith("https://") or not builder_image:
         raise ApiServerConfigError(
             "Targon rentals require DITTO_TARGON_PUBLIC_PLATFORM_URL and "
@@ -724,7 +735,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     if top5_backoff_cap < max(1, top5_backoff_base):
         raise ApiServerConfigError("TOP5_RESCORE_BACKOFF_CAP must be >= max(1, base)")
 
-    targon = _parse_targon_rental_config_from_env()
+    targon = _parse_targon_rental_config_from_env(commit_hash)
 
     return ApiServerConfig(
         host=host,

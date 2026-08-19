@@ -46,8 +46,9 @@ resource "google_secret_manager_secret" "screener_controller_api_token" {
 
 # The user's existing provider credential. This data source resolves only the
 # secret resource metadata; no version payload enters Terraform state or logs.
+# Platform owns Targon rentals, so the lookup is independent of the leftover
+# capacity-controller VM.
 data "google_secret_manager_secret" "targon_api_key" {
-  count     = local.screener_capacity_controller_count
   project   = var.project
   secret_id = var.targon_api_key_secret_id
 }
@@ -59,11 +60,11 @@ resource "google_service_account" "screener_capacity_controller" {
   display_name = "Ditto Screener Capacity Controller"
 }
 
-# Targon workers receive a 30-minute access token for this identity. It can
+# Targon L1 jobs receive a 30-minute access token for this identity. It can
 # access only the source-review credential required by the trusted worker; no
 # long-lived GCP key or broad Platform identity crosses provider boundaries.
+# Always created: Platform mints these tokens even when the capacity VM is off.
 resource "google_service_account" "screener_worker_bootstrap" {
-  count        = local.screener_capacity_controller_count
   project      = var.project
   account_id   = "ditto-screener-bootstrap"
   display_name = "Ditto Federated Screener Bootstrap"
@@ -88,22 +89,41 @@ resource "google_secret_manager_secret_iam_member" "screener_controller_token_pl
 resource "google_secret_manager_secret_iam_member" "targon_api_key_controller_access" {
   count     = local.screener_capacity_controller_count
   project   = var.project
-  secret_id = data.google_secret_manager_secret.targon_api_key[0].secret_id
+  secret_id = data.google_secret_manager_secret.targon_api_key.secret_id
   role      = "roles/secretmanager.secretAccessor"
   member    = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
 
+resource "google_secret_manager_secret_iam_member" "targon_api_key_platform_access" {
+  project   = var.project
+  secret_id = data.google_secret_manager_secret.targon_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${local.platform_api_sa_email}"
+}
+
+resource "google_secret_manager_secret_iam_member" "targon_api_key_runtime_access" {
+  project   = var.project
+  secret_id = data.google_secret_manager_secret.targon_api_key.secret_id
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${local.run_sa_email}"
+}
+
 resource "google_secret_manager_secret_iam_member" "screener_bootstrap_source_review_access" {
-  count     = local.screener_capacity_controller_count
   project   = var.project
   secret_id = "validator-openrouter-key"
   role      = "roles/secretmanager.secretAccessor"
-  member    = "serviceAccount:${google_service_account.screener_worker_bootstrap[0].email}"
+  member    = "serviceAccount:${google_service_account.screener_worker_bootstrap.email}"
+}
+
+resource "google_service_account_iam_member" "platform_api_mint_bootstrap_tokens" {
+  service_account_id = google_service_account.screener_worker_bootstrap.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${local.platform_api_sa_email}"
 }
 
 resource "google_service_account_iam_member" "screener_controller_mint_bootstrap_tokens" {
   count              = local.screener_capacity_controller_count
-  service_account_id = google_service_account.screener_worker_bootstrap[0].name
+  service_account_id = google_service_account.screener_worker_bootstrap.name
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.screener_capacity_controller[0].email}"
 }
@@ -219,5 +239,20 @@ output "screener_capacity_controller_sa_email" {
 
 output "screener_worker_bootstrap_sa_email" {
   description = "Identity used only for 30-minute federated worker bootstrap tokens."
-  value       = var.enable_screener_capacity_controller ? google_service_account.screener_worker_bootstrap[0].email : ""
+  value       = google_service_account.screener_worker_bootstrap.email
+}
+
+moved {
+  from = data.google_secret_manager_secret.targon_api_key[0]
+  to   = data.google_secret_manager_secret.targon_api_key
+}
+
+moved {
+  from = google_service_account.screener_worker_bootstrap[0]
+  to   = google_service_account.screener_worker_bootstrap
+}
+
+moved {
+  from = google_secret_manager_secret_iam_member.screener_bootstrap_source_review_access[0]
+  to   = google_secret_manager_secret_iam_member.screener_bootstrap_source_review_access
 }

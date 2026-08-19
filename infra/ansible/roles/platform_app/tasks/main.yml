@@ -69,6 +69,12 @@
     state: present
     update_cache: true
 
+- name: Install skopeo for Targon candidate-image promotion
+  ansible.builtin.apt:
+    name: skopeo
+    state: present
+  when: platform_targon_public_url | default('') | length > 0
+
 - name: Ensure Docker is enabled and running
   ansible.builtin.systemd:
     name: docker
@@ -246,6 +252,19 @@
     platform_secrets: "{{ platform_secrets | combine({'screener_controller_api_token': platform_screener_controller_token_read.stdout}) }}"
   no_log: true
   when: secret_screener_controller_api_token | length > 0
+
+- name: Read Targon API key from Secret Manager
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_targon_api_key }} --project={{ gcp_project }}"
+  register: platform_targon_api_key_read
+  changed_when: false
+  no_log: true
+  when: platform_targon_public_url | default('') | length > 0
+
+- name: Fold the Targon API key into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'targon_api_key': platform_targon_api_key_read.stdout}) }}"
+  no_log: true
+  when: platform_targon_public_url | default('') | length > 0
 
 - name: Read Hippius access key id when miner avatars are configured
   ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_hippius_access_key_id }} --project={{ gcp_project }}"

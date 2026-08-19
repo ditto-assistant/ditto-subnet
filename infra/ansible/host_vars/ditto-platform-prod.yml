@@ -57,6 +57,16 @@ secret_screener_api_token: "screener-api-token-prod"
 # access. Operators add the payload before converging this host.
 secret_screener_controller_api_token: "screener-controller-api-token-prod"
 
+# In-process Targon screening. Terraform grants this VM's attached identity
+# secretAccessor on TARGON_API_KEY; Ansible folds the value into .env.
+secret_targon_api_key: TARGON_API_KEY
+platform_targon_public_url: https://platform-api.heyditto.ai
+platform_targon_submission_builder_image: us-central1-docker.pkg.dev/ditto-app-dev/ditto-public-builders/submission-builder
+platform_targon_candidate_push_sa: ditto-screening-candidate-push@ditto-app-dev.iam.gserviceaccount.com
+platform_targon_candidate_pull_sa: ditto-screening-candidate-pull@ditto-app-dev.iam.gserviceaccount.com
+platform_targon_bootstrap_sa: ditto-screener-bootstrap@ditto-app-dev.iam.gserviceaccount.com
+platform_targon_source_review_secret: projects/ditto-app-dev/secrets/validator-openrouter-key
+
 # Publish the screening backlog (waiting_screening + screening) to Cloud
 # Monitoring every 60s — the prod screener fleet's autoscaling signal
 # (terraform infra/terraform/stacks/gcp-platform/screener-fleet.tf). Needs the metricWriter
