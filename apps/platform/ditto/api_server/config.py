@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from ditto.api_models.inference_concurrency_settings import (
@@ -216,6 +217,31 @@ class EfficiencyBonusConfig:
 
 
 @dataclass(frozen=True)
+class TargonRentalConfig:
+    """Create Kaniko, runtime-smoke, and L1 rentals from the Platform process."""
+
+    api_key: str = field(repr=False)
+    org_slug: str
+    resource: str
+    public_platform_url: str
+    submission_builder_image: str
+    candidate_writer_sa: str
+    candidate_reader_sa: str
+    bootstrap_sa: str
+    source_review_secret_resource: str
+    environment: str = "prod"
+    interval_seconds: float = 15.0
+    provision_timeout_seconds: float = 600.0
+    build_timeout_seconds: float = 1500.0
+    runtime_timeout_seconds: float = 180.0
+    source_review_timeout_seconds: float = 1800.0
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.api_key) and bool(self.submission_builder_image)
+
+
+@dataclass(frozen=True)
 class ApiServerConfig:
     """Resolved configuration for the API server process.
 
@@ -366,6 +392,47 @@ class ApiServerConfig:
         default_factory=EfficiencyBonusConfig
     )
     """Relative token-efficiency bonus knobs (bench_version >= 7); default-off."""
+
+    targon: TargonRentalConfig | None = None
+    """In-process Targon rental loop. Disabled when the API key is absent."""
+
+
+def _parse_targon_rental_config_from_env() -> TargonRentalConfig | None:
+    key_file = os.environ.get("DITTO_TARGON_API_KEY_FILE", "").strip()
+    if not key_file:
+        return None
+    try:
+        api_key = Path(key_file).read_text().strip()
+    except OSError as error:
+        raise ApiServerConfigError("DITTO_TARGON_API_KEY_FILE is unreadable") from error
+    if len(api_key) < 32:
+        raise ApiServerConfigError("DITTO_TARGON_API_KEY_FILE is invalid")
+    public_url = os.environ.get("DITTO_TARGON_PUBLIC_PLATFORM_URL", "").strip()
+    builder_image = os.environ.get("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", "").strip()
+    if not public_url.startswith("https://") or not builder_image:
+        raise ApiServerConfigError(
+            "Targon rentals require DITTO_TARGON_PUBLIC_PLATFORM_URL and "
+            "DITTO_TARGON_SUBMISSION_BUILDER_IMAGE"
+        )
+    return TargonRentalConfig(
+        api_key=api_key,
+        org_slug=os.environ.get("DITTO_TARGON_ORG_SLUG", "ditto").strip(),
+        resource=os.environ.get("DITTO_TARGON_RESOURCE", "cpu-small").strip(),
+        public_platform_url=public_url.rstrip("/"),
+        submission_builder_image=builder_image,
+        candidate_writer_sa=os.environ.get(
+            "DITTO_TARGON_CANDIDATE_PUSH_SA", ""
+        ).strip(),
+        candidate_reader_sa=os.environ.get(
+            "DITTO_TARGON_CANDIDATE_PULL_SA", ""
+        ).strip(),
+        bootstrap_sa=os.environ.get("DITTO_TARGON_BOOTSTRAP_SA", "").strip(),
+        source_review_secret_resource=os.environ.get(
+            "DITTO_TARGON_SOURCE_REVIEW_SECRET", ""
+        ).strip(),
+        environment=os.environ.get("DITTO_TARGON_ENVIRONMENT", "prod").strip()
+        or "prod",
+    )
 
 
 _VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}
@@ -657,6 +724,8 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
     if top5_backoff_cap < max(1, top5_backoff_base):
         raise ApiServerConfigError("TOP5_RESCORE_BACKOFF_CAP must be >= max(1, base)")
 
+    targon = _parse_targon_rental_config_from_env()
+
     return ApiServerConfig(
         host=host,
         port=port,
@@ -669,6 +738,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         storage=parse_storage_config_from_env(),
         embedding=parse_embedding_config_from_env(),
         data_pipeline=parse_data_pipeline_config_from_env(),
+        targon=targon,
         screener_auth=ScreenerAuthConfig(
             hotkey=screener_hotkey,
             api_token=screener_api_token,

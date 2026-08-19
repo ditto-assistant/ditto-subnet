@@ -285,6 +285,31 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             stack.push_async_callback(validator_names.aclose)
             if _process_role() == PLATFORM_ROLE:
                 await validator_names.start(app.state.session_maker)
+
+            targon_loop = None
+            if (
+                _process_role() == PLATFORM_ROLE
+                and config.targon is not None
+                and config.targon.enabled
+                and config.screener_auth.hotkey
+            ):
+                from ditto.api_server.targon_client import AsyncTargonClient
+                from ditto.api_server.targon_rental_loop import TargonRentalLoop
+
+                targon_client = AsyncTargonClient(
+                    api_key=config.targon.api_key,
+                    org_slug=config.targon.org_slug,
+                )
+                stack.push_async_callback(targon_client.aclose)
+                targon_loop = TargonRentalLoop(
+                    session_maker=app.state.session_maker,
+                    config=config.targon,
+                    targon=targon_client,
+                    screener_hotkey=config.screener_auth.hotkey,
+                )
+                stack.push_async_callback(targon_loop.aclose)
+                await targon_loop.start()
+            app.state.targon_rental_loop = targon_loop
         except Exception as e:
             raise ApiServerLifespanError(
                 f"failed to open dependencies during startup: {e}"

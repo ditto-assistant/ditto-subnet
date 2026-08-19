@@ -43,8 +43,8 @@ complete image archive. When runtime starts with Targon, the trusted controller
 promotes that exact archive to a private ephemeral registry, launches it
 directly as a Rental, and records digest/workload provenance. When runtime smoke records `succeeded`, that Targon `/health` result is the
 mechanical admission. Platform copies the verified Kaniko archive to the
-screened-image key and records the verdict itself. There is no screener
-sr25519 on this path and no GCE worker. Isolated fake-gateway oracle is
+screened-image key, creates the Targon rentals, and records the verdict.
+There is no screener sr25519, no GCE worker, and no capacity-controller host. Isolated fake-gateway oracle is
 skipped until a screener-to-rental prompt tool exists.
 
 Source review is also attempt-bound. A pinned trusted worker may return a
