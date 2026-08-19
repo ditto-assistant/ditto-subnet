@@ -290,6 +290,38 @@ describe("dedicated leaderboard page (row 3 slice)", () => {
     expect(el("emissions-col-tip").closest("th")?.hasAttribute("data-sort")).toBe(false);
   });
 
+  it("shows the fold crown clock, not this tarball's upload", async () => {
+    const crown = "2026-08-19T05:31:40.678880Z";
+    const upload = "2026-08-19T09:11:01.800258Z";
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          entries: (payload.entries ?? []).map((entry) =>
+            String(entry.agent_id) === String(rawLeaderEntry.agent_id)
+              ? { ...entry, first_seen: upload, crown_first_seen: crown }
+              : entry,
+          ),
+        };
+      },
+    });
+    await waitFor(() => {
+      const cell = document.querySelector(
+        'td.first-seen-cell[data-fold-arrival="2026-08-19T05:31:40.678880Z"]',
+      ) as HTMLElement | null;
+      expect(cell).toBeTruthy();
+      expect(cell?.getAttribute("title")).toContain(crown);
+      expect(cell?.getAttribute("title")).toContain(upload);
+      expect(cell?.getAttribute("title")).toContain("not this tarball");
+      expect(cell?.textContent).toContain("upload");
+    });
+    expect(
+      document.querySelector('#board thead th[data-sort="first_seen"]')?.textContent,
+    ).toContain("Crown since");
+  });
+
   it("states why an empty cohort adjusted nothing, instead of rendering blank", async () => {
     // The 2026-08-13 production shape: the preview ran and qualified nobody.
     // Per-row chips need a factor to render, so without this strip the board

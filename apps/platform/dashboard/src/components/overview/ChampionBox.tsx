@@ -12,6 +12,7 @@ import {
   crownContest,
   crownWhyHigh,
   displayComposite,
+  foldArrival,
   signedScore,
 } from "../../lib/scoring";
 import { ChipTip } from "../board/chips";
@@ -147,18 +148,14 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                 </b>
               </span>
             </Show>
-            <Show when={!scoreCeilingPool() && championEntry()?.first_seen}>
+            <Show when={!scoreCeilingPool() && foldArrival(championEntry() || {})}>
               <span>
-                First seen <b>{relTime(championEntry()?.first_seen)}</b>
+                Crown since <b>{relTime(foldArrival(championEntry() || {}))}</b>
               </span>
             </Show>
-            {/* The anchor, shown only when it disagrees with the upload time.
-                That disagreement is the whole of the "champion is newer than
-                the agents above it" complaint, and the board used to publish
-                only the number that made the fold look wrong. */}
             <Show when={!scoreCeilingPool() && heldFromLineage()}>
               <span>
-                Holds from <b>{relTime(championEntry()?.crown_first_seen as string)}</b>
+                This upload <b>{relTime(championEntry()?.first_seen)}</b>
               </span>
             </Show>
             <Show when={!scoreCeilingPool() && championEntry()?.bench_version != null}>

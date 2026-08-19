@@ -67,6 +67,56 @@ export function displayComposite(e: CompositeCarrier, settledView = false): numb
   return e.official_composite != null ? e.official_composite : e.composite;
 }
 
+/** Arrival fields the KOTH fold and the board clock read. */
+export interface ArrivalCarrier {
+  first_seen?: string | null;
+  crown_first_seen?: string | null;
+}
+
+/**
+ * The timestamp the fold orders on. ``crown_first_seen`` is the lineage's
+ * earliest same-score upload; ``first_seen`` is this tarball. Serving the
+ * tarball as "First seen" made Omar look earlier than Hogwarts when Hogwarts
+ * still held the 05:31 v2 clock.
+ */
+export function foldArrival(e: ArrivalCarrier): string | null {
+  const crown = e.crown_first_seen;
+  if (typeof crown === "string" && crown.length > 0) return crown;
+  const upload = e.first_seen;
+  if (typeof upload === "string" && upload.length > 0) return upload;
+  return null;
+}
+
+export function foldArrivalMs(e: ArrivalCarrier): number | null {
+  const iso = foldArrival(e);
+  if (iso == null) return null;
+  const t = Date.parse(iso);
+  return Number.isFinite(t) ? t : null;
+}
+
+export function tarballArrivalDiffers(e: ArrivalCarrier): boolean {
+  const fold = foldArrival(e);
+  const upload = e.first_seen;
+  return fold != null && typeof upload === "string" && upload.length > 0 && fold !== upload;
+}
+
+export function foldArrivalTip(e: ArrivalCarrier): string {
+  const fold = foldArrival(e);
+  if (fold == null) return "No arrival time.";
+  if (tarballArrivalDiffers(e)) {
+    return (
+      "Crown clock " +
+      fold +
+      ". The fold uses this lineage upload, not this tarball (" +
+      String(e.first_seen) +
+      ") and not screen-complete."
+    );
+  }
+  return (
+    "Crown clock " + fold + ". Upload time of the score this miner defends — not screen-complete."
+  );
+}
+
 /** Whether the exposed efficiency arithmetic is the score authority. Platform
  * exposes `effective_composite` for audit before activation, including neutral
  * factors whose arithmetic equals the official score, so numeric equality is

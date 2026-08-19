@@ -45,6 +45,7 @@ import {
   compositeCalculationHeading,
   compositeCalculationRows,
   displayComposite,
+  foldArrival,
   isEligible,
   isFinalized,
   unrankedKind,
@@ -1072,8 +1073,13 @@ function MinerSummary(props: { entry: RankedEntry; settled: boolean; total: numb
           />
           <Stat k="Tool mean" v={fx(e().tool_mean) + "  (" + pct(e().tool_mean) + ")"} />
           <Stat k="Memory mean" v={fx(e().memory_mean) + "  (" + pct(e().memory_mean) + ")"} />
-          <Show when={e().first_seen}>
-            {(seen) => <Stat k="First seen" v={new Date(seen()).toLocaleString()} />}
+          <Show when={foldArrival(e())}>
+            {(seen) => <Stat k="Crown since" v={new Date(seen()).toLocaleString()} />}
+          </Show>
+          <Show
+            when={e().crown_first_seen && e().first_seen && e().crown_first_seen !== e().first_seen}
+          >
+            <Stat k="This upload" v={new Date(e().first_seen as string).toLocaleString()} />
           </Show>
           <Stat
             k="Rank"

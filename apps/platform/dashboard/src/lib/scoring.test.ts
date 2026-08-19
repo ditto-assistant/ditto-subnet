@@ -41,6 +41,10 @@ import {
   dethroneFloor,
   displayComposite,
   embargoHours,
+  foldArrival,
+  foldArrivalMs,
+  foldArrivalTip,
+  tarballArrivalDiffers,
   emissionsSplit,
   errBandBounds,
   foldChainWeights,
@@ -93,6 +97,34 @@ describe("rolloutSettledView", () => {
     // Number(null) is 0, Number(undefined) is NaN — neither opens the view.
     expect(rolloutSettledView({ selection_mode: "current", desired_bench_version: 7 })).toBe(false);
     expect(rolloutSettledView({ selection_mode: "current", active_bench_version: 6 })).toBe(false);
+  });
+});
+
+describe("foldArrival", () => {
+  it("prefers the lineage crown clock over this tarball's upload", () => {
+    const hogwarts = {
+      first_seen: "2026-08-19T09:11:01.800258Z",
+      crown_first_seen: "2026-08-19T05:31:40.678880Z",
+    };
+    expect(foldArrival(hogwarts)).toBe("2026-08-19T05:31:40.678880Z");
+    expect(foldArrivalMs(hogwarts)).toBe(Date.parse("2026-08-19T05:31:40.678880Z"));
+    expect(tarballArrivalDiffers(hogwarts)).toBe(true);
+    expect(foldArrivalTip(hogwarts)).toContain("2026-08-19T05:31:40.678880Z");
+    expect(foldArrivalTip(hogwarts)).toContain("2026-08-19T09:11:01.800258Z");
+    expect(foldArrivalTip(hogwarts)).toContain("not this tarball");
+    expect(foldArrivalTip(hogwarts)).toContain("not screen-complete");
+  });
+
+  it("falls back to this tarball when no lineage clock is published", () => {
+    const omar = { first_seen: "2026-08-19T06:24:06.858354Z" };
+    expect(foldArrival(omar)).toBe("2026-08-19T06:24:06.858354Z");
+    expect(tarballArrivalDiffers(omar)).toBe(false);
+    expect(foldArrival(omar)! < "2026-08-19T09:11:01.800258Z").toBe(true);
+    expect(foldArrival({ crown_first_seen: "", first_seen: "2026-08-19T06:24:06.858354Z" })).toBe(
+      "2026-08-19T06:24:06.858354Z",
+    );
+    expect(foldArrival({})).toBeNull();
+    expect(foldArrivalMs({})).toBeNull();
   });
 });
 

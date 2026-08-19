@@ -27,10 +27,14 @@ import {
   displayComposite,
   chainWeightLabel,
   errBandBounds,
+  foldArrival,
+  foldArrivalMs,
+  foldArrivalTip,
   isEligible,
   isFinalized,
   isRegistered,
   showsCompositeErrBand,
+  tarballArrivalDiffers,
   unrankedKind,
 } from "../../lib/scoring";
 import { pushEntityRoute } from "../../stores/routeStore";
@@ -105,7 +109,7 @@ const BOARD_SORTS: Record<BoardSortKey, (e: BoardEntry, settledView: boolean) =>
   composite: (e, settledView) => displayComposite(e, settledView),
   cost: (e) => e.average_run_cost_microusd,
   latency: (e) => e.median_ms,
-  first_seen: (e) => (e.first_seen ? Date.parse(e.first_seen) : null),
+  first_seen: (e) => foldArrivalMs(e),
 };
 
 const BOARD_SORT_LABELS: Record<BoardSortKey, string> = {
@@ -113,7 +117,7 @@ const BOARD_SORT_LABELS: Record<BoardSortKey, string> = {
   composite: "Score",
   cost: "Average run cost",
   latency: "Latency",
-  first_seen: "First seen",
+  first_seen: "Crown since",
 };
 
 // The card layout under 720px hides the sortable column headers, so the
@@ -129,8 +133,8 @@ const MOBILE_SORT_OPTIONS: { value: string; label: string }[] = [
   { value: "cost:-1", label: "Avg run cost · high to low" },
   { value: "latency:1", label: "Latency · fastest first" },
   { value: "latency:-1", label: "Latency · slowest first" },
-  { value: "first_seen:-1", label: "First seen · newest first" },
-  { value: "first_seen:1", label: "First seen · oldest first" },
+  { value: "first_seen:-1", label: "Crown since · newest first" },
+  { value: "first_seen:1", label: "Crown since · oldest first" },
 ];
 
 function defaultBoardSort(): boolean {
@@ -218,10 +222,10 @@ const HEADERS: HeaderSpec[] = [
   },
   {
     key: "first_seen",
-    label: "First seen",
+    label: "Crown since",
     class: "num hide-sm",
     width: "92px",
-    tip: "When this miner's winning agent was first uploaded to the platform.",
+    tip: "When the KOTH fold treats this miner as having arrived: the earliest same-score family upload, not this tarball and not screen-complete.",
   },
 ];
 
@@ -701,7 +705,16 @@ function BoardRow(props: {
             </Show>
           </td>
         </Show>
-        <td class="num hide-sm first-seen-cell muted">{relTime(e().first_seen)}</td>
+        <td
+          class="num hide-sm first-seen-cell muted"
+          data-fold-arrival={foldArrival(e()) || undefined}
+          title={foldArrivalTip(e())}
+        >
+          {relTime(foldArrival(e()))}
+          <Show when={tarballArrivalDiffers(e())}>
+            <div class="tarball-upload">upload {relTime(e().first_seen)}</div>
+          </Show>
+        </td>
       </tr>
       <For each={familyMembers()}>
         {(member, familyIndex) => (
@@ -728,6 +741,11 @@ function BoardRow(props: {
                 <span class="family-member-score" title="Canonical three-validator median">
                   {fxScore(member.canonical_composite)}
                 </span>
+                <Show when={member.submitted_at}>
+                  <span class="family-member-submitted" title={"Upload " + member.submitted_at}>
+                    {relTime(member.submitted_at)}
+                  </span>
+                </Show>
                 <span class="family-member-state">
                   <RetestSeedChip count={Number(member.confirmation_seed_depth) || 0} />
                   <span>Scored · not independently ranked · represented by {displayName()}</span>
