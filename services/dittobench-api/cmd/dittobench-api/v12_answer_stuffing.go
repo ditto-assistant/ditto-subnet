@@ -142,9 +142,9 @@ func memoryAnswerIsProvablyComputed(
 
 // v12AnswerStuffingConfigFromEnv returns the compiled defaults with optional
 // operator overrides, following the broker's envOr/envIntDefault conventions. The
-// posture defaults to ENFORCE (a computed answer in the harness's model-input is a
-// deliberate injection); an operator may flip it to review, and an unknown value
-// falls back to the safe compiled default.
+// posture defaults to PENALIZE (a graduated, capped, never-zero factor). An
+// operator may flip it to review or enforce; an unknown value falls back to the
+// compiled default.
 func v12AnswerStuffingConfigFromEnv() v9base.AnswerStuffingGateConfig {
 	cfg := v9base.DefaultAnswerStuffingGateConfig()
 	cfg.MinCases = envIntDefault("DITTOBENCH_V12_ANSWER_STUFFING_MIN_CASES", cfg.MinCases)
@@ -156,8 +156,12 @@ func v12AnswerStuffingConfigFromEnv() v9base.AnswerStuffingGateConfig {
 	switch strings.ToLower(strings.TrimSpace(envOr("DITTOBENCH_V12_ANSWER_STUFFING_POSTURE", string(cfg.Posture)))) {
 	case string(scoregates.AnswerStuffingEnforce):
 		cfg.Posture = scoregates.AnswerStuffingEnforce
+	case string(scoregates.AnswerStuffingPenalize):
+		cfg.Posture = scoregates.AnswerStuffingPenalize
 	case string(scoregates.AnswerStuffingReview):
 		cfg.Posture = scoregates.AnswerStuffingReview
+	default:
+		cfg.Posture = v9base.DefaultAnswerStuffingPosture
 	}
 	return cfg
 }

@@ -40,10 +40,10 @@ package scoregates
 //     it catches a harness that DID route through the model but fed it the
 //     pre-computed answer to launder.
 //
-// Posture: ENFORCE by default. A finished COMPUTED answer sitting in the
-// harness's own model-input for a compute-required case is a deliberate
-// injection, so the default is a hard gate-zero -- but it is flippable to review
-// via env (the same shadow-before-enforce ladder the other gates follow).
+// Posture: PENALIZE by default. A finished COMPUTED answer in the harness
+// model-input is a lead, not a proof of Class-D coercion; enforce false-zeroed
+// an honest champion. The default is a graduated, capped, never-zero penalty,
+// flippable to review or enforce via env.
 //
 // Gating bar: STRICT + PROVABLE per case, with a LOW count threshold. Each flagged
 // case is now provable on its own -- the scorer flags a computed case ONLY when

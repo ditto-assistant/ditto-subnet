@@ -244,8 +244,9 @@ func applyV9BaseEvidence(
 	// reads the two per-case telemetry fields the scorer's provenance pass wrote
 	// and flags a run whose COMPUTED-answer cases were fed the finished answer
 	// through the model input above the run-level stuffed-share threshold. Under
-	// the default enforce posture it zeroes the composite; the gate is fail-open on
-	// incomplete capture and excludes verbatim-recall cases entirely.
+	// the default penalize posture it applies a graduated capped factor and never
+	// zeroes; the gate is fail-open on incomplete capture and excludes
+	// verbatim-recall cases entirely.
 	stuffingCfg := v12AnswerStuffingConfigFromEnv()
 	stuffing := v12AnswerStuffingTelemetry(req.BenchVersion, perCase, transcripts)
 	gates, err = v9base.AttachAnswerStuffingGate(req.BenchVersion, gates, stuffing, stuffingCfg)
