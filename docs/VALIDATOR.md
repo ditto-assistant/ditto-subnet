@@ -388,7 +388,8 @@ If all four services already match the descriptor, `adopt "$DIGEST"` records
 them without replacement. Both commands fail closed if the descriptor's
 signature is not from this repository's release workflow.
 
-Enable the timer only after migration or adoption succeeds:
+`VALIDATOR_STACK_AUTO_UPDATE` defaults on. Confirm it, then enable the timer
+only after migration or adoption succeeds:
 
 ```sh
 if grep -q '^VALIDATOR_STACK_AUTO_UPDATE=' .env; then

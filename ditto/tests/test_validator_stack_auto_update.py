@@ -495,6 +495,10 @@ def test_stack_bootstrap_persists_registry_wallet_and_signature_context() -> Non
     assert 'find "$sigstore_dir" -type d -exec chmod 0700 {} +' in installer
     assert 'find "$sigstore_dir" -type f -exec chmod 0600 {} +' in installer
     assert "VALIDATOR_STACK_AUTO_UPDATE=true" in installer
+    updater = UPDATER.read_text()
+    assert "setting VALIDATOR_STACK_AUTO_UPDATE true" in updater
+    assert "setting VALIDATOR_STACK_AUTO_UPDATE false" not in updater
+    assert "stack_update_timers_enabled" in updater
     assert installer.count("OnBootSec=1m") == 2
     assert installer.count("OnUnitInactiveSec=1m") == 2
     assert installer.count("RandomizedDelaySec=30s") == 2
@@ -903,6 +907,29 @@ def _run_updater(env: dict[str, str], *args: str) -> subprocess.CompletedProcess
         timeout=20,
         check=False,
     )
+
+
+def test_missing_auto_update_env_defaults_enabled(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, _, _, env_file = stack_updater_env
+    env_file.write_text("")
+
+    result = _run_updater(env, "status")
+
+    assert result.returncode == 0, result.stderr
+    assert "enabled=true\n" in result.stdout
+
+
+def test_adoption_allows_auto_update_env_when_timers_are_absent(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, _, _, env_file = stack_updater_env
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_disabled_stack_updater_does_not_touch_docker(

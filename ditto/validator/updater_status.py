@@ -131,7 +131,7 @@ def collect_updater_status(
 
     now = int(time.time()) if observed_at is None else observed_at
     managed = os.environ.get("VALIDATOR_STACK_MODE") == "managed"
-    enabled = os.environ.get("VALIDATOR_STACK_UPDATER", "false").lower() in {
+    enabled = os.environ.get("VALIDATOR_STACK_UPDATER", "true").lower() in {
         "1",
         "true",
         "yes",

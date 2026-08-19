@@ -15,6 +15,35 @@ def _managed(monkeypatch) -> None:
     monkeypatch.setenv("VALIDATOR_STACK_VERSION", "0.63.1")
 
 
+def test_managed_defaults_enabled_when_updater_env_is_omitted(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VALIDATOR_STACK_MODE", "managed")
+    monkeypatch.delenv("VALIDATOR_STACK_UPDATER", raising=False)
+    monkeypatch.setenv("VALIDATOR_STACK_DESCRIPTOR_REF", _CURRENT)
+    monkeypatch.setenv("VALIDATOR_STACK_VERSION", "0.63.1")
+
+    status = collect_updater_status(observed_at=100, state_dir=tmp_path)
+
+    assert status.enabled is True
+    assert status.state == "idle"
+    assert status.channel == "compat-2"
+
+
+def test_managed_explicit_false_still_reports_disabled(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("VALIDATOR_STACK_MODE", "managed")
+    monkeypatch.setenv("VALIDATOR_STACK_UPDATER", "false")
+    monkeypatch.setenv("VALIDATOR_STACK_DESCRIPTOR_REF", _CURRENT)
+    monkeypatch.setenv("VALIDATOR_STACK_VERSION", "0.63.1")
+
+    status = collect_updater_status(observed_at=100, state_dir=tmp_path)
+
+    assert status.enabled is False
+    assert status.state == "disabled"
+
+
 def test_source_mode_reports_not_managed_without_reading_host_state(
     tmp_path: Path, monkeypatch
 ) -> None:

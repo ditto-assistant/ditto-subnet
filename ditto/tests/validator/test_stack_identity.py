@@ -125,7 +125,7 @@ def test_managed_descriptor_env_produces_only_signed_exact_identities(
     monkeypatch.setenv("VALIDATOR_STACK_DITTOBENCH_REVISION", "cd" * 20)
     monkeypatch.setenv("VALIDATOR_STACK_COMPOSE_SCHEMA", "1")
     monkeypatch.setenv("VALIDATOR_STACK_UPDATE_PROTOCOL", "1")
-    monkeypatch.setenv("VALIDATOR_STACK_UPDATER", "1")
+    monkeypatch.delenv("VALIDATOR_STACK_UPDATER", raising=False)
     for component in _COMPONENTS:
         monkeypatch.setenv(f"VALIDATOR_STACK_COMPONENT_{component}", _REF)
 
@@ -139,6 +139,28 @@ def test_managed_descriptor_env_produces_only_signed_exact_identities(
         for identity in stack.components.__dict__.values()
         if identity is not None
     )
+
+
+def test_managed_explicit_updater_off_clears_stack_updater_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("VALIDATOR_STACK_MODE", "managed")
+    monkeypatch.setenv(
+        "VALIDATOR_STACK_DESCRIPTOR_REF",
+        "ghcr.io/ditto-assistant/ditto-subnet-stack@" + _DIGEST,
+    )
+    monkeypatch.setenv("VALIDATOR_STACK_VERSION", "1.2.3")
+    monkeypatch.setenv("VALIDATOR_STACK_REVISION", "ab" * 20)
+    monkeypatch.setenv("VALIDATOR_STACK_DITTOBENCH_REVISION", "cd" * 20)
+    monkeypatch.setenv("VALIDATOR_STACK_COMPOSE_SCHEMA", "1")
+    monkeypatch.setenv("VALIDATOR_STACK_UPDATE_PROTOCOL", "1")
+    monkeypatch.setenv("VALIDATOR_STACK_UPDATER", "false")
+    for component in _COMPONENTS:
+        monkeypatch.setenv(f"VALIDATOR_STACK_COMPONENT_{component}", _REF)
+
+    capabilities, _ = validator_capabilities_and_stack()
+    assert capabilities.full_stack_managed is True
+    assert capabilities.stack_updater is False
 
 
 @pytest.mark.parametrize(

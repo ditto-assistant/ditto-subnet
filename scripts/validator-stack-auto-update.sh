@@ -48,6 +48,11 @@ setting() {
 }
 
 is_true() { case "$1" in 1|true|TRUE|True|yes|YES|Yes) return 0;; *) return 1;; esac; }
+stack_update_timers_enabled() {
+  command -v systemctl >/dev/null 2>&1 || return 1
+  systemctl is-enabled --quiet ditto-validator-stack-auto-update.timer 2>/dev/null \
+    || systemctl is-enabled --quiet ditto-validator-stack-prefetch.timer 2>/dev/null
+}
 require_positive_integer() { [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "$1 must be a positive integer"; }
 is_descriptor_digest() { [[ "$1" =~ ^ghcr\.io/ditto-assistant/ditto-subnet-stack@sha256:[0-9a-f]{64}$ ]]; }
 is_image_digest() { [[ "$1" =~ ^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$ ]]; }
@@ -742,7 +747,7 @@ cleanup() {
 }
 
 show_status() {
-  printf 'enabled=%s\nchannel=%s\nprefetch_channel=%s\nmanaged_release=%s\n' "$(setting VALIDATOR_STACK_AUTO_UPDATE false)" "$RELEASE_CHANNEL" "$PREFETCH_CHANNEL" "$(manifest_value "$MANAGED_FILE" STACK_RELEASE 2>/dev/null || printf unmanaged)"
+  printf 'enabled=%s\nchannel=%s\nprefetch_channel=%s\nmanaged_release=%s\n' "$(setting VALIDATOR_STACK_AUTO_UPDATE true)" "$RELEASE_CHANNEL" "$PREFETCH_CHANNEL" "$(manifest_value "$MANAGED_FILE" STACK_RELEASE 2>/dev/null || printf unmanaged)"
   if [ -f "$CURRENT_DIR/manifest.env" ] && [ ! -L "$CURRENT_DIR/manifest.env" ]; then
     while IFS= read -r line; do
       case "$line" in
@@ -785,8 +790,8 @@ if [ "$mode" = prefetch ]; then
   if is_true "$(setting VALIDATOR_AUTO_UPDATE false)"; then
     die "the retired validator-only updater is still enabled: stop ditto-validator-auto-update.timer and remove VALIDATOR_AUTO_UPDATE from .env"
   fi
-  if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)"; then
-    log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt in)"
+  if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE true)"; then
+    log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt back in)"
     exit 0
   fi
   prefetched_candidate="$(resolve_channel_digest "$PREFETCH_CHANNEL")"
@@ -801,7 +806,7 @@ if is_true "$(setting VALIDATOR_AUTO_UPDATE false)"; then
   die "the retired validator-only updater is still enabled: stop ditto-validator-auto-update.timer and remove VALIDATOR_AUTO_UPDATE from .env"
 fi
 if [ "$mode" = adopt ]; then
-  is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)" && die "disable the stack timer before supervised adoption"
+  stack_update_timers_enabled && die "disable the stack timer before supervised adoption"
   [ "$#" -eq 2 ] || die "usage: $0 adopt <immutable-descriptor-digest>"
   is_descriptor_digest "$2" || die "adopt requires an immutable stack descriptor digest"
   [ ! -f "$MANAGED_FILE" ] || die "managed stack mode is already adopted"
@@ -813,7 +818,7 @@ if [ "$mode" = adopt ]; then
   rm -rf -- "$CURRENT_DIR"; mv "$STAGED_DIR" "$CURRENT_DIR"; record_managed "$2"; log "adopted managed complete stack $2"; exit 0
 fi
 if [ "$mode" = migrate ]; then
-  is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)" && die "disable the stack timer before supervised first migration"
+  stack_update_timers_enabled && die "disable the stack timer before supervised first migration"
   [ "$#" -eq 2 ] || die "usage: $0 migrate <immutable-descriptor-digest>"
   is_descriptor_digest "$2" || die "migrate requires an immutable stack descriptor digest"
   [ ! -f "$MANAGED_FILE" ] || die "stack is already managed; use run or rollback"
@@ -838,14 +843,14 @@ if [ "$mode" = migrate ]; then
   exit 0
 fi
 if [ "$mode" = rollback ]; then
-  is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)" && die "disable the stack timer before manual rollback"
+  stack_update_timers_enabled && die "disable the stack timer before manual rollback"
   [ -f "$LAST_UPDATE_FILE" ] || die "no previous complete release recorded"
   rollback_ref="$(manifest_value "$LAST_UPDATE_FILE" PREVIOUS_RELEASE)"; is_descriptor_digest "$rollback_ref" || die "recorded rollback release is invalid"
   verify_descriptor_signature "$rollback_ref" || die "rollback descriptor publisher identity is invalid"
   docker pull "$rollback_ref" >/dev/null; extract_descriptor "$rollback_ref" "$STAGED_DIR" || die "rollback descriptor unavailable"; pull_release_images "$STAGED_DIR" || die "rollback images unavailable"
   perform_update "$rollback_ref" true; exit 0
 fi
-if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE false)"; then log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt in)"; exit 0; fi
+if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE true)"; then log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt back in)"; exit 0; fi
 candidate="$(resolve_channel_digest "$RELEASE_CHANNEL")"
 verify_descriptor_signature "$candidate" || die "candidate descriptor publisher identity is invalid"
 if failed_candidate_is_suppressed "$candidate"; then exit 0; fi

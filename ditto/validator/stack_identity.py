@@ -167,7 +167,8 @@ def validator_capabilities_and_stack() -> tuple[
         require_screened_image=True,
         source_build_fallback=False,
         full_stack_managed=stack.mode == "managed",
-        stack_updater=stack.mode == "managed" and _truthy("VALIDATOR_STACK_UPDATER"),
+        stack_updater=stack.mode == "managed"
+        and _truthy("VALIDATOR_STACK_UPDATER", default=True),
         sandbox_egress_restricted=_truthy(
             "VALIDATOR_SANDBOX_EGRESS_RESTRICTED", default=False
         ),

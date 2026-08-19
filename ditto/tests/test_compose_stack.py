@@ -370,6 +370,10 @@ def test_screened_image_capability_is_enabled_without_a_global_requirement() -> 
     assert validator["NETUID"] == "118"
     assert validator["VALIDATOR_STACK_MODE"] == "source"
     assert validator["VALIDATOR_EXECUTOR_ISOLATION"] == "privileged_dind"
+    assert validator["VALIDATOR_STACK_UPDATER"] == (
+        "${VALIDATOR_STACK_AUTO_UPDATE:-true}"
+    )
+    assert _compose_default(validator["VALIDATOR_STACK_UPDATER"]) == "true"
 
 
 def test_dittobench_context_is_the_local_monorepo_service() -> None:
