@@ -320,11 +320,11 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_SOURCE_REVIEW_BASE_URL", "https://openrouter.ai/api/v1"
         ),
         source_review_timeout_seconds=_parse_float(
-            "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "600"
+            "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "1800"
         ),
-        source_review_max_steps=_parse_int("SCREENER_SOURCE_REVIEW_MAX_STEPS", "24"),
+        source_review_max_steps=_parse_int("SCREENER_SOURCE_REVIEW_MAX_STEPS", "200"),
         source_review_max_read_bytes=_parse_int(
-            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "1200000"
+            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "8000000"
         ),
         source_review_reasoning_effort=os.environ.get(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
@@ -399,13 +399,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_API_KEY_FILE is required by screening policy v8"
         )
-    if not 1 <= config.source_review_max_steps <= 40:
+    if not 1 <= config.source_review_max_steps <= 240:
         raise ScreenerConfigError(
-            "SCREENER_SOURCE_REVIEW_MAX_STEPS must be between 1 and 40"
+            "SCREENER_SOURCE_REVIEW_MAX_STEPS must be between 1 and 240"
         )
-    if not 32_000 <= config.source_review_max_read_bytes <= 4_000_000:
+    if not 32_000 <= config.source_review_max_read_bytes <= 16_000_000:
         raise ScreenerConfigError(
-            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES must be between 32000 and 4000000"
+            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES must be between 32000 and 16000000"
         )
     if config.source_review_reasoning_effort not in {"low", "medium", "high"}:
         raise ScreenerConfigError(

@@ -88,9 +88,9 @@ class ReviewSettings(BaseModel):
     l3_model: Literal["openai/gpt-5.6-sol"]
     timeout_seconds: Annotated[int, Field(ge=30, le=900)]
     max_steps: Annotated[int, Field(ge=1, le=20)]
-    source_review_max_steps: Annotated[int, Field(ge=1, le=40)] = 24
-    source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=4_000_000)] = (
-        1_200_000
+    source_review_max_steps: Annotated[int, Field(ge=1, le=240)] = 200
+    source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=16_000_000)] = (
+        8_000_000
     )
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]

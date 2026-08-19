@@ -145,8 +145,8 @@ def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
         ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
-    assert compatible.settings.source_review_max_steps == 24
-    assert compatible.settings.source_review_max_read_bytes == 1_200_000
+    assert compatible.settings.source_review_max_steps == 200
+    assert compatible.settings.source_review_max_read_bytes == 8_000_000
     assert compatible.settings.source_review_reasoning_effort == "high"
 
 

@@ -76,7 +76,7 @@ async def _amain() -> int:
     base = f"{platform}/api/v1/screener/submission-source-reviews/{review_id}"
     archive_path: str | None = None
     timeout_seconds = float(
-        os.environ.get("SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "180")
+        os.environ.get("SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS", "1800")
     )
     try:
         async with httpx.AsyncClient(
@@ -101,9 +101,11 @@ async def _amain() -> int:
                     "https://openrouter.ai/api/v1",
                 ),
                 timeout_seconds=timeout_seconds,
-                max_steps=int(os.environ.get("SCREENER_SOURCE_REVIEW_MAX_STEPS", "24")),
+                max_steps=int(
+                    os.environ.get("SCREENER_SOURCE_REVIEW_MAX_STEPS", "200")
+                ),
                 max_read_bytes=int(
-                    os.environ.get("SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "1200000")
+                    os.environ.get("SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "8000000")
                 ),
                 reasoning_effort=os.environ.get(
                     "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
