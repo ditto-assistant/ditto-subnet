@@ -13,7 +13,7 @@
   "ablation_selection_key_sha256": "2744541342deb53d3504556838313ba27d3bfca625db939054043f5e495b3831",
   "ablation_threshold_manifest_sha256": "6ec695b93cd953909fd583158cf9577425aa1830e3b93a79162ce9fb9fa0e9d5",
   "bench_version": 12,
-  "checksum": "6e142881a2cb808236ef207c682641fc3695272fb326afe05966dcb07ee30291",
+  "checksum": "d1354a3541076d515c78213d19476bc93ddc3af32af0de6b95a393e0b2750bb1",
   "composite": {
     "base_weight_bps": 7000,
     "checksum": "1ce77c31a1b6f146c4eb79c2422f066441c0eaff6cf3ca67fa13989a87c8101f",
@@ -61,7 +61,7 @@
   "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
   "longmem_min_history_bytes": 400000,
   "longmem_min_history_sessions": 55,
-  "longmem_profile_checksum": "224a031d0f82ba1e3da8140a782d9ecbd6df3968932315de1cb97fc4f75b5a88",
+  "longmem_profile_checksum": "6a83325a686ddd23f8317a11a6d1c35a2bdb4b4d7b1a0be92be20a75c226cf96",
   "longmem_profile_revision": "longmemeval-s-v12-shadow-12-zdr-v3",
   "longmem_projection_key_sha256": "8b228aa55a4d37004649554158309f3526b8a0c4454d96cd49ed1b5cc2fec09b",
   "longmem_seed_batch_pairs": 32,
@@ -89,12 +89,12 @@
       "max_requests": 1152,
       "max_total_tokens": 16704000,
       "model": "openai/gpt-oss-20b",
-      "profile_revision": "longmemeval-openrouter-gpt-oss-20b-deepinfra-zdr-shadow-v2",
+      "profile_revision": "longmemeval-openrouter-gpt-oss-20b-throughput-zdr-shadow-v1",
       "provider": "openrouter",
-      "receipt_provider": "DeepInfra",
-      "route_provider": "deepinfra"
+      "receipt_provider": "openrouter",
+      "route_provider": "throughput"
     }
   ],
-  "revision": "v12-confirmation-shadow-bounded-2026-08-15-zdr-v3",
+  "revision": "v12-confirmation-shadow-bounded-2026-08-19-zdr-v4",
   "schema_version": 1
 }

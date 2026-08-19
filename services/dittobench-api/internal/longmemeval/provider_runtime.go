@@ -50,10 +50,11 @@ type RequestAuthorizer interface {
 	Authorize(context.Context, string, *http.Request) error
 }
 
-// ProviderLaneRuntimeConfig binds one frozen profile lane to an exact upstream
-// route and exact response-provider identity. RouteProvider is the OpenRouter
-// provider slug sent in provider.only/order; ReceiptProvider is the exact
-// provider string that must be returned in every authoritative receipt.
+// ProviderLaneRuntimeConfig binds one frozen profile lane to its route and
+// receipt identities. The official judge still pins OpenRouter only/order to
+// RouteProvider and requires ReceiptProvider equality. The reader uses the
+// scoring-lane throughput aggregate: RouteProvider is that routing identity,
+// and receipts accept any non-empty OpenRouter provider rather than pinning one.
 type ProviderLaneRuntimeConfig struct {
 	Lane            string
 	UpstreamURL     string
@@ -375,12 +376,15 @@ func rewriteReaderRequest(raw []byte, policy ProviderPolicy, route string) ([]by
 	body["model"] = policy.Model
 	body["stream"] = false
 	delete(body, "models")
+	_ = route
+	// Match the scoring LLM relay: OpenRouter throughput aggregate, not a
+	// single-vendor pin. The Platform confirmation proxy echoes this dict
+	// and adds zdr=true. CoreWeave is ignored because its reviewed route is 4-bit.
 	body["provider"] = map[string]any{
-		"only":               []string{route},
-		"order":              []string{route},
-		"allow_fallbacks":    false,
-		"require_parameters": true,
-		"data_collection":    "deny",
+		"sort":            "throughput",
+		"ignore":          []string{"coreweave"},
+		"allow_fallbacks": true,
+		"data_collection": "deny",
 	}
 	encoded, err := json.Marshal(body)
 	if err != nil {
@@ -691,7 +695,10 @@ func decodeProviderReceipt(raw []byte, status int, policy ProviderPolicy, config
 	if err := decoder.Decode(&wire); err != nil || strings.TrimSpace(wire.ID) == "" || wire.Usage == nil {
 		return providerReceipt{}, errors.New("provider receipt identity or usage is missing")
 	}
-	if wire.Model != policy.Model || wire.Provider != config.ReceiptProvider {
+	if wire.Model != policy.Model || strings.TrimSpace(wire.Provider) == "" {
+		return providerReceipt{}, errors.New("provider receipt identity drift")
+	}
+	if policy.Lane == JudgeLane && wire.Provider != config.ReceiptProvider {
 		return providerReceipt{}, errors.New("provider receipt identity drift")
 	}
 	prompt, err := parseReceiptUint(wire.Usage.PromptTokens)

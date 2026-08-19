@@ -214,10 +214,12 @@ func TestReaderRelayPinsFrozenIdentityAndRecordsAuthoritativeReceipt(t *testing.
 		t.Fatalf("reader retained fallback model list: %#v", body)
 	}
 	routing, ok := body["provider"].(map[string]any)
-	if !ok || routing["allow_fallbacks"] != false || routing["data_collection"] != "deny" ||
-		routing["require_parameters"] != true || !reflect.DeepEqual(routing["only"], []any{"deepinfra"}) ||
-		!reflect.DeepEqual(routing["order"], []any{"deepinfra"}) {
+	if !ok || routing["allow_fallbacks"] != true || routing["data_collection"] != "deny" ||
+		routing["sort"] != "throughput" || !reflect.DeepEqual(routing["ignore"], []any{"coreweave"}) {
 		t.Fatalf("reader routing=%#v", routing)
+	}
+	if _, found := routing["only"]; found {
+		t.Fatalf("reader retained vendor pin: %#v", routing)
 	}
 	if header.Get("Authorization") != "Bearer "+authorizer.credential ||
 		header.Get("Authorization") == "Bearer harness-controlled-credential" {
@@ -235,6 +237,27 @@ func TestReaderRelayPinsFrozenIdentityAndRecordsAuthoritativeReceipt(t *testing.
 	if reader.Requests != 1 || reader.Successes != 1 || reader.ReceiptedRequests != 1 ||
 		reader.PromptTokens != 11 || reader.CompletionTokens != 3 || reader.TotalTokens != 14 ||
 		reader.CostUSDmicros != 2 || !validSHA256(reader.ReceiptSetSHA256) {
+		t.Fatalf("reader evidence=%#v", reader)
+	}
+}
+
+func TestReaderRelayAcceptsThroughputWinnerOtherThanGrantPin(t *testing.T) {
+	profile := runtimeProviderProfile(t)
+	upstream := newRuntimeUpstream(t)
+	upstream.next = func(index int, body map[string]any) (int, string) {
+		model, _ := body["model"].(string)
+		return http.StatusOK, fmt.Sprintf(
+			`{"id":"receipt-%d","model":%q,"provider":"Groq","choices":[{"message":{"content":"reader answer"}}],"usage":{"prompt_tokens":11,"completion_tokens":3,"total_tokens":14,"cost":0.00000125}}`,
+			index, model,
+		)
+	}
+	session, _ := newRuntimeProviderSession(t, profile, upstream)
+	response := readerRequest(t, session, `{"model":"openai/gpt-oss-20b"}`)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	reader := evidenceByLane(t, session)[ReaderLane]
+	if reader.ReceiptedRequests != 1 {
 		t.Fatalf("reader evidence=%#v", reader)
 	}
 }
@@ -474,7 +497,7 @@ func TestProviderReceiptValidationRejectsEveryMissingOrDriftingField(t *testing.
 		"missing id":            strings.Replace(valid, `"id":"receipt-x",`, "", 1),
 		"missing usage":         strings.Replace(valid, `,"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3,"cost":0.000001}`, "", 1),
 		"wrong model":           strings.Replace(valid, "openai/gpt-oss-20b", "other/model", 1),
-		"wrong provider":        strings.Replace(valid, `"provider":"DeepInfra"`, `"provider":"Other"`, 1),
+		"empty provider":        strings.Replace(valid, `"provider":"DeepInfra"`, `"provider":""`, 1),
 		"missing prompt":        strings.Replace(valid, `"prompt_tokens":2,`, "", 1),
 		"negative prompt":       strings.Replace(valid, `"prompt_tokens":2`, `"prompt_tokens":-1`, 1),
 		"fraction prompt":       strings.Replace(valid, `"prompt_tokens":2`, `"prompt_tokens":2.5`, 1),

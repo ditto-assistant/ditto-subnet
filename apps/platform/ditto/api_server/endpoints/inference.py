@@ -2475,13 +2475,21 @@ def _locked_confirmation_chat_payload(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="invalid confirmation request")
     provider = payload.get("provider")
-    expected_provider = {
-        "only": [grant.route_provider],
-        "order": [grant.route_provider],
-        "allow_fallbacks": False,
-        "require_parameters": True,
-        "data_collection": "deny",
-    }
+    if grant.lane == "reader":
+        expected_provider = {
+            "sort": "throughput",
+            "ignore": ["coreweave"],
+            "allow_fallbacks": True,
+            "data_collection": "deny",
+        }
+    else:
+        expected_provider = {
+            "only": [grant.route_provider],
+            "order": [grant.route_provider],
+            "allow_fallbacks": False,
+            "require_parameters": True,
+            "data_collection": "deny",
+        }
     if provider != expected_provider:
         raise HTTPException(
             status_code=403, detail="confirmation route is not permitted"
@@ -2496,10 +2504,9 @@ def _locked_confirmation_chat_payload(
         )
     max_tokens = _output_token_limit(without_provider, max_output_tokens)
     upstream = dict(without_provider)
-    # Same sanitization as the ordinary scoring lane. Confirmation pins
-    # ``require_parameters`` plus one ZDR provider; forwarding scoring-lane
-    # aliases or dropped fields makes OpenRouter exclude that endpoint or
-    # hard-400 gpt-oss-20b before any receipt exists.
+    # Same sanitization as the ordinary scoring lane. The reader uses that
+    # lane's throughput aggregate; forwarding gpt-oss aliases still hard-400s.
+    # The official judge stays Azure-pinned.
     for field in _DROPPED_REQUEST_FIELDS:
         upstream.pop(field, None)
     for field in (
@@ -2662,7 +2669,10 @@ async def proxy_confirmation_chat_completions(
         receipt_provider = _upstream_provider(decoded)
         usage = _bounded_usage(decoded)
         cost_microusd = _bounded_provider_cost(decoded) or -1
-        if receipt_provider != expected_provider or usage is None or cost_microusd < 0:
+        provider_matches = bool(receipt_provider) and (
+            grant.lane != "judge" or receipt_provider == expected_provider
+        )
+        if not provider_matches or usage is None or cost_microusd < 0:
             raise HTTPException(status_code=502, detail="provider identity mismatch")
         prompt_tokens, completion_tokens, _ = usage
         trusted = _public_provider_response(decoded)

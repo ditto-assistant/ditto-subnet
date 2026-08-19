@@ -771,7 +771,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	const installationSHA = "4d2ecaacefce7a3fe0144d4b6b6fd1d8df498ffaa81c62fae4b8ce837ae0731f"
+	const installationSHA = "9e5a57595207074d3da903257d47aa6d16f37a451cf2ac00a5ba70d7c7e7b32b"
 	if digestBytes(installationRaw) != installationSHA {
 		t.Fatalf("installation digest = %s", digestBytes(installationRaw))
 	}
@@ -783,13 +783,16 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-15-zdr-v3" ||
+	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-19-zdr-v4" ||
 		profile.LongMemCasesPerCapability != 2 || profile.AblationCoordinatorPolicy.SampleSize != 4 ||
 		profile.Composite.BaseWeightBPS != 7000 || profile.Composite.LongMemWeightBPS != 3000 {
 		t.Fatalf("unexpected bounded profile: %+v", profile)
 	}
-	if len(profile.ProviderLanes) != 2 || profile.ProviderLanes[0].Model != "openai/gpt-4o-2024-08-06" ||
-		profile.ProviderLanes[1].Model != "openai/gpt-oss-20b" {
+	if len(profile.ProviderLanes) != 2 ||
+		profile.ProviderLanes[0].Model != "openai/gpt-4o-2024-08-06" ||
+		profile.ProviderLanes[0].RouteProvider != "azure" ||
+		profile.ProviderLanes[1].Model != "openai/gpt-oss-20b" ||
+		profile.ProviderLanes[1].RouteProvider != "throughput" {
 		t.Fatalf("unexpected provider lanes: %+v", profile.ProviderLanes)
 	}
 	if profile.EmbeddingLane.Provider != "perplexity" ||

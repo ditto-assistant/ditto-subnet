@@ -850,10 +850,9 @@ def _confirmation_reader_payload(model: str, **extra: Any) -> dict[str, Any]:
         "messages": [{"role": "user", "content": "memory"}],
         "max_tokens": 64,
         "provider": {
-            "only": ["deepinfra"],
-            "order": ["deepinfra"],
-            "allow_fallbacks": False,
-            "require_parameters": True,
+            "sort": "throughput",
+            "ignore": ["coreweave"],
+            "allow_fallbacks": True,
             "data_collection": "deny",
         },
     }
@@ -876,8 +875,26 @@ def test_confirmation_reader_applies_v9_gpt_oss_reasoning_contract() -> None:
     assert "user" not in upstream
     assert "metadata" not in upstream
     assert upstream["provider"]["zdr"] is True
-    assert upstream["provider"]["only"] == ["deepinfra"]
+    assert upstream["provider"]["sort"] == "throughput"
+    assert upstream["provider"]["ignore"] == ["coreweave"]
+    assert "only" not in upstream["provider"]
     assert upstream["usage"] == {"include": True}
+
+
+def test_confirmation_reader_rejects_vendor_pin() -> None:
+    grant = _confirmation_grant(lane="reader", model="openai/gpt-oss-20b")
+    payload = _confirmation_reader_payload("openai/gpt-oss-20b")
+    payload["provider"] = {
+        "only": ["deepinfra"],
+        "order": ["deepinfra"],
+        "allow_fallbacks": False,
+        "require_parameters": True,
+        "data_collection": "deny",
+    }
+    with pytest.raises(HTTPException) as raised:
+        _locked_confirmation_chat_payload(payload, grant=grant, max_output_tokens=128)
+    assert raised.value.status_code == 403
+    assert raised.value.detail == "confirmation route is not permitted"
 
 
 def test_confirmation_reader_canonicalizes_reasoning_effort_alias() -> None:
@@ -909,8 +926,18 @@ def test_confirmation_reader_rejects_conflicting_reasoning_aliases() -> None:
 
 def test_confirmation_judge_does_not_gain_gpt_oss_reasoning() -> None:
     grant = _confirmation_grant(lane="judge", model="openai/gpt-4o-2024-08-06")
-    payload = _confirmation_reader_payload("openai/gpt-4o-2024-08-06")
-    payload["model"] = "openai/gpt-4o-2024-08-06"
+    payload = {
+        "model": "openai/gpt-4o-2024-08-06",
+        "messages": [{"role": "user", "content": "memory"}],
+        "max_tokens": 64,
+        "provider": {
+            "only": ["deepinfra"],
+            "order": ["deepinfra"],
+            "allow_fallbacks": False,
+            "require_parameters": True,
+            "data_collection": "deny",
+        },
+    }
     upstream, max_tokens = _locked_confirmation_chat_payload(
         payload, grant=grant, max_output_tokens=128
     )

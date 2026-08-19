@@ -73,7 +73,7 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-15-zdr-v3"
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-19-zdr-v4"
 LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-12-zdr-v3"
 ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-4-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
@@ -184,10 +184,14 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             ProviderLanePolicy(
                 lane="reader",
                 provider="openrouter",
-                route_provider="deepinfra",
-                receipt_provider="DeepInfra",
+                # Routing identity, not an OpenRouter slug. The reader uses the
+                # scoring LLM relay's throughput aggregate (every ZDR provider
+                # except CoreWeave). Receipts record the actual OpenRouter
+                # provider; this sentinel is not an equality pin.
+                route_provider="throughput",
+                receipt_provider="openrouter",
                 profile_revision=(
-                    "longmemeval-openrouter-gpt-oss-20b-deepinfra-zdr-shadow-v2"
+                    "longmemeval-openrouter-gpt-oss-20b-throughput-zdr-shadow-v1"
                 ),
                 model="openai/gpt-oss-20b",
                 # The public starter harness declares 24 agent turns per case.
@@ -296,11 +300,11 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
 
     launch = {
         "schema_version": 1,
-        "revision": "v9-confirmation-shadow-launch-2026-08-15-zdr-v3".replace(
+        "revision": "v9-confirmation-shadow-launch-2026-08-19-zdr-v4".replace(
             "v9-", f"{tag}-", 1
         )
         if bench_version != BENCH_VERSION_V9
-        else "v9-confirmation-shadow-launch-2026-08-15-zdr-v3",
+        else "v9-confirmation-shadow-launch-2026-08-19-zdr-v4",
         "mode": "shadow",
         "execution_profile_revision": profile.revision,
         "execution_profile_checksum": profile.checksum(),

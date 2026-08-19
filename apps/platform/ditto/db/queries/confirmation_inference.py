@@ -330,7 +330,12 @@ async def finish_confirmation_inference_request(
         or request.generation != generation
     ):
         return False
-    provider_matches = upstream_provider in {None, grant.receipt_provider}
+    if grant.lane == "judge":
+        provider_matches = upstream_provider in {None, grant.receipt_provider}
+    else:
+        provider_matches = upstream_provider is None or (
+            isinstance(upstream_provider, str) and 1 <= len(upstream_provider) <= 120
+        )
     cost_fits = grant.cost_microusd + cost_microusd <= grant.cost_budget_microusd
     usage_valid = (
         prompt_tokens >= 0

@@ -665,13 +665,22 @@ def _confirmation_chat_request(
             "n": 1,
             "stream": False,
             "provider": provider
-            or {
-                "only": [offer["route_provider"]],
-                "order": [offer["route_provider"]],
-                "allow_fallbacks": False,
-                "require_parameters": True,
-                "data_collection": "deny",
-            },
+            or (
+                {
+                    "sort": "throughput",
+                    "ignore": ["coreweave"],
+                    "allow_fallbacks": True,
+                    "data_collection": "deny",
+                }
+                if offer.get("lane") == "reader"
+                else {
+                    "only": [offer["route_provider"]],
+                    "order": [offer["route_provider"]],
+                    "allow_fallbacks": False,
+                    "require_parameters": True,
+                    "data_collection": "deny",
+                }
+            ),
         },
         separators=(",", ":"),
     ).encode()
@@ -848,10 +857,9 @@ class TestV9ConfirmationChatProxy:
             upstream_bodies.append(request.content)
             payload = json.loads(request.content)
             assert payload["provider"] == {
-                "only": ["deepinfra"],
-                "order": ["deepinfra"],
-                "allow_fallbacks": False,
-                "require_parameters": True,
+                "sort": "throughput",
+                "ignore": ["coreweave"],
+                "allow_fallbacks": True,
                 "data_collection": "deny",
                 "zdr": True,
             }
@@ -877,7 +885,7 @@ class TestV9ConfirmationChatProxy:
                     "object": "chat.completion",
                     "created": 1,
                     "model": offer["model"],
-                    "provider": offer["receipt_provider"],
+                    "provider": "Groq",
                     "choices": [
                         {
                             "index": 0,
@@ -1165,10 +1173,9 @@ class TestV9ConfirmationChatProxy:
             payload = json.loads(request.content)
             assert payload["model"] == offer["model"]
             assert payload["provider"] == {
-                "only": ["deepinfra"],
-                "order": ["deepinfra"],
-                "allow_fallbacks": False,
-                "require_parameters": True,
+                "sort": "throughput",
+                "ignore": ["coreweave"],
+                "allow_fallbacks": True,
                 "data_collection": "deny",
                 "zdr": True,
             }
@@ -1210,7 +1217,7 @@ class TestV9ConfirmationChatProxy:
                     "object": "chat.completion",
                     "created": 1,
                     "model": offer["model"],
-                    "provider": offer["receipt_provider"],
+                    "provider": "Groq",
                     "choices": [
                         {
                             "index": 0,
@@ -1776,7 +1783,7 @@ class TestV9ConfirmationChatProxy:
             assert request_row.status == "completed"
             assert request_row.upstream_provider == "Azure"
 
-    async def test_installed_reader_profile_reaches_zdr_deepinfra_route(
+    async def test_installed_reader_profile_reaches_throughput_zdr_route(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -1793,10 +1800,9 @@ class TestV9ConfirmationChatProxy:
         async def provider(request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content)
             assert payload["provider"] == {
-                "only": ["deepinfra"],
-                "order": ["deepinfra"],
-                "allow_fallbacks": False,
-                "require_parameters": True,
+                "sort": "throughput",
+                "ignore": ["coreweave"],
+                "allow_fallbacks": True,
                 "data_collection": "deny",
                 "zdr": True,
             }
@@ -1810,7 +1816,7 @@ class TestV9ConfirmationChatProxy:
                     "object": "chat.completion",
                     "created": 1,
                     "model": offer["model"],
-                    "provider": offer["receipt_provider"],
+                    "provider": "Groq",
                     "choices": [
                         {
                             "index": 0,
