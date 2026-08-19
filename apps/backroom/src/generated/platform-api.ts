@@ -13176,29 +13176,29 @@ export interface components {
              * @enum {string}
              */
             method: "flat" | "unpaired" | "paired";
+            /**
+             * Paired Standard Error
+             * @description Standard error of the per-seed challenger-minus-champion differences. Present only on a paired comparison. The statistical term is dethrone_z times this value, before high-score decay and the ceiling cap.
+             */
+            paired_standard_error?: number | null;
             /** Required Lead */
             required_lead: number;
             /** Required Score */
             required_score: number;
             /** Score Ceiling */
             score_ceiling: number;
-            /** Statistical Lead */
-            statistical_lead?: number | null;
-            /**
-             * Paired Standard Error
-             * @description Standard error of the per-seed challenger-minus-champion differences. Present only on a paired comparison.
-             */
-            paired_standard_error?: number | null;
-            /**
-             * Shared Seed Count
-             * @description How many shared confirmation seeds entered the paired comparison.
-             */
-            shared_seed_count?: number | null;
             /**
              * Seed Differences
-             * @description Per-seed challenger minus champion composites, sorted by seed id.
+             * @description Per-seed challenger minus champion composites, sorted by seed id. These are score differences, not case answers. Null when the fold is not a paired comparison.
              */
             seed_differences?: number[] | null;
+            /**
+             * Shared Seed Count
+             * @description How many shared confirmation seeds entered the paired comparison. Null when the fold used the unpaired or flat rule.
+             */
+            shared_seed_count?: number | null;
+            /** Statistical Lead */
+            statistical_lead?: number | null;
         };
         /**
          * PublicEfficiencyCohortMember

@@ -645,7 +645,9 @@ def test_bounded_factor_scales_each_paired_seeds_headroom_before_comparison() ->
 
     assert statistic is not None
     assert statistic.champion_reference == pytest.approx((0.991 + 0.955 + 0.91) / 3)
-    assert statistic.mean_difference == pytest.approx(1.0 - statistic.champion_reference)
+    assert statistic.mean_difference == pytest.approx(
+        1.0 - statistic.champion_reference
+    )
     assert len(statistic.differences) == 3
 
 

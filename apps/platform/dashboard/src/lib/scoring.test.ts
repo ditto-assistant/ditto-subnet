@@ -24,6 +24,7 @@ import {
   continualSampleCount,
   continualWaves,
   crownContest,
+  crownDifferenceText,
   crownHeldRowLabel,
   crownSeedDiffsText,
   crownWhyHigh,
@@ -264,6 +265,21 @@ describe("dethroneFloor", () => {
       "Shared-seed diffs: +0.167000 · -0.074000",
     );
     expect(crownHeldRowLabel(contest!, true)).toBe("#1 · +0.046535 / need +0.070822");
+    expect(crownDifferenceText(contest!)).toBe("Difference +0.046535");
+  });
+
+  it("prints the paired composites as challenger minus champion equals the lead", () => {
+    const contest = crownContest({
+      method: "paired",
+      challenger_lead: 0.046535,
+      required_lead: 0.070822,
+      required_score: 0.914777,
+      margin_lead: 0.007,
+      statistical_lead: 0.13927208,
+    });
+    expect(contest?.championPairedScore).toBeCloseTo(0.843955, 6);
+    expect(contest?.challengerPairedScore).toBeCloseTo(0.89049, 6);
+    expect(crownDifferenceText(contest!)).toBe("0.890490 − 0.843955 = +0.046535");
   });
 
   it("derives paired SE from statistical_lead when the payload omits it", () => {

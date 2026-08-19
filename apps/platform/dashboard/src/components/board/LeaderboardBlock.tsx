@@ -36,6 +36,7 @@ import {
   isFinalized,
   rolloutQuorum,
   signedScore,
+  crownDifferenceText,
 } from "../../lib/scoring";
 import type { BandDecayParams } from "../../lib/scoring";
 import { Tip } from "../ui/Tooltip";
@@ -407,12 +408,23 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                             {(held) => (
                               <>
                                 <dl class="koth-standing-metrics">
+                                  <Show
+                                    when={
+                                      held().challengerPairedScore != null &&
+                                      held().championPairedScore != null
+                                    }
+                                  >
+                                    <div>
+                                      <dt>Challenger paired</dt>
+                                      <dd>{fxScore(held().challengerPairedScore as number)}</dd>
+                                    </div>
+                                    <div>
+                                      <dt>Champion paired</dt>
+                                      <dd>{fxScore(held().championPairedScore as number)}</dd>
+                                    </div>
+                                  </Show>
                                   <div>
-                                    <dt>
-                                      {held().method === "paired"
-                                        ? "Head-to-head lead"
-                                        : "Current lead"}
-                                    </dt>
+                                    <dt>Difference</dt>
                                     <dd>{signedScore(held().challengerLead)}</dd>
                                   </div>
                                   <div>
@@ -440,7 +452,9 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                                     )}
                                   </Show>
                                 </dl>
-                                <div class="koth-standing-detail">{crownWhyHigh(held())}</div>
+                                <div class="koth-standing-detail">
+                                  {crownDifferenceText(held()) + ". " + crownWhyHigh(held())}
+                                </div>
                                 <Show when={held().seedDifferences}>
                                   {(diffs) => (
                                     <div class="koth-standing-diffs">

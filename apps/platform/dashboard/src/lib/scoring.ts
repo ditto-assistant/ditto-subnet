@@ -472,6 +472,10 @@ export interface CrownContest {
   challengerLead: number;
   requiredLead: number;
   shortfall: number;
+  /** Shared-seed mean composite for the incumbent, when required_score is present. */
+  championPairedScore: number | null;
+  /** Shared-seed mean composite for the challenger: champion + difference. */
+  challengerPairedScore: number | null;
   marginLead: number | null;
   statisticalLead: number | null;
   pairedStandardError: number | null;
@@ -526,11 +530,17 @@ export function crownContest(
   } else if (decision.method === "flat") {
     bindingTerm = "margin";
   }
+  const requiredScore = finiteOrNull(decision.required_score);
+  const championPairedScore = requiredScore == null ? null : requiredScore - requiredLead;
+  const challengerPairedScore =
+    championPairedScore == null ? null : championPairedScore + challengerLead;
   return {
     method: decision.method || "flat",
     challengerLead,
     requiredLead,
     shortfall: requiredLead - challengerLead,
+    championPairedScore,
+    challengerPairedScore,
     marginLead,
     statisticalLead,
     pairedStandardError,
@@ -607,6 +617,20 @@ export function crownHeldRowLabel(contest: CrownContest, isRawLeader: boolean): 
     signedScore(contest.challengerLead) +
     " / need " +
     signedScore(contest.requiredLead)
+  );
+}
+
+/** "0.890490 − 0.843955 = +0.046535" when both paired composites exist. */
+export function crownDifferenceText(contest: CrownContest): string {
+  if (contest.challengerPairedScore == null || contest.championPairedScore == null) {
+    return "Difference " + signedScore(contest.challengerLead);
+  }
+  return (
+    fxScore(contest.challengerPairedScore) +
+    " − " +
+    fxScore(contest.championPairedScore) +
+    " = " +
+    signedScore(contest.challengerLead)
   );
 }
 

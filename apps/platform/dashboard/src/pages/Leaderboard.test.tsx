@@ -907,7 +907,7 @@ describe("held-crown standing clarity", () => {
     expect(callout.textContent).toContain(championEntry.agent_name as string);
     expect(callout.textContent).toContain("is still champion");
     expect(callout.textContent).toContain(
-      "Head-to-head lead+" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
+      "Difference+" + fxScore(emissions?.raw_leader_decision?.challenger_lead as number),
     );
     expect(callout.textContent).toContain(
       "Needed to take crown+" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
@@ -979,7 +979,7 @@ describe("held-crown standing clarity", () => {
       expect(el("koth-standing-copy").textContent).toContain("Not enough shared seeds yet"),
     );
     const copy = el("koth-standing-copy").textContent;
-    expect(copy).toContain("Current lead+0.018572");
+    expect(copy).toContain("Difference+0.018572");
     expect(copy).toContain("Needed to take crown+0.046305");
     expect(copy).toContain("Dethrone score>0.750175");
     expect(copy).not.toContain("beat 0.710");
