@@ -11,12 +11,25 @@ jobs:
   title:
     runs-on: ubuntu-24.04
     steps:
+      # This list is python-semantic-release's conventional-parser
+      # allowed_tags, held identical on purpose. PSR is the authority on what
+      # a squash title means, and every tag it parses has defined release
+      # semantics, so rejecting one here bought nothing but a retitle. When
+      # bumping the PSR pin in pyproject.toml, re-read the list with:
+      #   uv run --only-group release python -c "from \
+      #   semantic_release.commit_parser.conventional import \
+      #   ConventionalCommitParserOptions as O; print(O().allowed_tags)"
       - name: Require a release-aware squash title
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
         run: |
-          if [[ ! "$PR_TITLE" =~ ^(fix|feat|chore|docs|perf)(\([^\)]+\))?\!?:\ .+ ]]; then
-            echo "PR titles must start with fix:, feat:, chore:, docs:, or perf: (optional scope and ! are supported)."
-            echo "docs: releases like chore: (no version bump); perf: releases like fix: (patch)."
+          pattern='^(build|chore|ci|docs|feat|fix|perf|refactor|style|test)(\([^)]+\))?!?: .+'
+          if [[ ! "$PR_TITLE" =~ $pattern ]]; then
+            echo "PR titles must start with a conventional type, which decides the release:"
+            echo "  feat:                                            minor version bump"
+            echo "  fix:  perf:                                      patch version bump"
+            echo "  build:  chore:  ci:  docs:  refactor:  style:  test:   no version bump"
+            echo
+            echo "An optional scope and a breaking-change ! are supported: feat(api)!: ..."
             exit 1
           fi
