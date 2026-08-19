@@ -520,14 +520,25 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 // on an unreleased protocol number. Sending 10 here would let an otherwise
 // correct v9 harness fail closed before exercising any v10 case and turn version
 // negotiation into a trivial difficulty signal.
+// publicWireBenchVersion is the newest bench_version the PUBLISHED harness
+// contract advertises (miners/dittobench-starter-kit/PROTOCOL.md). Every scorer
+// revision above it is validator-owned: it changes the dataset, projection, and
+// grader, but never what a harness must advertise or branch on.
+const publicWireBenchVersion = protocol.BenchVersionV9
+
 func harnessWireBenchVersion(benchVersion int) int {
-	if benchVersion == protocol.BenchVersionV10 {
-		return protocol.BenchVersionV9
+	if benchVersion < protocol.BenchVersionV7 {
+		return 0
 	}
-	if benchVersion >= protocol.BenchVersionV7 {
-		return benchVersion
+	// A FLOOR, not an equality. The v10-only form silently leaked v11 and would
+	// have leaked v12: an unreleased number reaches the harness, a conforming
+	// harness fails its supported-version check before running a single case,
+	// and version negotiation becomes a free difficulty signal for a
+	// template-fitter.
+	if benchVersion > publicWireBenchVersion {
+		return publicWireBenchVersion
 	}
-	return 0
+	return benchVersion
 }
 
 // runAttempt makes one POST /run. retryable is true when the failure is

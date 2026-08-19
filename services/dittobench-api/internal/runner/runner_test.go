@@ -408,7 +408,7 @@ func TestRunCase(t *testing.T) {
 }
 
 func TestRunCaseSendsPublicHarnessBenchVersion(t *testing.T) {
-	versions := make(chan int, 3)
+	versions := make(chan int, 5)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req protocol.RunRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -419,7 +419,9 @@ func TestRunCaseSendsPublicHarnessBenchVersion(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	for _, version := range []int{6, 7, protocol.BenchVersionV10} {
+	for _, version := range []int{
+		6, 7, protocol.BenchVersionV10, protocol.BenchVersionV11, protocol.BenchVersionV12,
+	} {
 		if _, err := RunCase(
 			sandboxContext(), srv.URL, "m1", "question", nil,
 			CaseOptions{BenchVersion: version},
@@ -435,6 +437,16 @@ func TestRunCaseSendsPublicHarnessBenchVersion(t *testing.T) {
 	}
 	if got := <-versions; got != protocol.BenchVersionV9 {
 		t.Fatalf("private v10 wire bench_version = %d, want public v9 contract", got)
+	}
+	// v11 and v12 are pinned individually: the previous equality form masked only
+	// v10, so every later private contract leaked its real number to the harness
+	// and failed a conforming supported-version check. A future bump that forgets
+	// the mask fails here instead of on the live board.
+	if got := <-versions; got != protocol.BenchVersionV9 {
+		t.Fatalf("private v11 wire bench_version = %d, want public v9 contract", got)
+	}
+	if got := <-versions; got != protocol.BenchVersionV9 {
+		t.Fatalf("private v12 wire bench_version = %d, want public v9 contract", got)
 	}
 }
 
