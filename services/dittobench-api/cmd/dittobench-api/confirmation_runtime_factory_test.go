@@ -775,6 +775,10 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if digestBytes(installationRaw) != installationSHA {
 		t.Fatalf("installation digest = %s", digestBytes(installationRaw))
 	}
+	composeRaw, err := os.ReadFile(filepath.Join(repository, "docker-compose.yml"))
+	if err != nil || !bytes.Contains(composeRaw, []byte(installationSHA)) {
+		t.Fatalf("compose installation pin missing %s: %v", installationSHA, err)
+	}
 	installation, err := readConfirmationActivationFile(installationPath, installationSHA)
 	if err != nil {
 		t.Fatal(err)

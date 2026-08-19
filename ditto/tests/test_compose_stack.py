@@ -1,5 +1,6 @@
 """Regression checks for production Compose invariants."""
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -175,12 +176,19 @@ def test_scorer_allows_only_verified_screened_image_downloads() -> None:
 def test_confirmation_runtime_uses_only_exact_public_release_assets() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     environment = compose["services"]["dittobench-api"]["environment"]
+    installation_path = (
+        Path(__file__).parents[2]
+        / "packages/ditto-screening-protocol/ditto_screening_protocol/data"
+        / "confirmation_installation_v9_shadow.json"
+    )
+    installation_sha256 = hashlib.sha256(installation_path.read_bytes()).hexdigest()
 
     assert environment["DITTOBENCH_V9_CONFIRMATION_INSTALLATION_FILE"] == (
         "/opt/ditto/confirmation/confirmation_installation_v9_shadow.json"
     )
-    assert environment["DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256"] == (
-        "4d2ecaacefce7a3fe0144d4b6b6fd1d8df498ffaa81c62fae4b8ce837ae0731f"
+    assert (
+        environment["DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256"]
+        == installation_sha256
     )
     assert environment["DITTOBENCH_REQUIRE_ISOLATED_DOCKER_DAEMON"] == "true"
     serialized = yaml.safe_dump(environment).lower()

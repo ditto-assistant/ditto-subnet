@@ -158,7 +158,7 @@ services:
       # These are immutable files inside the image, not host mounts, cloud
       # identities, Secret Manager references, or provider credentials.
       DITTOBENCH_V9_CONFIRMATION_INSTALLATION_FILE: /opt/ditto/confirmation/confirmation_installation_v9_shadow.json
-      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: 4d2ecaacefce7a3fe0144d4b6b6fd1d8df498ffaa81c62fae4b8ce837ae0731f
+      DITTOBENCH_V9_CONFIRMATION_INSTALLATION_SHA256: 9e5a57595207074d3da903257d47aa6d16f37a451cf2ac00a5ba70d7c7e7b32b
       # Hosted v7 parallelism. Both default inside the scorer image to the
       # values dittobench-api#104 ships (4 cases, 8 concurrent embeddings per
       # run); these anchors exist so a host with unusual headroom, or one being
