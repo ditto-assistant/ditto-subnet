@@ -82,7 +82,7 @@ FINNEY_BURN_HOTKEY = "5HmP9732JFjnut2RY9yg4Gz2qJ38vF8xFwZb5dQVPF7FsmZz"  # SN118
 # ticket simply reads ``expired``. So the abort point is derived from the
 # ticket's own deadline instead of from a constant that has to be manually kept
 # below a TTL this repo does not control -- that TTL has already moved
-# 30 -> 45 -> 90 minutes, and any of those moves could have inverted the
+# 30 -> 45 -> 90 -> 120 -> 150 minutes, and any of those moves could have inverted the
 # relationship silently.
 #
 # The margin is what an abort keeps in hand to cancel the scorer run and land a
@@ -563,7 +563,7 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_DITTOBENCH_POLL_SECONDS", "10")
         ),
         dittobench_timeout_seconds=float(
-            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "6600")
+            os.environ.get("VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS", "8400")
         ),
         http_timeout_seconds=float(
             os.environ.get("VALIDATOR_HTTP_TIMEOUT_SECONDS", "30")
