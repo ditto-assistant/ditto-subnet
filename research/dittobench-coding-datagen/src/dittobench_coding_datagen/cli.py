@@ -12,6 +12,7 @@ from dittobench_coding_datagen.audit import audit_curation_seed
 from dittobench_coding_datagen.canonical import canonical_json_bytes
 from dittobench_coding_datagen.compiler import compile_practice, grade, materialize
 from dittobench_coding_datagen.model import CorpusError
+from dittobench_coding_datagen.practice_server import evaluate_practice_harness
 from dittobench_coding_datagen.validation import validate_pack
 
 
@@ -46,6 +47,19 @@ def _parser() -> argparse.ArgumentParser:
     grade_parser.add_argument("--workspace", type=Path, required=True)
     grade_parser.add_argument("--timeout-seconds", type=int, default=30)
 
+    evaluate_parser = subcommands.add_parser(
+        "evaluate-practice",
+        help="evaluate a loopback coding harness against one public practice task",
+    )
+    evaluate_parser.add_argument("--pack", type=Path, required=True)
+    evaluate_parser.add_argument("--task", required=True)
+    evaluate_parser.add_argument("--harness-url", required=True)
+    evaluate_parser.add_argument(
+        "--inference-base-url",
+        default="http://127.0.0.1:9/offline-disabled",
+    )
+    evaluate_parser.add_argument("--timeout-seconds", type=int, default=120)
+
     audit_parser = subcommands.add_parser(
         "audit-curation",
         help="audit an external flat curation seed without importing it",
@@ -79,6 +93,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.workspace,
                 timeout_seconds=args.timeout_seconds,
             )
+        if args.command == "evaluate-practice":
+            evidence = evaluate_practice_harness(
+                args.pack,
+                args.task,
+                args.harness_url,
+                inference_base_url=args.inference_base_url,
+                timeout_seconds=args.timeout_seconds,
+            )
+            print(canonical_json_bytes(evidence.as_json()).decode("utf-8"), end="")
+            return 0 if evidence.repair_score_micros == 1_000_000 else 1
         if args.command == "audit-curation":
             result = audit_curation_seed(args.root)
             body = canonical_json_bytes(result)

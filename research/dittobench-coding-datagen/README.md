@@ -64,10 +64,56 @@ uv run dittobench-coding-datagen grade \
   --task PRACTICE-LEDGER-001 \
   --workspace /tmp/ditto-coding-task
 
+# Exercise a loopback coding harness through /coding/health, /coding/seed,
+# /coding/run, validator-owned typed tools, an authoritative workspace freeze,
+# and a fresh practice grader.
+uv run dittobench-coding-datagen evaluate-practice \
+  --pack practice/v1 \
+  --task PRACTICE-LEDGER-001 \
+  --harness-url http://127.0.0.1:8080
+
 # Audit the external v0.1 curation seed without importing it into this repo.
 uv run dittobench-coding-datagen audit-curation \
   /path/to/coding-dataset --output /tmp/coding-audit.json
 ```
+
+## Public practice runner
+
+Every compiled task carries a manifest-bound public runtime policy. The current
+pack allows edits only to `app.py` and exposes the fixed command IDs
+`visible-unit` and `python-compile`. A harness never receives the temporary
+workspace path.
+It drives the workspace through a random loopback capability with these tools:
+
+```text
+repo.list_tree
+repo.search
+repo.read_file
+repo.read_range
+repo.apply_patch
+tests.run
+build.run
+git.status
+git.diff
+```
+
+`repo.apply_patch` uses an expected file SHA-256 plus atomic, unambiguous text
+replacements. After `/coding/run` returns, the evaluator revokes the capability,
+freezes the changed-path and tree identities, reconstructs a pristine base, and
+injects the public regression tests only for grading. The result remains binary
+and `weight_eligible=false`.
+
+Each of the nine tiny fixtures deliberately admits exactly one undecorated pure
+function in `app.py`. The fixed build gate rejects imports, helper or class
+definitions, module-level execution, dangerous builtins, dunder access, and
+calls outside the fixture allowlist before test imports. This prevents a
+practice patch from converting an early process exit into a false passing
+grade; it is not a general policy for real repositories.
+
+This loopback runner is an offline protocol and integration-test fixture. It is
+not an isolation boundary for arbitrary hostile local processes: a production
+runner still requires the separately reviewed container, network, resource,
+credential, and task-capability controls in the private execution protocol.
 
 ## Future production topology
 
