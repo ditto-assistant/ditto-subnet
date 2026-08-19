@@ -27,11 +27,11 @@ addresses in `BACKROOM_ADMIN_EMAILS` receive write access. The Platform still
 enforces its admin token on every operation and receives the signed-in email as
 `X-Admin-Actor` for audit attribution.
 
-Sessions are intentionally bounded to 12 hours. Removing an address from
+Sessions are intentionally bounded to 7 days. Removing an address from
 `BACKROOM_ADMIN_EMAILS` revokes write access on its next request because the
 binding is re-read every time. Disabling or deleting the underlying Google
 Workspace account can leave its already-issued read-only session usable until
-that 12-hour expiry; this is the accepted read-access revocation window. Clear
+that 7-day expiry; this is the accepted read-access revocation window. Clear
 the session cookie at the edge when immediate read revocation is required.
 
 Do not add `FIREBASE_API_KEY`, `DITTO_API_BASE_URL`, or the private

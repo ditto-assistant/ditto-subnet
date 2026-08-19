@@ -10,6 +10,7 @@ import {
 import { BackroomMcpHandler } from './server/mcp-handler.server'
 import { beginMcpAuthorization, completeMcpAuthorization } from './server/mcp-oauth.server'
 import { cacheOAuthTokenReads } from './server/oauth-token-cache.server'
+import { SESSION_MAX_AGE_SECONDS } from './lib/auth.policy'
 
 const defaultHandler = {
   async fetch(request: Request, env: BackroomEnv) {
@@ -119,12 +120,12 @@ const oauthProvider = new OAuthProvider<BackroomEnv>({
   disallowPublicClientRegistration: false,
   clientIdMetadataDocumentEnabled: true,
   accessTokenTTL: 50 * 60,
-  refreshTokenTTL: 7 * 24 * 60 * 60,
+  refreshTokenTTL: SESSION_MAX_AGE_SECONDS,
   clientRegistrationTTL: 90 * 24 * 60 * 60,
   // A grant is only ever as live as the operator session that authorized it.
   // This deployment authenticates against Google plus BACKROOM_ADMIN_EMAILS and
   // has no refresh path, so an expired staff session ends the connection rather
-  // than being silently renewed: the 12-hour session bound documented in
+  // than being silently renewed: the 7-day session bound documented in
   // docs/oauth.md has to mean the same thing over MCP as it does in the console.
   async tokenExchangeCallback(options) {
     const props = options.props as McpGrantProps

@@ -32,7 +32,7 @@ Two independent gates apply to every privileged call. The grant must carry the
 scope, **and** the operator's account must still resolve to `write` through
 `BACKROOM_ADMIN_EMAILS`. The level is re-derived from that binding at consent
 time rather than read from the session cookie, so removing an address stops the
-next authorization from minting a privileged grant even while a 12-hour session
+next authorization from minting a privileged grant even while a 7-day session
 is still live. `mcp-scope.server.ts` additionally challenges the request with a
 `WWW-Authenticate` scope hint before the tool runs, so an under-scoped client
 gets a 403 naming the scope it needs rather than a tool-level refusal.

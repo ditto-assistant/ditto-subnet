@@ -2,14 +2,13 @@ import '@tanstack/react-start/server-only'
 
 import { getRequest, getRequestHeader, getResponseHeaders } from '@tanstack/react-start/server'
 import type { BackroomSession, BackroomUser, OAuthAttempt } from '../lib/auth.types'
-import { accessLevelForEmail } from '../lib/auth.policy'
+import { accessLevelForEmail, SESSION_MAX_AGE_SECONDS } from '../lib/auth.policy'
 import { sealToken, unsealToken } from './crypto.server'
 
 const SESSION_COOKIE_SECURE = '__Host-backroom_session'
 const SESSION_COOKIE_LOCAL = 'backroom_session'
 const OAUTH_COOKIE_SECURE = '__Host-backroom_oauth'
 const OAUTH_COOKIE_LOCAL = 'backroom_oauth'
-const SESSION_MAX_AGE_SECONDS = 60 * 60 * 12
 const OAUTH_MAX_AGE_SECONDS = 60 * 10
 
 function isSecureRequest() {

@@ -3,7 +3,12 @@ import '@tanstack/react-start/server-only'
 import { getRequest } from '@tanstack/react-start/server'
 import { createRemoteJWKSet, jwtVerify } from 'jose'
 import type { BackroomSession, OAuthAttempt } from '../lib/auth.types'
-import { accessLevelForEmail, isVerifiedOmniauraEmail, safeReturnTo } from '../lib/auth.policy'
+import {
+  accessLevelForEmail,
+  isVerifiedOmniauraEmail,
+  safeReturnTo,
+  SESSION_LIFETIME_MS,
+} from '../lib/auth.policy'
 import { constantTimeEqual, randomToken } from './crypto.server'
 import {
   clearOAuthAttemptCookie,
@@ -15,7 +20,6 @@ import {
 const GOOGLE_AUTHORIZE_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
 const GOOGLE_JWKS = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'))
-const SESSION_LIFETIME_MS = 12 * 60 * 60 * 1000
 
 function bytesToBase64Url(bytes: Uint8Array) {
   let binary = ''

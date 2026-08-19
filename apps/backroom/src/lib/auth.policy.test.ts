@@ -5,7 +5,16 @@ import {
   isVerifiedOmniauraEmail,
   parseAdminEmails,
   safeReturnTo,
+  SESSION_LIFETIME_MS,
+  SESSION_MAX_AGE_SECONDS,
 } from './auth.policy'
+
+describe('staff session lifetime', () => {
+  it('bounds console and cookie sessions to seven days', () => {
+    expect(SESSION_LIFETIME_MS).toBe(7 * 24 * 60 * 60 * 1000)
+    expect(SESSION_MAX_AGE_SECONDS).toBe(SESSION_LIFETIME_MS / 1000)
+  })
+})
 
 describe('isVerifiedOmniauraEmail', () => {
   it('accepts verified OmniAura identities case-insensitively', () => {

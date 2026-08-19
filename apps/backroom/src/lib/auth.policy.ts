@@ -1,5 +1,12 @@
 export const OMNIAURA_EMAIL_DOMAIN = '@omniaura.ai'
 
+// Staff sessions are fixed-lifetime: no silent renew. Write access is still
+// re-derived from BACKROOM_ADMIN_EMAILS on every request. This bound is the
+// remaining read-access window after a Workspace account is disabled, and it
+// matches the MCP refresh-token TTL so console and agent grants die together.
+export const SESSION_LIFETIME_MS = 7 * 24 * 60 * 60 * 1000
+export const SESSION_MAX_AGE_SECONDS = SESSION_LIFETIME_MS / 1000
+
 export function isVerifiedOmniauraEmail(email: string, verified: boolean) {
   return verified && email.trim().toLowerCase().endsWith(OMNIAURA_EMAIL_DOMAIN)
 }

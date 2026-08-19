@@ -262,8 +262,8 @@ describe('Backroom MCP OAuth consent', () => {
   it('refuses write to an account the admin binding no longer lists', async () => {
     // The level is re-derived from BACKROOM_ADMIN_EMAILS at consent time, so a
     // session cookie sealed while the account still had write cannot mint a
-    // privileged grant after the address is removed. Without this the 12-hour
-    // session would become a 12-hour window to hand an agent write access.
+    // privileged grant after the address is removed. Without this the 7-day
+    // session would become a 7-day window to hand an agent write access.
     const completeAuthorization = vi.fn().mockResolvedValue({
       redirectTo: 'http://127.0.0.1:8899/callback?code=issued',
     })
