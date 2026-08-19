@@ -91,7 +91,7 @@ func validBrokerSlot(value string) bool {
 }
 
 func (request confirmationExecutionRequest) validate(now time.Time, readiness confirmationReadiness) error {
-	if request.Purpose != confirmationPurpose || !confirmationBenchVersionSupported(request.BenchVersion) {
+	if request.Purpose != confirmationPurpose || !confirmationSubjectEpochSupported(request.BenchVersion) {
 		return errors.New("confirmation execution requires a supported confirmation bench version")
 	}
 	if strings.TrimSpace(request.BundleID) == "" || strings.TrimSpace(request.TicketID) == "" ||

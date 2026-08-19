@@ -586,6 +586,52 @@ func TestTrustedConfirmationReadinessPublishesOnlyValidatedInstallation(t *testi
 	}
 }
 
+func TestConfirmationSubjectEpochAllowListTracksEvidenceStack(t *testing.T) {
+	t.Parallel()
+	for version, want := range map[int]bool{
+		8: false, 9: true, 10: true, 11: true, 12: true, 13: false, 0: false,
+	} {
+		if got := confirmationSubjectEpochSupported(version); got != want {
+			t.Fatalf("confirmationSubjectEpochSupported(%d) = %v, want %v", version, got, want)
+		}
+	}
+	// The instrument allow-list stays {9, 12}. A live v11 *subject* must not
+	// require a v11 *profile*.
+	if confirmationBenchVersionSupported(11) {
+		t.Fatal("instrument allow-list must not treat bench 11 as an installable profile")
+	}
+}
+
+func TestTrustedConfirmationExecuteAcceptsV11SubjectAgainstV9Instrument(t *testing.T) {
+	t.Parallel()
+	profile, raw := validInstalledConfirmationProfile(t)
+	request := validTrustedConfirmationRequest(t, raw, profile)
+	request.BenchVersion = 11
+	acquired := 0
+	executor := installTrustedExecutor(t, raw, confirmationRuntimeFactoryFunc(func(context.Context, confirmationRuntimeIdentity) (*confirmationRuntime, error) {
+		acquired++
+		return validConfirmationRuntime(), nil
+	}))
+	executor.coordinate = func(
+		context.Context, confirmationExecutionRequest, confirmationExecutionProfileWire, *confirmationRuntime,
+	) (confirmationExecutionResult, error) {
+		return confirmationExecutionResult{
+			LongMemEval:                  json.RawMessage(`{"ok":"longmem"}`),
+			InferenceAblation:            json.RawMessage(`{"ok":"inference"}`),
+			EmbeddingAblation:            json.RawMessage(`{"ok":"embedding"}`),
+			AblationCoordinatorLatencyMS: 1,
+		}, nil
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), request.Deadline)
+	defer cancel()
+	if _, err := executor.Execute(ctx, request); err != nil {
+		t.Fatalf("v9 instrument rejected a v11 subject: %v", err)
+	}
+	if acquired != 1 {
+		t.Fatalf("acquisitions = %d, want 1", acquired)
+	}
+}
+
 func TestTrustedConfirmationExecuteBindsScreenedSourceAndCleansUp(t *testing.T) {
 	t.Parallel()
 	profile, raw := validInstalledConfirmationProfile(t)

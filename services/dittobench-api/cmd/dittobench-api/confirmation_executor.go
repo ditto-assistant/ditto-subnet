@@ -227,12 +227,25 @@ func (b confirmationAblationBudget) ablationBudget() ablation.Budget {
 
 func microsToScore(value uint64) float64 { return float64(value) / 1_000_000 }
 
-// confirmationBenchVersionSupported is the single main-package gate for which
-// bench versions a confirmation bundle may run under. It defers to the ablation
-// package so the scorer request validator, profile validator, inference broker,
-// and frozen ablation contract can never drift on the allow-list ({9, 12}).
+// confirmationBenchVersionSupported is the instrument allow-list: which frozen
+// confirmation *profiles* this scorer can install ({9, 12}). The v9 shadow
+// profile is an instrument that confirms every evidence-stack subject epoch.
 func confirmationBenchVersionSupported(benchVersion int) bool {
 	return ablation.ConfirmationBenchVersionSupported(benchVersion)
+}
+
+// confirmationSubjectEpochSupported is the bundle/job allow-list: which
+// subject epochs the installed instrument may confirm. This must track Python
+// ``supports_confirmation`` / ``CONFIRMATION_BENCH_VERSIONS`` (9, 10, 11, 12).
+// Using the instrument allow-list here is what rejected live v11 jobs against
+// the shipped v9 profile in ~4s at running_confirmation.
+func confirmationSubjectEpochSupported(benchVersion int) bool {
+	switch benchVersion {
+	case 9, 10, 11, 12:
+		return true
+	default:
+		return false
+	}
 }
 
 type confirmationRuntimeIdentity struct {
@@ -450,7 +463,7 @@ func (executor *trustedConfirmationExecutor) Execute(
 		return confirmationExecutionResult{}, fmt.Errorf("confirmation request profile: %w", err)
 	}
 	if !reflect.DeepEqual(requested, executor.profile) || request.ProfileRevision != executor.profile.Revision ||
-		request.ProfileChecksum != executor.profile.Checksum || request.BenchVersion != executor.profile.benchVersion() {
+		request.ProfileChecksum != executor.profile.Checksum {
 		return confirmationExecutionResult{}, errors.New("confirmation request does not match the installed launch profile")
 	}
 	deadline, ok := ctx.Deadline()

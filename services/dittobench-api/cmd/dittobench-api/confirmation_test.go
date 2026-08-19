@@ -356,7 +356,7 @@ func TestConfirmationExecuteRejectsInvalidFrozenContractBeforeExecution(t *testi
 		{
 			name: "future version",
 			mutate: func(request *confirmationExecutionRequest) {
-				request.BenchVersion = 10
+				request.BenchVersion = 13
 			},
 			message: "confirmation execution requires a supported confirmation bench version",
 		},
