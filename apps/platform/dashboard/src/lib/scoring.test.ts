@@ -23,10 +23,16 @@ import {
   compositeEquationText,
   continualSampleCount,
   continualWaves,
+  crownChampionScoreLabel,
+  crownChallengerScoreLabel,
+  crownComparisonNote,
   crownContest,
   crownDifferenceText,
   crownHeldRowLabel,
+  crownHeldRowTip,
+  crownScaleNote,
   crownSeedDiffsText,
+  crownThresholdLabel,
   crownWhyHigh,
   curveV3ScoreAdjustment,
   efficiencyTieBreakChipLabel,
@@ -279,7 +285,58 @@ describe("dethroneFloor", () => {
     });
     expect(contest?.championPairedScore).toBeCloseTo(0.843955, 6);
     expect(contest?.challengerPairedScore).toBeCloseTo(0.89049, 6);
+    expect(contest?.requiredScore).toBeCloseTo(0.914777, 6);
     expect(crownDifferenceText(contest!)).toBe("0.890490 − 0.843955 = +0.046535");
+  });
+
+  it("refuses to treat the Score column as the paired dethrone bar", () => {
+    // Hogwarts_v2 vs Alexandros-ditto-v11 on 2026-08-19: official 0.739125
+    // vs required_score 0.724648, the exact miner misread.
+    const contest = crownContest({
+      method: "paired",
+      challenger_lead: -0.040757,
+      required_lead: 0.033269276681151067,
+      required_score: 0.7246482766811511,
+      margin_lead: 0.007,
+      statistical_lead: 0.03994056,
+      paired_standard_error: 0.024354,
+      shared_seed_count: 2,
+      seed_differences: [-0.065111, -0.016403],
+    });
+    expect(contest?.challengerPairedScore).toBeCloseTo(0.650622, 6);
+    expect(crownThresholdLabel("paired")).toBe("Shared-seed bar");
+    expect(crownChallengerScoreLabel("paired")).toBe("Shared-seed mean");
+    expect(crownChampionScoreLabel("paired")).toBe("Champion shared-seed mean");
+    expect(crownThresholdLabel("unpaired")).toBe("Score bar");
+    const note = crownScaleNote(
+      { composite: 0.772692, official_composite: 0.7391252142857143 },
+      contest!,
+    );
+    expect(note).toContain("Do not compare the Score column (0.739125)");
+    expect(note).toContain("shared-seed bar (>0.724648)");
+    expect(note).toContain("shared-seed mean 0.650622");
+    expect(note).toContain("0.772692 own-seed median");
+    expect(note).not.toContain("own-seed median is the rank score");
+    expect(crownComparisonNote("paired")).toContain("The Score column ranks the board");
+    expect(crownComparisonNote("paired")).not.toContain("own-seed score");
+    expect(crownHeldRowTip(contest!)).toContain("The shared-seed mean must exceed 0.724648");
+    expect(crownHeldRowTip(contest!)).toContain("The Score column is a different number");
+    expect(crownHeldRowTip(contest!)).not.toContain("The challenger score must exceed");
+  });
+
+  it("compares the unpaired bar to the Score column, not the own-seed median", () => {
+    const contest = crownContest({
+      method: "unpaired",
+      challenger_lead: 0.0185715,
+      required_lead: 0.046305194,
+      required_score: 0.750175444,
+    });
+    const note = crownScaleNote({ composite: 0.772692, official_composite: 0.739125 }, contest!);
+    expect(note).toContain("The Score column (0.739125) is the number the unpaired band compares");
+    expect(note).toContain("It must exceed 0.750175");
+    expect(note).toContain("0.772692 own-seed median is not the Score column");
+    expect(crownComparisonNote("unpaired")).toContain("Score-column numbers");
+    expect(crownHeldRowTip(contest!)).toContain("The Score column must exceed 0.750175");
   });
 
   it("derives paired SE from statistical_lead when the payload omits it", () => {

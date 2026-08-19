@@ -25,8 +25,14 @@ import {
   shortKey,
 } from "../../lib/format";
 import {
+  crownChampionScoreLabel,
+  crownChallengerScoreLabel,
+  crownComparisonNote,
   crownContest,
+  crownDifferenceText,
+  crownScaleNote,
   crownSeedDiffsText,
+  crownThresholdLabel,
   crownWhyHigh,
   dethroneBandScale,
   dethroneFloor,
@@ -36,7 +42,6 @@ import {
   isFinalized,
   rolloutQuorum,
   signedScore,
-  crownDifferenceText,
 } from "../../lib/scoring";
 import type { BandDecayParams } from "../../lib/scoring";
 import { Tip } from "../ui/Tooltip";
@@ -296,16 +301,6 @@ function VersionSwitch(props: { store: LeaderboardStore }): JSX.Element {
 // so this is the only explanation the compact board carries). Every number
 // is read from the fold; the strip below keeps the full math.
 
-function crownComparisonNote(method: string | undefined): string {
-  if (method === "paired") {
-    return "Rank is each agent's own-seed score. The crown is a head-to-head on shared confirmation seeds, so a lucky private dataset cannot take the title.";
-  }
-  if (method === "unpaired") {
-    return "Not enough shared seeds yet for a paired comparison, so the fold uses an unpaired uncertainty band. More shared retests can change this threshold.";
-  }
-  return "The first-seen incumbent holds until a challenger clears the flat protection margin.";
-}
-
 function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
   const store = props.store;
   const floor = createMemo(() =>
@@ -333,9 +328,6 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
     const n = aboveCount();
     return n === 1 ? "1 agent scores higher than it" : n + " agents score higher than it";
   };
-  const rawMedianDiffers = (entry: BoardEntry): boolean =>
-    Number.isFinite(entry.composite) &&
-    Math.abs(entry.composite - displayComposite(entry, store.settledView())) >= 0.0000005;
   return (
     <div
       class="koth-standing"
@@ -384,7 +376,8 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                     }
                   >
                     {(current) => {
-                      const contest = () => crownContest(current().decision, current().emissions);
+                      const heldContest = () =>
+                        crownContest(current().decision, current().emissions);
                       return (
                         <>
                           <div class="koth-standing-title">
@@ -404,7 +397,7 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                               {" is still champion."}
                             </b>
                           </div>
-                          <Show when={contest()}>
+                          <Show when={heldContest()}>
                             {(held) => (
                               <>
                                 <dl class="koth-standing-metrics">
@@ -414,12 +407,20 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                                       held().championPairedScore != null
                                     }
                                   >
-                                    <div>
-                                      <dt>Challenger paired</dt>
+                                    <div class="koth-standing-compare">
+                                      <dt>
+                                        {crownChallengerScoreLabel(current().decision.method)}
+                                      </dt>
                                       <dd>{fxScore(held().challengerPairedScore as number)}</dd>
                                     </div>
+                                    <Show when={held().requiredScore != null}>
+                                      <div class="koth-standing-compare">
+                                        <dt>{crownThresholdLabel(current().decision.method)}</dt>
+                                        <dd>{">" + fxScore(held().requiredScore as number)}</dd>
+                                      </div>
+                                    </Show>
                                     <div>
-                                      <dt>Champion paired</dt>
+                                      <dt>{crownChampionScoreLabel(current().decision.method)}</dt>
                                       <dd>{fxScore(held().championPairedScore as number)}</dd>
                                     </div>
                                   </Show>
@@ -443,13 +444,17 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                                       </div>
                                     )}
                                   </Show>
-                                  <Show when={current().decision.required_score}>
-                                    {(score) => (
-                                      <div>
-                                        <dt>Dethrone score</dt>
-                                        <dd>{">" + fxScore(score())}</dd>
-                                      </div>
-                                    )}
+                                  <Show
+                                    when={
+                                      held().requiredScore != null &&
+                                      (held().challengerPairedScore == null ||
+                                        held().championPairedScore == null)
+                                    }
+                                  >
+                                    <div class="koth-standing-compare">
+                                      <dt>{crownThresholdLabel(current().decision.method)}</dt>
+                                      <dd>{">" + fxScore(held().requiredScore as number)}</dd>
+                                    </div>
                                   </Show>
                                 </dl>
                                 <div class="koth-standing-detail">
@@ -466,10 +471,13 @@ function KothStandingCallout(props: { store: LeaderboardStore }): JSX.Element {
                             )}
                           </Show>
                           <div class="koth-standing-detail">
-                            <Show when={rawMedianDiffers(current().leader)}>
-                              {"The " +
-                                fxScore(current().leader.composite) +
-                                " own-seed median is the rank score, not the crown test. "}
+                            <Show when={heldContest()}>
+                              {(held) => (
+                                <>
+                                  {crownScaleNote(current().leader, held(), store.settledView()) +
+                                    " "}
+                                </>
+                              )}
                             </Show>
                             {crownComparisonNote(current().decision.method)}
                           </div>

@@ -23,7 +23,7 @@ import {
 import {
   crownContest,
   crownHeldRowLabel,
-  crownWhyHigh,
+  crownHeldRowTip,
   displayComposite,
   chainWeightLabel,
   errBandBounds,
@@ -31,7 +31,6 @@ import {
   isFinalized,
   isRegistered,
   showsCompositeErrBand,
-  signedScore,
   unrankedKind,
 } from "../../lib/scoring";
 import { pushEntityRoute } from "../../stores/routeStore";
@@ -395,22 +394,7 @@ function BoardRow(props: {
     const isRawLeader = String(emissions?.raw_leader_agent_id) === String(e().agent_id);
     const contest = crownContest(emissions?.raw_leader_decision, emissions);
     if (contest && isRawLeader) {
-      const threshold =
-        typeof emissions?.raw_leader_decision?.required_score === "number" &&
-        Number.isFinite(emissions.raw_leader_decision.required_score)
-          ? " The challenger score must exceed " +
-            fxScore(emissions.raw_leader_decision.required_score) +
-            "."
-          : "";
-      return (
-        "Rank #1 is not champion. Head-to-head lead is " +
-        signedScore(contest.challengerLead) +
-        "; needs " +
-        signedScore(contest.requiredLead) +
-        " to take the crown. " +
-        crownWhyHigh(contest) +
-        threshold
-      );
+      return crownHeldRowTip(contest);
     }
     return "Scores above the reigning champion, but the crown only moves on the shared-seed head-to-head, not on rank.";
   };

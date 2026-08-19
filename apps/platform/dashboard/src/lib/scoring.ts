@@ -476,6 +476,9 @@ export interface CrownContest {
   championPairedScore: number | null;
   /** Shared-seed mean composite for the challenger: champion + difference. */
   challengerPairedScore: number | null;
+  /** Fold threshold the challenger must strictly exceed, on the same scale as
+   * the method: shared-seed mean when paired, Score column when unpaired. */
+  requiredScore: number | null;
   marginLead: number | null;
   statisticalLead: number | null;
   pairedStandardError: number | null;
@@ -541,6 +544,7 @@ export function crownContest(
     shortfall: requiredLead - challengerLead,
     championPairedScore,
     challengerPairedScore,
+    requiredScore,
     marginLead,
     statisticalLead,
     pairedStandardError,
@@ -631,6 +635,115 @@ export function crownDifferenceText(contest: CrownContest): string {
     fxScore(contest.championPairedScore) +
     " = " +
     signedScore(contest.challengerLead)
+  );
+}
+
+/** Metric label for the challenger's crown-test score. */
+export function crownChallengerScoreLabel(method: string | undefined): string {
+  return method === "paired" ? "Shared-seed mean" : "Challenger score";
+}
+
+/** Metric label for the incumbent's crown-test score. */
+export function crownChampionScoreLabel(method: string | undefined): string {
+  return method === "paired" ? "Champion shared-seed mean" : "Champion score";
+}
+
+/** Metric label for required_score. Paired bars are not the Score column. */
+export function crownThresholdLabel(method: string | undefined): string {
+  if (method === "paired") return "Shared-seed bar";
+  if (method === "unpaired") return "Score bar";
+  return "Dethrone bar";
+}
+
+/** One-line rule: rank number vs crown test. */
+export function crownComparisonNote(method: string | undefined): string {
+  if (method === "paired") {
+    return (
+      "The Score column ranks the board. The crown is a head-to-head on shared confirmation " +
+      "seeds, so a lucky private dataset cannot take the title."
+    );
+  }
+  if (method === "unpaired") {
+    return (
+      "Not enough shared seeds yet for a paired comparison, so the fold uses an unpaired " +
+      "uncertainty band on the Score-column numbers. More shared retests can change this threshold."
+    );
+  }
+  return "The first-seen incumbent holds until a challenger clears the flat protection margin.";
+}
+
+const SCORE_EPS = 0.0000005;
+
+/**
+ * Stop miners comparing the Score column to a paired dethrone bar.
+ * Rank uses the continual mean; the crown uses shared-seed means when paired.
+ */
+export function crownScaleNote(
+  leader: CompositeCarrier,
+  contest: CrownContest,
+  settledView = false,
+): string {
+  const boardScore = displayComposite(leader, settledView);
+  const ownSeed = leader.composite;
+  const ownSeedDiffers = Number.isFinite(ownSeed) && Math.abs(ownSeed - boardScore) >= SCORE_EPS;
+
+  if (contest.method === "paired") {
+    let text = "Do not compare the Score column (" + fxScore(boardScore) + ")";
+    if (contest.requiredScore != null) {
+      text += " to the shared-seed bar (>" + fxScore(contest.requiredScore) + ")";
+    } else {
+      text += " to a dethrone bar";
+    }
+    if (contest.challengerPairedScore != null) {
+      text += ". The crown test is the shared-seed mean " + fxScore(contest.challengerPairedScore);
+      if (contest.requiredScore != null) {
+        text += " against that bar";
+      }
+    } else {
+      text += ". The crown test is the shared-seed head-to-head, not the Score column";
+    }
+    text += ".";
+    if (ownSeedDiffers) {
+      text +=
+        " The " +
+        fxScore(ownSeed) +
+        " own-seed median is a third number and also is not the crown test.";
+    }
+    return text;
+  }
+
+  let text =
+    "The Score column (" + fxScore(boardScore) + ") is the number the unpaired band compares.";
+  if (contest.requiredScore != null) {
+    text += " It must exceed " + fxScore(contest.requiredScore) + ".";
+  }
+  if (ownSeedDiffers) {
+    text +=
+      " The " +
+      fxScore(ownSeed) +
+      " own-seed median is not the Score column and not the crown test.";
+  }
+  return text;
+}
+
+/** Row tooltip: name the comparable threshold, never "the challenger score". */
+export function crownHeldRowTip(contest: CrownContest): string {
+  const threshold =
+    contest.requiredScore != null
+      ? contest.method === "paired"
+        ? " The shared-seed mean must exceed " +
+          fxScore(contest.requiredScore) +
+          ". The Score column is a different number."
+        : " The Score column must exceed " + fxScore(contest.requiredScore) + "."
+      : "";
+  return (
+    "Rank #1 is not champion. Head-to-head lead is " +
+    signedScore(contest.challengerLead) +
+    "; needs " +
+    signedScore(contest.requiredLead) +
+    " to take the crown. " +
+    crownWhyHigh(contest) +
+    threshold
   );
 }
 

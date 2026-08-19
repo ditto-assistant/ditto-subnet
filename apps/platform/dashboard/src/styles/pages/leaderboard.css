@@ -98,6 +98,9 @@
 .koth-standing-metrics > div:nth-child(n + 3) dd {
   color: var(--gold);
 }
+.koth-standing-metrics > div.koth-standing-compare dd {
+  color: var(--gold);
+}
 .koth-standing-detail {
   max-width: 75ch;
   color: var(--text-dim);

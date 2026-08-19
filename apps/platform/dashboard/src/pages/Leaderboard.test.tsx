@@ -913,8 +913,15 @@ describe("held-crown standing clarity", () => {
       "Needed to take crown+" + fxScore(emissions?.raw_leader_decision?.required_lead as number),
     );
     expect(callout.textContent).toContain("flat margin is not the gate");
-    expect(callout.textContent).toContain("own-seed median is the rank score, not the crown test");
+    expect(callout.textContent).toContain("Do not compare the Score column");
+    expect(callout.textContent).toContain(fxScore(displayComposite(rawLeaderEntry)) + ")");
+    expect(callout.textContent).toContain(
+      fxScore(rawLeaderEntry.composite) + " own-seed median is a third number",
+    );
+    expect(callout.textContent).toContain("The Score column ranks the board");
     expect(callout.textContent).toContain("head-to-head on shared confirmation seeds");
+    expect(callout.textContent).not.toContain("own-seed median is the rank score");
+    expect(callout.textContent).not.toContain("Rank is each agent's own-seed score");
   });
 
   it("dims every higher-scoring row and notes it outscores without dethroning", async () => {
@@ -981,8 +988,54 @@ describe("held-crown standing clarity", () => {
     const copy = el("koth-standing-copy").textContent;
     expect(copy).toContain("Difference+0.018572");
     expect(copy).toContain("Needed to take crown+0.046305");
-    expect(copy).toContain("Dethrone score>0.750175");
+    expect(copy).toContain("Score bar>0.750175");
+    expect(copy).toContain("The Score column");
+    expect(copy).toContain("must exceed 0.750175");
+    expect(copy).not.toContain("Dethrone score");
     expect(copy).not.toContain("beat 0.710");
+  });
+
+  it("names the paired bar on the shared-seed scale and forbids comparing it to Score", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          emissions: {
+            ...payload.emissions,
+            raw_leader_decision: {
+              ...payload.emissions?.raw_leader_decision,
+              method: "paired",
+              challenger_lead: -0.040757,
+              required_lead: 0.033269276681151067,
+              required_score: 0.7246482766811511,
+              margin_lead: 0.007,
+              statistical_lead: 0.03994056,
+              paired_standard_error: 0.024354,
+              shared_seed_count: 2,
+              seed_differences: [-0.065111, -0.016403],
+            },
+          },
+        };
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(el("koth-standing-copy").textContent).toContain("Shared-seed bar>0.724648"),
+    );
+    const copy = el("koth-standing-copy").textContent;
+    expect(copy).toContain("Shared-seed mean0.650622");
+    expect(copy).toContain("Do not compare the Score column");
+    expect(copy).toContain("shared-seed bar (>0.724648)");
+    expect(copy).toContain("shared-seed mean 0.650622");
+    expect(copy).not.toContain("Dethrone score");
+    expect(copy).not.toContain("own-seed median is the rank score");
+    const note = document.querySelector("tr.above-champion .above-champion-note") as HTMLElement;
+    expect(note.getAttribute("data-tooltip")).toContain(
+      "The shared-seed mean must exceed 0.724648",
+    );
+    expect(note.getAttribute("data-tooltip")).toContain("The Score column is a different number");
   });
 
   it("pins the dimming and hover-restore rules in the stylesheet", () => {

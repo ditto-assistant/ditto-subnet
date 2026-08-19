@@ -7,7 +7,13 @@ import { Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { fx, pct, publicDisplayName, relTime, shortKey } from "../../lib/format";
-import { crownContest, crownWhyHigh, displayComposite, signedScore } from "../../lib/scoring";
+import {
+  crownComparisonNote,
+  crownContest,
+  crownWhyHigh,
+  displayComposite,
+  signedScore,
+} from "../../lib/scoring";
 import { ChipTip } from "../board/chips";
 import { leaderboardVersionView } from "../board/board-state";
 import { EntityButton } from "../ui/EntityButton";
@@ -107,7 +113,7 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               <ChipTip
                 tag="div"
                 class="champion-score tip-chip"
-                text="Finalized composite — the headline score in [0,1] that drives rank."
+                text="Finalized Score-column number in [0,1] that drives rank. The crown can sit on a lower-ranked row: rank is not the crown test."
               >
                 <span class="champion-score-label">Composite</span>
                 {fx(composite() as number)}
@@ -198,7 +204,9 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
                   " and the crown needs " +
                   signedScore(contest.requiredLead) +
                   ". " +
-                  crownWhyHigh(contest)
+                  crownWhyHigh(contest) +
+                  " " +
+                  crownComparisonNote(contest.method)
                 );
               })()}
             </div>
