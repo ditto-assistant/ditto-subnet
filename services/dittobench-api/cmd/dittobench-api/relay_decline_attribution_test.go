@@ -568,15 +568,17 @@ func TestImpossibleBudgetDeclineKeepsTheMinerAttempt(t *testing.T) {
 
 func TestBudgetEvidenceStillAttributesGenuineExhaustion(t *testing.T) {
 	session := &brokerSession{
-		requestBudget:             1,
-		tokenBudget:               1000,
-		embeddingRequestBudget:    1,
-		embeddingTokenBudget:      1000,
-		maxOutputTokens:           100,
-		chatDispatches:            2,
-		chatChargeUpperBound:      1001,
-		embeddingDispatches:       2,
-		embeddingChargeUpperBound: 1001,
+		requestBudget:          1,
+		tokenBudget:            1000,
+		embeddingRequestBudget: 1,
+		embeddingTokenBudget:   1000,
+		maxOutputTokens:        100,
+		successes:              1,
+		inFlight:               1,
+		promptTokens:           950,
+		completionTokens:       50,
+		embeddingRequests:      2,
+		embeddingInFlight:      1,
 	}
 	for _, testCase := range []struct {
 		name       string
@@ -588,7 +590,7 @@ func TestBudgetEvidenceStillAttributesGenuineExhaustion(t *testing.T) {
 		{name: "chat tokens", code: platformDeclineTokenBudgetExhausted, upperBound: 101},
 		{name: "chat reservation", code: platformDeclineReservationTooLarge, upperBound: 1001},
 		{name: "embedding requests", code: platformDeclineBudgetExhausted, embedding: true, upperBound: 10},
-		{name: "embedding tokens", code: platformDeclineTokenBudgetExhausted, embedding: true, upperBound: 101},
+		{name: "embedding tokens", code: platformDeclineTokenBudgetExhausted, embedding: true, upperBound: 1001},
 		{name: "embedding reservation", code: platformDeclineReservationTooLarge, embedding: true, upperBound: 1001},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -597,6 +599,109 @@ func TestBudgetEvidenceStillAttributesGenuineExhaustion(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFalseTokenDeclineAfterHealthySpendIsQuarantined(t *testing.T) {
+	// Crown-v11 v4/v5: ~620 completed chats, ~3M settled tokens, 75M grant.
+	// The cumulative body-byte overestimate had already crossed 75M, so a
+	// false 4104 was charged to the miner. Settled + this request cannot
+	// have crossed the wall.
+	session := &brokerSession{
+		requestBudget:        8192,
+		tokenBudget:          75_000_000,
+		maxOutputTokens:      8192,
+		successes:            620,
+		inFlight:             1,
+		promptTokens:         2_500_000,
+		completionTokens:     400_000,
+		chatDispatches:       9000,
+		chatChargeUpperBound: 90_000_000,
+	}
+	current := uint64(63_337)
+	if declineMatchesBudgetEvidenceLocked(session, platformDeclineTokenBudgetExhausted, false, current) {
+		t.Fatal("false 4104 after 4% settled spend was treated as genuine")
+	}
+	if declineMatchesBudgetEvidenceLocked(session, platformDeclineBudgetExhausted, false, current) {
+		t.Fatal("false 4102 after 620 successes against 8192 was treated as genuine")
+	}
+	if declineMatchesBudgetEvidenceLocked(session, platformDeclineReservationTooLarge, false, current) {
+		t.Fatal("63k reservation against 75M was treated as 4109")
+	}
+}
+
+func TestFalseTokenDeclineAfterHealthySpendKeepsTheMinerAttempt(t *testing.T) {
+	upstreamCalls := 0
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls++
+		if upstreamCalls == 1 {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"usage":   map[string]int{"prompt_tokens": 2_500_000, "completion_tokens": 400_000},
+				"choices": []map[string]any{{"message": map[string]string{"content": "OK"}}},
+			})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error_code":4104,"message":"token budget exhausted"}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	terminalFailures := 0
+	broker.terminalAgentFailure = func(string) { terminalFailures++ }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel, brokerActivation{
+		RequestBudget:          8192,
+		TokenBudget:            75_000_000,
+		EmbeddingRequestBudget: 100_000,
+		EmbeddingTokenBudget:   1_000_000_000,
+		MaxOutputTokens:        8192,
+	})
+	sourceIP := "192.0.2.201"
+	runID := claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","max_tokens":64}`))
+	first.RemoteAddr = sourceIP + ":4321"
+	first.SetPathValue("rest", "v1/chat/completions")
+	firstRec := httptest.NewRecorder()
+	broker.handle(firstRec, first)
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("healthy call status=%d, want 200", firstRec.Code)
+	}
+
+	second := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","max_tokens":64}`))
+	second.RemoteAddr = sourceIP + ":4322"
+	second.SetPathValue("rest", "v1/chat/completions")
+	secondRec := httptest.NewRecorder()
+	broker.handle(secondRec, second)
+	if secondRec.Code != http.StatusBadGateway {
+		t.Fatalf("declined call status=%d, want 502", secondRec.Code)
+	}
+
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.GrantDenials != 1 || end.GrantAgentDeclines != 0 || end.DeclineEvidenceMismatches != 1 {
+		t.Fatalf("false 4104 was not quarantined: %+v", end)
+	}
+	if terminalFailures != 0 {
+		t.Fatalf("false 4104 consumed the attempt via %d terminal callback(s)", terminalFailures)
+	}
+	degraded := relayDegradedSince(start, end)
+	if !errors.Is(degraded, errGrantDeclineEvidenceMismatch) {
+		t.Fatalf("degraded=%v, want evidence mismatch", degraded)
+	}
+	failure := relayFinalizeFailure(degraded)
+	if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "model_relay_unavailable" {
+		t.Fatalf("false 4104 did not preserve the miner attempt: %+v", failure)
+	}
+	_ = runID
 }
 
 func TestOutstandingSignedDispatchKeepsConcurrentExhaustionAgentAttributed(t *testing.T) {

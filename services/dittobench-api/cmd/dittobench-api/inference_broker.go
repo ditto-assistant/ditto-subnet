@@ -984,10 +984,18 @@ func declineIsAgentFault(code int) bool {
 }
 
 // declineMatchesBudgetEvidenceLocked independently checks whether the typed
-// Platform decline is even possible under what this broker dispatched. The
-// Platform remains authoritative for the exact accounting; these are
-// deliberately conservative upper bounds whose only job is to disprove an
-// impossible attribution. Missing evidence keeps the pre-upgrade behaviour.
+// Platform decline is even possible under what this broker observed. The
+// Platform remains authoritative for the exact accounting. Missing evidence
+// keeps the pre-upgrade behaviour (treat the code as possible).
+//
+// These bounds exist only to DISPROVE an impossible attribution. A cumulative
+// byte-length overestimate that eventually exceeds the token cap does not
+// prove the harness spent the grant: Crown-v11 v4/v5 died as
+// inference_allowance_exhausted at ~4% settled tokens / ~7.5% requests because
+// the old chatChargeUpperBound / chatDispatches sums treated "cannot disprove"
+// as "charge the miner". Confirm 4102/4104 only from a lower bound that can
+// actually have crossed the wall: settled usage plus this request (and
+// in-flight siblings for the request-count wall).
 func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedding bool, currentUpperBound uint64) bool {
 	if session == nil {
 		return false
@@ -998,9 +1006,13 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 		}
 		switch code {
 		case platformDeclineBudgetExhausted:
-			return session.embeddingDispatches > session.embeddingRequestBudget
+			// embeddingRequests increments once per handle, including this call,
+			// before the platform is contacted. It is the reservation lower
+			// bound we have: the 1B-token / 100k-request embedding grant is
+			// not crossed by a body-byte sum the way chat is.
+			return session.embeddingRequests >= session.embeddingRequestBudget
 		case platformDeclineTokenBudgetExhausted:
-			return session.embeddingChargeUpperBound > session.embeddingTokenBudget
+			return currentUpperBound > session.embeddingTokenBudget
 		case platformDeclineReservationTooLarge:
 			return currentUpperBound > session.embeddingTokenBudget
 		default:
@@ -1012,9 +1024,16 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 	}
 	switch code {
 	case platformDeclineBudgetExhausted:
-		return session.chatDispatches > session.requestBudget
+		// Platform fires 4102 when already-reserved count >= budget. Successes
+		// are completed reservations; inFlight includes this call and any
+		// sibling that may still hold a slot (including a just-lost admission).
+		return session.successes+uint64(session.inFlight) >= session.requestBudget
 	case platformDeclineTokenBudgetExhausted:
-		return session.chatChargeUpperBound > session.tokenBudget
+		// Platform fires 4104 when settled + this reservation > token_budget.
+		// Use receipted provider tokens plus this request's byte-derived
+		// ceiling. Do NOT use the run-long sum of body bytes: that overestimate
+		// crosses 75M while settled spend is still a few million.
+		return session.promptTokens+session.completionTokens+currentUpperBound > session.tokenBudget
 	case platformDeclineReservationTooLarge:
 		return currentUpperBound > session.tokenBudget
 	default:
@@ -3972,6 +3991,8 @@ func (b *inferenceBroker) proxy(
 		mismatches := session.declineEvidenceMismatches
 		dispatches, requestBudget := session.chatDispatches, session.requestBudget
 		chargeUpperBound, tokenBudget := session.chatChargeUpperBound, session.tokenBudget
+		settledTokens := session.promptTokens + session.completionTokens
+		successes, inFlight := session.successes, session.inFlight
 		runID, deadline := session.boundRunID, session.ticketDeadline
 		session.mu.Unlock()
 		if agentDecline {
@@ -3983,10 +4004,11 @@ func (b *inferenceBroker) proxy(
 		// not merely the same log line but the same CLASSIFICATION. Older
 		// platforms send no code, get the old wording, and stay no-fault.
 		log.Printf(
-			"run %s: platform declined the inference grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d, evidence-mismatch #%d, signed dispatches=%d/%d, dispatched charge upper bound=%d/%d)",
+			"run %s: platform declined the inference grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d, evidence-mismatch #%d, signed dispatches=%d/%d, successes=%d in_flight=%d, settled_tokens=%d, this_request_upper_bound=%d, dispatched charge upper bound=%d/%d)",
 			runID, platformDeclineReason(declineCode), attribution,
 			deadline.UTC().Format(time.RFC3339), time.Until(deadline).Truncate(time.Second),
-			denials, agentDenials, mismatches, dispatches, requestBudget, chargeUpperBound, tokenBudget,
+			denials, agentDenials, mismatches, dispatches, requestBudget, successes, inFlight,
+			settledTokens, currentChargeUpperBound, chargeUpperBound, tokenBudget,
 		)
 		writeError(w, http.StatusBadGateway, "inference provider unavailable")
 		return
