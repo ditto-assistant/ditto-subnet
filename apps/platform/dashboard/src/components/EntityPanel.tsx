@@ -37,7 +37,7 @@ import {
   relTime,
   relTimeUntil,
 } from "../lib/format";
-import { entityHref } from "../lib/router";
+import { dashboardHref, entityHref } from "../lib/router";
 import type { EntityKind, EntityRoute } from "../lib/router";
 import type { NameHandle } from "../types/leaderboard";
 import {
@@ -769,7 +769,7 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
           </Show>
           <Show when={minerEntry()}>
             <div class="gloss-link">
-              <a href="#/benchmark">What each category and metric means →</a>
+              <a href={dashboardHref("benchmark")}>What each category and metric means →</a>
             </div>
           </Show>
         </div>

@@ -177,6 +177,25 @@ class TestInjectLiveSeo:
         assert "#1 <a href=" in html
         assert "static fallback" not in html
 
+    def test_operations_opengraph_does_not_use_the_champion(self) -> None:
+        html = inject_live_seo(
+            _MARKED_HTML,
+            origin=_ORIGIN,
+            path="/operations",
+            snapshot=_snapshot(),
+        )
+        assert "<title>Validator fleet · Ditto SN118</title>" in html
+        assert 'property="og:title" content="Validator fleet · Ditto SN118"' in html
+        assert "validator and screener fleet" in html
+        assert "Current champion" not in html
+        assert "#1 jupiter" not in html
+        assert "0.912345" not in html
+        assert '"@type":"ItemList"' not in html
+        assert (
+            'property="og:url" content="https://platform-api.heyditto.ai/operations"'
+            in html
+        )
+
     def test_missing_snapshot_does_not_invent_ranks(self) -> None:
         html = inject_live_seo(_MARKED_HTML, origin=_ORIGIN, path="/", snapshot=None)
         assert "rank #" not in html

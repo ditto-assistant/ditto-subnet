@@ -42,6 +42,16 @@ describe("currentPage", () => {
     setLocation("/#/operations");
     syncFromLocation();
     expect(currentPage()).toBe("operations");
+    expect(fullUrl()).toBe("/operations#/operations");
+  });
+
+  it("canonicalizes hash-only page routes onto the crawlable pathname", () => {
+    setLocation("/#/operations?validator=v1");
+    syncFromLocation();
+    expect(fullUrl()).toBe("/operations#/operations?validator=v1");
+    setLocation("/?api=x#/leaderboard");
+    syncFromLocation();
+    expect(fullUrl()).toBe("/leaderboard?api=x#/leaderboard");
   });
 
   it("follows a crawlable pathname when there is no hash page", () => {
@@ -73,7 +83,7 @@ describe("currentPage", () => {
   it("leaves non-route fragments (skip link) alone and keeps the page", () => {
     setLocation("/#/operations");
     syncFromLocation();
-    setLocation("/#main-content");
+    setLocation("/operations#main-content");
     syncFromLocation();
     expect(currentPage()).toBe("operations");
     expect(location.hash).toBe("#main-content");
@@ -133,7 +143,7 @@ describe("navigateToPage", () => {
     setLocation("/#/submissions?status=rejected&agent=a1");
     syncFromLocation();
     navigateToPage("submissions");
-    expect(fullUrl()).toBe("/#/submissions?status=rejected");
+    expect(fullUrl()).toBe("/submissions#/submissions?status=rejected");
     expect(entityRoute()).toBeNull();
   });
 
@@ -143,17 +153,17 @@ describe("navigateToPage", () => {
     const push = vi.spyOn(history, "pushState");
     navigateToPage("submissions");
     expect(push).not.toHaveBeenCalled();
-    expect(fullUrl()).toBe("/#/submissions?status=rejected");
+    expect(fullUrl()).toBe("/submissions#/submissions?status=rejected");
   });
 
   it("pushes (not replaces) a history entry and clears entityReturnUrl", () => {
     setLocation("/#/overview");
     syncFromLocation();
-    entityReturnUrl.value = "/#/operations";
+    entityReturnUrl.value = "/operations#/operations";
     const push = vi.spyOn(history, "pushState");
     navigateToPage("benchmark");
     expect(push).toHaveBeenCalledTimes(1);
-    expect(push).toHaveBeenCalledWith({}, "", "/#/benchmark");
+    expect(push).toHaveBeenCalledWith({}, "", "/benchmark#/benchmark");
     expect(entityReturnUrl.value).toBeNull();
     expect(currentPage()).toBe("benchmark");
   });
@@ -164,8 +174,8 @@ describe("pushEntityRoute", () => {
     setLocation("/#/operations");
     syncFromLocation();
     pushEntityRoute("validator", "v1");
-    expect(fullUrl()).toBe("/#/operations?validator=v1");
-    expect(entityReturnUrl.value).toBe("/#/operations");
+    expect(fullUrl()).toBe("/operations#/operations?validator=v1");
+    expect(entityReturnUrl.value).toBe("/operations#/operations");
     expect(history.state).toEqual({ entity: true });
     expect(entityRoute()).toMatchObject({ kind: "validator", id: "v1" });
   });
@@ -174,7 +184,7 @@ describe("pushEntityRoute", () => {
     setLocation("/#/submissions?status=rejected");
     syncFromLocation();
     pushEntityRoute("agent", "a1");
-    expect(fullUrl()).toBe("/#/submissions?status=rejected&agent=a1");
+    expect(fullUrl()).toBe("/submissions#/submissions?status=rejected&agent=a1");
   });
 
   it("no-ops when the URL already addresses the entity", () => {
@@ -185,7 +195,7 @@ describe("pushEntityRoute", () => {
     pushEntityRoute("validator", "v1");
     expect(push).not.toHaveBeenCalled();
     // The recorded return URL is not overwritten by the no-op.
-    expect(entityReturnUrl.value).toBe("/#/operations");
+    expect(entityReturnUrl.value).toBe("/operations#/operations");
   });
 });
 
@@ -194,7 +204,7 @@ describe("closeEntityRoute", () => {
     setLocation("/#/submissions?status=rejected&agent=a1");
     syncFromLocation();
     closeEntityRoute();
-    expect(fullUrl()).toBe("/#/submissions?status=rejected");
+    expect(fullUrl()).toBe("/submissions#/submissions?status=rejected");
     expect(entityRoute()).toBeNull();
     expect(currentPage()).toBe("submissions");
     expect(entityReturnUrl.value).toBeNull();
@@ -217,7 +227,7 @@ describe("closeEntityRoute", () => {
     expect(back).toHaveBeenCalledTimes(1);
     expect(replace).not.toHaveBeenCalled();
     // The return URL is cleared by the popstate that follows, not here.
-    expect(entityReturnUrl.value).toBe("/#/operations");
+    expect(entityReturnUrl.value).toBe("/operations#/operations");
   });
 
   it("requires BOTH a return URL and history.state.entity to go back", () => {
@@ -228,7 +238,7 @@ describe("closeEntityRoute", () => {
     const back = vi.spyOn(history, "back");
     closeEntityRoute();
     expect(back).not.toHaveBeenCalled();
-    expect(fullUrl()).toBe("/#/operations");
+    expect(fullUrl()).toBe("/operations#/operations");
     expect(entityReturnUrl.value).toBeNull();
   });
 
@@ -236,7 +246,7 @@ describe("closeEntityRoute", () => {
     setLocation("/?agent=a1");
     syncFromLocation();
     closeEntityRoute();
-    expect(fullUrl()).toBe("/#/submissions");
+    expect(fullUrl()).toBe("/submissions#/submissions");
   });
 
   it("is a no-op on dedicated entity pages", () => {
@@ -257,7 +267,7 @@ describe("closeEntityRoute", () => {
     syncFromLocation();
     entityReturnUrl.value = "/#/operations";
     closeEntityRoute();
-    expect(fullUrl()).toBe("/#/operations?screener=s1");
+    expect(fullUrl()).toBe("/operations#/operations?screener=s1");
     expect(entityReturnUrl.value).toBeNull();
   });
 

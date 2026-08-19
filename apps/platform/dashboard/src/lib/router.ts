@@ -1,11 +1,14 @@
 // URL logic for the SPA router.
 //
-// All SPA state (the entity overlay params and the activity filters) lives in
-// a query string INSIDE the hash ("#/submissions?agent=…&status=…"). The real
-// (server-visible) query string carries only deploy/config knobs (?api=,
-// ?wandb=), so the document URL and its HTTP cache entry stay stable while
-// the SPA navigates. Legacy links with SPA state in the real query are
-// recognized once and normalized into the hash form.
+// The document pathname is the sidebar page (`/operations`, `/leaderboard`).
+// Overlay and filter state lives in a query string INSIDE the hash
+// (`#/operations?validator=…`), and the real query carries only deploy/config
+// knobs (`?api=`, `?wandb=`). That keeps each page's HTTP cache entry stable
+// during in-page navigation while Discord/Slack/Twitter — which never see
+// the fragment — fetch `/operations` instead of the homepage OG card.
+// Hash-only links (`/#/operations`) still resolve; the router canonicalizes
+// them onto the crawlable pathname. Legacy links with SPA state in the real
+// query are recognized once and normalized into the hash form.
 import { bootParams } from "./config";
 
 export type PageName =
@@ -65,6 +68,11 @@ export function pageFromPathname(pathname?: string): PageName | null {
   const raw = (pathname ?? location.pathname).replace(/^\/+|\/+$/g, "");
   const segment = raw.split("/")[0] ?? "";
   return segment !== "" && isPageName(segment) ? segment : null;
+}
+
+/** Crawlable pathname for a sidebar page. Overview canonicalizes to `/`. */
+export function pagePathname(page: string): string {
+  return page === "overview" ? "/" : "/" + page;
 }
 
 export type EntityKind = "agent" | "miner" | "validator" | "screener";
@@ -160,7 +168,9 @@ export function configSearch(): string {
 
 export function spaHref(page: string, query?: URLSearchParams): string {
   const qs = query ? query.toString() : "";
-  return "/" + configSearch() + "#/" + page + (qs ? "?" + qs : "");
+  // Pathname is what unfurlers fetch. Keep the hash page too so parseHashRoute
+  // and hash-only bookmarks keep working after a copy-paste.
+  return pagePathname(page) + configSearch() + "#/" + page + (qs ? "?" + qs : "");
 }
 
 // The page currently addressed by the hash, or by a crawlable pathname

@@ -601,8 +601,8 @@ describe("validator modal · Assignment (9073–9074)", () => {
     expect(chipOf(signed, "Assignment")).toEqual(["Assignment mismatch", "stage bad"]);
     expect(assignmentHeadings(signed)).toEqual(["Platform", "Heartbeat"]);
     expect(anchors(signed, "Assignment")).toEqual([
-      ["Mnemosyne · 11111111", "/#/operations?agent=" + AGENT_A],
-      ["Agent · 22222222", "/#/operations?agent=" + AGENT_B],
+      ["Mnemosyne · 11111111", "/operations#/operations?agent=" + AGENT_A],
+      ["Agent · 22222222", "/operations#/operations?agent=" + AGENT_B],
     ]);
   });
 
@@ -679,7 +679,7 @@ describe("validator modal · Assignment (9073–9074)", () => {
     // The heartbeat's side is exactly what went missing, so it is not invented.
     expect(assignmentHeadings(signed)).toEqual(["Platform assignment"]);
     expect(anchors(signed, "Assignment")).toEqual([
-      ["Mnemosyne · 11111111", "/#/operations?agent=" + AGENT_A],
+      ["Mnemosyne · 11111111", "/operations#/operations?agent=" + AGENT_A],
     ]);
   });
 
@@ -731,7 +731,7 @@ describe("validator modal · evicted leases (9068–9087)", () => {
         "not free.",
     );
     expect(anchors(signed, key)).toEqual([
-      ["Mnemosyne · 11111111", "/#/operations?agent=" + AGENT_A],
+      ["Mnemosyne · 11111111", "/operations#/operations?agent=" + AGENT_A],
     ]);
     const detail = row(signed, key).querySelector(".assignment-detail");
     // The deadline is ahead of now, so it counts forward: relTime would floor a
@@ -753,7 +753,9 @@ describe("validator modal · evicted leases (9068–9087)", () => {
       "silence here is not evidence the slot is free (slot omitted by heartbeat protocol 15)",
     );
     // No agent name reported: the anchor still names the id it does have.
-    expect(anchors(signed, key)).toEqual([["Agent · 33333333", "/#/operations?agent=" + AGENT_C]]);
+    expect(anchors(signed, key)).toEqual([
+      ["Agent · 33333333", "/operations#/operations?agent=" + AGENT_C],
+    ]);
     expect(row(signed, key).querySelector(".assignment-detail")?.textContent).toBe(
       "Lease released 1h ago · bench v6",
     );
@@ -780,7 +782,7 @@ describe("validator modal · legacy single-benchmark fallback (9097–9098)", ()
     expect(rowKeys(signed)).toContain("Active benchmark");
     expect(value(signed, "Active benchmark")).toContain("Benchmark 42% · 118 of 281 checks");
     expect(anchors(signed, "Active benchmark")).toEqual([
-      ["Mnemosyne · 11111111", "/#/operations?agent=" + AGENT_A],
+      ["Mnemosyne · 11111111", "/operations#/operations?agent=" + AGENT_A],
     ]);
   });
 

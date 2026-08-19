@@ -11,6 +11,7 @@ import {
   entityHref,
   isPageName,
   pageFromPathname,
+  pagePathname,
   readEntityRoute,
 } from "../lib/router";
 import type { EntityKind, EntityRoute, PageName } from "../lib/router";
@@ -58,6 +59,18 @@ function derivePage(current: PageName | null): PageName {
       "",
       location.pathname + location.search + "#/" + page,
     );
+  } else if (hashPage && !entity?.full) {
+    // Hash-only shares (`/#/operations?validator=…`) look like `/` to Discord.
+    // Lift the page into the pathname so the address bar, and the next paste,
+    // unfurl that page's OG tags instead of the homepage champion card.
+    const wantPath = pagePathname(hashPage);
+    if (location.pathname !== wantPath) {
+      history.replaceState(
+        (history.state as unknown) ?? {},
+        "",
+        wantPath + location.search + location.hash,
+      );
+    }
   }
   return page;
 }

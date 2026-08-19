@@ -7,7 +7,7 @@ import { MinerAvatar } from "../components/ui/MinerAvatar";
 import { API_BASE } from "../lib/config";
 import { authJSON, postJSON } from "../lib/api";
 import { copyText } from "../lib/copy";
-import { fullEntityHref } from "../lib/router";
+import { dashboardHref, fullEntityHref, spaHref } from "../lib/router";
 import {
   clearMinerSession,
   minerSession,
@@ -160,7 +160,7 @@ function readPollGrant(): StoredPollGrant | null {
 function writeLoginHash(userCode: string, completeToken?: string): void {
   const params = new URLSearchParams({ code: userCode });
   if (completeToken) params.set("complete", completeToken);
-  history.replaceState(history.state ?? {}, "", "#/reviews?" + params.toString());
+  history.replaceState(history.state ?? {}, "", spaHref("reviews", params));
 }
 
 export function ReviewsPage(): JSX.Element {
@@ -410,8 +410,8 @@ function SignInPanel(props: { presetCode: string; completeToken: string }): JSX.
         <p class="account-error">{error()}</p>
       </Show>
       <p class="muted">
-        Public ATH holds now live at <a href="#/ath">#/ath</a>. Your submissions stay on{" "}
-        <a href="#/submissions">#/submissions</a>.
+        Public ATH holds now live at <a href={dashboardHref("ath")}>/ath</a>. Your submissions stay
+        on <a href={dashboardHref("submissions")}>/submissions</a>.
       </p>
     </div>
   );

@@ -54,22 +54,86 @@ _SNAPSHOT_FAILURE_TTL_SECONDS = 5.0
 _DEFAULT_ORIGIN = "https://platform-api.heyditto.ai"
 _PROD_HOST_SUFFIX = "heyditto.ai"
 
+_STATIC_DESCRIPTION = (
+    "Live Ditto SN118 leaderboard scores, submission progress, and validator health."
+)
+
 # Pathnames the SPA also understands as pages. Hash routes stay valid; these
-# exist so a sitemap URL is a real document URL, not a fragment.
-CRAWLABLE_PAGES: tuple[tuple[str, str, str], ...] = (
-    ("/", "overview", "Ditto SN118 · Subnet Leaderboard"),
-    ("/overview", "overview", "Overview · Ditto SN118"),
-    ("/leaderboard", "leaderboard", "Leaderboard · Ditto SN118"),
-    ("/benchmark", "benchmark", "Benchmark · Ditto SN118"),
-    ("/pipeline", "pipeline", "Submission pipeline · Ditto SN118"),
-    ("/operations", "operations", "Validator fleet · Ditto SN118"),
-    ("/submissions", "submissions", "Recent submissions · Ditto SN118"),
-    ("/ath", "ath", "ATH reviews · Ditto SN118"),
+# exist so a sitemap URL is a real document URL, not a fragment. Discord and
+# other unfurlers never see `#/operations`, so OG tags are keyed off this path.
+CRAWLABLE_PAGES: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "/",
+        "overview",
+        "Ditto SN118 · Subnet Leaderboard",
+        _STATIC_DESCRIPTION,
+    ),
+    (
+        "/overview",
+        "overview",
+        "Overview · Ditto SN118",
+        _STATIC_DESCRIPTION,
+    ),
+    (
+        "/leaderboard",
+        "leaderboard",
+        "Leaderboard · Ditto SN118",
+        _STATIC_DESCRIPTION,
+    ),
+    (
+        "/benchmark",
+        "benchmark",
+        "Benchmark · Ditto SN118",
+        (
+            "What DittoBench measures and the frozen scoring setup for the "
+            "active benchmark."
+        ),
+    ),
+    (
+        "/pipeline",
+        "pipeline",
+        "Submission pipeline · Ditto SN118",
+        (
+            "Every SN118 submission from upload to scored: admission, "
+            "validation, and integrity review."
+        ),
+    ),
+    (
+        "/operations",
+        "operations",
+        "Validator fleet · Ditto SN118",
+        (
+            "Live Ditto SN118 validator and screener fleet: capacity, slot "
+            "work, and trusted miner-image builds."
+        ),
+    ),
+    (
+        "/submissions",
+        "submissions",
+        "Recent submissions · Ditto SN118",
+        (
+            "Recent SN118 submissions with screening evidence and validator "
+            "quorum progress."
+        ),
+    ),
+    (
+        "/ath",
+        "ath",
+        "ATH reviews · Ditto SN118",
+        (
+            "Public queue of held high-score SN118 submissions. Scores "
+            "preserved, emissions paused."
+        ),
+    ),
 )
 
 CRAWLABLE_PAGE_PATHS: tuple[str, ...] = tuple(
-    path for path, _page, _title in CRAWLABLE_PAGES if path != "/"
+    path for path, _page, _title, _desc in CRAWLABLE_PAGES if path != "/"
 )
+
+# Champion title, live board description, Dataset/ItemList JSON-LD, and the
+# noscript standings list belong on the board — not on fleet/pipeline pages.
+_BOARD_PATHS = frozenset({"/", "/overview", "/leaderboard"})
 
 # Miner sign-in is a form, not a public dataset. Keep it off the sitemap.
 _NOINDEX_PATHS = frozenset({"/reviews"})
@@ -87,9 +151,6 @@ _ENTITY_PATH = re.compile(
     r"/(?P<ident>[^/]+)/?$"
 )
 
-_STATIC_DESCRIPTION = (
-    "Live Ditto SN118 leaderboard scores, submission progress, and validator health."
-)
 _DEFAULT_OG_IMAGE = "/assets/paperditto-512.png"
 _DEFAULT_OG_ALT = "Ditto paper mascot"
 
@@ -481,7 +542,13 @@ def inject_live_seo(
         robots=robots,
         snapshot=snapshot,
     )
-    body = _render_body(origin=origin, snapshot=snapshot)
+    body = _render_body(
+        origin=origin,
+        path=path,
+        title=title,
+        description=description,
+        snapshot=snapshot,
+    )
     # Callable replacements: the JSON-LD payload contains `\u003c` escapes
     # that re.sub would otherwise treat as replacement-string syntax.
     out = _HEAD_BLOCK.sub(
@@ -541,9 +608,10 @@ def _page_meta(
     title = "Ditto SN118 · Subnet Leaderboard"
     description = _STATIC_DESCRIPTION
     robots = "index, follow, max-image-preview:large"
-    for route, _page, route_title in CRAWLABLE_PAGES:
+    for route, _page, route_title, route_description in CRAWLABLE_PAGES:
         if route == clean:
             title = route_title
+            description = route_description
             break
     if clean in _NOINDEX_PATHS:
         title = "Miner sign-in · Ditto SN118"
@@ -561,7 +629,7 @@ def _page_meta(
             )
         else:
             title = f"{entity.group('ident')} · Ditto SN118"
-    elif snapshot is not None and clean in {"/", "/overview", "/leaderboard"}:
+    elif snapshot is not None and clean in _BOARD_PATHS:
         description = _live_description(snapshot)
         champion = snapshot.champion()
         if champion is not None and clean in {"/", "/overview"}:
@@ -609,7 +677,11 @@ def _render_head(
     else:
         image_extras = ""
     schemas = [_organization_schema(origin), _website_schema(origin, description)]
-    if snapshot is not None and robots.startswith("index"):
+    if (
+        snapshot is not None
+        and robots.startswith("index")
+        and _normalize_path(path) in _BOARD_PATHS
+    ):
         schemas.append(_dataset_schema(origin, snapshot))
         if snapshot.miners:
             schemas.append(_item_list_schema(origin, snapshot))
@@ -633,7 +705,21 @@ def _render_head(
 {json_ld}"""
 
 
-def _render_body(*, origin: str, snapshot: SeoSnapshot | None) -> str:
+def _render_body(
+    *,
+    origin: str,
+    path: str,
+    title: str,
+    description: str,
+    snapshot: SeoSnapshot | None,
+) -> str:
+    if _normalize_path(path) not in _BOARD_PATHS:
+        return (
+            "    <noscript>\n"
+            f"      <h1>{html.escape(title)}</h1>\n"
+            f"      <p>{html.escape(description)}</p>\n"
+            "    </noscript>"
+        )
     if snapshot is None or not snapshot.miners:
         return (
             "    <noscript>\n"

@@ -10,6 +10,7 @@ import type { JSX } from "solid-js";
 
 import { WANDB_URL } from "../../lib/config";
 import type { PageName } from "../../lib/router";
+import { dashboardHref } from "../../lib/router";
 import { minerSession } from "../../stores/sessionStore";
 import { currentPage, navigateToPage } from "../../stores/routeStore";
 import { BenchBadge } from "./BenchBadge";
@@ -135,7 +136,7 @@ export interface SidebarProps {
 }
 
 // Plain left clicks route through the store; modified clicks keep native
-// anchor behavior (new tab etc.) on the static "#/{page}" href.
+// anchor behavior (new tab etc.) on the crawlable pathname href.
 function onNavClick(ev: MouseEvent, page: PageName): void {
   if (
     ev.defaultPrevented ||
@@ -179,7 +180,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
             <a
               class="nav-item"
               classList={{ active: currentPage() === item.page }}
-              href={"#/" + item.page}
+              href={dashboardHref(item.page)}
               data-page={item.page}
               aria-current={currentPage() === item.page ? "page" : undefined}
               onClick={(ev) => onNavClick(ev, item.page)}

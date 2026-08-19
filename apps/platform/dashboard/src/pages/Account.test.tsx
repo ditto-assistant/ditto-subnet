@@ -46,7 +46,7 @@ describe("miner sign-in page", () => {
     const text = document.body.textContent ?? "";
     expect(text).toContain("Sign in with your hotkey");
     expect(text).toContain("uvx");
-    expect(text).toContain("#/ath");
+    expect(text).toContain("/ath");
     expect(text).toContain("Permissions");
   });
 

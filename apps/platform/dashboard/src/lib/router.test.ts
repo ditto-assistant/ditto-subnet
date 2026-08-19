@@ -173,13 +173,18 @@ describe("configSearch", () => {
 });
 
 describe("spaHref", () => {
-  it("mints '/' + '#/page' with no config", () => {
+  it("mints '/' + '#/overview' so homepage unfurlers still fetch /", () => {
     expect(spaHref("overview")).toBe("/#/overview");
+  });
+
+  it("puts other pages in the pathname so unfurlers see that page's OG tags", () => {
+    expect(spaHref("operations")).toBe("/operations#/operations");
+    expect(spaHref("leaderboard")).toBe("/leaderboard#/leaderboard");
   });
 
   it("appends the hash query when non-empty", () => {
     expect(spaHref("submissions", new URLSearchParams("status=rejected&page=2"))).toBe(
-      "/#/submissions?status=rejected&page=2",
+      "/submissions#/submissions?status=rejected&page=2",
     );
   });
 
@@ -191,6 +196,7 @@ describe("spaHref", () => {
     setBoot("api=x");
     setLocation("/agents/a1?utm=1#/whatever?noise=1");
     expect(spaHref("overview")).toBe("/?api=x#/overview");
+    expect(spaHref("operations")).toBe("/operations?api=x#/operations");
   });
 });
 
@@ -245,12 +251,14 @@ describe("handle profile path", () => {
 describe("entityHref", () => {
   it("keeps the current page and appends the entity param", () => {
     setLocation("/#/operations");
-    expect(entityHref("agent", "a1")).toBe("/#/operations?agent=a1");
+    expect(entityHref("agent", "a1")).toBe("/operations#/operations?agent=a1");
   });
 
   it("preserves the rest of the hash state (activity filters)", () => {
     setLocation("/#/submissions?status=rejected&page=2");
-    expect(entityHref("agent", "a1")).toBe("/#/submissions?status=rejected&page=2&agent=a1");
+    expect(entityHref("agent", "a1")).toBe(
+      "/submissions#/submissions?status=rejected&page=2&agent=a1",
+    );
   });
 
   it("replaces any other open entity param (one entity at a time)", () => {
@@ -260,26 +268,28 @@ describe("entityHref", () => {
 
   it("falls back to ENTITY_PAGES for cold links with no page route", () => {
     setLocation("/");
-    expect(entityHref("agent", "a1")).toBe("/#/submissions?agent=a1");
+    expect(entityHref("agent", "a1")).toBe("/submissions#/submissions?agent=a1");
     expect(entityHref("miner", "hk")).toBe("/#/overview?miner=hk");
-    expect(entityHref("validator", "v1")).toBe("/#/operations?validator=v1");
-    expect(entityHref("screener", "s1")).toBe("/#/operations?screener=s1");
+    expect(entityHref("validator", "v1")).toBe("/operations#/operations?validator=v1");
+    expect(entityHref("screener", "s1")).toBe("/operations#/operations?screener=s1");
   });
 
   it("falls back to ENTITY_PAGES on a dedicated entity page", () => {
     setLocation("/agent/a1");
-    expect(entityHref("agent", "a1")).toBe("/#/submissions?agent=a1");
+    expect(entityHref("agent", "a1")).toBe("/submissions#/submissions?agent=a1");
   });
 
   it("honors an explicit page argument", () => {
     setLocation("/#/overview");
-    expect(entityHref("validator", "v1", "operations")).toBe("/#/operations?validator=v1");
+    expect(entityHref("validator", "v1", "operations")).toBe(
+      "/operations#/operations?validator=v1",
+    );
   });
 
   it("carries the boot config knobs in the real query", () => {
     setBoot("api=x");
     setLocation("/?api=x#/operations");
-    expect(entityHref("miner", "hk")).toBe("/?api=x#/operations?miner=hk");
+    expect(entityHref("miner", "hk")).toBe("/operations?api=x#/operations?miner=hk");
   });
 });
 
@@ -299,7 +309,9 @@ describe("fullEntityHref", () => {
 describe("dashboardHref", () => {
   it("keeps page-scoped view state on same-page navigation", () => {
     setLocation("/#/submissions?status=rejected&q=needle&page=3");
-    expect(dashboardHref("submissions")).toBe("/#/submissions?status=rejected&q=needle&page=3");
+    expect(dashboardHref("submissions")).toBe(
+      "/submissions#/submissions?status=rejected&q=needle&page=3",
+    );
   });
 
   it("drops page-scoped view state on cross-page navigation", () => {
@@ -309,17 +321,17 @@ describe("dashboardHref", () => {
 
   it("clears entity params even on same-page navigation (overlay close)", () => {
     setLocation("/#/submissions?agent=a1&status=rejected");
-    expect(dashboardHref("submissions")).toBe("/#/submissions?status=rejected");
+    expect(dashboardHref("submissions")).toBe("/submissions#/submissions?status=rejected");
   });
 
   it("drops the leaderboard pager page when leaving overview", () => {
     setLocation("/#/overview?page=4");
-    expect(dashboardHref("submissions")).toBe("/#/submissions");
+    expect(dashboardHref("submissions")).toBe("/submissions#/submissions");
   });
 
   it("treats a dedicated entity page as cross-page (no page route present)", () => {
     setLocation("/agent/a1");
-    expect(dashboardHref("submissions")).toBe("/#/submissions");
+    expect(dashboardHref("submissions")).toBe("/submissions#/submissions");
   });
 });
 
