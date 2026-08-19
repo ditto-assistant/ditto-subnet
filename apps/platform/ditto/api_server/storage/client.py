@@ -579,6 +579,33 @@ class S3StorageClient:
             ) from e
         return b"".join(chunks)
 
+    async def copy_object(self, *, source_key: str, dest_key: str) -> None:
+        """Server-side copy inside the private bucket.
+
+        Used to bind a Platform-verified Kaniko archive as the screened image
+        without streaming the tar through the API process.
+        """
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        target = self._config.bucket
+        try:
+            async with self._session.client(
+                "s3",
+                endpoint_url=self._config.endpoint_url,
+                use_ssl=self._config.use_tls,
+                config=self._client_config,
+            ) as s3:
+                await s3.copy_object(
+                    Bucket=target,
+                    Key=dest_key,
+                    CopySource={"Bucket": target, "Key": source_key},
+                )
+        except (ClientError, BotoCoreError) as error:
+            raise ObjectUploadFailedError(
+                f"copy_object failed: source={source_key!r} dest={dest_key!r} "
+                f"cause={error}"
+            ) from error
+
     async def object_exists(self, *, key: str, bucket: str | None = None) -> bool:
         """Return ``True`` iff a HEAD against ``key`` succeeds.
 

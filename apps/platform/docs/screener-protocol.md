@@ -42,10 +42,10 @@ build is attempt-bound and becomes consumable only after Platform verifies the
 complete image archive. When runtime starts with Targon, the trusted controller
 promotes that exact archive to a private ephemeral registry, launches it
 directly as a Rental, and records digest/workload provenance. When runtime smoke records `succeeded`, that Targon `/health` result is the
-mechanical admission. The owning screener publishes the Platform-verified
-Kaniko archive as the screened image and does not docker-load or rebuild it.
-Signing remains on the GCE controller/pet. Isolated fake-gateway oracle is
-skipped on this path until a screener-to-rental prompt tool exists.
+mechanical admission. Platform copies the verified Kaniko archive to the
+screened-image key and records the verdict itself. There is no screener
+sr25519 on this path and no GCE worker. Isolated fake-gateway oracle is
+skipped until a screener-to-rental prompt tool exists.
 
 Source review is also attempt-bound. A pinned trusted worker may return a
 bounded L1 observation. Certified low-risk clearance is a pass without local

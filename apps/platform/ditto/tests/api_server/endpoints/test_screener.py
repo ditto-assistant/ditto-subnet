@@ -535,6 +535,7 @@ def _install_storage(app: FastAPI) -> MagicMock:
     storage.complete_multipart_upload = AsyncMock()
     storage.abort_multipart_upload = AsyncMock()
     storage.delete_object = AsyncMock()
+    storage.copy_object = AsyncMock()
     storage.object_exists = AsyncMock(return_value=True)
     storage.verify_object_sha256 = AsyncMock(
         return_value=VerifiedObject(size_bytes=123, sha256="12" * 32)
@@ -1074,6 +1075,140 @@ class TestFederatedScreenerNodes:
             assert review is not None
             assert review.status == "queued"
             assert review.artifact_sha256 == _SHA256
+
+    async def test_controller_claim_admits_uploaded_agent_without_gce_worker(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        claimed = await client.post(
+            "/api/v1/screener/controller/submission-image-builds/claim",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={"environment": "prod", "controller_epoch": "builder:test"},
+        )
+        assert claimed.status_code == 200, claimed.text
+        job = claimed.json()["build"]
+        assert job is not None
+        assert job["agent_id"] == str(agent_id)
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.SCREENING
+
+    async def test_platform_attests_targon_pass_without_screener_signature(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        storage = _install_storage(app)
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                TrustedImageBuild(
+                    build_id=uuid4(),
+                    environment="prod",
+                    component="screener",
+                    source_repository=(
+                        "https://github.com/ditto-assistant/ditto-subnet.git"
+                    ),
+                    source_sha="a" * 40,
+                    context_path=".",
+                    dockerfile_path="workers/screener/Dockerfile",
+                    destination=(
+                        "us-central1-docker.pkg.dev/ditto-app-dev/"
+                        "ditto-public-runtime/screener:sha-test"
+                    ),
+                    status="succeeded",
+                    provider="targon",
+                    image_digest="sha256:" + "b" * 64,
+                    completed_at=datetime.now(UTC),
+                    created_by="test",
+                    reason="provide a pinned reviewed source worker image",
+                )
+            )
+        controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        claimed = await client.post(
+            "/api/v1/screener/controller/submission-image-builds/claim",
+            headers=controller_headers,
+            json={"environment": "prod", "controller_epoch": "builder:test"},
+        )
+        assert claimed.status_code == 200, claimed.text
+        job = claimed.json()["build"]
+        build_id = job["build_id"]
+        attempt_id = job["attempt_id"]
+        async with session_maker() as session, session.begin():
+            row = await session.get(SubmissionImageBuild, UUID(build_id))
+            assert row is not None
+            row.status = "succeeded"
+            row.output_sha256 = "12" * 32
+            row.output_size_bytes = 123
+            row.runtime_status = "running"
+            row.controller_epoch = "builder:test"
+            row.completed_at = datetime.now(UTC)
+        smoked = await client.post(
+            f"/api/v1/screener/controller/submission-image-builds/{build_id}/runtime-result",
+            headers=controller_headers,
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:test",
+                "status": "succeeded",
+                "provider_resource_id": "wrk-runtime",
+                "image_reference": (
+                    "us-central1-docker.pkg.dev/ditto-app-dev/"
+                    "ditto-screening-candidates/miner@sha256:" + "cd" * 32
+                ),
+            },
+        )
+        assert smoked.status_code == 204, smoked.text
+        leased = await client.post(
+            "/api/v1/screener/controller/submission-source-reviews/claim",
+            headers=controller_headers,
+            json={"environment": "prod", "controller_epoch": "builder:test"},
+        )
+        assert leased.status_code == 200, leased.text
+        review = leased.json()["review"]
+        complete = await client.post(
+            f"/api/v1/screener/submission-source-reviews/{review['review_id']}/complete",
+            headers={"Authorization": f"Bearer {review['job_token']}"},
+            json={
+                "observation": {
+                    "ok": True,
+                    "risk_level": "low",
+                    "categories": [],
+                    "clearance_certified": True,
+                }
+            },
+        )
+        assert complete.status_code == 200, complete.text
+        storage.copy_object.assert_awaited()
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            assert agent is not None
+            assert agent.status == AgentStatus.EVALUATING
+            assert agent.screened_image_sha256 == "12" * 32
+            attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
+            assert attempt is not None
+            assert attempt.status == "passed"
 
     async def test_consuming_succeeded_build_keeps_pending_runtime_archive(
         self,

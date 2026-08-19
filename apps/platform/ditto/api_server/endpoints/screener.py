@@ -144,6 +144,10 @@ from ditto.api_server.storage import (
     ObjectUploadFailedError,
     S3StorageClient,
 )
+from ditto.api_server.targon_screening import (
+    admit_targon_screening_work,
+    maybe_finalize_targon_screen,
+)
 from ditto.chain import ChainError
 from ditto.db.models import (
     Agent,
@@ -1422,6 +1426,7 @@ async def consume_submission_image_build(
 )
 async def claim_submission_image_build(
     payload: TrustedImageBuildClaimRequest,
+    request: Request,
     _controller: ControllerDep,
     session: SessionDep,
 ) -> SubmissionImageBuildClaimResponse:
@@ -1431,6 +1436,16 @@ async def claim_submission_image_build(
         _, provider_settings = await resolve_screener_provider_settings(
             session, environment=payload.environment
         )
+        attester = request.app.state.config.screener_auth.hotkey
+        if attester is not None and _targon_first(
+            provider_settings.build_provider_priority
+        ):
+            await admit_targon_screening_work(
+                session,
+                screener_hotkey=attester,
+                environment=payload.environment,
+                now=now,
+            )
         if not _targon_first(provider_settings.build_provider_priority):
             await session.execute(
                 update(SubmissionImageBuild)
@@ -1691,6 +1706,7 @@ async def claim_submission_runtime_smoke(
 async def complete_submission_runtime_smoke(
     build_id: UUID,
     payload: SubmissionRuntimeResultRequest,
+    request: Request,
     _controller: ControllerDep,
     session: SessionDep,
     storage: StorageDep,
@@ -1739,6 +1755,7 @@ async def complete_submission_runtime_smoke(
             if (
                 _targon_first(provider_settings.source_review_provider_priority)
                 and attempt is not None
+                and not attempt.build_only
                 and attempt.status == "running"
                 and now < deadline
             ):
@@ -1756,8 +1773,23 @@ async def complete_submission_runtime_smoke(
                         constraint="submission_source_reviews_attempt_key"
                     )
                 )
-    if output_key is not None and await storage.object_exists(key=output_key):
+        finalize_attempt_id = row.attempt_id
+    if (
+        output_key is not None
+        and payload.status != "succeeded"
+        and await storage.object_exists(key=output_key)
+    ):
         await storage.delete_object(key=output_key)
+    attester = request.app.state.config.screener_auth.hotkey
+    if attester is not None:
+        async with session.begin():
+            await maybe_finalize_targon_screen(
+                session,
+                storage=storage,
+                screener_hotkey=attester,
+                attempt_id=finalize_attempt_id,
+                now=datetime.now(UTC),
+            )
 
 
 @router.post(
@@ -2405,7 +2437,9 @@ async def get_submission_source_review_source(
 async def complete_submission_source_review(
     review_id: UUID,
     payload: SubmissionSourceReviewCompleteRequest,
+    request: Request,
     session: SessionDep,
+    storage: StorageDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> SubmissionSourceReviewCompleteResponse:
     now = datetime.now(UTC)
@@ -2425,6 +2459,17 @@ async def complete_submission_source_review(
         row.lease_expires_at = None
         row.job_token_hash = None
         row.job_token_expires_at = None
+        attempt_id = row.attempt_id
+    attester = request.app.state.config.screener_auth.hotkey
+    if attester is not None:
+        async with session.begin():
+            await maybe_finalize_targon_screen(
+                session,
+                storage=storage,
+                screener_hotkey=attester,
+                attempt_id=attempt_id,
+                now=datetime.now(UTC),
+            )
     return SubmissionSourceReviewCompleteResponse(verified=True)
 
 

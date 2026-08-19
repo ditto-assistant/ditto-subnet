@@ -1,9 +1,10 @@
 # Federated screener capacity
 
-The subnet control plane can run with zero idle screeners. Platform owns demand,
-controller fencing, one-time node enrollment, rotating node credentials, and the
-audited capacity/event view. The private `ditto-screener-capacity-prod` process
-is the only normal provider mutator.
+The subnet control plane can run with zero idle GCE screeners. Platform owns
+demand, admits Targon screening attempts, and attests verdicts. A sibling
+`ditto-image-builder` process on the Platform host creates Kaniko, runtime, and
+L1 rentals. The separate `ditto-screener-capacity-prod` VM and screener fleet
+MIG are retired on this path.
 
 ## Provider order and safety gate
 
@@ -47,11 +48,16 @@ or `nogo` attestation still disables nested-Docker workers on Targon. It does
 not send screening demand to the GCE fleet when the three decomposed lanes are
 Targon-first. Screening on Targon is Kaniko compile, direct-image `/health`
 smoke of that exact archive, and read-only L1 review of the source tarball in a
-separate screener rental. The worker that signs the policy-9 verdict stays on
-GCE (controller/pet) and does not docker-load or rebuild the miner. Elevated L1
-findings quarantine rather than running GCE L2/L3 until that path is rewritten.
-A screener-to-smoke-rental prompt tool is a later issue; isolated fake-gateway
-oracle remains GCE-only until then.
+separate screener rental. Platform admits the screening attempt and attests the verdict. Elevated L1
+findings quarantine rather than running GCE L2/L3. A screener-to-smoke-rental
+prompt tool is a later issue; isolated fake-gateway oracle is skipped until
+then.
+
+The GCE screener fleet and the separate capacity-controller VM are not part of
+this path. Targon still needs a process that creates rentals and promotes
+images (today `ditto-image-builder`). Run that sibling unit on the Platform
+host; do not put `TARGON_API_KEY` in the API request process. Scale the screener
+MIG to zero and stop `ditto-screener-capacity`.
 
 Targon VMs expose a stronger kernel boundary, but they are not an acceptable
 autoscaling substitute yet: the live inventory is GPU-only, bootstrap is SSH
@@ -128,13 +134,13 @@ floor is zero; normal scale-in is controller-owned and lease-aware.
 
 ## Identity boundaries
 
-- Platform API uses `ditto-platform-api`; it reads the controller bearer only
-  to authenticate controller calls.
-- The capacity VM uses `ditto-screener-capacity`; it may read the Targon key and
-  controller bearer, resize the screener MIG, and mint short-lived bootstrap
-  tokens. It has no Platform storage or inference-provider access.
-- GCE workers use `ditto-screener-worker`; they can read only the exact worker
-  signing, bearer, source-review, and repository bootstrap secrets.
+- Platform API uses `ditto-platform-api`. It admits Targon screens and attests
+  verdicts. It does not hold `TARGON_API_KEY`.
+- The Targon rental launcher (`ditto-image-builder`) may read the Targon key
+  and registry impersonation identities. Run it on the Platform host as a
+  sibling unit, not inside the API process. It does not sign verdicts.
+- GCE screener workers and the capacity-controller VM are leftover from the
+  nested-Docker path and are not required for Targon-first screening.
 - Federated Targon workers get a one-time Platform registration grant and a
   30-minute token for `ditto-screener-bootstrap`, which can read only the
   source-review secret. No service-account key crosses the provider boundary.
