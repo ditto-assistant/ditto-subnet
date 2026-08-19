@@ -12,7 +12,10 @@ The deployment scripts already reinstall for this reason
 protection on the paths that generate committed artifacts.
 """
 
+import importlib.util
+import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -21,6 +24,12 @@ BACKROOM_GENERATOR = ROOT / "apps/backroom/scripts/platform-contract/generate.sh
 GOLDEN_GENERATOR = ROOT / "scripts/gen_validator_contract.py"
 FRESHNESS_MODULE = ROOT / "scripts/screening_protocol_freshness.py"
 REINSTALL = "uv sync --reinstall-package ditto-screening-protocol"
+
+# The generator lived in two places until the leaner Platform-side copy was
+# deleted. That copy wrote the mirror goldens without ``assert_fresh()`` and
+# without ``miner_contract.json``, so reaching for the nearer script silently
+# opted out of both protections this module exists to pin.
+RETIRED_GENERATOR = ROOT / "apps/platform/scripts/gen_validator_contract.py"
 
 
 def test_backroom_client_generator_reinstalls_before_dumping_the_schema() -> None:
@@ -36,7 +45,105 @@ def test_golden_generator_refuses_to_run_against_a_stale_install() -> None:
 
     assert "assert_fresh()" in script
     # Must gate the writes, not merely be imported.
-    assert script.index("assert_fresh()") < script.index("out.write_text")
+    assert script.index("assert_fresh()") < script.index(".write_text(")
+
+
+def test_exactly_one_generator_writes_the_contract_goldens() -> None:
+    """A second generator is a way to bypass every guard above it."""
+    assert not RETIRED_GENERATOR.exists(), (
+        f"{RETIRED_GENERATOR.relative_to(ROOT)} is back; the goldens have one "
+        "generator so the staleness guard and the miner contract cannot be "
+        "skipped by running the nearer script"
+    )
+    generators = {
+        path.relative_to(ROOT)
+        for path in ROOT.rglob("gen_validator_contract.py")
+        if ".venv" not in path.parts and "node_modules" not in path.parts
+    }
+    assert generators == {GOLDEN_GENERATOR.relative_to(ROOT)}
+
+
+def _import_generator() -> ModuleType:
+    """Import the generator by path; ``scripts/`` is not an importable package."""
+    spec = importlib.util.spec_from_file_location(
+        "gen_validator_contract_under_test", GOLDEN_GENERATOR
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _run_generator(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, authoritative: bool
+) -> tuple[Path, Path]:
+    generator = _import_generator()
+    monkeypatch.setattr(generator, "assert_fresh", lambda: None)
+    monkeypatch.setattr(
+        generator, "_models_are_the_subnet_copy", lambda: not authoritative
+    )
+    out = tmp_path / "subnet"
+    mirror = tmp_path / "mirror"
+    out.mkdir()
+    mirror.mkdir()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "gen_validator_contract.py",
+            "--out",
+            str(out / "validator_contract.json"),
+            "--confirmation-out",
+            str(out / "confirmation_contract.json"),
+            "--miner-out",
+            str(out / "miner_contract.json"),
+            "--mirror-dir",
+            str(mirror),
+        ],
+    )
+    generator.main()
+    return out, mirror
+
+
+def test_golden_generator_writes_both_monorepo_contract_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The byte-identical mirror is produced, not merely asserted afterwards.
+
+    ``test_monorepo_validator_goldens_match_platform_byte_for_byte`` requires
+    the two committed copies to match. Deleting the Platform-side generator
+    removed the only other writer of the mirror, so this one writes both from a
+    single computation -- and by default, since an opt-in mirror is one nobody
+    remembers to ask for.
+    """
+    generator = _import_generator()
+    assert generator._PLATFORM_CONTRACT_DIR == (
+        ROOT / "apps/platform/ditto/tests/contract"
+    )
+
+    out, mirror = _run_generator(monkeypatch, tmp_path, authoritative=True)
+
+    for filename in ("validator_contract.json", "confirmation_contract.json"):
+        assert (mirror / filename).read_bytes() == (out / filename).read_bytes()
+    # The miner golden has no committed Platform-side copy to keep in step.
+    assert (out / "miner_contract.json").exists()
+    assert not (mirror / "miner_contract.json").exists()
+
+
+def test_golden_generator_refuses_to_mirror_the_subnets_own_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regenerating from the client copy must not overwrite the golden.
+
+    The Platform-side golden exists to catch this repo's hand-maintained models
+    drifting from it. Writing the mirror from those same models would make the
+    guard agree with whatever the client currently says -- green on precisely
+    the change it exists to fail.
+    """
+    out, mirror = _run_generator(monkeypatch, tmp_path, authoritative=False)
+
+    assert (out / "validator_contract.json").exists()
+    assert list(mirror.iterdir()) == []
 
 
 def test_freshness_check_stays_quiet_when_it_cannot_prove_staleness(

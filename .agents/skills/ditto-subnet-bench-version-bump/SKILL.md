@@ -97,8 +97,12 @@ regenerate and re-grade **byte-identically**.
 ### 7. Frontend + generated artifacts (the silent ones)
 - **Regenerate, never hand-edit**: `apps/backroom/src/generated/platform-api.ts`
   (`apps/backroom/scripts/platform-contract/generate.sh`); both `validator_contract.json`
-  copies (`scripts/gen_validator_contract.py` — `ditto/tests/contract/` and
-  `apps/platform/ditto/tests/contract/` must stay byte-identical);
+  copies — `scripts/gen_validator_contract.py` is the **only** generator, and one run
+  from Platform writes `ditto/tests/contract/` plus the byte-identical
+  `apps/platform/ditto/tests/contract/` mirror:
+  `cd apps/platform && uv run python ../../scripts/gen_validator_contract.py`
+  (run from the repo root it regenerates from the subnet's *copy* of the models and
+  refuses the mirror, so the goldens will not match);
   `services/model-relay/db/schema.sql` (`scripts/gen-schema.sh` + `go tool sqlc generate`)
   whenever a migration lands.
 - **Hand-written mirrors drift and CI often will not catch them** — grep and fix by hand:

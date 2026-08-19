@@ -11,7 +11,9 @@ The committed ``validator_contract.json`` golden is generated from the
 **platform** models (the source of truth). The validator contract test
 recomputes the same structure from this repo's models and asserts equality, so
 the worker client cannot silently drift from the API it calls. Regenerate it
-with ``scripts/gen_validator_contract.py``.
+with the repository-root ``scripts/gen_validator_contract.py`` (the only
+generator; run it from this directory's project so ``ditto`` resolves to
+Platform, and it writes both contract directories).
 """
 
 from __future__ import annotations

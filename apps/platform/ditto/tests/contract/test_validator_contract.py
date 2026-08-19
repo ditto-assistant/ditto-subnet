@@ -7,8 +7,13 @@ the shared models to the committed golden so an accidental field rename/retype/
 add/remove is caught here; the validator client in ditto-subnet holds a copy of
 the same golden and asserts its models match it.
 
-On an intentional contract change, regenerate the golden with
-``scripts/gen_validator_contract.py`` and commit it with the model edit.
+On an intentional contract change, regenerate the golden with the
+repository-root ``scripts/gen_validator_contract.py`` -- the only generator --
+and commit it with the model edit::
+
+    cd apps/platform && uv run python ../../scripts/gen_validator_contract.py
+
+One run writes this golden and the byte-identical ditto-subnet copy.
 """
 
 from __future__ import annotations
@@ -140,10 +145,10 @@ def test_validator_models_match_committed_contract() -> None:
     mismatched = [name for name in SHARED_MODELS if actual[name] != golden[name]]
     assert not mismatched, (
         f"validator wire model(s) {mismatched} drifted from the committed "
-        f"contract. If intended, regenerate ditto/tests/contract/"
-        f"validator_contract.json via scripts/gen_validator_contract.py and "
-        f"commit it with the change (and sync ditto-subnet's copy)."
-        f"{stale_install_hint()}"
+        f"contract. If intended, regenerate this golden with "
+        f"`uv run python ../../scripts/gen_validator_contract.py` -- one run "
+        f"also refreshes the byte-identical ditto-subnet copy -- and commit "
+        f"both with the change.{stale_install_hint()}"
     )
 
 
