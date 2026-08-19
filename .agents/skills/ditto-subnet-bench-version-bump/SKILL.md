@@ -64,6 +64,30 @@ regenerate and re-grade **byte-identically**.
 - `docs/bench-versions.md` — document the contract.
 - Known-vectors: pin the **new** vector; if any v2..v(N-1) vector moves, your gating is wrong.
 
+### 1b. LongMemEval / confirmation — a PERMANENT DIMENSION of every bench
+
+Not an opt-in per-version feature: every new `bench_version` is expected to run it. Two rules:
+
+- **The execution profile is an INSTRUMENT, not a per-epoch contract.** A new version is confirmed
+  by the *already-shipped* profile — no new release asset is required to bump. The bundle's
+  `bench_version` is the subject score's epoch; the profile's is the instrument's epoch. Modeling
+  it as a per-epoch contract is what has repeatedly made a bump look blocked on a new asset.
+  (`test_confirmation_follows_the_live_benchmark` encodes this.) Installing a per-version
+  instrument is an optional DEPTH upgrade: the v10+ floors (`V10MinCasesPerCapability=8`,
+  `MinHistorySessions=55`, `MinHistoryBytes=400_000`) make it ~4x the cost of the v9 instrument.
+- **Sweep the lane as ONE unit — it has failed at ~8 boundaries.** Platform select -> bundle ->
+  validator claim -> Go execute -> Python wire converter -> signed evidence root -> ranking ->
+  public/Backroom projections. Fixing only the boundary you were pointed at is the failure mode:
+  the layer above starts accepting and the next one down still rejects. Trace the whole path and
+  grep `bench_version`, `== 9`, `!= 9`, `Literal[9]` across `packages/`, `apps/platform/`,
+  `ditto/`, `services/dittobench-api/` before editing.
+- Watch the **bit-paired** literals (the signed evidence root on both the validator and Platform
+  side) — move both atomically or neither — and any checksum Python computes that Go recomputes
+  (`longmem_checksum`, `ablation_checksum`): a hardcoded epoch there causes profile identity drift.
+- Bundles ship **OFF**; the ladder is OFF -> SHADOW -> ENFORCE, and ENFORCE is **fail-closed**
+  (an unqualified confirmation-capable row is dropped from the authoritative ledger). Never enable
+  ENFORCE before qualified bundles exist under SHADOW.
+
 ### 2. Scorer (`services/dittobench-api`)
 - `internal/scoregates/scoregates.go` — `BenchVersionVN` + `SupportedBenchVersion` **upper bound**
   (a `<= V(N-1)` here silently rejects the new version).
