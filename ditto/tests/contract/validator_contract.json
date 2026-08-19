@@ -1174,6 +1174,262 @@
         ],
         "type": "object"
       },
+      "V12AnswerStuffingGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "clean_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "loose_eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "loose_stuffed_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "loose_stuffed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "min_cases": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "enforce",
+              "penalize",
+              "review"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
+            ],
+            "type": "string"
+          },
+          "review_required": {
+            "type": "boolean"
+          },
+          "review_share_threshold_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stuffed_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stuffed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threshold_bps": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "stuffed_cases",
+          "clean_cases",
+          "attribution_complete",
+          "review_required",
+          "posture",
+          "stuffed_bps",
+          "threshold_bps",
+          "min_cases",
+          "loose_eligible_cases",
+          "loose_stuffed_cases",
+          "loose_stuffed_bps",
+          "review_share_threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V12InferenceLatencyGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "floor_ms": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "review",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
+            ],
+            "type": "string"
+          },
+          "sub_floor_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threshold_bps": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "unflagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "flagged_cases",
+          "unflagged_cases",
+          "floor_ms",
+          "attribution_complete",
+          "posture",
+          "sub_floor_bps",
+          "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V12ModelDependenceGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dependence_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dependent_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "independent_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
+            ],
+            "type": "string"
+          },
+          "slice_attribution_complete": {
+            "type": "boolean"
+          },
+          "threshold_bps": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "dependent_cases",
+          "independent_cases",
+          "slice_attribution_complete",
+          "dependence_bps",
+          "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
       "V9AuthoritativeToolGate": {
         "properties": {
           "coverage_bps": {
@@ -1214,7 +1470,10 @@
               "below_threshold",
               "zero_inference",
               "insufficient_evidence",
-              "not_applicable"
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
             ],
             "type": "string"
           },
@@ -1245,10 +1504,8 @@
       "V9BaseEvidence": {
         "properties": {
           "applied_gate_factor_bps": {
-            "enum": [
-              0,
-              10000
-            ],
+            "maximum": 10000,
+            "minimum": 0,
             "type": "integer"
           },
           "artifact_sha256": {
@@ -1307,10 +1564,8 @@
             "type": "string"
           },
           "semantic_gate_factor_bps": {
-            "enum": [
-              0,
-              10000
-            ],
+            "maximum": 10000,
+            "minimum": 0,
             "type": "integer"
           },
           "transcript_sha256": {
@@ -1676,7 +1931,10 @@
               "below_threshold",
               "zero_inference",
               "insufficient_evidence",
-              "not_applicable"
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
             ],
             "type": "string"
           },
@@ -1734,6 +1992,17 @@
       },
       "V9ScoreGateEvidence": {
         "properties": {
+          "answer_stuffing": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V12AnswerStuffingGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "authoritative_tool": {
             "$ref": "#/$defs/V9AuthoritativeToolGate"
           },
@@ -1745,6 +2014,28 @@
               12
             ],
             "type": "integer"
+          },
+          "inference_latency": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V12InferenceLatencyGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model_dependence": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V12ModelDependenceGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "model_use": {
             "$ref": "#/$defs/V9ModelUseGate"
@@ -3116,6 +3407,262 @@
         ],
         "type": "object"
       },
+      "V12AnswerStuffingGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "clean_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "loose_eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "loose_stuffed_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "loose_stuffed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "min_cases": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "enforce",
+              "penalize",
+              "review"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
+            ],
+            "type": "string"
+          },
+          "review_required": {
+            "type": "boolean"
+          },
+          "review_share_threshold_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stuffed_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "stuffed_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threshold_bps": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "stuffed_cases",
+          "clean_cases",
+          "attribution_complete",
+          "review_required",
+          "posture",
+          "stuffed_bps",
+          "threshold_bps",
+          "min_cases",
+          "loose_eligible_cases",
+          "loose_stuffed_cases",
+          "loose_stuffed_bps",
+          "review_share_threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V12InferenceLatencyGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "attribution_complete": {
+            "type": "boolean"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "flagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "floor_ms": {
+            "minimum": 1,
+            "type": "integer"
+          },
+          "posture": {
+            "enum": [
+              "review",
+              "enforce"
+            ],
+            "type": "string"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
+            ],
+            "type": "string"
+          },
+          "sub_floor_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "threshold_bps": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "unflagged_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "flagged_cases",
+          "unflagged_cases",
+          "floor_ms",
+          "attribution_complete",
+          "posture",
+          "sub_floor_bps",
+          "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
+      "V12ModelDependenceGate": {
+        "properties": {
+          "administered_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dependence_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "dependent_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "eligible_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "factor_bps": {
+            "maximum": 10000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "independent_cases": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "result": {
+            "enum": [
+              "passed",
+              "below_threshold",
+              "zero_inference",
+              "insufficient_evidence",
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
+            ],
+            "type": "string"
+          },
+          "slice_attribution_complete": {
+            "type": "boolean"
+          },
+          "threshold_bps": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "administered_cases",
+          "eligible_cases",
+          "dependent_cases",
+          "independent_cases",
+          "slice_attribution_complete",
+          "dependence_bps",
+          "threshold_bps",
+          "result",
+          "factor_bps"
+        ],
+        "type": "object"
+      },
       "V9AuthoritativeToolGate": {
         "properties": {
           "coverage_bps": {
@@ -3156,7 +3703,10 @@
               "below_threshold",
               "zero_inference",
               "insufficient_evidence",
-              "not_applicable"
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
             ],
             "type": "string"
           },
@@ -3187,10 +3737,8 @@
       "V9BaseEvidence": {
         "properties": {
           "applied_gate_factor_bps": {
-            "enum": [
-              0,
-              10000
-            ],
+            "maximum": 10000,
+            "minimum": 0,
             "type": "integer"
           },
           "artifact_sha256": {
@@ -3249,10 +3797,8 @@
             "type": "string"
           },
           "semantic_gate_factor_bps": {
-            "enum": [
-              0,
-              10000
-            ],
+            "maximum": 10000,
+            "minimum": 0,
             "type": "integer"
           },
           "transcript_sha256": {
@@ -3618,7 +4164,10 @@
               "below_threshold",
               "zero_inference",
               "insufficient_evidence",
-              "not_applicable"
+              "not_applicable",
+              "latency_implausible",
+              "answer_stuffed",
+              "review_required"
             ],
             "type": "string"
           },
@@ -3676,6 +4225,17 @@
       },
       "V9ScoreGateEvidence": {
         "properties": {
+          "answer_stuffing": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V12AnswerStuffingGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
           "authoritative_tool": {
             "$ref": "#/$defs/V9AuthoritativeToolGate"
           },
@@ -3687,6 +4247,28 @@
               12
             ],
             "type": "integer"
+          },
+          "inference_latency": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V12InferenceLatencyGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
+          },
+          "model_dependence": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/V12ModelDependenceGate"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null
           },
           "model_use": {
             "$ref": "#/$defs/V9ModelUseGate"

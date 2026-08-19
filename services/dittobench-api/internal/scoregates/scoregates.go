@@ -120,7 +120,8 @@ type AuthoritativeToolInput struct {
 // the single trust bit the relay/validator must set: it is true only when the
 // counterfactual comparison settled for every eligible slice case. Until the
 // relay populates real per-case counterfactual evidence it stays false, and the
-// gate fails closed (insufficient_evidence -> factor 0).
+// gate fails OPEN (insufficient_evidence -> full factor): missing ablation
+// telemetry is a validator gap, not proof the answers are model-independent.
 type ModelDependenceInput struct {
 	AdministeredCases        int  `json:"administered_cases"`
 	EligibleCases            int  `json:"eligible_cases"`
@@ -259,10 +260,11 @@ func buildModelDependenceForVersion(benchVersion, threshold int, dependence []Mo
 }
 
 // buildModelDependence turns the trusted counterfactual slice observations into
-// pure, version-bound evidence. It fails closed on incomplete telemetry, and
-// publishes a zero factor whenever the answers did not move (a KV-parser and
-// any other model-independent harness) or the counterfactual comparison did not
-// settle for every eligible case.
+// pure, version-bound evidence. Incomplete telemetry (TelemetryComplete=false)
+// is a hard error. A settled slice with no dependent answers (a KV-parser)
+// publishes a zero factor. An unsettled slice fails OPEN: insufficient_evidence
+// with a full factor, so an honest run is never zeroed because a counterfactual
+// re-run timed out or overflowed the ticket-budget guard.
 func buildModelDependence(in ModelDependenceInput, threshold int) (ModelDependenceEvidence, error) {
 	if !in.TelemetryComplete {
 		return ModelDependenceEvidence{}, fmt.Errorf("%w: model-dependence", ErrTelemetryUnavailable)
@@ -292,9 +294,10 @@ func buildModelDependence(in ModelDependenceInput, threshold int) (ModelDependen
 		SliceAttributionComplete: in.SliceAttributionComplete, ThresholdBPS: threshold,
 	}
 	if !in.SliceAttributionComplete {
-		// Fail closed: without a settled per-case counterfactual comparison the
-		// run has not proven its answers depend on the model at all.
-		e.Result, e.FactorBPS, e.DependenceBPS = ResultInsufficientEvidence, 0, 0
+		// Fail OPEN: without a settled per-case counterfactual comparison the
+		// gate cannot prove independence, and a detection gate must never zero
+		// an honest run for missing validator/relay ablation telemetry.
+		e.Result, e.FactorBPS, e.DependenceBPS = ResultInsufficientEvidence, BasisPointScale, 0
 		return e, nil
 	}
 	if in.EligibleCases == 0 {

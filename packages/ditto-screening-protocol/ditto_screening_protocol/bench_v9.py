@@ -6,12 +6,16 @@ derivations while retaining their existing public import paths.
 
 The v9 gate contract carries forward unchanged to bench v10 and v11: the
 evidence keeps the frozen v9 contract identity while ``bench_version`` records
-the run's actual version, so digests remain version-bound.
+the run's actual version, so digests remain version-bound. Bench v12 appends
+the causal model-dependence, inference-latency, and answer-stuffing gates to
+the same signed digest; Python must re-derive those bytes or Platform rejects
+every v12 score.
 """
 
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Mapping
 from typing import Annotated, Literal, get_args
 
@@ -23,6 +27,8 @@ _V9_PROFILE_ID_PATTERN = r"^[a-z0-9][a-z0-9._:@/-]{0,127}$"
 _V9_MAX_COUNT = 10_000_000
 _V9_MAX_USAGE = 9_007_199_254_740_991
 _BASIS_POINTS = 10_000
+_ANSWER_STUFFING_MAX_PENALTY_BPS = 5_000
+_ANSWER_STUFFING_REVIEW_MIN_CASES = 2
 
 # The authoritative ordinary-score identity is shared by Platform admission,
 # operator recovery, and validator evidence validation. Go binds the same pair
@@ -105,7 +111,32 @@ V9GateResult = Literal[
     "zero_inference",
     "insufficient_evidence",
     "not_applicable",
+    "latency_implausible",
+    "answer_stuffed",
+    "review_required",
 ]
+
+
+def _coverage_bps(numerator: int, denominator: int) -> int:
+    if denominator <= 0:
+        return 0
+    return numerator * _BASIS_POINTS // denominator
+
+
+def _go_bool(value: bool) -> str:
+    return "true" if value else "false"
+
+
+def _apply_gate_factor_micros(ordinary_micros: int, factor_bps: int) -> int:
+    """Match Go ``ApplyForVersion`` then ``scoreMicros`` (half away from zero)."""
+    if factor_bps == 0:
+        return 0
+    if factor_bps >= _BASIS_POINTS:
+        return ordinary_micros
+    scaled = ordinary_micros * factor_bps / _BASIS_POINTS
+    if scaled >= 0:
+        return int(math.floor(scaled + 0.5))
+    return int(math.ceil(scaled - 0.5))
 
 V9EvidenceBenchVersion = Literal[9, 10, 11, 12]
 """Benchmark epochs whose scores carry the signed v9 base-evidence stack.
@@ -290,6 +321,183 @@ class V9AuthoritativeToolGate(BaseModel):
         return self
 
 
+class V12ModelDependenceGate(BaseModel):
+    """Causal model-dependence gate. Present on every bench_version>=12 digest."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    administered_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    eligible_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    dependent_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    independent_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    slice_attribution_complete: bool
+    dependence_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+    threshold_bps: Annotated[int, Field(ge=1, le=_BASIS_POINTS)]
+    result: V9GateResult
+    factor_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+
+    @model_validator(mode="after")
+    def _validate_derived_evidence(self) -> V12ModelDependenceGate:
+        if self.eligible_cases > self.administered_cases:
+            raise ValueError("dependence eligible cases exceed administered cases")
+        if self.dependent_cases > self.eligible_cases:
+            raise ValueError("dependence dependent cases exceed eligible cases")
+        if self.independent_cases != self.eligible_cases - self.dependent_cases:
+            raise ValueError("dependence independent cases are not derived correctly")
+        if not self.slice_attribution_complete:
+            # Fail OPEN: an unsettled counterfactual is a validator/relay gap, not
+            # proof the answers are model-independent. Keep the signed
+            # insufficient_evidence result and a full factor so an honest run is
+            # never zeroed for missing ablation telemetry.
+            dependence, result, factor = 0, "insufficient_evidence", _BASIS_POINTS
+        elif self.eligible_cases == 0:
+            dependence, result, factor = (
+                _BASIS_POINTS,
+                "not_applicable",
+                _BASIS_POINTS,
+            )
+        else:
+            dependence = _coverage_bps(self.dependent_cases, self.eligible_cases)
+            if dependence < self.threshold_bps:
+                result, factor = "below_threshold", 0
+            else:
+                result, factor = "passed", _BASIS_POINTS
+        if (self.dependence_bps, self.result, self.factor_bps) != (
+            dependence,
+            result,
+            factor,
+        ):
+            raise ValueError("model-dependence derived evidence is inconsistent")
+        return self
+
+
+class V12InferenceLatencyGate(BaseModel):
+    """Inference-latency gate. Canonicalized only when administered."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    administered_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    eligible_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    flagged_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    unflagged_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    floor_ms: Annotated[int, Field(ge=1)]
+    attribution_complete: bool
+    posture: Literal["review", "enforce"]
+    sub_floor_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+    threshold_bps: Annotated[int, Field(ge=1, le=_BASIS_POINTS)]
+    result: V9GateResult
+    factor_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+
+    @model_validator(mode="after")
+    def _validate_derived_evidence(self) -> V12InferenceLatencyGate:
+        if self.eligible_cases > self.administered_cases:
+            raise ValueError("latency eligible cases exceed administered cases")
+        if self.flagged_cases > self.eligible_cases:
+            raise ValueError("latency flagged cases exceed eligible cases")
+        if self.unflagged_cases != self.eligible_cases - self.flagged_cases:
+            raise ValueError("latency unflagged cases are not derived correctly")
+        if not self.attribution_complete:
+            sub_floor, result, factor = 0, "insufficient_evidence", _BASIS_POINTS
+        elif self.eligible_cases == 0:
+            sub_floor, result, factor = 0, "not_applicable", _BASIS_POINTS
+        else:
+            sub_floor = _coverage_bps(self.flagged_cases, self.eligible_cases)
+            if sub_floor < self.threshold_bps:
+                result, factor = "passed", _BASIS_POINTS
+            elif self.posture == "enforce":
+                result, factor = "latency_implausible", 0
+            else:
+                result, factor = "latency_implausible", _BASIS_POINTS
+        if (self.sub_floor_bps, self.result, self.factor_bps) != (
+            sub_floor,
+            result,
+            factor,
+        ):
+            raise ValueError("inference-latency derived evidence is inconsistent")
+        return self
+
+
+class V12AnswerStuffingGate(BaseModel):
+    """Answer-stuffing gate. Canonicalized only when administered."""
+
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    administered_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    eligible_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    stuffed_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    clean_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    attribution_complete: bool
+    review_required: bool
+    posture: Literal["enforce", "penalize", "review"]
+    stuffed_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+    threshold_bps: Annotated[int, Field(ge=1, le=_BASIS_POINTS)]
+    min_cases: Annotated[int, Field(ge=1)]
+    loose_eligible_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    loose_stuffed_cases: Annotated[int, Field(ge=0, le=_V9_MAX_COUNT)]
+    loose_stuffed_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+    review_share_threshold_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+    result: V9GateResult
+    factor_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+
+    @model_validator(mode="after")
+    def _validate_derived_evidence(self) -> V12AnswerStuffingGate:
+        if self.eligible_cases > self.administered_cases:
+            raise ValueError("answer-stuffing eligible cases exceed administered cases")
+        if self.stuffed_cases > self.eligible_cases:
+            raise ValueError("answer-stuffing stuffed cases exceed eligible cases")
+        if self.clean_cases != self.eligible_cases - self.stuffed_cases:
+            raise ValueError("answer-stuffing clean cases are not derived correctly")
+        if self.loose_eligible_cases > self.administered_cases:
+            raise ValueError(
+                "answer-stuffing loose eligible cases exceed administered cases"
+            )
+        if self.loose_stuffed_cases > self.loose_eligible_cases:
+            raise ValueError(
+                "answer-stuffing loose stuffed cases exceed loose eligible cases"
+            )
+        stuffed_bps = 0
+        loose_stuffed_bps = 0
+        if not self.attribution_complete:
+            result, factor = "insufficient_evidence", _BASIS_POINTS
+        else:
+            if self.eligible_cases > 0:
+                stuffed_bps = _coverage_bps(self.stuffed_cases, self.eligible_cases)
+            if self.loose_eligible_cases > 0:
+                loose_stuffed_bps = _coverage_bps(
+                    self.loose_stuffed_cases, self.loose_eligible_cases
+                )
+            loose_review = (
+                self.review_share_threshold_bps > 0
+                and self.loose_stuffed_cases >= _ANSWER_STUFFING_REVIEW_MIN_CASES
+                and loose_stuffed_bps >= self.review_share_threshold_bps
+            )
+            if self.review_required:
+                result, factor = "review_required", _BASIS_POINTS
+            elif self.eligible_cases > 0 and self.stuffed_cases >= self.min_cases:
+                result = "answer_stuffed"
+                if self.posture == "enforce":
+                    factor = 0
+                elif self.posture == "penalize":
+                    penalty = min(stuffed_bps, _ANSWER_STUFFING_MAX_PENALTY_BPS)
+                    factor = _BASIS_POINTS - penalty
+                else:
+                    factor = _BASIS_POINTS
+            elif loose_review:
+                result, factor = "review_required", _BASIS_POINTS
+            elif self.eligible_cases == 0:
+                result, factor = "not_applicable", _BASIS_POINTS
+            else:
+                result, factor = "passed", _BASIS_POINTS
+        if (
+            self.stuffed_bps,
+            self.loose_stuffed_bps,
+            self.result,
+            self.factor_bps,
+        ) != (stuffed_bps, loose_stuffed_bps, result, factor):
+            raise ValueError("answer-stuffing derived evidence is inconsistent")
+        return self
+
+
 class V9ScoreGateEvidence(BaseModel):
     """Complete typed mirror of ``internal/scoregates.Evidence``."""
 
@@ -301,12 +509,49 @@ class V9ScoreGateEvidence(BaseModel):
     threshold_profile: V9ThresholdProfile
     model_use: V9ModelUseGate
     authoritative_tool: V9AuthoritativeToolGate
+    model_dependence: V12ModelDependenceGate | None = None
+    inference_latency: V12InferenceLatencyGate | None = None
+    answer_stuffing: V12AnswerStuffingGate | None = None
+
+    @model_validator(mode="after")
+    def _validate_versioned_gates(self) -> V9ScoreGateEvidence:
+        v12 = self.bench_version >= 12
+        if v12 and self.model_dependence is None:
+            raise ValueError("v12 score gates require model_dependence")
+        if not v12 and (
+            self.model_dependence is not None
+            or self.inference_latency is not None
+            or self.answer_stuffing is not None
+        ):
+            raise ValueError("pre-v12 score gates must omit v12 gates")
+        return self
+
+    def combined_factor_bps(self) -> int:
+        """Mirror Go ``Evidence.CombinedFactorBPS``."""
+        if (
+            self.model_use.factor_bps == 0
+            or self.authoritative_tool.factor_bps == 0
+        ):
+            return 0
+        if (
+            self.bench_version >= 12
+            and self.model_dependence is not None
+            and self.model_dependence.factor_bps == 0
+        ):
+            return 0
+        combined = _BASIS_POINTS
+        if self.bench_version >= 12:
+            if self.inference_latency is not None:
+                combined = combined * self.inference_latency.factor_bps // _BASIS_POINTS
+            if self.answer_stuffing is not None:
+                combined = combined * self.answer_stuffing.factor_bps // _BASIS_POINTS
+        return combined
 
     def canonical_bytes(self) -> bytes:
         model = self.model_use
         excluded = model.excluded
         tool = self.authoritative_tool
-        return (
+        body = (
             "ditto-score-gates-v1\n"
             f"schema_version={self.schema_version}\n"
             f"bench_version={self.bench_version}\n"
@@ -343,7 +588,65 @@ class V9ScoreGateEvidence(BaseModel):
             f"tool.threshold_bps={tool.threshold_bps}\n"
             f"tool.result={tool.result}\n"
             f"tool.factor_bps={tool.factor_bps}\n"
-        ).encode()
+        )
+        if self.bench_version >= 12:
+            dep = self.model_dependence
+            assert dep is not None
+            body += (
+                f"model_dependence.administered_cases={dep.administered_cases}\n"
+                f"model_dependence.eligible_cases={dep.eligible_cases}\n"
+                f"model_dependence.dependent_cases={dep.dependent_cases}\n"
+                f"model_dependence.independent_cases={dep.independent_cases}\n"
+                "model_dependence.slice_attribution_complete="
+                f"{_go_bool(dep.slice_attribution_complete)}\n"
+                f"model_dependence.dependence_bps={dep.dependence_bps}\n"
+                f"model_dependence.threshold_bps={dep.threshold_bps}\n"
+                f"model_dependence.result={dep.result}\n"
+                f"model_dependence.factor_bps={dep.factor_bps}\n"
+            )
+            lat = self.inference_latency
+            if lat is not None:
+                body += (
+                    f"inference_latency.administered_cases={lat.administered_cases}\n"
+                    f"inference_latency.eligible_cases={lat.eligible_cases}\n"
+                    f"inference_latency.flagged_cases={lat.flagged_cases}\n"
+                    f"inference_latency.unflagged_cases={lat.unflagged_cases}\n"
+                    f"inference_latency.floor_ms={lat.floor_ms}\n"
+                    "inference_latency.attribution_complete="
+                    f"{_go_bool(lat.attribution_complete)}\n"
+                    f"inference_latency.posture={lat.posture}\n"
+                    f"inference_latency.sub_floor_bps={lat.sub_floor_bps}\n"
+                    f"inference_latency.threshold_bps={lat.threshold_bps}\n"
+                    f"inference_latency.result={lat.result}\n"
+                    f"inference_latency.factor_bps={lat.factor_bps}\n"
+                )
+            stuffing = self.answer_stuffing
+            if stuffing is not None:
+                body += (
+                    "answer_stuffing.administered_cases="
+                    f"{stuffing.administered_cases}\n"
+                    f"answer_stuffing.eligible_cases={stuffing.eligible_cases}\n"
+                    f"answer_stuffing.stuffed_cases={stuffing.stuffed_cases}\n"
+                    f"answer_stuffing.clean_cases={stuffing.clean_cases}\n"
+                    "answer_stuffing.attribution_complete="
+                    f"{_go_bool(stuffing.attribution_complete)}\n"
+                    "answer_stuffing.review_required="
+                    f"{_go_bool(stuffing.review_required)}\n"
+                    f"answer_stuffing.posture={stuffing.posture}\n"
+                    f"answer_stuffing.stuffed_bps={stuffing.stuffed_bps}\n"
+                    f"answer_stuffing.threshold_bps={stuffing.threshold_bps}\n"
+                    f"answer_stuffing.min_cases={stuffing.min_cases}\n"
+                    "answer_stuffing.loose_eligible_cases="
+                    f"{stuffing.loose_eligible_cases}\n"
+                    "answer_stuffing.loose_stuffed_cases="
+                    f"{stuffing.loose_stuffed_cases}\n"
+                    f"answer_stuffing.loose_stuffed_bps={stuffing.loose_stuffed_bps}\n"
+                    "answer_stuffing.review_share_threshold_bps="
+                    f"{stuffing.review_share_threshold_bps}\n"
+                    f"answer_stuffing.result={stuffing.result}\n"
+                    f"answer_stuffing.factor_bps={stuffing.factor_bps}\n"
+                )
+        return body.encode()
 
     def digest_hex(self) -> str:
         return hashlib.sha256(self.canonical_bytes()).hexdigest()
@@ -365,8 +668,8 @@ class V9BaseEvidence(BaseModel):
     ordinary_stderr_micros: Annotated[int, Field(ge=0, le=1_000_000)]
     score_gates: V9ScoreGateEvidence
     score_gates_sha256: Annotated[str, Field(pattern=_SHA256_PATTERN)]
-    semantic_gate_factor_bps: Literal[0, 10000]
-    applied_gate_factor_bps: Literal[0, 10000]
+    semantic_gate_factor_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
+    applied_gate_factor_bps: Annotated[int, Field(ge=0, le=_BASIS_POINTS)]
     effective_composite_micros: Annotated[int, Field(ge=0, le=1_000_000)]
     effective_stderr_micros: Annotated[int, Field(ge=0, le=1_000_000)]
 
@@ -376,12 +679,7 @@ class V9BaseEvidence(BaseModel):
             raise ValueError("score_gates bench_version does not match base evidence")
         if self.score_gates_sha256 != self.score_gates.digest_hex():
             raise ValueError("score_gates_sha256 does not match score_gates")
-        semantic = (
-            0
-            if self.score_gates.model_use.factor_bps == 0
-            or self.score_gates.authoritative_tool.factor_bps == 0
-            else _BASIS_POINTS
-        )
+        semantic = self.score_gates.combined_factor_bps()
         applied = (
             _BASIS_POINTS if self.score_gates.rollout_mode == "shadow" else semantic
         )
@@ -389,8 +687,12 @@ class V9BaseEvidence(BaseModel):
             raise ValueError("semantic gate factor contradicts score-gate evidence")
         if self.applied_gate_factor_bps != applied:
             raise ValueError("applied gate factor contradicts rollout mode")
-        expected_composite = self.ordinary_composite_micros if applied else 0
-        expected_stderr = self.ordinary_stderr_micros if applied else 0
+        expected_composite = _apply_gate_factor_micros(
+            self.ordinary_composite_micros, applied
+        )
+        expected_stderr = _apply_gate_factor_micros(
+            self.ordinary_stderr_micros, applied
+        )
         if self.effective_composite_micros != expected_composite:
             raise ValueError("effective composite contradicts applied gate factor")
         if self.effective_stderr_micros != expected_stderr:

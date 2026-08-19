@@ -337,3 +337,99 @@ def test_omitempty_normalization_covers_v10_reports() -> None:
         **raw,
         "composite_stderr": 0.0,
     }
+
+
+def _v12_gates() -> dict[str, object]:
+    gates = _gates()
+    gates["bench_version"] = 12
+    gates["model_dependence"] = {
+        "administered_cases": 10,
+        "eligible_cases": 10,
+        "dependent_cases": 10,
+        "independent_cases": 0,
+        "slice_attribution_complete": True,
+        "dependence_bps": 10000,
+        "threshold_bps": 1,
+        "result": "passed",
+        "factor_bps": 10000,
+    }
+    return gates
+
+
+def test_v12_gates_bind_into_the_signed_digest() -> None:
+    v11 = copy.deepcopy(_gates())
+    v11["bench_version"] = 11
+    pre = V9ScoreGateEvidence.model_validate(v11)
+    v12 = V9ScoreGateEvidence.model_validate(_v12_gates())
+
+    assert b"model_dependence.result=passed\n" in v12.canonical_bytes()
+    assert b"model_dependence.factor_bps=10000\n" in v12.canonical_bytes()
+    assert v12.digest_hex() != pre.digest_hex()
+    assert v12.combined_factor_bps() == 10000
+
+
+def test_v12_score_rejects_a_stripped_digest() -> None:
+    """The historical extra=ignore pin would drop v12 gates then hash v9 bytes."""
+    stripped = copy.deepcopy(_v12_gates())
+    stripped.pop("model_dependence")
+    with pytest.raises(ValidationError, match="model_dependence"):
+        V9ScoreGateEvidence.model_validate(stripped)
+
+
+def test_v12_incomplete_counterfactual_fails_open() -> None:
+    gates = _v12_gates()
+    dependence = gates["model_dependence"]
+    assert isinstance(dependence, dict)
+    dependence.update(
+        slice_attribution_complete=False,
+        dependence_bps=0,
+        result="insufficient_evidence",
+        factor_bps=10000,
+    )
+    evidence = V9ScoreGateEvidence.model_validate(gates)
+    assert evidence.model_dependence is not None
+    assert evidence.model_dependence.result == "insufficient_evidence"
+    assert evidence.model_dependence.factor_bps == 10000
+    assert evidence.combined_factor_bps() == 10000
+
+    dependence["factor_bps"] = 0
+    with pytest.raises(ValidationError, match="model-dependence"):
+        V9ScoreGateEvidence.model_validate(gates)
+
+
+def test_v12_base_evidence_accepts_penalize_scaling() -> None:
+    gates = _v12_gates()
+    gates["answer_stuffing"] = {
+        "administered_cases": 10,
+        "eligible_cases": 10,
+        "stuffed_cases": 2,
+        "clean_cases": 8,
+        "attribution_complete": True,
+        "review_required": False,
+        "posture": "penalize",
+        "stuffed_bps": 2000,
+        "threshold_bps": 1,
+        "min_cases": 1,
+        "loose_eligible_cases": 10,
+        "loose_stuffed_cases": 2,
+        "loose_stuffed_bps": 2000,
+        "review_share_threshold_bps": 4000,
+        "result": "answer_stuffed",
+        "factor_bps": 8000,
+    }
+    evidence = V9ScoreGateEvidence.model_validate(gates)
+    assert evidence.combined_factor_bps() == 8000
+    assert b"answer_stuffing.posture=penalize\n" in evidence.canonical_bytes()
+    base = _base()
+    base.update(
+        bench_version=12,
+        score_gates=gates,
+        score_gates_sha256=evidence.digest_hex(),
+        semantic_gate_factor_bps=8000,
+        applied_gate_factor_bps=8000,
+        effective_composite_micros=649876,
+        effective_stderr_micros=9876,
+    )
+    parsed = V9BaseEvidence.model_validate(base)
+    assert parsed.effective_composite_micros == 649876
+    assert parsed.applied_gate_factor_bps == 8000

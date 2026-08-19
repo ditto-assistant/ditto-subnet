@@ -55,8 +55,8 @@ import (
 // ticket budget). Real runs reach the model on at most a few hundred cases, so
 // the whole pass stays far under that ceiling; this cap is only a hard ticket-
 // budget guard. If a run somehow exceeds it, the overflow cases are left with no
-// verdict, SliceAttributionComplete stays false, and the gate fails closed — the
-// safe direction (a cheater can never pass on partial evidence).
+// verdict, SliceAttributionComplete stays false, and the gate fails OPEN — a
+// detection gate must never zero an honest run for a ticket-budget gap.
 const counterfactualMaxCases = 1024
 
 // counterfactualChatBudget is the per-case synthetic ledger ceiling for the
@@ -98,7 +98,7 @@ const counterfactualCorrectThreshold = 0.5
 
 // counterfactualCaseRunner re-runs one case under a LaneInference full-ablation
 // responder and reports the harness's RunResponse produced with NO usable model
-// output. ok=false leaves the case's verdict unsettled (fail closed).
+// output. ok=false leaves the case's verdict unsettled (fail open).
 //
 // The interface is the seam that keeps the deterministic slice/verdict logic
 // unit-testable: production wires the live broker lease (brokerCounterfactualRunner),
@@ -181,7 +181,7 @@ func populateV12Counterfactual(
 		return summary
 	}
 	// Misaligned inputs cannot be trusted to attribute counterfactuals; leaving
-	// the fields unset makes the reader fail closed.
+	// the fields unset makes the reader fail OPEN (insufficient_evidence).
 	if len(perCase) != len(transcripts) || len(specs) != len(transcripts) {
 		log.Printf("run %s: v12 counterfactual skipped: misaligned per-case inputs", runID)
 		return summary
@@ -225,9 +225,9 @@ func populateV12Counterfactual(
 			break
 		}
 		if rank >= counterfactualMaxCases {
-			// Beyond the ticket-budget guard: leave the rest pending (fail closed).
+			// Beyond the ticket-budget guard: leave the rest pending (fail open).
 			summary.Overflow = len(eligible) - rank
-			log.Printf("run %s: v12 counterfactual over budget guard (%d eligible > %d); gate will fail closed",
+			log.Printf("run %s: v12 counterfactual over budget guard (%d eligible > %d); gate will fail open",
 				runID, len(eligible), counterfactualMaxCases)
 			break
 		}

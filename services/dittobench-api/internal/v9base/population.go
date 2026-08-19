@@ -252,8 +252,8 @@ func ExcludedFromModelPopulation(score protocol.CaseScore) bool {
 //
 // The optional dependence argument carries the v12 counterfactual slice: it
 // must be absent for bench_version<12 and, for bench_version>=12, supplies the
-// causal model-dependence gate (fail-closed to insufficient_evidence when the
-// relay has not settled the per-case counterfactual comparison).
+// causal model-dependence gate (fail-open to insufficient_evidence with a full
+// factor when the relay has not settled the per-case counterfactual comparison).
 func BuildGateEvidence(benchVersion int, perCase []protocol.CaseScore, model AggregateModelTelemetry, toolTelemetryComplete bool, dependence ...ModelDependenceTelemetry) (scoregates.Evidence, error) {
 	modelInput := scoregates.ModelUseInput{
 		AdministeredCases: len(perCase),

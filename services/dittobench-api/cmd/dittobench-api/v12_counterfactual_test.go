@@ -238,8 +238,8 @@ func TestV12CounterfactualCleanIncorrectExcludedFromTally(t *testing.T) {
 }
 
 // A case the relay cannot settle stays pending, so SliceAttributionComplete is
-// false and the gate fails closed even for an otherwise-genuine agent.
-func TestV12CounterfactualUnsettledCaseFailsClosed(t *testing.T) {
+// false and the gate fails OPEN even for an otherwise-genuine agent.
+func TestV12CounterfactualUnsettledCaseFailsOpen(t *testing.T) {
 	const n = 8
 	perCase, transcripts, specs := modelReachedRun(t, n, true)
 	summary := populateV12Counterfactual(context.Background(), "run-pending", 99, protocol.BenchVersionV12, perCase, transcripts, specs,
@@ -255,8 +255,8 @@ func TestV12CounterfactualUnsettledCaseFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildGateEvidence error = %v", err)
 	}
-	if gates.ModelDependence.Result != scoregates.ResultInsufficientEvidence || gates.ModelDependence.FactorBPS != 0 {
-		t.Fatalf("unsettled v12 run not fail-closed: %+v", gates.ModelDependence)
+	if gates.ModelDependence.Result != scoregates.ResultInsufficientEvidence || gates.ModelDependence.FactorBPS != scoregates.BasisPointScale {
+		t.Fatalf("unsettled v12 run not fail-open: %+v", gates.ModelDependence)
 	}
 }
 
@@ -383,8 +383,8 @@ func TestV12CounterfactualTransportGapStaysPending(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildGateEvidence error = %v", err)
 	}
-	if gates.ModelDependence.Result != scoregates.ResultInsufficientEvidence || gates.ModelDependence.FactorBPS != 0 {
-		t.Fatalf("transport-gap run not fail-open-pending: %+v", gates.ModelDependence)
+	if gates.ModelDependence.Result != scoregates.ResultInsufficientEvidence || gates.ModelDependence.FactorBPS != scoregates.BasisPointScale {
+		t.Fatalf("transport-gap run not fail-open: %+v", gates.ModelDependence)
 	}
 }
 

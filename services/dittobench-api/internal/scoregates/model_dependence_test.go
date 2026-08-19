@@ -116,15 +116,15 @@ func TestModelDependenceThresholdBoundaryIsInclusive(t *testing.T) {
 	}
 }
 
-func TestModelDependenceFailsClosedWithoutSettledAttribution(t *testing.T) {
+func TestModelDependenceFailsOpenWithoutSettledAttribution(t *testing.T) {
 	dep := dependenceInput(10, 10)
 	dep.SliceAttributionComplete = false
 	e := buildV12(t, RolloutEnforce, dep)
-	if e.ModelDependence.Result != ResultInsufficientEvidence || e.ModelDependence.FactorBPS != 0 || e.ModelDependence.DependenceBPS != 0 {
-		t.Fatalf("unsettled attribution not fail-closed: %+v", e.ModelDependence)
+	if e.ModelDependence.Result != ResultInsufficientEvidence || e.ModelDependence.FactorBPS != BasisPointScale || e.ModelDependence.DependenceBPS != 0 {
+		t.Fatalf("unsettled attribution not fail-open: %+v", e.ModelDependence)
 	}
-	if factor, err := e.CombinedFactorBPS(); err != nil || factor != 0 {
-		t.Fatalf("CombinedFactorBPS() = %d, %v; want 0, nil", factor, err)
+	if factor, err := e.CombinedFactorBPS(); err != nil || factor != BasisPointScale {
+		t.Fatalf("CombinedFactorBPS() = %d, %v; want %d, nil", factor, err, BasisPointScale)
 	}
 }
 

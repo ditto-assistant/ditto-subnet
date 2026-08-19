@@ -146,8 +146,8 @@ func TestV12ModelDependenceGateCatchesKVParser(t *testing.T) {
 }
 
 // Until the relay populates the per-case counterfactual verdict, the v12 gate
-// must fail closed to a signed insufficient_evidence 0.00 rather than pass.
-func TestV12ModelDependenceFailsClosedWithoutRelayEvidence(t *testing.T) {
+// must fail OPEN to a signed insufficient_evidence full factor rather than zero.
+func TestV12ModelDependenceFailsOpenWithoutRelayEvidence(t *testing.T) {
 	const cases = 6
 	perCase := make([]protocol.CaseScore, 0, cases)
 	transcripts := make([]transcriptCase, 0, cases)
@@ -168,12 +168,12 @@ func TestV12ModelDependenceFailsClosedWithoutRelayEvidence(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildGateEvidence error = %v", err)
 	}
-	if gates.ModelDependence.Result != scoregates.ResultInsufficientEvidence || gates.ModelDependence.FactorBPS != 0 {
-		t.Fatalf("uninstrumented v12 run not fail-closed: %+v", gates.ModelDependence)
+	if gates.ModelDependence.Result != scoregates.ResultInsufficientEvidence || gates.ModelDependence.FactorBPS != scoregates.BasisPointScale {
+		t.Fatalf("uninstrumented v12 run not fail-open: %+v", gates.ModelDependence)
 	}
 	factor, err := gates.CombinedFactorBPS()
-	if err != nil || factor != 0 {
-		t.Fatalf("CombinedFactorBPS = %d, %v; want 0, nil", factor, err)
+	if err != nil || factor != scoregates.BasisPointScale {
+		t.Fatalf("CombinedFactorBPS = %d, %v; want %d, nil", factor, err, scoregates.BasisPointScale)
 	}
 }
 

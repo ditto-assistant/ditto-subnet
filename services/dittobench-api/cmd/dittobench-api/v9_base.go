@@ -320,7 +320,7 @@ func v9AggregateModelTelemetry(
 //     incorrect -> excluded from the dependent/independent tally (kept out of the
 //     denominator), yet it still counts toward slice-attribution completeness.
 //   - ...Observed=false: NOT administered -> pending; the reader keeps
-//     SliceAttributionComplete false so the gate fails closed.
+//     SliceAttributionComplete false so the gate fails OPEN.
 //
 // A launderer stays correct under ablation, so DependentCases stays low against
 // EligibleCases and the dependent share falls below threshold -> the gate floors
@@ -332,9 +332,9 @@ func v9AggregateModelTelemetry(
 // eligible model-reached case has been administered a verdict. Until the relay
 // populates the per-case CaseExecution fields, at least one eligible case lacks a
 // verdict (or none exist), SliceAttributionComplete is false, and the gate
-// publishes insufficient_evidence with factor 0 -- a signed, finalizable 0.00
-// rather than a spurious pass. Returns an empty slice for bench_version<12 so
-// v9..v11 evidence is byte-identical.
+// publishes insufficient_evidence with a full factor -- a signed review
+// signal rather than a false zero. Returns an empty slice for bench_version<12
+// so v9..v11 evidence is byte-identical.
 func v9DependenceTelemetryForVersion(
 	benchVersion int,
 	perCase []protocol.CaseScore,
@@ -344,7 +344,7 @@ func v9DependenceTelemetryForVersion(
 		return nil
 	}
 	// Misaligned transcripts cannot be trusted to attribute counterfactuals;
-	// leave telemetry incomplete so BuildGateEvidence fails closed.
+	// leave telemetry incomplete so BuildGateEvidence rejects the evidence.
 	if len(perCase) != len(transcripts) {
 		return []v9base.ModelDependenceTelemetry{{}}
 	}

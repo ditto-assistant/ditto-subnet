@@ -47,6 +47,9 @@ _SHARED_BENCH_V9_MODELS = (
     "V9GateExclusions",
     "V9ModelUseGate",
     "V9AuthoritativeToolGate",
+    "V12ModelDependenceGate",
+    "V12InferenceLatencyGate",
+    "V12AnswerStuffingGate",
     "V9ScoreGateEvidence",
     "V9BaseEvidence",
 )
