@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import UUID, uuid4
 
 import bittensor
@@ -3735,7 +3735,15 @@ class TestV9ConfirmationFailureRecovery:
         )
         assert failed.status_code == 200, failed.text
 
-        reclaimed = await _claim(client, payload=_claim_payload(slot_id="longmem-0"))
+        cooling_down = await _claim(client, payload=_claim_payload(slot_id="longmem-0"))
+        assert cooling_down.status_code == 204, cooling_down.text
+
+        with patch.object(
+            confirmation_mod,
+            "CONFIRMATION_FAILED_REISSUE_COOLDOWN",
+            timedelta(0),
+        ):
+            reclaimed = await _claim(client, payload=_claim_payload(slot_id="longmem-0"))
 
         assert reclaimed.status_code == 200, reclaimed.text
         assert reclaimed.json()["ticket_id"] != str(first_ticket.ticket_id)

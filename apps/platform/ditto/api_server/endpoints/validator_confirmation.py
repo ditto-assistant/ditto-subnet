@@ -11,12 +11,12 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.confirmation_bundles import (
@@ -299,6 +299,29 @@ def _execution_profile(
             "checksum": profile.checksum(),
         }
     )
+
+
+# Failed LongMem tickets used to be re-claimed on the next validator poll,
+# which turned an identity-pin or scorer reject into a 16-attempt, $52.50
+# storm in two minutes. A bounded per-bundle cooldown keeps the daily cap
+# available for a later healthy executor without hiding a genuine later retry.
+CONFIRMATION_FAILED_REISSUE_COOLDOWN = timedelta(minutes=15)
+
+
+async def _bundle_reissue_cooling_down(
+    session: AsyncSession, *, bundle_id: UUID, now: datetime
+) -> bool:
+    last_failed_at = await session.scalar(
+        select(func.max(ConfirmationBundleTicket.failed_at)).where(
+            ConfirmationBundleTicket.bundle_id == bundle_id,
+            ConfirmationBundleTicket.failed_at.is_not(None),
+        )
+    )
+    if last_failed_at is None:
+        return False
+    if last_failed_at.tzinfo is None:
+        last_failed_at = last_failed_at.replace(tzinfo=UTC)
+    return last_failed_at + CONFIRMATION_FAILED_REISSUE_COOLDOWN > now
 
 
 async def _subject_agent_id(session: AsyncSession, *, bundle_id: UUID) -> UUID | None:
@@ -635,6 +658,10 @@ async def request_v9_confirmation_job(
             )
             selected_bundle = None
             for candidate in bundles:
+                if await _bundle_reissue_cooling_down(
+                    session, bundle_id=candidate.bundle_id, now=now
+                ):
+                    continue
                 if (
                     await _subject_agent_id(session, bundle_id=candidate.bundle_id)
                     is not None
