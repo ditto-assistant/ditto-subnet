@@ -17312,11 +17312,22 @@ export interface components {
              */
             source_review_max_steps: number;
             /**
+             * Source Review Model
+             * @default openai/gpt-5.6-luna
+             * @constant
+             */
+            source_review_model: "openai/gpt-5.6-luna";
+            /**
              * Source Review Reasoning Effort
              * @default high
              * @enum {string}
              */
             source_review_reasoning_effort: "low" | "medium" | "high";
+            /**
+             * Source Review Timeout Seconds
+             * @default 1800
+             */
+            source_review_timeout_seconds: number;
             /**
              * Timeout Seconds
              * @default 900

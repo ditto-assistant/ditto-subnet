@@ -1354,6 +1354,8 @@ describe('screener review settings schemas', () => {
     source_review_max_steps: 200,
     source_review_max_read_bytes: 8_000_000,
     source_review_reasoning_effort: 'high',
+    source_review_model: 'openai/gpt-5.6-luna',
+    source_review_timeout_seconds: 1_800,
     max_input_tokens: 425_000,
     max_output_tokens: 20_000,
     max_completion_tokens: 2_400,
@@ -1380,15 +1382,25 @@ describe('screener review settings schemas', () => {
   })
 
   it('fills L1 Luna budget defaults when older payloads omit them', () => {
-    const { source_review_max_steps, source_review_max_read_bytes, source_review_reasoning_effort, ...legacy } =
-      settings
+    const {
+      source_review_max_steps,
+      source_review_max_read_bytes,
+      source_review_reasoning_effort,
+      source_review_model,
+      source_review_timeout_seconds,
+      ...legacy
+    } = settings
     expect(source_review_max_steps).toBe(200)
     expect(source_review_max_read_bytes).toBe(8_000_000)
     expect(source_review_reasoning_effort).toBe('high')
+    expect(source_review_model).toBe('openai/gpt-5.6-luna')
+    expect(source_review_timeout_seconds).toBe(1_800)
     const parsed = screenerReviewSettingsSchema.parse(legacy)
     expect(parsed.source_review_max_steps).toBe(200)
     expect(parsed.source_review_max_read_bytes).toBe(8_000_000)
     expect(parsed.source_review_reasoning_effort).toBe('high')
+    expect(parsed.source_review_model).toBe('openai/gpt-5.6-luna')
+    expect(parsed.source_review_timeout_seconds).toBe(1_800)
   })
 
   it('rejects duplicate model chains and short audit reasons', () => {

@@ -1352,7 +1352,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get screener review settings',
       description:
-        'Read L1/L2/L3 source-review settings, last-applied worker instances, and recent shadow observations. L1 is openai/gpt-5.6-luna. deferred_source_review.mode lives on get_queue_policy_settings; bypass means this reviewer never runs. Requires backroom:read.',
+        'Read L1/L2/L3 source-review settings, last-applied worker instances, and recent shadow observations. L1 model and timeout live on this contract (default openai/gpt-5.6-luna). deferred_source_review.mode lives on get_queue_policy_settings; bypass means this reviewer never runs. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerReviewControl()),

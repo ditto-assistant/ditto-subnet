@@ -21,6 +21,7 @@ ReviewModel = Literal[
     "z-ai/glm-5.2",
     "openai/gpt-5.6-sol",
 ]
+SourceReviewModel = Literal["openai/gpt-5.6-luna"]
 
 _MAX_SHADOW_PROVIDER_STAGES = 50
 
@@ -93,6 +94,8 @@ class ReviewSettings(BaseModel):
         8_000_000
     )
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
+    source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
+    source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 1_800
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
@@ -118,6 +121,8 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "source_review_max_steps",
     "source_review_max_read_bytes",
     "source_review_reasoning_effort",
+    "source_review_model",
+    "source_review_timeout_seconds",
 )
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
@@ -169,6 +174,8 @@ class EffectiveReviewSettings(BaseModel):
             source_review_max_steps=value.source_review_max_steps,
             source_review_max_read_bytes=value.source_review_max_read_bytes,
             source_review_reasoning_effort=value.source_review_reasoning_effort,
+            source_review_model=value.source_review_model,
+            source_review_timeout_seconds=float(value.source_review_timeout_seconds),
             l2_max_input_tokens=value.max_input_tokens,
             l2_max_output_tokens=value.max_output_tokens,
             l2_max_completion_tokens=value.max_completion_tokens,
@@ -232,6 +239,8 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "source_review_max_steps": config.source_review_max_steps,
             "source_review_max_read_bytes": config.source_review_max_read_bytes,
             "source_review_reasoning_effort": config.source_review_reasoning_effort,
+            "source_review_model": config.source_review_model,
+            "source_review_timeout_seconds": int(config.source_review_timeout_seconds),
             "max_input_tokens": config.l2_max_input_tokens,
             "max_output_tokens": config.l2_max_output_tokens,
             "max_completion_tokens": config.l2_max_completion_tokens,

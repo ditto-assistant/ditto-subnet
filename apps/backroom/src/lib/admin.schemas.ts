@@ -240,6 +240,7 @@ export const screenerReviewModelSchema = z.enum([
   'z-ai/glm-5.2',
   'openai/gpt-5.6-sol',
 ])
+export const sourceReviewModelSchema = z.enum(['openai/gpt-5.6-luna'])
 export const screenerReviewSettingsSchema = z
   .object({
     mode: screenerReviewModeSchema,
@@ -252,6 +253,8 @@ export const screenerReviewSettingsSchema = z
     source_review_max_steps: z.number().int().min(1).max(240).default(200),
     source_review_max_read_bytes: z.number().int().min(32_000).max(16_000_000).default(8_000_000),
     source_review_reasoning_effort: z.enum(['low', 'medium', 'high']).default('high'),
+    source_review_model: sourceReviewModelSchema.default('openai/gpt-5.6-luna'),
+    source_review_timeout_seconds: z.number().int().min(60).max(3_600).default(1_800),
     max_input_tokens: z.number().int().min(1).max(1_000_000),
     max_output_tokens: z.number().int().min(1).max(128_000),
     max_completion_tokens: z.number().int().min(1).max(128_000),

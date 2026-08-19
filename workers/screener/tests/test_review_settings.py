@@ -120,7 +120,10 @@ def _legacy_payload(config, dropped: tuple[str, ...]) -> dict:
 
 
 def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
-    config = make_config(review_settings_cache_file=str(tmp_path / "settings.json"))
+    config = make_config(
+        review_settings_cache_file=str(tmp_path / "settings.json"),
+        source_review_timeout_seconds=1_800,
+    )
     payload = _legacy_payload(
         config,
         (
@@ -128,6 +131,8 @@ def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
             "source_review_max_steps",
             "source_review_max_read_bytes",
             "source_review_reasoning_effort",
+            "source_review_model",
+            "source_review_timeout_seconds",
         ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
@@ -135,13 +140,15 @@ def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
 
 
 def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
-    config = make_config()
+    config = make_config(source_review_timeout_seconds=1_800)
     payload = _legacy_payload(
         config,
         (
             "source_review_max_steps",
             "source_review_max_read_bytes",
             "source_review_reasoning_effort",
+            "source_review_model",
+            "source_review_timeout_seconds",
         ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
@@ -150,14 +157,26 @@ def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
     assert compatible.settings.source_review_reasoning_effort == "high"
 
 
+def test_pre_l1_model_checksum_remains_valid(make_config) -> None:
+    config = make_config(source_review_timeout_seconds=1_800)
+    payload = _legacy_payload(
+        config, ("source_review_model", "source_review_timeout_seconds")
+    )
+    compatible = EffectiveReviewSettings.model_validate(payload)
+    assert compatible.settings.source_review_model == "openai/gpt-5.6-luna"
+    assert compatible.settings.source_review_timeout_seconds == 1_800
+
+
 def test_explicit_budget_is_never_dropped_from_the_checksum(make_config) -> None:
-    config = make_config()
+    config = make_config(source_review_timeout_seconds=1_800)
     payload = _legacy_payload(
         config,
         (
             "source_review_max_steps",
             "source_review_max_read_bytes",
             "source_review_reasoning_effort",
+            "source_review_model",
+            "source_review_timeout_seconds",
         ),
     )
     payload["settings"]["source_review_max_read_bytes"] = 2_000_000

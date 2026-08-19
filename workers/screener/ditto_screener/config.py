@@ -411,6 +411,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT must be low, medium, or high"
         )
+    if config.source_review_model != "openai/gpt-5.6-luna":
+        raise ScreenerConfigError(
+            "SCREENER_SOURCE_REVIEW_MODEL must be openai/gpt-5.6-luna"
+        )
+    if not 60 <= config.source_review_timeout_seconds <= 3_600:
+        raise ScreenerConfigError(
+            "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS must be between 60 and 3600"
+        )
     if config.static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
         raise ScreenerConfigError(
             "SCREENER_STATIC_PREFLIGHT_V2_MODE must be off, shadow, or enforce"
