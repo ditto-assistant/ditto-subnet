@@ -218,6 +218,13 @@ func (manifest Manifest) validate(now time.Time) error {
 	return nil
 }
 
+// Validate checks the complete runner manifest at the supplied trusted time.
+// It lets orchestration reject invalid control-plane input before contacting an
+// untrusted harness or consuming a visible bundle.
+func (manifest Manifest) Validate(now time.Time) error {
+	return manifest.validate(now)
+}
+
 func validateCommands(commands []CommandSpec) error {
 	if commands == nil {
 		return errors.New("command collection must be present")

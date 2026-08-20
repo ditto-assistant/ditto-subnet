@@ -287,6 +287,24 @@ readiness only, not correctness or eligibility.
 }
 ```
 
+### Active coding capability certification
+
+`/coding/health` is capability discovery only. A trusted certifier must bind
+the exact screened artifact and run one content-addressed public canary through
+`health -> seed -> identical seed replay -> run -> revoke -> freeze -> pristine
+grade`. Certification expires and is invalidated by any artifact change.
+
+An absent endpoint or missing capability means `coding_supported=false`: the
+miner remains in the existing tool-and-memory pipeline and does not receive an
+artificial zero folded into that score. A miner that advertises coding enters
+the coding pipeline only after the active canary resolves. Validator
+infrastructure, invalid task material, and control-plane integrity never count
+as miner certification failures.
+
+Contract v1 certification is still `weight_eligible=false`. Platform
+persistence, rolling core qualification, a separate shadow coding ledger, and
+any coding emissions allocation require later reviewed contracts.
+
 ### `POST /coding/seed`
 
 The scorer sends one profile capability and its visible memory records. Calls
