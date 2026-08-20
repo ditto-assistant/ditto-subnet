@@ -16,7 +16,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -36,7 +36,6 @@ _BUILD_LEASE = timedelta(minutes=50)
 _JOB_TTL = timedelta(minutes=45)
 _SOURCE_LEASE = timedelta(minutes=35)
 _REAP_LIMIT = 16
-_MAX_INFLIGHT_BUILDS = 2
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
 _INFLIGHT_JOB = ("leased", "running")
@@ -153,17 +152,6 @@ class TargonRentalLoop:
             return False
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
-            inflight = await session.scalar(
-                select(func.count())
-                .select_from(SubmissionImageBuild)
-                .where(
-                    SubmissionImageBuild.environment == self._config.environment,
-                    SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
-                    SubmissionImageBuild.provider == "targon",
-                )
-            )
-            if int(inflight or 0) >= _MAX_INFLIGHT_BUILDS:
-                return False
             row = await session.scalar(
                 select(SubmissionImageBuild)
                 .join(

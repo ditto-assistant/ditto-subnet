@@ -214,7 +214,7 @@ async def test_reaps_terminal_source_review_rental(
 
 
 @pytest.mark.asyncio
-async def test_caps_concurrent_kaniko_launches(
+async def test_launches_queued_kaniko_in_parallel(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(
@@ -237,7 +237,7 @@ async def test_caps_concurrent_kaniko_launches(
     await loop.tick()
     await loop.tick()
     await loop.tick()
-    assert len(targon.created) == 2
+    assert len(targon.created) == 3
 
 
 @pytest.mark.asyncio
