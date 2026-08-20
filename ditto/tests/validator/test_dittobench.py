@@ -29,9 +29,9 @@ from ditto.api_models.validator_capabilities import (
 )
 from ditto.validator import dittobench
 from ditto.validator.dittobench import (
-    SUPPORTED_BENCH_VERSIONS,
     _AGENT_ATTRIBUTABLE_INFERENCE_CODES,
     _SANDBOX_INFRASTRUCTURE_CODES,
+    SUPPORTED_BENCH_VERSIONS,
     DittobenchClient,
     DittobenchProgressSnapshot,
     InferenceBrokerSession,
