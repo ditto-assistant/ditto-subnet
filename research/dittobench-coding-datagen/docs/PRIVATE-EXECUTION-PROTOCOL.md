@@ -17,6 +17,14 @@ implementation, and drives validator-owned repository tools. The validator
 freezes the resulting workspace and a fresh, networkless grader determines
 patch correctness from executable evidence.
 
+The implementation ownership is not "validator code": `services/dittobench-api`
+owns the versioned coding-runner sidecar, freezer, grader, sandbox/egress
+policy, and canonical runtime evidence. `ditto/validator` only orchestrates
+those digest-pinned ephemeral services, independently verifies evidence, and
+signs its root. Platform owns durable catalog, lease, exposure, and evidence
+state. No coding task, workspace, transcript, or retry state is durable on a
+validator host.
+
 The first private rollout is one task, weight zero. Memory, tool, efficiency,
 and any LLM review remain diagnostics until separately calibrated and activated.
 
@@ -33,6 +41,8 @@ This contract does not:
   declaration authoritative;
 - authorize an unrestricted shell, a host checkout mount, a Docker socket, or
   network access in the coding workspace;
+- authorize general miner-harness egress: the harness network is default-deny
+  and may reach only its case-scoped runner capability and inference broker;
 - assign reward to an LLM judge.
 
 ## Version and activation
@@ -41,6 +51,7 @@ The public practice and private shadow lanes begin with:
 
 ```json
 {
+  "bench_family": "coding",
   "coding_contract_version": 1,
   "weight_eligible": false
 }
@@ -50,6 +61,15 @@ The public practice and private shadow lanes begin with:
 evidence semantics. It is independent of DittoBench `bench_version`; a future
 weighted integration maps a reviewed coding contract to a then-unused immutable
 benchmark version. No existing benchmark version is reinterpreted.
+
+Contract v1 and every `*-v1` evidence schema are permanently shadow-only.
+Weighted activation requires `coding_contract_version=2`, a reviewed
+`weight_eligible=true` schema, and an explicit `bench_family="coding"`
+discriminator. Existing open-ended version floors remain open-ended only within
+`bench_family="memory"`; LongMem confirmation, memory scoregates, efficiency,
+and receipt contracts must not match a coding-family version by numeric floor.
+The activation audit must make every family switch exhaustive rather than
+restoring enumerated version pins.
 
 Unknown JSON fields are ignored for rolling compatibility, but every known
 field is strictly typed and bounded. Signed evidence is computed from a
@@ -64,9 +84,10 @@ canonical known-field projection, never by reserializing an untrusted object.
 | Selected run manifest | Platform lease, identical for k=3 | Validator task choice |
 | Scoped memory indexing and retrieval | Miner harness | Self-reported rankings |
 | Model and provider route | Platform ticket grant | Miner model request |
-| Repository mutations and tool events | Coding-runner sidecar | Miner final report |
-| Frozen patch and final tree | Validator-owned workspace freezer | Miner patch field |
-| Correctness | Fresh networkless grader | Miner test claims |
+| Repository mutations and tool events | DittoBench coding-runner sidecar | Miner final report |
+| Frozen patch and final tree | DittoBench workspace freezer | Miner patch field |
+| Correctness | DittoBench fresh networkless grader | Miner test claims |
+| Harness network policy | DittoBench sandbox and egress proxy | Miner destination request |
 | Score signature | Validator key over typed evidence roots | Advisory details |
 | Final queue and weight state | Platform ledger and validator fold | Dashboard state |
 
@@ -90,10 +111,15 @@ grader_contract_digest
 public verification key
 ```
 
-The catalog commitment precedes a predetermined future chain height. After the
-miner artifact is immutable, Platform derives selection from the canonical
-block hash at that height. Validators independently fetch and verify that block
-hash; re-hashing a Platform-supplied string is insufficient.
+The catalog commitment precedes every candidate artifact. After one miner
+artifact is immutable, Platform assigns that artifact a fresh predetermined
+future chain height. Selection is derived per submission from a
+domain-separated tuple containing the corpus release/root, immutable agent
+artifact SHA-256, coding run ID, selection derivation ID, and independently
+fetched canonical block hash at that height. Re-hashing a Platform-supplied
+string is insufficient. Different artifact digests therefore receive different
+selections; all k=3 validators for one artifact receive the identical resulting
+manifest.
 
 The first shadow run selects exactly one task. Later task counts are determined
 from measured runtime, cost, reliability, and score variance rather than fixed
@@ -105,6 +131,7 @@ the same canonical `CodingRunManifest`:
 ```json
 {
   "schema": "dittobench-coding-run-manifest-v1",
+  "bench_family": "coding",
   "coding_contract_version": 1,
   "weight_eligible": false,
   "ticket_id": "opaque-ticket-id",
@@ -168,6 +195,15 @@ Real source issue IDs, public URLs, commit hashes, target-task mappings, policy
 labels, gold patches, and curator notes remain in the private view. Opaque IDs
 reduce direct lookup but do not make recognizable open-source code anonymous.
 
+Private corpus v1 must therefore use genuine post-commit seeded semantic
+generation over private/post-cutoff source or transformations whose sampled
+specification derives identifiers, values, structure, bug site, and grader
+expectations. Recognizable historical OSS issues are calibration material, not
+secret production tasks. Related work includes SWE-bench Pro's held-out sets,
+SWE-Bench-CL and MemoryAgentBench's memory evaluation, and R2E-Gym's procedural
+task generation. DittoBench Coding's intended differentiator is V0-V4 selective
+memory use and rejection under adversarial subnet economics, not opaque IDs.
+
 The miner may inspect every record in its assigned bundle. It never receives
 another profile, an unselected task bundle, hidden policy labels, or the full
 catalog. Cross-user and cross-ticket access must fail closed.
@@ -196,10 +232,24 @@ Only one variant of a base task is exposed in one task session. Each variant
 uses a fresh harness state and workspace unless it belongs to a separately
 versioned sequential-memory track.
 
+V3 is not purely a metadata filter. Some calibration cases may expose an
+explicit expired epoch, but a measured fraction must have non-decisive validity
+metadata and require comparing memory content with current repository state or
+current-user instructions. Required constraints are sampled per instance and
+must not repeat hidden-test literals or patch-equivalent answers. Variant labels
+must not be inferable solely from bundle metadata.
+
 ## Harness protocol
 
 Coding uses separate endpoints so long-running, stateful repository work cannot
 silently change the existing `/seed` and `/run` contracts.
+
+The harness container runs behind a coding-specific fail-closed egress proxy
+and host firewall. Its only destinations are the exact case-bound
+`workspace_capability_url` and ticket-bound `inference_base_url`; direct DNS,
+IP, CONNECT, metadata-service, or arbitrary Internet access is denied. The
+proxy binds the ticket/source identity and records attempted destinations. Any
+miner-attributable bypass or disallowed egress attempt is `candidate_integrity`.
 
 ### `GET /coding/health`
 
@@ -243,6 +293,15 @@ hidden policy or grader state.
 The scorer gives the harness visible issue text and expiring, task-scoped
 capabilities. The active user and task are lease-derived and cannot be selected
 by the caller.
+
+The scorer—not the untrusted harness—owns `wall_time_seconds` and the transport
+deadline. Contract v1 uses one bounded synchronous/long-poll POST, while runner
+and relay events are committed independently. After the first authoritative
+tool or relay event, response loss, client disconnect, or deadline expiry never
+earns a clean retry: the scorer revokes capabilities, freezes, and grades the
+workspace exactly as if the advisory response arrived. `final_report` is simply
+absent from evidence. Only a transport failure before any candidate execution
+became authoritative is `validator_infrastructure`.
 
 ```json
 {
@@ -322,6 +381,8 @@ repo.search
 repo.read_file
 repo.read_range
 repo.apply_patch
+repo.create_file
+repo.delete_file
 tests.run(command_id)
 build.run(command_id)
 git.status
@@ -333,9 +394,19 @@ general `sh -c` or caller-selected executable. Each operation enforces safe
 workspace-relative paths, input/output bounds, deadlines, process limits, a
 scrubbed environment, and network denial.
 
+Create/delete are reserved contract-v1 names but remain disabled by the public
+practice runtime policy. A private task must explicitly allow each created or
+deleted path. Rename is represented as one allowed delete plus one allowed
+create and is frozen as such.
+
 The runner cannot access hidden tests, grader files, validator credentials,
 provider keys, host mounts, Docker, metadata services, sibling containers, or
 another ticket's workspace. Its event sequence is monotonic and hash-chained.
+Calls are serial-only. `call_id` is an idempotency key: retrying the exact same
+typed request returns the cached response and sequence verbatim, while reusing
+an ID with different bytes fails as candidate integrity. A lost HTTP response
+is retried with the same ID; clients never guess or skip the authoritative
+sequence.
 
 ## Authoring and grading lifecycle
 
@@ -396,8 +467,10 @@ Terminal outcomes are mutually exclusive:
   or grader startup failed before candidate execution became authoritative;
 - `task_invalid`: base/gold validation, environment, test, or curator metadata
   is defective; quarantine the task and do not charge the miner;
-- `integrity_incident`: digest, signature, capability, cross-user, or protected
-  material mismatch; fail closed and retain bounded evidence.
+- `candidate_integrity`: miner-attributable egress, capability, cross-user,
+  workspace, or protected-material violation; fail closed and score zero;
+- `control_plane_integrity`: catalog, signature, transport, grader, or
+  validator-controlled digest mismatch; fail closed without charging the miner.
 
 Retry policy is bounded by the ticket lease and terminal domain. A repair
 failure is not retried as infrastructure, and an invalid task is not scored as a
@@ -426,6 +499,12 @@ placing it only in advisory report details is insufficient.
 
 ## Retirement
 
+Platform maintains an append-only exposure ledger. Issuing a selected visible
+capsule or grader bundle marks that task/version consumed even if the run later
+fails. Weighted selection excludes consumed tasks; reuse requires a new hidden
+and adversarial grader version with a new commitment. The one fixed weight-zero
+shadow task is an explicit non-weighted exception.
+
 While a corpus release can affect a private shadow or future weighted run,
 public surfaces expose only schemas, commitments, bounded redacted telemetry,
 and retired evidence approved for release. Active repository bundles, task
@@ -433,18 +512,24 @@ manifests, memory mappings, policies, hidden tests, and reference fixes remain
 private. A retired release may be published only after an explicit Platform
 retirement transition and leakage review.
 
+Before activation, winning coding harnesses must flow through the existing
+king-only `artifact_release` path. Active task identities, hidden tests, and
+answer-bearing traces stay redacted; approved unredacted evidence may be
+released only after the associated task version is retired.
+
 ## Implementation sequence
 
 This ADR enables, but does not combine, the following PRs:
 
 1. task/memory/run/evidence schemas and public vectors;
-2. coding-runner workspace tools and freezer;
-3. pristine deterministic grader;
-4. Luna Platform route and ticket-scoped broker capability;
-5. scoped miner-memory seed and deterministic policy diagnostics;
-6. private catalog service and post-commit shared-manifest selector;
-7. validator/Platform shadow leases and evidence persistence;
-8. one-task calibration against no-memory, always-use, random-memory,
+2. DittoBench-owned coding-runner workspace tools and freezer;
+3. DittoBench-owned pristine deterministic grader;
+4. coding-specific default-deny harness sandbox and egress allowlist;
+5. Luna Platform route and ticket-scoped broker capability;
+6. scoped miner-memory seed and deterministic policy diagnostics;
+7. private catalog, per-artifact selector, and exposure ledger;
+8. validator/Platform shadow leases, evidence persistence, and king artifact release;
+9. one-task calibration against no-memory, always-use, random-memory,
    selective-memory, no-op, test-tampering, known-bad, and valid-repair probes.
 
 No step may activate coding weights. Activation requires a separate immutable
