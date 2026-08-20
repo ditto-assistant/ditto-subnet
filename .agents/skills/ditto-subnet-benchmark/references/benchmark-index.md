@@ -14,6 +14,7 @@
 | Miner reference harness | `miners/dittobench-starter-kit/` |
 | Shadow coding practice/runtime | `research/dittobench-coding-datagen/` |
 | Shadow coding-agent harness | `miners/dittobench-coding-starter-kit/` |
+| Shadow coding runner/freezer core | `services/dittobench-api/internal/codingrunner/` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
 
