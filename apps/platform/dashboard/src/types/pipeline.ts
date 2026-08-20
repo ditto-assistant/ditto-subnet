@@ -166,7 +166,11 @@ export interface ValidationAttempt {
   /** "sandbox_oom" | "infrastructure" | "scoring_error". */
   failure_reason?: string | null;
   /** Public-safe machine cause behind failure_reason. */
-  failure_code?: "inference_allowance_exhausted" | null;
+  failure_code?:
+    | "inference_allowance_exhausted"
+    | "inference_request_rejected"
+    | "model_inference_required"
+    | null;
   deadline?: string | null;
   benchmark_progress?: BenchmarkProgress | null;
   bench_version?: number | null;

@@ -8528,6 +8528,49 @@ class TestPublicActivity:
         assert attempt["failure_reason"] == "scoring_error"
         assert attempt["failure_code"] == "model_inference_required"
 
+    async def test_pipeline_publishes_inference_request_rejected(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A 400 before reservation is not a spent grant on the public wire."""
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="schema-refused-agent",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        now = datetime.now(UTC)
+        deadline = now - timedelta(minutes=5)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=_MINER_B,
+                    slot_id="slot-0",
+                    bench_version=_ERA,
+                    status=TicketStatus.EXPIRED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    issued_at=now - timedelta(hours=1),
+                    deadline=deadline,
+                    failure_reason="scoring_error",
+                    failure_detail="inference_request_rejected",
+                    failed_at=deadline,
+                )
+            )
+        _install_db(app, session_maker)
+
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+
+        assert response.status_code == 200
+        attempt = response.json()["validation_attempts"][0]
+        assert attempt["failure_reason"] == "scoring_error"
+        assert attempt["failure_code"] == "inference_request_rejected"
+
     async def test_pipeline_dates_a_retried_lease_after_its_kept_failure(
         self,
         app: FastAPI,

@@ -555,6 +555,28 @@ describe("superseded validator failures stay history (row 21, #459)", () => {
     expect(view.retryTip).toContain("does not receive an automatic infrastructure retry");
   });
 
+  it("makes a pre-reservation refusal terminal without calling it a spent grant", () => {
+    const view = validationAttemptView({
+      validator_hotkey: "5CFtzzb4",
+      status: "expired",
+      purpose: "canonical_quorum",
+      issued_at: "2026-07-25T20:00:00Z",
+      deadline: "2026-07-25T22:00:00Z",
+      bench_version: 11,
+      actively_running: false,
+      failure_reason: "scoring_error",
+      failure_code: "inference_request_rejected",
+      failed_at: "2026-07-25T21:00:00Z",
+    });
+    expect(view.headline).toBe("Inference request rejected");
+    expect(view.headline).not.toContain("deferred");
+    expect(view.headline).not.toContain("allowance");
+    expect(view.tone).toBe("bad");
+    expect(view.metaRest).toContain("request refused before reservation");
+    expect(view.retryTip).toContain("not a spent grant");
+    expect(view.retryTip).toContain("does not receive an automatic infrastructure retry");
+  });
+
   it("keeps a clean first-attempt score plainly worded", () => {
     const view = validationAttemptView({
       validator_hotkey: "5HmP9732",

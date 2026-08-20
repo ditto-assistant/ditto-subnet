@@ -887,6 +887,13 @@ func relayFinalizeFailure(err error) *store.Failure {
 	}
 }
 
+func relaySandboxFailurePrefix(failure *store.Failure) string {
+	if failure != nil && failure.Code == "inference_request_rejected" {
+		return "harness inference request rejected: "
+	}
+	return "harness exhausted its inference allowance: "
+}
+
 func (s *server) failRelayUnavailable(runID string, err error) {
 	failure := relayFinalizeFailure(err)
 	// The prose has to follow the classification. "locked model relay
@@ -896,7 +903,7 @@ func (s *server) failRelayUnavailable(runID string, err error) {
 	// logs and in errors.failure_detail(), as a broken relay.
 	prefix := "locked model relay unavailable: "
 	if failure.Kind == "sandbox_failure" {
-		prefix = "harness exhausted its inference allowance: "
+		prefix = relaySandboxFailurePrefix(failure)
 	}
 	s.store.FailWith(runID, prefix+err.Error(), failure)
 }

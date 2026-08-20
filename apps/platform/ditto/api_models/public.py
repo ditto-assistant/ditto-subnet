@@ -2749,7 +2749,12 @@ class PublicValidationAttempt(BaseModel):
         None
     )
     failure_code: (
-        Literal["inference_allowance_exhausted", "model_inference_required"] | None
+        Literal[
+            "inference_allowance_exhausted",
+            "inference_request_rejected",
+            "model_inference_required",
+        ]
+        | None
     ) = None
     """Allowlisted terminal cause behind ``failure_reason``.
 

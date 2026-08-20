@@ -6417,12 +6417,17 @@ async def agent_pipeline(
                     cast(
                         Literal[
                             "inference_allowance_exhausted",
+                            "inference_request_rejected",
                             "model_inference_required",
                         ],
                         ticket.failure_detail,
                     )
                     if ticket.failure_detail
-                    in {"inference_allowance_exhausted", "model_inference_required"}
+                    in {
+                        "inference_allowance_exhausted",
+                        "inference_request_rejected",
+                        "model_inference_required",
+                    }
                     else None
                 ),
                 failed_at=ticket.failed_at,

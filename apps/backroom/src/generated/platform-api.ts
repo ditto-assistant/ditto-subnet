@@ -15572,7 +15572,7 @@ export interface components {
             /** Failed At */
             failed_at?: string | null;
             /** Failure Code */
-            failure_code?: ("inference_allowance_exhausted" | "model_inference_required") | null;
+            failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required") | null;
             /** Failure Reason */
             failure_reason?: ("infrastructure" | "scoring_error" | "sandbox_oom") | null;
             /**

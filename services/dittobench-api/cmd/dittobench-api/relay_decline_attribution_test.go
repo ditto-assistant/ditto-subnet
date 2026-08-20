@@ -100,6 +100,21 @@ func TestFinalizeFailureAttributionContract(t *testing.T) {
 	}
 }
 
+func TestRejectedRequestPrefixDoesNotSayAllowanceExhausted(t *testing.T) {
+	rejected := relayFinalizeFailure(errAgentRequestRejected)
+	prefix := relaySandboxFailurePrefix(rejected)
+	if prefix != "harness inference request rejected: " {
+		t.Fatalf("rejected-request prefix = %q", prefix)
+	}
+	if strings.Contains(prefix, "allowance") {
+		t.Fatalf("a 400 must not be logged as a spent grant: %q", prefix)
+	}
+	spent := relayFinalizeFailure(errAgentInferenceDeclined)
+	if got := relaySandboxFailurePrefix(spent); got != "harness exhausted its inference allowance: " {
+		t.Fatalf("spent-grant prefix = %q", got)
+	}
+}
+
 // THE GUARD, in the direction that matters for THIS change.
 //
 // #118's guard ran the other way: its default was terminal, it was moving
