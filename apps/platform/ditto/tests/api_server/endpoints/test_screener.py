@@ -1114,6 +1114,7 @@ class TestFederatedScreenerNodes:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
@@ -1121,34 +1122,16 @@ class TestFederatedScreenerNodes:
         storage = _install_storage(app)
         generator = _FakeGenerator(sha="ee" * 32)
         _install_generator(app, generator)
-        config_bytes = (
-            b'{"architecture":"amd64","os":"linux",'
-            b'"rootfs":{"type":"layers","diff_ids":[]}}'
+        config_digest = "ab" * 32
+
+        async def _inspect(ref: str | None) -> str | None:
+            del ref
+            return "sha256:" + config_digest
+
+        monkeypatch.setattr(
+            "ditto.api_server.targon_screening.config_digest_from_runtime_image",
+            _inspect,
         )
-        config_digest = hashlib.sha256(config_bytes).hexdigest()
-
-        async def _download(*, key: str, dest) -> None:
-            del key
-            manifest = [
-                {
-                    "Config": f"{config_digest}.json",
-                    "RepoTags": [
-                        "ditto-screen/11111111-1111-4111-8111-111111111111-"
-                        "22222222-2222-4222-8222-222222222222:latest"
-                    ],
-                    "Layers": [],
-                }
-            ]
-            with tarfile.open(dest, "w:") as archive:
-                encoded = json.dumps(manifest).encode()
-                info = tarfile.TarInfo("manifest.json")
-                info.size = len(encoded)
-                archive.addfile(info, io.BytesIO(encoded))
-                info = tarfile.TarInfo(f"{config_digest}.json")
-                info.size = len(config_bytes)
-                archive.addfile(info, io.BytesIO(config_bytes))
-
-        storage.download_object_to_path = AsyncMock(side_effect=_download)
         app.state.config = replace(
             app.state.config,
             screener_auth=replace(

@@ -55,6 +55,52 @@ def mint_access_token(service_account: str) -> str:
     return token
 
 
+def inspect_registry_config_digest(image_reference: str, access_token: str) -> str:
+    """Return the image-config digest from a registry manifest.
+
+    Validators still fetch the docker-save tar via a presigned URL. Platform
+    only needs the config digest so DittoBench can match ``{configDigest}.json``.
+    This is a small ``skopeo inspect --raw``, not an archive download.
+    """
+    if "/" not in image_reference or "@" not in image_reference:
+        raise TargonPromoteError("runtime image reference is invalid")
+    registry_host = image_reference.split("/", 1)[0]
+    result = _run_skopeo(
+        ["skopeo", "inspect", "--raw", f"docker://{image_reference}"],
+        registry_host=registry_host,
+        access_token=access_token,
+        timeout=_INSPECT_TIMEOUT_SECONDS,
+    )
+    if result.returncode != 0:
+        inspect_error = subprocess.CalledProcessError(
+            result.returncode, result.args, result.stdout, result.stderr
+        )
+        raise TargonPromoteError(
+            f"runtime image inspect failed: {_skopeo_detail(inspect_error)}"
+        ) from inspect_error
+    try:
+        payload = json.loads(result.stdout)
+    except (TypeError, ValueError) as error:
+        raise TargonPromoteError(
+            "runtime image inspect returned invalid JSON"
+        ) from error
+    if not isinstance(payload, dict):
+        raise TargonPromoteError("runtime image inspect returned invalid JSON")
+    media_type = payload.get("mediaType")
+    if media_type in (
+        "application/vnd.oci.image.index.v1+json",
+        "application/vnd.docker.distribution.manifest.list.v2+json",
+    ):
+        raise TargonPromoteError("runtime image inspect returned an index")
+    config = payload.get("config")
+    if not isinstance(config, dict):
+        raise TargonPromoteError("runtime image manifest has no config")
+    digest = config.get("digest")
+    if not isinstance(digest, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", digest):
+        raise TargonPromoteError("runtime image config digest is invalid")
+    return digest
+
+
 async def promote_runtime_archive(
     *,
     storage: S3StorageClient,
