@@ -1200,8 +1200,10 @@ def _openrouter_headers(
 #    `"reasoning_effort" and "reasoning.effort" are both provided with
 #    conflicting values` when both aliases are present and disagree. The lock
 #    heals that shape up front by collapsing to the nested block. Extra message
-#    / tool_call keys (OpenRouter ``index``, echoed assistant ``reasoning``)
-#    are accepted at the door and forwarded; live OpenRouter accepts them.
+#    / tool_call keys (OpenRouter ``index``, echoed assistant ``reasoning`` /
+#    ``reasoning_content`` / ``reasoning_details``) are accepted at the door and
+#    forwarded; live OpenRouter accepts them. Message-level traces are the
+#    agent's own history, not the pinned request-level ``reasoning`` object.
 
 # The anti-cheat boundary. Accepted, then replaced or removed so the ticket's
 # value governs; see ``_locked_upstream_payload``.
@@ -1494,7 +1496,17 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
         allowed = {
             "system": {"role", "content"},
             "user": {"role", "content"},
-            "assistant": {"role", "content", "tool_calls"},
+            "assistant": {
+                "role",
+                "content",
+                "tool_calls",
+                # OpenRouter plaintext trace, DeepSeek/rig-core alias, and the
+                # structured details block. These are history fields on the
+                # assistant message, not the pinned request-level object.
+                "reasoning",
+                "reasoning_content",
+                "reasoning_details",
+            },
             # ``name`` is an optional legacy/OpenAI-compatible annotation.
             # Some otherwise valid harnesses include it redundantly alongside
             # ``tool_call_id``. Accept it at the caller boundary, validate it
@@ -1504,10 +1516,10 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
         if allowed is None:
             raise HTTPException(status_code=400, detail="invalid message")
         # Extra keys are accepted, not refused. Miners echo provider-additive
-        # fields (assistant reasoning, tool_call `index`) and killing the run
-        # over them is the Cooking-class bug. Live OpenRouter accepts them;
-        # `_locked_upstream_payload` only strips the proven-bad sibling alias
-        # and the legacy tool-role `name`.
+        # fields (assistant reasoning traces, tool_call `index`) and killing
+        # the run over them is the Cooking-class bug. Live OpenRouter accepts
+        # them; `_locked_upstream_payload` only strips the proven-bad sibling
+        # alias and the legacy tool-role `name`.
         content = message.get("content")
         text_parts = (
             isinstance(content, list)
@@ -1528,6 +1540,14 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
             and (not isinstance(message["name"], str) or not message["name"])
         ):
             raise HTTPException(status_code=400, detail="invalid tool name")
+        if role == "assistant":
+            for field in ("reasoning", "reasoning_content"):
+                value = message.get(field)
+                if value is not None and not isinstance(value, str):
+                    raise HTTPException(status_code=400, detail=f"invalid {field}")
+            details = message.get("reasoning_details")
+            if details is not None and not isinstance(details, list):
+                raise HTTPException(status_code=400, detail="invalid reasoning_details")
         tool_calls = message.get("tool_calls", [])
         if not isinstance(tool_calls, list):
             raise HTTPException(status_code=400, detail="invalid tool calls")
@@ -1747,9 +1767,11 @@ def _locked_upstream_payload(
 def _sanitize_upstream_messages(messages: list[Any]) -> list[Any]:
     """Drop only the legacy tool-role ``name`` some upstreams reject.
 
-    Extra keys (assistant ``reasoning``, OpenRouter ``tool_calls[].index``)
-    stay. Live OpenRouter accepts them; the proven-bad shape to heal is the
-    sibling ``reasoning_effort`` alias, which is stripped in the lock.
+    Assistant reasoning traces (``reasoning``, ``reasoning_content``,
+    ``reasoning_details``) and OpenRouter ``tool_calls[].index`` stay. Live
+    OpenRouter accepts them; the proven-bad shape to heal is the sibling
+    ``reasoning_effort`` alias, which is stripped in the lock. Do not strip
+    traces: miners that echo them are using a documented OpenRouter strategy.
     """
     sanitized: list[Any] = []
     for message in messages:

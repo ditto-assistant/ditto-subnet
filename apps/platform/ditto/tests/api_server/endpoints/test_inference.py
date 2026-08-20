@@ -1334,6 +1334,107 @@ def test_echoed_provider_tool_call_index_is_accepted_not_refused() -> None:
     assert call["function"] == {"name": "search_memory", "arguments": "{}"}
 
 
+def test_echoed_assistant_reasoning_content_is_forwarded_not_stripped() -> None:
+    """Crown/rig-core CompletionsClient recall emits ``reasoning_content``.
+
+    Request-level ``reasoning`` is pinned to the ticket contract. Message-level
+    traces are the agent's own history and must survive that pin. The lock
+    still heals the flat ``reasoning_effort`` alias and strips tool-role
+    ``name``.
+    """
+    payload: dict[str, object] = {
+        "model": "openai/gpt-oss-20b",
+        "reasoning_effort": "medium",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "",
+                "reasoning_content": "I should call search_memory.",
+                "reasoning": "I should call search_memory.",
+                "reasoning_details": [
+                    {
+                        "type": "reasoning.text",
+                        "text": "I should call search_memory.",
+                    }
+                ],
+                "tool_calls": [
+                    {
+                        "id": "1",
+                        "type": "function",
+                        "index": 0,
+                        "function": {"name": "search_memory", "arguments": "{}"},
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "1",
+                "name": "search_memory",
+                "content": "ok",
+            },
+        ],
+    }
+    _validate_request_schema(payload)
+    upstream = _locked_upstream_payload(
+        payload, model="openai/gpt-oss-20b", max_tokens=256, bench_version=9
+    )
+    assert "reasoning_effort" not in upstream
+    assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
+    message = upstream["messages"][0]
+    assert message["reasoning_content"] == "I should call search_memory."
+    assert message["reasoning"] == "I should call search_memory."
+    assert message["reasoning_details"] == [
+        {"type": "reasoning.text", "text": "I should call search_memory."}
+    ]
+    assert message["tool_calls"][0]["index"] == 0
+    assert "name" not in upstream["messages"][1]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "detail"),
+    [
+        ("reasoning", {"effort": "medium"}, "invalid reasoning"),
+        ("reasoning_content", {"text": "think"}, "invalid reasoning_content"),
+        ("reasoning_details", "think", "invalid reasoning_details"),
+    ],
+)
+def test_malformed_assistant_reasoning_traces_fail_closed(
+    field: str, value: object, detail: str
+) -> None:
+    payload: dict[str, object] = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [
+            {"role": "assistant", "content": "", field: value},
+        ],
+    }
+    with pytest.raises(HTTPException) as raised:
+        _validate_request_schema(payload)
+    assert raised.value.status_code == 400
+    assert raised.value.detail == detail
+
+
+def test_request_level_reasoning_pin_does_not_wipe_message_traces() -> None:
+    payload: dict[str, object] = {
+        "model": "openai/gpt-oss-20b",
+        "reasoning": {"effort": "high"},
+        "reasoning_effort": "low",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "ok",
+                "reasoning_content": "keep this trace",
+            }
+        ],
+    }
+    _validate_request_schema(payload)
+    upstream = _locked_upstream_payload(
+        payload, model="openai/gpt-oss-20b", max_tokens=256, bench_version=9
+    )
+    assert "reasoning_effort" not in upstream
+    assert upstream["reasoning"] == {"effort": "high", "exclude": True}
+    assert upstream["messages"][0]["reasoning_content"] == "keep this trace"
+
+
 def test_structured_outputs_and_logprobs_are_forwarded_intact() -> None:
     """Verified against the pinned v7 model on every supporting provider.
 

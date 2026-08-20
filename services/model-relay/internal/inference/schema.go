@@ -291,10 +291,14 @@ func validateToolChoice(v any) *httpError {
 }
 
 var messageAllowedKeys = map[string]map[string]struct{}{
-	"system":    {"role": {}, "content": {}},
-	"user":      {"role": {}, "content": {}},
-	"assistant": {"role": {}, "content": {}, "tool_calls": {}},
-	"tool":      {"role": {}, "content": {}, "tool_call_id": {}, "name": {}},
+	"system": {"role": {}, "content": {}},
+	"user":   {"role": {}, "content": {}},
+	"assistant": {
+		"role": {}, "content": {}, "tool_calls": {},
+		// History traces, not the pinned request-level reasoning object.
+		"reasoning": {}, "reasoning_content": {}, "reasoning_details": {},
+	},
+	"tool": {"role": {}, "content": {}, "tool_call_id": {}, "name": {}},
 }
 
 func validateMessages(v any) *httpError {
@@ -315,8 +319,8 @@ func validateMessages(v any) *httpError {
 			return httpErrorf(400, "invalid message")
 		}
 		// Extra keys are accepted, not refused. Miners echo provider-additive
-		// fields (assistant reasoning, tool_call index) and killing the run
-		// over them is the Cooking-class bug. Live OpenRouter accepts them;
+		// fields (assistant reasoning traces, tool_call index) and killing the
+		// run over them is the Cooking-class bug. Live OpenRouter accepts them;
 		// lockedUpstreamPayload only strips the proven-bad sibling alias and
 		// the legacy tool-role name.
 		content, hasContent := message["content"]
@@ -332,6 +336,20 @@ func validateMessages(v any) *httpError {
 				name, ok := nameValue.(string)
 				if !ok || name == "" {
 					return httpErrorf(400, "invalid tool name")
+				}
+			}
+		}
+		if role == "assistant" {
+			for _, field := range []string{"reasoning", "reasoning_content"} {
+				if value, present := message[field]; present && value != nil {
+					if _, ok := value.(string); !ok {
+						return httpErrorf(400, "invalid %s", field)
+					}
+				}
+			}
+			if details, present := message["reasoning_details"]; present && details != nil {
+				if _, ok := details.([]any); !ok {
+					return httpErrorf(400, "invalid reasoning_details")
 				}
 			}
 		}
@@ -549,9 +567,10 @@ func lockedUpstreamPayload(payload map[string]any, model string, maxTokens int, 
 }
 
 func sanitizeUpstreamMessages(messages []any) []any {
-	// Drop only the legacy tool-role name some upstreams reject. Extra keys
-	// (assistant reasoning, OpenRouter tool_call index) stay: live OpenRouter
-	// accepts them. The proven-bad shape is the sibling reasoning_effort alias.
+	// Drop only the legacy tool-role name some upstreams reject. Assistant
+	// reasoning traces (reasoning, reasoning_content, reasoning_details) and
+	// OpenRouter tool_call index stay: live OpenRouter accepts them. Do not
+	// strip traces. The proven-bad shape is the sibling reasoning_effort alias.
 	stripped := make([]any, len(messages))
 	for i, raw := range messages {
 		message, ok := raw.(map[string]any)

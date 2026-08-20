@@ -238,3 +238,76 @@ func TestOpenRouterAcceptsHealedGrandmasterPayload(t *testing.T) {
 		t.Fatalf("status=%d message=%q", status, message)
 	}
 }
+
+func TestOpenRouterAcceptsCrownReasoningContentPayload(t *testing.T) {
+	status, message := postOpenRouter(t, crownRecallPayload())
+	if status != http.StatusOK {
+		t.Fatalf("status=%d message=%q", status, message)
+	}
+}
+
+func TestOpenRouterAcceptsReasoningAndReasoningContentAliases(t *testing.T) {
+	payload := crownRecallPayload()
+	messages := payload["messages"].([]any)
+	assistant := messages[2].(map[string]any)
+	assistant["reasoning"] = reasoningTraceText
+	status, message := postOpenRouter(t, payload)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d message=%q", status, message)
+	}
+}
+
+func TestOpenRouterAcceptsHealedCrownPayload(t *testing.T) {
+	payload := asSchemaPayload(t, crownRecallPayload())
+	if err := validateRequestSchema(payload); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	upstream, herr := lockedUpstreamPayload(payload, v7Model, 8, 9)
+	if herr != nil {
+		t.Fatalf("lock: %v", herr)
+	}
+	if _, present := upstream["reasoning_effort"]; present {
+		t.Fatal("reasoning_effort leaked")
+	}
+	messages, _ := upstream["messages"].([]any)
+	assistant, _ := messages[2].(map[string]any)
+	if assistant["reasoning_content"] != reasoningTraceText {
+		t.Fatalf("reasoning_content stripped: %v", assistant)
+	}
+	tool, _ := messages[3].(map[string]any)
+	if _, present := tool["name"]; present {
+		t.Fatalf("tool name leaked: %v", tool)
+	}
+	status, message := postOpenRouter(t, upstream)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d message=%q", status, message)
+	}
+}
+
+func TestOpenRouterHealedConflictKeepsReasoningContent(t *testing.T) {
+	payload := asSchemaPayload(t, crownRecallPayload())
+	payload["reasoning"] = map[string]any{"effort": "high"}
+	payload["reasoning_effort"] = "low"
+	if err := validateRequestSchema(payload); err != nil {
+		t.Fatalf("schema: %v", err)
+	}
+	upstream, herr := lockedUpstreamPayload(payload, v7Model, 8, 9)
+	if herr != nil {
+		t.Fatalf("lock: %v", herr)
+	}
+	if _, present := upstream["reasoning_effort"]; present {
+		t.Fatal("reasoning_effort leaked")
+	}
+	reasoning, _ := upstream["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" || reasoning["exclude"] != true {
+		t.Fatalf("reasoning=%v", upstream["reasoning"])
+	}
+	assistant, _ := upstream["messages"].([]any)[2].(map[string]any)
+	if assistant["reasoning_content"] != reasoningTraceText {
+		t.Fatalf("reasoning_content stripped: %v", assistant)
+	}
+	status, message := postOpenRouter(t, upstream)
+	if status != http.StatusOK {
+		t.Fatalf("status=%d message=%q", status, message)
+	}
+}

@@ -72,6 +72,12 @@ func TestValidateRequestSchema(t *testing.T) {
 		{"content image part", `{"messages":[{"role":"user","content":[{"type":"image_url","image_url":"u"}]}]}`, "text content only"},
 		{"assistant tool_calls ok", `{"messages":[{"role":"assistant","content":null,"tool_calls":[{"id":"1","type":"function","function":{"name":"f","arguments":"{}"}}]}]}`, ""},
 		{"tool call extra key", `{"messages":[{"role":"assistant","content":null,"tool_calls":[{"id":"1","type":"function","index":0,"function":{"name":"f","arguments":"{}"}}]}]}`, ""},
+		{"assistant reasoning_content ok", `{"messages":[{"role":"assistant","content":"","reasoning_content":"think"}]}`, ""},
+		{"assistant reasoning alias ok", `{"messages":[{"role":"assistant","content":"","reasoning":"think","reasoning_content":"think"}]}`, ""},
+		{"assistant reasoning_details ok", `{"messages":[{"role":"assistant","content":"","reasoning_details":[{"type":"reasoning.text","text":"think"}]}]}`, ""},
+		{"assistant reasoning_content non-string", `{"messages":[{"role":"assistant","content":"","reasoning_content":{"x":1}}]}`, "invalid reasoning_content"},
+		{"assistant reasoning non-string", `{"messages":[{"role":"assistant","content":"","reasoning":{"effort":"medium"}}]}`, "invalid reasoning"},
+		{"assistant reasoning_details non-list", `{"messages":[{"role":"assistant","content":"","reasoning_details":"think"}]}`, "invalid reasoning_details"},
 		{"tool calls non-list", `{"messages":[{"role":"assistant","content":null,"tool_calls":{}}]}`, "invalid tool calls"},
 		{"tools ok", `{"tools":[{"type":"function","function":{"name":"f","description":"d","parameters":{}}}],` + minimalMessages + `}`, ""},
 		{"tools bad type", `{"tools":[{"type":"web","function":{"name":"f"}}],` + minimalMessages + `}`, "invalid function tool"},
@@ -227,6 +233,24 @@ func TestLockedUpstreamPayload(t *testing.T) {
 	}
 	if _, present := messages[0].(map[string]any)["content"]; !present {
 		t.Fatalf("user message must survive")
+	}
+	traced := parsePayload(t, `{
+		"model":"openai/gpt-oss-20b","reasoning_effort":"medium",
+		"messages":[{"role":"assistant","content":"","reasoning_content":"I should call search_memory.","reasoning":"I should call search_memory."}]
+	}`)
+	tracedUp, herr := lockedUpstreamPayload(traced, v7Model, 40, 9)
+	if herr != nil {
+		t.Fatalf("reasoning_content lock: %v", herr)
+	}
+	if _, present := tracedUp["reasoning_effort"]; present {
+		t.Fatal("reasoning_effort must be stripped")
+	}
+	tracedMsg := tracedUp["messages"].([]any)[0].(map[string]any)
+	if tracedMsg["reasoning_content"] != "I should call search_memory." {
+		t.Fatalf("reasoning_content stripped: %v", tracedMsg)
+	}
+	if tracedMsg["reasoning"] != "I should call search_memory." {
+		t.Fatalf("message reasoning stripped: %v", tracedMsg)
 	}
 	// The original payload must not have been mutated (tool message keeps
 	// its name for the caller's view).
