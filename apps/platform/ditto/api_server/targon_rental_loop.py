@@ -15,7 +15,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -142,9 +142,46 @@ class TargonRentalLoop:
                 return provider
         return self._providers[0]
 
+    async def _targon_inflight(self) -> int:
+        """Count live Targon rentals we still own.
+
+        Targon cannot provision an unbounded burst. Kaniko, smoke, and L1
+        share one cap so create/deploy stays inside that window.
+        """
+        async with self._session_maker() as session:
+            builds = await session.scalar(
+                select(func.count())
+                .select_from(SubmissionImageBuild)
+                .where(
+                    SubmissionImageBuild.environment == self._config.environment,
+                    SubmissionImageBuild.provider == "targon",
+                    or_(
+                        SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
+                        SubmissionImageBuild.runtime_status == "running",
+                    ),
+                )
+            )
+            reviews = await session.scalar(
+                select(func.count())
+                .select_from(SubmissionSourceReview)
+                .where(
+                    SubmissionSourceReview.environment == self._config.environment,
+                    SubmissionSourceReview.provider == "targon",
+                    SubmissionSourceReview.status.in_(_INFLIGHT_JOB),
+                )
+            )
+        return int(builds or 0) + int(reviews or 0)
+
+    async def _provider_has_capacity(self, provider: ScreeningComputeProvider) -> bool:
+        if not await provider.capacity_ok():
+            return False
+        if provider.stored_provider != "targon":
+            return True
+        return await self._targon_inflight() < self._config.max_inflight
+
     async def _any_capacity(self) -> bool:
         for provider in self._providers:
-            if await provider.capacity_ok():
+            if await self._provider_has_capacity(provider):
                 return True
         return False
 
@@ -194,7 +231,7 @@ class TargonRentalLoop:
         )
         error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
         for provider in self._providers:
-            if not await provider.capacity_ok():
+            if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
             try:
@@ -288,7 +325,7 @@ class TargonRentalLoop:
         last_provider: ScreeningComputeProvider | None = None
         healthy = False
         for provider in self._providers:
-            if not await provider.capacity_ok():
+            if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
             try:
@@ -457,7 +494,7 @@ class TargonRentalLoop:
         )
         error_code = "TARGON_SOURCE_REVIEW_PROVIDER_ERROR"
         for provider in self._providers:
-            if not await provider.capacity_ok():
+            if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
             try:

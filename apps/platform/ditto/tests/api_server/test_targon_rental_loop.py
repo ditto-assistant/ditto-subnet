@@ -534,3 +534,61 @@ async def test_kaniko_falls_back_to_cloudrun_after_targon_provision_timeout(
         assert build.provider == "gcp"
         assert build.status == "running"
         assert build.error_code is None
+
+
+@pytest.mark.asyncio
+async def test_targon_inflight_cap_holds_eleventh_without_fallback(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="one", sha256="aa" * 32
+    )
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="two", sha256="bb" * 32
+    )
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(max_inflight=1),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    assert await loop.tick() is True
+    await loop.tick()
+    assert len(targon.created) == 1
+    async with session_maker() as session:
+        builds = (await session.scalars(select(SubmissionImageBuild))).all()
+        statuses = sorted(build.status for build in builds)
+        assert statuses == ["queued", "running"]
+
+
+@pytest.mark.asyncio
+async def test_targon_inflight_cap_overflows_to_cloudrun(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="one", sha256="aa" * 32
+    )
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="two", sha256="bb" * 32
+    )
+    targon = _FakeTargon()
+    cloudrun = _FakeCloudRun()
+    config = _config(max_inflight=1)
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=config,
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        providers=[TargonComputeProvider(targon, config), cloudrun],
+        interval_seconds=60,
+    )
+    await loop.tick()
+    await loop.tick()
+    assert len(targon.created) == 1
+    assert cloudrun.builds
+    async with session_maker() as session:
+        builds = (await session.scalars(select(SubmissionImageBuild))).all()
+        providers = sorted(str(build.provider) for build in builds)
+        assert providers == ["gcp", "targon"]

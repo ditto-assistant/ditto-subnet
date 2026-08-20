@@ -24,11 +24,12 @@ Production has two postures, not a working hybrid:
 
 - **Targon-first** (`['targon', 'gcp']`): Platform claims new one-shot Targon
   work for that lane, then falls back to Cloud Run when Targon has no
-  capacity or a rental never leaves provisioning within
-  `provision_timeout_seconds`. Kaniko and L1 are Cloud Run Jobs. Runtime
-  smoke is a short-lived internal Cloud Run Service so Platform can GET
-  `/health`. The untrusted runtime SA receives no cloud, GitHub, Platform,
-  or provider credentials — only the attempt-bound job token.
+  capacity, already has `max_inflight` (default 10) live rentals, or a
+  rental never leaves provisioning within `provision_timeout_seconds`.
+  Kaniko and L1 are Cloud Run Jobs. Runtime smoke is a short-lived internal
+  Cloud Run Service so Platform can GET `/health`. The untrusted runtime SA
+  receives no cloud, GitHub, Platform, or provider credentials — only the
+  attempt-bound job token.
 - **GCE-only** (`['gcp']`): Targon is disabled for that lane. Queued Targon
   work is immediately terminalized as `fallback_required` / runtime `skipped`.
   This is the old GCE screening path and does not require a deploy.

@@ -551,6 +551,32 @@ class TestTargonRentalConfig:
             == f"{self._BUILDER}:sha-{self._COMMIT}"
         )
         assert self._KEY not in repr(config.targon)
+        assert config.targon.max_inflight == 10
+
+    def test_targon_max_inflight_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
+        monkeypatch.setenv(
+            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
+        )
+        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
+        monkeypatch.setenv("DITTO_TARGON_MAX_INFLIGHT", "8")
+        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
+        assert config.targon is not None
+        assert config.targon.max_inflight == 8
+
+    def test_targon_max_inflight_rejects_zero(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
+        monkeypatch.setenv(
+            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
+        )
+        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
+        monkeypatch.setenv("DITTO_TARGON_MAX_INFLIGHT", "0")
+        with pytest.raises(ApiServerConfigError, match="DITTO_TARGON_MAX_INFLIGHT"):
+            parse_api_server_config_from_env(commit_hash=self._COMMIT)
 
     def test_short_key_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)

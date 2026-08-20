@@ -235,6 +235,8 @@ class TargonRentalConfig:
     build_timeout_seconds: float = 1500.0
     runtime_timeout_seconds: float = 180.0
     source_review_timeout_seconds: float = 1800.0
+    max_inflight: int = 10
+    """Cap on concurrent Targon rentals (Kaniko, smoke, and L1 combined)."""
 
     @property
     def enabled(self) -> bool:
@@ -465,7 +467,21 @@ def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig
         ).strip(),
         environment=os.environ.get("DITTO_TARGON_ENVIRONMENT", "prod").strip()
         or "prod",
+        max_inflight=_parse_targon_max_inflight(),
     )
+
+
+def _parse_targon_max_inflight() -> int:
+    raw = os.environ.get("DITTO_TARGON_MAX_INFLIGHT", "10").strip() or "10"
+    try:
+        value = int(raw)
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_TARGON_MAX_INFLIGHT must be an integer"
+        ) from error
+    if value < 1:
+        raise ApiServerConfigError("DITTO_TARGON_MAX_INFLIGHT must be >= 1")
+    return value
 
 
 def _parse_cloudrun_screening_config_from_env() -> CloudRunScreeningConfig | None:
