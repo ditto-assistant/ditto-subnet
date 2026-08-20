@@ -18480,6 +18480,111 @@ export interface components {
             /** Subtensor Network */
             subtensor_network?: string | null;
         };
+        /**
+         * V12AnswerStuffingGate
+         * @description Answer-stuffing gate. Canonicalized only when administered.
+         */
+        V12AnswerStuffingGate: {
+            /** Administered Cases */
+            administered_cases: number;
+            /** Attribution Complete */
+            attribution_complete: boolean;
+            /** Clean Cases */
+            clean_cases: number;
+            /** Eligible Cases */
+            eligible_cases: number;
+            /** Factor Bps */
+            factor_bps: number;
+            /** Loose Eligible Cases */
+            loose_eligible_cases: number;
+            /** Loose Stuffed Bps */
+            loose_stuffed_bps: number;
+            /** Loose Stuffed Cases */
+            loose_stuffed_cases: number;
+            /** Min Cases */
+            min_cases: number;
+            /**
+             * Posture
+             * @enum {string}
+             */
+            posture: "enforce" | "penalize" | "review";
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
+            /** Review Required */
+            review_required: boolean;
+            /** Review Share Threshold Bps */
+            review_share_threshold_bps: number;
+            /** Stuffed Bps */
+            stuffed_bps: number;
+            /** Stuffed Cases */
+            stuffed_cases: number;
+            /** Threshold Bps */
+            threshold_bps: number;
+        };
+        /**
+         * V12InferenceLatencyGate
+         * @description Inference-latency gate. Canonicalized only when administered.
+         */
+        V12InferenceLatencyGate: {
+            /** Administered Cases */
+            administered_cases: number;
+            /** Attribution Complete */
+            attribution_complete: boolean;
+            /** Eligible Cases */
+            eligible_cases: number;
+            /** Factor Bps */
+            factor_bps: number;
+            /** Flagged Cases */
+            flagged_cases: number;
+            /** Floor Ms */
+            floor_ms: number;
+            /**
+             * Posture
+             * @enum {string}
+             */
+            posture: "review" | "enforce";
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
+            /** Sub Floor Bps */
+            sub_floor_bps: number;
+            /** Threshold Bps */
+            threshold_bps: number;
+            /** Unflagged Cases */
+            unflagged_cases: number;
+        };
+        /**
+         * V12ModelDependenceGate
+         * @description Causal model-dependence gate. Present on every bench_version>=12 digest.
+         */
+        V12ModelDependenceGate: {
+            /** Administered Cases */
+            administered_cases: number;
+            /** Dependence Bps */
+            dependence_bps: number;
+            /** Dependent Cases */
+            dependent_cases: number;
+            /** Eligible Cases */
+            eligible_cases: number;
+            /** Factor Bps */
+            factor_bps: number;
+            /** Independent Cases */
+            independent_cases: number;
+            /**
+             * Result
+             * @enum {string}
+             */
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
+            /** Slice Attribution Complete */
+            slice_attribution_complete: boolean;
+            /** Threshold Bps */
+            threshold_bps: number;
+        };
         /** V7InferenceCalibration */
         V7InferenceCalibration: {
             /** Manifest Sha256 */
@@ -18511,7 +18616,7 @@ export interface components {
              * Result
              * @enum {string}
              */
-            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable";
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
             /** Threshold Bps */
             threshold_bps: number;
             /** Unexpected Executions */
@@ -18522,11 +18627,8 @@ export interface components {
          * @description Signature-bound ordinary v9 score identity and binary gate evidence.
          */
         V9BaseEvidence: {
-            /**
-             * Applied Gate Factor Bps
-             * @enum {integer}
-             */
-            applied_gate_factor_bps: 0 | 10000;
+            /** Applied Gate Factor Bps */
+            applied_gate_factor_bps: number;
             /** Artifact Sha256 */
             artifact_sha256: string;
             /**
@@ -18555,11 +18657,8 @@ export interface components {
             score_gates: components["schemas"]["V9ScoreGateEvidence"];
             /** Score Gates Sha256 */
             score_gates_sha256: string;
-            /**
-             * Semantic Gate Factor Bps
-             * @enum {integer}
-             */
-            semantic_gate_factor_bps: 0 | 10000;
+            /** Semantic Gate Factor Bps */
+            semantic_gate_factor_bps: number;
             /** Transcript Sha256 */
             transcript_sha256: string;
         };
@@ -19006,7 +19105,7 @@ export interface components {
              * Result
              * @enum {string}
              */
-            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable";
+            result: "passed" | "below_threshold" | "zero_inference" | "insufficient_evidence" | "not_applicable" | "latency_implausible" | "answer_stuffed" | "review_required";
             /** Successful Inference Cases */
             successful_inference_cases: number;
             /** Successful Requests */
@@ -19029,12 +19128,15 @@ export interface components {
          * @description Complete typed mirror of ``internal/scoregates.Evidence``.
          */
         V9ScoreGateEvidence: {
+            answer_stuffing?: components["schemas"]["V12AnswerStuffingGate"] | null;
             authoritative_tool: components["schemas"]["V9AuthoritativeToolGate"];
             /**
              * Bench Version
              * @enum {integer}
              */
             bench_version: 9 | 10 | 11 | 12;
+            inference_latency?: components["schemas"]["V12InferenceLatencyGate"] | null;
+            model_dependence?: components["schemas"]["V12ModelDependenceGate"] | null;
             model_use: components["schemas"]["V9ModelUseGate"];
             /**
              * Rollout Mode
