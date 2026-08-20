@@ -114,9 +114,22 @@ def _score(
     )
     # The gate stack is digest-bound, so moving the epoch means re-deriving the
     # digest exactly as a scorer would rather than editing the field in place.
-    gates = V9ScoreGateEvidence.model_validate(
-        {**raw["score_gates"], "bench_version": bench_version}
-    )
+    # v12 also requires model_dependence; a version bump that only rewrites
+    # bench_version is not a valid digest.
+    gate_payload = {**raw["score_gates"], "bench_version": bench_version}
+    if bench_version >= 12:
+        gate_payload["model_dependence"] = {
+            "administered_cases": 10,
+            "eligible_cases": 10,
+            "dependent_cases": 10,
+            "independent_cases": 0,
+            "slice_attribution_complete": True,
+            "dependence_bps": 10000,
+            "threshold_bps": 1,
+            "result": "passed",
+            "factor_bps": 10000,
+        }
+    gates = V9ScoreGateEvidence.model_validate(gate_payload)
     raw["bench_version"] = bench_version
     raw["score_gates"] = gates.model_dump(mode="json")
     raw["score_gates_sha256"] = gates.digest_hex()

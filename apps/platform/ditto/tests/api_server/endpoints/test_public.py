@@ -846,18 +846,49 @@ def test_public_v9_base_projection_is_typed_and_fails_closed() -> None:
     )
 
 
+# Passing v12 model-dependence: required on every bench_version>=12 digest.
+# Pre-v12 vectors omit it; restamping the epoch without this block is invalid.
+_PASSING_V12_MODEL_DEPENDENCE = {
+    "administered_cases": 10,
+    "eligible_cases": 10,
+    "dependent_cases": 10,
+    "independent_cases": 0,
+    "slice_attribution_complete": True,
+    "dependence_bps": 10000,
+    "threshold_bps": 1,
+    "result": "passed",
+    "factor_bps": 10000,
+}
+
+
+def _score_gates_for_version(score_gates: dict, bench_version: int) -> dict:
+    """Rewrite a v9+ gate payload for another epoch of the same contract."""
+    payload = dict(score_gates)
+    payload["bench_version"] = bench_version
+    if bench_version >= 12:
+        payload.setdefault("model_dependence", dict(_PASSING_V12_MODEL_DEPENDENCE))
+    else:
+        payload.pop("model_dependence", None)
+        payload.pop("inference_latency", None)
+        payload.pop("answer_stuffing", None)
+    return payload
+
+
 def _restamped_v9_base(details: dict, bench_version: int) -> dict:
     """The same signed root re-derived for another epoch of the same contract.
 
     The evidence binds ``score_gates.bench_version`` to its own and pins the
-    gate digest, so a bench bump rewrites three fields together -- which is
-    precisely the shape a carried-forward validator reports.
+    gate digest. A bump through v11 rewrites those fields together; v12 also
+    binds ``model_dependence``, which is the shape a carried-forward validator
+    reports.
     """
     from ditto_screening_protocol.bench_v9 import V9ScoreGateEvidence
 
     stamped = json.loads(json.dumps(details))
     stamped["bench_version"] = bench_version
-    stamped["score_gates"]["bench_version"] = bench_version
+    stamped["score_gates"] = _score_gates_for_version(
+        stamped["score_gates"], bench_version
+    )
     stamped["score_gates_sha256"] = V9ScoreGateEvidence.model_validate(
         stamped["score_gates"]
     ).digest_hex()
