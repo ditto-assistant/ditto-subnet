@@ -46,8 +46,8 @@ var forwardedRequestFields = map[string]struct{}{
 }
 
 var refusedRequestFields = map[string]string{
-	"models":     "the model is pinned by the ticket, not chosen by the request",
-	"transforms": "prompt transforms would change benchmark semantics",
+	"models":             "the model is pinned by the ticket, not chosen by the request",
+	"transforms":         "prompt transforms would change benchmark semantics",
 	"plugins":            "server-side plugins are not available on this lane",
 	"web_search_options": "server-side web search is not available on this lane",
 	"functions":          "use tools instead",
