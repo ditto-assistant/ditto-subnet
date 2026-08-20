@@ -240,6 +240,44 @@ func validateDockerSaveArchive(path, expectedRef, expectedID string) (bool, erro
 	return validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID, nil)
 }
 
+func attemptScopedScreenedImageRef(tag, expectedRef string) bool {
+	const prefix = "ditto-screen/"
+	const suffix = ":latest"
+	tag = strings.TrimPrefix(tag, "docker.io/")
+	expectedRef = strings.TrimPrefix(expectedRef, "docker.io/")
+	if !strings.HasPrefix(expectedRef, prefix) || !strings.HasSuffix(expectedRef, suffix) {
+		return false
+	}
+	agentID := strings.TrimSuffix(strings.TrimPrefix(expectedRef, prefix), suffix)
+	want := prefix + agentID + "-"
+	if !strings.HasPrefix(tag, want) || !strings.HasSuffix(tag, suffix) {
+		return false
+	}
+	attemptID := strings.TrimSuffix(strings.TrimPrefix(tag, want), suffix)
+	return screenedImageUUID(agentID) && screenedImageUUID(attemptID)
+}
+
+func screenedImageUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	for i := 0; i < 36; i++ {
+		c := value[i]
+		switch i {
+		case 8, 13, 18, 23:
+			if c != '-' {
+				return false
+			}
+		default:
+			if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' {
+				continue
+			}
+			return false
+		}
+	}
+	return true
+}
+
 // validateDockerSaveArchiveWithStoreIDs binds the signed image-config digest
 // to every Docker ID the validated archive can acquire after load. Classic
 // graphdriver stores expose the config digest as `.Id`; Docker 28's containerd
@@ -407,7 +445,15 @@ func validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID string,
 	}
 	archiveTagged := len(manifest[0].RepoTags) == 1 && manifest[0].RepoTags[0] == expectedRef
 	if len(manifest[0].RepoTags) != 0 && !archiveTagged {
-		return false, fmt.Errorf("archive tags must be empty or exactly the expected image ref %q", expectedRef)
+		// Targon/Kaniko `--tar-path` stamps `--destination`, which Platform
+		// binds as the attempt-scoped `ditto-screen/{agent}-{attempt}:latest`.
+		// The scoring lane's expected ref is the stable agent identity. Empty
+		// tags and the exact agent ref stay canonical; the attempt alias is
+		// accepted and retagged, same as an untagged docker save.
+		if len(manifest[0].RepoTags) != 1 ||
+			!attemptScopedScreenedImageRef(manifest[0].RepoTags[0], expectedRef) {
+			return false, fmt.Errorf("archive tags must be empty or exactly the expected image ref %q", expectedRef)
+		}
 	}
 	classic := strings.TrimPrefix(manifest[0].Config, "./") == expectedClassicConfig
 	manifestConfig := strings.TrimPrefix(manifest[0].Config, "./")
@@ -441,7 +487,9 @@ func validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID string,
 				primaryCount++
 				name := strings.TrimPrefix(descriptor.Annotations["io.containerd.image.name"], "docker.io/")
 				if descriptor.MediaType != primaryMediaType ||
-					(name != expectedRef && (archiveTagged || name != "")) {
+					(name != expectedRef &&
+						!attemptScopedScreenedImageRef(name, expectedRef) &&
+						(archiveTagged || name != "")) {
 					return false, fmt.Errorf("expected image descriptor has invalid media type or name")
 				}
 				continue

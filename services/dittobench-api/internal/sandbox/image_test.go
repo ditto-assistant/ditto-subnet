@@ -351,6 +351,26 @@ func TestValidateDockerSaveArchiveAcceptsOCIConfigStoreID(t *testing.T) {
 	t.Fatal("manifest.json missing")
 }
 
+func TestValidateDockerSaveArchiveAcceptsKanikoAttemptTag(t *testing.T) {
+	attemptRef := "ditto-screen/550e8400-e29b-41d4-a716-446655440000-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:latest"
+	archive, imageID := makeScreenedImageArchiveVariant(t, []string{attemptRef}, false)
+	tagged, err := validateDockerSaveArchive(writeArchive(t, archive), testScreenedImageRef, imageID)
+	if err != nil {
+		t.Fatalf("Kaniko attempt-scoped tag rejected: %v", err)
+	}
+	if tagged {
+		t.Fatal("attempt-scoped tag must be retagged to the agent ref")
+	}
+}
+
+func TestValidateDockerSaveArchiveRejectsForeignAttemptTag(t *testing.T) {
+	other := "ditto-screen/11111111-1111-4111-8111-111111111111-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:latest"
+	archive, imageID := makeScreenedImageArchiveVariant(t, []string{other}, false)
+	if _, err := validateDockerSaveArchive(writeArchive(t, archive), testScreenedImageRef, imageID); err == nil {
+		t.Fatal("foreign attempt-scoped tag was accepted")
+	}
+}
+
 func TestValidateDockerSaveArchiveAcceptsProvenanceDisabledDockerStoreID(t *testing.T) {
 	archive, imageID := makeDockerSchema2OCIArchive(t, nil, true)
 	tagged, err := validateDockerSaveArchive(writeArchive(t, archive), testScreenedImageRef, imageID)
