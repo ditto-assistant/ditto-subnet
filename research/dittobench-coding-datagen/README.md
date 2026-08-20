@@ -4,6 +4,10 @@ This package is the **shadow-only** coding-repair corpus compiler and contract
 validator for DittoBench. It deliberately does not alter the production
 DittoBench score, `bench_version`, validator ledger, or weights.
 
+Language-neutral Python/Go/Rust wire and digest vectors live in
+`packages/dittobench-coding-contract`; this component must remain compatible
+with those shared vectors.
+
 ## Security boundary
 
 The public tree contains schemas, compiler code, leakage checks, and a disjoint

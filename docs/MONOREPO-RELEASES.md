@@ -25,6 +25,12 @@ release gate runs Rust formatting, Clippy, and tests from the exact merge
 source and proves the pinned Dockerfile builds. It publishes no image, deploys
 no service, and cannot affect scores or weights.
 
+Language-neutral coding contract vectors live under
+`packages/dittobench-coding-contract`. Changes there select the validator,
+DittoBench API, coding datagen, coding starter kit, and validator stack so the
+Python, Go, and Rust consumers cannot release against different canonical
+bytes. The package remains shadow-only and contains no private corpus material.
+
 The `Release` workflow first rejects a merge that a newer queued `main` push
 already superseded. For the current merge, affected root surfaces and every
 selected component verify the exact source in parallel before one aggregate

@@ -7,7 +7,7 @@ package codingcontract
 const (
 	ContractVersion           = 1
 	ResolvedRepairScoreMicros = 1_000_000
-	MaxCanonicalJSONBytes     = 1 << 20
+	MaxCanonicalJSONBytes     = 4 << 20
 )
 
 type TerminalDomain string
@@ -17,7 +17,16 @@ const (
 	DomainRepairFailure           TerminalDomain = "repair_failure"
 	DomainValidatorInfrastructure TerminalDomain = "validator_infrastructure"
 	DomainTaskInvalid             TerminalDomain = "task_invalid"
-	DomainIntegrityIncident       TerminalDomain = "integrity_incident"
+	DomainCandidateIntegrity      TerminalDomain = "candidate_integrity"
+	DomainControlPlaneIntegrity   TerminalDomain = "control_plane_integrity"
+)
+
+type ModelUsageStatus string
+
+const (
+	ModelUsageComplete        ModelUsageStatus = "complete"
+	ModelUsageNotInvoked      ModelUsageStatus = "not_invoked"
+	ModelUsageProviderFailure ModelUsageStatus = "provider_failure"
 )
 
 type ManifestTask struct {
@@ -36,20 +45,23 @@ type ManifestTask struct {
 }
 
 type RunManifest struct {
-	Schema                string         `json:"schema"`
-	CodingContractVersion int            `json:"coding_contract_version"`
-	WeightEligible        bool           `json:"weight_eligible"`
-	TicketID              string         `json:"ticket_id"`
-	AgentID               string         `json:"agent_id"`
-	AgentArtifactSHA256   string         `json:"agent_artifact_sha256"`
-	CorpusReleaseID       string         `json:"corpus_release_id"`
-	CatalogMerkleRoot     string         `json:"catalog_merkle_root"`
-	SelectionDerivationID string         `json:"selection_derivation_id"`
-	SelectionBlockNumber  uint64         `json:"selection_block_number"`
-	SelectionBlockHash    string         `json:"selection_block_hash"`
-	TaskSetID             string         `json:"task_set_id"`
-	TaskSetManifestSHA256 string         `json:"task_set_manifest_sha256"`
-	Tasks                 []ManifestTask `json:"tasks"`
+	Schema                    string         `json:"schema"`
+	CodingContractVersion     int            `json:"coding_contract_version"`
+	WeightEligible            bool           `json:"weight_eligible"`
+	CodingRunID               string         `json:"coding_run_id"`
+	AgentID                   string         `json:"agent_id"`
+	AgentArtifactSHA256       string         `json:"agent_artifact_sha256"`
+	CorpusReleaseID           string         `json:"corpus_release_id"`
+	CatalogMerkleRoot         string         `json:"catalog_merkle_root"`
+	SelectionDerivationID     string         `json:"selection_derivation_id"`
+	SelectionChainGenesisHash string         `json:"selection_chain_genesis_hash"`
+	SelectionBlockNumber      uint64         `json:"selection_block_number"`
+	SelectionBlockHash        string         `json:"selection_block_hash"`
+	InferenceGrantSHA256      string         `json:"inference_grant_sha256"`
+	GraderContractSHA256      string         `json:"grader_contract_sha256"`
+	TaskSetID                 string         `json:"task_set_id"`
+	TaskSetManifestSHA256     string         `json:"task_set_manifest_sha256"`
+	Tasks                     []ManifestTask `json:"tasks"`
 }
 
 type VisibleMemory struct {
@@ -108,19 +120,24 @@ type RunRequest struct {
 }
 
 type ModelEvidence struct {
-	Model                    string `json:"model"`
-	Provider                 string `json:"provider"`
-	ProviderRouteProfile     string `json:"provider_route_profile"`
-	ReasoningEffort          string `json:"reasoning_effort"`
-	PromptSHA256             string `json:"prompt_sha256"`
-	ToolSchemaSHA256         string `json:"tool_schema_sha256"`
-	ProviderReceiptSetSHA256 string `json:"provider_receipt_set_sha256"`
-	Requests                 uint64 `json:"requests"`
-	PromptTokens             uint64 `json:"prompt_tokens"`
-	CompletionTokens         uint64 `json:"completion_tokens"`
-	TotalTokens              uint64 `json:"total_tokens"`
-	CostUSDMicros            uint64 `json:"cost_usd_micros"`
-	RetryCount               uint32 `json:"retry_count"`
+	Model                    string           `json:"model"`
+	Provider                 string           `json:"provider"`
+	ProviderRouteProfile     string           `json:"provider_route_profile"`
+	ReasoningEffort          string           `json:"reasoning_effort"`
+	InferenceGrantSHA256     string           `json:"inference_grant_sha256"`
+	PromptSHA256             string           `json:"prompt_sha256"`
+	ToolSchemaSHA256         string           `json:"tool_schema_sha256"`
+	UsageStatus              ModelUsageStatus `json:"usage_status"`
+	FallbackUsed             bool             `json:"fallback_used"`
+	CostSource               string           `json:"cost_source"`
+	Currency                 string           `json:"currency"`
+	ProviderReceiptSetSHA256 *string          `json:"provider_receipt_set_sha256"`
+	Requests                 uint64           `json:"requests"`
+	PromptTokens             uint64           `json:"prompt_tokens"`
+	CompletionTokens         uint64           `json:"completion_tokens"`
+	TotalTokens              uint64           `json:"total_tokens"`
+	CostUSDMicros            uint64           `json:"cost_usd_micros"`
+	RetryCount               uint32           `json:"retry_count"`
 }
 
 type AuthoringEvidence struct {
@@ -148,6 +165,7 @@ type TestGroupEvidence struct {
 }
 
 type GraderEvidence struct {
+	GraderContractSHA256        string              `json:"grader_contract_sha256"`
 	GraderBundleSHA256          string              `json:"grader_bundle_sha256"`
 	GraderImageDigest           string              `json:"grader_image_digest"`
 	TestManifestSHA256          string              `json:"test_manifest_sha256"`
@@ -161,7 +179,8 @@ type TaskEvidence struct {
 	Schema                string             `json:"schema"`
 	CodingContractVersion int                `json:"coding_contract_version"`
 	WeightEligible        bool               `json:"weight_eligible"`
-	TicketID              string             `json:"ticket_id"`
+	CodingRunID           string             `json:"coding_run_id"`
+	ValidatorTicketID     string             `json:"validator_ticket_id"`
 	AgentID               string             `json:"agent_id"`
 	AgentArtifactSHA256   string             `json:"agent_artifact_sha256"`
 	CorpusReleaseID       string             `json:"corpus_release_id"`
@@ -184,17 +203,20 @@ type TaskResult struct {
 }
 
 type RunEvidence struct {
-	Schema                 string       `json:"schema"`
-	CodingContractVersion  int          `json:"coding_contract_version"`
-	WeightEligible         bool         `json:"weight_eligible"`
-	RunManifestSHA256      string       `json:"run_manifest_sha256"`
-	TaskSetManifestSHA256  string       `json:"task_set_manifest_sha256"`
-	Tasks                  []TaskResult `json:"tasks"`
-	ResolvedCount          uint32       `json:"resolved_count"`
-	RepairFailureCount     uint32       `json:"repair_failure_count"`
-	InfrastructureCount    uint32       `json:"infrastructure_count"`
-	InvalidCount           uint32       `json:"invalid_count"`
-	IntegrityIncidentCount uint32       `json:"integrity_incident_count"`
-	ScoreableTaskCount     uint32       `json:"scoreable_task_count"`
-	RepairMeanMicros       uint32       `json:"repair_mean_micros"`
+	Schema                     string       `json:"schema"`
+	CodingContractVersion      int          `json:"coding_contract_version"`
+	WeightEligible             bool         `json:"weight_eligible"`
+	CodingRunID                string       `json:"coding_run_id"`
+	ValidatorTicketID          string       `json:"validator_ticket_id"`
+	RunManifestSHA256          string       `json:"run_manifest_sha256"`
+	TaskSetManifestSHA256      string       `json:"task_set_manifest_sha256"`
+	Tasks                      []TaskResult `json:"tasks"`
+	ResolvedCount              uint32       `json:"resolved_count"`
+	RepairFailureCount         uint32       `json:"repair_failure_count"`
+	InfrastructureCount        uint32       `json:"infrastructure_count"`
+	InvalidCount               uint32       `json:"invalid_count"`
+	CandidateIntegrityCount    uint32       `json:"candidate_integrity_count"`
+	ControlPlaneIntegrityCount uint32       `json:"control_plane_integrity_count"`
+	ScoreableTaskCount         uint32       `json:"scoreable_task_count"`
+	RepairMeanMicros           uint32       `json:"repair_mean_micros"`
 }

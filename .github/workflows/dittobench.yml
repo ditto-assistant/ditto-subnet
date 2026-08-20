@@ -7,6 +7,7 @@ on:
       - services/dittobench-api/**
       - research/dittobench-datagen/**
       - packages/ditto-screening-protocol/ditto_screening_protocol/data/**
+      - packages/dittobench-coding-contract/**
       - scripts/generate_confirmation_installation.py
       - docker-compose.yml
       - Dockerfile.sandbox-docker

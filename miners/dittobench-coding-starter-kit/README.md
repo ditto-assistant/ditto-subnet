@@ -8,6 +8,10 @@ workspace capability.
 It does **not** alter the active DittoBench score or weights. The public coding
 practice pack is permanently ineligible for emissions.
 
+The shared contract vectors are owned by
+`packages/dittobench-coding-contract`. Rust seed/run parsing and canonical
+memory digests are tested against the same vectors as Python and Go.
+
 ## Trust boundary
 
 The harness receives:
