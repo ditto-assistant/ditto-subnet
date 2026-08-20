@@ -38,9 +38,7 @@ export function validatorFailureLabel(
 }
 
 function isAgentTerminalInferenceCode(code?: string | null): boolean {
-  return (
-    code === "inference_allowance_exhausted" || code === "inference_request_rejected"
-  );
+  return code === "inference_allowance_exhausted" || code === "inference_request_rejected";
 }
 
 /** Screening attempt chip; a resolved quarantine reads by its resolution
@@ -129,9 +127,9 @@ export function validationAttemptView(a: ValidationAttempt): ValidationAttemptVi
       ? "The agent exhausted its request or token allowance, or sent one request larger than the run token allowance. It is not validator infrastructure and does not receive an automatic infrastructure retry."
       : a.failure_code === "inference_request_rejected" && currentFailure
         ? "The platform refused the harness's inference request before reserving capacity (schema, size, or an unsupported field). It is not a spent grant and does not receive an automatic infrastructure retry."
-      : canonical && (a.actively_running ? "running" : a.status) === "expired"
-        ? VALIDATOR_RETRY_EXPLANATION
-        : null;
+        : canonical && (a.actively_running ? "running" : a.status) === "expired"
+          ? VALIDATOR_RETRY_EXPLANATION
+          : null;
   let meta = "";
   if (a.actively_running) meta += " is running the benchmark";
   else if (a.status === "issued") meta += " has this assignment";
