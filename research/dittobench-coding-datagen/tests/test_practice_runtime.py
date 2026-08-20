@@ -369,6 +369,54 @@ def test_terminal_harness_failure_freezes_patch_but_cannot_score() -> None:
     assert evidence.grader_tests_returncode == 0
 
 
+def test_freezer_rejects_oversized_patch() -> None:
+    padding = "x" * 65_400
+    repair = (
+        "def normalize_reference(value: str) -> str:\n"
+        f"    padding = {padding!r}\n"
+        "    return value.strip()\n"
+    )
+    with PracticeWorkspaceSession(PACK, "PRACTICE-LEDGER-001") as session:
+        source = session.invoke(
+            _request(session, "oversized-read", "repo.read_file", {"path": "app.py"})
+        )
+        assert source.result is not None
+        patched = session.invoke(
+            _request(
+                session,
+                "oversized-patch",
+                "repo.apply_patch",
+                {
+                    "expected_sha256": source.result["sha256"],
+                    "path": "app.py",
+                    "replacements": [
+                        {"new_text": repair, "old_text": source.result["content"]}
+                    ],
+                },
+            )
+        )
+        assert patched.ok
+        with pytest.raises(CorpusError, match="diff limit"):
+            session.freeze()
+
+
+def test_evaluator_maps_freeze_error_to_harness_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def rejected_freeze(_session: PracticeWorkspaceSession) -> None:
+        raise CorpusError("miner-influenced freeze failure")
+
+    monkeypatch.setattr(PracticeWorkspaceSession, "freeze", rejected_freeze)
+    task_id = "PRACTICE-LEDGER-001"
+    with OfflineHarness(VALID_REPAIRS[task_id]) as harness:
+        evidence = evaluate_practice_harness(PACK, task_id, harness.url)
+
+    assert evidence.harness_completed is False
+    assert evidence.terminal_domain == "harness_failure"
+    assert evidence.repair_score_micros == 0
+    assert evidence.patch_sha256 == "0" * 64
+
+
 def test_noop_freeze_is_a_binary_repair_failure() -> None:
     with PracticeWorkspaceSession(PACK, "PRACTICE-LEDGER-001") as session:
         submission = session.freeze()
@@ -446,6 +494,16 @@ def test_grader_rejects_frame_escape_that_forges_test_completion() -> None:
             "expected_sha256",
         ),
         ("tests.run", {"command_id": "arbitrary-shell"}, "not allowed"),
+        (
+            "repo.create_file",
+            {"content": "value", "path": "new.py"},
+            "reserved but not enabled",
+        ),
+        (
+            "repo.delete_file",
+            {"expected_sha256": "0" * 64, "path": "app.py"},
+            "reserved but not enabled",
+        ),
         (
             "repo.read_range",
             {"path": "app.py", "start_line": 1, "end_line": 401},
@@ -529,6 +587,28 @@ def test_hidden_grader_files_are_not_reachable() -> None:
             )
         )
         assert hidden.ok is False
+
+
+def test_failing_test_result_does_not_leak_workspace_path() -> None:
+    with PracticeWorkspaceSession(PACK, "PRACTICE-LEDGER-001") as session:
+        workspace = str(session._workspace)
+        resolved = str(session._workspace.resolve())
+        response = session.invoke(
+            _request(
+                session,
+                "failing-tests",
+                "tests.run",
+                {"command_id": "visible-unit"},
+            )
+        )
+
+    assert response.ok
+    assert response.result is not None
+    assert response.result["returncode"] != 0
+    combined = response.result["stdout"] + response.result["stderr"]
+    assert workspace not in combined
+    assert resolved not in combined
+    assert "<workspace>" in combined
 
 
 @pytest.mark.parametrize("attack", ["symlink", "new-file", "protected-file"])

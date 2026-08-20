@@ -91,6 +91,8 @@ repo.search
 repo.read_file
 repo.read_range
 repo.apply_patch
+repo.create_file (reserved; disabled by this pack)
+repo.delete_file (reserved; disabled by this pack)
 tests.run
 build.run
 git.status
@@ -109,6 +111,11 @@ definitions, module-level execution, dangerous builtins, dunder access, and
 calls outside the fixture allowlist before test imports. This prevents a
 practice patch from converting an early process exit into a false passing
 grade; it is not a general policy for real repositories.
+
+That one-function constraint is only a public v1 fixture limitation, not the
+benchmark's difficulty target. The next public practice revision must include a
+multi-file task large enough to require tree, search, and ranged-read tools;
+private repository tasks may enable manifest-scoped create/delete operations.
 
 This loopback runner is an offline protocol and integration-test fixture. It is
 not an isolation boundary for arbitrary hostile local processes: a production
