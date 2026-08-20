@@ -65,9 +65,8 @@ type AddReclaimedChatTokensParams struct {
 	GrantID        pgtype.UUID        `json:"grantId"`
 }
 
-// Stale-reclamation charge: a canceled in-flight chat request is charged its
-// full reservation into the grant's prompt_tokens. Grant row is locked by
-// the caller.
+// Kept for schema compatibility. Admission no longer charges the
+// reservation estimate onto the grant; token spend is receipted usage only.
 func (q *Queries) AddReclaimedChatTokens(ctx context.Context, arg AddReclaimedChatTokensParams) error {
 	_, err := q.db.Exec(ctx, addReclaimedChatTokens, arg.ReservedTokens, arg.Now, arg.GrantID)
 	return err
