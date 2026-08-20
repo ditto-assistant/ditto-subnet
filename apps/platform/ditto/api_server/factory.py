@@ -375,6 +375,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     providers=providers,
                     complete_screen=complete_screen,
                     resolve_builder_image=resolve_submission_builder_image,
+                    storage=storage,
                 )
                 stack.push_async_callback(targon_loop.aclose)
                 await targon_loop.start()

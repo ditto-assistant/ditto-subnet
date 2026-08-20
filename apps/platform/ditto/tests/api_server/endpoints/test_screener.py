@@ -9,7 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hashlib
+import io
 import json
+import tarfile
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -536,6 +539,7 @@ def _install_storage(app: FastAPI) -> MagicMock:
     storage.abort_multipart_upload = AsyncMock()
     storage.delete_object = AsyncMock()
     storage.copy_object = AsyncMock()
+    storage.download_object_to_path = AsyncMock()
     storage.object_exists = AsyncMock(return_value=True)
     storage.verify_object_sha256 = AsyncMock(
         return_value=VerifiedObject(size_bytes=123, sha256="12" * 32)
@@ -1117,6 +1121,34 @@ class TestFederatedScreenerNodes:
         storage = _install_storage(app)
         generator = _FakeGenerator(sha="ee" * 32)
         _install_generator(app, generator)
+        config_bytes = (
+            b'{"architecture":"amd64","os":"linux",'
+            b'"rootfs":{"type":"layers","diff_ids":[]}}'
+        )
+        config_digest = hashlib.sha256(config_bytes).hexdigest()
+
+        async def _download(*, key: str, dest) -> None:
+            del key
+            manifest = [
+                {
+                    "Config": f"{config_digest}.json",
+                    "RepoTags": [
+                        "ditto-screen/11111111-1111-4111-8111-111111111111-"
+                        "22222222-2222-4222-8222-222222222222:latest"
+                    ],
+                    "Layers": [],
+                }
+            ]
+            with tarfile.open(dest, "w:") as archive:
+                encoded = json.dumps(manifest).encode()
+                info = tarfile.TarInfo("manifest.json")
+                info.size = len(encoded)
+                archive.addfile(info, io.BytesIO(encoded))
+                info = tarfile.TarInfo(f"{config_digest}.json")
+                info.size = len(config_bytes)
+                archive.addfile(info, io.BytesIO(config_bytes))
+
+        storage.download_object_to_path = AsyncMock(side_effect=_download)
         app.state.config = replace(
             app.state.config,
             screener_auth=replace(
@@ -1208,6 +1240,7 @@ class TestFederatedScreenerNodes:
             assert agent is not None
             assert agent.status == AgentStatus.EVALUATING
             assert agent.screened_image_sha256 == "12" * 32
+            assert agent.screened_image_id == "sha256:" + config_digest
             attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
             assert attempt is not None
             assert attempt.status == "passed"

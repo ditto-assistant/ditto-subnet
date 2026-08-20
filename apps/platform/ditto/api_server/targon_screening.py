@@ -10,8 +10,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import secrets
+import tempfile
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
@@ -21,6 +24,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_server.attestation import expected_netuid
+from ditto.api_server.docker_save_archive import config_digest_from_docker_save
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
 from ditto.db.models import (
@@ -41,7 +45,7 @@ from ditto.db.queries.screening import claim_screening_attempts, get_screening_a
 from ditto_screening_protocol import SourceReviewObservationPayload
 
 if TYPE_CHECKING:
-    from sqlalchemy.ext.asyncio import AsyncSession
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
     from ditto.api_server.datapipeline import DatasetGenerator
     from ditto.api_server.storage.client import S3StorageClient
@@ -464,11 +468,13 @@ async def _bind_screened_image(
         or build.output_key is None
     ):
         return None
-    image_id = "sha256:" + build.output_sha256
-    if build.runtime_image_reference and "@" in build.runtime_image_reference:
-        digest = build.runtime_image_reference.rsplit("@", 1)[1]
-        if digest.startswith("sha256:") and len(digest) == 71:
-            image_id = digest
+    image_id = await _image_id_for_kaniko_archive(storage, key=build.output_key)
+    if image_id is None:
+        image_id = "sha256:" + build.output_sha256
+        if build.runtime_image_reference and "@" in build.runtime_image_reference:
+            digest = build.runtime_image_reference.rsplit("@", 1)[1]
+            if digest.startswith("sha256:") and len(digest) == 71:
+                image_id = digest
     image_ref = f"ditto-screen/{agent.agent_id}:latest"
     image_upload_id = uuid4()
     dest_key = f"{agent.agent_id}/screened-images/{image_upload_id}.tar"
@@ -498,3 +504,103 @@ async def _bind_screened_image(
     session.add(upload)
     await session.flush()
     return upload
+
+
+_REPAIR_LIMIT = 8
+
+
+async def repair_kaniko_screened_image_identities(
+    session_maker: async_sessionmaker,
+    storage: S3StorageClient,
+    *,
+    limit: int = _REPAIR_LIMIT,
+) -> int:
+    """Re-pin Targon/Cloud Run Kaniko archives to their config digest.
+
+    Already-evaluating agents keep the Artifact Registry manifest digest from
+    smoke. DittoBench 0.98.7 accepts attempt-scoped RepoTags but still requires
+    ``{configDigest}.json``. Updating only the bound image id is enough; the
+    tar is unchanged. GCE archives already use the config digest and no-op.
+    """
+    async with session_maker() as session:
+        rows = (
+            await session.execute(
+                select(Agent, ScreenedImageUpload, SubmissionImageBuild)
+                .join(
+                    ScreenedImageUpload,
+                    ScreenedImageUpload.image_upload_id
+                    == Agent.screened_image_upload_id,
+                )
+                .join(
+                    SubmissionImageBuild,
+                    SubmissionImageBuild.attempt_id == ScreenedImageUpload.attempt_id,
+                )
+                .where(
+                    Agent.status == AgentStatus.EVALUATING,
+                    Agent.screened_image_id.is_not(None),
+                    SubmissionImageBuild.status.in_(("succeeded", "consumed")),
+                    SubmissionImageBuild.provider.in_(("targon", "gcp")),
+                )
+            )
+        ).all()
+    candidates: list[tuple[Agent, ScreenedImageUpload, str]] = []
+    for agent_row, upload_row, build in rows:
+        current_id = agent_row.screened_image_id
+        if current_id is None:
+            continue
+        runtime_ref = build.runtime_image_reference or ""
+        tar_id = f"sha256:{build.output_sha256}" if build.output_sha256 else ""
+        if current_id not in runtime_ref and current_id != tar_id:
+            continue
+        candidates.append((agent_row, upload_row, current_id))
+        if len(candidates) >= limit:
+            break
+    repaired = 0
+    for agent_row, upload_row, current_id in candidates:
+        key = f"{agent_row.agent_id}/screened-images/{upload_row.image_upload_id}.tar"
+        digest = await _image_id_for_kaniko_archive(storage, key=key)
+        if digest is None or digest == current_id:
+            continue
+        async with session_maker() as session, session.begin():
+            agent = await session.get(Agent, agent_row.agent_id, with_for_update=True)
+            upload = await session.get(
+                ScreenedImageUpload,
+                upload_row.image_upload_id,
+                with_for_update=True,
+            )
+            if (
+                agent is None
+                or upload is None
+                or agent.screened_image_id != current_id
+                or agent.status != AgentStatus.EVALUATING
+            ):
+                continue
+            agent.screened_image_id = digest
+            upload.image_id = digest
+        logger.info(
+            "re-pinned Kaniko screened image agent_id=%s from %s to %s",
+            agent_row.agent_id,
+            current_id,
+            digest,
+        )
+        repaired += 1
+    return repaired
+
+
+async def _image_id_for_kaniko_archive(
+    storage: S3StorageClient, *, key: str
+) -> str | None:
+    from ditto.api_server.storage.errors import ObjectDownloadFailedError
+
+    fd, name = tempfile.mkstemp(prefix="ditto-kaniko-archive-", suffix=".tar")
+    os.close(fd)
+    dest = Path(name)
+    try:
+        dest.chmod(0o600)
+        await storage.download_object_to_path(key=key, dest=dest)
+        return config_digest_from_docker_save(dest)
+    except (ObjectDownloadFailedError, OSError):
+        logger.warning("Kaniko archive digest read failed key=%s", key, exc_info=True)
+        return None
+    finally:
+        dest.unlink(missing_ok=True)

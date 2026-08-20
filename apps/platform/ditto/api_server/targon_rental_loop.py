@@ -79,6 +79,7 @@ class TargonRentalLoop:
         providers: Sequence[ScreeningComputeProvider] | None = None,
         complete_screen: Callable[[UUID], Awaitable[None]] | None = None,
         resolve_builder_image: Callable[[str], str] | None = None,
+        storage: object | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._config = config
@@ -96,6 +97,7 @@ class TargonRentalLoop:
         self._complete_screen = complete_screen
         self._resolve_builder_image = resolve_builder_image or (lambda image: image)
         self._resolved_builder_image: str | None = None
+        self._storage = storage
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._epoch = "platform-targon-loop"
@@ -146,7 +148,24 @@ class TargonRentalLoop:
         handled = await self._launch_smoke() or handled
         handled = await self._launch_source_review() or handled
         handled = await self._finalize_ready_attempts() or handled
+        handled = await self._repair_kaniko_image_ids() or handled
         return handled
+
+    async def _repair_kaniko_image_ids(self) -> bool:
+        if self._storage is None:
+            return False
+        from ditto.api_server.storage.client import S3StorageClient
+        from ditto.api_server.targon_screening import (
+            repair_kaniko_screened_image_identities,
+        )
+
+        storage = self._storage
+        if not isinstance(storage, S3StorageClient):
+            return False
+        repaired = await repair_kaniko_screened_image_identities(
+            self._session_maker, storage
+        )
+        return repaired > 0
 
     async def _finalize_ready_attempts(self) -> bool:
         """Attest Targon passes after smoke, or fail-retry after Kaniko fallback."""
