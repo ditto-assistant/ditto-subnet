@@ -32,7 +32,6 @@ from ditto.api_server.endpoints.inference import (
     _locked_confirmation_chat_payload,
     _locked_grant_model,
     _locked_upstream_payload,
-    _validate_request_schema,
     _max_chargeable_tokens,
     _openrouter_attempt_count,
     _openrouter_headers,
@@ -932,20 +931,19 @@ def test_confirmation_reader_canonicalizes_reasoning_effort_alias() -> None:
     assert upstream["reasoning"] == {"effort": "high", "exclude": True}
 
 
-def test_confirmation_reader_rejects_conflicting_reasoning_aliases() -> None:
+def test_confirmation_reader_heals_conflicting_reasoning_aliases() -> None:
     grant = _confirmation_grant(lane="reader", model="openai/gpt-oss-20b")
-    with pytest.raises(HTTPException) as raised:
-        _locked_confirmation_chat_payload(
-            _confirmation_reader_payload(
-                "openai/gpt-oss-20b",
-                reasoning={"effort": "low"},
-                reasoning_effort="high",
-            ),
-            grant=grant,
-            max_output_tokens=128,
-        )
-    assert raised.value.status_code == 400
-    assert raised.value.detail == "conflicting reasoning effort"
+    upstream, _ = _locked_confirmation_chat_payload(
+        _confirmation_reader_payload(
+            "openai/gpt-oss-20b",
+            reasoning={"effort": "low"},
+            reasoning_effort="high",
+        ),
+        grant=grant,
+        max_output_tokens=128,
+    )
+    assert "reasoning_effort" not in upstream
+    assert upstream["reasoning"] == {"effort": "low", "exclude": True}
 
 
 def test_confirmation_judge_does_not_gain_gpt_oss_reasoning() -> None:
@@ -1112,7 +1110,7 @@ def test_v9_equal_reasoning_aliases_collapse_to_one_field(effort: str) -> None:
         ("high", "medium"),
     ],
 )
-def test_v9_conflicting_reasoning_aliases_fail_closed(nested: str, flat: str) -> None:
+def test_v9_conflicting_reasoning_aliases_prefer_nested(nested: str, flat: str) -> None:
     payload = {
         "model": "openai/gpt-oss-20b",
         "messages": [{"role": "user", "content": "hello"}],
@@ -1120,16 +1118,15 @@ def test_v9_conflicting_reasoning_aliases_fail_closed(nested: str, flat: str) ->
         "reasoning_effort": flat,
     }
 
-    with pytest.raises(HTTPException) as raised:
-        _locked_upstream_payload(
-            payload,
-            model="openai/gpt-oss-20b",
-            max_tokens=256,
-            bench_version=9,
-        )
+    upstream = _locked_upstream_payload(
+        payload,
+        model="openai/gpt-oss-20b",
+        max_tokens=256,
+        bench_version=9,
+    )
 
-    assert raised.value.status_code == 400
-    assert raised.value.detail == "conflicting reasoning effort"
+    assert "reasoning_effort" not in upstream
+    assert upstream["reasoning"] == {"effort": nested, "exclude": True}
 
 
 @pytest.mark.parametrize(
@@ -1299,8 +1296,12 @@ def test_grant_protecting_fields_are_pinned_not_forwarded() -> None:
         assert removed not in upstream, removed
 
 
-def test_echoed_provider_tool_call_index_is_stripped_not_refused() -> None:
-    """Grandmaster-style harnesses copy tool_calls back, including `index`."""
+def test_echoed_provider_tool_call_index_is_accepted_not_refused() -> None:
+    """Grandmaster-style harnesses copy tool_calls back, including `index`.
+
+    Live OpenRouter accepts the extra key, so the lock forwards it and only
+    heals the proven-bad sibling ``reasoning_effort`` alias.
+    """
     payload: dict[str, object] = {
         "model": "openai/gpt-oss-20b",
         "reasoning_effort": "medium",
@@ -1308,6 +1309,7 @@ def test_echoed_provider_tool_call_index_is_stripped_not_refused() -> None:
             {
                 "role": "assistant",
                 "content": "",
+                "reasoning": "call the tool",
                 "tool_calls": [
                     {
                         "id": "1",
@@ -1321,11 +1323,14 @@ def test_echoed_provider_tool_call_index_is_stripped_not_refused() -> None:
     }
     _validate_request_schema(payload)
     upstream = _locked_upstream_payload(
-        payload, model="openai/gpt-oss-20b", max_tokens=256
+        payload, model="openai/gpt-oss-20b", max_tokens=256, bench_version=9
     )
     assert "reasoning_effort" not in upstream
-    call = upstream["messages"][0]["tool_calls"][0]
-    assert "index" not in call
+    assert upstream["reasoning"] == {"effort": "medium", "exclude": True}
+    message = upstream["messages"][0]
+    assert message["reasoning"] == "call the tool"
+    call = message["tool_calls"][0]
+    assert call["index"] == 0
     assert call["function"] == {"name": "search_memory", "arguments": "{}"}
 
 

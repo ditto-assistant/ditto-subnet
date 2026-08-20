@@ -52,7 +52,7 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
@@ -1113,30 +1113,6 @@ async def _complete_chat_with_recovery(
             fallback_phase=phase,
         )
 
-    if last_code == "upstream_http_400" and "reasoning" in payload:
-        stripped = {key: value for key, value in payload.items() if key != "reasoning"}
-        try:
-            recovered = await _complete_chat_with_recovery(
-                client,
-                config,
-                payload=stripped,
-                model=model,
-                expected_provider=expected_provider,
-                expected_quantization=expected_quantization,
-                expected_prompt_price=expected_prompt_price,
-                expected_completion_price=expected_completion_price,
-                sleep=sleep,
-            )
-        except _ChatProviderExhausted as exhausted:
-            exhausted.upstream_attempts += total_attempts
-            exhausted.openrouter_attempts += router_attempts
-            raise
-        return replace(
-            recovered,
-            upstream_attempts=recovered.upstream_attempts + total_attempts,
-            openrouter_attempts=recovered.openrouter_attempts + router_attempts,
-        )
-
     raise _ChatProviderExhausted(
         upstream_attempts=total_attempts,
         openrouter_attempts=router_attempts,
@@ -1220,10 +1196,12 @@ def _openrouter_headers(
 #    (``allow_fallbacks: true``) the request simply lands on one of the eight
 #    supporting providers, so forwarding ``response_format`` cannot manufacture
 #    a 400.
-#  * ``reasoning_effort`` is the one field that HARD-FAILS: OpenRouter answers
-#    400 `"reasoning_effort" and "reasoning.effort" are both provided with
-#    conflicting values` whenever it disagrees with the pinned block. Forwarding
-#    it would break every request that sets it to anything but ``medium``.
+#  * ``reasoning_effort`` is the one proven-bad sibling: OpenRouter answers 400
+#    `"reasoning_effort" and "reasoning.effort" are both provided with
+#    conflicting values` when both aliases are present and disagree. The lock
+#    heals that shape up front by collapsing to the nested block. Extra message
+#    / tool_call keys (OpenRouter ``index``, echoed assistant ``reasoning``)
+#    are accepted at the door and forwarded; live OpenRouter accepts them.
 
 # The anti-cheat boundary. Accepted, then replaced or removed so the ticket's
 # value governs; see ``_locked_upstream_payload``.
@@ -1525,9 +1503,11 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
         }.get(role)
         if allowed is None:
             raise HTTPException(status_code=400, detail="invalid message")
-        # Extra keys are dropped in `_locked_upstream_payload`, not refused.
-        # Miners echo provider-additive fields (assistant reasoning, tool_call
-        # `index`) and killing the run over them is the Cooking-class bug.
+        # Extra keys are accepted, not refused. Miners echo provider-additive
+        # fields (assistant reasoning, tool_call `index`) and killing the run
+        # over them is the Cooking-class bug. Live OpenRouter accepts them;
+        # `_locked_upstream_payload` only strips the proven-bad sibling alias
+        # and the legacy tool-role `name`.
         content = message.get("content")
         text_parts = (
             isinstance(content, list)
@@ -1669,13 +1649,9 @@ def _benchmark_reasoning_for_request(
             raise HTTPException(status_code=400, detail="invalid reasoning_effort")
         flat_effort = candidate
 
-    if (
-        nested_effort is not None
-        and flat_effort is not None
-        and nested_effort != flat_effort
-    ):
-        raise HTTPException(status_code=400, detail="conflicting reasoning effort")
-
+    # Nested wins on conflict. OpenRouter 400s when both aliases disagree; the
+    # nested block is the canonical provider field, and dropping the flat
+    # sibling is the same heal as matching aliases. Do not wait for that 400.
     effort = nested_effort or flat_effort or BENCH_V9_DEFAULT_REASONING_EFFORT
     return {"effort": effort, "exclude": True}
 
@@ -1768,52 +1744,22 @@ def _locked_upstream_payload(
     return upstream
 
 
-_MESSAGE_ALLOWED_KEYS = {
-    "system": {"role", "content"},
-    "user": {"role", "content"},
-    "assistant": {"role", "content", "tool_calls"},
-    "tool": {"role", "content", "tool_call_id", "name"},
-}
-
-
 def _sanitize_upstream_messages(messages: list[Any]) -> list[Any]:
-    """Keep the OpenAI message contract; drop provider-echo extras."""
+    """Drop only the legacy tool-role ``name`` some upstreams reject.
+
+    Extra keys (assistant ``reasoning``, OpenRouter ``tool_calls[].index``)
+    stay. Live OpenRouter accepts them; the proven-bad shape to heal is the
+    sibling ``reasoning_effort`` alias, which is stripped in the lock.
+    """
     sanitized: list[Any] = []
     for message in messages:
-        if not isinstance(message, dict):
+        if isinstance(message, dict) and message.get("role") == "tool":
+            sanitized.append(
+                {key: value for key, value in message.items() if key != "name"}
+            )
+        else:
             sanitized.append(message)
-            continue
-        role = message.get("role")
-        allowed = _MESSAGE_ALLOWED_KEYS.get(role, set())
-        clean = {
-            key: value
-            for key, value in message.items()
-            if key in allowed and not (role == "tool" and key == "name")
-        }
-        if "tool_calls" in clean:
-            clean["tool_calls"] = _sanitize_upstream_tool_calls(clean["tool_calls"])
-        sanitized.append(clean)
     return sanitized
-
-
-def _sanitize_upstream_tool_calls(raw: Any) -> Any:
-    if not isinstance(raw, list):
-        return raw
-    out: list[dict[str, Any]] = []
-    for call in raw:
-        if not isinstance(call, dict):
-            continue
-        function = call.get("function")
-        clean_fn: dict[str, Any] = {}
-        if isinstance(function, dict):
-            if "name" in function:
-                clean_fn["name"] = function["name"]
-            if "arguments" in function:
-                clean_fn["arguments"] = function["arguments"]
-        out.append(
-            {"id": call.get("id"), "type": call.get("type"), "function": clean_fn}
-        )
-    return out
 
 
 async def _resolve_admission_config(

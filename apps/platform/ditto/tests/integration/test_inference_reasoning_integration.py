@@ -385,7 +385,7 @@ async def test_caller_reasoning_effort_is_accepted_pinned_to_medium_and_charged(
 
 
 @pytest.mark.asyncio
-async def test_v9_reasoning_strategy_reaches_provider_and_invalid_aliases_spend_nothing(
+async def test_v9_reasoning_strategy_reaches_provider_and_invalid_effort_spends_nothing(
     session_maker: async_sessionmaker[Any],
 ) -> None:
     """The authenticated provider boundary applies the complete V9 contract."""
@@ -470,13 +470,20 @@ async def test_v9_reasoning_strategy_reaches_provider_and_invalid_aliases_spend_
                 "reasoning": {"effort": "high", "exclude": True},
             }
         )
-        with pytest.raises(HTTPException) as conflicting:
+        conflicting = await submit(
+            {
+                "model": V7_MODEL,
+                "messages": [{"role": "user", "content": "conflict"}],
+                "reasoning": {"effort": "high"},
+                "reasoning_effort": "low",
+            }
+        )
+        with pytest.raises(HTTPException) as invalid:
             await submit(
                 {
                     "model": V7_MODEL,
-                    "messages": [{"role": "user", "content": "conflict"}],
-                    "reasoning": {"effort": "high"},
-                    "reasoning_effort": "low",
+                    "messages": [{"role": "user", "content": "bad effort"}],
+                    "reasoning_effort": "minimal",
                 }
             )
     finally:
@@ -485,11 +492,13 @@ async def test_v9_reasoning_strategy_reaches_provider_and_invalid_aliases_spend_
     assert selected.status_code == 200
     assert defaulted.status_code == 200
     assert broker_canonical.status_code == 200
-    assert conflicting.value.status_code == 400
-    assert conflicting.value.detail == "conflicting reasoning effort"
+    assert conflicting.status_code == 200
+    assert invalid.value.status_code == 400
+    assert invalid.value.detail == "invalid reasoning_effort"
     assert [request["reasoning"] for request in seen] == [
         {"effort": "low", "exclude": True},
         {"effort": "medium", "exclude": True},
+        {"effort": "high", "exclude": True},
         {"effort": "high", "exclude": True},
     ]
     assert all("reasoning_effort" not in request for request in seen)
@@ -500,13 +509,13 @@ async def test_v9_reasoning_strategy_reaches_provider_and_invalid_aliases_spend_
                 select(InferenceRequest).where(InferenceRequest.grant_id == grant_id)
             )
         )
-        assert len(requests) == 3
+        assert len(requests) == 4
         assert all(request.status == "completed" for request in requests)
         grant = await session.get(InferenceGrant, grant_id)
         assert grant is not None
-        assert grant.request_count == 3
-        assert grant.prompt_tokens == 30
-        assert grant.completion_tokens == 15
+        assert grant.request_count == 4
+        assert grant.prompt_tokens == 40
+        assert grant.completion_tokens == 20
 
 
 @pytest.mark.parametrize("bench_version", [7, 8, 9])

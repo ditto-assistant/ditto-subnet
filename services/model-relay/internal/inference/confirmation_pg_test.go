@@ -240,7 +240,7 @@ func TestLockedConfirmationChatPayloadAppliesGptOssReasoningContract(t *testing.
 		}
 	})
 
-	t.Run("conflicting aliases fail closed", func(t *testing.T) {
+	t.Run("conflicting aliases prefer nested", func(t *testing.T) {
 		payload := map[string]any{
 			"model":            "openai/gpt-oss-20b",
 			"messages":         []any{map[string]any{"role": "user", "content": "memory"}},
@@ -249,9 +249,16 @@ func TestLockedConfirmationChatPayloadAppliesGptOssReasoningContract(t *testing.
 			"reasoning_effort": "high",
 			"provider":         provider,
 		}
-		_, _, herr := lockedConfirmationChatPayload(payload, &grant, 128)
-		if herr == nil || herr.status != 400 || herr.message != "conflicting reasoning effort" {
-			t.Fatalf("conflict err=%v", herr)
+		upstream, _, herr := lockedConfirmationChatPayload(payload, &grant, 128)
+		if herr != nil {
+			t.Fatalf("conflict should heal, err=%v", herr)
+		}
+		if _, found := upstream["reasoning_effort"]; found {
+			t.Fatalf("reasoning_effort alias leaked: %v", upstream)
+		}
+		reasoning, _ := upstream["reasoning"].(map[string]any)
+		if reasoning["effort"] != "low" || reasoning["exclude"] != true {
+			t.Fatalf("reasoning=%v", upstream["reasoning"])
 		}
 	})
 

@@ -4648,9 +4648,8 @@ func normalizeChatRequest(body []byte, model string, benchVersion int) ([]byte, 
 		}
 		flatEffort = candidate
 	}
-	if nestedEffort != "" && flatEffort != "" && nestedEffort != flatEffort {
-		return nil, fmt.Errorf("conflicting reasoning effort")
-	}
+	// Nested wins on conflict. OpenRouter 400s when both aliases disagree;
+	// dropping the flat sibling is the same heal as matching aliases.
 	effort := nestedEffort
 	if effort == "" {
 		effort = flatEffort

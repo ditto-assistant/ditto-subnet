@@ -89,6 +89,7 @@ markers = [
     "localnet: tests against a local Bittensor network",
     "e2e: end-to-end tests through the full stack",
     "needs_chain: requires a reachable Pylon backed by a live subtensor",
+    "needs_openrouter: billed live OpenRouter calls; opt-in, never CI",
 ]
 # `integration` and `e2e` are NOT deselected. They were, and the consequence
 # was that `test_reservations_on_one_grant_serialize_and_respect_the_budget`
@@ -104,10 +105,13 @@ markers = [
 # integration tests now run there. Resist widening this marker; the whole
 # point of this change is that "the test needs a real dependency" stopped
 # being a reason not to run it.
+#
+# `needs_openrouter` is a billed live-provider gate. It is never CI: the tests
+# spend a real OpenRouter key and must be run by an operator who has one.
 addopts = [
     "-n",
     "auto",
     "--dist=worksteal",
     "-m",
-    "not slow and not localnet and not needs_chain",
+    "not slow and not localnet and not needs_chain and not needs_openrouter",
 ]

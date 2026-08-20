@@ -314,9 +314,11 @@ func validateMessages(v any) *httpError {
 		if _, ok := messageAllowedKeys[role]; !ok {
 			return httpErrorf(400, "invalid message")
 		}
-		// Extra keys are dropped in lockedUpstreamPayload, not refused.
-		// Miners echo provider-additive fields (assistant reasoning, tool_call
-		// index) and killing the run over them is the Cooking-class bug.
+		// Extra keys are accepted, not refused. Miners echo provider-additive
+		// fields (assistant reasoning, tool_call index) and killing the run
+		// over them is the Cooking-class bug. Live OpenRouter accepts them;
+		// lockedUpstreamPayload only strips the proven-bad sibling alias and
+		// the legacy tool-role name.
 		content, hasContent := message["content"]
 		if hasContent && content != nil {
 			if _, isStr := content.(string); !isStr {
@@ -502,9 +504,8 @@ func benchmarkReasoningForRequest(payload map[string]any, model string, benchVer
 		}
 		flatEffort = effort
 	}
-	if nestedEffort != "" && flatEffort != "" && nestedEffort != flatEffort {
-		return nil, httpErrorf(400, "conflicting reasoning effort")
-	}
+	// Nested wins on conflict. OpenRouter 400s when both aliases disagree;
+	// dropping the flat sibling is the same heal as matching aliases.
 	effort := nestedEffort
 	if effort == "" {
 		effort = flatEffort
@@ -548,62 +549,25 @@ func lockedUpstreamPayload(payload map[string]any, model string, maxTokens int, 
 }
 
 func sanitizeUpstreamMessages(messages []any) []any {
+	// Drop only the legacy tool-role name some upstreams reject. Extra keys
+	// (assistant reasoning, OpenRouter tool_call index) stay: live OpenRouter
+	// accepts them. The proven-bad shape is the sibling reasoning_effort alias.
 	stripped := make([]any, len(messages))
 	for i, raw := range messages {
 		message, ok := raw.(map[string]any)
-		if !ok {
+		if !ok || message["role"] != "tool" {
 			stripped[i] = raw
 			continue
 		}
-		role, _ := message["role"].(string)
-		allowed := messageAllowedKeys[role]
-		clean := make(map[string]any, len(allowed))
-		for key, value := range message {
-			if _, ok := allowed[key]; !ok {
-				continue
+		clean := make(map[string]any, len(message))
+		for k, v := range message {
+			if k != "name" {
+				clean[k] = v
 			}
-			if role == "tool" && key == "name" {
-				continue
-			}
-			if key == "tool_calls" {
-				clean[key] = sanitizeUpstreamToolCalls(value)
-				continue
-			}
-			clean[key] = value
 		}
 		stripped[i] = clean
 	}
 	return stripped
-}
-
-func sanitizeUpstreamToolCalls(raw any) any {
-	calls, ok := raw.([]any)
-	if !ok {
-		return raw
-	}
-	out := make([]any, 0, len(calls))
-	for _, callRaw := range calls {
-		call, ok := callRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		fn, _ := call["function"].(map[string]any)
-		cleanFn := map[string]any{}
-		if fn != nil {
-			if name, present := fn["name"]; present {
-				cleanFn["name"] = name
-			}
-			if arguments, present := fn["arguments"]; present {
-				cleanFn["arguments"] = arguments
-			}
-		}
-		out = append(out, map[string]any{
-			"id":       call["id"],
-			"type":     call["type"],
-			"function": cleanFn,
-		})
-	}
-	return out
 }
 
 // estimatedTokens mirrors _estimated_tokens: ceil(len/4), floored at 1.

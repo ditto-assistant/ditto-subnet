@@ -2283,6 +2283,7 @@ func TestNormalizeV9ReasoningStrategy(t *testing.T) {
 		{name: "nested medium", body: `{"reasoning":{"effort":"medium"}}`, wantEffort: "medium"},
 		{name: "nested high", body: `{"reasoning":{"effort":"high"}}`, wantEffort: "high"},
 		{name: "equal aliases", body: `{"reasoning":{"effort":"high"},"reasoning_effort":"high"}`, wantEffort: "high"},
+		{name: "conflicting aliases prefer nested", body: `{"reasoning":{"effort":"high"},"reasoning_effort":"low"}`, wantEffort: "high"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -2314,7 +2315,6 @@ func TestNormalizeV9ReasoningRejectsInvalidAndConflictingInputs(t *testing.T) {
 		body string
 		want string
 	}{
-		{name: "conflicting aliases", body: `{"reasoning":{"effort":"high"},"reasoning_effort":"low"}`, want: "conflicting reasoning effort"},
 		{name: "null flat", body: `{"reasoning_effort":null}`, want: "invalid reasoning_effort"},
 		{name: "boolean flat", body: `{"reasoning_effort":true}`, want: "invalid reasoning_effort"},
 		{name: "unknown flat", body: `{"reasoning_effort":"minimal"}`, want: "invalid reasoning_effort"},

@@ -209,22 +209,7 @@ func lockedConfirmationChatPayload(decoded any, grant *postgres.ConfirmationInfe
 		delete(upstream, field)
 	}
 	if messages, ok := upstream["messages"].([]any); ok {
-		stripped := make([]any, len(messages))
-		for i, raw := range messages {
-			message, ok := raw.(map[string]any)
-			if ok && message["role"] == "tool" {
-				clean := make(map[string]any, len(message))
-				for k, v := range message {
-					if k != "name" {
-						clean[k] = v
-					}
-				}
-				stripped[i] = clean
-			} else {
-				stripped[i] = raw
-			}
-		}
-		upstream["messages"] = stripped
+		upstream["messages"] = sanitizeUpstreamMessages(messages)
 	}
 	upstream["model"] = grant.Model
 	if grant.Lane == "judge" {

@@ -1134,28 +1134,6 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 		phaseResult.fallbackPhase = spec.phase
 		return phaseResult, nil
 	}
-	if lastCode == "upstream_http_400" {
-		if _, hasReasoning := payload["reasoning"]; hasReasoning {
-			stripped := make(map[string]any, len(payload))
-			for k, v := range payload {
-				if k != "reasoning" {
-					stripped[k] = v
-				}
-			}
-			recovered, exhausted := completeChatWithRecovery(ctx, client, cfg, stripped, model,
-				expectedProvider, expectedQuantization, expectedPromptPrice, expectedCompletionPrice, sleep)
-			if recovered != nil {
-				recovered.upstreamAttempts += totalAttempts
-				recovered.openrouterAttempts += routerAttempts
-				return recovered, nil
-			}
-			if exhausted != nil {
-				exhausted.upstreamAttempts += totalAttempts
-				exhausted.openrouterAttempts += routerAttempts
-				return nil, exhausted
-			}
-		}
-	}
 	return nil, &chatProviderExhausted{
 		upstreamAttempts:   totalAttempts,
 		openrouterAttempts: routerAttempts,

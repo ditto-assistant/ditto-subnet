@@ -150,12 +150,11 @@ func TestBenchmarkReasoningForRequest(t *testing.T) {
 		t.Fatalf("v9 exclude-true shape: got %v %v", block, err)
 	}
 	for body, want := range map[string]string{
-		`{"reasoning":{"effort":"low","exclude":false}}`:           "invalid reasoning",
-		`{"reasoning":{"effort":"low","extra":1}}`:                 "invalid reasoning",
-		`{"reasoning":"low"}`:                                      "invalid reasoning",
-		`{"reasoning":{"effort":"max"}}`:                           "invalid reasoning effort",
-		`{"reasoning_effort":"max"}`:                               "invalid reasoning_effort",
-		`{"reasoning":{"effort":"low"},"reasoning_effort":"high"}`: "conflicting reasoning effort",
+		`{"reasoning":{"effort":"low","exclude":false}}`: "invalid reasoning",
+		`{"reasoning":{"effort":"low","extra":1}}`:       "invalid reasoning",
+		`{"reasoning":"low"}`:                            "invalid reasoning",
+		`{"reasoning":{"effort":"max"}}`:                 "invalid reasoning effort",
+		`{"reasoning_effort":"max"}`:                     "invalid reasoning_effort",
 	} {
 		if _, err := reason(body, 9); err == nil || err.message != want {
 			t.Fatalf("%s: want %q, got %v", body, want, err)
@@ -164,6 +163,10 @@ func TestBenchmarkReasoningForRequest(t *testing.T) {
 	// Matching aliases are fine.
 	if block, err := reason(`{"reasoning":{"effort":"low"},"reasoning_effort":"low"}`, 9); err != nil || block["effort"] != "low" {
 		t.Fatalf("matching aliases: got %v %v", block, err)
+	}
+	// Conflicting aliases heal to the nested block instead of 400ing.
+	if block, err := reason(`{"reasoning":{"effort":"low"},"reasoning_effort":"high"}`, 9); err != nil || block["effort"] != "low" {
+		t.Fatalf("conflicting aliases prefer nested: got %v %v", block, err)
 	}
 }
 
@@ -215,8 +218,12 @@ func TestLockedUpstreamPayload(t *testing.T) {
 	}
 	calls := indexedUp["messages"].([]any)[0].(map[string]any)["tool_calls"].([]any)
 	call := calls[0].(map[string]any)
-	if _, present := call["index"]; present {
-		t.Fatal("tool_call index must be stripped upstream")
+	index, present := call["index"]
+	if !present {
+		t.Fatal("tool_call index must be forwarded; OpenRouter accepts it")
+	}
+	if n, ok := index.(json.Number); !ok || n.String() != "0" {
+		t.Fatalf("tool_call index = %v", index)
 	}
 	if _, present := messages[0].(map[string]any)["content"]; !present {
 		t.Fatalf("user message must survive")

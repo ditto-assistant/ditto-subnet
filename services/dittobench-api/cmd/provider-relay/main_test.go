@@ -139,3 +139,29 @@ func TestGPTOSSRelayPreservesAgentReasoningEffort(t *testing.T) {
 		t.Fatalf("reasoning = %#v", reasoning)
 	}
 }
+
+func TestGPTOSSRelayHealsConflictingReasoningAliases(t *testing.T) {
+	var got map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer upstream.Close()
+	r := &relay{upstream: upstream.URL, apiKey: "host-key", model: "openai/gpt-oss-20b", client: &http.Client{Timeout: time.Second}}
+	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"other","reasoning":{"effort":"high"},"reasoning_effort":"low"}`))
+	response := httptest.NewRecorder()
+	r.handle(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if _, present := got["reasoning_effort"]; present {
+		t.Fatalf("flat reasoning alias escaped normalization: %#v", got)
+	}
+	reasoning := got["reasoning"].(map[string]any)
+	if reasoning["effort"] != "high" || reasoning["exclude"] != true {
+		t.Fatalf("reasoning = %#v", reasoning)
+	}
+}

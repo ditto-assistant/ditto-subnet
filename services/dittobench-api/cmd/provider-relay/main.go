@@ -222,10 +222,9 @@ func normalizeReasoning(body map[string]any) error {
 		if !ok {
 			return errors.New("invalid reasoning_effort")
 		}
-		if effort != "" && effort != candidate {
-			return errors.New("conflicting reasoning effort")
+		if effort == "" {
+			effort = candidate
 		}
-		effort = candidate
 	}
 	if effort == "" {
 		effort = "medium"
