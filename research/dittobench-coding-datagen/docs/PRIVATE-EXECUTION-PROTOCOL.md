@@ -472,10 +472,13 @@ has no reward or weight effect in contract v1. Any LLM memory/engineering review
 has weight zero; it may identify curation defects but never decides correctness,
 waives integrity, or supplies partial repair credit.
 
-## Failure domains
+## Terminal domains
 
 Terminal outcomes are mutually exclusive:
 
+- `resolved`: authoritative authoring and fresh-grader evidence proves the
+  complete repair; this is the only domain with
+  `repair_score_micros = 1_000_000`;
 - `repair_failure`: candidate build/test failure, protected-path change,
   dependency-policy violation, or calibrated candidate timeout/OOM;
 - `validator_infrastructure`: capsule transport, daemon, host, runner, broker,
@@ -486,6 +489,11 @@ Terminal outcomes are mutually exclusive:
   workspace, or protected-material violation; fail closed and score zero;
 - `control_plane_integrity`: catalog, signature, transport, grader, or
   validator-controlled digest mismatch; fail closed without charging the miner.
+
+`failure_code` is null only for `resolved`; every non-resolved terminal domain
+has a bounded machine-readable failure code. Infrastructure and task-invalid
+outcomes are excluded from the repair mean. Integrity incidents are scoreable
+zeroes because they are attributable to the submitted attempt.
 
 Retry policy is bounded by the ticket lease and terminal domain. A repair
 failure is not retried as infrastructure, and an invalid task is not scored as a
@@ -511,6 +519,13 @@ terminal domain and integer repair_score_micros
 binary task vector, pass/fail/invalid counts, and integer repair mean. Its digest
 must become a first-class score-signature field before any weighted activation;
 placing it only in advisory report details is insufficient.
+
+Contract v1 canonical bytes are the validated known-field JSON projection with
+lexicographically sorted object keys, compact separators, UTF-8 encoding, and
+one trailing newline. Decoders reject duplicate fields and missing known
+fields, ignore unknown fields for rolling compatibility, and exclude unknown
+fields from the canonical digest. The public Go/Python golden vectors are the
+cross-language authority for these bytes and roots.
 
 ## Retirement
 

@@ -102,6 +102,8 @@ reviewed activation; neither diagnostic can rescue an incorrect patch.
 
 Terminal domains are disjoint:
 
+- `resolved`: complete authoritative authoring and fresh-grader evidence proves
+  the repair and yields exactly `1_000_000` micros.
 - `repair_failure`: candidate compile/test failure, calibrated timeout/OOM,
   protected-path change, or dependency/network violation.
 - `validator_infrastructure`: capsule transport, host, daemon, or grader startup
@@ -110,6 +112,10 @@ Terminal domains are disjoint:
   the task and do not charge the miner.
 - `integrity_incident`: digest/signature mismatch; fail closed without an
   unbounded retry loop.
+
+Every non-resolved domain has a bounded `failure_code` and scores zero.
+Infrastructure and task-invalid outcomes are excluded from the repair mean;
+integrity incidents remain attributable scoreable zeroes.
 
 ## Signed evidence root
 
