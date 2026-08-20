@@ -115,7 +115,10 @@ def test_coding_datagen_change_is_shadow_only(components, ignored_paths) -> None
         components,
         ignored_paths,
         "research/dittobench-coding-datagen/src/dittobench_coding_datagen/compiler.py",
-    ) == {"dittobench_coding_datagen"}
+    ) == {
+        "dittobench_coding_datagen",
+        "dittobench_coding_starter_kit",
+    }
     assert (
         root_verification(
             components,
@@ -129,7 +132,34 @@ def test_coding_datagen_change_is_shadow_only(components, ignored_paths) -> None
 def test_coding_datagen_workflow_is_release_owned(components, ignored_paths) -> None:
     assert selected(
         components, ignored_paths, ".github/workflows/coding-datagen-ci.yml"
-    ) == {"dittobench_coding_datagen"}
+    ) == {
+        "dittobench_coding_datagen",
+        "dittobench_coding_starter_kit",
+    }
+
+
+def test_coding_starter_kit_change_is_shadow_only(components, ignored_paths) -> None:
+    path = "miners/dittobench-coding-starter-kit/src/agent.rs"
+    assert selected(components, ignored_paths, path) == {
+        "dittobench_coding_starter_kit"
+    }
+    assert root_verification(components, ignored_paths, path) == "none"
+
+
+def test_coding_starter_workflow_is_release_owned(components, ignored_paths) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        ".github/workflows/coding-starter-kit-ci.yml",
+    ) == {"dittobench_coding_starter_kit"}
+
+
+def test_coding_starter_e2e_script_is_release_owned(components, ignored_paths) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "scripts/test-coding-starter-practice-e2e.sh",
+    ) == {"dittobench_coding_starter_kit"}
 
 
 def test_platform_change_does_not_release_validator_stack(
@@ -263,6 +293,7 @@ def test_direct_stack_changes_use_focused_contract_verification(
         "apps/backroom/src/routes/index.tsx",
         "workers/screener/ditto_screener/worker.py",
         "miners/dittobench-starter-kit/src/baseline.rs",
+        "miners/dittobench-coding-starter-kit/src/agent.rs",
         "docs/MONOREPO-RELEASES.md",
     ],
 )

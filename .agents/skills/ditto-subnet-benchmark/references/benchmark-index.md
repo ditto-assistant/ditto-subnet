@@ -12,6 +12,8 @@
 | Inference relay | `services/dittobench-api/cmd/provider-relay/`, scorer broker files |
 | Deterministic datagen | `research/dittobench-datagen/` |
 | Miner reference harness | `miners/dittobench-starter-kit/` |
+| Shadow coding practice/runtime | `research/dittobench-coding-datagen/` |
+| Shadow coding-agent harness | `miners/dittobench-coding-starter-kit/` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
@@ -28,6 +30,7 @@
 - `docs/UNTRUSTED-EXECUTION-RUNBOOK.md`
 - `docs/VALIDATOR.md`
 - Live overlapping `/run` and `case_concurrency`: [`bench-runtime.md`](bench-runtime.md)
+- `research/dittobench-coding-datagen/docs/PRIVATE-EXECUTION-PROTOCOL.md`
 
 ## High-value lookups
 
@@ -38,6 +41,8 @@ rg -n 'seed|baseline|run_size|efficiency' \
   services/dittobench-api/internal research/dittobench-datagen
 rg -n 'longmemeval|hermes|openclaw' services/dittobench-api/integrations
 rg -n 'request_job|submit_score|set_weights' ditto/validator apps/platform/ditto
+rg -n 'weight_eligible|workspace_capability|repair_score_micros' \
+  research/dittobench-coding-datagen miners/dittobench-coding-starter-kit
 ```
 
 ## Validation ladder
@@ -47,6 +52,13 @@ cd services/dittobench-api && go test ./...
 uv run pytest ditto/tests/validator ditto/tests/contract -q
 uv run pytest ditto/tests/test_compose_stack.py ditto/tests/test_validator_compose.py -q
 RELAY_API_KEY=validation-placeholder docker compose config --quiet
+(cd miners/dittobench-coding-starter-kit && \
+  cargo fmt --check && \
+  cargo clippy --locked --all-targets --all-features -- -D warnings && \
+  cargo test --locked --all-targets --all-features)
+bash scripts/test-coding-starter-practice-e2e.sh
+(cd miners/dittobench-coding-starter-kit && \
+  docker build --tag dittobench-coding-starter-kit:validation .)
 ```
 
 Run adapter-local tests in their own directory. For LongMemEval:
@@ -60,5 +72,7 @@ python -m pytest -q
 
 - A green adapter run proves adapter plumbing, not a production scoring change.
 - A built image proves construction, not deployed revision or runtime behavior.
+- A green coding-practice E2E proves only the public shadow protocol; it does
+  not activate a private corpus, production scorer, validator path, or weight.
 - A heartbeat proves liveness, not correctness of the screened image or score version.
 - Retain raw manifests, exact SHAs, model/provider identity, seeds, and scorer output with research conclusions.
