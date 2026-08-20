@@ -16,6 +16,7 @@ from ditto.api_models.coding import (
     CodingTaskEvidence,
     canonical_digest,
     canonical_json_bytes,
+    memory_bundle_digest,
     parse_canonical_json,
     run_evidence_digest,
     task_evidence_digest,
@@ -69,6 +70,8 @@ def test_evidence_golden_vectors_require_manifest_authority() -> None:
     )
     with pytest.raises(TypeError, match="manifest-bound"):
         canonical_digest(task)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="transport models"):
+        canonical_digest(task.model_dump(mode="json"))  # type: ignore[arg-type]
 
 
 def test_unknown_fields_are_ignored_and_excluded_from_canonical_digest() -> None:
@@ -92,10 +95,7 @@ def test_unicode_and_html_characters_have_cross_language_canonical_bytes() -> No
 
     memories = copy.deepcopy(vectors["seed_request"]["memories"])
     memories[0]["content"] = "Preserve café <tag> & separators \u2028 and \u2029."
-    assert (
-        canonical_digest({"memories": memories})
-        == vectors["digests"]["unicode_seed_memory"]
-    )
+    assert memory_bundle_digest(memories) == vectors["digests"]["unicode_seed_memory"]
 
 
 def test_duplicate_and_missing_known_fields_fail_closed() -> None:
