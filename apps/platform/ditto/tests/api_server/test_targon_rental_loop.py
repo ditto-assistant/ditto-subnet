@@ -592,3 +592,35 @@ async def test_targon_inflight_cap_overflows_to_cloudrun(
         builds = (await session.scalars(select(SubmissionImageBuild))).all()
         providers = sorted(str(build.provider) for build in builds)
         assert providers == ["gcp", "targon"]
+
+
+@pytest.mark.asyncio
+async def test_tick_finalizes_running_attempt_after_smoke(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    called: list[UUID] = []
+
+    async def complete_screen(attempt_id: UUID) -> None:
+        called.append(attempt_id)
+
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        complete_screen=complete_screen,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.status = "succeeded"
+        build.runtime_status = "succeeded"
+        build.output_sha256 = "12" * 32
+        build.output_size_bytes = 123
+        attempt_id = build.attempt_id
+    await loop.tick()
+    assert called == [attempt_id]

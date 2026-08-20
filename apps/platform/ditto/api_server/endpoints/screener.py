@@ -146,7 +146,7 @@ from ditto.api_server.storage import (
 )
 from ditto.api_server.targon_screening import (
     admit_targon_screening_work,
-    maybe_finalize_targon_screen,
+    finalize_targon_screen_and_pin_dataset,
 )
 from ditto.chain import ChainError
 from ditto.db.models import (
@@ -1717,6 +1717,8 @@ async def complete_submission_runtime_smoke(
     _controller: ControllerDep,
     session: SessionDep,
     storage: StorageDep,
+    generator: GeneratorDep,
+    chain: ChainDep,
 ) -> None:
     now = datetime.now(UTC)
     output_key: str | None = None
@@ -1789,14 +1791,15 @@ async def complete_submission_runtime_smoke(
         await storage.delete_object(key=output_key)
     attester = request.app.state.config.screener_auth.hotkey
     if attester is not None:
-        async with session.begin():
-            await maybe_finalize_targon_screen(
-                session,
-                storage=storage,
-                screener_hotkey=attester,
-                attempt_id=finalize_attempt_id,
-                now=datetime.now(UTC),
-            )
+        await finalize_targon_screen_and_pin_dataset(
+            session,
+            storage=storage,
+            screener_hotkey=attester,
+            attempt_id=finalize_attempt_id,
+            now=datetime.now(UTC),
+            generator=generator,
+            chain=chain,
+        )
 
 
 @router.post(
@@ -2457,6 +2460,8 @@ async def complete_submission_source_review(
     request: Request,
     session: SessionDep,
     storage: StorageDep,
+    generator: GeneratorDep,
+    chain: ChainDep,
     authorization: Annotated[str | None, Header()] = None,
 ) -> SubmissionSourceReviewCompleteResponse:
     now = datetime.now(UTC)
@@ -2491,14 +2496,15 @@ async def complete_submission_source_review(
                 stored_review.updated_at = datetime.now(UTC)
     attester = request.app.state.config.screener_auth.hotkey
     if attester is not None:
-        async with session.begin():
-            await maybe_finalize_targon_screen(
-                session,
-                storage=storage,
-                screener_hotkey=attester,
-                attempt_id=attempt_id,
-                now=datetime.now(UTC),
-            )
+        await finalize_targon_screen_and_pin_dataset(
+            session,
+            storage=storage,
+            screener_hotkey=attester,
+            attempt_id=attempt_id,
+            now=datetime.now(UTC),
+            generator=generator,
+            chain=chain,
+        )
     return SubmissionSourceReviewCompleteResponse(verified=True)
 
 

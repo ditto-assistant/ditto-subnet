@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import secrets
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
@@ -20,15 +21,19 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_server.attestation import expected_netuid
+from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
 from ditto.db.models import (
     Agent,
+    BenchmarkDataset,
     ScreenedImageUpload,
     ScreeningAttempt,
     ScreeningQuarantine,
     SubmissionImageBuild,
     SubmissionSourceReview,
 )
+from ditto.db.queries.agents import get_agent_by_id
+from ditto.db.queries.benchmark_rollout import arrival_bench_version
 from ditto.db.queries.screener_provider_settings import (
     resolve_screener_provider_settings,
 )
@@ -38,7 +43,9 @@ from ditto_screening_protocol import SourceReviewObservationPayload
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
+    from ditto.api_server.datapipeline import DatasetGenerator
     from ditto.api_server.storage.client import S3StorageClient
+    from ditto.chain import ChainClient
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +269,113 @@ async def maybe_finalize_targon_screen(
         upload.sha256,
     )
     return True
+
+
+async def ensure_arrival_dataset(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    generator: DatasetGenerator,
+    chain: ChainClient | None,
+) -> None:
+    """Pin the arrival-era dataset after a Targon-attested pass.
+
+    ``maybe_finalize_targon_screen`` used to promote EVALUATING with a verified
+    image and no BenchmarkDataset row. Claim then treated that as missing
+    dataset work and rebuilt Kaniko forever.
+    """
+    if generator.run_size is None:
+        return
+    async with session.begin():
+        agent = await get_agent_by_id(session, agent_id=agent_id)
+        if agent is None:
+            return
+        bench_version = await arrival_bench_version(session, agent=agent)
+        existing = await session.get(BenchmarkDataset, (agent_id, bench_version))
+        if existing is not None:
+            return
+        seed = agent.dataset_seed
+        block_number = agent.dataset_seed_block
+        block_hash = agent.dataset_seed_block_hash
+    if seed is None:
+        seed, block_number, block_hash = await _dataset_seed(chain, agent_id)
+    sha256 = await generator.generate(seed, bench_version=bench_version)
+    async with session.begin():
+        existing = await session.get(BenchmarkDataset, (agent_id, bench_version))
+        if existing is not None:
+            return
+        agent = await get_agent_by_id(session, agent_id=agent_id, for_update=True)
+        if agent is None:
+            return
+        session.add(
+            BenchmarkDataset(
+                agent_id=agent_id,
+                bench_version=bench_version,
+                seed=seed,
+                sha256=sha256,
+                run_size=generator.run_size,
+                seed_block=block_number,
+                seed_block_hash=block_hash,
+            )
+        )
+        if agent.dataset_seed is None:
+            agent.dataset_seed = seed
+            agent.dataset_sha256 = sha256
+            agent.dataset_run_size = generator.run_size
+            agent.dataset_seed_block = block_number
+            agent.dataset_seed_block_hash = block_hash
+
+
+async def finalize_targon_screen_and_pin_dataset(
+    session: AsyncSession,
+    *,
+    storage: S3StorageClient,
+    screener_hotkey: str,
+    attempt_id: UUID,
+    now: datetime,
+    generator: DatasetGenerator | None,
+    chain: ChainClient | None,
+) -> bool:
+    """Finalize a ready Targon attempt, then pin its arrival dataset."""
+    async with session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=storage,
+            screener_hotkey=screener_hotkey,
+            attempt_id=attempt_id,
+            now=now,
+        )
+        attempt = await get_screening_attempt(session, attempt_id=attempt_id)
+        agent_id = (
+            attempt.agent_id
+            if attempt is not None and attempt.status == "passed"
+            else None
+        )
+    if agent_id is None or generator is None:
+        return finalized
+    await ensure_arrival_dataset(
+        session,
+        agent_id=agent_id,
+        generator=generator,
+        chain=chain,
+    )
+    return finalized
+
+
+async def _dataset_seed(
+    chain: ChainClient | None, agent_id: UUID
+) -> tuple[int, int | None, str | None]:
+    if chain is None:
+        return secrets.randbits(63), None, None
+    try:
+        block = await chain.get_latest_block()
+    except Exception:
+        logger.warning(
+            "on-chain seed derivation unavailable; using local seed agent_id=%s",
+            agent_id,
+        )
+        return secrets.randbits(63), None, None
+    return derive_seed(block.hash, agent_id), block.number, block.hash
 
 
 async def _fail_retryable(

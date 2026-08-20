@@ -13,6 +13,7 @@ import os
 import re
 from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -341,6 +342,22 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                             config.targon,
                         )
                     )
+                from ditto.api_server.targon_screening import (
+                    finalize_targon_screen_and_pin_dataset,
+                )
+
+                async def complete_screen(attempt_id):
+                    async with app.state.session_maker() as session:
+                        await finalize_targon_screen_and_pin_dataset(
+                            session,
+                            storage=storage,
+                            screener_hotkey=config.screener_auth.hotkey,
+                            attempt_id=attempt_id,
+                            now=datetime.now(UTC),
+                            generator=generator,
+                            chain=chain,
+                        )
+
                 targon_loop = TargonRentalLoop(
                     session_maker=app.state.session_maker,
                     config=config.targon,
@@ -349,6 +366,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     promote_archive=promote_archive,
                     mint_token=mint_token,
                     providers=providers,
+                    complete_screen=complete_screen,
                 )
                 stack.push_async_callback(targon_loop.aclose)
                 await targon_loop.start()

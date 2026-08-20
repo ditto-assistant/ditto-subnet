@@ -1115,6 +1115,8 @@ class TestFederatedScreenerNodes:
         _install_db(app, session_maker)
         _install_chain(app)
         storage = _install_storage(app)
+        generator = _FakeGenerator(sha="ee" * 32)
+        _install_generator(app, generator)
         app.state.config = replace(
             app.state.config,
             screener_auth=replace(
@@ -1209,6 +1211,15 @@ class TestFederatedScreenerNodes:
             attempt = await session.get(ScreeningAttempt, UUID(attempt_id))
             assert attempt is not None
             assert attempt.status == "passed"
+            dataset = (
+                await session.scalars(
+                    select(BenchmarkDataset).where(
+                        BenchmarkDataset.agent_id == agent_id
+                    )
+                )
+            ).one()
+            assert dataset.sha256 == "ee" * 32
+            assert generator.calls == 1
 
     async def test_consuming_succeeded_build_keeps_pending_runtime_archive(
         self,

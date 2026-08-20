@@ -77,6 +77,7 @@ class TargonRentalLoop:
         health_probe: Callable[[str], Awaitable[bool]] | None = None,
         interval_seconds: float | None = None,
         providers: Sequence[ScreeningComputeProvider] | None = None,
+        complete_screen: Callable[[UUID], Awaitable[None]] | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._config = config
@@ -91,6 +92,7 @@ class TargonRentalLoop:
             providers = [TargonComputeProvider(targon, config, health_probe=probe)]
         self._providers = list(providers)
         self._interval_seconds = interval_seconds or config.interval_seconds
+        self._complete_screen = complete_screen
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._epoch = "platform-targon-loop"
@@ -133,7 +135,42 @@ class TargonRentalLoop:
         handled = await self._launch_kaniko() or handled
         handled = await self._launch_smoke() or handled
         handled = await self._launch_source_review() or handled
+        handled = await self._finalize_ready_attempts() or handled
         return handled
+
+    async def _finalize_ready_attempts(self) -> bool:
+        """Attest Targon passes after smoke, including leftover running attempts."""
+        if self._complete_screen is None:
+            return False
+        now = datetime.now(UTC)
+        async with self._session_maker() as session:
+            attempt_ids = list(
+                await session.scalars(
+                    select(SubmissionImageBuild.attempt_id)
+                    .join(
+                        ScreeningAttempt,
+                        ScreeningAttempt.attempt_id == SubmissionImageBuild.attempt_id,
+                    )
+                    .where(
+                        SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.status.in_(("succeeded", "consumed")),
+                        SubmissionImageBuild.runtime_status == "succeeded",
+                        ScreeningAttempt.status == "running",
+                        ScreeningAttempt.deadline > now,
+                    )
+                )
+            )
+        finalized = False
+        for attempt_id in attempt_ids:
+            try:
+                await self._complete_screen(attempt_id)
+            except Exception:
+                logger.exception(
+                    "targon screen finalize failed attempt_id=%s", attempt_id
+                )
+                continue
+            finalized = True
+        return finalized
 
     def _provider_named(self, stored: str | None) -> ScreeningComputeProvider:
         wanted = stored or "targon"
