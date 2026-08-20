@@ -2,6 +2,8 @@ package sandbox
 
 import (
 	"archive/tar"
+	"bufio"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -278,6 +280,25 @@ func screenedImageUUID(value string) bool {
 	return true
 }
 
+// maybeGzipArchiveReader unwraps gzip when the stored object starts with
+// magic 1f 8b. Uncompressed docker-save tars pass through unchanged.
+// SHA-256 and size pin the stored bytes, not the inflated tar.
+func maybeGzipArchiveReader(r io.Reader) (io.Reader, io.Closer, error) {
+	buffered := bufio.NewReader(r)
+	magic, err := buffered.Peek(2)
+	if err != nil && !errors.Is(err, io.EOF) {
+		return nil, nil, fmt.Errorf("read archive header: %w", err)
+	}
+	if len(magic) >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		gz, err := gzip.NewReader(buffered)
+		if err != nil {
+			return nil, nil, fmt.Errorf("gzip: %w", err)
+		}
+		return gz, gz, nil
+	}
+	return buffered, nil, nil
+}
+
 // validateDockerSaveArchiveWithStoreIDs binds the signed image-config digest
 // to every Docker ID the validated archive can acquire after load. Classic
 // graphdriver stores expose the config digest as `.Id`; Docker 28's containerd
@@ -291,10 +312,18 @@ func validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID string,
 	}
 	defer file.Close()
 
+	source, gz, err := maybeGzipArchiveReader(file)
+	if err != nil {
+		return false, err
+	}
+	if gz != nil {
+		defer gz.Close()
+	}
+
 	expectedHex := strings.TrimPrefix(expectedID, "sha256:")
 	expectedClassicConfig := expectedHex + ".json"
 	expectedOCIBlob := "blobs/sha256/" + expectedHex
-	reader := tar.NewReader(file)
+	reader := tar.NewReader(source)
 	var manifestBytes []byte
 	var indexBytes []byte
 	var expectedImageDescriptorBytes []byte

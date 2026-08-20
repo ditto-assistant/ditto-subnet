@@ -111,6 +111,14 @@ func TestDeterministicVerificationFailuresStayTerminal(t *testing.T) {
 			name:  "archive is not a valid docker save",
 			serve: []byte("this is not a tar archive at all, not even close"),
 		},
+		{
+			name:  "gzip that is not a docker save",
+			serve: gzipBytes(t, []byte("this is not a tar archive at all, not even close")),
+		},
+		{
+			name:  "truncated gzip",
+			serve: gzipBytes(t, archive)[:10],
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			body := tc.serve

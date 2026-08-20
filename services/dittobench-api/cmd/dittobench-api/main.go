@@ -611,9 +611,11 @@ type submitRequest struct {
 	// upload, so this is defense in depth against a swapped/corrupted blob.
 	TarballSHA256 string `json:"tarball_sha256,omitempty"`
 	// ScreenedImageURL is a short-lived URL for a `docker save` archive
-	// produced by the trusted screener from this exact tarball. It is
-	// accepted only together with TarballURL: the source is still materialized
-	// for structural anti-copy fingerprinting, but the Rust crate is not rebuilt.
+	// produced by the trusted screener from this exact tarball. The stored
+	// object may be a plain tar or gzip of that tar; sha256 and size pin the
+	// stored bytes. It is accepted only together with TarballURL: the source
+	// is still materialized for structural anti-copy fingerprinting, but the
+	// Rust crate is not rebuilt.
 	ScreenedImageURL string `json:"screened_image_url,omitempty"`
 	// ScreenedImageSHA256 pins the archive bytes. ScreenedImageID pins
 	// the Docker image loaded from those bytes, preventing an archive/tag swap.

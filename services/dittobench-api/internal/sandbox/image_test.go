@@ -3,6 +3,7 @@ package sandbox
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -278,6 +279,94 @@ func writeArchive(t *testing.T, archive []byte) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+func gzipBytes(t *testing.T, raw []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	writer := gzip.NewWriter(&buf)
+	if _, err := writer.Write(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestValidateDockerSaveArchiveAcceptsGzipAndUncompressed(t *testing.T) {
+	archive, imageID := makeScreenedImageArchive(t)
+
+	tagged, err := validateDockerSaveArchive(writeArchive(t, archive), testScreenedImageRef, imageID)
+	if err != nil {
+		t.Fatalf("uncompressed archive rejected: %v", err)
+	}
+	if !tagged {
+		t.Fatal("tagged uncompressed archive reported as untagged")
+	}
+
+	gzPath := filepath.Join(t.TempDir(), "image.tar.gz")
+	if err := os.WriteFile(gzPath, gzipBytes(t, archive), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tagged, err = validateDockerSaveArchive(gzPath, testScreenedImageRef, imageID)
+	if err != nil {
+		t.Fatalf("gzip archive rejected: %v", err)
+	}
+	if !tagged {
+		t.Fatal("tagged gzip archive reported as untagged")
+	}
+}
+
+func TestValidateDockerSaveArchiveAcceptsGzipOCIIndex(t *testing.T) {
+	archive, imageID := makeOCIIndexArchive(t, nil)
+	path := filepath.Join(t.TempDir(), "image.tar.gz")
+	if err := os.WriteFile(path, gzipBytes(t, archive), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateDockerSaveArchive(path, testScreenedImageRef, imageID); err != nil {
+		t.Fatalf("gzip OCI archive rejected: %v", err)
+	}
+}
+
+func TestValidateDockerSaveArchiveRejectsTruncatedGzip(t *testing.T) {
+	archive, imageID := makeScreenedImageArchive(t)
+	compressed := gzipBytes(t, archive)
+	if len(compressed) < 12 {
+		t.Fatal("gzip fixture too small")
+	}
+	path := filepath.Join(t.TempDir(), "image.tar.gz")
+	if err := os.WriteFile(path, compressed[:10], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateDockerSaveArchive(path, testScreenedImageRef, imageID); err == nil {
+		t.Fatal("truncated gzip archive was accepted")
+	}
+}
+
+func TestValidateDockerSaveArchiveRejectsGzipNonTar(t *testing.T) {
+	_, imageID := makeScreenedImageArchive(t)
+	path := filepath.Join(t.TempDir(), "image.tar.gz")
+	if err := os.WriteFile(path, gzipBytes(t, []byte("this is not a tar archive")), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := validateDockerSaveArchive(path, testScreenedImageRef, imageID); err == nil {
+		t.Fatal("gzip of non-tar was accepted")
+	}
+}
+
+func TestLoadScreenedImageAcceptsGzipArchive(t *testing.T) {
+	archive, imageID := makeScreenedImageArchive(t)
+	compressed := gzipBytes(t, archive)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(compressed)
+	}))
+	defer server.Close()
+	installFakeDocker(t, "", imageID)
+	src := screenedImageSource(server.URL, compressed, imageID)
+	if _, _, err := (&LocalDocker{AllowPrivate: true}).loadScreenedImage(context.Background(), src, t.TempDir()); err != nil {
+		t.Fatalf("load gzip screened image: %v", err)
+	}
 }
 
 func TestValidateDockerSaveArchiveAcceptsBoundedAttestations(t *testing.T) {
