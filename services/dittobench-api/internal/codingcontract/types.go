@@ -47,6 +47,7 @@ type ManifestTask struct {
 type RunManifest struct {
 	Schema                    string         `json:"schema"`
 	CodingContractVersion     int            `json:"coding_contract_version"`
+	BenchFamily               string         `json:"bench_family"`
 	WeightEligible            bool           `json:"weight_eligible"`
 	CodingRunID               string         `json:"coding_run_id"`
 	AgentID                   string         `json:"agent_id"`

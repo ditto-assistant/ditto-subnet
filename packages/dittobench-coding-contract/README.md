@@ -13,6 +13,7 @@ records, repository bundles, hidden tests, policy labels, provider credentials,
 and signing keys must never enter this package.
 
 Canonical JSON uses lexicographically sorted object keys, compact separators,
-UTF-8, escaped U+2028/U+2029 separators, and one trailing newline. Evidence
+UTF-8, no unpaired surrogate escapes, at most 32 nesting levels, escaped
+U+2028/U+2029 separators, and one trailing newline. Evidence
 roots additionally require the selected run manifest and validator lease ticket;
 raw task or run evidence is not independently signable.

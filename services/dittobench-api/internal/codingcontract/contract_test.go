@@ -10,13 +10,26 @@ import (
 )
 
 type goldenVectors struct {
-	Manifest              json.RawMessage   `json:"manifest"`
-	SeedRequest           json.RawMessage   `json:"seed_request"`
-	RunRequest            json.RawMessage   `json:"run_request"`
-	TaskEvidence          json.RawMessage   `json:"task_evidence"`
-	ZeroModelTaskEvidence json.RawMessage   `json:"zero_model_task_evidence"`
-	RunEvidence           json.RawMessage   `json:"run_evidence"`
-	Digests               map[string]string `json:"digests"`
+	Manifest                json.RawMessage     `json:"manifest"`
+	SeedRequest             json.RawMessage     `json:"seed_request"`
+	RunRequest              json.RawMessage     `json:"run_request"`
+	TaskEvidence            json.RawMessage     `json:"task_evidence"`
+	ZeroModelTaskEvidence   json.RawMessage     `json:"zero_model_task_evidence"`
+	NonresolvedTaskEvidence json.RawMessage     `json:"nonresolved_task_evidence"`
+	RunEvidence             json.RawMessage     `json:"run_evidence"`
+	AggregateRunEvidence    json.RawMessage     `json:"aggregate_run_evidence"`
+	WireBoundaryVectors     wireBoundaryVectors `json:"wire_boundary_vectors"`
+	Digests                 map[string]string   `json:"digests"`
+}
+
+type wireBoundaryVectors struct {
+	PairedSurrogateJSONString         string `json:"paired_surrogate_json_string"`
+	EscapedSurrogateLiteralJSONString string `json:"escaped_surrogate_literal_json_string"`
+	ReplacementCharacterJSONString    string `json:"replacement_character_json_string"`
+	LoneHighJSONString                string `json:"lone_high_json_string"`
+	LoneLowJSONString                 string `json:"lone_low_json_string"`
+	MaxJSONDepth                      int    `json:"max_json_depth"`
+	RejectJSONDepth                   int    `json:"reject_json_depth"`
 }
 
 func loadGoldenVectors(t *testing.T) goldenVectors {
@@ -143,6 +156,48 @@ func TestUnicodeMemoryHasCrossLanguageCanonicalBytes(t *testing.T) {
 	}
 }
 
+func TestRawUnicodeBoundaryVectorsMatchPython(t *testing.T) {
+	vectors := loadGoldenVectors(t)
+	description := []byte(`"The parser drops an incomplete trailing sequence."`)
+	replaceDescription := func(raw string) []byte {
+		t.Helper()
+		return bytes.Replace(vectors.RunRequest, description, []byte(raw), 1)
+	}
+
+	paired, err := ParseRunRequest(replaceDescription(vectors.WireBoundaryVectors.PairedSurrogateJSONString))
+	if err != nil {
+		t.Fatalf("paired surrogate was rejected: %v", err)
+	}
+	if paired.Issue.Description != "😀" {
+		t.Fatalf("paired surrogate decoded to %q", paired.Issue.Description)
+	}
+	for raw, expected := range map[string]string{
+		vectors.WireBoundaryVectors.EscapedSurrogateLiteralJSONString: `\ud800`,
+		vectors.WireBoundaryVectors.ReplacementCharacterJSONString:    "�",
+	} {
+		parsed, err := ParseRunRequest(replaceDescription(raw))
+		if err != nil {
+			t.Fatalf("valid Unicode boundary %q was rejected: %v", raw, err)
+		}
+		if parsed.Issue.Description != expected {
+			t.Fatalf("valid Unicode boundary decoded to %q, want %q", parsed.Issue.Description, expected)
+		}
+	}
+	for label, raw := range map[string]string{
+		"lone high": vectors.WireBoundaryVectors.LoneHighJSONString,
+		"lone low":  vectors.WireBoundaryVectors.LoneLowJSONString,
+	} {
+		if _, err := ParseRunRequest(replaceDescription(raw)); err == nil {
+			t.Fatalf("%s surrogate was accepted", label)
+		}
+	}
+	invalidUTF8 := replaceDescription(`"invalid"`)
+	invalidUTF8 = bytes.Replace(invalidUTF8, []byte("invalid"), []byte{0xff}, 1)
+	if _, err := ParseRunRequest(invalidUTF8); err == nil {
+		t.Fatal("invalid UTF-8 was accepted")
+	}
+}
+
 func TestDuplicateAndMissingKnownFieldsFailClosed(t *testing.T) {
 	if _, err := ParseRunManifest([]byte(`{"schema":"a","schema":"b"}`)); err == nil {
 		t.Fatal("duplicate field was accepted")
@@ -159,6 +214,10 @@ func TestShadowContractCannotBecomeWeightEligible(t *testing.T) {
 	weighted := bytes.Replace(vectors.Manifest, []byte(`"weight_eligible": false`), []byte(`"weight_eligible": true`), 1)
 	if _, err := ParseRunManifest(weighted); err == nil {
 		t.Fatal("weight-eligible coding v1 manifest was accepted")
+	}
+	wrongFamily := bytes.Replace(vectors.Manifest, []byte(`"bench_family": "coding"`), []byte(`"bench_family": "memory"`), 1)
+	if _, err := ParseRunManifest(wrongFamily); err == nil {
+		t.Fatal("non-coding bench family was accepted")
 	}
 }
 
@@ -194,15 +253,64 @@ func TestNullCollectionsAndExcessiveNestingFailClosed(t *testing.T) {
 		t.Fatal("nil issue constraints were accepted")
 	}
 
-	nested := strings.Repeat("[", 130) + `"leaf"` + strings.Repeat("]", 130)
-	extended := bytes.Replace(
-		vectors.Manifest,
-		[]byte(`"tasks"`),
-		[]byte(`"future_nested":`+nested+`,"tasks"`),
-		1,
-	)
-	if _, err := ParseRunManifest(extended); err == nil {
+	nestedBody := func(valueDepth int) []byte {
+		t.Helper()
+		wrappers := valueDepth - 1
+		nested := strings.Repeat("[", wrappers) + `"leaf"` + strings.Repeat("]", wrappers)
+		return bytes.Replace(
+			vectors.Manifest,
+			[]byte(`"tasks"`),
+			[]byte(`"future_nested":`+nested+`,"tasks"`),
+			1,
+		)
+	}
+	if _, err := ParseRunManifest(nestedBody(vectors.WireBoundaryVectors.MaxJSONDepth)); err != nil {
+		t.Fatalf("maximum JSON nesting was rejected: %v", err)
+	}
+	if _, err := ParseRunManifest(nestedBody(vectors.WireBoundaryVectors.RejectJSONDepth)); err == nil {
 		t.Fatal("excessive JSON nesting was accepted")
+	}
+}
+
+func TestSharedNonresolvedAndAggregateEvidenceVectors(t *testing.T) {
+	vectors := loadGoldenVectors(t)
+	manifest, err := ParseRunManifest(vectors.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonresolved, err := ParseTaskEvidence(vectors.NonresolvedTaskEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nonresolved.Authoring != nil || nonresolved.Grader != nil ||
+		nonresolved.TerminalDomain != DomainValidatorInfrastructure || nonresolved.FailureCode == nil ||
+		*nonresolved.FailureCode != "transport_pre_authoritative" {
+		t.Fatal("nonresolved task vector lost its pre-authoritative null semantics")
+	}
+	digest, err := TaskEvidenceDigest(manifest, "validator-ticket-001", nonresolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != vectors.Digests["nonresolved_task_evidence"] {
+		t.Fatalf("nonresolved task digest = %s, want %s", digest, vectors.Digests["nonresolved_task_evidence"])
+	}
+
+	aggregate, err := ParseRunEvidence(vectors.AggregateRunEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if aggregate.ScoreableTaskCount != 6 || aggregate.RepairMeanMicros != 666_666 ||
+		aggregate.ResolvedCount != 4 || aggregate.RepairFailureCount != 1 ||
+		aggregate.InfrastructureCount != 1 || aggregate.InvalidCount != 1 ||
+		aggregate.CandidateIntegrityCount != 1 || aggregate.ControlPlaneIntegrityCount != 1 {
+		t.Fatal("aggregate vector did not preserve terminal-domain membership and floor arithmetic")
+	}
+	digest, err = digestUnchecked(aggregate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != vectors.Digests["aggregate_run_evidence"] {
+		t.Fatalf("aggregate run digest = %s, want %s", digest, vectors.Digests["aggregate_run_evidence"])
 	}
 }
 
