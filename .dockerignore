@@ -7,5 +7,6 @@
 .ruff_cache
 __pycache__
 *.pyc
+**/target
 context-docs
 wandb

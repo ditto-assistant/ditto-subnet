@@ -469,6 +469,19 @@ func TestCommandOutputIsScrubbedAndMutationFailsClosed(t *testing.T) {
 	if frozen.Failure == nil || frozen.Failure.Kind != "candidate_integrity" || frozen.Failure.Code != "command_mutation" {
 		t.Fatalf("mutated workspace freeze=%#v", frozen)
 	}
+
+	scratchMutation := &recordingExecutor{result: CommandResult{ReturnCode: 0, WorkspaceMutated: true}}
+	scratchSession, _ := newFixtureSession(t, scratchMutation)
+	failed, err = scratchSession.Invoke(context.Background(), toolRequest(
+		"command-003", "tests.run", map[string]any{"command_id": "visible-tests"},
+	))
+	if err != nil || failed.OK || failed.Error == nil || failed.Error.Code != "command_mutation" {
+		t.Fatalf("scratch mutation signal did not fail closed: response=%#v err=%v", failed, err)
+	}
+	frozen = scratchSession.Freeze()
+	if frozen.Failure == nil || frozen.Failure.Kind != "candidate_integrity" || frozen.Failure.Code != "command_mutation" {
+		t.Fatalf("scratch-mutated freeze=%#v", frozen)
+	}
 }
 
 func TestFreezeCancelsActiveCommandBeforeWaitingForLock(t *testing.T) {

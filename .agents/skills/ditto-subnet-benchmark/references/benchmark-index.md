@@ -16,6 +16,7 @@
 | Shadow coding-agent harness | `miners/dittobench-coding-starter-kit/` |
 | Shadow coding runner/freezer core | `services/dittobench-api/internal/codingrunner/` |
 | Shadow pristine coding grader | `services/dittobench-api/internal/codinggrader/` |
+| Shadow coding sandbox executor | `services/dittobench-api/internal/codingexecutor/` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
@@ -33,6 +34,7 @@
 - `docs/VALIDATOR.md`
 - Live overlapping `/run` and `case_concurrency`: [`bench-runtime.md`](bench-runtime.md)
 - `research/dittobench-coding-datagen/docs/PRIVATE-EXECUTION-PROTOCOL.md`
+- `services/dittobench-api/docs/coding-sandbox-shadow.md`
 
 ## High-value lookups
 

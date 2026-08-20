@@ -143,8 +143,10 @@ The future coding-repair lane has a separate, permanently weight-zero v1
 contract. Its unexposed runner/freezer core and security boundary are documented
 in [`docs/coding-runner-shadow.md`](docs/coding-runner-shadow.md); the separate
 fresh-replay grader boundary is in
-[`docs/coding-grader-shadow.md`](docs/coding-grader-shadow.md). Green core tests
-do not imply a private catalog, sandboxed command executor, Platform lease,
+[`docs/coding-grader-shadow.md`](docs/coding-grader-shadow.md), and the
+networkless supervisor adapter is in
+[`docs/coding-sandbox-shadow.md`](docs/coding-sandbox-shadow.md). Green core tests
+do not imply a production supervisor/test-driver image, private catalog, Platform lease,
 deployment, or score activation.
 
 ## Control-plane authentication

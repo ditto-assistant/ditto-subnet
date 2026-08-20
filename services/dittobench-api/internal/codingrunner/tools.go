@@ -671,7 +671,7 @@ func (session *Session) runCommand(ctx context.Context, raw json.RawMessage, com
 		session.latchFailure(classifyFreezeError(snapshotErr), freezeErrorCode(snapshotErr))
 		return nil, snapshotErr
 	}
-	if !equalSnapshots(before, after) {
+	if result.WorkspaceMutated || !equalSnapshots(before, after) {
 		session.latchFailure("candidate_integrity", "command_mutation")
 		return nil, violation("command_mutation", "manifest command mutated the authoring workspace")
 	}

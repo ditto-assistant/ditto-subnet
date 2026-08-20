@@ -124,6 +124,12 @@ func (manifest Manifest) validate(now time.Time) error {
 	return nil
 }
 
+// Validate checks one complete grader manifest at the supplied trusted time.
+// It is exported for the separately reviewed sandbox executor adapter.
+func (manifest Manifest) Validate(now time.Time) error {
+	return manifest.validate(now)
+}
+
 // BuildRun is the trusted executor's out-of-process build completion receipt.
 type BuildRun struct {
 	CommandID          string

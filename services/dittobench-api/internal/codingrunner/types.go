@@ -245,11 +245,12 @@ func commandIDs(commands []CommandSpec) map[string]struct{} {
 
 // CommandResult is bounded and scrubbed before it becomes model-visible.
 type CommandResult struct {
-	ReturnCode int           `json:"returncode"`
-	Stdout     string        `json:"stdout"`
-	Stderr     string        `json:"stderr"`
-	TimedOut   bool          `json:"timed_out"`
-	Duration   time.Duration `json:"-"`
+	ReturnCode       int           `json:"returncode"`
+	Stdout           string        `json:"stdout"`
+	Stderr           string        `json:"stderr"`
+	TimedOut         bool          `json:"timed_out"`
+	WorkspaceMutated bool          `json:"workspace_mutated"`
+	Duration         time.Duration `json:"-"`
 }
 
 // CommandExecutor runs one manifest-owned command in the trusted runner
