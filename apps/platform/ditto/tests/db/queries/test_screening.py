@@ -24,6 +24,7 @@ from ditto.db.models import (
     ScreenerHeartbeat,
     ScreeningAttempt,
     ScreeningQuarantine,
+    SubmissionImageBuild,
 )
 from ditto.db.queries.screening import (
     _EXHAUSTED_REASON_CODE,
@@ -245,16 +246,59 @@ async def _claim(
     *,
     limit: int = 10,
     deferred_review_mode: str = "off",
+    now: datetime | None = None,
 ) -> list:
     async with session.begin():
         return await claim_screening_attempts(
             session,
             screener_hotkey=_SCREENER,
-            now=datetime.now(UTC),
+            now=now or datetime.now(UTC),
             ttl=timedelta(minutes=45),
             limit=limit,
             deferred_review_mode=deferred_review_mode,
         )
+
+
+def _heartbeat(
+    *,
+    instance_id: str,
+    now: datetime,
+    state: str = "polling",
+    active_agent_id=None,
+) -> ScreenerHeartbeat:
+    return ScreenerHeartbeat(
+        screener_hotkey=_SCREENER,
+        instance_id=instance_id,
+        software_version="0.21.0",
+        protocol_version=4,
+        policy_version=SCREENING_POLICY_VERSION,
+        state=state,
+        active_agent_id=active_agent_id,
+        first_seen_at=now - timedelta(days=1),
+        reported_at=now - timedelta(seconds=5),
+        seen_at=now - timedelta(seconds=5),
+        signature="ab" * 64,
+    )
+
+
+def _targon_build(
+    *,
+    agent: Agent,
+    attempt: ScreeningAttempt,
+    status: str = "running",
+) -> SubmissionImageBuild:
+    return SubmissionImageBuild(
+        build_id=uuid4(),
+        agent_id=agent.agent_id,
+        attempt_id=attempt.attempt_id,
+        environment="prod",
+        artifact_sha256=agent.sha256,
+        image_ref=f"ditto-screen/{agent.agent_id}-{attempt.attempt_id}:latest",
+        output_key=f"remote-builds/{attempt.attempt_id}/image.tar",
+        status=status,
+        provider="targon",
+        runtime_status="pending",
+    )
 
 
 async def test_claim_releases_heartbeat_proven_orphan_without_expiry_penalty(
@@ -354,6 +398,220 @@ async def test_claim_preserves_attempt_reported_active_by_a_fresh_worker(
 
     assert claimed == []
     assert attempt.status == "running"
+
+
+async def test_polling_pet_does_not_orphan_in_flight_targon_kaniko(
+    session: AsyncSession,
+) -> None:
+    """Platform-attested Targon screens must survive leftover GCE heartbeats.
+
+    ``ditto-screener-prod`` is slated for deletion. Until then it still
+    heartbeats ``polling`` on the shared hotkey and would otherwise fail
+    Kaniko leases every five minutes.
+    """
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-targon-kaniko",
+        name="targon-kaniko",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.SCREENING,
+    )
+    attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=agent.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=10),
+        deadline=now + timedelta(minutes=60),
+        build_only=True,
+    )
+    async with session.begin():
+        session.add_all(
+            [
+                agent,
+                attempt,
+                _targon_build(agent=agent, attempt=attempt),
+                _heartbeat(instance_id="ditto-screener-prod", now=now),
+            ]
+        )
+
+    claimed = await _claim(session, limit=4, deferred_review_mode="bypass", now=now)
+
+    assert claimed == []
+    assert attempt.status == "running"
+
+
+async def test_one_fresh_heartbeat_cannot_stack_a_second_targon_first_lease(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    held = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-held-build",
+        name="held-build",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.SCREENING,
+    )
+    waiting = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-waiting-build",
+        name="waiting-build",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.UPLOADED,
+    )
+    held_attempt = ScreeningAttempt(
+        attempt_id=uuid4(),
+        agent_id=held.agent_id,
+        screener_hotkey=_SCREENER,
+        policy_version=SCREENING_POLICY_VERSION,
+        status="running",
+        started_at=now - timedelta(minutes=2),
+        deadline=now + timedelta(minutes=68),
+        build_only=True,
+    )
+    async with session.begin():
+        session.add_all(
+            [
+                held,
+                waiting,
+                held_attempt,
+                _targon_build(agent=held, attempt=held_attempt),
+                _heartbeat(
+                    instance_id="ditto-screener-prod",
+                    now=now,
+                    state="screening",
+                    active_agent_id=held.agent_id,
+                ),
+            ]
+        )
+
+    claimed = await _claim(session, limit=4, deferred_review_mode="bypass", now=now)
+
+    assert claimed == []
+    async with session.begin():
+        reloaded = await session.get(Agent, waiting.agent_id)
+    assert reloaded is not None
+    assert reloaded.status == AgentStatus.UPLOADED
+
+
+async def test_two_fresh_heartbeats_may_hold_two_targon_first_leases(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    held = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-held-fleet",
+        name="held-fleet",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.SCREENING,
+    )
+    waiting = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-next-fleet",
+        name="next-fleet",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.UPLOADED,
+    )
+    async with session.begin():
+        session.add_all(
+            [
+                held,
+                waiting,
+                ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=held.agent_id,
+                    screener_hotkey=_SCREENER,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now - timedelta(minutes=2),
+                    deadline=now + timedelta(minutes=68),
+                    build_only=True,
+                ),
+                _heartbeat(
+                    instance_id="ditto-screener-fleet-a",
+                    now=now,
+                    state="screening",
+                    active_agent_id=held.agent_id,
+                ),
+                _heartbeat(instance_id="ditto-screener-fleet-b", now=now),
+            ]
+        )
+
+    claimed = await _claim(session, limit=4, deferred_review_mode="bypass", now=now)
+
+    assert len(claimed) == 1
+    assert claimed[0][0].agent_id == waiting.agent_id
+
+
+async def test_orphan_refill_cannot_exceed_fresh_heartbeat_instances(
+    session: AsyncSession,
+) -> None:
+    now = datetime.now(UTC)
+    held: list[Agent] = []
+    waiting: list[Agent] = []
+    rows: list[object] = []
+    for index in range(4):
+        agent = Agent(
+            agent_id=uuid4(),
+            miner_hotkey=f"5HK-orphan-{index}",
+            name=f"orphan-{index}",
+            sha256=uuid4().hex * 2,
+            status=AgentStatus.SCREENING,
+        )
+        held.append(agent)
+        rows.extend(
+            [
+                agent,
+                ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=agent.agent_id,
+                    screener_hotkey=_SCREENER,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now - timedelta(minutes=10),
+                    deadline=now + timedelta(minutes=60),
+                    build_only=True,
+                ),
+            ]
+        )
+    for index in range(4):
+        agent = Agent(
+            agent_id=uuid4(),
+            miner_hotkey=f"5HK-refill-{index}",
+            name=f"refill-{index}",
+            sha256=uuid4().hex * 2,
+            status=AgentStatus.UPLOADED,
+        )
+        waiting.append(agent)
+        rows.append(agent)
+    rows.append(_heartbeat(instance_id="ditto-screener-prod", now=now))
+    async with session.begin():
+        session.add_all(rows)
+
+    claimed = await _claim(session, limit=4, deferred_review_mode="bypass", now=now)
+
+    assert len(claimed) == 1
+    claimed_ids = {agent.agent_id for agent, _, _ in claimed}
+    eligible_ids = {agent.agent_id for agent in held + waiting}
+    assert claimed_ids <= eligible_ids
+    async with session.begin():
+        running = list(
+            await session.scalars(
+                select(ScreeningAttempt).where(ScreeningAttempt.status == "running")
+            )
+        )
+        failed = list(
+            await session.scalars(
+                select(ScreeningAttempt).where(
+                    ScreeningAttempt.status == "failed",
+                    ScreeningAttempt.reason_code == "worker-lease-orphaned",
+                )
+            )
+        )
+    assert len(running) == 1
+    assert len(failed) == 4
 
 
 @pytest.mark.parametrize("mode", ["off", "observe"])

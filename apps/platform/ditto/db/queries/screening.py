@@ -27,6 +27,7 @@ from ditto.db.models import (
     ScreeningAttempt,
     ScreeningQuarantine,
     ScreeningRetryOverride,
+    SubmissionImageBuild,
 )
 from ditto.db.queries.benchmark_admission import (
     activated_rollout_for_version,
@@ -334,6 +335,11 @@ async def fail_orphaned_screening_attempts(
     grace, at least one fresh heartbeat was observed after it started, and no
     fresh instance reports that agent as its active work.
 
+    Platform-attested Targon screens do not heartbeat. A leftover GCE pet
+    (``ditto-screener-prod``) that is still polling would otherwise orphan
+    those Kaniko leases every five minutes. An in-flight submission image
+    build is positive evidence the attempt is still being worked.
+
     These are infrastructure failures, not inconclusive reviews. Mark them
     ``failed`` so they retry immediately without consuming the five-expiry
     adjudication budget.
@@ -363,6 +369,19 @@ async def fail_orphaned_screening_attempts(
     if not heartbeats:
         return 0
 
+    in_flight_builds = set(
+        await session.scalars(
+            select(SubmissionImageBuild.attempt_id).where(
+                SubmissionImageBuild.attempt_id.in_(
+                    [attempt.attempt_id for attempt in attempts]
+                ),
+                SubmissionImageBuild.status.in_(
+                    ("queued", "leased", "running", "succeeded")
+                ),
+            )
+        )
+    )
+
     failed = 0
     for attempt in attempts:
         started_at = attempt.started_at
@@ -382,7 +401,11 @@ async def fail_orphaned_screening_attempts(
             and heartbeat.active_agent_id == attempt.agent_id
             for heartbeat in heartbeats
         )
-        if not observed_after_claim or still_active:
+        if (
+            not observed_after_claim
+            or still_active
+            or attempt.attempt_id in in_flight_builds
+        ):
             continue
         attempt.status = "failed"
         attempt.finished_at = now
@@ -395,6 +418,72 @@ async def fail_orphaned_screening_attempts(
             agent.screening_reason_code = _ORPHANED_ATTEMPT_REASON_CODE
         failed += 1
     return failed
+
+
+async def _fresh_heartbeat_instance_count(
+    session: AsyncSession,
+    *,
+    screener_hotkey: str,
+    now: datetime,
+) -> int:
+    """Count live fleet instances for one shared screener hotkey."""
+    count = await session.scalar(
+        select(func.count())
+        .select_from(ScreenerHeartbeat)
+        .where(
+            ScreenerHeartbeat.screener_hotkey == screener_hotkey,
+            ScreenerHeartbeat.seen_at >= now - _SCREENER_HEARTBEAT_FRESHNESS,
+        )
+    )
+    return int(count or 0)
+
+
+async def _running_attempt_count_for_hotkey(
+    session: AsyncSession,
+    *,
+    screener_hotkey: str,
+) -> int:
+    """Count in-flight screening leases held by one shared screener hotkey."""
+    count = await session.scalar(
+        select(func.count())
+        .select_from(ScreeningAttempt)
+        .where(
+            ScreeningAttempt.screener_hotkey == screener_hotkey,
+            ScreeningAttempt.status == "running",
+        )
+    )
+    return int(count or 0)
+
+
+async def _shared_hotkey_claim_budget(
+    session: AsyncSession,
+    *,
+    screener_hotkey: str,
+    now: datetime,
+) -> int | None:
+    """Return extra leases this hotkey may take, or ``None`` when uncapped.
+
+    Claims are authenticated by the shared fleet hotkey; heartbeats are per
+    ``instance_id``. Platform-attested Targon screens also claim on this
+    hotkey and do not heartbeat. While a leftover GCE pet still reports,
+    extra ``/claim``s from nested-Docker leftovers stack Kaniko leases that
+    the pet then orphans every five minutes. Cap concurrent running attempts
+    to the live instance count whenever at least one instance is heartbeating.
+    No heartbeat yet keeps the historical uncapped path so the Platform
+    Targon loop can admit work after ``ditto-screener-prod`` is deleted.
+    """
+    fresh_instances = await _fresh_heartbeat_instance_count(
+        session,
+        screener_hotkey=screener_hotkey,
+        now=now,
+    )
+    if fresh_instances <= 0:
+        return None
+    running = await _running_attempt_count_for_hotkey(
+        session,
+        screener_hotkey=screener_hotkey,
+    )
+    return max(0, fresh_instances - running)
 
 
 async def _expired_attempt_count(session: AsyncSession, *, agent_id: UUID) -> int:
@@ -501,6 +590,12 @@ async def claim_screening_attempts(
     already holding a pending deferred review can be re-claimed for that
     review -- that stays eligible in every mode, or a mode change would strand
     the holds open when it was made.
+
+    When at least one instance is heartbeating this shared hotkey, concurrent
+    running leases cannot exceed that live instance count. That keeps
+    leftover GCE pets from stacking and orphaning Targon-first Kaniko builds
+    every five minutes. After those pets are gone, zero heartbeats leaves
+    this path uncapped so Platform can admit Targon one-shot rentals.
     """
     # Claiming is already a short transaction. Serialize it in Postgres so two
     # workers cannot skip-lock sibling rows with the same hash and admit both.
@@ -520,6 +615,15 @@ async def claim_screening_attempts(
         screener_hotkey=screener_hotkey,
         now=now,
     )
+    claim_budget = await _shared_hotkey_claim_budget(
+        session,
+        screener_hotkey=screener_hotkey,
+        now=now,
+    )
+    if claim_budget is not None:
+        limit = min(limit, claim_budget)
+        if limit <= 0:
+            return []
     has_running_or_backoff = exists(
         select(ScreeningAttempt.attempt_id).where(
             ScreeningAttempt.agent_id == Agent.agent_id,
