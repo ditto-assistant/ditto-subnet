@@ -356,22 +356,9 @@ async def test_grant_rejects_wrong_bearer_model_budget_and_replay(
             )
             is InferenceDecline.MODEL_NOT_PERMITTED
         )
-        assert (
-            await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=uuid4(),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=101,
-                now=now,
-                config=_config(),
-            )
-            is InferenceDecline.RESERVATION_TOO_LARGE
-        )
-        # ...and asking for more than the whole allowance did NOT spend it. The
-        # accepted request below is the assertion that matters: a lease must
-        # survive one oversized call.
+        # An oversized *estimate* is not a refusal. Token spend is counted
+        # from the provider receipt after the call; body+max_output is not
+        # an admission gate.
         assert grant.status == "active"
         nonce = uuid4()
         accepted = await begin_inference_request(
@@ -464,7 +451,7 @@ async def test_fresh_lease_revokes_abandoned_deadline_grant(
 
 
 @pytest.mark.asyncio
-async def test_revocation_cancels_inflight_and_missing_usage_charges_reservation(
+async def test_revocation_cancels_inflight_and_missing_usage_charges_nothing(
     session: AsyncSession,
 ) -> None:
     async with session.begin():
@@ -520,7 +507,7 @@ async def test_revocation_cancels_inflight_and_missing_usage_charges_reservation
             usage_available=False,
             now=now,
         )
-        assert grant.prompt_tokens == 10
+        assert grant.prompt_tokens == 0
 
 
 @pytest.mark.asyncio
@@ -1025,19 +1012,11 @@ def _token_budget_config(token_budget: int) -> InferenceProxyConfig:
 async def test_a_spent_token_budget_is_named_terminal_and_persistent(
     session: AsyncSession,
 ) -> None:
-    """The defect that made #473 inert, in miniature.
+    """The request that crosses the token wall is allowed to finish.
 
-    A grant whose token allowance is gone used to answer a bare ``None``, which
-    the envelope renders as 4100 and the broker classifies as transient. It then
-    retried at ~2.5/sec for two minutes and the run died as
-    ``model_relay_unavailable`` -- 1009 declines on one lease, every one of them
-    4100, with 1h21m still on the clock.
-
-    Note the arithmetic that hid this from the exhaustion check in
-    ``finish_inference_request``: that one fires on ``spent >= token_budget``,
-    but a run stalls one *request* short of the line and never books the last
-    call, so ``spent`` freezes below the budget forever. Nothing set the status,
-    so nothing named the refusal, on any call for the rest of the run.
+    Token spend is receipted after the call. An in-flight estimate must not
+    4104 a grant whose settled spend is still under the budget. Once settled
+    spend is at or past the wall, later calls are named 4104 and stay named.
     """
     config = _token_budget_config(1_000)
     async with session.begin():
@@ -1066,24 +1045,35 @@ async def test_a_spent_token_budget_is_named_terminal_and_persistent(
                 usage_available=True,
                 now=now,
             )
-        # 900 booked against a 1,000 budget: a 250-token call no longer fits.
+        # 900 booked against a 1,000 budget. A 250-token *estimate* used to
+        # 4104 here even though settled spend was still under the wall. The
+        # crossing request is allowed to finish; the next one is refused.
         assert grant.prompt_tokens + grant.completion_tokens == 900
         assert grant.status == "active"
-        assert (
-            await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=uuid4(),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=250,
-                now=now,
-                config=config,
-            )
-            is InferenceDecline.TOKEN_BUDGET_EXHAUSTED
+        crossing = await begin_inference_request(
+            session,
+            grant_id=grant.grant_id,
+            nonce=(nonce := uuid4()),
+            bearer=bearer,
+            model=_CHAT_MODEL,
+            token_reservation=250,
+            now=now,
+            config=config,
         )
-        # Terminal, and recorded as terminal -- matching request-count
-        # exhaustion, so the broker must not retry it.
+        assert isinstance(crossing, tuple)
+        await finish_inference_request(
+            session,
+            grant_id=grant.grant_id,
+            nonce=nonce,
+            generation=grant.generation,
+            status="completed",
+            prompt_tokens=200,
+            completion_tokens=25,
+            cost_microusd=1,
+            usage_available=True,
+            now=now,
+        )
+        assert grant.prompt_tokens + grant.completion_tokens == 1_125
         assert grant.status == "exhausted"
         # And it stays named -- as the *token* wall, not the request wall -- for
         # the whole tail of the run, which is the window in which a harness can
@@ -1105,20 +1095,19 @@ async def test_a_spent_token_budget_is_named_terminal_and_persistent(
 
 
 @pytest.mark.asyncio
-async def test_in_flight_reservations_alone_are_backpressure_not_exhaustion(
+async def test_in_flight_reservations_do_not_spend_the_token_budget(
     session: AsyncSession,
 ) -> None:
-    """Nothing spent, so nothing is over -- the reservations will settle.
+    """Nothing settled, so the token wall has not been hit.
 
-    The old code answered this identically to a genuinely spent allowance (both
-    were a bare ``None``), which meant a grant with plenty of headroom could be
-    reported as dead purely because several calls happened to be in flight. It
-    has to degrade to backpressure or a healthy run is thrown away.
+    In-flight body+max_output estimates used to 503 (or worse, 4104) a grant
+    that had spent zero tokens. Concurrent calls are bounded by the ticket
+    concurrency rail, not by summing reservation ceilings.
     """
     config = _token_budget_config(1_000)
     async with session.begin():
         _ticket, grant, bearer, now = await _live_grant(session, config)
-        for _ in range(3):
+        for _ in range(4):
             assert isinstance(
                 await begin_inference_request(
                     session,
@@ -1132,23 +1121,7 @@ async def test_in_flight_reservations_alone_are_backpressure_not_exhaustion(
                 ),
                 tuple,
             )
-        # 900 reserved, 0 spent. A fourth call crosses only because of the three
-        # in flight.
         assert grant.prompt_tokens + grant.completion_tokens == 0
-        assert (
-            await begin_inference_request(
-                session,
-                grant_id=grant.grant_id,
-                nonce=uuid4(),
-                bearer=bearer,
-                model=_CHAT_MODEL,
-                token_reservation=300,
-                now=now,
-                config=config,
-            )
-            is InferenceDecline.AT_CAPACITY
-        )
-        # Emphatically still alive: backpressure must not spend the lease.
         assert grant.status == "active"
 
 
@@ -1220,28 +1193,19 @@ async def test_a_jupiter_profile_run_completes_at_the_shipped_budget(
 
 
 @pytest.mark.asyncio
-async def test_a_reclaimed_request_is_charged_the_estimate_not_the_byte_count(
+async def test_a_failed_request_without_usage_does_not_charge_the_estimate(
     session: AsyncSession,
 ) -> None:
-    """The over-charge was booked, not merely reserved.
+    """No receipt, no spend.
 
-    Every path that reclaims a request which never returned trusted usage --
-    timeout, transport failure, revocation, the stale sweep -- charges
-    ``reserved_tokens`` as ``prompt_tokens``. While that figure was
-    ``max_tokens + len(body)``, a call whose body was 8KB was permanently
-    booked ~8,000 tokens against the grant when it really cost ~2,000.
-
-    This asserts the charge follows the reservation, so an honest reservation is
-    an honest charge. The endpoint-level halves -- that the reservation is now
-    ~1/4 of the byte count, and that the ceiling stayed a true bound -- live in
-    ``test_inference.py``.
+    Timeouts and upstream failures used to book ``reserved_tokens`` onto the
+    grant. That is the estimate, not consumption, and it is how a run that
+    never saw 75M of real tokens still died as inference_allowance_exhausted.
     """
     config = _token_budget_config(1_000_000)
     async with session.begin():
         _ticket, grant, bearer, now = await _live_grant(session, config)
         nonce = uuid4()
-        # What the old code would have reserved for an 8KB body vs. what the
-        # estimate reserves for the same call.
         byte_bound, estimate = 8_192, 2_048
         assert isinstance(
             await begin_inference_request(
@@ -1257,7 +1221,6 @@ async def test_a_reclaimed_request_is_charged_the_estimate_not_the_byte_count(
             ),
             tuple,
         )
-        # The provider never answered, so the reservation is what gets booked.
         await finish_inference_request(
             session,
             grant_id=grant.grant_id,
@@ -1270,8 +1233,8 @@ async def test_a_reclaimed_request_is_charged_the_estimate_not_the_byte_count(
             usage_available=False,
             now=now,
         )
-        assert grant.prompt_tokens == estimate
-        assert grant.prompt_tokens != byte_bound
+        assert grant.prompt_tokens == 0
+        assert grant.completion_tokens == 0
 
 
 @pytest.mark.asyncio

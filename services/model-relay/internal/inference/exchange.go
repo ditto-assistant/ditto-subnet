@@ -334,23 +334,6 @@ func (d *Deps) activateInferenceGrant(ctx context.Context, q *postgres.Queries,
 		}); err != nil {
 			return nil, "", err
 		}
-		if req.RequestKind == kindChat {
-			if err := q.AddReclaimedChatTokens(ctx, postgres.AddReclaimedChatTokensParams{
-				ReservedTokens: req.ReservedTokens,
-				Now:            pgTime(now),
-				GrantID:        req.GrantID,
-			}); err != nil {
-				return nil, "", err
-			}
-		} else {
-			if err := q.AddReclaimedEmbeddingTokens(ctx, postgres.AddReclaimedEmbeddingTokensParams{
-				ReservedTokens: req.ReservedTokens,
-				Now:            pgTime(now),
-				GrantID:        req.GrantID,
-			}); err != nil {
-				return nil, "", err
-			}
-		}
 	}
 	bearer, err := newBearer()
 	if err != nil {

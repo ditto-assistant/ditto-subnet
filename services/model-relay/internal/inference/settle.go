@@ -96,9 +96,9 @@ func finishInferenceRequest(ctx context.Context, q *postgres.Queries, p finishPa
 	completionTokens := max64(0, p.completionTokens)
 	costMicrousd := max64(0, p.costMicrousd)
 	if !p.usageAvailable {
-		// Every outcome without trusted usage is conservatively charged its
-		// reservation.
-		promptTokens = request.ReservedTokens
+		// No receipt, no spend. Charging the reservation estimate booked
+		// megatokens against grants that never saw provider usage.
+		promptTokens = 0
 		completionTokens = 0
 	} else if promptTokens > request.MaxChargeableTokens-completionTokens {
 		// Overflow-safe form of promptTokens+completionTokens >

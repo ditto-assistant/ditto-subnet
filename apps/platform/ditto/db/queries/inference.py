@@ -32,6 +32,18 @@ def bearer_digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _cancel_unsettled_request(request: InferenceRequest, now: datetime) -> None:
+    """Drop an in-flight request without booking the reservation estimate.
+
+    Token spend is receipted provider usage only. A timeout, revoke, or stale
+    sweep that never saw a receipt therefore charges zero. The request still
+    counts against the request-count budget.
+    """
+    request.status = "canceled"
+    request.prompt_tokens = 0
+    request.completed_at = now
+
+
 USAGE_ACCOUNTING_VERSION = 2
 """The metering contract new grants are booked under.
 
@@ -285,13 +297,7 @@ async def activate_inference_grant(
         # either settled or crossed the provider timeout recovery window.
         return None
     for request in started:
-        request.status = "canceled"
-        request.prompt_tokens = request.reserved_tokens
-        request.completed_at = now
-        if request.request_kind == "chat":
-            grant.prompt_tokens += request.reserved_tokens
-        else:
-            grant.embedding_tokens += request.reserved_tokens
+        _cancel_unsettled_request(request, now)
     bearer = secrets.token_urlsafe(32)
     grant.bearer_digest = bearer_digest(bearer)
     grant.broker_public_key = broker_public_key.rstrip("=")
@@ -344,13 +350,7 @@ async def revoke_ticket_inference(
             requests_by_grant.setdefault(request.grant_id, []).append(request)
     for grant in grants:
         for request in requests_by_grant.get(grant.grant_id, []):
-            request.status = "canceled"
-            request.prompt_tokens = request.reserved_tokens
-            request.completed_at = now
-            if request.request_kind == "chat":
-                grant.prompt_tokens += request.reserved_tokens
-            else:
-                grant.embedding_tokens += request.reserved_tokens
+            _cancel_unsettled_request(request, now)
         grant.status = "revoked"
         grant.active_requests = 0
         grant.embedding_active_requests = 0
@@ -382,25 +382,22 @@ class InferenceDecline(StrEnum):
       practical advice as revocation, different cause, and worth separating
       because one is the platform acting and the other is just the clock.
     * :attr:`BUDGET_EXHAUSTED` — the **request-count** allowance is spent.
-    * :attr:`TOKEN_BUDGET_EXHAUSTED` — the **token** allowance is spent. Split
-      from the above deliberately: they are tuned by different operator dials
-      and a harness that hits the token wall at call 400 is behaving very
-      differently from one that hits the request wall at call 8192.
+    * :attr:`TOKEN_BUDGET_EXHAUSTED` — settled receipted tokens already meet
+      the grant. The request that crossed the wall is allowed to finish; this
+      is the *next* call. Split from the request-count wall deliberately.
     * :attr:`MODEL_NOT_PERMITTED` — the grant does not pin this model.
     * :attr:`NONCE_REPLAYED` — this (grant, nonce) already exists. Repeating it
       can never succeed; the caller must mint a fresh nonce.
     * :attr:`GRANT_NOT_EXCHANGED` — minted but never exchanged for a bearer, so
       there is no live lease here yet. The broker must exchange first.
-    * :attr:`RESERVATION_TOO_LARGE` — the request alone is bigger than the whole
-      token allowance. Distinct from exhaustion on purpose: nothing has been
-      spent, and a lease must not be declared dead because one call was
-      oversized.
+    * :attr:`RESERVATION_TOO_LARGE` — historical. Admission no longer estimates
+      a call against the grant before the provider returns; leftover 4109s are
+      kept on the wire so older brokers still parse the code.
 
     Retryable, and the caller should back off and return:
 
     * :attr:`AT_CAPACITY` — nothing is wrong at all; the lane was momentarily
-      full, or the grant's in-flight reservations momentarily cover the
-      remaining token headroom. Both clear on their own.
+      full. Clears on its own.
 
     And the one honest remainder:
 
@@ -590,19 +587,16 @@ async def begin_inference_request(
     # to an unnamed refusal -- which is precisely the window in which a harness
     # needs to know whether to retry, wind down, or give up.
     #
-    # ``exhausted`` is one status covering two different spent allowances, and
-    # the tail of a run must not be told the wrong one. Rather than remembering
-    # which wall was hit, ask the same question the wall asked: would a request
-    # of *this* size still fit in the token allowance? That re-derivation is two
-    # already-loaded columns and it stays correct in the case a stored reason
-    # would get wrong -- exhaustion recorded a request short of the budget, so
-    # ``spent`` sits just below ``token_budget`` rather than at it.
+    # ``exhausted`` is one status covering two spent allowances. Re-derive
+    # which wall was hit from settled spend, not from a reservation estimate:
+    # the request that crossed the token budget is allowed to finish, so a
+    # stored "would this estimate still fit?" check would 4104 a run that is
+    # actually only request-count exhausted, or vice versa.
     if grant.status != "active":
         if grant.status == "exhausted":
             if (
                 request_kind == "chat"
-                and grant.prompt_tokens + grant.completion_tokens + token_reservation
-                > grant.token_budget
+                and grant.prompt_tokens + grant.completion_tokens >= grant.token_budget
             ):
                 return InferenceDecline.TOKEN_BUDGET_EXHAUSTED
             return InferenceDecline.BUDGET_EXHAUSTED
@@ -629,13 +623,7 @@ async def begin_inference_request(
         ).all()
     )
     for stale in stale_requests:
-        stale.status = "canceled"
-        stale.prompt_tokens = stale.reserved_tokens
-        stale.completed_at = now
-        if request_kind == "chat":
-            grant.prompt_tokens += stale.reserved_tokens
-        else:
-            grant.embedding_tokens += stale.reserved_tokens
+        _cancel_unsettled_request(stale, now)
     if stale_requests:
         await session.flush()
         active_count = int(
@@ -680,13 +668,6 @@ async def begin_inference_request(
     if token_reservation < 1:
         # A caller-shape error, not an allowance problem. Nothing to attribute.
         return InferenceDecline.UNATTRIBUTED
-    active_reserved = await session.scalar(
-        select(func.coalesce(func.sum(InferenceRequest.reserved_tokens), 0)).where(
-            InferenceRequest.grant_id == grant.grant_id,
-            InferenceRequest.status == "started",
-            InferenceRequest.request_kind == request_kind,
-        )
-    )
     spent = (
         grant.prompt_tokens + grant.completion_tokens
         if request_kind == "chat"
@@ -695,41 +676,16 @@ async def begin_inference_request(
     token_budget = (
         grant.token_budget if request_kind == "chat" else grant.embedding_token_budget
     )
-    if spent + int(active_reserved or 0) + token_reservation > token_budget:
-        # Three very different events used to share this one anonymous exit, and
-        # telling them apart is exactly what a broker needs.
-        if token_reservation > token_budget:
-            # The request is larger than the entire allowance, so it would not
-            # have fit in a brand-new grant either. That is a caller-shape
-            # problem, and emphatically not a reason to declare a lease spent
-            # when it has consumed nothing.
-            return InferenceDecline.RESERVATION_TOO_LARGE
-        if spent + token_reservation > token_budget:
-            # The allowance has less room left than one request needs. No amount
-            # of waiting brings it back, so say so and stop. This is the branch
-            # that answered a bare ``None`` -- and therefore 4100, which the
-            # broker reads as transient and retries at ~2.5/sec for two minutes
-            # until the run dies as ``model_relay_unavailable``. It is the whole
-            # reason the heaviest v7 agents failed with hours left on the lease.
-            #
-            # Note that ``spent`` never actually reaches ``token_budget`` on
-            # this path, which is why the exhaustion check in
-            # ``finish_inference_request`` (``>= token_budget``) did not cover
-            # it: the run stalls a request short of the line and stays there.
-            if request_kind == "chat":
-                # Terminal, and recorded as terminal, exactly as request-count
-                # exhaustion is: a spent allowance does not come back, so the
-                # status gate above answers every later call in the run without
-                # re-deriving it. Deliberately not done for embeddings, whose
-                # 1B allowance means reaching it is pathological rather than
-                # thorough -- and killing the grant would take chat down too.
-                grant.status = "exhausted"
-            return InferenceDecline.TOKEN_BUDGET_EXHAUSTED
-        # Only the *in-flight* reservations push the total over. Nothing is
-        # spent yet and they settle within the provider timeout, so this is
-        # backpressure, not exhaustion -- answering it terminally would throw
-        # away a run that still had room.
-        return _at_capacity(request_kind, "token_reservation")
+    # Token spend is counted after the provider receipt, not estimated before
+    # the call. The request that crosses the wall is allowed to finish (a 76M
+    # run against a 75M grant is fine); the *next* request sees settled spend
+    # already at or past the budget and gets 4104. Body-byte + max_output
+    # ceilings are stored on the request row for untrusted-receipt clamping
+    # only -- they must not admit-gate or exhaust the grant.
+    if spent >= token_budget:
+        if request_kind == "chat":
+            grant.status = "exhausted"
+        return InferenceDecline.TOKEN_BUDGET_EXHAUSTED
     active_requests = (
         grant.active_requests
         if request_kind == "chat"
@@ -948,9 +904,10 @@ async def finish_inference_request(
     completion_tokens = max(0, completion_tokens)
     cost_microusd = max(0, cost_microusd)
     if not usage_available:
-        # Every provider outcome without trusted usage is conservatively
-        # charged to its reservation, including timeout and transport failure.
-        prompt_tokens = request.reserved_tokens
+        # No receipt, no spend. Charging the reservation estimate here is what
+        # booked megatokens against grants that never saw a provider usage
+        # object (timeouts, 5xx, empty completions).
+        prompt_tokens = 0
         completion_tokens = 0
     elif prompt_tokens + completion_tokens > request.max_chargeable_tokens:
         # Untrusted provider accounting cannot exceed the byte-derived ceiling

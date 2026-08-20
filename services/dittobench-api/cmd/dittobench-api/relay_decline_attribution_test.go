@@ -628,6 +628,7 @@ func TestBudgetEvidenceStillAttributesGenuineExhaustion(t *testing.T) {
 		promptTokens:           950,
 		completionTokens:       50,
 		embeddingRequests:      2,
+		embeddingTokens:        1000,
 		embeddingInFlight:      1,
 	}
 	for _, testCase := range []struct {
@@ -638,16 +639,17 @@ func TestBudgetEvidenceStillAttributesGenuineExhaustion(t *testing.T) {
 	}{
 		{name: "chat requests", code: platformDeclineBudgetExhausted, upperBound: 10},
 		{name: "chat tokens", code: platformDeclineTokenBudgetExhausted, upperBound: 101},
-		{name: "chat reservation", code: platformDeclineReservationTooLarge, upperBound: 1001},
 		{name: "embedding requests", code: platformDeclineBudgetExhausted, embedding: true, upperBound: 10},
 		{name: "embedding tokens", code: platformDeclineTokenBudgetExhausted, embedding: true, upperBound: 1001},
-		{name: "embedding reservation", code: platformDeclineReservationTooLarge, embedding: true, upperBound: 1001},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			if !declineMatchesBudgetEvidenceLocked(session, testCase.code, testCase.embedding, testCase.upperBound) {
 				t.Fatal("genuine exhaustion was incorrectly quarantined")
 			}
 		})
+	}
+	if declineMatchesBudgetEvidenceLocked(session, platformDeclineReservationTooLarge, false, 1001) {
+		t.Fatal("4109 from a byte ceiling was treated as genuine")
 	}
 }
 
@@ -674,8 +676,8 @@ func TestFalseTokenDeclineAfterHealthySpendIsQuarantined(t *testing.T) {
 	if declineMatchesBudgetEvidenceLocked(session, platformDeclineBudgetExhausted, false, current) {
 		t.Fatal("false 4102 after 620 successes against 8192 was treated as genuine")
 	}
-	if declineMatchesBudgetEvidenceLocked(session, platformDeclineReservationTooLarge, false, current) {
-		t.Fatal("63k reservation against 75M was treated as 4109")
+	if declineMatchesBudgetEvidenceLocked(session, platformDeclineReservationTooLarge, false, 90_000_000) {
+		t.Fatal("run-long byte ceiling was treated as 4109")
 	}
 }
 

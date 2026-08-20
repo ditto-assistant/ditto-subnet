@@ -38,6 +38,15 @@ def _bearer_digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _cancel_unsettled_confirmation_request(
+    request: ConfirmationInferenceRequest, now: datetime
+) -> None:
+    """Drop an in-flight confirmation request without booking the estimate."""
+    request.status = "canceled"
+    request.prompt_tokens = 0
+    request.completed_at = now
+
+
 def _lane_specs(
     profile: ConfirmationVerificationProfile,
 ) -> dict[str, tuple[str, str, str, str, str, int, int, int]]:
@@ -189,10 +198,7 @@ async def ensure_confirmation_inference_grants(
     for grant, created in grants:
         active = active_by_grant[grant.grant_id]
         for request in active:
-            request.status = "canceled"
-            request.prompt_tokens = request.reserved_tokens
-            request.completed_at = now
-            grant.prompt_tokens += request.reserved_tokens
+            _cancel_unsettled_confirmation_request(request, now)
         bearer = secrets.token_urlsafe(32)
         grant.bearer_digest = _bearer_digest(bearer)
         grant.broker_public_key = broker_public_key.rstrip("=")
@@ -283,10 +289,7 @@ async def begin_confirmation_inference_request(
     if token_reservation < 1 or max_chargeable_tokens < token_reservation:
         await session.delete(request)
         return ConfirmationInferenceDecline.UNATTRIBUTED
-    if (
-        grant.prompt_tokens + grant.completion_tokens + token_reservation
-        > grant.token_budget
-    ):
+    if grant.prompt_tokens + grant.completion_tokens >= grant.token_budget:
         grant.status = "exhausted"
         await session.delete(request)
         return ConfirmationInferenceDecline.TOKEN_BUDGET_EXHAUSTED
@@ -347,7 +350,7 @@ async def finish_confirmation_inference_request(
     )
     delivered = status == "completed" and usage_valid
     if not delivered:
-        prompt_tokens = request.reserved_tokens
+        prompt_tokens = 0
         completion_tokens = 0
         cost_microusd = 0
         status = "failed"

@@ -389,7 +389,7 @@ func beginConfirmationInferenceRequest(ctx context.Context, q *postgres.Queries,
 		}
 		return decline(confirmationDeclineUnattributed)
 	}
-	if grant.PromptTokens+grant.CompletionTokens+p.tokenReservation > grant.TokenBudget {
+	if grant.PromptTokens+grant.CompletionTokens >= grant.TokenBudget {
 		if err := markExhausted(); err != nil {
 			return nil, nil, err
 		}
@@ -475,7 +475,7 @@ func finishConfirmationInferenceRequest(ctx context.Context, q *postgres.Queries
 	costMicrousd := p.costMicrousd
 	status := p.status
 	if !delivered {
-		promptTokens = request.ReservedTokens
+		promptTokens = 0
 		completionTokens = 0
 		costMicrousd = 0
 		status = "failed"

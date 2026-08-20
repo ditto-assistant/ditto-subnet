@@ -553,7 +553,7 @@ func TestConfirmationChatDeclines(t *testing.T) {
 	})
 }
 
-func TestConfirmationChatProviderFailureChargesReservation(t *testing.T) {
+func TestConfirmationChatProviderFailureDoesNotChargeReservation(t *testing.T) {
 	var calls int
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
@@ -581,7 +581,7 @@ func TestConfirmationChatProviderFailureChargesReservation(t *testing.T) {
 		f.grantID, nonce).Scan(&status, &prompt, &completion, &cost, &reserved, &providerNull); err != nil {
 		t.Fatalf("read request: %v", err)
 	}
-	if status != "failed" || prompt != reserved || completion != 0 || cost != 0 || !providerNull {
+	if status != "failed" || prompt != 0 || completion != 0 || cost != 0 || !providerNull {
 		t.Fatalf("failure settle: %s %d/%d cost=%d reserved=%d providerNull=%v",
 			status, prompt, completion, cost, reserved, providerNull)
 	}
@@ -592,8 +592,8 @@ func TestConfirmationChatProviderFailureChargesReservation(t *testing.T) {
 		f.grantID).Scan(&active, &grantPrompt); err != nil {
 		t.Fatalf("read grant: %v", err)
 	}
-	if active != 0 || grantPrompt != reserved {
-		t.Fatalf("grant accounting after failure: active=%d prompt=%d want %d", active, grantPrompt, reserved)
+	if active != 0 || grantPrompt != 0 {
+		t.Fatalf("grant accounting after failure: active=%d prompt=%d want 0", active, grantPrompt)
 	}
 }
 
@@ -818,7 +818,7 @@ func TestConfirmationChatPreProviderRouteMissExhaustionSettlesOnce(t *testing.T)
 		t.Fatalf("read exhausted route-miss accounting: %v", err)
 	}
 	if status != "failed" || requestCount != 1 || active != 0 || rows != 1 ||
-		prompt != reserved || completion != 0 || cost != 0 {
+		prompt != 0 || completion != 0 || cost != 0 {
 		t.Fatalf("route-miss exhaustion accounting: status=%s count=%d active=%d rows=%d %d/%d cost=%d",
 			status, requestCount, active, rows, prompt, completion, cost)
 	}
@@ -893,7 +893,7 @@ func TestConfirmationChatBackpressureExhaustionSettlesOnce(t *testing.T) {
 		f.grantID, nonce).Scan(&status, &prompt, &completion, &cost, &reserved); err != nil {
 		t.Fatalf("read exhausted request: %v", err)
 	}
-	if status != "failed" || prompt != reserved || completion != 0 || cost != 0 {
+	if status != "failed" || prompt != 0 || completion != 0 || cost != 0 {
 		t.Fatalf("exhausted request settle: %s %d/%d completion=%d cost=%d",
 			status, prompt, reserved, completion, cost)
 	}
@@ -907,7 +907,7 @@ func TestConfirmationChatBackpressureExhaustionSettlesOnce(t *testing.T) {
 		t.Fatalf("read exhausted grant: %v", err)
 	}
 	if requestCount != 1 || active != 0 || rows != 1 ||
-		grantPrompt != reserved || grantCompletion != 0 || grantCost != 0 {
+		grantPrompt != 0 || grantCompletion != 0 || grantCost != 0 {
 		t.Fatalf("exhausted grant accounting: count=%d active=%d rows=%d %d/%d cost=%d",
 			requestCount, active, rows, grantPrompt, grantCompletion, grantCost)
 	}

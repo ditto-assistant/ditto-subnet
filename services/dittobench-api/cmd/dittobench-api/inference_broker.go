@@ -79,16 +79,10 @@ func usesPlatformEmbedding(benchVersion int) bool {
 // without giving the heartbeat a chance to explain the pause.
 //
 // Why so small. Each broker-level attempt is a NEW nonce and therefore a NEW
-// platform reservation (ditto-platform ditto/db/queries/inference.py:460-474:
-// `reserved_tokens=token_reservation`, `grant.request_count += 1`). A failed
-// attempt is then conservatively charged its FULL reservation to the grant
-// (`if not usage_available: prompt_tokens = request.reserved_tokens`,
-// inference.py:543-547). So attempt N costs the grant one request and a whole
-// reservation whether or not the provider did any work. That ledger is the
-// grant's CAPACITY budget -- it is not the miner's scored usage, which this
-// broker books separately and only from a successful attempt -- but it is still
-// finite, and a large cap here could exhaust a grant mid-run and convert a
-// survivable blip into the very failure the retry exists to prevent.
+// platform request (`grant.request_count += 1`). Failed attempts no longer
+// charge the reservation estimate onto the token grant, but they still spend
+// the request-count budget. A large cap here could still exhaust that budget
+// mid-run and convert a survivable blip into a 4102.
 //
 // Each extra broker delivery is a NEW reservation. Chat therefore makes one
 // fast delivery, then at most four slow recovery deliveries. Even a pathological
@@ -227,6 +221,7 @@ type brokerSession struct {
 	embeddingCalls      map[chan struct{}]context.CancelFunc
 	embeddingRetries    uint64
 	embeddingRequests   uint64
+	embeddingTokens     uint64
 	embeddingInputs     uint64
 	embeddingInputBytes uint64
 	requests            uint64
@@ -971,14 +966,14 @@ var declineFaultFor = map[int]declineFault{
 	// The request-count allowance the ticket granted, spent by the harness's
 	// own call volume. The lease is alive and the platform is healthy.
 	platformDeclineBudgetExhausted: declineFaultAgent,
-	// The token allowance, spent by the harness's own prompt sizes. The
-	// platform splits this from the request count precisely because "hit the
-	// token wall at call 400" is a different agent behaviour from "hit the
-	// request wall at call 8192" -- both are the agent's behaviour.
+	// The token allowance, spent by the harness's own receipted prompt and
+	// completion tokens. The platform splits this from the request count
+	// because "hit the token wall" is a different agent behaviour from
+	// "hit the request wall at call 8192" -- both are the agent's behaviour.
 	platformDeclineTokenBudgetExhausted: declineFaultAgent,
-	// A single harness request whose reservation exceeds the entire token
-	// allowance. Nothing has been spent and the lease is still good: the
-	// request itself is oversized, which is authored by the harness alone.
+	// Historical: a single request whose *estimate* exceeded the whole grant.
+	// Admission no longer emits 4109; leftover codes cannot be confirmed
+	// from a byte ceiling and stay platform-fault via the evidence guard.
 	platformDeclineReservationTooLarge: declineFaultAgent,
 }
 
@@ -1028,14 +1023,11 @@ func attributePlatformDeclineLocked(session *brokerSession, code int, embedding 
 // cannot confirm the code: treat it as impossible so the miner keeps the
 // attempt (the same default as an unknown decline code).
 //
-// These bounds exist only to DISPROVE an impossible attribution. A cumulative
-// byte-length overestimate that eventually exceeds the token cap does not
-// prove the harness spent the grant: Crown-v11 v4/v5 died as
-// inference_allowance_exhausted at ~4% settled tokens / ~7.5% requests because
-// the old chatChargeUpperBound / chatDispatches sums treated "cannot disprove"
-// as "charge the miner". Confirm 4102/4104 only from a lower bound that can
-// actually have crossed the wall: settled usage plus this request (and
-// in-flight siblings for the request-count wall).
+// These bounds exist only to DISPROVE an impossible attribution. Confirm
+// 4104 from settled receipted tokens only. A body-byte + max_output ceiling
+// is not spend: Crown-v11 / gatev58 died as inference_allowance_exhausted
+// at a few percent of the 75M wall because the old sums treated "cannot
+// disprove" as "charge the miner".
 func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedding bool, currentUpperBound uint64) bool {
 	if !sessionHasBudgetEvidenceLocked(session, embedding) {
 		return false
@@ -1049,9 +1041,9 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 			// not crossed by a body-byte sum the way chat is.
 			return session.embeddingRequests >= session.embeddingRequestBudget
 		case platformDeclineTokenBudgetExhausted:
-			return currentUpperBound > session.embeddingTokenBudget
+			return session.embeddingTokens >= session.embeddingTokenBudget
 		case platformDeclineReservationTooLarge:
-			return currentUpperBound > session.embeddingTokenBudget
+			return false
 		default:
 			return false
 		}
@@ -1063,13 +1055,12 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 		// sibling that may still hold a slot (including a just-lost admission).
 		return session.successes+uint64(session.inFlight) >= session.requestBudget
 	case platformDeclineTokenBudgetExhausted:
-		// Platform fires 4104 when settled + this reservation > token_budget.
-		// Use receipted provider tokens plus this request's byte-derived
-		// ceiling. Do NOT use the run-long sum of body bytes: that overestimate
-		// crosses 75M while settled spend is still a few million.
-		return session.promptTokens+session.completionTokens+currentUpperBound > session.tokenBudget
+		// Platform fires 4104 when settled receipted tokens already meet the
+		// grant. Do not add a body-byte + max_output ceiling: that overestimate
+		// is why Crown-v11 / gatev58 died at a few percent of the 75M wall.
+		return session.promptTokens+session.completionTokens >= session.tokenBudget
 	case platformDeclineReservationTooLarge:
-		return currentUpperBound > session.tokenBudget
+		return false
 	default:
 		return false
 	}
@@ -3189,13 +3180,16 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 			return
 		}
 	}
+	session.mu.Lock()
+	if decoded.PromptEvalCount > 0 {
+		session.embeddingTokens += uint64(decoded.PromptEvalCount)
+	}
 	if confirmationCase {
-		session.mu.Lock()
 		snapshot := session.caseSnapshots[caseGeneration]
 		snapshot.EmbeddingDelivered++
 		session.caseSnapshots[caseGeneration] = snapshot
-		session.mu.Unlock()
 	}
+	session.mu.Unlock()
 	writeJSON(w, http.StatusOK, decoded)
 }
 

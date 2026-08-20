@@ -61,9 +61,8 @@ SET bearer_digest = sqlc.arg(bearer_digest)::text,
 WHERE grant_id = sqlc.arg(grant_id)::uuid;
 
 -- name: AddReclaimedChatTokens :exec
--- Stale-reclamation charge: a canceled in-flight chat request is charged its
--- full reservation into the grant's prompt_tokens. Grant row is locked by
--- the caller.
+-- Kept for schema compatibility. Admission no longer charges the
+-- reservation estimate onto the grant; token spend is receipted usage only.
 UPDATE inference_grants
 SET prompt_tokens = prompt_tokens + sqlc.arg(reserved_tokens)::bigint,
     updated_at = sqlc.arg(now)::timestamptz

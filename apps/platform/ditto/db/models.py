@@ -3404,12 +3404,10 @@ class InferenceRequest(Base):
     request_kind: Mapped[str] = mapped_column(Text, nullable=False, default="chat")
     model: Mapped[str] = mapped_column(Text, nullable=False)
     reserved_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
-    """Estimated tokens held against the grant's allowance while in flight.
+    """Stored estimate of the call, for untrusted-receipt clamping only.
 
-    An *estimate*, not a bound, since ``usage_accounting_version = 2``. It is
-    also what every reclamation path charges when a request never returns
-    trusted usage, which is why it being ~4x too large mattered: the figure was
-    not merely reserved, it was booked.
+    Token spend is receipted provider usage. This figure is not admission-gated
+    and is not booked onto the grant when a request never returns usage.
     """
     max_chargeable_tokens: Mapped[int] = mapped_column(
         BigInteger, nullable=False, server_default=text("0")

@@ -199,7 +199,7 @@ async def test_model_substitution_nonce_replay_and_budget_exhaustion_fail_closed
             upstream_provider="wrong-provider",
             now=_NOW + timedelta(seconds=1),
         )
-        assert judge.prompt_tokens == 1
+        assert judge.prompt_tokens == 0
         assert judge.active_requests == 0
         assert (
             await begin_confirmation_inference_request(

@@ -13,7 +13,7 @@ Postgres, because SQLite cannot exhibit the behavior either way:
 
 * reservations against DIFFERENT grants make progress simultaneously, and
 * reservations against the SAME grant still serialize and still cannot
-  collectively over-reserve past that grant's token budget.
+  collectively overspend that grant's request-count budget.
 """
 
 from __future__ import annotations
@@ -243,16 +243,16 @@ async def test_reservations_on_different_grants_are_not_serialized() -> None:
 
 
 async def test_reservations_on_one_grant_serialize_and_respect_the_budget() -> None:
-    """Concurrent reservations on a single grant cannot over-reserve it.
+    """Concurrent reservations on a single grant cannot overspend request count.
 
-    The grant row lock is the only thing standing between eight simultaneous
-    requests and a miner spending more inference than its ticket bought, so
-    this is the invariant the advisory lock removal must not have weakened.
+    Token spend is receipted after the provider returns, so in-flight estimates
+    no longer cap admission. The grant row lock still serializes request-count
+    accounting: eight simultaneous calls against a budget of three must admit
+    exactly three.
     """
     engine = create_db_engine()
     maker = async_sessionmaker(engine, expire_on_commit=False)
-    # Room for exactly three reservations of 100 tokens each.
-    config = replace(_config(), token_budget=300)
+    config = replace(_config(), request_budget=3)
     try:
         await _clean(maker)
         grant_id, bearer = await _seed_grant(
@@ -276,7 +276,7 @@ async def test_reservations_on_one_grant_serialize_and_respect_the_budget() -> N
                 return isinstance(reserved, tuple)
 
         outcomes = await asyncio.gather(*(reserve() for _ in range(8)))
-        assert sum(outcomes) == 3, "over- or under-reserved against a 300 token budget"
+        assert sum(outcomes) == 3, "over- or under-admitted against a 3-request budget"
 
         async with maker() as session:
             grant = await session.get(InferenceGrant, grant_id)

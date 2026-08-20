@@ -498,7 +498,31 @@ func TestChatClientAbortStillSettlesRealUsage(t *testing.T) {
 	}
 }
 
-func TestChatUpstreamFailureChargesReservation(t *testing.T) {
+func TestChatAdmitsWhenEstimateExceedsRemainingBudget(t *testing.T) {
+	upstream := fakeChatUpstream(t, nil)
+	defer upstream.Close()
+	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
+	f.seedRoute(t)
+	testutil.SeedSQL(t, f.pool, `UPDATE inference_grants SET token_budget = 50 WHERE grant_id = $1`, f.grantID)
+
+	nonce := uuid.New()
+	body := []byte(chatBody) // max_tokens=64 plus body/4 exceeds 50; old admission 4109'd
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, nonce, body)))
+	if w.Code != 200 {
+		t.Fatalf("want 200 on an oversized estimate, got %d: %s", w.Code, w.Body.String())
+	}
+	var prompt, completion, budget int64
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT prompt_tokens, completion_tokens, token_budget FROM inference_grants WHERE grant_id = $1`,
+		f.grantID).Scan(&prompt, &completion, &budget); err != nil {
+		t.Fatalf("read grant: %v", err)
+	}
+	if prompt != 12 || completion != 5 || budget != 50 {
+		t.Fatalf("settled spend %d/%d against budget %d", prompt, completion, budget)
+	}
+}
+
+func TestChatUpstreamFailureDoesNotChargeReservation(t *testing.T) {
 	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte(`{"error":"boom"}`))
@@ -525,8 +549,8 @@ func TestChatUpstreamFailureChargesReservation(t *testing.T) {
 	if status != "failed" || terminal != "upstream_http_500" {
 		t.Fatalf("failure settle: status=%s terminal=%s", status, terminal)
 	}
-	if prompt != reserved {
-		t.Fatalf("missing usage must charge the reservation: prompt=%d reserved=%d", prompt, reserved)
+	if prompt != 0 {
+		t.Fatalf("missing usage must not charge the reservation: prompt=%d reserved=%d", prompt, reserved)
 	}
 	// 3 bounded attempts per phase, 2 phases in aggregate mode.
 	if attempts != 6 || phase != 1 {
@@ -539,8 +563,8 @@ func TestChatUpstreamFailureChargesReservation(t *testing.T) {
 		Scan(&active, &grantPrompt); err != nil {
 		t.Fatalf("read grant: %v", err)
 	}
-	if active != 0 || grantPrompt != reserved {
-		t.Fatalf("grant accounting after failure: active=%d prompt=%d", active, grantPrompt)
+	if active != 0 || grantPrompt != 0 {
+		t.Fatalf("grant accounting after failure: active=%d prompt=%d want 0", active, grantPrompt)
 	}
 	// A 500 is route-observable: the route cools down.
 	var routeStatus string
@@ -813,7 +837,7 @@ func TestEmbeddingsBackpressure(t *testing.T) {
 		 WHERE grant_id = $1 AND nonce = $2`, f.grantID, nonce).Scan(&status, &terminal, &prompt, &reserved); err != nil {
 		t.Fatalf("read request: %v", err)
 	}
-	if status != "failed" || terminal != "embedding_provider_backpressure_429" || prompt != reserved {
+	if status != "failed" || terminal != "embedding_provider_backpressure_429" || prompt != 0 {
 		t.Fatalf("backpressure settle: %s %s %d/%d", status, terminal, prompt, reserved)
 	}
 }

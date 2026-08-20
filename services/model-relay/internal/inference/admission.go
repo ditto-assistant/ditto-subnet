@@ -175,11 +175,11 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 		return decline(relayhttp.DeclineModelNotPermitted)
 	}
 	// Step 8: status gate (persistent terminals). "exhausted" re-derives
-	// which allowance is spent rather than storing it.
+	// which allowance is spent from settled usage, not a reservation estimate.
 	if grant.Status != "active" {
 		switch grant.Status {
 		case "exhausted":
-			if p.kind == kindChat && grant.PromptTokens+grant.CompletionTokens+p.tokenReservation > grant.TokenBudget {
+			if p.kind == kindChat && grant.PromptTokens+grant.CompletionTokens >= grant.TokenBudget {
 				return decline(relayhttp.DeclineTokenBudgetExhausted)
 			}
 			return decline(relayhttp.DeclineBudgetExhausted)
@@ -190,8 +190,8 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 		}
 	}
 	// Step 9: stale reclamation (this grant + lane, rank 3 locks). Canceled
-	// requests are charged their full reservation as prompt tokens (the
-	// estimate, not the byte count); the lane counter is then RECOUNTED.
+	// requests that never saw a provider receipt charge zero tokens; the
+	// lane counter is then RECOUNTED. The reservation estimate is not spend.
 	staleCutoff := p.now.Add(-2 * time.Duration(p.timeoutSeconds) * time.Second)
 	stale, err := q.ListStaleStartedInferenceRequestsForUpdate(ctx, postgres.ListStaleStartedInferenceRequestsForUpdateParams{
 		GrantID:     pgUUID(p.grantID),
@@ -208,25 +208,6 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 			Nonce:   req.Nonce,
 		}); err != nil {
 			return nil, nil, err
-		}
-		if p.kind == kindChat {
-			if err := q.AddReclaimedChatTokens(ctx, postgres.AddReclaimedChatTokensParams{
-				ReservedTokens: req.ReservedTokens,
-				Now:            pgTime(p.now),
-				GrantID:        req.GrantID,
-			}); err != nil {
-				return nil, nil, err
-			}
-			grant.PromptTokens += req.ReservedTokens
-		} else {
-			if err := q.AddReclaimedEmbeddingTokens(ctx, postgres.AddReclaimedEmbeddingTokensParams{
-				ReservedTokens: req.ReservedTokens,
-				Now:            pgTime(p.now),
-				GrantID:        req.GrantID,
-			}); err != nil {
-				return nil, nil, err
-			}
-			grant.EmbeddingTokens += req.ReservedTokens
 		}
 	}
 	if len(stale) > 0 {
@@ -285,41 +266,31 @@ func beginInferenceRequest(ctx context.Context, tx pgx.Tx, q *postgres.Queries, 
 	if p.kind == kindEmbedding && int64(grant.EmbeddingRequestCount) >= int64(grant.EmbeddingRequestBudget) {
 		return decline(relayhttp.DeclineBudgetExhausted)
 	}
-	// Step 12: caller-shape reservation gate.
+	// Step 12: caller-shape reservation gate. The reservation is stored on
+	// the request row for untrusted-receipt clamping; it is not spend.
 	if p.tokenReservation < 1 {
 		return decline(relayhttp.DeclineUnattributed)
 	}
-	// Step 13: token headroom.
-	activeReserved, err := q.SumStartedReservedTokens(ctx, postgres.SumStartedReservedTokensParams{
-		GrantID:     pgUUID(p.grantID),
-		RequestKind: p.kind,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
+	// Step 13: token budget from settled receipts only. The request that
+	// crosses the wall is allowed to finish; the next one sees spent already
+	// at or past the budget and gets 4104. Body-byte + max_output ceilings
+	// must not admit-gate.
 	spent := grant.PromptTokens + grant.CompletionTokens
 	tokenBudget := grant.TokenBudget
 	if p.kind == kindEmbedding {
 		spent = grant.EmbeddingTokens
 		tokenBudget = grant.EmbeddingTokenBudget
 	}
-	if spent+activeReserved+p.tokenReservation > tokenBudget {
-		if p.tokenReservation > tokenBudget {
-			return decline(relayhttp.DeclineReservationTooLarge)
-		}
-		if spent+p.tokenReservation > tokenBudget {
-			if p.kind == kindChat {
-				if err := q.MarkInferenceGrantExhausted(ctx, postgres.MarkInferenceGrantExhaustedParams{
-					Now:     pgTime(p.now),
-					GrantID: pgUUID(p.grantID),
-				}); err != nil {
-					return nil, nil, err
-				}
+	if spent >= tokenBudget {
+		if p.kind == kindChat {
+			if err := q.MarkInferenceGrantExhausted(ctx, postgres.MarkInferenceGrantExhaustedParams{
+				Now:     pgTime(p.now),
+				GrantID: pgUUID(p.grantID),
+			}); err != nil {
+				return nil, nil, err
 			}
-			return decline(relayhttp.DeclineTokenBudgetExhausted)
 		}
-		// Only the in-flight reservations overflow: backpressure.
-		return decline(atCapacity(p.kind, metrics.ScopeTokenReservation))
+		return decline(relayhttp.DeclineTokenBudgetExhausted)
 	}
 	// Step 14: exact per-ticket concurrency (protected by the grant row
 	// lock).

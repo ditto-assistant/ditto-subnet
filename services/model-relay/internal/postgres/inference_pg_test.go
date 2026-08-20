@@ -261,7 +261,7 @@ func TestInsertInferenceRequestNonceReplay(t *testing.T) {
 	}
 }
 
-func TestStaleReclamationChargesReservationAndRecounts(t *testing.T) {
+func TestStaleReclamationCancelsWithoutChargingTheEstimate(t *testing.T) {
 	f := newFixture(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	staleNonce := uuid.New()
@@ -303,13 +303,6 @@ func TestStaleReclamationChargesReservationAndRecounts(t *testing.T) {
 			}); err != nil {
 				t.Fatalf("cancel: %v", err)
 			}
-			if err := q.AddReclaimedChatTokens(ctx, dbpg.AddReclaimedChatTokensParams{
-				ReservedTokens: req.ReservedTokens,
-				Now:            pgTime(now),
-				GrantID:        req.GrantID,
-			}); err != nil {
-				t.Fatalf("charge grant: %v", err)
-			}
 		}
 
 		// Recount, not decrement.
@@ -339,8 +332,8 @@ func TestStaleReclamationChargesReservationAndRecounts(t *testing.T) {
 		f.grantID, staleNonce).Scan(&reqStatus, &reqPromptTokens); err != nil {
 		t.Fatalf("read request: %v", err)
 	}
-	if reqStatus != "canceled" || reqPromptTokens != 500 {
-		t.Fatalf("stale request: want canceled/500 (the ESTIMATE, not bytes), got %s/%d", reqStatus, reqPromptTokens)
+	if reqStatus != "canceled" || reqPromptTokens != 0 {
+		t.Fatalf("stale request: want canceled/0 (no estimate charge), got %s/%d", reqStatus, reqPromptTokens)
 	}
 
 	var grantPromptTokens int64
@@ -350,8 +343,8 @@ func TestStaleReclamationChargesReservationAndRecounts(t *testing.T) {
 	).Scan(&grantPromptTokens, &grantActive); err != nil {
 		t.Fatalf("read grant: %v", err)
 	}
-	if grantPromptTokens != 500 {
-		t.Fatalf("grant charge: want 500 reclaimed prompt tokens, got %d", grantPromptTokens)
+	if grantPromptTokens != 0 {
+		t.Fatalf("grant charge: want 0 reclaimed prompt tokens, got %d", grantPromptTokens)
 	}
 	if grantActive != 1 {
 		t.Fatalf("grant active recount: want 1, got %d", grantActive)

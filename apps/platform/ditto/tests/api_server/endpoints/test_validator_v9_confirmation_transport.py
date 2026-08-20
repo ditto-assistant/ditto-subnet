@@ -1028,14 +1028,14 @@ class TestV9ConfirmationChatProxy:
             assert len(request_rows) == 1
             request_row = request_rows[0]
             assert request_row.status == "failed"
-            assert request_row.prompt_tokens == request_row.reserved_tokens
+            assert request_row.prompt_tokens == 0
             assert request_row.completion_tokens == 0
             assert request_row.cost_microusd == 0
             assert request_row.upstream_provider is None
             assert grant is not None
             assert grant.request_count == 1
             assert grant.active_requests == 0
-            assert grant.prompt_tokens == request_row.reserved_tokens
+            assert grant.prompt_tokens == 0
             assert grant.completion_tokens == 0
             assert grant.cost_microusd == 0
 

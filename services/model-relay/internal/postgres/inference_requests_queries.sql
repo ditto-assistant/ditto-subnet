@@ -40,14 +40,13 @@ ORDER BY nonce
 FOR UPDATE;
 
 -- name: CancelInferenceRequestChargingReservation :exec
--- Reclamation write: cancel a (locked) started request and charge its full
--- reservation as prompt tokens — the estimate, not the byte count (see
--- test_a_reclaimed_request_is_charged_the_estimate_not_the_byte_count). The
--- matching grant-side charge is AddReclaimedChatTokens /
--- AddReclaimedEmbeddingTokens.
+-- Reclamation write: cancel a (locked) started request without booking the
+-- reservation estimate. Token spend is receipted provider usage only; a stale
+-- or rotated call that never settled charges zero. The request still counts
+-- against the request-count budget.
 UPDATE inference_requests
 SET status = 'canceled',
-    prompt_tokens = reserved_tokens,
+    prompt_tokens = 0,
     completed_at = sqlc.arg(now)::timestamptz
 WHERE grant_id = sqlc.arg(grant_id)::uuid
   AND nonce = sqlc.arg(nonce)::uuid;
