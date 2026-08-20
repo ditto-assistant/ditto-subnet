@@ -22,6 +22,15 @@ from ditto.api_models.benchmark_capacity import (
     BenchmarkCapacity,
 )
 from ditto.api_models.benchmark_progress import BenchmarkProgress
+from ditto.api_models.coding_certification import (
+    AgentCodingCertificationStatus,
+    CodingCapabilityCertificationReceipt,
+    CodingCertificationRecord,
+    CodingCertificationStage,
+    CodingCertificationStatus,
+    SubmitCodingCertificationRequest,
+    SubmitCodingCertificationResponse,
+)
 from ditto.api_models.health import HealthResponse
 from ditto.api_models.name_claim import (
     NameClaimEndorsementView,
@@ -198,12 +207,17 @@ from ditto.api_models.validator import (
 )
 
 __all__ = [
+    "AgentCodingCertificationStatus",
     "AgentResponse",
     "AgentStatusResponse",
     "ArtifactResponse",
     "ActiveBenchmarkSlot",
     "BenchmarkCapacity",
     "BenchmarkProgress",
+    "CodingCapabilityCertificationReceipt",
+    "CodingCertificationRecord",
+    "CodingCertificationStage",
+    "CodingCertificationStatus",
     "CaseScore",
     "CategoryStat",
     "ConfirmationScoreRecord",
@@ -355,6 +369,8 @@ __all__ = [
     "ScreenerProviderSettingsWriteRequest",
     "SubmitScoreRequest",
     "SubmitScoreResponse",
+    "SubmitCodingCertificationRequest",
+    "SubmitCodingCertificationResponse",
     "SubmitTranscriptResponse",
     "Top5ConfirmationJobRequest",
     "ValidatorHeartbeatRequest",

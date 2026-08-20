@@ -721,6 +721,49 @@ ALTER SEQUENCE public.burn_settings_revisions_revision_seq OWNED BY public.burn_
 
 
 --
+-- Name: coding_capability_certifications; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.coding_capability_certifications (
+    certification_row_id uuid NOT NULL,
+    agent_id uuid NOT NULL,
+    artifact_sha256 text NOT NULL,
+    screened_image_sha256 text NOT NULL,
+    validator_hotkey text NOT NULL,
+    bench_version integer NOT NULL,
+    ticket_deadline timestamp with time zone NOT NULL,
+    coding_contract_version integer NOT NULL,
+    certification_id text NOT NULL,
+    status text NOT NULL,
+    failure_stage text,
+    failure_code text,
+    certification_sha256 text NOT NULL,
+    canary_manifest_sha256 text NOT NULL,
+    transcript_object_key text,
+    frozen_submission_object_key text,
+    issued_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    weight_eligible boolean NOT NULL,
+    receipt jsonb NOT NULL,
+    signature text NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_072f CHECK (((coding_contract_version > 0) AND (bench_version > 0))),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_1f19 CHECK (((transcript_object_key IS NULL) OR (transcript_object_key ~ '^sha256/[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_311a CHECK ((((status = 'certified'::text) AND (failure_stage IS NULL) AND (failure_code IS NULL)) OR ((status <> 'certified'::text) AND (failure_stage IS NOT NULL) AND (failure_code IS NOT NULL)))),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_4e52 CHECK (((frozen_submission_object_key IS NULL) OR (frozen_submission_object_key ~ '^sha256/[0-9a-f]{64}$'::text))),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_4f65 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_554c CHECK ((status = ANY (ARRAY['unsupported'::text, 'failed'::text, 'certified'::text]))),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_6449 CHECK ((canary_manifest_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_85b3 CHECK ((signature ~ '^[0-9a-f]{128}$'::text)),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_9677 CHECK ((weight_eligible = false)),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_a287 CHECK (((expires_at > issued_at) AND (expires_at <= (issued_at + '24:00:00'::interval)))),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_ac37 CHECK ((screened_image_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_d7e8 CHECK ((certification_sha256 ~ '^[0-9a-f]{64}$'::text)),
+    CONSTRAINT ck_coding_capability_certifications_coding_certificatio_f820 CHECK (((status <> 'certified'::text) OR ((transcript_object_key IS NOT NULL) AND (frozen_submission_object_key IS NOT NULL))))
+);
+
+
+--
 -- Name: confirmation_budget_days; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2812,6 +2855,22 @@ ALTER TABLE ONLY public.burn_settings_revisions
 
 
 --
+-- Name: coding_capability_certifications coding_capability_certifications_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_capability_certifications
+    ADD CONSTRAINT coding_capability_certifications_pkey PRIMARY KEY (certification_row_id);
+
+
+--
+-- Name: coding_capability_certifications coding_certifications_identity_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_capability_certifications
+    ADD CONSTRAINT coding_certifications_identity_key UNIQUE (agent_id, validator_hotkey, coding_contract_version, certification_id);
+
+
+--
 -- Name: confirmation_bundle_subjects confirmation_bundle_subjects_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3932,6 +3991,20 @@ CREATE UNIQUE INDEX burn_settings_scope_revision_idx ON public.burn_settings_rev
 
 
 --
+-- Name: coding_certifications_active_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_certifications_active_idx ON public.coding_capability_certifications USING btree (agent_id, expires_at, validator_hotkey) WHERE (status = 'certified'::text);
+
+
+--
+-- Name: coding_certifications_agent_created_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_certifications_agent_created_idx ON public.coding_capability_certifications USING btree (agent_id, created_at);
+
+
+--
 -- Name: confirmation_bundles_state_created_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4556,6 +4629,14 @@ ALTER TABLE ONLY public.ath_reviews
 
 ALTER TABLE ONLY public.ath_reviews
     ADD CONSTRAINT ath_reviews_original_duplicate_of_fkey FOREIGN KEY (original_duplicate_of) REFERENCES public.agents(agent_id) ON DELETE RESTRICT;
+
+
+--
+-- Name: coding_capability_certifications coding_certifications_agent_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.coding_capability_certifications
+    ADD CONSTRAINT coding_certifications_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(agent_id) ON DELETE CASCADE;
 
 
 --
