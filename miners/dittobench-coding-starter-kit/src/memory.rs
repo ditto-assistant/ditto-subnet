@@ -396,7 +396,12 @@ pub fn memory_bundle_sha256(request: &CodingSeedRequest) -> Result<String, Strin
         memories: &request.memories,
     })
     .map_err(|error| error.to_string())?;
-    let mut bytes = serde_json::to_vec(&canonicalize(value)).map_err(|error| error.to_string())?;
+    let serialized =
+        serde_json::to_string(&canonicalize(value)).map_err(|error| error.to_string())?;
+    let mut bytes = serialized
+        .replace('\u{2028}', "\\u2028")
+        .replace('\u{2029}', "\\u2029")
+        .into_bytes();
     bytes.push(b'\n');
     Ok(hex_sha256(&bytes))
 }
@@ -526,6 +531,33 @@ mod tests {
         assert_eq!(
             memory_bundle_sha256(&request).unwrap(),
             "c8753c1183bc4a05d7e26e268e1670438a111b2ac6419a6bbbec0491a8df6a37"
+        );
+    }
+
+    #[test]
+    fn shared_memory_vectors_match_python_canonical_bytes() {
+        const VECTOR: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/dittobench-coding-contract/testdata/coding_memory_v1.json"
+        ));
+        let vector: Value = serde_json::from_str(VECTOR).unwrap();
+        let memory: VisibleMemoryRecord = serde_json::from_value(vector["memory"].clone()).unwrap();
+        let mut request = CodingSeedRequest {
+            coding_contract_version: CODING_CONTRACT_VERSION,
+            ticket_id: "vector-ticket".to_string(),
+            case_id: "vector-case".to_string(),
+            profile_capability_id: "vector-profile".to_string(),
+            memory_bundle_sha256: String::new(),
+            memories: vec![memory],
+        };
+        assert_eq!(
+            memory_bundle_sha256(&request).unwrap(),
+            vector["digests"]["ascii"].as_str().unwrap()
+        );
+        request.memories[0].content = vector["unicode_content"].as_str().unwrap().to_string();
+        assert_eq!(
+            memory_bundle_sha256(&request).unwrap(),
+            vector["digests"]["unicode"].as_str().unwrap()
         );
     }
 

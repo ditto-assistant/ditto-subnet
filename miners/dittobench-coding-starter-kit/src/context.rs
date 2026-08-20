@@ -275,7 +275,9 @@ mod tests {
             .iter()
             .position(|message| message.role == "assistant")
             .map_or(&[][..], |index| &messages[index..]);
-        for pair in suffix.chunks_exact(2) {
+        let (pairs, remainder) = suffix.as_chunks::<2>();
+        assert!(remainder.is_empty());
+        for pair in pairs {
             assert_eq!(pair[0].role, "assistant");
             assert_eq!(pair[1].role, "tool");
             assert_eq!(pair[0].tool_calls[0].id, pair[1].tool_call_id);

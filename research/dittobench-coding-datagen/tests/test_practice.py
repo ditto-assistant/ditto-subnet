@@ -11,6 +11,7 @@ from jsonschema import Draft202012Validator
 from dittobench_coding_datagen.canonical import (
     canonical_json_bytes,
     safe_relative_path,
+    sha256_hex,
     tree_identities,
 )
 from dittobench_coding_datagen.compiler import (
@@ -334,6 +335,24 @@ def test_canonical_json_escapes_javascript_line_separators() -> None:
     assert b"\\u2029" in body
     assert "\u2028".encode() not in body
     assert "\u2029".encode() not in body
+
+
+def test_shared_memory_vector_pins_ascii_and_unicode_digests() -> None:
+    vector_path = (
+        ROOT.parents[1]
+        / "packages/dittobench-coding-contract/testdata/coding_memory_v1.json"
+    )
+    vector = json.loads(vector_path.read_text(encoding="utf-8"))
+    memory = vector["memory"]
+    assert (
+        sha256_hex(canonical_json_bytes({"memories": [memory]}))
+        == vector["digests"]["ascii"]
+    )
+    memory["content"] = vector["unicode_content"]
+    assert (
+        sha256_hex(canonical_json_bytes({"memories": [memory]}))
+        == vector["digests"]["unicode"]
+    )
 
 
 def test_source_rejects_unknown_supersession() -> None:

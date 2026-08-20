@@ -1,13 +1,13 @@
 //! Typed client for the validator-owned coding workspace capability.
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
 use ditto_harness::{Error, Tool, ToolDefinition};
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
 use crate::protocol::{
     is_lower_sha256, WorkspaceToolRequest, WorkspaceToolResponse, CODING_CONTRACT_VERSION,
@@ -19,6 +19,8 @@ const TOOL_NAMES: &[(&str, &str)] = &[
     ("repo_read_file", "repo.read_file"),
     ("repo_read_range", "repo.read_range"),
     ("repo_apply_patch", "repo.apply_patch"),
+    ("repo_create_file", "repo.create_file"),
+    ("repo_delete_file", "repo.delete_file"),
     ("tests_run", "tests.run"),
     ("build_run", "build.run"),
     ("git_status", "git.status"),
@@ -30,8 +32,14 @@ struct WorkspaceContext {
     endpoint: String,
     case_id: String,
     profile_capability_id: String,
-    next_call: AtomicU64,
-    last_sequence: AtomicU64,
+    sequence: Mutex<WorkspaceSequence>,
+}
+
+#[derive(Debug, Default)]
+struct WorkspaceSequence {
+    next_call: u64,
+    last_sequence: u64,
+    poisoned: bool,
 }
 
 #[derive(Clone)]
@@ -74,8 +82,7 @@ impl WorkspaceClient {
                 endpoint,
                 case_id,
                 profile_capability_id,
-                next_call: AtomicU64::new(0),
-                last_sequence: AtomicU64::new(0),
+                sequence: Mutex::new(WorkspaceSequence::default()),
             }),
         })
     }
@@ -116,7 +123,14 @@ impl Tool for RemoteWorkspaceTool {
                 "workspace tool arguments must be an object".to_string(),
             ));
         }
-        let ordinal = self.context.next_call.fetch_add(1, Ordering::SeqCst) + 1;
+        let mut sequence = self.context.sequence.lock().await;
+        if sequence.poisoned {
+            return Err(Error::Tool(
+                "workspace session is unavailable after an ambiguous transport failure".to_string(),
+            ));
+        }
+        sequence.next_call = sequence.next_call.saturating_add(1);
+        let ordinal = sequence.next_call;
         let call_id = format!("workspace-call-{ordinal}");
         let request = WorkspaceToolRequest {
             coding_contract_version: CODING_CONTRACT_VERSION,
@@ -126,44 +140,64 @@ impl Tool for RemoteWorkspaceTool {
             name: self.runner_name.clone(),
             arguments,
         };
-        let response = self
-            .context
-            .client
-            .post(&self.context.endpoint)
-            .json(&request)
-            .send()
-            .await?;
-        let status = response.status();
-        let bytes = response.bytes().await?;
+        let mut attempt = 0_u8;
+        let (status, bytes) = loop {
+            let result = async {
+                let response = self
+                    .context
+                    .client
+                    .post(&self.context.endpoint)
+                    .json(&request)
+                    .send()
+                    .await?;
+                let status = response.status();
+                let bytes = response.bytes().await?;
+                Ok::<_, reqwest::Error>((status, bytes))
+            }
+            .await;
+            match result {
+                Ok(response) => break response,
+                Err(_) if attempt == 0 => attempt = 1,
+                Err(error) => {
+                    sequence.poisoned = true;
+                    return Err(error.into());
+                }
+            }
+        };
         if bytes.len() > 2 * 1024 * 1024 {
+            sequence.poisoned = true;
             return Err(Error::Tool("workspace response exceeded 2 MiB".to_string()));
         }
         if !status.is_success() {
+            sequence.poisoned = true;
             return Err(Error::Tool(format!(
                 "workspace endpoint returned HTTP {status}"
             )));
         }
-        let response: WorkspaceToolResponse = serde_json::from_slice(&bytes)?;
+        let response: WorkspaceToolResponse = serde_json::from_slice(&bytes).inspect_err(|_| {
+            sequence.poisoned = true;
+        })?;
         if response.call_id != call_id {
+            sequence.poisoned = true;
             return Err(Error::Tool("workspace call_id mismatch".to_string()));
         }
         if !is_lower_sha256(&response.event_sha256) {
+            sequence.poisoned = true;
             return Err(Error::Tool(
                 "workspace response has invalid event_sha256".to_string(),
             ));
         }
-        let previous = self.context.last_sequence.load(Ordering::SeqCst);
-        if response.sequence != previous + 1 {
+        let expected = sequence.last_sequence.saturating_add(1);
+        if response.sequence != expected {
+            sequence.poisoned = true;
             return Err(Error::Tool(format!(
                 "workspace sequence mismatch: expected {}, received {}",
-                previous + 1,
-                response.sequence
+                expected, response.sequence
             )));
         }
-        self.context
-            .last_sequence
-            .store(response.sequence, Ordering::SeqCst);
+        sequence.last_sequence = response.sequence;
         if response.ok && response.error.is_some() {
+            sequence.poisoned = true;
             return Err(Error::Tool(
                 "successful workspace response carried an error".to_string(),
             ));
@@ -266,6 +300,32 @@ pub fn tool_definitions() -> Vec<ToolDefinition> {
             ),
         ),
         (
+            "repo.create_file",
+            (
+                "Create one manifest-authorized UTF-8 file; disabled by public practice policy.",
+                object_schema(
+                    json!({
+                        "path": {"type": "string", "minLength": 1, "maxLength": 256},
+                        "content": {"type": "string", "maxLength": 65536}
+                    }),
+                    &["path", "content"],
+                ),
+            ),
+        ),
+        (
+            "repo.delete_file",
+            (
+                "Delete one manifest-authorized file at its expected digest; disabled by public practice policy.",
+                object_schema(
+                    json!({
+                        "path": {"type": "string", "minLength": 1, "maxLength": 256},
+                        "expected_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                    }),
+                    &["path", "expected_sha256"],
+                ),
+            ),
+        ),
+        (
             "tests.run",
             (
                 "Run a task-manifest test command by opaque command ID.",
@@ -337,7 +397,7 @@ fn object_schema(properties: Value, required: &[&str]) -> Value {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use axum::extract::State;
     use axum::http::{header, StatusCode};
@@ -346,12 +406,38 @@ mod tests {
 
     use super::*;
 
+    #[derive(Clone, Default)]
+    struct SerialState {
+        active: Arc<AtomicUsize>,
+        max_active: Arc<AtomicUsize>,
+        sequence: Arc<AtomicUsize>,
+    }
+
+    async fn serial_response(
+        State(state): State<SerialState>,
+        Json(request): Json<WorkspaceToolRequest>,
+    ) -> Json<WorkspaceToolResponse> {
+        let active = state.active.fetch_add(1, Ordering::SeqCst) + 1;
+        state.max_active.fetch_max(active, Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        state.active.fetch_sub(1, Ordering::SeqCst);
+        let sequence = state.sequence.fetch_add(1, Ordering::SeqCst) + 1;
+        Json(WorkspaceToolResponse {
+            call_id: request.call_id,
+            sequence: u64::try_from(sequence).unwrap(),
+            ok: true,
+            result: json!({"sequence": sequence}),
+            error: None,
+            event_sha256: "c".repeat(64),
+        })
+    }
+
     #[test]
     fn canonical_tools_are_narrow_and_ordered() {
         let tools = tool_definitions();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 11);
         assert_eq!(tools[0].name, "repo_list_tree");
-        assert_eq!(tools[8].name, "git_diff");
+        assert_eq!(tools[10].name, "git_diff");
         assert!(tools
             .iter()
             .all(|tool| tool.input_schema["additionalProperties"] == false));
@@ -413,6 +499,82 @@ mod tests {
             .await;
         assert!(matches!(result, Err(Error::Tool(message)) if message.contains("307")));
         assert!(!called.load(Ordering::SeqCst));
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn transport_loss_retries_the_same_idempotency_key() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for attempt in 0..2 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let mut request = vec![0_u8; 16 * 1024];
+                let _ = stream.read(&mut request).await.unwrap();
+                if attempt == 0 {
+                    drop(stream);
+                    continue;
+                }
+                let body = serde_json::to_vec(&WorkspaceToolResponse {
+                    call_id: "workspace-call-1".to_string(),
+                    sequence: 1,
+                    ok: true,
+                    result: json!({"replayed": true}),
+                    error: None,
+                    event_sha256: "b".repeat(64),
+                })
+                .unwrap();
+                let headers = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                    body.len()
+                );
+                stream.write_all(headers.as_bytes()).await.unwrap();
+                stream.write_all(&body).await.unwrap();
+                stream.shutdown().await.unwrap();
+            }
+        });
+        let client = WorkspaceClient::new(
+            format!("http://{address}/tool"),
+            "case".to_string(),
+            "profile".to_string(),
+        )
+        .unwrap();
+        let result = client.tools()[0]
+            .execute(json!({"path": ".", "depth": 1}))
+            .await
+            .unwrap();
+        assert_eq!(result["replayed"], true);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn concurrent_workspace_calls_are_serialized() {
+        let state = SerialState::default();
+        let max_active = Arc::clone(&state.max_active);
+        let app = Router::new()
+            .route("/tool", post(serial_response))
+            .with_state(state);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = WorkspaceClient::new(
+            format!("http://{address}/tool"),
+            "case".to_string(),
+            "profile".to_string(),
+        )
+        .unwrap();
+        let tools = client.tools();
+        let first = Arc::clone(&tools[0]);
+        let second = Arc::clone(&tools[1]);
+        let (first_result, second_result) = tokio::join!(
+            first.execute(json!({"path": ".", "depth": 1})),
+            second.execute(json!({"query": "x", "path": ".", "max_results": 1}))
+        );
+        assert!(first_result.is_ok());
+        assert!(second_result.is_ok());
+        assert_eq!(max_active.load(Ordering::SeqCst), 1);
         server.abort();
     }
 }

@@ -6,6 +6,7 @@ on:
     paths:
       - miners/dittobench-coding-starter-kit/**
       - research/dittobench-coding-datagen/**
+      - packages/dittobench-coding-contract/**
       - .github/workflows/coding-starter-kit-ci.yml
       - scripts/test-coding-starter-practice-e2e.sh
 

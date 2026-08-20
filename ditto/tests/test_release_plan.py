@@ -162,6 +162,20 @@ def test_coding_starter_e2e_script_is_release_owned(components, ignored_paths) -
     ) == {"dittobench_coding_starter_kit"}
 
 
+def test_shared_coding_memory_vector_selects_public_consumers(
+    components, ignored_paths
+) -> None:
+    selected_components = selected(
+        components,
+        ignored_paths,
+        "packages/dittobench-coding-contract/testdata/coding_memory_v1.json",
+    )
+    assert {
+        "dittobench_coding_datagen",
+        "dittobench_coding_starter_kit",
+    } <= selected_components
+
+
 def test_platform_change_does_not_release_validator_stack(
     components, ignored_paths
 ) -> None:
