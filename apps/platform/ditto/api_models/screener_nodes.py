@@ -507,7 +507,7 @@ class ScreenerProviderJobView(BaseModel):
     job_id: UUID
     lane: Literal["build", "runtime", "source_review"]
     status: str
-    provider: Literal["targon"] | None = None
+    provider: Literal["targon", "gcp"] | None = None
     provider_resource_id: str | None = None
     image_reference: str | None = None
     error_code: str | None = None

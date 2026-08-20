@@ -5459,7 +5459,7 @@ async def _public_submission_build_snapshot(
                 agent_name=agent_name,
                 agent_version=agent_version,
                 status=cast(Any, row.status),
-                provider=cast(Literal["targon"] | None, row.provider),
+                provider=cast(Literal["targon", "gcp"] | None, row.provider),
                 attempt_count=row.attempt_count,
                 output_sha256=row.output_sha256,
                 output_size_bytes=row.output_size_bytes,

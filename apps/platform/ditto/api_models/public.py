@@ -3715,7 +3715,7 @@ class PublicSubmissionImageBuild(BaseModel):
         "canceled",
         "consumed",
     ]
-    provider: Literal["targon"] | None = None
+    provider: Literal["targon", "gcp"] | None = None
     attempt_count: Annotated[int, Field(ge=0, le=3)]
     output_sha256: Annotated[str | None, Field(pattern=r"^[0-9a-f]{64}$")] = None
     output_size_bytes: Annotated[int | None, Field(ge=1, le=4294967296)] = None

@@ -23,6 +23,7 @@ const STATUS: Record<SubmissionImageBuildStatus, readonly [string, string]> = {
 function buildRoute(build: SubmissionImageBuild): string {
   if (build.status === "fallback_required") return "Targon → local allowed";
   if (build.provider === "targon") return "Targon";
+  if (build.provider === "gcp") return "Cloud Run";
   if (build.status === "queued") return "Awaiting Targon";
   return "Not assigned";
 }

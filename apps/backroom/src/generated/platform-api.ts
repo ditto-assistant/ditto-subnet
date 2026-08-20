@@ -15069,7 +15069,7 @@ export interface components {
             /** Output Size Bytes */
             output_size_bytes?: number | null;
             /** Provider */
-            provider?: "targon" | null;
+            provider?: ("targon" | "gcp") | null;
             /** Started At */
             started_at?: string | null;
             /**
@@ -17123,7 +17123,7 @@ export interface components {
              */
             lane: "build" | "runtime" | "source_review";
             /** Provider */
-            provider?: "targon" | null;
+            provider?: ("targon" | "gcp") | null;
             /** Provider Resource Id */
             provider_resource_id?: string | null;
             /** Status */
@@ -17877,13 +17877,13 @@ export interface components {
             /** Output Size Bytes */
             output_size_bytes?: number | null;
             /** Provider */
-            provider?: "targon" | null;
+            provider?: ("targon" | "gcp") | null;
             /** Runtime Error Code */
             runtime_error_code?: string | null;
             /** Runtime Image Reference */
             runtime_image_reference?: string | null;
             /** Runtime Provider */
-            runtime_provider?: "targon" | null;
+            runtime_provider?: ("targon" | "gcp") | null;
             /**
              * Runtime Status
              * @default skipped
@@ -18073,7 +18073,7 @@ export interface components {
             error_code?: string | null;
             observation?: components["schemas"]["SourceReviewObservationPayload"] | null;
             /** Provider */
-            provider?: "targon" | null;
+            provider?: ("targon" | "gcp") | null;
             /**
              * Review Id
              * Format: uuid

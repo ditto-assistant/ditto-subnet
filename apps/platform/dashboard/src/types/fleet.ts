@@ -230,7 +230,7 @@ export interface SubmissionImageBuild {
   agent_name?: string | null;
   agent_version?: number | null;
   status: SubmissionImageBuildStatus;
-  provider?: "targon" | null;
+  provider?: "targon" | "gcp" | null;
   attempt_count: number;
   output_sha256?: string | null;
   output_size_bytes?: number | null;

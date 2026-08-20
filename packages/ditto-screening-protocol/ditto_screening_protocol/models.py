@@ -91,7 +91,7 @@ class SubmissionImageBuildResponse(BaseModel):
     build_id: UUID
     attempt_id: UUID
     status: SubmissionImageBuildStatus
-    provider: Literal["targon"] | None = None
+    provider: Literal["targon", "gcp"] | None = None
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     image_ref: Annotated[
         str,
@@ -104,7 +104,7 @@ class SubmissionImageBuildResponse(BaseModel):
     runtime_status: Literal[
         "pending", "running", "succeeded", "fallback_required", "skipped"
     ] = "skipped"
-    runtime_provider: Literal["targon"] | None = None
+    runtime_provider: Literal["targon", "gcp"] | None = None
     runtime_image_reference: (
         Annotated[
             str,
@@ -132,7 +132,8 @@ class SubmissionImageBuildResponse(BaseModel):
         if self.status == "fallback_required" and self.error_code is None:
             raise ValueError("fallback remote build requires an error code")
         if self.runtime_status == "succeeded" and (
-            self.runtime_provider != "targon" or self.runtime_image_reference is None
+            self.runtime_provider not in ("targon", "gcp")
+            or self.runtime_image_reference is None
         ):
             raise ValueError("successful runtime smoke requires provider provenance")
         if (
@@ -772,7 +773,7 @@ class SubmissionSourceReviewResponse(BaseModel):
     review_id: UUID
     attempt_id: UUID
     status: SubmissionSourceReviewStatus
-    provider: Literal["targon"] | None = None
+    provider: Literal["targon", "gcp"] | None = None
     artifact_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     observation: SourceReviewObservationPayload | None = None
     error_code: Annotated[str, Field(pattern=r"^[A-Z][A-Z0-9_]{0,79}$")] | None = None

@@ -5567,9 +5567,19 @@ class TestPublicActivity:
                 queue_ready=False,
             )
         )
+        gcp_agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="gcp-canary",
+                queue_ready=False,
+            )
+        )
         now = datetime.now(UTC)
         targon_attempt_id = uuid4()
         fallback_attempt_id = uuid4()
+        gcp_attempt_id = uuid4()
         async with session_maker() as session, session.begin():
             session.add_all(
                 [
@@ -5592,6 +5602,16 @@ class TestPublicActivity:
                         started_at=now - timedelta(minutes=9),
                         deadline=now + timedelta(minutes=21),
                         finished_at=now - timedelta(minutes=2),
+                    ),
+                    ScreeningAttempt(
+                        attempt_id=gcp_attempt_id,
+                        agent_id=gcp_agent_id,
+                        screener_hotkey=_MINER_B,
+                        policy_version=SCREENING_POLICY_VERSION,
+                        status="passed",
+                        started_at=now - timedelta(minutes=6),
+                        deadline=now + timedelta(minutes=24),
+                        finished_at=now - timedelta(seconds=30),
                     ),
                     SubmissionImageBuild(
                         build_id=uuid4(),
@@ -5637,6 +5657,30 @@ class TestPublicActivity:
                         completed_at=now - timedelta(minutes=2),
                         updated_at=now - timedelta(minutes=2),
                     ),
+                    SubmissionImageBuild(
+                        build_id=uuid4(),
+                        agent_id=gcp_agent_id,
+                        attempt_id=gcp_attempt_id,
+                        environment="prod",
+                        artifact_sha256="34" * 32,
+                        image_ref=(
+                            f"ditto-screen/{gcp_agent_id}-{gcp_attempt_id}:latest"
+                        ),
+                        output_key="private/gcp-output.tar",
+                        status="consumed",
+                        provider="gcp",
+                        provider_resource_id="gcp-resource-must-stay-private",
+                        output_sha256="56" * 32,
+                        output_size_bytes=234567,
+                        attempt_count=1,
+                        controller_epoch="private-controller-epoch",
+                        job_token_hash="78" * 32,
+                        created_at=now - timedelta(minutes=6),
+                        started_at=now - timedelta(minutes=5),
+                        completed_at=now - timedelta(minutes=1),
+                        consumed_at=now - timedelta(seconds=30),
+                        updated_at=now - timedelta(seconds=30),
+                    ),
                 ]
             )
         _install_db(app, session_maker)
@@ -5650,15 +5694,20 @@ class TestPublicActivity:
         assert snapshot["targon_completed_count"] == 1
         assert snapshot["fallback_authorized_count"] == 1
         assert [row["agent_name"] for row in snapshot["builds"]] == [
+            "gcp-canary",
             "targon-canary",
             "fallback-canary",
         ]
-        targon = snapshot["builds"][0]
+        gcp = snapshot["builds"][0]
+        assert gcp["provider"] == "gcp"
+        assert gcp["status"] == "consumed"
+        assert gcp["output_sha256"] == "56" * 32
+        targon = snapshot["builds"][1]
         assert targon["provider"] == "targon"
         assert targon["status"] == "consumed"
         assert targon["output_sha256"] == "ef" * 32
         assert targon["attempt_count"] == 1
-        assert {
+        private_fields = {
             "build_id",
             "attempt_id",
             "artifact_sha256",
@@ -5666,7 +5715,9 @@ class TestPublicActivity:
             "provider_resource_id",
             "controller_epoch",
             "job_token_hash",
-        }.isdisjoint(targon)
+        }
+        assert private_fields.isdisjoint(gcp)
+        assert private_fields.isdisjoint(targon)
 
     async def test_lists_all_stages_newest_first_without_sensitive_fields(
         self,
