@@ -41,8 +41,7 @@ def test_resolve_falls_back_to_latest_published_digest(
 
     monkeypatch.setattr("ditto.api_server.builder_image.subprocess.run", fake_run)
     assert (
-        resolve_submission_builder_image(f"{_REPO}:sha-missing")
-        == f"{_REPO}@{_LATEST}"
+        resolve_submission_builder_image(f"{_REPO}:sha-missing") == f"{_REPO}@{_LATEST}"
     )
 
 
