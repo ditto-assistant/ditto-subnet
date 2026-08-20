@@ -17,6 +17,14 @@ validator stack, publish a runtime image, or affect weights. A future scored
 coding service must add its own explicit dependencies rather than silently
 joining the existing validator stack.
 
+The shadow coding-agent reference harness under
+`miners/dittobench-coding-starter-kit` is a separate release component that
+depends on that public coding contract. Coding-datagen changes therefore
+re-verify both components, while a starter-only change remains isolated. Its
+release gate runs Rust formatting, Clippy, and tests from the exact merge
+source and proves the pinned Dockerfile builds. It publishes no image, deploys
+no service, and cannot affect scores or weights.
+
 The `Release` workflow first rejects a merge that a newer queued `main` push
 already superseded. For the current merge, affected root surfaces and every
 selected component verify the exact source in parallel before one aggregate
@@ -25,6 +33,8 @@ consume the resulting immutable release commit:
 
 - the miner starter kit is released from `miners/dittobench-starter-kit`
   without rebuilding the validator stack;
+- the shadow coding starter kit is exact-source verified without publishing or
+  deploying a runtime artifact;
 - Platform uses the reusable exact-SHA IAP deploy and migrates from
   `/opt/ditto-subnet/apps/platform`;
 - Platform API/runtime changes also select Backroom, so both build and deploy

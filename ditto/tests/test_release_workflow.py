@@ -7,6 +7,9 @@ from ditto.validator.build_info import HEARTBEAT_PROTOCOL_VERSION
 
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 CI_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/ci.yml"
+CODING_STARTER_CI_PATH = (
+    Path(__file__).parents[2] / ".github/workflows/coding-starter-kit-ci.yml"
+)
 WORKFLOW_DIR = RELEASE_WORKFLOW_PATH.parent
 PYPROJECT_PATH = Path(__file__).parents[2] / "pyproject.toml"
 ROOT_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
@@ -15,6 +18,7 @@ RELEASE_OWNED_COMPONENT_WORKFLOWS = (
     "ci.yml",
     "backroom-ci.yml",
     "coding-datagen-ci.yml",
+    "coding-starter-kit-ci.yml",
     "datagen-ci.yml",
     "dittobench.yml",
     "model-relay.yml",
@@ -44,6 +48,26 @@ def test_release_is_the_single_post_merge_component_orchestrator() -> None:
         assert "push" not in triggers, workflow_name
 
 
+def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> None:
+    workflow = yaml.load(CODING_STARTER_CI_PATH.read_text(), Loader=yaml.BaseLoader)
+    paths = workflow["on"]["pull_request"]["paths"]
+    assert "miners/dittobench-coding-starter-kit/**" in paths
+    assert "research/dittobench-coding-datagen/**" in paths
+    assert "scripts/test-coding-starter-practice-e2e.sh" in paths
+    verify = workflow["jobs"]["verify"]
+    gate = _step(verify["steps"], "Verify format, lint, and tests")
+    assert "cargo fmt --check" in gate["run"]
+    assert (
+        "cargo clippy --locked --all-targets --all-features -- -D warnings"
+        in (gate["run"])
+    )
+    assert "cargo test --locked --all-targets --all-features --verbose" in gate["run"]
+    image = _step(verify["steps"], "Build the shadow harness image")
+    assert "docker build" in image["run"]
+    e2e = _step(verify["steps"], "Run the scripted Rust and Python practice E2E")
+    assert "scripts/test-coding-starter-practice-e2e.sh" in e2e["run"]
+
+
 def test_release_fanout_is_gated_by_the_component_plan() -> None:
     workflow = yaml.safe_load(RELEASE_WORKFLOW_PATH.read_text())
     jobs = workflow["jobs"]
@@ -60,6 +84,7 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     )
     assert {
         "miner_starter_kit",
+        "dittobench_coding_starter_kit",
         "dittobench_api",
         "dittobench_coding_datagen",
         "dittobench_datagen",
@@ -87,6 +112,10 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "needs.verify-source.result == 'success'" in jobs["release"]["if"]
     assert "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["release"]["if"]
     assert (
+        "needs.plan.outputs.dittobench_coding_starter_kit == 'true'"
+        in jobs["release"]["if"]
+    )
+    assert (
         "needs.plan.outputs.dittobench_coding_datagen == 'true'"
         in jobs["release"]["if"]
     )
@@ -94,13 +123,61 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert (
         "needs.plan.outputs.miner_starter_kit == 'true'" in jobs["admit-current"]["if"]
     )
+    assert (
+        "needs.plan.outputs.dittobench_coding_starter_kit == 'true'"
+        in jobs["admit-current"]["if"]
+    )
     assert jobs["verify-source"]["if"] == "always()"
     assert "verify-dittobench-coding-datagen" in jobs["verify-source"]["needs"]
+    assert "verify-dittobench-coding-starter-kit" in jobs["verify-source"]["needs"]
     coding_gate = jobs["verify-dittobench-coding-datagen"]
     assert "needs.plan.outputs.dittobench_coding_datagen == 'true'" in coding_gate["if"]
     assert coding_gate["defaults"]["run"]["working-directory"] == (
         "research/dittobench-coding-datagen"
     )
+    coding_starter_gate = jobs["verify-dittobench-coding-starter-kit"]
+    assert (
+        "needs.plan.outputs.dittobench_coding_starter_kit == 'true'"
+        in coding_starter_gate["if"]
+    )
+    assert coding_starter_gate["defaults"]["run"]["working-directory"] == (
+        "miners/dittobench-coding-starter-kit"
+    )
+    image_gate = _step(
+        coding_starter_gate["steps"],
+        "Build coding starter kit image from exact merge source",
+    )
+    assert "docker build" in image_gate["run"]
+    e2e_gate = _step(
+        coding_starter_gate["steps"],
+        "Run scripted coding practice E2E from exact merge source",
+    )
+    assert "scripts/test-coding-starter-practice-e2e.sh" in e2e_gate["run"]
+    source_gate = _step(
+        jobs["verify-source"]["steps"],
+        "Require every selected exact-source gate",
+    )
+    assert source_gate["env"]["CODING_STARTER_REQUIRED"] == (
+        "${{ needs.plan.outputs.dittobench_coding_starter_kit }}"
+    )
+    assert source_gate["env"]["CODING_STARTER_RESULT"] == (
+        "${{ needs.verify-dittobench-coding-starter-kit.result }}"
+    )
+    assert (
+        'require_selected "$CODING_STARTER_REQUIRED" "$CODING_STARTER_RESULT" '
+        "dittobench-coding-starter-kit" in source_gate["run"]
+    )
+
+    for job_name, job in jobs.items():
+        if job_name in {
+            "plan",
+            "admit-current",
+            "release",
+            "verify-dittobench-coding-starter-kit",
+            "verify-source",
+        }:
+            continue
+        assert "dittobench_coding_starter_kit" not in str(job), job_name
 
     image_jobs = (
         "build-validator-amd64",
@@ -382,6 +459,20 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert "cargo build --locked --verbose" in starter_verification["run"]
     assert "cargo test --locked --verbose" in starter_verification["run"]
 
+    coding_starter_verification = _step(
+        jobs["verify-dittobench-coding-starter-kit"]["steps"],
+        "Gate coding starter kit release on exact merge source",
+    )
+    assert "cargo fmt --check" in coding_starter_verification["run"]
+    assert (
+        "cargo clippy --locked --all-targets --all-features -- -D warnings"
+        in coding_starter_verification["run"]
+    )
+    assert (
+        "cargo test --locked --all-targets --all-features --verbose"
+        in coding_starter_verification["run"]
+    )
+
     model_relay_steps = jobs["verify-model-relay"]["steps"]
     model_relay_uv = _step(model_relay_steps, "Install uv")
     assert str(model_relay_uv["uses"]).startswith("astral-sh/setup-uv@")
@@ -417,6 +508,10 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
             "Gate screener orchestrator release on exact merge source",
             "needs.plan.outputs.screener_orchestrator == 'true'",
         ),
+        "verify-dittobench-coding-starter-kit": (
+            "Gate coding starter kit release on exact merge source",
+            "needs.plan.outputs.dittobench_coding_starter_kit == 'true'",
+        ),
     }
     for job_name, (step_name, condition) in component_gates.items():
         assert condition in jobs[job_name]["if"]
@@ -429,11 +524,13 @@ def test_release_commits_the_refreshed_project_version_to_uv_lock() -> None:
     assert {
         "verify-root",
         "verify-starter-kit",
+        "verify-dittobench-coding-starter-kit",
         "verify-platform",
         "verify-model-relay",
         "verify-backroom",
         "verify-dittobench-api",
         "verify-dittobench-datagen",
+        "verify-dittobench-coding-datagen",
         "verify-screener",
         "verify-screener-orchestrator",
     } < set(aggregate["needs"])
@@ -465,11 +562,13 @@ def test_superseded_candidate_skips_expensive_source_verification_early() -> Non
         "verify-root-tests",
         "verify-root-contract",
         "verify-starter-kit",
+        "verify-dittobench-coding-starter-kit",
         "verify-platform",
         "verify-model-relay",
         "verify-backroom",
         "verify-dittobench-api",
         "verify-dittobench-datagen",
+        "verify-dittobench-coding-datagen",
         "verify-screener",
         "verify-screener-orchestrator",
     ):
