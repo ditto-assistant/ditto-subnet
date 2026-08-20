@@ -176,6 +176,17 @@ def test_shared_coding_memory_vector_selects_public_consumers(
     } <= selected_components
 
 
+def test_coding_contract_models_select_scorer_and_validator_stack(
+    components, ignored_paths
+) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "ditto/api_models/coding.py",
+        "services/dittobench-api/internal/codingcontract/types.go",
+    ) == {"dittobench_api", "validator", "validator_stack"}
+
+
 def test_platform_change_does_not_release_validator_stack(
     components, ignored_paths
 ) -> None:
