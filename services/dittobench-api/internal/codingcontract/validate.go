@@ -109,7 +109,8 @@ func (task ManifestTask) Validate() error {
 
 func (manifest RunManifest) Validate() error {
 	if manifest.Schema != "dittobench-coding-run-manifest-v1" ||
-		manifest.CodingContractVersion != ContractVersion || manifest.WeightEligible {
+		manifest.CodingContractVersion != ContractVersion || manifest.BenchFamily != "coding" ||
+		manifest.WeightEligible {
 		return errors.New("run manifest is not shadow coding contract v1")
 	}
 	if !validIdentifier(manifest.CodingRunID, 256) || !validIdentifier(manifest.AgentID, 256) ||

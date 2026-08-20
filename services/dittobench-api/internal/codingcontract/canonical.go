@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"unicode/utf8"
 )
 
 type canonicalModel interface {
@@ -143,6 +144,9 @@ func parseCanonical[T parsedModel](
 	if len(body) == 0 || len(body) > MaxCanonicalJSONBytes {
 		return zero, errors.New("coding JSON size is outside the canonical bound")
 	}
+	if err := validateRawJSONUnicode(body); err != nil {
+		return zero, err
+	}
 	if err := rejectDuplicateJSONFields(body); err != nil {
 		return zero, err
 	}
@@ -170,6 +174,51 @@ func parseCanonical[T parsedModel](
 		return zero, err
 	}
 	return decoded, nil
+}
+
+func validateRawJSONUnicode(body []byte) error {
+	if !utf8.Valid(body) {
+		return errors.New("coding JSON is not valid UTF-8")
+	}
+	for index := 0; index < len(body); {
+		if body[index] != '\\' || index+1 >= len(body) {
+			index++
+			continue
+		}
+		if body[index+1] != 'u' {
+			index += 2
+			continue
+		}
+		codepoint, ok := escapedCodepoint(body, index)
+		if !ok {
+			index += 2
+			continue
+		}
+		switch {
+		case codepoint >= 0xD800 && codepoint <= 0xDBFF:
+			paired, valid := escapedCodepoint(body, index+6)
+			if !valid || paired < 0xDC00 || paired > 0xDFFF {
+				return errors.New("coding JSON contains an unpaired high surrogate")
+			}
+			index += 12
+		case codepoint >= 0xDC00 && codepoint <= 0xDFFF:
+			return errors.New("coding JSON contains an unpaired low surrogate")
+		default:
+			index += 6
+		}
+	}
+	return nil
+}
+
+func escapedCodepoint(body []byte, index int) (uint16, bool) {
+	if index < 0 || index+6 > len(body) || body[index] != '\\' || body[index+1] != 'u' {
+		return 0, false
+	}
+	decoded, err := hex.DecodeString(string(body[index+2 : index+6]))
+	if err != nil || len(decoded) != 2 {
+		return 0, false
+	}
+	return uint16(decoded[0])<<8 | uint16(decoded[1]), true
 }
 
 func requireEOF(decoder *json.Decoder) error {
@@ -234,7 +283,7 @@ func validateManifestTaskShape(object map[string]any, path string) error {
 }
 
 func validateRunManifestShape(object map[string]any) error {
-	if err := requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible", "coding_run_id",
+	if err := requireFields(object, "$", "schema", "coding_contract_version", "bench_family", "weight_eligible", "coding_run_id",
 		"agent_id", "agent_artifact_sha256", "corpus_release_id", "catalog_merkle_root",
 		"selection_derivation_id", "selection_chain_genesis_hash", "selection_block_number",
 		"selection_block_hash", "inference_grant_sha256", "grader_contract_sha256", "task_set_id",
@@ -394,8 +443,8 @@ func rejectDuplicateJSONFields(body []byte) error {
 }
 
 func scanJSONValue(decoder *json.Decoder, depth int) error {
-	if depth > 128 {
-		return errors.New("coding JSON nesting exceeds 128 levels")
+	if depth > 32 {
+		return errors.New("coding JSON nesting exceeds 32 levels")
 	}
 	token, err := decoder.Token()
 	if err != nil {

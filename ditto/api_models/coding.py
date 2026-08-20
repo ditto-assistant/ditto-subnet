@@ -161,6 +161,7 @@ class CodingManifestTask(CodingContractModel):
 class CodingRunManifest(CodingContractModel):
     schema_name: Literal["dittobench-coding-run-manifest-v1"] = Field(alias="schema")
     coding_contract_version: Literal[1]
+    bench_family: Literal["coding"]
     weight_eligible: Literal[False]
     coding_run_id: OpaqueId
     agent_id: OpaqueId
@@ -635,8 +636,8 @@ def parse_canonical_json[ModelT: CodingContractModel](
     stack: list[tuple[Any, int]] = [(decoded, 0)]
     while stack:
         value, depth = stack.pop()
-        if depth > 128:
-            raise ValueError("coding JSON nesting exceeds 128 levels")
+        if depth > 32:
+            raise ValueError("coding JSON nesting exceeds 32 levels")
         if isinstance(value, dict):
             stack.extend((nested, depth + 1) for nested in value.values())
         elif isinstance(value, list):

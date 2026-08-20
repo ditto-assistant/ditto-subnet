@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -98,6 +99,38 @@ def test_unicode_and_html_characters_have_cross_language_canonical_bytes() -> No
     assert memory_bundle_digest(memories) == vectors["digests"]["unicode_seed_memory"]
 
 
+def test_raw_unicode_boundary_vectors_match_go() -> None:
+    vectors = _vectors()
+    boundaries = vectors["wire_boundary_vectors"]
+    original = b'"The parser drops an incomplete trailing sequence."'
+
+    def replace_description(raw_json_string: str) -> bytes:
+        return _body(vectors["run_request"]).replace(
+            original, raw_json_string.encode("utf-8"), 1
+        )
+
+    paired = parse_canonical_json(
+        CodingRunRequest,
+        replace_description(boundaries["paired_surrogate_json_string"]),
+    )
+    assert paired.issue.description == "😀"
+    for key, expected in (
+        ("escaped_surrogate_literal_json_string", r"\ud800"),
+        ("replacement_character_json_string", "�"),
+    ):
+        parsed = parse_canonical_json(
+            CodingRunRequest, replace_description(boundaries[key])
+        )
+        assert parsed.issue.description == expected
+    for key in ("lone_high_json_string", "lone_low_json_string"):
+        with pytest.raises((ValueError, UnicodeError)):
+            parse_canonical_json(CodingRunRequest, replace_description(boundaries[key]))
+
+    invalid_utf8 = replace_description('"invalid"').replace(b"invalid", b"\xff", 1)
+    with pytest.raises((ValueError, UnicodeError)):
+        parse_canonical_json(CodingRunRequest, invalid_utf8)
+
+
 def test_duplicate_and_missing_known_fields_fail_closed() -> None:
     duplicate = b'{"schema":"a","schema":"b"}'
     with pytest.raises(ValueError, match="duplicate JSON field"):
@@ -112,6 +145,11 @@ def test_duplicate_and_missing_known_fields_fail_closed() -> None:
 def test_shadow_contract_cannot_become_weight_eligible() -> None:
     manifest = _vectors()["manifest"]
     manifest["weight_eligible"] = True
+    with pytest.raises(ValidationError):
+        parse_canonical_json(CodingRunManifest, _body(manifest))
+
+    manifest = _vectors()["manifest"]
+    manifest["bench_family"] = "memory"
     with pytest.raises(ValidationError):
         parse_canonical_json(CodingRunManifest, _body(manifest))
 
@@ -180,6 +218,51 @@ def test_infrastructure_and_invalid_tasks_are_not_in_repair_mean() -> None:
     assert parsed.repair_mean_micros == 500_000
 
 
+def test_shared_nonresolved_and_aggregate_evidence_vectors() -> None:
+    vectors = _vectors()
+    manifest = parse_canonical_json(CodingRunManifest, _body(vectors["manifest"]))
+    nonresolved = parse_canonical_json(
+        CodingTaskEvidence, _body(vectors["nonresolved_task_evidence"])
+    )
+    assert nonresolved.authoring is None
+    assert nonresolved.grader is None
+    assert nonresolved.terminal_domain.value == "validator_infrastructure"
+    assert nonresolved.failure_code == "transport_pre_authoritative"
+    assert (
+        task_evidence_digest(manifest, "validator-ticket-001", nonresolved)
+        == vectors["digests"]["nonresolved_task_evidence"]
+    )
+
+    aggregate = parse_canonical_json(
+        CodingRunEvidence, _body(vectors["aggregate_run_evidence"])
+    )
+    assert aggregate.scoreable_task_count == 6
+    assert aggregate.repair_mean_micros == 666_666
+    assert (
+        aggregate.resolved_count,
+        aggregate.repair_failure_count,
+        aggregate.infrastructure_count,
+        aggregate.invalid_count,
+        aggregate.candidate_integrity_count,
+        aggregate.control_plane_integrity_count,
+    ) == (4, 1, 1, 1, 1, 1)
+    aggregate_bytes = (
+        json.dumps(
+            aggregate.model_dump(mode="json", by_alias=True),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+        + "\n"
+    ).encode()
+    assert (
+        hashlib.sha256(aggregate_bytes).hexdigest()
+        == vectors["digests"]["aggregate_run_evidence"]
+    )
+
+
 def test_run_evidence_replays_against_manifest_and_task_roots() -> None:
     vectors = _vectors()
     manifest = parse_canonical_json(CodingRunManifest, _body(vectors["manifest"]))
@@ -245,10 +328,21 @@ def test_null_collections_and_excessive_nesting_fail_closed() -> None:
     with pytest.raises(ValidationError):
         parse_canonical_json(CodingRunRequest, _body(run))
 
-    nested: object = "leaf"
-    for _ in range(130):
-        nested = [nested]
-    manifest = vectors["manifest"]
-    manifest["future_nested"] = nested
+    def manifest_at_value_depth(value_depth: int) -> dict[str, Any]:
+        nested: object = "leaf"
+        for _ in range(value_depth - 1):
+            nested = [nested]
+        manifest = copy.deepcopy(vectors["manifest"])
+        manifest["future_nested"] = nested
+        return manifest
+
+    boundaries = vectors["wire_boundary_vectors"]
+    parse_canonical_json(
+        CodingRunManifest,
+        _body(manifest_at_value_depth(boundaries["max_json_depth"])),
+    )
     with pytest.raises(ValueError, match="nesting"):
-        parse_canonical_json(CodingRunManifest, _body(manifest))
+        parse_canonical_json(
+            CodingRunManifest,
+            _body(manifest_at_value_depth(boundaries["reject_json_depth"])),
+        )

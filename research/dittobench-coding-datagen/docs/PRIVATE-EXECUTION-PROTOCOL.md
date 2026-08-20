@@ -546,7 +546,7 @@ lexicographically sorted object keys, compact separators, UTF-8 encoding, and
 one trailing newline. Evidence decoders reject duplicate fields; harness
 decoders reject duplicate known fields. All decoders reject missing known
 fields, ignore unknown fields for rolling compatibility, and exclude unknown
-fields from the canonical digest. JSON input is bounded to 4 MiB and 128 nesting
+fields from the canonical digest. JSON input is bounded to 4 MiB and 32 nesting
 levels. The public Python/Go/Rust vectors under
 `packages/dittobench-coding-contract/testdata` are the cross-language authority
 for these bytes and roots, including Unicode separators and nullable fields.
