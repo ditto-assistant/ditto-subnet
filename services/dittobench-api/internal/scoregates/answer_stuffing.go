@@ -53,11 +53,12 @@ package scoregates
 // value that is nowhere in memory yet fed into the model input cannot be a numeric
 // coincidence with an operand: an operand-equals-answer value is present in memory
 // as that operand and is therefore excluded before it can be flagged. Because a
-// single flagged case is already proof of injection, the run zeroes when the COUNT
-// of provable stuffed cases crosses a low threshold (default 1) rather than a
-// majority share -- the old majority rule let a minority stuffer (real exploit
-// lets_5.0 stuffs ~1 of 5 computed cases) slip through. The stuffed share is still
-// published for observability.
+// single flagged case is already a lead, the compiled default PENALIZE posture
+// reduces the composite by a capped stuffed share rather than zeroing; enforce
+// zeroes when the COUNT of provable stuffed cases crosses a low threshold
+// (default 1) rather than a majority share -- the old majority rule let a
+// minority stuffer (real exploit lets_5.0 stuffs ~1 of 5 computed cases) slip
+// through. The stuffed share is still published for observability.
 
 import "fmt"
 
@@ -65,8 +66,8 @@ type AnswerStuffingPosture string
 
 const (
 	// AnswerStuffingEnforce zeroes the composite when the provable stuffed COUNT
-	// reaches MinCases. Default: a computed answer in the harness's model-input is a
-	// deliberate injection, so the honest posture is a hard gate.
+	// reaches MinCases. Opt-in only: the compiled default is PENALIZE because a
+	// computed answer in the harness's model-input is a lead, not a proof.
 	AnswerStuffingEnforce AnswerStuffingPosture = "enforce"
 	// AnswerStuffingReview emits the signed evidence and routes a flagged run to
 	// human review WITHOUT zeroing the composite (FactorBPS stays full). Reserved
