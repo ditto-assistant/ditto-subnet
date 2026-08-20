@@ -6864,9 +6864,6 @@ def _review_evidence(digest: str) -> list[dict[str, object]]:
 
 
 def _source_tarball() -> tuple[bytes, str]:
-    import hashlib
-    import io
-    import tarfile
 
     files = {
         "Cargo.toml": b'[package]\nname="agent"\nversion="0.1.0"\n',
@@ -7868,9 +7865,6 @@ class TestQuarantineBaselineDiff:
         app: FastAPI,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> tuple[UUID, MagicMock]:
-        import hashlib
-        import io
-        import tarfile
 
         from ditto.api_server.starter_kit import starter_kit_head_text
 
