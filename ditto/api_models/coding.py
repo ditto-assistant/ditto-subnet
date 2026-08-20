@@ -230,10 +230,7 @@ class CodingSeedRequest(CodingContractModel):
         identities = [memory.memory_id for memory in self.memories]
         if identities != sorted(identities) or len(set(identities)) != len(identities):
             raise ValueError("memories must be unique and sorted by memory_id")
-        projection = {
-            "memories": [memory.model_dump(mode="json") for memory in self.memories]
-        }
-        if sha256_hex(canonical_json_bytes(projection)) != self.memory_bundle_sha256:
+        if memory_bundle_digest(self.memories) != self.memory_bundle_sha256:
             raise ValueError("memory_bundle_sha256 does not match canonical memories")
         return self
 
@@ -575,17 +572,11 @@ def _canonical_json_bytes(value: BaseModel | dict[str, Any] | list[Any]) -> byte
 
 
 def canonical_json_bytes(
-    value: CodingRunManifest
-    | CodingSeedRequest
-    | CodingRunRequest
-    | dict[str, Any]
-    | list[Any],
+    value: CodingRunManifest | CodingSeedRequest | CodingRunRequest,
 ) -> bytes:
     """Serialize transport models; signed evidence requires authority context."""
 
-    if isinstance(value, BaseModel) and not isinstance(
-        value, (CodingRunManifest, CodingSeedRequest, CodingRunRequest)
-    ):
+    if not isinstance(value, (CodingRunManifest, CodingSeedRequest, CodingRunRequest)):
         raise TypeError(
             "only coding transport models use the generic canonical API; "
             "signed evidence requires a manifest-bound digest API"
@@ -598,13 +589,24 @@ def sha256_hex(body: bytes) -> str:
 
 
 def canonical_digest(
-    value: CodingRunManifest
-    | CodingSeedRequest
-    | CodingRunRequest
-    | dict[str, Any]
-    | list[Any],
+    value: CodingRunManifest | CodingSeedRequest | CodingRunRequest,
 ) -> str:
     return sha256_hex(canonical_json_bytes(value))
+
+
+def memory_bundle_digest(
+    memories: list[CodingVisibleMemory] | list[dict[str, Any]],
+) -> str:
+    """Hash only a validated visible-memory projection."""
+
+    normalized = [
+        memory
+        if isinstance(memory, CodingVisibleMemory)
+        else CodingVisibleMemory.model_validate_json(json.dumps(memory))
+        for memory in memories
+    ]
+    projection = {"memories": [memory.model_dump(mode="json") for memory in normalized]}
+    return sha256_hex(_canonical_json_bytes(projection))
 
 
 def parse_canonical_json[ModelT: CodingContractModel](
@@ -792,6 +794,7 @@ __all__ = [
     "CodingVisibleMemory",
     "canonical_digest",
     "canonical_json_bytes",
+    "memory_bundle_digest",
     "parse_canonical_json",
     "run_evidence_digest",
     "task_evidence_digest",
