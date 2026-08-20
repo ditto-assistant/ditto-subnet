@@ -2070,11 +2070,11 @@ def _done_v9_job(*, declare_transcript: bool = True) -> dict[str, object]:
 
 
 def _done_zero_inference_job(bench_version: int) -> dict[str, object]:
-    """The signed report a PROVEN zero-inference run now returns on v9/v10/v11.
+    """The signed report a PROVEN zero-inference run now returns on v9+.
 
     The model-use gate reads ``zero_inference`` with factor ``0``, the enforce
     multiplier collapses the effective composite to ``0``, and the root is
-    signed exactly like any other score.
+    signed exactly like any other score. v12 also binds model_dependence.
     """
     from ditto_screening_protocol.bench_v9 import V9ScoreGateEvidence
 
@@ -2084,6 +2084,18 @@ def _done_zero_inference_job(bench_version: int) -> dict[str, object]:
     evidence["transcript_sha256"] = declared
     evidence["bench_version"] = bench_version
     evidence["score_gates"]["bench_version"] = bench_version
+    if bench_version >= 12:
+        evidence["score_gates"]["model_dependence"] = {
+            "administered_cases": 10,
+            "eligible_cases": 10,
+            "dependent_cases": 10,
+            "independent_cases": 0,
+            "slice_attribution_complete": True,
+            "dependence_bps": 10000,
+            "threshold_bps": 1,
+            "result": "passed",
+            "factor_bps": 10000,
+        }
     model_use = evidence["score_gates"]["model_use"]
     model_use.update(
         successful_inference_cases=0,
@@ -2129,7 +2141,10 @@ def _done_zero_inference_job(bench_version: int) -> dict[str, object]:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [9, 10, 11])
+@pytest.mark.parametrize(
+    "bench_version",
+    [version for version in SUPPORTED_BENCH_VERSIONS if version >= 9],
+)
 async def test_proven_zero_inference_polls_back_as_an_ordinary_score(
     bench_version: int,
 ) -> None:
