@@ -15,7 +15,6 @@ every v12 score.
 from __future__ import annotations
 
 import hashlib
-import math
 from collections.abc import Mapping
 from typing import Annotated, Literal, get_args
 
@@ -128,15 +127,12 @@ def _go_bool(value: bool) -> str:
 
 
 def _apply_gate_factor_micros(ordinary_micros: int, factor_bps: int) -> int:
-    """Match Go ``ApplyForVersion`` then ``scoreMicros`` (half away from zero)."""
+    """Match Go ``applyBPS``: ``(value * factor + 5000) / 10000``."""
     if factor_bps == 0:
         return 0
     if factor_bps >= _BASIS_POINTS:
         return ordinary_micros
-    scaled = ordinary_micros * factor_bps / _BASIS_POINTS
-    if scaled >= 0:
-        return int(math.floor(scaled + 0.5))
-    return int(math.ceil(scaled - 0.5))
+    return (ordinary_micros * factor_bps + _BASIS_POINTS // 2) // _BASIS_POINTS
 
 V9EvidenceBenchVersion = Literal[9, 10, 11, 12]
 """Benchmark epochs whose scores carry the signed v9 base-evidence stack.

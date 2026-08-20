@@ -84,7 +84,7 @@ type counterfactualCaseSpec struct {
 	// counterfactual verdict is correctness-based: the pass grades both the clean
 	// response and the ablated response through this closure and compares whether
 	// correctness was PRESERVED under full model ablation. nil leaves the case
-	// ungradeable, so it stays pending and the gate fails closed.
+	// ungradeable, so it stays pending and the gate fails open.
 	grade func(protocol.RunResponse) float64
 }
 
@@ -204,7 +204,7 @@ func populateV12Counterfactual(
 		}
 		if !specs[i].populated() {
 			// No re-run spec captured for this model-reached case: cannot administer
-			// its counterfactual, so it stays pending and the gate fails closed.
+			// its counterfactual, so it stays pending and the gate fails open.
 			continue
 		}
 		eligible = append(eligible, eligibleCase{index: i, caseID: score.CaseID, rank: counterfactualRank(seed, benchVersion, score.CaseID, "selection")})
