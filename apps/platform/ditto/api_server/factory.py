@@ -320,6 +320,27 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                         access_token=writer_token,
                     )
 
+                from ditto.api_server.cloudrun_client import AsyncCloudRunClient
+                from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
+                from ditto.api_server.screening_provider import ScreeningComputeProvider
+                from ditto.api_server.targon_provider import TargonComputeProvider
+
+                providers: list[ScreeningComputeProvider] = [
+                    TargonComputeProvider(targon_client, config.targon)
+                ]
+                if config.cloudrun is not None and config.cloudrun.enabled:
+                    cloudrun_client = AsyncCloudRunClient(
+                        project=config.cloudrun.project,
+                        region=config.cloudrun.region,
+                    )
+                    stack.push_async_callback(cloudrun_client.aclose)
+                    providers.append(
+                        CloudRunComputeProvider(
+                            cloudrun_client,
+                            config.cloudrun,
+                            config.targon,
+                        )
+                    )
                 targon_loop = TargonRentalLoop(
                     session_maker=app.state.session_maker,
                     config=config.targon,
@@ -327,6 +348,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     screener_hotkey=config.screener_auth.hotkey,
                     promote_archive=promote_archive,
                     mint_token=mint_token,
+                    providers=providers,
                 )
                 stack.push_async_callback(targon_loop.aclose)
                 await targon_loop.start()

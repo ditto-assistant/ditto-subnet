@@ -10,9 +10,8 @@ import asyncio
 import hashlib
 import logging
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 import httpx
@@ -21,7 +20,15 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ditto.api_server.config import TargonRentalConfig
-from ditto.api_server.targon_client import TargonAPIError
+from ditto.api_server.screening_provider import (
+    BuildSpec,
+    ReviewSpec,
+    ScreeningComputeProvider,
+    ScreeningProviderError,
+    SmokeSpec,
+    provision_error_code,
+)
+from ditto.api_server.targon_provider import TargonComputeProvider, TargonRentals
 from ditto.api_server.targon_screening import admit_targon_screening_work
 from ditto.db.models import (
     ScreeningAttempt,
@@ -39,7 +46,6 @@ _REAP_LIMIT = 16
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
 _INFLIGHT_JOB = ("leased", "running")
-_PROVISION_FAILED = frozenset({"error", "deleted", "suspended"})
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
@@ -54,18 +60,6 @@ async def _default_health_probe(url: str) -> bool:
     return 200 <= response.status_code < 300
 
 
-class TargonRentals(Protocol):
-    async def inventory(self) -> list[dict[str, Any]]: ...
-
-    async def create_rental(self, **payload: Any) -> dict[str, Any]: ...
-
-    async def deploy(self, uid: str) -> None: ...
-
-    async def state(self, uid: str) -> dict[str, Any]: ...
-
-    async def delete(self, uid: str) -> None: ...
-
-
 PromoteArchive = Callable[[str, str, str], Awaitable[str]]
 MintToken = Callable[[str], Awaitable[str]]
 
@@ -76,20 +70,26 @@ class TargonRentalLoop:
         *,
         session_maker: async_sessionmaker,
         config: TargonRentalConfig,
-        targon: TargonRentals,
+        targon: TargonRentals | None = None,
         screener_hotkey: str,
         promote_archive: PromoteArchive | None = None,
         mint_token: MintToken | None = None,
         health_probe: Callable[[str], Awaitable[bool]] | None = None,
         interval_seconds: float | None = None,
+        providers: Sequence[ScreeningComputeProvider] | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._config = config
-        self._targon = targon
         self._screener_hotkey = screener_hotkey
         self._promote_archive = promote_archive
         self._mint_token = mint_token
-        self._health_probe = health_probe or _default_health_probe
+        probe = health_probe or _default_health_probe
+        self._health_probe = probe
+        if providers is None:
+            if targon is None:
+                raise ValueError("targon or providers is required")
+            providers = [TargonComputeProvider(targon, config, health_probe=probe)]
+        self._providers = list(providers)
         self._interval_seconds = interval_seconds or config.interval_seconds
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
@@ -135,56 +135,24 @@ class TargonRentalLoop:
         handled = await self._launch_source_review() or handled
         return handled
 
-    async def _capacity_ok(self) -> bool:
-        try:
-            rows = await self._targon.inventory()
-        except TargonAPIError:
-            logger.warning("targon inventory unavailable", exc_info=True)
-            return False
-        available = sum(
-            max(0, int(row.get("available", 0)))
-            for row in rows
-            if str(row.get("name", "")) == self._config.resource
-        )
-        return available >= 1
+    def _provider_named(self, stored: str | None) -> ScreeningComputeProvider:
+        wanted = stored or "targon"
+        for provider in self._providers:
+            if provider.stored_provider == wanted or provider.name == wanted:
+                return provider
+        return self._providers[0]
+
+    async def _any_capacity(self) -> bool:
+        for provider in self._providers:
+            if await provider.capacity_ok():
+                return True
+        return False
 
     def _provision_cutoff(self, now: datetime) -> datetime:
         return now - timedelta(seconds=self._config.provision_timeout_seconds)
 
-    async def _provision_status(self, uid: str) -> str:
-        try:
-            state = await self._targon.state(uid)
-        except TargonAPIError:
-            return ""
-        return str(state.get("status", "")).casefold()
-
-    async def _wait_for_provisioned(self, uid: str) -> str:
-        """Wait until Targon reports running, a terminal failure, or timeout.
-
-        Provision is time-to-running only. Kaniko may then compile up to the
-        existing build/lease caps. Returns ``running``, ``error``, or
-        ``timeout``.
-        """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + self._config.provision_timeout_seconds
-        while True:
-            status = await self._provision_status(uid)
-            if status == "running":
-                return "running"
-            if status in _PROVISION_FAILED:
-                return "error"
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                return "timeout"
-            await asyncio.sleep(min(1.0, remaining))
-
-    def _provision_error_code(self, result: str) -> str:
-        if result == "timeout":
-            return "TARGON_PROVISION_TIMEOUT"
-        return "TARGON_PROVISION_ERROR"
-
     async def _launch_kaniko(self) -> bool:
-        if not await self._capacity_ok():
+        if not await self._any_capacity():
             return False
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
@@ -208,7 +176,6 @@ class TargonRentalLoop:
                 return False
             token = secrets.token_urlsafe(48)
             row.status = "leased"
-            row.provider = "targon"
             row.controller_epoch = self._epoch
             row.lease_expires_at = now + _BUILD_LEASE
             row.attempt_count += 1
@@ -216,56 +183,59 @@ class TargonRentalLoop:
             row.job_token_expires_at = now + _JOB_TTL
             row.updated_at = now
             build_id = row.build_id
-        name = f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32]
-        uid: str | None = None
-        try:
-            created = await self._targon.create_rental(
-                name=name,
-                image=self._config.submission_builder_image,
-                resource_name=self._config.resource,
-                envs=[
-                    {
-                        "name": "DITTO_PLATFORM_URL",
-                        "value": self._config.public_platform_url,
-                    },
-                    {"name": "DITTO_BUILD_ID", "value": str(build_id)},
-                    {"name": "DITTO_BUILD_JOB_TOKEN", "value": token},
-                ],
-            )
-            uid = str(created["uid"])
-            async with self._session_maker() as session, session.begin():
-                stored = await session.get(SubmissionImageBuild, build_id)
-                if stored is not None:
-                    stored.status = "running"
-                    stored.provider_resource_id = uid
-                    stored.updated_at = datetime.now(UTC)
-            await self._targon.deploy(uid)
-            provisioned = await self._wait_for_provisioned(uid)
-            if provisioned != "running":
-                await self._fail_build_provision(build_id, provisioned)
-                if uid is not None:
-                    await self._delete_rental(uid)
-                    await self._clear_resource_id("build", build_id)
-                return True
-            return True
-        except (TargonAPIError, KeyError, ValueError):
-            logger.exception("targon kaniko launch failed build_id=%s", build_id)
-            async with self._session_maker() as session, session.begin():
-                stored = await session.get(SubmissionImageBuild, build_id)
-                if stored is not None:
-                    stored.status = "fallback_required"
-                    stored.error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
-                    stored.updated_at = datetime.now(UTC)
+        spec = BuildSpec(
+            name=f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32],
+            image=self._config.submission_builder_image,
+            env=(
+                ("DITTO_PLATFORM_URL", self._config.public_platform_url),
+                ("DITTO_BUILD_ID", str(build_id)),
+                ("DITTO_BUILD_JOB_TOKEN", token),
+            ),
+        )
+        error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
+        for provider in self._providers:
+            if not await provider.capacity_ok():
+                continue
+            uid: str | None = None
+            try:
+                uid = await provider.create_build(spec)
+                async with self._session_maker() as session, session.begin():
+                    stored = await session.get(SubmissionImageBuild, build_id)
+                    if stored is not None:
+                        stored.status = "running"
+                        stored.provider = provider.stored_provider
+                        stored.provider_resource_id = uid
+                        stored.updated_at = datetime.now(UTC)
+                await provider.start(uid)
+                provisioned = await provider.wait_until_running(
+                    uid, self._config.provision_timeout_seconds
+                )
+                if provisioned == "running":
+                    return True
+                error_code = provision_error_code(provider.stored_provider, provisioned)
+            except ScreeningProviderError:
+                logger.exception(
+                    "%s kaniko launch failed build_id=%s", provider.name, build_id
+                )
+                error_code = (
+                    "TARGON_SUBMISSION_PROVIDER_ERROR"
+                    if provider.stored_provider == "targon"
+                    else "CLOUDRUN_PROVIDER_ERROR"
+                )
             if uid is not None:
-                await self._delete_rental(uid)
-            return True
+                await provider.delete(uid)
+                await self._clear_resource_id("build", build_id)
+        await self._fail_build_provision(build_id, error_code)
+        return True
 
     async def _launch_smoke(self) -> bool:
-        if self._promote_archive is None or self._mint_token is None:
+        mint_token = self._mint_token
+        promote_archive = self._promote_archive
+        if promote_archive is None or mint_token is None:
             return False
         if not self._config.candidate_writer_sa or not self._config.candidate_reader_sa:
             return False
-        if not await self._capacity_ok():
+        if not await self._any_capacity():
             return False
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
@@ -290,83 +260,114 @@ class TargonRentalLoop:
             build_id = row.build_id
             output_key = row.output_key
             destination = f"{_CANDIDATE_REGISTRY}:build-{build_id.hex}"
-        uid: str | None = None
+        writer = await mint_token(self._config.candidate_writer_sa)
         try:
-            writer = await self._mint_token(self._config.candidate_writer_sa)
-            image_reference = await self._promote_archive(
-                output_key, destination, writer
-            )
-            pull = await self._mint_token(self._config.candidate_reader_sa)
-            created = await self._targon.create_rental(
-                name=f"ditto-runtime-{str(build_id).replace('-', '')[:14]}"[:32],
-                image=image_reference,
-                resource_name=self._config.resource,
-                envs=[
-                    {"name": "OPENROUTER_API_KEY", "value": "sk-screener-smoke"},
-                    {"name": "DITTOBENCH_DB", "value": "/tmp/dittobench.db"},
-                ],
-                ports=[{"port": 8080, "protocol": "TCP", "routing": "PROXIED"}],
-                registry_auth={
-                    "server": destination.split("/", 1)[0],
-                    "username": "oauth2accesstoken",
-                    "password": pull,
-                },
-            )
-            uid = str(created["uid"])
-            await self._targon.deploy(uid)
-            provisioned = await self._wait_for_provisioned(uid)
-            healthy = (
-                await self._wait_for_health(uid) if provisioned == "running" else False
-            )
-            async with self._session_maker() as session, session.begin():
-                stored = await session.get(SubmissionImageBuild, build_id)
-                if stored is None:
-                    return True
-                stored.runtime_provider_resource_id = uid
-                stored.runtime_image_reference = image_reference
-                stored.updated_at = datetime.now(UTC)
-                if healthy:
-                    stored.runtime_status = "succeeded"
-                    stored.runtime_completed_at = datetime.now(UTC)
-                    attempt = await session.get(ScreeningAttempt, stored.attempt_id)
-                    if attempt is not None and not attempt.build_only:
-                        await session.execute(
-                            pg_insert(SubmissionSourceReview)
-                            .values(
-                                review_id=uuid4(),
-                                agent_id=stored.agent_id,
-                                attempt_id=stored.attempt_id,
-                                environment=stored.environment,
-                                artifact_sha256=stored.artifact_sha256,
-                                status="queued",
-                            )
-                            .on_conflict_do_nothing(
-                                constraint="submission_source_reviews_attempt_key"
-                            )
-                        )
-                else:
-                    stored.runtime_status = "fallback_required"
-                    stored.runtime_error_code = (
-                        self._provision_error_code(provisioned)
-                        if provisioned != "running"
-                        else "TARGON_RUNTIME_HEALTH_FAILED"
-                    )
-                    stored.runtime_completed_at = datetime.now(UTC)
-            return True
+            image_reference = await promote_archive(output_key, destination, writer)
         except Exception:
-            logger.exception("targon runtime launch failed build_id=%s", build_id)
-            async with self._session_maker() as session, session.begin():
-                stored = await session.get(SubmissionImageBuild, build_id)
-                if stored is not None:
-                    stored.runtime_status = "fallback_required"
-                    stored.runtime_error_code = "TARGON_RUNTIME_PROVIDER_ERROR"
-                    stored.updated_at = datetime.now(UTC)
+            logger.exception("runtime archive promote failed build_id=%s", build_id)
+            await self._fail_runtime_provision(
+                build_id, "TARGON_RUNTIME_PROVIDER_ERROR"
+            )
             return True
-        finally:
-            # L1 reads the source tarball on a separate trusted-screener
-            # rental. The miner runtime image is not needed after /health.
-            if uid is not None and await self._delete_rental(uid):
+        pull = await mint_token(self._config.candidate_reader_sa)
+        spec = SmokeSpec(
+            name=f"ditto-runtime-{str(build_id).replace('-', '')[:14]}"[:32],
+            image=image_reference,
+            env=(
+                ("OPENROUTER_API_KEY", "sk-screener-smoke"),
+                ("DITTOBENCH_DB", "/tmp/dittobench.db"),
+            ),
+            registry_auth={
+                "server": destination.split("/", 1)[0],
+                "username": "oauth2accesstoken",
+                "password": pull,
+            },
+        )
+        error_code = "TARGON_RUNTIME_PROVIDER_ERROR"
+        last_uid: str | None = None
+        last_provider: ScreeningComputeProvider | None = None
+        healthy = False
+        for provider in self._providers:
+            if not await provider.capacity_ok():
+                continue
+            uid: str | None = None
+            try:
+                uid = await provider.create_smoke(spec)
+                last_uid = uid
+                last_provider = provider
+                async with self._session_maker() as session, session.begin():
+                    stored = await session.get(SubmissionImageBuild, build_id)
+                    if stored is not None:
+                        stored.runtime_provider_resource_id = uid
+                        stored.runtime_image_reference = image_reference
+                        stored.updated_at = datetime.now(UTC)
+                await provider.start(uid)
+                provisioned = await provider.wait_until_running(
+                    uid, self._config.provision_timeout_seconds
+                )
+                if provisioned == "running":
+                    healthy = await provider.probe_smoke(
+                        uid,
+                        timeout_seconds=self._config.runtime_timeout_seconds,
+                    )
+                    if healthy:
+                        error_code = ""
+                        break
+                    error_code = "TARGON_RUNTIME_HEALTH_FAILED"
+                else:
+                    error_code = provision_error_code(
+                        provider.stored_provider, provisioned
+                    )
+            except ScreeningProviderError:
+                logger.exception(
+                    "%s runtime launch failed build_id=%s", provider.name, build_id
+                )
+                error_code = (
+                    "TARGON_RUNTIME_PROVIDER_ERROR"
+                    if provider.stored_provider == "targon"
+                    else "CLOUDRUN_PROVIDER_ERROR"
+                )
+            if uid is not None:
+                await provider.delete(uid)
                 await self._clear_resource_id("runtime", build_id)
+                last_uid = None
+                last_provider = None
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(SubmissionImageBuild, build_id)
+            if stored is None:
+                return True
+            stored.runtime_image_reference = image_reference
+            stored.updated_at = datetime.now(UTC)
+            if healthy:
+                stored.runtime_status = "succeeded"
+                stored.runtime_completed_at = datetime.now(UTC)
+                attempt = await session.get(ScreeningAttempt, stored.attempt_id)
+                if attempt is not None and not attempt.build_only:
+                    await session.execute(
+                        pg_insert(SubmissionSourceReview)
+                        .values(
+                            review_id=uuid4(),
+                            agent_id=stored.agent_id,
+                            attempt_id=stored.attempt_id,
+                            environment=stored.environment,
+                            artifact_sha256=stored.artifact_sha256,
+                            status="queued",
+                        )
+                        .on_conflict_do_nothing(
+                            constraint="submission_source_reviews_attempt_key"
+                        )
+                    )
+            else:
+                stored.runtime_status = "fallback_required"
+                stored.runtime_error_code = error_code
+                stored.runtime_completed_at = datetime.now(UTC)
+        if (
+            last_uid is not None
+            and last_provider is not None
+            and await last_provider.delete(last_uid)
+        ):
+            await self._clear_resource_id("runtime", build_id)
+        return True
 
     async def _launch_source_review(self) -> bool:
         if (
@@ -374,9 +375,10 @@ class TargonRentalLoop:
             or not self._config.source_review_secret_resource
         ):
             return False
-        if self._mint_token is None:
+        mint_token = self._mint_token
+        if mint_token is None:
             return False
-        if not await self._capacity_ok():
+        if not await self._any_capacity():
             return False
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
@@ -416,7 +418,6 @@ class TargonRentalLoop:
                 return False
             token = secrets.token_urlsafe(48)
             row.status = "leased"
-            row.provider = "targon"
             row.controller_epoch = self._epoch
             row.lease_expires_at = now + _SOURCE_LEASE
             row.attempt_count += 1
@@ -426,150 +427,118 @@ class TargonRentalLoop:
             review_id = row.review_id
             attempt_id = row.attempt_id
             artifact_sha256 = row.artifact_sha256
-        uid: str | None = None
-        try:
-            bootstrap = await self._mint_token(self._config.bootstrap_sa)
-            created = await self._targon.create_rental(
-                name=f"ditto-source-{str(review_id).replace('-', '')[:16]}"[:32],
-                image=image_reference,
-                resource_name=self._config.resource,
-                envs=[
-                    {
-                        "name": "DITTO_PLATFORM_URL",
-                        "value": self._config.public_platform_url,
-                    },
-                    {"name": "DITTO_SOURCE_REVIEW_ID", "value": str(review_id)},
-                    {
-                        "name": "DITTO_SOURCE_REVIEW_ATTEMPT_ID",
-                        "value": str(attempt_id),
-                    },
-                    {
-                        "name": "DITTO_SOURCE_REVIEW_ARTIFACT_SHA256",
-                        "value": artifact_sha256,
-                    },
-                    {"name": "DITTO_SOURCE_REVIEW_JOB_TOKEN", "value": token},
-                    {"name": "DITTO_SOURCE_REVIEW_JOB", "value": "1"},
-                    {
-                        "name": "SCREENER_NODE_CREDENTIAL_FILE",
-                        "value": "/tmp/ditto-source-review/node.json",
-                    },
-                    {
-                        "name": "SCREENER_GCP_BOOTSTRAP_ACCESS_TOKEN",
-                        "value": bootstrap,
-                    },
-                    {
-                        "name": "SCREENER_SOURCE_REVIEW_SECRET_RESOURCE",
-                        "value": self._config.source_review_secret_resource,
-                    },
-                    {
-                        "name": "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS",
-                        "value": str(int(self._config.source_review_timeout_seconds)),
-                    },
-                ],
-                commands=["/app/workers/screener/.venv/bin/python", "-m"],
-                args=["ditto_screener.source_review_job"],
-            )
-            uid = str(created["uid"])
-            async with self._session_maker() as session, session.begin():
-                stored = await session.get(SubmissionSourceReview, review_id)
-                if stored is not None:
-                    stored.status = "running"
-                    stored.provider_resource_id = uid
-                    stored.updated_at = datetime.now(UTC)
-            await self._targon.deploy(uid)
-            provisioned = await self._wait_for_provisioned(uid)
-            if provisioned != "running":
-                await self._fail_review_provision(review_id, provisioned)
-                if uid is not None:
-                    await self._delete_rental(uid)
-                    await self._clear_resource_id("review", review_id)
-                return True
-            return True
-        except Exception:
-            logger.exception(
-                "targon source-review launch failed review_id=%s", review_id
-            )
-            async with self._session_maker() as session, session.begin():
-                stored = await session.get(SubmissionSourceReview, review_id)
-                if stored is not None:
-                    stored.status = "fallback_required"
-                    stored.error_code = "TARGON_SOURCE_REVIEW_PROVIDER_ERROR"
-                    stored.updated_at = datetime.now(UTC)
+        bootstrap = await mint_token(self._config.bootstrap_sa)
+        spec = ReviewSpec(
+            name=f"ditto-source-{str(review_id).replace('-', '')[:16]}"[:32],
+            image=image_reference,
+            env=(
+                ("DITTO_PLATFORM_URL", self._config.public_platform_url),
+                ("DITTO_SOURCE_REVIEW_ID", str(review_id)),
+                ("DITTO_SOURCE_REVIEW_ATTEMPT_ID", str(attempt_id)),
+                ("DITTO_SOURCE_REVIEW_ARTIFACT_SHA256", artifact_sha256),
+                ("DITTO_SOURCE_REVIEW_JOB_TOKEN", token),
+                ("DITTO_SOURCE_REVIEW_JOB", "1"),
+                (
+                    "SCREENER_NODE_CREDENTIAL_FILE",
+                    "/tmp/ditto-source-review/node.json",
+                ),
+                ("SCREENER_GCP_BOOTSTRAP_ACCESS_TOKEN", bootstrap),
+                (
+                    "SCREENER_SOURCE_REVIEW_SECRET_RESOURCE",
+                    self._config.source_review_secret_resource,
+                ),
+                (
+                    "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS",
+                    str(int(self._config.source_review_timeout_seconds)),
+                ),
+            ),
+            commands=("/app/workers/screener/.venv/bin/python", "-m"),
+            args=("ditto_screener.source_review_job",),
+        )
+        error_code = "TARGON_SOURCE_REVIEW_PROVIDER_ERROR"
+        for provider in self._providers:
+            if not await provider.capacity_ok():
+                continue
+            uid: str | None = None
+            try:
+                uid = await provider.create_source_review(spec)
+                async with self._session_maker() as session, session.begin():
+                    stored = await session.get(SubmissionSourceReview, review_id)
+                    if stored is not None:
+                        stored.status = "running"
+                        stored.provider = provider.stored_provider
+                        stored.provider_resource_id = uid
+                        stored.updated_at = datetime.now(UTC)
+                await provider.start(uid)
+                provisioned = await provider.wait_until_running(
+                    uid, self._config.provision_timeout_seconds
+                )
+                if provisioned == "running":
+                    return True
+                error_code = provision_error_code(provider.stored_provider, provisioned)
+            except ScreeningProviderError:
+                logger.exception(
+                    "%s source-review launch failed review_id=%s",
+                    provider.name,
+                    review_id,
+                )
+                error_code = (
+                    "TARGON_SOURCE_REVIEW_PROVIDER_ERROR"
+                    if provider.stored_provider == "targon"
+                    else "CLOUDRUN_PROVIDER_ERROR"
+                )
             if uid is not None:
-                await self._delete_rental(uid)
-            return True
+                await provider.delete(uid)
+                await self._clear_resource_id("review", review_id)
+        await self._fail_review_provision(review_id, error_code)
+        return True
 
-    async def _fail_build_provision(self, build_id: UUID, result: str) -> None:
+    async def _fail_build_provision(self, build_id: UUID, error_code: str) -> None:
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
             stored = await session.get(SubmissionImageBuild, build_id)
             if stored is None or stored.status not in _INFLIGHT_JOB:
                 return
             stored.status = "fallback_required"
-            stored.error_code = self._provision_error_code(result)
+            stored.error_code = error_code
             stored.completed_at = now
             stored.updated_at = now
             stored.lease_expires_at = None
 
-    async def _fail_review_provision(self, review_id: UUID, result: str) -> None:
+    async def _fail_review_provision(self, review_id: UUID, error_code: str) -> None:
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
             stored = await session.get(SubmissionSourceReview, review_id)
             if stored is None or stored.status not in _INFLIGHT_JOB:
                 return
             stored.status = "fallback_required"
-            stored.error_code = self._provision_error_code(result)
+            stored.error_code = error_code
             stored.completed_at = now
             stored.updated_at = now
             stored.lease_expires_at = None
 
-    async def _fail_runtime_provision(self, build_id: UUID, result: str) -> None:
+    async def _fail_runtime_provision(self, build_id: UUID, error_code: str) -> None:
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
             stored = await session.get(SubmissionImageBuild, build_id)
             if stored is None or stored.runtime_status != "running":
                 return
             stored.runtime_status = "fallback_required"
-            stored.runtime_error_code = self._provision_error_code(result)
+            stored.runtime_error_code = error_code
             stored.runtime_completed_at = now
             stored.updated_at = now
-
-    async def _wait_for_health(self, uid: str) -> bool:
-        if self._health_probe is None:
-            return False
-        deadline = (
-            asyncio.get_running_loop().time() + self._config.runtime_timeout_seconds
-        )
-        while asyncio.get_running_loop().time() < deadline:
-            try:
-                state = await self._targon.state(uid)
-            except TargonAPIError:
-                await asyncio.sleep(1)
-                continue
-            urls = state.get("urls")
-            if isinstance(urls, list):
-                for row in urls:
-                    if not isinstance(row, dict) or row.get("port") != 8080:
-                        continue
-                    url = str(row.get("url", "")).rstrip("/")
-                    if url.startswith("https://") and await self._health_probe(url):
-                        return True
-            if str(state.get("status", "")).casefold() == "error":
-                return False
-            await asyncio.sleep(1)
-        return False
 
     async def release_rental(self, uid: str | None) -> bool:
         """DELETE a rental as soon as its Platform job has completed."""
         if not uid:
             return False
-        return await self._delete_rental(uid)
+        return await self._delete_resource(None, uid)
 
     async def _reap_unprovisioned_rentals(self) -> bool:
-        """Fail in-flight rentals that never reached Targon running."""
+        """Fail in-flight rentals that never reached a running workload."""
         now = datetime.now(UTC)
         cutoff = self._provision_cutoff(now)
-        candidates: list[tuple[str, UUID, str]] = []
+        candidates: list[tuple[str, UUID, str, str | None]] = []
         async with self._session_maker() as session, session.begin():
             builds = (
                 await session.scalars(
@@ -588,7 +557,7 @@ class TargonRentalLoop:
             for row in builds:
                 uid = row.provider_resource_id
                 if uid:
-                    candidates.append(("build", row.build_id, uid))
+                    candidates.append(("build", row.build_id, uid, row.provider))
             runtimes = (
                 await session.scalars(
                     select(SubmissionImageBuild)
@@ -606,7 +575,7 @@ class TargonRentalLoop:
             for row in runtimes:
                 uid = row.runtime_provider_resource_id
                 if uid:
-                    candidates.append(("runtime", row.build_id, uid))
+                    candidates.append(("runtime", row.build_id, uid, row.provider))
             reviews = (
                 await session.scalars(
                     select(SubmissionSourceReview)
@@ -624,20 +593,24 @@ class TargonRentalLoop:
             for row in reviews:
                 uid = row.provider_resource_id
                 if uid:
-                    candidates.append(("review", row.review_id, uid))
+                    candidates.append(("review", row.review_id, uid, row.provider))
         handled = False
-        for kind, row_id, uid in candidates:
-            status = await self._provision_status(uid)
+        for kind, row_id, uid, stored_provider in candidates:
+            provider = self._provider_named(stored_provider)
+            status = await provider.provision_status(uid)
             if status == "running":
                 continue
-            result = "error" if status in _PROVISION_FAILED else "timeout"
+            result = (
+                "error" if status in {"error", "deleted", "suspended"} else "timeout"
+            )
+            error_code = provision_error_code(provider.stored_provider, result)
             if kind == "build":
-                await self._fail_build_provision(row_id, result)
+                await self._fail_build_provision(row_id, error_code)
             elif kind == "runtime":
-                await self._fail_runtime_provision(row_id, result)
+                await self._fail_runtime_provision(row_id, error_code)
             else:
-                await self._fail_review_provision(row_id, result)
-            if await self._delete_rental(uid):
+                await self._fail_review_provision(row_id, error_code)
+            if await provider.delete(uid):
                 await self._clear_resource_id(kind, row_id)
             handled = True
         return handled
@@ -654,7 +627,7 @@ class TargonRentalLoop:
         50-minute build lease.
         """
         handled = await self._reap_unprovisioned_rentals()
-        pending: list[tuple[str, UUID, str]] = []
+        pending: list[tuple[str, UUID, str, str | None]] = []
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
             stale = (
@@ -685,7 +658,7 @@ class TargonRentalLoop:
                 row.updated_at = now
                 row.lease_expires_at = None
                 if uid:
-                    pending.append(("build", row.build_id, uid))
+                    pending.append(("build", row.build_id, uid, row.provider))
             builds = (
                 await session.scalars(
                     select(SubmissionImageBuild)
@@ -702,7 +675,7 @@ class TargonRentalLoop:
             for row in builds:
                 uid = row.provider_resource_id
                 if uid:
-                    pending.append(("build", row.build_id, uid))
+                    pending.append(("build", row.build_id, uid, row.provider))
             runtimes = (
                 await session.scalars(
                     select(SubmissionImageBuild)
@@ -719,7 +692,7 @@ class TargonRentalLoop:
             for row in runtimes:
                 uid = row.runtime_provider_resource_id
                 if uid:
-                    pending.append(("runtime", row.build_id, uid))
+                    pending.append(("runtime", row.build_id, uid, row.provider))
             reviews = (
                 await session.scalars(
                     select(SubmissionSourceReview)
@@ -736,9 +709,9 @@ class TargonRentalLoop:
             for row in reviews:
                 uid = row.provider_resource_id
                 if uid:
-                    pending.append(("review", row.review_id, uid))
-        for kind, row_id, uid in pending:
-            if await self._delete_rental(uid):
+                    pending.append(("review", row.review_id, uid, row.provider))
+        for kind, row_id, uid, stored_provider in pending:
+            if await self._delete_resource(stored_provider, uid):
                 await self._clear_resource_id(kind, row_id)
                 handled = True
         return handled
@@ -760,10 +733,9 @@ class TargonRentalLoop:
                 stored_review.provider_resource_id = None
                 stored_review.updated_at = datetime.now(UTC)
 
-    async def _delete_rental(self, uid: str) -> bool:
-        try:
-            await self._targon.delete(uid)
-        except TargonAPIError:
-            logger.warning("targon delete failed uid=%s", uid, exc_info=True)
-            return False
-        return True
+    async def _delete_resource(self, stored_provider: str | None, uid: str) -> bool:
+        if stored_provider is None:
+            stored_provider = (
+                "gcp" if uid.startswith(("job:", "service:")) else "targon"
+            )
+        return await self._provider_named(stored_provider).delete(uid)

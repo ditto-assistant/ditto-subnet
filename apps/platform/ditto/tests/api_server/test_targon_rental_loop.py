@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.config import TargonRentalConfig
+from ditto.api_server.screening_provider import BuildSpec, ReviewSpec, SmokeSpec
+from ditto.api_server.targon_provider import TargonComputeProvider
 from ditto.api_server.targon_rental_loop import TargonRentalLoop
 from ditto.db.models import Agent, SubmissionImageBuild, SubmissionSourceReview
 from ditto.tests.api_server.endpoints.test_screener import (
@@ -429,3 +431,106 @@ async def test_runtime_smoke_provision_timeout(
         assert build.runtime_error_code == "TARGON_PROVISION_TIMEOUT"
         assert build.runtime_provider_resource_id is None
     assert "wrk-2" in targon.deleted
+
+
+class _FakeCloudRun:
+    name = "cloudrun"
+    stored_provider = "gcp"
+
+    def __init__(self) -> None:
+        self.builds: list[str] = []
+        self.started: list[str] = []
+        self.deleted: list[str] = []
+        self.status = "running"
+
+    async def capacity_ok(self) -> bool:
+        return True
+
+    async def create_build(self, spec: BuildSpec) -> str:
+        self.builds.append(spec.name)
+        return f"job:{spec.name}"
+
+    async def create_smoke(self, spec: SmokeSpec) -> str:
+        return f"service:{spec.name}"
+
+    async def create_source_review(self, spec: ReviewSpec) -> str:
+        return f"job:{spec.name}"
+
+    async def start(self, resource_id: str) -> None:
+        self.started.append(resource_id)
+
+    async def provision_status(self, resource_id: str) -> str:
+        del resource_id
+        return self.status
+
+    async def wait_until_running(self, resource_id: str, timeout_seconds: float) -> str:
+        del resource_id, timeout_seconds
+        return "running" if self.status == "running" else "timeout"
+
+    async def probe_smoke(self, resource_id: str, *, timeout_seconds: float) -> bool:
+        del resource_id, timeout_seconds
+        return self.status == "running"
+
+    async def delete(self, resource_id: str) -> bool:
+        self.deleted.append(resource_id)
+        return True
+
+
+@pytest.mark.asyncio
+async def test_kaniko_falls_back_to_cloudrun_when_targon_has_no_capacity(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+
+    class _EmptyTargon(_FakeTargon):
+        async def inventory(self) -> list[dict[str, Any]]:
+            return [{"name": "cpu-small", "available": 0}]
+
+    targon = _EmptyTargon()
+    cloudrun = _FakeCloudRun()
+    config = _config()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=config,
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        providers=[TargonComputeProvider(targon, config), cloudrun],
+        interval_seconds=60,
+    )
+    assert await loop.tick() is True
+    assert targon.created == []
+    assert cloudrun.builds
+    assert cloudrun.started
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.provider == "gcp"
+        assert build.status == "running"
+        assert build.provider_resource_id == f"job:{cloudrun.builds[0]}"
+
+
+@pytest.mark.asyncio
+async def test_kaniko_falls_back_to_cloudrun_after_targon_provision_timeout(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon(status="provisioning")
+    cloudrun = _FakeCloudRun()
+    config = _config(provision_timeout_seconds=0)
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=config,
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        providers=[TargonComputeProvider(targon, config), cloudrun],
+        interval_seconds=60,
+    )
+    assert await loop.tick() is True
+    assert targon.deleted == ["wrk-1"]
+    assert cloudrun.builds
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.provider == "gcp"
+        assert build.status == "running"
+        assert build.error_code is None

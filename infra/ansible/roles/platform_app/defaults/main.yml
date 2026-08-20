@@ -182,6 +182,10 @@ platform_targon_candidate_pull_sa: ""
 platform_targon_bootstrap_sa: ""
 platform_targon_source_review_secret: ""
 platform_targon_environment: prod
+platform_cloudrun_project: ""
+platform_cloudrun_region: us-central1
+platform_cloudrun_untrusted_sa: ""
+platform_cloudrun_invoker_sa: ""
 
 # Platform-owned inference stays dark until the coordinated rollout enables it.
 platform_inference_proxy_enabled: false

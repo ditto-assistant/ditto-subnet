@@ -242,6 +242,25 @@ class TargonRentalConfig:
 
 
 @dataclass(frozen=True)
+class CloudRunScreeningConfig:
+    """GCP Cloud Run fallback for Kaniko Jobs, L1 Jobs, and smoke Services."""
+
+    project: str
+    region: str
+    untrusted_sa_email: str
+    platform_invoker_sa_email: str
+
+    @property
+    def enabled(self) -> bool:
+        return bool(
+            self.project
+            and self.region
+            and self.untrusted_sa_email
+            and self.platform_invoker_sa_email
+        )
+
+
+@dataclass(frozen=True)
 class ApiServerConfig:
     """Resolved configuration for the API server process.
 
@@ -396,6 +415,9 @@ class ApiServerConfig:
     targon: TargonRentalConfig | None = None
     """In-process Targon rental loop. Disabled when the API key is absent."""
 
+    cloudrun: CloudRunScreeningConfig | None = None
+    """Cloud Run Jobs/Service fallback. Disabled when project/SA env is absent."""
+
 
 def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig | None:
     api_key = os.environ.get("DITTO_TARGON_API_KEY", "").strip()
@@ -443,6 +465,21 @@ def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig
         ).strip(),
         environment=os.environ.get("DITTO_TARGON_ENVIRONMENT", "prod").strip()
         or "prod",
+    )
+
+
+def _parse_cloudrun_screening_config_from_env() -> CloudRunScreeningConfig | None:
+    project = os.environ.get("DITTO_CLOUDRUN_PROJECT", "").strip()
+    untrusted = os.environ.get("DITTO_CLOUDRUN_UNTRUSTED_SA", "").strip()
+    invoker = os.environ.get("DITTO_CLOUDRUN_INVOKER_SA", "").strip()
+    if not project or not untrusted or not invoker:
+        return None
+    return CloudRunScreeningConfig(
+        project=project,
+        region=os.environ.get("DITTO_CLOUDRUN_REGION", "us-central1").strip()
+        or "us-central1",
+        untrusted_sa_email=untrusted,
+        platform_invoker_sa_email=invoker,
     )
 
 
@@ -736,6 +773,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         raise ApiServerConfigError("TOP5_RESCORE_BACKOFF_CAP must be >= max(1, base)")
 
     targon = _parse_targon_rental_config_from_env(commit_hash)
+    cloudrun = _parse_cloudrun_screening_config_from_env()
 
     return ApiServerConfig(
         host=host,
@@ -750,6 +788,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         embedding=parse_embedding_config_from_env(),
         data_pipeline=parse_data_pipeline_config_from_env(),
         targon=targon,
+        cloudrun=cloudrun,
         screener_auth=ScreenerAuthConfig(
             hotkey=screener_hotkey,
             api_token=screener_api_token,

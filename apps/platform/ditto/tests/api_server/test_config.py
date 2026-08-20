@@ -576,6 +576,24 @@ class TestTargonRentalConfig:
         assert config.targon is not None
         assert config.targon.api_key == self._KEY
 
+    def test_cloudrun_env_enables_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_CLOUDRUN_PROJECT", "ditto-app-dev")
+        monkeypatch.setenv(
+            "DITTO_CLOUDRUN_UNTRUSTED_SA",
+            "ditto-screening-untrusted@ditto-app-dev.iam.gserviceaccount.com",
+        )
+        monkeypatch.setenv(
+            "DITTO_CLOUDRUN_INVOKER_SA",
+            "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com",
+        )
+        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
+        assert config.cloudrun is not None
+        assert config.cloudrun.enabled is True
+        assert config.cloudrun.region == "us-central1"
+
     def test_the_default_is_an_actual_raise_over_the_number_it_replaced(self):
         """1024 was the ceiling a legitimate heavy strategy hit at check ~266.
 

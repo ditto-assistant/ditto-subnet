@@ -66,6 +66,10 @@ platform_targon_candidate_push_sa: ditto-screening-candidate-push@ditto-app-dev.
 platform_targon_candidate_pull_sa: ditto-screening-candidate-pull@ditto-app-dev.iam.gserviceaccount.com
 platform_targon_bootstrap_sa: ditto-screener-bootstrap@ditto-app-dev.iam.gserviceaccount.com
 platform_targon_source_review_secret: projects/ditto-app-dev/secrets/validator-openrouter-key
+platform_cloudrun_project: ditto-app-dev
+platform_cloudrun_region: us-central1
+platform_cloudrun_untrusted_sa: ditto-screening-untrusted@ditto-app-dev.iam.gserviceaccount.com
+platform_cloudrun_invoker_sa: ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com
 
 # Publish the screening backlog (waiting_screening + screening) to Cloud
 # Monitoring every 60s — the prod screener fleet's autoscaling signal

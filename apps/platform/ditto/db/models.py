@@ -2307,7 +2307,7 @@ class SubmissionImageBuild(Base):
             name="submission_image_builds_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider = 'targon'",
+            "provider IS NULL OR provider IN ('targon', 'gcp')",
             name="submission_image_builds_provider_check",
         ),
         CheckConstraint(
@@ -2407,7 +2407,7 @@ class SubmissionSourceReview(Base):
             name="submission_source_reviews_status_check",
         ),
         CheckConstraint(
-            "provider IS NULL OR provider = 'targon'",
+            "provider IS NULL OR provider IN ('targon', 'gcp')",
             name="submission_source_reviews_provider_check",
         ),
         CheckConstraint(
