@@ -148,7 +148,10 @@ class TargonRentalLoop:
         handled = await self._launch_smoke() or handled
         handled = await self._launch_source_review() or handled
         handled = await self._finalize_ready_attempts() or handled
-        handled = await self._repair_kaniko_image_ids() or handled
+        # v0.98.8 re-pinned by downloading screened tars on this loop and
+        # stalled /health plus the public dashboard. Bind still pins new
+        # Kaniko screens to the config digest. Do not re-enable until the
+        # digest read is proven not to block request serving.
         return handled
 
     async def _repair_kaniko_image_ids(self) -> bool:

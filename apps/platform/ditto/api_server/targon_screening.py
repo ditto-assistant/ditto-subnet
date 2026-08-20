@@ -8,6 +8,7 @@ identity; Platform does not hold or use the mnemonic.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import os
@@ -506,7 +507,7 @@ async def _bind_screened_image(
     return upload
 
 
-_REPAIR_LIMIT = 8
+_REPAIR_LIMIT = 1
 
 
 async def repair_kaniko_screened_image_identities(
@@ -598,7 +599,8 @@ async def _image_id_for_kaniko_archive(
     try:
         dest.chmod(0o600)
         await storage.download_object_to_path(key=key, dest=dest)
-        return config_digest_from_docker_save(dest)
+        # tarfile scans are sync and multi-GB; keep them off the API loop.
+        return await asyncio.to_thread(config_digest_from_docker_save, dest)
     except (ObjectDownloadFailedError, OSError):
         logger.warning("Kaniko archive digest read failed key=%s", key, exc_info=True)
         return None
