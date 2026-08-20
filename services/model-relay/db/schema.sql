@@ -2216,7 +2216,7 @@ CREATE TABLE public.submission_image_builds (
     CONSTRAINT ck_submission_image_builds_submission_image_builds_imag_2e51 CHECK ((image_ref = ((((('ditto-screen/'::text || (agent_id)::text) || '-'::text) || (attempt_id)::text) || chr(58)) || 'latest'::text))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_270a CHECK (((output_size_bytes IS NULL) OR ((output_size_bytes >= 1) AND (output_size_bytes <= '4294967296'::bigint)))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_outp_4205 CHECK (((output_sha256 IS NULL) OR (output_sha256 ~ '^[0-9a-f]{64}$'::text))),
-    CONSTRAINT ck_submission_image_builds_submission_image_builds_prov_dba8 CHECK (((provider IS NULL) OR (provider = 'targon'::text))),
+    CONSTRAINT ck_submission_image_builds_submission_image_builds_prov_dba8 CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text])))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_runt_165c CHECK ((runtime_status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'skipped'::text]))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_runt_7180 CHECK (((runtime_image_reference IS NULL) OR (runtime_image_reference ~ '^[a-z0-9.-]+(:[0-9]+)?/[a-z0-9._/-]+@sha256:[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_submission_image_builds_submission_image_builds_status_check CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
@@ -2316,7 +2316,7 @@ CREATE TABLE public.submission_source_reviews (
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__43cb CHECK ((status = ANY (ARRAY['queued'::text, 'leased'::text, 'running'::text, 'succeeded'::text, 'fallback_required'::text, 'canceled'::text, 'consumed'::text]))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__4bdc CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__8b37 CHECK ((artifact_sha256 ~ '^[0-9a-f]{64}$'::text)),
-    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__f22b CHECK (((provider IS NULL) OR (provider = 'targon'::text))),
+    CONSTRAINT ck_submission_source_reviews_submission_source_reviews__f22b CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['targon'::text, 'gcp'::text])))),
     CONSTRAINT ck_submission_source_reviews_submission_source_reviews__fa74 CHECK (((attempt_count >= 0) AND (attempt_count <= 3)))
 );
 
