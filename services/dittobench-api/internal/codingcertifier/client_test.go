@@ -1,6 +1,7 @@
 package codingcertifier
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -12,6 +13,12 @@ import (
 
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 )
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
 
 func TestHTTPHarnessClientAcceptsForwardCompatibleKnownFields(t *testing.T) {
 	seed := fixtureSeed(t)
@@ -109,7 +116,46 @@ func TestHTTPHarnessClientRejectsDuplicateKnownFields(t *testing.T) {
 	}
 	if _, err := client.Health(t.Context()); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("expected duplicate-field failure, got %v", err)
+	} else {
+		var failure *HarnessError
+		if !errors.As(err, &failure) || failure.Kind != HarnessFailureProtocol {
+			t.Fatalf("failure=%#v err=%v", failure, err)
+		}
 	}
+}
+
+func TestHTTPHarnessClientTypesTransportAndHTTPFailures(t *testing.T) {
+	t.Run("transport", func(t *testing.T) {
+		client, err := NewHTTPHarnessClient("http://harness.invalid", &http.Client{Transport: roundTripFunc(
+			func(*http.Request) (*http.Response, error) {
+				return nil, context.DeadlineExceeded
+			},
+		)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Health(t.Context())
+		var failure *HarnessError
+		if !errors.As(err, &failure) || failure.Kind != HarnessFailureTimeout {
+			t.Fatalf("failure=%#v err=%v", failure, err)
+		}
+	})
+	t.Run("http", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer server.Close()
+		client, err := NewHTTPHarnessClient(server.URL, server.Client())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = client.Health(t.Context())
+		var failure *HarnessError
+		if !errors.As(err, &failure) || failure.Kind != HarnessFailureHTTP ||
+			failure.HTTPStatus != http.StatusInternalServerError {
+			t.Fatalf("failure=%#v err=%v", failure, err)
+		}
+	})
 }
 
 func fixtureSeed(t *testing.T) codingcontract.SeedRequest {

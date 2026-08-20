@@ -25,6 +25,39 @@ const (
 // backwards-compatible core-only result, not a failed coding score.
 var ErrCodingUnsupported = errors.New("coding capability is unsupported")
 
+// HarnessFailureKind separates validator transport from candidate HTTP or
+// protocol behavior. The certifier combines this with authoritative event
+// count before assigning a terminal domain.
+type HarnessFailureKind string
+
+const (
+	HarnessFailureTransport HarnessFailureKind = "transport"
+	HarnessFailureTimeout   HarnessFailureKind = "timeout"
+	HarnessFailureHTTP      HarnessFailureKind = "http"
+	HarnessFailureProtocol  HarnessFailureKind = "protocol"
+)
+
+// HarnessError is one bounded phase-specific harness failure.
+type HarnessError struct {
+	Operation  string
+	Kind       HarnessFailureKind
+	HTTPStatus int
+	Err        error
+}
+
+func (failure *HarnessError) Error() string {
+	if failure.HTTPStatus != 0 {
+		return fmt.Sprintf("coding harness %s failed with HTTP %d: %v", failure.Operation, failure.HTTPStatus, failure.Err)
+	}
+	return fmt.Sprintf("coding harness %s %s failure: %v", failure.Operation, failure.Kind, failure.Err)
+}
+
+func (failure *HarnessError) Unwrap() error { return failure.Err }
+
+func harnessFailure(operation string, kind HarnessFailureKind, status int, err error) error {
+	return &HarnessError{Operation: operation, Kind: kind, HTTPStatus: status, Err: err}
+}
+
 // HTTPHarnessClient is a strict client for one validator-started harness. The
 // caller must supply a transport authorized for that sandbox origin.
 type HTTPHarnessClient struct {
@@ -62,7 +95,7 @@ func (client *HTTPHarnessClient) Health(ctx context.Context) (HealthResponse, er
 		return HealthResponse{}, err
 	}
 	if err := response.validate(); err != nil {
-		return HealthResponse{}, err
+		return HealthResponse{}, harnessFailure("health", HarnessFailureProtocol, status, err)
 	}
 	return response.normalized(), nil
 }
@@ -95,7 +128,7 @@ func (client *HTTPHarnessClient) Run(
 		return RunResponse{}, err
 	}
 	if err := response.validate(request); err != nil {
-		return RunResponse{}, err
+		return RunResponse{}, harnessFailure("run", HarnessFailureProtocol, http.StatusOK, err)
 	}
 	return response, nil
 }
@@ -109,19 +142,19 @@ func (client *HTTPHarnessClient) do(
 	responseBody any,
 ) (int, error) {
 	if ctx == nil {
-		return 0, errors.New("coding harness request context is required")
+		return 0, harnessFailure(path, HarnessFailureProtocol, 0, errors.New("request context is required"))
 	}
 	var body io.Reader
 	if requestBody != nil {
 		encoded, err := json.Marshal(requestBody)
 		if err != nil {
-			return 0, errors.New("encode coding harness request")
+			return 0, harnessFailure(path, HarnessFailureProtocol, 0, errors.New("encode request"))
 		}
 		body = bytes.NewReader(encoded)
 	}
 	request, err := http.NewRequestWithContext(ctx, method, client.baseURL+path, body)
 	if err != nil {
-		return 0, errors.New("build coding harness request")
+		return 0, harnessFailure(path, HarnessFailureProtocol, 0, errors.New("build request"))
 	}
 	request.Header.Set("Accept", "application/json")
 	if requestBody != nil {
@@ -129,39 +162,55 @@ func (client *HTTPHarnessClient) do(
 	}
 	response, err := client.client.Do(request)
 	if err != nil {
-		return 0, fmt.Errorf("coding harness request failed: %w", err)
+		kind := HarnessFailureTransport
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			kind = HarnessFailureTimeout
+		}
+		return 0, harnessFailure(strings.TrimPrefix(path, "/coding/"), kind, 0, err)
 	}
 	defer response.Body.Close()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4<<10))
-		return response.StatusCode, fmt.Errorf("coding harness returned HTTP %d", response.StatusCode)
+		return response.StatusCode, harnessFailure(
+			strings.TrimPrefix(path, "/coding/"), HarnessFailureHTTP, response.StatusCode, errors.New("non-success response"),
+		)
 	}
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
 	if mediaErr != nil || strings.ToLower(mediaType) != "application/json" {
-		return response.StatusCode, errors.New("coding harness response is not JSON")
+		return response.StatusCode, harnessFailure(
+			strings.TrimPrefix(path, "/coding/"), HarnessFailureProtocol, response.StatusCode, errors.New("response is not JSON"),
+		)
 	}
 	limited := io.LimitReader(response.Body, maximum+1)
 	raw, err := io.ReadAll(limited)
 	if err != nil || int64(len(raw)) > maximum {
-		return response.StatusCode, errors.New("coding harness response exceeds its bound")
+		return response.StatusCode, harnessFailure(
+			strings.TrimPrefix(path, "/coding/"), HarnessFailureProtocol, response.StatusCode, errors.New("response exceeds bound"),
+		)
 	}
 	if err := validateJSONEnvelope(raw); err != nil {
-		return response.StatusCode, err
+		return response.StatusCode, harnessFailure(
+			strings.TrimPrefix(path, "/coding/"), HarnessFailureProtocol, response.StatusCode, err,
+		)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	if err := decoder.Decode(responseBody); err != nil {
-		return response.StatusCode, errors.New("coding harness response JSON is invalid")
+		return response.StatusCode, harnessFailure(
+			strings.TrimPrefix(path, "/coding/"), HarnessFailureProtocol, response.StatusCode, errors.New("response JSON is invalid"),
+		)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		return response.StatusCode, errors.New("coding harness response contains trailing content")
+		return response.StatusCode, harnessFailure(
+			strings.TrimPrefix(path, "/coding/"), HarnessFailureProtocol, response.StatusCode, errors.New("response contains trailing content"),
+		)
 	}
 	return response.StatusCode, nil
 }
 
 func validateJSONEnvelope(body []byte) error {
 	if err := codingcontract.ValidateRawJSONUnicode(body); err != nil {
-		return errors.New("coding harness response JSON contains invalid Unicode")
+		return errors.New("JSON contains invalid Unicode")
 	}
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.UseNumber()
@@ -169,18 +218,18 @@ func validateJSONEnvelope(body []byte) error {
 		return err
 	}
 	if token, err := decoder.Token(); !errors.Is(err, io.EOF) || token != nil {
-		return errors.New("coding harness response contains trailing content")
+		return errors.New("JSON contains trailing content")
 	}
 	return nil
 }
 
 func scanJSONValue(decoder *json.Decoder, depth int) error {
 	if depth > 32 {
-		return errors.New("coding harness response exceeds JSON depth")
+		return errors.New("JSON exceeds the depth limit")
 	}
 	token, err := decoder.Token()
 	if err != nil {
-		return errors.New("coding harness response JSON is invalid")
+		return errors.New("JSON is invalid")
 	}
 	delimiter, structured := token.(json.Delim)
 	if !structured {
@@ -193,10 +242,10 @@ func scanJSONValue(decoder *json.Decoder, depth int) error {
 			keyToken, err := decoder.Token()
 			key, ok := keyToken.(string)
 			if err != nil || !ok {
-				return errors.New("coding harness response object key is invalid")
+				return errors.New("JSON object key is invalid")
 			}
 			if _, duplicate := seen[key]; duplicate {
-				return errors.New("coding harness response contains a duplicate field")
+				return errors.New("JSON contains a duplicate field")
 			}
 			seen[key] = struct{}{}
 			if err := scanJSONValue(decoder, depth+1); err != nil {
@@ -205,7 +254,7 @@ func scanJSONValue(decoder *json.Decoder, depth int) error {
 		}
 		closing, err := decoder.Token()
 		if err != nil || closing != json.Delim('}') {
-			return errors.New("coding harness response object is incomplete")
+			return errors.New("JSON object is incomplete")
 		}
 	case '[':
 		for decoder.More() {
@@ -215,10 +264,10 @@ func scanJSONValue(decoder *json.Decoder, depth int) error {
 		}
 		closing, err := decoder.Token()
 		if err != nil || closing != json.Delim(']') {
-			return errors.New("coding harness response array is incomplete")
+			return errors.New("JSON array is incomplete")
 		}
 	default:
-		return errors.New("coding harness response JSON delimiter is invalid")
+		return errors.New("JSON delimiter is invalid")
 	}
 	return nil
 }
