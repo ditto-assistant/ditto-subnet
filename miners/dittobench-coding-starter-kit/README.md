@@ -28,6 +28,8 @@ repo_search     -> repo.search
 repo_read_file  -> repo.read_file
 repo_read_range -> repo.read_range
 repo_apply_patch -> repo.apply_patch
+repo_create_file -> repo.create_file (manifest-authorized private tasks)
+repo_delete_file -> repo.delete_file (manifest-authorized private tasks)
 tests_run       -> tests.run(command_id)
 build_run       -> build.run(command_id)
 git_status      -> git.status
@@ -36,6 +38,12 @@ git_diff        -> git.diff
 
 There is no general shell tool. The scorer freezes the validator-owned
 workspace after `/coding/run` returns.
+
+Workspace calls are serialized. A lost response is retried once with the exact
+same `call_id`, which the runner serves idempotently; an unresolved ambiguous
+transport failure poisons the client so later calls fail immediately instead of
+burning the remaining budget against a sequence gap. Create/delete names are
+reserved in contract v1 but disabled by the public practice policy.
 
 ## Endpoints
 
@@ -110,6 +118,12 @@ their order in a bounded 16-call queue and releases exactly one call per agent
 turn. It does not make another provider request until the queue is empty, and
 usage/cost metadata is attached only to the first returned call. Workspace
 operations therefore remain serial and validator-observed.
+
+Live workspace observations may use the runner's full 32 KiB read bound.
+Context compaction separately evicts older complete tool-call/result pairs.
+Token, tool, turn, context, or wall-time exhaustion returns a bounded degraded
+final report rather than HTTP 5xx, so the validator can still freeze and grade
+the authoritative workspace.
 
 ## Validation
 

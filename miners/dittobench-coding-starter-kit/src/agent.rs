@@ -12,6 +12,8 @@ use crate::context;
 use crate::memory::RetrievedMemory;
 use crate::protocol::CodingRunRequest;
 
+const MAX_LIVE_TOOL_OBSERVATION_BYTES: usize = 32 * 1024;
+
 pub const CODING_SYSTEM_PROMPT: &str = r"You are a repository coding agent operating through validator-owned tools.
 
 Solve the current issue with the smallest complete, maintainable patch.
@@ -69,17 +71,19 @@ impl CodingAgent {
     ///
     /// # Errors
     ///
-    /// Returns an error when model execution fails or a declared token,
-    /// tool-call, turn, or wall-time budget is exhausted.
+    /// Returns an error only for unrecoverable model failure before any
+    /// authoritative workspace activity. Budget exhaustion returns a bounded
+    /// advisory report so the validator can still freeze and grade the patch.
     pub async fn run(
         &self,
         request: &CodingRunRequest,
         memories: &[RetrievedMemory],
     ) -> Result<AgentOutcome, AgentError> {
         let deadline = Duration::from_secs(request.budgets.wall_time_seconds);
-        tokio::time::timeout(deadline, self.run_inner(request, memories))
-            .await
-            .map_err(|_| AgentError::WallTime)?
+        match tokio::time::timeout(deadline, self.run_inner(request, memories)).await {
+            Ok(result) => result,
+            Err(_) => Ok(degraded_outcome(&AgentError::WallTime, 0, 0, 0)),
+        }
     }
 
     // Budget checks intentionally remain adjacent to the actions they guard.
@@ -110,19 +114,32 @@ impl CodingAgent {
             .min(256 * 1024);
         let mut input_tokens = 0_u64;
         let mut output_tokens = 0_u64;
+        let mut workspace_tool_calls = 0_u32;
         let mut last_call: Option<(String, Value)> = None;
         let mut repeated_calls = 0_u8;
 
         for turn in 0..max_turns {
             if !context::enforce_budget(&mut messages, context_bytes) {
-                return Err(AgentError::ContextBudget);
+                return Ok(degraded_outcome(
+                    &AgentError::ContextBudget,
+                    input_tokens,
+                    output_tokens,
+                    workspace_tool_calls,
+                ));
             }
             debug_assert!(context::message_bytes(&messages) <= context_bytes);
-            let chunk = self
-                .model
-                .next(&messages, &definitions)
-                .await
-                .map_err(|error| AgentError::Model(error.to_string()))?;
+            let chunk = match self.model.next(&messages, &definitions).await {
+                Ok(chunk) => chunk,
+                Err(error) if workspace_tool_calls > 0 => {
+                    return Ok(degraded_outcome(
+                        &AgentError::Model(error.to_string()),
+                        input_tokens,
+                        output_tokens,
+                        workspace_tool_calls,
+                    ));
+                }
+                Err(error) => return Err(AgentError::Model(error.to_string())),
+            };
             if let Some(cost) = &chunk.cost {
                 input_tokens = input_tokens.saturating_add(
                     u64::try_from(cost.usage.input_tokens.max(0)).unwrap_or(u64::MAX),
@@ -132,26 +149,46 @@ impl CodingAgent {
                 );
             }
             if input_tokens > request.budgets.model_input_tokens {
-                return Err(AgentError::InputBudget);
+                return Ok(degraded_outcome(
+                    &AgentError::InputBudget,
+                    input_tokens,
+                    output_tokens,
+                    workspace_tool_calls,
+                ));
             }
             if output_tokens > request.budgets.model_output_tokens {
-                return Err(AgentError::OutputBudget);
+                return Ok(degraded_outcome(
+                    &AgentError::OutputBudget,
+                    input_tokens,
+                    output_tokens,
+                    workspace_tool_calls,
+                ));
             }
 
             let Some(mut call) = chunk.tool_call else {
                 let final_text = bounded_text(chunk.text.trim(), 2_000);
                 if final_text.is_empty() {
-                    return Err(AgentError::EmptyFinal);
+                    return Ok(degraded_outcome(
+                        &AgentError::EmptyFinal,
+                        input_tokens,
+                        output_tokens,
+                        workspace_tool_calls,
+                    ));
                 }
                 return Ok(AgentOutcome {
                     final_text,
                     input_tokens,
                     output_tokens,
-                    workspace_tool_calls: u32::try_from(turn).unwrap_or(u32::MAX),
+                    workspace_tool_calls,
                 });
             };
-            if u32::try_from(turn).unwrap_or(u32::MAX) >= request.budgets.workspace_tool_calls {
-                return Err(AgentError::ToolBudget);
+            if workspace_tool_calls >= request.budgets.workspace_tool_calls {
+                return Ok(degraded_outcome(
+                    &AgentError::ToolBudget,
+                    input_tokens,
+                    output_tokens,
+                    workspace_tool_calls,
+                ));
             }
             if call.id.is_empty() {
                 call.id = format!("model-call-{turn}");
@@ -164,10 +201,17 @@ impl CodingAgent {
                 last_call = Some(identity);
             }
             if repeated_calls >= 3 {
-                return Err(AgentError::Model(format!(
-                    "repeated identical tool call {:?}",
-                    call.name
-                )));
+                let error =
+                    AgentError::Model(format!("repeated identical tool call {:?}", call.name));
+                if workspace_tool_calls > 0 {
+                    return Ok(degraded_outcome(
+                        &error,
+                        input_tokens,
+                        output_tokens,
+                        workspace_tool_calls,
+                    ));
+                }
+                return Err(error);
             }
             let mut history_call = call.clone();
             history_call.args = bounded_json_value(history_call.args, 4096);
@@ -186,7 +230,7 @@ impl CodingAgent {
                     Ok(output) => ToolCallResponse {
                         id: call.id.clone(),
                         name: call.name.clone(),
-                        output: bounded_json_value(output, 4096),
+                        output: bounded_json_value(output, MAX_LIVE_TOOL_OBSERVATION_BYTES),
                         error: String::new(),
                     },
                     Err(error) => ToolCallResponse {
@@ -213,8 +257,38 @@ impl CodingAgent {
                 }],
                 ..ChatMessage::default()
             });
+            workspace_tool_calls = workspace_tool_calls.saturating_add(1);
         }
-        Err(AgentError::TurnBudget)
+        Ok(degraded_outcome(
+            &AgentError::TurnBudget,
+            input_tokens,
+            output_tokens,
+            workspace_tool_calls,
+        ))
+    }
+}
+
+fn degraded_outcome(
+    reason: &AgentError,
+    input_tokens: u64,
+    output_tokens: u64,
+    workspace_tool_calls: u32,
+) -> AgentOutcome {
+    AgentOutcome {
+        final_text: bounded_text(
+            &format!(
+                concat!(
+                    "Coding session ended without a final model summary: {}. ",
+                    "The validator-owned workspace may contain a partial or complete patch; ",
+                    "freeze it and rely on independent grading."
+                ),
+                reason
+            ),
+            2_000,
+        ),
+        input_tokens,
+        output_tokens,
+        workspace_tool_calls,
     }
 }
 
@@ -318,7 +392,7 @@ mod tests {
     use std::sync::Mutex;
 
     use async_trait::async_trait;
-    use ditto_harness::{ChatChunk, ToolCall, ToolDefinition};
+    use ditto_harness::{ChatChunk, Cost, CostedUsage, ToolCall, ToolDefinition, Usage};
 
     use super::*;
     use crate::model::shared_script;
@@ -328,6 +402,19 @@ mod tests {
 
     struct RecordingTool {
         calls: Mutex<Vec<Value>>,
+    }
+
+    struct NeverModel;
+
+    #[async_trait]
+    impl Model for NeverModel {
+        async fn next(
+            &self,
+            _messages: &[ChatMessage],
+            _tools: &[ToolDefinition],
+        ) -> ditto_harness::Result<ChatChunk> {
+            std::future::pending().await
+        }
     }
 
     #[async_trait]
@@ -424,8 +511,11 @@ mod tests {
 
     #[test]
     fn huge_tool_observation_is_bounded_before_history() {
-        let bounded = bounded_json_value(json!({"content": "x".repeat(1_000_000)}), 4096);
-        assert!(serde_json::to_vec(&bounded).unwrap().len() <= 4096);
+        let bounded = bounded_json_value(
+            json!({"content": "x".repeat(1_000_000)}),
+            MAX_LIVE_TOOL_OBSERVATION_BYTES,
+        );
+        assert!(serde_json::to_vec(&bounded).unwrap().len() <= MAX_LIVE_TOOL_OBSERVATION_BYTES);
         assert_eq!(bounded["observation_truncated"], true);
     }
 
@@ -446,9 +536,89 @@ mod tests {
         let mut req = request();
         req.budgets.workspace_tool_calls = 4;
         let agent = CodingAgent::new(model, vec![tool as Arc<dyn Tool>]);
-        assert!(matches!(
-            agent.run(&req, &[]).await,
-            Err(AgentError::Model(_))
-        ));
+        let outcome = agent.run(&req, &[]).await.unwrap();
+        assert_eq!(outcome.workspace_tool_calls, 2);
+        assert!(outcome.final_text.contains("repeated identical tool call"));
+    }
+
+    #[tokio::test]
+    async fn output_budget_after_workspace_activity_returns_degraded_report() {
+        let model = shared_script(vec![
+            ChatChunk {
+                tool_call: Some(ToolCall {
+                    id: "call-1".to_string(),
+                    name: "repo_read_file".to_string(),
+                    args: json!({"path":"app.py"}),
+                }),
+                ..ChatChunk::default()
+            },
+            ChatChunk {
+                text: "completed patch summary".to_string(),
+                cost: Some(CostedUsage {
+                    usage: Usage {
+                        provider: "test".to_string(),
+                        model: "test".to_string(),
+                        input_tokens: 1,
+                        output_tokens: 1_001,
+                        total_tokens: 1_002,
+                    },
+                    cost: Cost::default(),
+                }),
+                ..ChatChunk::default()
+            },
+        ]);
+        let tool = Arc::new(RecordingTool {
+            calls: Mutex::new(Vec::new()),
+        });
+        let agent = CodingAgent::new(model, vec![tool as Arc<dyn Tool>]);
+        let outcome = agent.run(&request(), &[]).await.unwrap();
+        assert_eq!(outcome.workspace_tool_calls, 1);
+        assert!(outcome
+            .final_text
+            .contains("model output token budget exhausted"));
+        assert!(outcome.final_text.contains("freeze it"));
+    }
+
+    #[tokio::test]
+    async fn tool_budget_returns_degraded_report_instead_of_error() {
+        let model = shared_script(vec![
+            ChatChunk {
+                tool_call: Some(ToolCall {
+                    id: "call-1".to_string(),
+                    name: "repo_read_file".to_string(),
+                    args: json!({"path":"app.py"}),
+                }),
+                ..ChatChunk::default()
+            },
+            ChatChunk {
+                tool_call: Some(ToolCall {
+                    id: "call-2".to_string(),
+                    name: "repo_read_file".to_string(),
+                    args: json!({"path":"other.py"}),
+                }),
+                ..ChatChunk::default()
+            },
+        ]);
+        let tool = Arc::new(RecordingTool {
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut request = request();
+        request.budgets.workspace_tool_calls = 1;
+        let agent = CodingAgent::new(model, vec![tool as Arc<dyn Tool>]);
+        let outcome = agent.run(&request, &[]).await.unwrap();
+        assert_eq!(outcome.workspace_tool_calls, 1);
+        assert!(outcome
+            .final_text
+            .contains("workspace tool budget exhausted"));
+    }
+
+    #[tokio::test]
+    async fn wall_time_returns_degraded_report_instead_of_error() {
+        let mut request = request();
+        request.budgets.wall_time_seconds = 1;
+        let agent = CodingAgent::new(Arc::new(NeverModel), Vec::new());
+        let outcome = agent.run(&request, &[]).await.unwrap();
+        assert!(outcome.final_text.contains("wall-time budget exhausted"));
+        assert!(outcome.final_text.contains("freeze it"));
     }
 }

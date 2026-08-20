@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - research/dittobench-coding-datagen/**
+      - packages/dittobench-coding-contract/**
       - .github/workflows/coding-datagen-ci.yml
 
 permissions:
