@@ -61,9 +61,8 @@ class InferenceExchangeResponse(BaseModel):
     provider: Annotated[str, Field(min_length=1, max_length=128)] | None = None
     profile_revision: Annotated[str, Field(min_length=1, max_length=128)] | None = None
     model: Annotated[str, Field(min_length=1, max_length=128)] | None = None
-    # Validator-private fields populated from rollout-safe exchange response
-    # headers. They are deliberately absent from the strict Platform JSON
-    # response so older validators can exchange grants during a mixed rollout.
+    # Budget evidence: JSON is authoritative. Headers remain a fallback overlay
+    # when an older Platform omits the body fields.
     request_budget: Annotated[int, Field(ge=1)] | None = None
     token_budget: Annotated[int, Field(ge=1)] | None = None
     embedding_request_budget: Annotated[int, Field(ge=1)] | None = None

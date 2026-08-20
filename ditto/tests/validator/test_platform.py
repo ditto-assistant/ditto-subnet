@@ -780,6 +780,129 @@ async def test_exchange_inference_grant_preserves_ticket_route_identity() -> Non
     assert response.max_output_tokens == 8192
 
 
+async def test_exchange_inference_grant_prefers_json_budget_evidence() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    grant_id = UUID("00000000-0000-0000-0000-000000000001")
+    expires_at = datetime.now(UTC)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/api/v1/inference/exchange"
+        return httpx.Response(
+            200,
+            json={
+                "grant_id": str(grant_id),
+                "bearer": "b" * 32,
+                "proxy_url": "https://platform.test/api/v1/inference/chat/completions",
+                "expires_at": expires_at.isoformat(),
+                "generation": 1,
+                "provider": "WandB",
+                "profile_revision": "openrouter-route-wandb-v1",
+                "model": "openai/gpt-oss-20b",
+                "request_budget": 8192,
+                "token_budget": 75_000_000,
+                "embedding_request_budget": 100_000,
+                "embedding_token_budget": 1_000_000_000,
+                "max_output_tokens": 8192,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            cast(Any, config),
+            http,
+            keypair,
+        ).exchange_inference_grant(
+            grant_id,
+            "A" * 43,
+            "https://platform.test/api/v1/inference/exchange",
+        )
+
+    assert response.request_budget == 8192
+    assert response.token_budget == 75_000_000
+    assert response.embedding_request_budget == 100_000
+    assert response.embedding_token_budget == 1_000_000_000
+    assert response.max_output_tokens == 8192
+
+
+async def test_exchange_inference_grant_json_survives_partial_headers() -> None:
+    """A Cloudflare hop that drops some X-Ditto-* headers must not disarm JSON."""
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    grant_id = UUID("00000000-0000-0000-0000-000000000001")
+    expires_at = datetime.now(UTC)
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"X-Ditto-Request-Budget": "8192"},
+            json={
+                "grant_id": str(grant_id),
+                "bearer": "b" * 32,
+                "proxy_url": "https://platform.test/api/v1/inference/chat/completions",
+                "expires_at": expires_at.isoformat(),
+                "generation": 1,
+                "request_budget": 8192,
+                "token_budget": 75_000_000,
+                "embedding_request_budget": 100_000,
+                "embedding_token_budget": 1_000_000_000,
+                "max_output_tokens": 8192,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            cast(Any, config), http, keypair
+        ).exchange_inference_grant(
+            grant_id,
+            "A" * 43,
+            "https://platform.test/api/v1/inference/exchange",
+        )
+
+    assert response.token_budget == 75_000_000
+    assert response.max_output_tokens == 8192
+
+
+async def test_exchange_inference_grant_rejects_partial_json_budget_evidence() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    grant_id = UUID("00000000-0000-0000-0000-000000000001")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "grant_id": str(grant_id),
+                "bearer": "b" * 32,
+                "proxy_url": "https://platform.test/api/v1/inference/chat/completions",
+                "expires_at": datetime.now(UTC).isoformat(),
+                "generation": 1,
+                "request_budget": 8192,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(
+            PlatformInfrastructureError, match="incomplete budget evidence"
+        ):
+            await PlatformClient(
+                cast(Any, config), http, keypair
+            ).exchange_inference_grant(
+                grant_id,
+                "A" * 43,
+                "https://platform.test/api/v1/inference/exchange",
+            )
+
+
 async def test_exchange_inference_grant_rejects_partial_budget_evidence() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
     grant_id = UUID("00000000-0000-0000-0000-000000000001")

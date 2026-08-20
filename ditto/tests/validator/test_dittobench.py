@@ -1541,6 +1541,39 @@ async def test_relay_recovery_exhaustion_reaches_failure_detail() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "cause",
+    ["grant_decline_evidence_mismatch", "budget_evidence_absent"],
+)
+async def test_budget_evidence_relay_causes_reach_failure_detail(cause: str) -> None:
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error": "private relay error",
+                "failure": {
+                    "kind": "validator_infrastructure",
+                    "code": "model_relay_unavailable",
+                    "retryable": True,
+                    "diagnostics": {
+                        "relay_cause": cause,
+                        "budget_evidence_armed": cause != "budget_evidence_absent",
+                    },
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(ValidatorInfrastructureError) as caught:
+            await DittobenchClient(cast(Any, _poll_config()), http)._poll(
+                "run-1", expected_bench_version=8
+            )
+    assert caught.value.code == f"model_relay_unavailable:{cause}"
+    assert failure_detail(caught.value) == caught.value.code
+
+
+@pytest.mark.asyncio
 async def test_unchanged_progress_watchdog_cancels_despite_heartbeats(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1745,6 +1778,12 @@ def test_a_structured_code_still_wins_over_the_message() -> None:
             "code": "model_inference_required",
             "retryable": False,
         },
+        # Pre-reservation 4xx is the agent's bytes, but not a spent grant.
+        {
+            "kind": "sandbox_failure",
+            "code": "inference_request_rejected",
+            "retryable": False,
+        },
         # The same code smuggled under the no-fault KIND. Rejected because the
         # code is not in the allowlist.
         {
@@ -1762,7 +1801,9 @@ async def test_agent_attributable_inference_failures_stay_the_agents(
     ``inference_allowance_exhausted`` means the harness spent the request-count
     or token allowance its own ticket granted, or sent one request too large to
     reserve (platform decline codes 4102/4104/4109). The lease was alive and the
-    platform healthy throughout. ``model_inference_required`` means the broker
+    platform healthy throughout. ``inference_request_rejected`` means the
+    platform refused the request bytes before reserving capacity -- still the
+    agent's, but not a spent grant. ``model_inference_required`` means the broker
     was healthy, the harness made no authoritative chat request, AND the scorer
     could not prove the harness was able to reach the broker at all -- a PROVEN
     zero-inference run is not a failure and never reaches this path (see
@@ -1800,6 +1841,9 @@ async def test_agent_attributable_inference_failures_stay_the_agents(
             assert failure_detail(raised.value) == expected_code
         if expected_code == "model_inference_required":
             assert "made no authoritative model call" in str(raised.value)
+            assert "exhausted" not in str(raised.value)
+        if expected_code == "inference_request_rejected":
+            assert "rejected before reservation" in str(raised.value)
             assert "exhausted" not in str(raised.value)
 
 

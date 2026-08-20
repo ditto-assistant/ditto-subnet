@@ -1957,9 +1957,10 @@ async def exchange_inference_grant(
         raise HTTPException(status_code=409, detail="inference grant is not live")
     grant, bearer = activated
     response.headers["Cache-Control"] = "no-store"
-    # Budget evidence remains in headers for compatibility with validators that
-    # predate forward-compatible JSON parsing. Current response models ignore
-    # additive JSON fields during rolling fleet upgrades.
+    # JSON is the authoritative copy: exchange rides Cloudflare on
+    # dittobench.ai, and custom response headers are a silent-drop risk.
+    # Headers remain as a fallback overlay for validators that predate the
+    # body fields. Older validators ignore unknown JSON (extra="ignore").
     response.headers["X-Ditto-Request-Budget"] = str(grant.request_budget)
     response.headers["X-Ditto-Token-Budget"] = str(grant.token_budget)
     response.headers["X-Ditto-Embedding-Request-Budget"] = str(
@@ -1978,6 +1979,11 @@ async def exchange_inference_grant(
         provider=grant.route_provider if grant.bench_version >= 7 else None,
         profile_revision=grant.route_profile if grant.bench_version >= 7 else None,
         model=grant.allowed_models[0] if grant.bench_version >= 7 else None,
+        request_budget=grant.request_budget,
+        token_budget=grant.token_budget,
+        embedding_request_budget=grant.embedding_request_budget,
+        embedding_token_budget=grant.embedding_token_budget,
+        max_output_tokens=config.max_output_tokens,
     )
 
 

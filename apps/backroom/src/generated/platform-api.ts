@@ -10541,6 +10541,10 @@ export interface components {
         InferenceExchangeResponse: {
             /** Bearer */
             bearer: string;
+            /** Embedding Request Budget */
+            embedding_request_budget?: number | null;
+            /** Embedding Token Budget */
+            embedding_token_budget?: number | null;
             /**
              * Expires At
              * Format: date-time
@@ -10553,6 +10557,8 @@ export interface components {
              * Format: uuid
              */
             grant_id: string;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
             /** Model */
             model?: string | null;
             /** Profile Revision */
@@ -10561,6 +10567,10 @@ export interface components {
             provider?: string | null;
             /** Proxy Url */
             proxy_url: string;
+            /** Request Budget */
+            request_budget?: number | null;
+            /** Token Budget */
+            token_budget?: number | null;
         };
         /** InferenceGrantOffer */
         InferenceGrantOffer: {

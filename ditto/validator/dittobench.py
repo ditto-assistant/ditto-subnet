@@ -251,11 +251,14 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
 # old validator's terminal default is already the intended outcome for them --
 # which is why only this direction needs the care.
 #
-# The scorer emits two terminal, agent-attributable inference codes:
+# The scorer emits three terminal, agent-attributable inference codes:
 #
 # - ``inference_allowance_exhausted`` when the harness spent the request-count
 #   or token allowance its own ticket granted, or sent one request too large to
 #   reserve (platform decline codes 4102/4104/4109).
+# - ``inference_request_rejected`` when the platform refused the harness's
+#   request bytes before reserving capacity (schema, size, unsupported field).
+#   That is the agent's bytes, but it is not a spent grant.
 # - ``model_inference_required`` when the broker stayed healthy but observed no
 #   authoritative chat request during the scored interval AND the scorer could
 #   not prove the harness was able to reach the broker at all.
@@ -291,7 +294,11 @@ _SANDBOX_INFRASTRUCTURE_CODES = {
 # the code. So the agent codes are excluded three independent ways. The test
 # ``test_agent_attributable_inference_failures_stay_the_agents`` pins all three.
 _AGENT_ATTRIBUTABLE_INFERENCE_CODES = frozenset(
-    {"inference_allowance_exhausted", "model_inference_required"}
+    {
+        "inference_allowance_exhausted",
+        "inference_request_rejected",
+        "model_inference_required",
+    }
 )
 
 assert not (_AGENT_ATTRIBUTABLE_INFERENCE_CODES & _SANDBOX_INFRASTRUCTURE_CODES)
@@ -368,6 +375,8 @@ _RELAY_CAUSES = frozenset(
     {
         "inference_lane_saturated",
         "provider_recovery_exhausted",
+        "grant_decline_evidence_mismatch",
+        "budget_evidence_absent",
     }
 )
 
@@ -1491,11 +1500,15 @@ class DittobenchClient:
                     # failures that are hardest to read from the outside.
                     log_tail = _container_log_tail(data)
                     if agent_failure_code is not None:
-                        message = (
-                            f"run {run_id} made no authoritative model call"
-                            if agent_failure_code == "model_inference_required"
-                            else f"run {run_id} exhausted its inference allowance"
-                        )
+                        if agent_failure_code == "model_inference_required":
+                            message = f"run {run_id} made no authoritative model call"
+                        elif agent_failure_code == "inference_request_rejected":
+                            message = (
+                                f"run {run_id} had an inference request rejected "
+                                "before reservation"
+                            )
+                        else:
+                            message = f"run {run_id} exhausted its inference allowance"
                         raise DittobenchError(
                             message,
                             code=agent_failure_code,

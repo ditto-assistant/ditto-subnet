@@ -71,6 +71,21 @@ class InferenceExchangeResponse(BaseModel):
     model: Annotated[str, Field(min_length=1, max_length=128)] | None = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    request_budget: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    token_budget: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    embedding_request_budget: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    embedding_token_budget: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    max_output_tokens: Annotated[int, Field(ge=1)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
     @field_validator("expires_at")
     @classmethod

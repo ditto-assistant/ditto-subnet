@@ -91,6 +91,32 @@ _INFERENCE_BUDGET_EVIDENCE_HEADERS = {
     "embedding_token_budget": "X-Ditto-Embedding-Token-Budget",
     "max_output_tokens": "X-Ditto-Max-Output-Tokens",
 }
+_INFERENCE_BUDGET_EVIDENCE_FIELDS = tuple(_INFERENCE_BUDGET_EVIDENCE_HEADERS)
+
+
+def _json_budget_evidence(exchange: InferenceExchangeResponse) -> dict[str, int] | None:
+    """Return complete JSON budget evidence, or None when the body omitted it.
+
+    Partial JSON is a broken new-Platform response, not a mixed-rollout gap.
+    """
+    values = {
+        field: getattr(exchange, field) for field in _INFERENCE_BUDGET_EVIDENCE_FIELDS
+    }
+    present = [value is not None for value in values.values()]
+    if not any(present):
+        return None
+    if not all(present):
+        raise PlatformInfrastructureError(
+            "inference exchange returned incomplete budget evidence"
+        )
+    evidence = {
+        field: int(value) for field, value in values.items() if value is not None
+    }
+    if any(value < 1 for value in evidence.values()):
+        raise PlatformInfrastructureError(
+            "inference exchange returned invalid budget evidence"
+        )
+    return evidence
 
 
 def _inference_budget_evidence(response: httpx.Response) -> dict[str, int]:
@@ -543,6 +569,11 @@ class PlatformClient:
                 ) from error
             if response.status_code == 200:
                 exchange = InferenceExchangeResponse.model_validate(response.json())
+                # JSON is authoritative. Prefer it when complete so a Cloudflare
+                # hop that drops X-Ditto-* headers cannot disarm the broker.
+                json_evidence = _json_budget_evidence(exchange)
+                if json_evidence is not None:
+                    return exchange
                 return exchange.model_copy(update=_inference_budget_evidence(response))
             retryable = (
                 response.status_code in {408, 429} or response.status_code >= 500

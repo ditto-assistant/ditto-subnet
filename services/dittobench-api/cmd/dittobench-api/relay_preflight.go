@@ -48,10 +48,15 @@ type relayHealthSnapshot struct {
 	// Platform named an agent allowance code but the broker's independent
 	// request/charge upper bounds proved that code impossible.
 	DeclineEvidenceMismatches uint64 `json:"decline_evidence_mismatches"`
+	// BudgetEvidenceAbsences is the subset of grant denials where the Platform
+	// named an agent allowance code but this session had no authenticated
+	// request/token budgets. Missing evidence cannot confirm the code.
+	BudgetEvidenceAbsences uint64 `json:"budget_evidence_absences"`
 	// AgentRequestRejections counts pre-reservation 4xx: the platform refusing
 	// the harness's request bytes (schema, size, model) without reserving
 	// capacity or contacting a provider. Already fails the run via
-	// UsageUnavailable; this exists so the failure can name the harness.
+	// UsageUnavailable; this exists so finalize can name a rejected request
+	// instead of a spent grant.
 	AgentRequestRejections uint64 `json:"agent_request_rejections"`
 	// CapacityExhaustions counts calls that spent their entire bounded
 	// backpressure wait budget and gave up. Reported separately from
@@ -95,6 +100,7 @@ type relayExecutionSummary struct {
 	GrantDenials              uint64 `json:"grant_denials,omitempty"`
 	GrantAgentDeclines        uint64 `json:"grant_agent_declines,omitempty"`
 	DeclineEvidenceMismatches uint64 `json:"decline_evidence_mismatches,omitempty"`
+	BudgetEvidenceAbsences    uint64 `json:"budget_evidence_absences,omitempty"`
 	AgentRequestRejections    uint64 `json:"agent_request_rejections,omitempty"`
 	CapacityExhaustions       uint64 `json:"capacity_exhaustions,omitempty"`
 	RecoveryWaits             uint64 `json:"recovery_waits,omitempty"`
@@ -349,9 +355,10 @@ func requireTokenAccounting(snapshot relayHealthSnapshot, benchVersion int, runS
 // sending one malformed request per case was minting itself retry grants.
 //
 // execution.AgentRequestRejections is the second cause, counted separately.
-// When it accounts for the ENTIRE usage shortfall, the run is the agent's.
-// Any provider-side gap at all, and the run keeps its grant -- the same
-// infrastructure-wins-ties rule relayDegradedSince applies to grant denials.
+// When it accounts for the ENTIRE usage shortfall, the run is the agent's --
+// a rejected request, not a spent grant. Any provider-side gap at all, and
+// the run keeps its grant -- the same infrastructure-wins-ties rule
+// relayDegradedSince applies to grant denials.
 func requireCompleteV7Usage(benchVersion int, usage protocol.TokenUsage, execution relayExecutionSummary) error {
 	if benchVersion < protocol.BenchVersionV7 || efficiency.ValidUsage(usage) {
 		return nil
@@ -406,7 +413,7 @@ func requireCompleteV7Usage(benchVersion int, usage protocol.TokenUsage, executi
 	if execution.AgentRequestRejections > 0 && execution.AgentRequestRejections >= usage.UsageUnavailable {
 		return fmt.Errorf(
 			"%w: the platform rejected %d of the harness's inference request(s) outright, before reserving any capacity — no provider was contacted",
-			errAgentInferenceDeclined, execution.AgentRequestRejections,
+			errAgentRequestRejected, execution.AgentRequestRejections,
 		)
 	}
 	return fmt.Errorf("benchmark v7 requires complete provider token usage")
@@ -467,10 +474,17 @@ func relayDegradedSince(start, end relayHealthSnapshot) error {
 		// them, mixed in with a hundred budget declines -- and the run keeps
 		// its grant. A platform failure can therefore never start billing a
 		// miner, no matter what else happened alongside it.
+		absences := end.BudgetEvidenceAbsences - start.BudgetEvidenceAbsences
 		if agentDeclines == denials {
 			return fmt.Errorf(
 				"%w: the harness exhausted its own inference allowance %d time(s) during benchmark — the lease was alive and the platform healthy",
 				errAgentInferenceDeclined, denials,
+			)
+		}
+		if absences > 0 {
+			return fmt.Errorf(
+				"%w: platform sent %d terminal allowance decline(s) while this session had no authenticated budget evidence",
+				errBudgetEvidenceAbsent, absences,
 			)
 		}
 		if evidenceMismatches > 0 {
@@ -516,6 +530,7 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		end.GrantDenials < start.GrantDenials ||
 		end.GrantAgentDeclines < start.GrantAgentDeclines ||
 		end.DeclineEvidenceMismatches < start.DeclineEvidenceMismatches ||
+		end.BudgetEvidenceAbsences < start.BudgetEvidenceAbsences ||
 		end.AgentRequestRejections < start.AgentRequestRejections ||
 		end.CapacityExhaustions < start.CapacityExhaustions ||
 		end.RecoveryWaits < start.RecoveryWaits ||
@@ -527,7 +542,8 @@ func relayRestarted(start, end relayHealthSnapshot) bool {
 		// inconsistently; refuse to classify on it rather than guess.
 		end.GrantAgentDeclines-start.GrantAgentDeclines > end.GrantDenials-start.GrantDenials ||
 		end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches > end.GrantDenials-start.GrantDenials ||
-		(end.GrantAgentDeclines-start.GrantAgentDeclines)+(end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches) > end.GrantDenials-start.GrantDenials
+		end.BudgetEvidenceAbsences-start.BudgetEvidenceAbsences > end.GrantDenials-start.GrantDenials ||
+		(end.GrantAgentDeclines-start.GrantAgentDeclines)+(end.DeclineEvidenceMismatches-start.DeclineEvidenceMismatches)+(end.BudgetEvidenceAbsences-start.BudgetEvidenceAbsences) > end.GrantDenials-start.GrantDenials
 }
 
 func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary, error) {
@@ -541,6 +557,7 @@ func relayExecutionSince(start, end relayHealthSnapshot) (relayExecutionSummary,
 		GrantDenials:              end.GrantDenials - start.GrantDenials,
 		GrantAgentDeclines:        end.GrantAgentDeclines - start.GrantAgentDeclines,
 		DeclineEvidenceMismatches: end.DeclineEvidenceMismatches - start.DeclineEvidenceMismatches,
+		BudgetEvidenceAbsences:    end.BudgetEvidenceAbsences - start.BudgetEvidenceAbsences,
 		AgentRequestRejections:    end.AgentRequestRejections - start.AgentRequestRejections,
 		CapacityExhaustions:       end.CapacityExhaustions - start.CapacityExhaustions,
 		RecoveryWaits:             end.RecoveryWaits - start.RecoveryWaits,
@@ -707,11 +724,13 @@ func (s *server) handleRelayPreflight(w http.ResponseWriter, r *http.Request) {
 //     grant -- which is precisely why it is a sentinel and not a substring.
 var (
 	errAgentInferenceDeclined       = errors.New("agent-attributable inference decline")
+	errAgentRequestRejected         = errors.New("agent-attributable inference request rejection")
 	errAgentModelUseMissing         = errors.New("agent made no authoritative model call")
 	errRouteProofUnavailable        = errors.New("platform did not complete the route challenge")
 	errInferenceLaneSaturated       = errors.New("platform inference lane saturated")
 	errRelayRecoveryExhausted       = errors.New("provider recovery exhausted")
 	errGrantDeclineEvidenceMismatch = errors.New("grant decline contradicted broker budget evidence")
+	errBudgetEvidenceAbsent         = errors.New("grant decline lacked authenticated budget evidence")
 )
 
 // relayFinalizeFailure classifies a finalize-path relay failure.
@@ -775,11 +794,26 @@ func relayFinalizeFailure(err error) *store.Failure {
 	case errors.Is(err, errAgentInferenceDeclined):
 		// Terminal and the agent's: retrying cannot help, because the harness
 		// would spend the same allowance the same way on a fresh grant. This is
-		// the only bin in this function that costs a miner an attempt, and
+		// one of two bins in this function that costs a miner an attempt, and
 		// every condition reaching it is one the agent controls outright.
 		return &store.Failure{
 			Kind:      "sandbox_failure",
 			Code:      "inference_allowance_exhausted",
+			Retryable: false,
+			Diagnostics: map[string]any{
+				"budget_evidence_armed": true,
+			},
+		}
+	case errors.Is(err, errAgentRequestRejected):
+		// Terminal and the agent's, but not a spent grant: the platform refused
+		// the request bytes before reserving capacity (schema, size, unsupported
+		// field). A fresh grant cannot repair the same harness bytes, so this
+		// stays retryable=false. It MUST NOT share inference_allowance_exhausted:
+		// operators group that code as "the 75M/8192 wall", and a 400 is not
+		// that wall.
+		return &store.Failure{
+			Kind:      "sandbox_failure",
+			Code:      "inference_request_rejected",
 			Retryable: false,
 		}
 	case errors.Is(err, errInferenceLaneSaturated):
@@ -830,7 +864,18 @@ func relayFinalizeFailure(err error) *store.Failure {
 			Code:      "model_relay_unavailable",
 			Retryable: true,
 			Diagnostics: map[string]any{
-				"relay_cause": "grant_decline_evidence_mismatch",
+				"relay_cause":           "grant_decline_evidence_mismatch",
+				"budget_evidence_armed": true,
+			},
+		}
+	case errors.Is(err, errBudgetEvidenceAbsent):
+		return &store.Failure{
+			Kind:      "validator_infrastructure",
+			Code:      "model_relay_unavailable",
+			Retryable: true,
+			Diagnostics: map[string]any{
+				"relay_cause":           "budget_evidence_absent",
+				"budget_evidence_armed": false,
 			},
 		}
 	default:

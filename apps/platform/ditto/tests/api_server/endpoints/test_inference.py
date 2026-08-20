@@ -13,7 +13,11 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import HTTPException
 
-from ditto.api_models.inference import InferenceExchangeRequest, InferenceGrantOffer
+from ditto.api_models.inference import (
+    InferenceExchangeRequest,
+    InferenceExchangeResponse,
+    InferenceGrantOffer,
+)
 from ditto.api_server.config import InferenceProxyConfig
 from ditto.api_server.endpoints.inference import (
     _ALLOWED_REQUEST_FIELDS,
@@ -1653,6 +1657,26 @@ def test_adaptive_route_remains_exact_and_disables_fallback() -> None:
         "data_collection": "deny",
         "zdr": True,
     }
+
+
+def test_exchange_response_serializes_budget_evidence_in_json() -> None:
+    encoded = InferenceExchangeResponse(
+        grant_id=uuid4(),
+        bearer="b" * 32,
+        proxy_url="https://platform.test/api/v1/inference/chat/completions",
+        expires_at=datetime.now(UTC),
+        generation=1,
+        request_budget=8192,
+        token_budget=75_000_000,
+        embedding_request_budget=100_000,
+        embedding_token_budget=1_000_000_000,
+        max_output_tokens=8192,
+    ).model_dump(mode="json")
+    assert encoded["request_budget"] == 8192
+    assert encoded["token_budget"] == 75_000_000
+    assert encoded["embedding_request_budget"] == 100_000
+    assert encoded["embedding_token_budget"] == 1_000_000_000
+    assert encoded["max_output_tokens"] == 8192
 
 
 def test_legacy_offer_omits_additive_v7_route_identity() -> None:

@@ -247,6 +247,11 @@ type brokerSession struct {
 	// run still fails closed, but it is validator infrastructure and keeps the
 	// miner's attempt.
 	declineEvidenceMismatches uint64
+	// budgetEvidenceAbsences counts terminal allowance codes received while
+	// this session had no authenticated request/token budgets. Missing evidence
+	// is not proof the harness spent the grant: it is a transport or mixed-
+	// rollout gap, and it must not bill a miner.
+	budgetEvidenceAbsences uint64
 	// terminalAgentFailureNotified makes the first typed agent-attributable
 	// allowance decline end the benchmark exactly once. Once the platform says
 	// the grant is spent, every later case can only receive the same refusal.
@@ -254,8 +259,8 @@ type brokerSession struct {
 	// agentRequestRejections counts pre-reservation 4xx (a 400 the platform's
 	// schema refused, a 403 on a model, an oversized body) -- the platform
 	// rejecting the harness's request without ever reserving capacity. These
-	// already fail the run through usageUnavailable; this counter exists only
-	// so the failure can name the harness instead of the relay.
+	// already fail the run through usageUnavailable; this counter exists so
+	// finalize can name a rejected request instead of a spent grant.
 	agentRequestRejections uint64
 	// capacityExhaustions counts calls that used up their whole bounded
 	// backpressure wait budget and gave up. Deliberately its own counter AND
@@ -983,10 +988,45 @@ func declineIsAgentFault(code int) bool {
 	return declineFaultFor[code] == declineFaultAgent
 }
 
+// sessionHasBudgetEvidenceLocked reports whether this session received the
+// authenticated Platform budgets needed to confirm a 4102/4104/4109. Missing
+// evidence is a transport or mixed-rollout gap, not proof the harness spent
+// the grant.
+func sessionHasBudgetEvidenceLocked(session *brokerSession, embedding bool) bool {
+	if session == nil {
+		return false
+	}
+	if embedding {
+		return session.embeddingRequestBudget > 0 && session.embeddingTokenBudget > 0
+	}
+	return session.requestBudget > 0 && session.tokenBudget > 0 && session.maxOutputTokens > 0
+}
+
+// attributePlatformDeclineLocked classifies one typed 429. The session lock
+// must already be held. Agent-fault codes without authenticated budgets, or
+// with budgets that cannot have been crossed, stay platform-fault.
+func attributePlatformDeclineLocked(session *brokerSession, code int, embedding bool, currentUpperBound uint64) (agentDecline bool, attribution string) {
+	attribution = "platform fault: the lease is gone"
+	if !declineIsAgentFault(code) {
+		return false, attribution
+	}
+	if !sessionHasBudgetEvidenceLocked(session, embedding) {
+		session.budgetEvidenceAbsences++
+		return false, "platform fault: no authenticated budget evidence; will not charge the miner"
+	}
+	if declineMatchesBudgetEvidenceLocked(session, code, embedding, currentUpperBound) {
+		session.grantAgentDeclines++
+		return true, "AGENT fault: the harness spent its own allowance"
+	}
+	session.declineEvidenceMismatches++
+	return false, "platform fault: terminal allowance code contradicted the broker's budget evidence"
+}
+
 // declineMatchesBudgetEvidenceLocked independently checks whether the typed
 // Platform decline is even possible under what this broker observed. The
 // Platform remains authoritative for the exact accounting. Missing evidence
-// keeps the pre-upgrade behaviour (treat the code as possible).
+// cannot confirm the code: treat it as impossible so the miner keeps the
+// attempt (the same default as an unknown decline code).
 //
 // These bounds exist only to DISPROVE an impossible attribution. A cumulative
 // byte-length overestimate that eventually exceeds the token cap does not
@@ -997,13 +1037,10 @@ func declineIsAgentFault(code int) bool {
 // actually have crossed the wall: settled usage plus this request (and
 // in-flight siblings for the request-count wall).
 func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedding bool, currentUpperBound uint64) bool {
-	if session == nil {
+	if !sessionHasBudgetEvidenceLocked(session, embedding) {
 		return false
 	}
 	if embedding {
-		if session.embeddingRequestBudget == 0 || session.embeddingTokenBudget == 0 {
-			return true
-		}
 		switch code {
 		case platformDeclineBudgetExhausted:
 			// embeddingRequests increments once per handle, including this call,
@@ -1018,9 +1055,6 @@ func declineMatchesBudgetEvidenceLocked(session *brokerSession, code int, embedd
 		default:
 			return false
 		}
-	}
-	if session.requestBudget == 0 || session.tokenBudget == 0 || session.maxOutputTokens == 0 {
-		return true
 	}
 	switch code {
 	case platformDeclineBudgetExhausted:
@@ -2083,6 +2117,15 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 	session.ticketAgentID = activation.AgentID
 	session.ticketSlotID = activation.SlotID
 	session.ticketDeadline = activation.TicketDeadline
+	if sessionHasBudgetEvidenceLocked(session, false) && sessionHasBudgetEvidenceLocked(session, true) {
+		log.Printf(
+			"inference session %s: budget evidence armed request=%d token=%d embedding_request=%d embedding_token=%d max_output=%d",
+			id, session.requestBudget, session.tokenBudget,
+			session.embeddingRequestBudget, session.embeddingTokenBudget, session.maxOutputTokens,
+		)
+	} else {
+		log.Printf("inference session %s: budget evidence absent; will not attribute 4102/4104/4109 to the agent", id)
+	}
 	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusOK, map[string]bool{"active": true})
 }
@@ -3094,21 +3137,15 @@ func (b *inferenceBroker) handleEmbeddingWithLease(w http.ResponseWriter, r *htt
 				session.callerCancels++
 			} else if errors.As(err, &denied) {
 				session.grantDenials++
-				attribution := "platform fault: the lease is gone"
-				if declineIsAgentFault(denied.code) && declineMatchesBudgetEvidenceLocked(session, denied.code, true, denied.reservationUpperBound) {
-					session.grantAgentDeclines++
-					agentDecline = true
-					attribution = "AGENT fault: the harness spent its own allowance"
-				} else if declineIsAgentFault(denied.code) {
-					session.declineEvidenceMismatches++
-					attribution = "platform fault: terminal allowance code contradicted the broker's budget evidence"
-				}
+				var attribution string
+				agentDecline, attribution = attributePlatformDeclineLocked(session, denied.code, true, denied.reservationUpperBound)
 				log.Printf(
-					"run %s: platform declined the embedding grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d, evidence-mismatch #%d, signed dispatches=%d/%d, dispatched charge upper bound=%d/%d)",
+					"run %s: platform declined the embedding grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d, evidence-mismatch #%d, evidence-absent #%d, signed dispatches=%d/%d, dispatched charge upper bound=%d/%d)",
 					session.boundRunID, platformDeclineReason(denied.code), attribution,
 					session.ticketDeadline.UTC().Format(time.RFC3339),
 					time.Until(session.ticketDeadline).Truncate(time.Second),
 					session.grantDenials, session.grantAgentDeclines, session.declineEvidenceMismatches,
+					session.budgetEvidenceAbsences,
 					session.embeddingDispatches, session.embeddingRequestBudget,
 					session.embeddingChargeUpperBound, session.embeddingTokenBudget,
 				)
@@ -3583,6 +3620,7 @@ func (b *inferenceBroker) health(w http.ResponseWriter, session *brokerSession) 
 		GrantDenials:              session.grantDenials,
 		GrantAgentDeclines:        session.grantAgentDeclines,
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
+		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
 		CapacityExhaustions:       session.capacityExhaustions,
 		RecoveryWaits:             session.recoveryWaits,
@@ -3977,18 +4015,10 @@ func (b *inferenceBroker) proxy(
 		session.grantDenials++
 		session.providerLatency += totalLatency
 		declineCode := platformDeclineCode(responseBody)
-		attribution := "platform fault: the lease is gone"
-		agentDecline := false
-		if declineIsAgentFault(declineCode) && declineMatchesBudgetEvidenceLocked(session, declineCode, false, currentChargeUpperBound) {
-			session.grantAgentDeclines++
-			agentDecline = true
-			attribution = "AGENT fault: the harness spent its own allowance"
-		} else if declineIsAgentFault(declineCode) {
-			session.declineEvidenceMismatches++
-			attribution = "platform fault: terminal allowance code contradicted the broker's budget evidence"
-		}
+		agentDecline, attribution := attributePlatformDeclineLocked(session, declineCode, false, currentChargeUpperBound)
 		denials, agentDenials := session.grantDenials, session.grantAgentDeclines
 		mismatches := session.declineEvidenceMismatches
+		absences := session.budgetEvidenceAbsences
 		dispatches, requestBudget := session.chatDispatches, session.requestBudget
 		chargeUpperBound, tokenBudget := session.chatChargeUpperBound, session.tokenBudget
 		settledTokens := session.promptTokens + session.completionTokens
@@ -4004,10 +4034,10 @@ func (b *inferenceBroker) proxy(
 		// not merely the same log line but the same CLASSIFICATION. Older
 		// platforms send no code, get the old wording, and stay no-fault.
 		log.Printf(
-			"run %s: platform declined the inference grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d, evidence-mismatch #%d, signed dispatches=%d/%d, successes=%d in_flight=%d, settled_tokens=%d, this_request_upper_bound=%d, dispatched charge upper bound=%d/%d)",
+			"run %s: platform declined the inference grant (429: %s -- %s); ticket deadline held locally is %s (in %s) -- this is a lease denial, not a provider fault (denial #%d, agent-attributable #%d, evidence-mismatch #%d, evidence-absent #%d, signed dispatches=%d/%d, successes=%d in_flight=%d, settled_tokens=%d, this_request_upper_bound=%d, dispatched charge upper bound=%d/%d)",
 			runID, platformDeclineReason(declineCode), attribution,
 			deadline.UTC().Format(time.RFC3339), time.Until(deadline).Truncate(time.Second),
-			denials, agentDenials, mismatches, dispatches, requestBudget, successes, inFlight,
+			denials, agentDenials, mismatches, absences, dispatches, requestBudget, successes, inFlight,
 			settledTokens, currentChargeUpperBound, chargeUpperBound, tokenBudget,
 		)
 		writeError(w, http.StatusBadGateway, "inference provider unavailable")
@@ -4147,6 +4177,7 @@ func (b *inferenceBroker) snapshot(id string) (relayHealthSnapshot, error) {
 		GrantDenials: session.grantDenials, EmbeddingRetries: session.embeddingRetries,
 		GrantAgentDeclines:        session.grantAgentDeclines,
 		DeclineEvidenceMismatches: session.declineEvidenceMismatches,
+		BudgetEvidenceAbsences:    session.budgetEvidenceAbsences,
 		AgentRequestRejections:    session.agentRequestRejections,
 		CapacityExhaustions:       session.capacityExhaustions,
 		RecoveryWaits:             session.recoveryWaits,

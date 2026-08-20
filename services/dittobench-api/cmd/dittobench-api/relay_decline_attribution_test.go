@@ -78,6 +78,16 @@ func TestFinalizeFailureAttributionContract(t *testing.T) {
 			kind: "sandbox_failure", code: "inference_allowance_exhausted", retryable: false,
 			why: "the lease was alive and the platform healthy; the agent spent what it was given",
 		},
+		{
+			name: "agent request rejected before reservation", err: fmt.Errorf("%w: the platform rejected 2 request(s)", errAgentRequestRejected),
+			kind: "sandbox_failure", code: "inference_request_rejected", retryable: false,
+			why: "a 400/413 is the harness's bytes, not a spent 75M/8192 grant",
+		},
+		{
+			name: "budget evidence absent", err: fmt.Errorf("%w: 1 decline(s)", errBudgetEvidenceAbsent),
+			kind: "validator_infrastructure", code: "model_relay_unavailable", retryable: true,
+			why: "missing budgets cannot confirm 4102/4104; keep the miner attempt",
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			failure := relayFinalizeFailure(testCase.err)
@@ -118,9 +128,12 @@ func TestUnrecognisedFinalizeFailuresCannotReachTheAgentClass(t *testing.T) {
 		// would let a harness print either on stderr and change its own
 		// verdict; `errors.Is` cannot be forged from text.
 		errors.New("agent-attributable inference decline"),
+		errors.New("agent-attributable inference request rejection"),
+		errors.New("grant decline lacked authenticated budget evidence"),
 		errors.New("platform inference lane saturated"),
 		errors.New("the harness exhausted its own inference allowance 400 time(s)"),
 		errors.New("inference_allowance_exhausted"),
+		errors.New("inference_request_rejected"),
 		errors.New("sandbox_failure: inference_allowance_exhausted retryable=false"),
 		// A harness echoing the platform's decline envelope back at the relay.
 		errors.New(`{"error_code": 4102, "detail": "budget exhausted"}`),
@@ -247,6 +260,22 @@ func TestAMixedRunKeepsItsGrant(t *testing.T) {
 // inconsistently and this must refuse to classify rather than conclude "all
 // denials were the agent's" from corrupt arithmetic -- which is exactly the
 // shape of input that would turn a bug into a wrongly-billed miner.
+func TestUnarmedAllowanceDeclineKeepsTheGrant(t *testing.T) {
+	start := relayHealthSnapshot{Requests: 10}
+	end := relayHealthSnapshot{Requests: 20, GrantDenials: 1, BudgetEvidenceAbsences: 1}
+	err := relayDegradedSince(start, end)
+	if !errors.Is(err, errBudgetEvidenceAbsent) {
+		t.Fatalf("got %v, want budget evidence absent", err)
+	}
+	if errors.Is(err, errAgentInferenceDeclined) {
+		t.Fatal("unarmed decline charged the miner")
+	}
+	failure := relayFinalizeFailure(err)
+	if failure.Diagnostics["relay_cause"] != "budget_evidence_absent" {
+		t.Fatalf("diagnostics=%+v", failure.Diagnostics)
+	}
+}
+
 func TestAnImpossibleSubsetIsRefusedRatherThanBlamed(t *testing.T) {
 	start := relayHealthSnapshot{Requests: 10}
 	end := relayHealthSnapshot{Requests: 20, GrantDenials: 2, GrantAgentDeclines: 3}
@@ -348,8 +377,11 @@ func TestPreReservationRejectionsAreTheAgents(t *testing.T) {
 			if err == nil {
 				t.Fatalf("incomplete usage was allowed to score (%s)", testCase.why)
 			}
-			if got := errors.Is(err, errAgentInferenceDeclined); got != testCase.agent {
+			if got := errors.Is(err, errAgentRequestRejected); got != testCase.agent {
 				t.Fatalf("%s: agent-attributed=%v, want %v", testCase.why, got, testCase.agent)
+			}
+			if errors.Is(err, errAgentInferenceDeclined) {
+				t.Fatalf("%s: pre-reservation 4xx must not be inference_allowance_exhausted", testCase.why)
 			}
 		})
 	}
@@ -389,9 +421,12 @@ func TestBudgetDeclineIsAttributedToTheAgentEndToEnd(t *testing.T) {
 			body  string
 			agent bool
 		}{
-			{name: "token budget exhausted", body: `{"error_code": 4104}`, agent: true},
-			{name: "request budget exhausted", body: `{"error_code": 4102}`, agent: true},
-			{name: "reservation too large", body: `{"error_code": 4109}`, agent: true},
+			// Unarmed session: a typed allowance code cannot be confirmed, so
+			// the miner keeps the attempt. Armed genuine exhaustion is covered
+			// by TestBudgetEvidenceStillAttributesGenuineExhaustion.
+			{name: "token budget exhausted", body: `{"error_code": 4104}`, agent: false},
+			{name: "request budget exhausted", body: `{"error_code": 4102}`, agent: false},
+			{name: "reservation too large", body: `{"error_code": 4109}`, agent: false},
 			{name: "grant revoked", body: `{"error_code": 4101}`, agent: false},
 			{name: "lease expired", body: `{"error_code": 4105}`, agent: false},
 			// An older platform that sends no code at all keeps the old
@@ -629,6 +664,26 @@ func TestFalseTokenDeclineAfterHealthySpendIsQuarantined(t *testing.T) {
 	}
 }
 
+func TestMissingBudgetEvidenceCannotConfirmAnAllowanceDecline(t *testing.T) {
+	session := &brokerSession{}
+	if sessionHasBudgetEvidenceLocked(session, false) || sessionHasBudgetEvidenceLocked(session, true) {
+		t.Fatal("empty session reported budget evidence")
+	}
+	if declineMatchesBudgetEvidenceLocked(session, platformDeclineTokenBudgetExhausted, false, 90_000_000) {
+		t.Fatal("missing evidence confirmed a 4104")
+	}
+	agent, attribution := attributePlatformDeclineLocked(session, platformDeclineTokenBudgetExhausted, false, 90_000_000)
+	if agent {
+		t.Fatal("missing evidence charged the miner")
+	}
+	if session.budgetEvidenceAbsences != 1 || session.grantAgentDeclines != 0 {
+		t.Fatalf("attribution counters = agent=%d absent=%d", session.grantAgentDeclines, session.budgetEvidenceAbsences)
+	}
+	if !strings.HasPrefix(attribution, "platform fault") {
+		t.Fatalf("attribution=%q", attribution)
+	}
+}
+
 func TestFalseTokenDeclineAfterHealthySpendKeepsTheMinerAttempt(t *testing.T) {
 	upstreamCalls := 0
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -702,6 +757,62 @@ func TestFalseTokenDeclineAfterHealthySpendKeepsTheMinerAttempt(t *testing.T) {
 		t.Fatalf("false 4104 did not preserve the miner attempt: %+v", failure)
 	}
 	_ = runID
+}
+
+func TestMissingBudgetEvidenceKeepsTheMinerAttempt(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error_code":4104,"message":"token budget exhausted"}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	terminalFailures := 0
+	broker.terminalAgentFailure = func(string) { terminalFailures++ }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	sourceIP := "192.0.2.202"
+	_ = claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+	start, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b","max_tokens":64}`))
+	request.RemoteAddr = sourceIP + ":4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("status=%d, want 502", recorder.Code)
+	}
+
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.GrantDenials != 1 || end.GrantAgentDeclines != 0 || end.BudgetEvidenceAbsences != 1 {
+		t.Fatalf("unarmed 4104 was charged to the miner: %+v", end)
+	}
+	if terminalFailures != 0 {
+		t.Fatalf("unarmed 4104 consumed the attempt via %d terminal callback(s)", terminalFailures)
+	}
+	degraded := relayDegradedSince(start, end)
+	if !errors.Is(degraded, errBudgetEvidenceAbsent) {
+		t.Fatalf("degraded=%v, want budget evidence absent", degraded)
+	}
+	failure := relayFinalizeFailure(degraded)
+	if failure.Kind != "validator_infrastructure" || !failure.Retryable || failure.Code != "model_relay_unavailable" {
+		t.Fatalf("unarmed 4104 did not preserve the miner attempt: %+v", failure)
+	}
+	if failure.Diagnostics["relay_cause"] != "budget_evidence_absent" {
+		t.Fatalf("missing absence diagnosis: %+v", failure.Diagnostics)
+	}
+	if armed, _ := failure.Diagnostics["budget_evidence_armed"].(bool); armed {
+		t.Fatalf("unarmed session reported budget_evidence_armed: %+v", failure.Diagnostics)
+	}
 }
 
 func TestOutstandingSignedDispatchKeepsConcurrentExhaustionAgentAttributed(t *testing.T) {
@@ -933,6 +1044,9 @@ func TestPreReservationRejectionIsAttributedToTheAgentEndToEnd(t *testing.T) {
 			failure := relayFinalizeFailure(usageErr)
 			if failure.Kind != "sandbox_failure" || failure.Retryable {
 				t.Fatalf("the harness's own malformed request still mints a retry grant: %+v", failure)
+			}
+			if failure.Code != "inference_request_rejected" {
+				t.Fatalf("pre-reservation 4xx must not look like a spent grant: %+v", failure)
 			}
 		})
 	}
