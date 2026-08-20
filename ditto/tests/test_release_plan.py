@@ -187,13 +187,20 @@ def test_coding_contract_models_select_scorer_and_validator_stack(
     ) == {"dittobench_api", "validator", "validator_stack"}
 
 
-def test_shadow_coding_runner_selects_only_scorer_stack(
-    components, ignored_paths
+@pytest.mark.parametrize(
+    "path",
+    [
+        "services/dittobench-api/internal/codingrunner/session.go",
+        "services/dittobench-api/internal/codinggrader/grader.go",
+    ],
+)
+def test_shadow_coding_execution_selects_only_scorer_stack(
+    components, ignored_paths, path: str
 ) -> None:
     assert selected(
         components,
         ignored_paths,
-        "services/dittobench-api/internal/codingrunner/session.go",
+        path,
     ) == {"dittobench_api", "validator_stack"}
 
 

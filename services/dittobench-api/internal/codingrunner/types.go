@@ -88,7 +88,8 @@ func DefaultLimits() Limits {
 	}
 }
 
-func (limits Limits) validate() error {
+// Validate checks the complete hard and aggregate resource envelope.
+func (limits Limits) Validate() error {
 	if limits.MaxBundleBytes <= 0 || limits.MaxBundleBytes > hardMaxBundleBytes ||
 		limits.MaxWorkspaceBytes <= 0 || limits.MaxWorkspaceBytes > hardMaxWorkspaceBytes ||
 		limits.MaxFileBytes <= 0 || limits.MaxFileBytes > hardMaxFileBytes ||
@@ -127,9 +128,10 @@ type CommandSpec struct {
 	Timeout time.Duration
 }
 
-func (command CommandSpec) validate() error {
+// Validate checks the bounded manifest-owned command contract.
+func (command CommandSpec) Validate() error {
 	if !validIdentifier(command.ID, 80) || len(command.Argv) == 0 || len(command.Argv) > 64 ||
-		command.Timeout <= 0 || command.Timeout > maxCommandTimeout {
+		command.Timeout <= 0 || command.Timeout > maxCommandTimeout || command.Timeout%time.Millisecond != 0 {
 		return errors.New("coding command is outside contract bounds")
 	}
 	executable := command.Argv[0]
@@ -176,7 +178,7 @@ func (manifest Manifest) validate(now time.Time) error {
 	if manifest.Deadline.IsZero() || !manifest.Deadline.After(now) || manifest.Deadline.After(now.Add(maxSessionLifetime)) {
 		return errors.New("coding runner deadline is outside the bounded session lifetime")
 	}
-	if err := manifest.Limits.validate(); err != nil {
+	if err := manifest.Limits.Validate(); err != nil {
 		return err
 	}
 	if len(manifest.EditablePaths)+len(manifest.CreatablePaths)+len(manifest.DeletablePaths) > manifest.Limits.MaxEntries {
@@ -222,7 +224,7 @@ func validateCommands(commands []CommandSpec) error {
 	}
 	previous := ""
 	for _, command := range commands {
-		if err := command.validate(); err != nil {
+		if err := command.Validate(); err != nil {
 			return err
 		}
 		if previous != "" && command.ID <= previous {
@@ -340,6 +342,15 @@ type TranscriptIdentity struct {
 	SHA256    string `json:"sha256"`
 	SizeBytes int64  `json:"size_bytes"`
 	Events    uint64 `json:"events"`
+}
+
+// BundleIdentity is the deterministic identity of one safely materialized
+// capsule. Catalog tooling can use it without constructing a runner session.
+type BundleIdentity struct {
+	VisibleBundleSHA256 string `json:"visible_bundle_sha256"`
+	TreeSHA256          string `json:"tree_sha256"`
+	Entries             int    `json:"entries"`
+	FileBytes           int64  `json:"file_bytes"`
 }
 
 func validIdentifier(value string, maximum int) bool {

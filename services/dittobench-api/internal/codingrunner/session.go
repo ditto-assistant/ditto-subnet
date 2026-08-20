@@ -153,9 +153,9 @@ func NewSession(ctx context.Context, manifest Manifest, visibleBundle io.Reader,
 }
 
 func cloneManifest(manifest Manifest) Manifest {
-	manifest.EditablePaths = append([]string(nil), manifest.EditablePaths...)
-	manifest.CreatablePaths = append([]string(nil), manifest.CreatablePaths...)
-	manifest.DeletablePaths = append([]string(nil), manifest.DeletablePaths...)
+	manifest.EditablePaths = cloneStrings(manifest.EditablePaths)
+	manifest.CreatablePaths = cloneStrings(manifest.CreatablePaths)
+	manifest.DeletablePaths = cloneStrings(manifest.DeletablePaths)
 	manifest.TestCommands = cloneCommands(manifest.TestCommands)
 	manifest.BuildCommands = cloneCommands(manifest.BuildCommands)
 	return manifest
@@ -302,11 +302,17 @@ func (session *Session) validateChanges(ctx context.Context, current map[string]
 			if err != nil || sha256Hex(body) != afterSHA {
 				return nil, nil, errors.New("changed workspace file could not be bound")
 			}
+			if !utf8.Valid(body) {
+				return nil, nil, violation("binary_change", "workspace changed %q to non-UTF-8 content", filePath)
+			}
 			change.AfterContent = body
 			patchBytes += after.size
 		case !existed && exists:
 			if _, allowed := session.creatable[filePath]; !allowed {
 				return nil, nil, violation("undeclared_add", "workspace added undeclared path %q", filePath)
+			}
+			if after.mode != 0o644 {
+				return nil, nil, violation("mode_change", "workspace created %q with a noncanonical mode", filePath)
 			}
 			afterSHA := after.sha256
 			change.Kind, change.Mode = "added", uint32(after.mode)
@@ -314,6 +320,9 @@ func (session *Session) validateChanges(ctx context.Context, current map[string]
 			body, err := readBoundedFile(ctx, filepath.Join(session.root, filepath.FromSlash(filePath)), session.manifest.Limits.MaxFileBytes)
 			if err != nil || sha256Hex(body) != afterSHA {
 				return nil, nil, errors.New("added workspace file could not be bound")
+			}
+			if !utf8.Valid(body) {
+				return nil, nil, violation("binary_change", "workspace created %q with non-UTF-8 content", filePath)
 			}
 			change.AfterContent = body
 			patchBytes += after.size
@@ -407,9 +416,9 @@ func (session *Session) freezeLocked() FreezeResult {
 		AuthoringEventRoot:        session.eventRoot,
 		AuthoringTranscriptSHA256: session.transcriptIdentityLocked().SHA256,
 		AuthoringTranscriptBytes:  session.transcriptBytes,
-		ChangedPaths:              append([]string(nil), paths...),
+		ChangedPaths:              cloneStrings(paths),
 		Changes:                   cloneChanges(changes),
-		Patch:                     append([]byte(nil), patch...),
+		Patch:                     cloneBytes(patch),
 		ProtectedPathsIntact:      true,
 	}
 	return FreezeResult{Submission: submission}
@@ -493,10 +502,13 @@ func freezeErrorCode(err error) string {
 }
 
 func cloneChanges(values []FrozenChange) []FrozenChange {
+	if values == nil {
+		return nil
+	}
 	result := make([]FrozenChange, len(values))
 	for index, value := range values {
 		result[index] = value
-		result[index].AfterContent = append([]byte(nil), value.AfterContent...)
+		result[index].AfterContent = cloneBytes(value.AfterContent)
 		if value.BeforeSHA256 != nil {
 			copyValue := *value.BeforeSHA256
 			result[index].BeforeSHA256 = &copyValue
@@ -518,10 +530,28 @@ func cloneFreezeResult(value FreezeResult) FreezeResult {
 		return FreezeResult{}
 	}
 	submission := *value.Submission
-	submission.ChangedPaths = append([]string(nil), value.Submission.ChangedPaths...)
+	submission.ChangedPaths = cloneStrings(value.Submission.ChangedPaths)
 	submission.Changes = cloneChanges(value.Submission.Changes)
-	submission.Patch = append([]byte(nil), value.Submission.Patch...)
+	submission.Patch = cloneBytes(value.Submission.Patch)
 	return FreezeResult{Submission: &submission}
+}
+
+func cloneStrings(values []string) []string {
+	if values == nil {
+		return nil
+	}
+	result := make([]string, len(values))
+	copy(result, values)
+	return result
+}
+
+func cloneBytes(value []byte) []byte {
+	if value == nil {
+		return nil
+	}
+	result := make([]byte, len(value))
+	copy(result, value)
+	return result
 }
 
 func marshalResult(value any) (json.RawMessage, error) {

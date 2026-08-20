@@ -35,7 +35,10 @@ func TestManifestFailsClosedOnMutableAuthority(t *testing.T) {
 		"absolute command":  func(value *Manifest) { value.TestCommands[0].Argv = []string{"/usr/bin/python", "-m", "pytest"} },
 		"duplicate command": func(value *Manifest) { value.TestCommands = append(value.TestCommands, value.TestCommands[0]) },
 		"shared command ID": func(value *Manifest) { value.BuildCommands[0].ID = "visible-tests" },
-		"oversized limit":   func(value *Manifest) { value.Limits.MaxPatchBytes = hardMaxPatchBytes + 1 },
+		"sub-millisecond timeout": func(value *Manifest) {
+			value.TestCommands[0].Timeout += time.Nanosecond
+		},
+		"oversized limit": func(value *Manifest) { value.Limits.MaxPatchBytes = hardMaxPatchBytes + 1 },
 		"undersized replay cache": func(value *Manifest) {
 			value.Limits.MaxReplayCacheBytes = int64(value.Limits.MaxToolCalls)*int64(value.Limits.MaxResponseBytes) - 1
 		},

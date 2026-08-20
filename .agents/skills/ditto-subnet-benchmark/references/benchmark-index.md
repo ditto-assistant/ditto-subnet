@@ -15,6 +15,7 @@
 | Shadow coding practice/runtime | `research/dittobench-coding-datagen/` |
 | Shadow coding-agent harness | `miners/dittobench-coding-starter-kit/` |
 | Shadow coding runner/freezer core | `services/dittobench-api/internal/codingrunner/` |
+| Shadow pristine coding grader | `services/dittobench-api/internal/codinggrader/` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |

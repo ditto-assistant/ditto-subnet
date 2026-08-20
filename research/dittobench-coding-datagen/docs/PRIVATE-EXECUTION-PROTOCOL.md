@@ -162,7 +162,9 @@ the same canonical `CodingRunManifest`:
       "resource_profile_sha256": "lowercase-sha256",
       "grader_bundle_sha256": "lowercase-sha256",
       "grader_image_digest": "sha256:oci-digest",
-      "test_manifest_sha256": "lowercase-sha256"
+      "grader_platform": "linux/amd64",
+      "test_manifest_sha256": "lowercase-sha256",
+      "grader_plan_sha256": "lowercase-sha256"
     }
   ]
 }
@@ -175,6 +177,13 @@ the authority.
 ticket IDs, deadlines, hotkeys, and transport capabilities remain in each lease
 envelope and signed validator evidence; they cannot make the selected task-set
 manifest differ between validators.
+
+`grader_plan_sha256` is the canonical digest of the public
+`dittobench-coding-grader-plan-v1` projection demonstrated in the shared
+contract vectors. It binds the selected case/variant, visible capsule and base
+tree, grader identities, execution timeout, exact commands/counts, and fail-fast
+order. The execution timeout starts only after setup and pristine
+materialization; parent or lease deadlines remain validator infrastructure.
 
 ## Scoped miner memory
 
@@ -451,14 +460,18 @@ sequence.
 4. Start the bounded coding-runner workspace and ticket-scoped Luna relay.
 5. Execute `/coding/run`; record authoritative runner and relay events.
 6. Stop authoring and revoke every task capability.
-7. Freeze added, modified, deleted, mode-changed, and untracked paths. Reject
-   traversal, symlinks, special files, protected paths, or count/byte overflow.
+7. Freeze canonical UTF-8 added, modified, and deleted file transitions. New
+   files use mode `0644`; modified and deleted files preserve their base mode.
+   Reject traversal, mode changes, symlinks, special files, protected paths,
+   or count/byte overflow.
 8. Bind the base tree, frozen patch, changed-path root, and final tree digests.
 9. Destroy the authoring environment.
 10. Apply the frozen patch to a pristine base in a fresh networkless grader.
 11. Inject the digest-pinned private grader bundle only after the patch is fixed.
-12. Run build, fail-to-pass, pass-to-pass, hidden, adversarial, and integrity
-    groups, then emit typed canonical evidence.
+12. Start the plan-bound candidate execution timeout, then run build,
+    fail-to-pass, pass-to-pass, hidden, adversarial, and integrity
+    in that fail-fast order, then emit typed canonical evidence. Evidence keeps
+    the five test groups in canonical lexical order.
 
 The candidate may not modify visible tests, task runners, dependency policy, or
 any protected path unless a task manifest explicitly allows that path. The
@@ -531,7 +544,8 @@ visible bundle, base tree, memory bundle, resource profile, and environment dige
 model, provider route/profile, reasoning, prompt/tool-schema, usage, and retry identity
 authoring event root and bounded transcript digest
 frozen patch, final tree, changed-path root, and protected-path verdict
-grader bundle/image/test-manifest and before/after integrity digests
+grader bundle/image/platform/test-manifest, canonical grader plan, resource profile,
+ordered execution-receipt root/count, and before/after integrity digests
 exact build and test counts
 terminal domain and integer repair_score_micros
 ```
