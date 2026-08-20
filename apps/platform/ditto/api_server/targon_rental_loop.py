@@ -16,7 +16,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -36,8 +36,10 @@ _BUILD_LEASE = timedelta(minutes=50)
 _JOB_TTL = timedelta(minutes=45)
 _SOURCE_LEASE = timedelta(minutes=35)
 _REAP_LIMIT = 16
+_MAX_INFLIGHT_BUILDS = 2
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
+_INFLIGHT_JOB = ("leased", "running")
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
@@ -151,6 +153,17 @@ class TargonRentalLoop:
             return False
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
+            inflight = await session.scalar(
+                select(func.count())
+                .select_from(SubmissionImageBuild)
+                .where(
+                    SubmissionImageBuild.environment == self._config.environment,
+                    SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
+                    SubmissionImageBuild.provider == "targon",
+                )
+            )
+            if int(inflight or 0) >= _MAX_INFLIGHT_BUILDS:
+                return False
             row = await session.scalar(
                 select(SubmissionImageBuild)
                 .join(
@@ -466,15 +479,52 @@ class TargonRentalLoop:
             await asyncio.sleep(1)
         return False
 
+    async def release_rental(self, uid: str | None) -> bool:
+        """DELETE a rental as soon as its Platform job has completed."""
+        if not uid:
+            return False
+        return await self._delete_rental(uid)
+
     async def _reap_finished_rentals(self) -> bool:
         """DELETE one-shots whose Platform job is already terminal.
 
         Kaniko and L1 stay up until the job posts completion. Runtime smoke
         is deleted in `_launch_smoke`; this also drains leftovers from before
-        that change.
+        that change. Expired in-flight Kaniko rows are treated as finished so
+        a crash-loop that never POSTs complete cannot keep billing.
         """
         pending: list[tuple[str, UUID, str]] = []
+        now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
+            stale = (
+                await session.scalars(
+                    select(SubmissionImageBuild)
+                    .where(
+                        SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
+                        SubmissionImageBuild.provider_resource_id.is_not(None),
+                        or_(
+                            and_(
+                                SubmissionImageBuild.lease_expires_at.is_not(None),
+                                SubmissionImageBuild.lease_expires_at < now,
+                            ),
+                            SubmissionImageBuild.updated_at < now - _BUILD_LEASE,
+                        ),
+                    )
+                    .order_by(SubmissionImageBuild.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in stale:
+                uid = row.provider_resource_id
+                row.status = "fallback_required"
+                row.error_code = "TARGON_SUBMISSION_LEASE_EXPIRED"
+                row.completed_at = now
+                row.updated_at = now
+                row.lease_expires_at = None
+                if uid:
+                    pending.append(("build", row.build_id, uid))
             builds = (
                 await session.scalars(
                     select(SubmissionImageBuild)

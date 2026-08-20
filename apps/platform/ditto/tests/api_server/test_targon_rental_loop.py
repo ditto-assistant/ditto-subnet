@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -211,3 +211,59 @@ async def test_reaps_terminal_source_review_rental(
         review = await session.scalar(select(SubmissionSourceReview).limit(1))
         assert review is not None
         assert review.provider_resource_id is None
+
+
+@pytest.mark.asyncio
+async def test_caps_concurrent_kaniko_launches(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="one", sha256="aa" * 32
+    )
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="two", sha256="bb" * 32
+    )
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="three", sha256="cc" * 32
+    )
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    await loop.tick()
+    await loop.tick()
+    assert len(targon.created) == 2
+
+
+@pytest.mark.asyncio
+async def test_reaps_expired_running_kaniko_rental(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.updated_at = datetime.now(UTC) - timedelta(hours=2)
+        build.lease_expires_at = datetime.now(UTC) - timedelta(minutes=1)
+    targon.deleted.clear()
+    assert await loop.tick() is True
+    assert "wrk-1" in targon.deleted
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "fallback_required"
+        assert build.provider_resource_id is None

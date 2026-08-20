@@ -222,6 +222,13 @@ def _targon_first(providers: tuple[str, ...]) -> bool:
     return bool(providers) and providers[0] == "targon"
 
 
+async def _release_targon_rental(request: Request, uid: str | None) -> bool:
+    loop = getattr(request.app.state, "targon_rental_loop", None)
+    if loop is None or not uid:
+        return False
+    return bool(await loop.release_rental(uid))
+
+
 def _effective_provider_settings(
     *, environment: str, revision: int, settings: ScreenerProviderSettings
 ) -> EffectiveScreenerProviderSettings:
@@ -1971,6 +1978,7 @@ async def mint_submission_build_upload(
 async def complete_submission_build_upload(
     build_id: UUID,
     payload: SubmissionBuildCompleteRequest,
+    request: Request,
     session: SessionDep,
     storage: StorageDep,
     authorization: Annotated[str | None, Header()] = None,
@@ -2022,6 +2030,15 @@ async def complete_submission_build_upload(
         stored.lease_expires_at = None
         stored.job_token_hash = None
         stored.job_token_expires_at = None
+        rental_uid = stored.provider_resource_id
+    if await _release_targon_rental(request, rental_uid):
+        async with session.begin():
+            stored = await session.get(
+                SubmissionImageBuild, build_id, with_for_update=True
+            )
+            if stored is not None and stored.provider_resource_id == rental_uid:
+                stored.provider_resource_id = None
+                stored.updated_at = datetime.now(UTC)
     return SubmissionBuildCompleteResponse(verified=True)
 
 
@@ -2460,6 +2477,18 @@ async def complete_submission_source_review(
         row.job_token_hash = None
         row.job_token_expires_at = None
         attempt_id = row.attempt_id
+        rental_uid = row.provider_resource_id
+    if await _release_targon_rental(request, rental_uid):
+        async with session.begin():
+            stored_review = await session.get(
+                SubmissionSourceReview, review_id, with_for_update=True
+            )
+            if (
+                stored_review is not None
+                and stored_review.provider_resource_id == rental_uid
+            ):
+                stored_review.provider_resource_id = None
+                stored_review.updated_at = datetime.now(UTC)
     attester = request.app.state.config.screener_auth.hotkey
     if attester is not None:
         async with session.begin():
