@@ -15,6 +15,7 @@ from collections.abc import AsyncIterator
 from contextlib import AsyncExitStack, asynccontextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from uuid import UUID
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
@@ -346,12 +347,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     finalize_targon_screen_and_pin_dataset,
                 )
 
-                async def complete_screen(attempt_id):
+                attester = config.screener_auth.hotkey
+                assert attester is not None
+
+                async def complete_screen(attempt_id: UUID) -> None:
                     async with app.state.session_maker() as session:
                         await finalize_targon_screen_and_pin_dataset(
                             session,
                             storage=storage,
-                            screener_hotkey=config.screener_auth.hotkey,
+                            screener_hotkey=attester,
                             attempt_id=attempt_id,
                             now=datetime.now(UTC),
                             generator=generator,
@@ -362,7 +366,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     session_maker=app.state.session_maker,
                     config=config.targon,
                     targon=targon_client,
-                    screener_hotkey=config.screener_auth.hotkey,
+                    screener_hotkey=attester,
                     promote_archive=promote_archive,
                     mint_token=mint_token,
                     providers=providers,
