@@ -253,7 +253,27 @@ def evaluate_practice_harness(
                 _validate_run_response(run_response, task_id)
             except CorpusError:
                 harness_completed = False
-            submission = session.freeze()
+            try:
+                submission = session.freeze()
+            except CorpusError:
+                failed = session.freeze_failure_identity()
+                return PracticeTaskEvidence(
+                    coding_contract_version=CODING_CONTRACT_VERSION,
+                    weight_eligible=False,
+                    task_id=failed.task_id,
+                    base_tree_sha256=failed.base_tree_sha256,
+                    final_tree_sha256=failed.final_tree_sha256,
+                    patch_sha256="0" * 64,
+                    changed_path_root=failed.changed_path_root,
+                    authoring_event_root=failed.authoring_event_root,
+                    build_returncode=126,
+                    visible_tests_returncode=126,
+                    grader_tests_returncode=126,
+                    protected_paths_intact=False,
+                    harness_completed=False,
+                    terminal_domain="harness_failure",
+                    repair_score_micros=0,
+                )
         evidence = grade_frozen_practice_submission(pack, submission)
         if harness_completed:
             return evidence

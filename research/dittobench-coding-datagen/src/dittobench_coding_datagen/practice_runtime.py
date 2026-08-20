@@ -161,6 +161,15 @@ class FrozenPracticeSubmission:
 
 
 @dataclass(frozen=True)
+class FailedWorkspaceIdentity:
+    task_id: str
+    base_tree_sha256: str
+    final_tree_sha256: str
+    changed_path_root: str
+    authoring_event_root: str
+
+
+@dataclass(frozen=True)
 class _FileState:
     body: bytes
     mode: int
@@ -475,8 +484,16 @@ def run_practice_command(
         stdout_body = stdout_file.read(MAX_READ_BYTES + 1)
         stderr_body = stderr_file.read(MAX_READ_BYTES + 1)
     truncated = len(stdout_body) > MAX_READ_BYTES or len(stderr_body) > MAX_READ_BYTES
-    stdout = stdout_body[:MAX_READ_BYTES].decode("utf-8", errors="replace")
-    stderr = stderr_body[:MAX_READ_BYTES].decode("utf-8", errors="replace")
+    prefixes = {str(workspace), str(workspace.resolve())}
+
+    def scrub(body: bytes) -> str:
+        text = body[:MAX_READ_BYTES].decode("utf-8", errors="replace")
+        for prefix in sorted(prefixes, key=len, reverse=True):
+            text = text.replace(prefix, "<workspace>")
+        return text
+
+    stdout = scrub(stdout_body)
+    stderr = scrub(stderr_body)
     if command_id in {"grader-unit", "visible-unit"} and returncode == 0:
         completions = re.findall(
             r"(?m)^DITTOBENCH_TEST_COMPLETION:([1-9][0-9]*):1$", stdout
@@ -621,6 +638,8 @@ class PracticeWorkspaceSession:
             "git.diff": self._git_diff,
             "git.status": self._git_status,
             "repo.apply_patch": self._repo_apply_patch,
+            "repo.create_file": self._repo_create_file,
+            "repo.delete_file": self._repo_delete_file,
             "repo.list_tree": self._repo_list_tree,
             "repo.read_file": self._repo_read_file,
             "repo.read_range": self._repo_read_range,
@@ -824,6 +843,27 @@ class PracticeWorkspaceSession:
             "size_bytes": len(updated_body),
         }
 
+    def _repo_create_file(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _exact_arguments(arguments, frozenset({"content", "path"}), "repo.create_file")
+        _bounded_string(arguments["path"], "path", 256)
+        if not isinstance(arguments["content"], str):
+            raise CorpusError("content must be a string")
+        raise CorpusError(
+            "repo.create_file is reserved but not enabled by practice policy"
+        )
+
+    def _repo_delete_file(self, arguments: dict[str, Any]) -> dict[str, Any]:
+        _exact_arguments(
+            arguments,
+            frozenset({"expected_sha256", "path"}),
+            "repo.delete_file",
+        )
+        _bounded_string(arguments["path"], "path", 256)
+        _bounded_string(arguments["expected_sha256"], "expected_sha256", 64)
+        raise CorpusError(
+            "repo.delete_file is reserved but not enabled by practice policy"
+        )
+
     def _assert_workspace_policy(self) -> tuple[dict[str, _FileState], tuple[str, ...]]:
         current = _snapshot(self._workspace)
         paths = _changed_paths(self._base, current)
@@ -879,6 +919,29 @@ class PracticeWorkspaceSession:
 
         with self._lock:
             return self._freeze_locked()
+
+    def freeze_failure_identity(self) -> FailedWorkspaceIdentity:
+        """Revoke a failed workspace and retain only bounded identity evidence."""
+
+        with self._lock:
+            if self._closed:
+                raise CorpusError("practice workspace is closed")
+            self._frozen = True
+            try:
+                current = _snapshot(self._workspace)
+                paths = _changed_paths(self._base, current)
+                final_tree = _tree_sha256(current)
+                changed_root = sha256_hex(canonical_json_bytes(list(paths)))
+            except CorpusError:
+                final_tree = "0" * 64
+                changed_root = "0" * 64
+            return FailedWorkspaceIdentity(
+                task_id=self.case.task_id,
+                base_tree_sha256=self._base_tree_sha256,
+                final_tree_sha256=final_tree,
+                changed_path_root=changed_root,
+                authoring_event_root=self._event_root,
+            )
 
     def _freeze_locked(self) -> FrozenPracticeSubmission:
         if self._closed:
