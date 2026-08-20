@@ -89,7 +89,9 @@ describe('Backroom MCP tools', () => {
         'get_queue_policy_settings',
         'get_screener_review_settings',
         'apply_screener_review_settings',
+        'get_validator_fleet',
         'get_validator_slot_settings',
+        'list_validator_assignments',
         'list_confirmation_bundles',
         'set_burn_settings',
         'set_continual_retest_settings',
@@ -171,11 +173,12 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 86_000 whole-payload includes the L1 model/timeout fields on the
-    // screener-review settings write schema. Keep modest headroom for schema
-    // evolution; tighten the description budgets, not this whole-payload
-    // backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(86_000)
+    // 87_000 whole-payload includes the L1 model/timeout fields on the
+    // screener-review settings write schema and the validator fleet/assignment
+    // read schemas. Keep modest headroom for schema evolution; tighten the
+    // description budgets, not this whole-payload backstop, to push back on
+    // tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(87_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
       20_700,
@@ -821,6 +824,8 @@ describe('Backroom MCP tools', () => {
       list_stuck_submissions: { maxLimit: 200, maxDefault: 10 },
       list_lease_revocations: { maxLimit: 200, maxDefault: 50 },
       get_leaderboard: { maxLimit: 200, maxDefault: 50 },
+      get_validator_fleet: { maxLimit: 200, maxDefault: 50 },
+      list_validator_assignments: { maxLimit: 200, maxDefault: 50 },
     }
 
     for (const [name, bounds] of Object.entries(paginatedTools)) {
@@ -2602,6 +2607,203 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenLastCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/validator-slot-settings',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads validator fleet identity and a whole-fleet version histogram', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const current = '5' + 'A'.repeat(47)
+    const lagging = '5' + 'B'.repeat(47)
+    const digest = (ch: string) => `sha256:${ch.repeat(64)}`
+    const revision = (ch: string) => ch.repeat(40)
+    const component = (ch: string) => ({
+      image_digest: digest(ch),
+      source_revision: revision(ch),
+      version: '0.64.0',
+      provenance: 'signed_descriptor',
+    })
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        generated_at: '2026-08-20T13:40:00Z',
+        active_bench_version: 11,
+        online_window_seconds: 90,
+        stale_window_seconds: 300,
+        reported_count: 2,
+        online_count: 2,
+        validators: [
+          {
+            validator_hotkey: current,
+            software_version: '0.64.0',
+            protocol_version: 23,
+            state: 'idle',
+            configured_slots: 2,
+            healthy_slots: ['slot-0', 'slot-1'],
+            admission: 'accepting',
+            active_benchmarks: [],
+            confirmation_benchmarks: [],
+            assignment_state: 'idle',
+            reported_at: '2026-08-20T13:39:50Z',
+            seen_at: '2026-08-20T13:39:51Z',
+            online: true,
+            availability: 'available',
+            health: 'healthy',
+            scorer_liveness: 'serving',
+            bench_serviceability: 'serving',
+            stack: {
+              mode: 'managed',
+              compose_schema: 2,
+              release_descriptor_digest: digest('c'),
+              components: {
+                ditto_subnet: component('a'),
+                dittobench_api: component('d'),
+                sandbox_docker: component('e'),
+                model_relay: component('f'),
+                pylon: component('g'),
+                ollama: null,
+              },
+            },
+            capabilities: {
+              scorer_benchmarks: {
+                status: 'fresh_verified',
+                software_version: '0.64.0',
+                source_revision: revision('d'),
+                supported_bench_versions: [11],
+              },
+            },
+            updater_status: {
+              enabled: true,
+              channel: 'compat-2',
+              state: 'idle',
+              current_version: '0.64.0',
+              current_descriptor: `ghcr.io/ditto-assistant/ditto-subnet-stack@${digest('c')}`,
+              candidate_version: null,
+              candidate_descriptor: null,
+              failed_candidate_count: 0,
+              suppressed: false,
+              observed_at: 1_787_000_000,
+            },
+          },
+          {
+            validator_hotkey: lagging,
+            software_version: '0.63.1',
+            protocol_version: 22,
+            state: 'idle',
+            configured_slots: 2,
+            healthy_slots: ['slot-0'],
+            admission: 'accepting',
+            active_benchmarks: [{ slot_id: 'slot-0' }],
+            online: true,
+            health: 'healthy',
+            scorer_liveness: 'unreported',
+            bench_serviceability: 'software_obsolete',
+            updater_status: {
+              enabled: true,
+              state: 'prefetched',
+              current_version: '0.63.1',
+              candidate_version: '0.64.0',
+              failed_candidate_count: 0,
+              suppressed: false,
+              observed_at: 1_787_000_100,
+            },
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_validator_fleet',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    const body = readJsonResult(response) as {
+      online_serving_count: number
+      software_obsolete_count: number
+      rollout: { software_versions: Array<{ value: string; count: number }> }
+      validators: Array<{ validator_hotkey: string; software_version: string }>
+    }
+    expect(body.online_serving_count).toBe(1)
+    expect(body.software_obsolete_count).toBe(1)
+    expect(body.rollout.software_versions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ value: '0.64.0', count: 1, serving_count: 1 }),
+        expect.objectContaining({ value: '0.63.1', count: 1, serving_count: 0 }),
+      ]),
+    )
+    expect(body.validators.map((row) => row.software_version).sort()).toEqual([
+      '0.63.1',
+      '0.64.0',
+    ])
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/public/validators',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('fails closed when the validator fleet heartbeat view is unreachable', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(Response.json({ detail: 'nope' }, { status: 503 })),
+    )
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_validator_fleet',
+      arguments: {},
+    })
+    expect(response.isError).toBe(true)
+    expect(readTextResult(response)).not.toMatch(/"validators":\s*\[\]/)
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads live validator assignments without changing them', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '12345678-1234-4234-8234-123456789012'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        count: 1,
+        items: [
+          {
+            agent_id: agentId,
+            agent_name: 'lets_5.6',
+            miner_hotkey: '5' + 'C'.repeat(47),
+            validator_hotkey: '5' + 'A'.repeat(47),
+            issued_at: '2026-08-20T13:00:00Z',
+            deadline: '2026-08-20T15:00:00Z',
+            bench_version: 11,
+            attempt_count: 2,
+            score_count: 0,
+            provisional_composite: null,
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'list_validator_assignments',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      count: 1,
+      returned: 1,
+      items: [{ agent_id: agentId, agent_name: 'lets_5.6', bench_version: 11 }],
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/validator-assignments',
       expect.objectContaining({ method: 'GET' }),
     )
 

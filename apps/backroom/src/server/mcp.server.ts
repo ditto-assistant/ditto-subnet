@@ -18,6 +18,8 @@ import {
   compactScreeningQuarantines,
   compactScreeningSubmissions,
   compactStuckSubmissions,
+  compactValidatorAssignments,
+  compactValidatorFleet,
 } from '../lib/mcp-payloads'
 import { compactListFields, type HoistOptions } from '../lib/mcp-response'
 import {
@@ -147,6 +149,8 @@ import {
   setInferenceConcurrencySettings,
   setQueuePolicySettings,
   fetchValidatorSlotSettings,
+  fetchValidatorFleetObservability,
+  fetchValidatorAssignments,
   setValidatorSlotSettings,
   fetchBurnSettings,
   setBurnSettings,
@@ -437,6 +441,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Read accepted validator scores for one agent and benchmark version, with exact seeds and aggregates. Defaults to the current applicable benchmark.',
   get_validator_slot_settings:
     'Read effective validator slot and disk policy plus optional newest-first revision history. A validator advertising more slots than the cap is not an underutilized host. historyLimit defaults to 0.',
+  get_validator_fleet:
+    'Read validator heartbeats, stack identity, and version histogram.',
+  list_validator_assignments:
+    'Read live validator scoring leases.',
   get_miner_owner_footprint:
     'Trace payment-record links for one miner hotkey or coldkey. Payment provenance is a common-control signal, not ownership; confirm metagraph ownership separately.',
   get_inference_concurrency_settings:
@@ -1515,6 +1523,69 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => authorizeConfirmationBundleRetest(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_validator_fleet',
+    {
+      title: 'Get validator fleet',
+      description:
+        'Read the platform public validator heartbeat view with the identity the slot-cap console drops. Each row keeps software_version, protocol_version, stack component revisions (ditto_subnet, dittobench_api, model_relay, sandbox), scorer probe identity, updater current/candidate versions, bench_serviceability, host metrics, and live work counts. Calibration manifests and per-check progress are stripped. The rollout histogram is computed on the whole fleet before any hotkey filter or page, so online_serving_count and version buckets answer "is this SHA on enough validators" without paging. A missing updater_status is heartbeat protocol older than v23, not a failed update. software_obsolete validators are issued no scoring work. Requires backroom:read; a failed fleet read is an error, never an empty fleet.',
+      inputSchema: {
+        validatorHotkey: z.string().min(1).max(64).optional(),
+        ...MCP_PAGINATION_INPUT,
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ validatorHotkey, limit, offset }) => {
+      const fleet = compactValidatorFleet(await fetchValidatorFleetObservability())
+      const validators = validatorHotkey
+        ? fleet.validators.filter((row) => row.validator_hotkey === validatorHotkey)
+        : fleet.validators
+      return result(
+        compacted(
+          paginateLocalCollection(
+            {
+              ...fleet,
+              ...(validatorHotkey ? { filter: { validatorHotkey } } : {}),
+              validators,
+            },
+            'validators',
+            limit,
+            offset,
+          ),
+          { validators: { pin: ['validator_hotkey'] } },
+        ),
+      )
+    },
+  )
+
+  registerTool(
+    'list_validator_assignments',
+    {
+      title: 'List validator assignments',
+      description:
+        'Read live SN118 scoring leases from the platform validator-assignment ledger: agent id and name, miner hotkey, validator hotkey, issued_at, deadline, bench_version, attempt_count, score_count, and provisional_composite. This is who holds work right now, not who can serve the active benchmark; pair with get_validator_fleet for software/stack identity and updater versions. Optional agentId and validatorHotkey filters apply after the platform returns the full live set. Requires backroom:read and changes nothing.',
+      inputSchema: {
+        agentId: z.string().uuid().optional(),
+        validatorHotkey: z.string().min(1).max(64).optional(),
+        ...MCP_PAGINATION_INPUT,
+      },
+      annotations: toolAnnotations('read'),
+    },
+    async ({ agentId, validatorHotkey, limit, offset }) => {
+      const list = await fetchValidatorAssignments()
+      const items = list.items.filter((item) => {
+        if (agentId && item.agent_id !== agentId) return false
+        if (validatorHotkey && item.validator_hotkey !== validatorHotkey) return false
+        return true
+      })
+      return result(
+        compactValidatorAssignments(
+          paginateLocalCollection({ items, count: items.length }, 'items', limit, offset),
+        ),
+      )
+    },
   )
 
   registerTool(

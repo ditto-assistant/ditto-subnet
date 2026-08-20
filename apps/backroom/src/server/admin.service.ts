@@ -138,6 +138,7 @@ import {
   setValidatorIssuancePauseInputSchema,
   setValidatorSlotSettingsInputSchema,
   validatorFleetSchema,
+  validatorFleetObservabilitySchema,
   artifactReleaseControlSchema,
   submissionSettingsControlSchema,
   screenerReviewControlSchema,
@@ -1035,6 +1036,18 @@ export async function fetchValidatorFleet() {
   } catch {
     return null
   }
+}
+
+// Same public heartbeat view as fetchValidatorFleet, but identity fields stay
+// and a failed read is an error. The slot-cap page swallows this because a
+// blank fleet block must not take down the kill switch; an MCP diagnosis that
+// cannot see versions cannot claim the fleet is current.
+export async function fetchValidatorFleetObservability() {
+  const payload = await platformAdminRequest(VALIDATOR_FLEET_PATH, {
+    timeoutMs: 8_000,
+    retries: 1,
+  })
+  return validatorFleetObservabilitySchema.parse(payload)
 }
 
 export async function fetchScreeningQuarantines(

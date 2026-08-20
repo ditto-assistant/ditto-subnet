@@ -2962,6 +2962,60 @@ export const publicOrphanedSlotSchema = z.object({
   state: z.enum(['still_running', 'indeterminate']),
 })
 
+export const validatorUpdaterStatusSchema = z
+  .object({
+    candidate_descriptor: z.string().nullable().optional(),
+    candidate_version: z.string().nullable().optional(),
+    channel: z.literal('compat-2').nullable().optional(),
+    current_descriptor: z.string().nullable().optional(),
+    current_version: z.string().nullable().optional(),
+    enabled: z.boolean(),
+    failed_candidate_count: z.number().int().min(0).max(100),
+    last_failure_at: z.number().int().nonnegative().nullable().optional(),
+    last_failure_reason: z
+      .enum([
+        'candidate_deploy_failed',
+        'candidate_readiness_failed',
+        'transaction_interrupted',
+        'unknown',
+      ])
+      .nullable()
+      .optional(),
+    last_success_at: z.number().int().nonnegative().nullable().optional(),
+    observed_at: z.number().int().nonnegative(),
+    retry_after: z.number().int().nonnegative().nullable().optional(),
+    state: z.enum([
+      'not_managed',
+      'disabled',
+      'unavailable',
+      'idle',
+      'prefetched',
+      'draining',
+      'replacing',
+      'verifying',
+      'rollback',
+      'backoff',
+      'retry_ready',
+      'suppressed',
+    ]),
+    suppressed: z.boolean(),
+    transaction_phase: z
+      .enum([
+        'prepared',
+        'drained',
+        'old_stopped',
+        'candidate_started',
+        'committed',
+        'rollback_pending',
+        'rollback_ready',
+      ])
+      .nullable()
+      .optional(),
+  } satisfies PlatformResponseShape<GeneratedValidatorUpdaterStatus>)
+  .nullable()
+  .optional()
+  .catch(null)
+
 export const validatorFleetMemberSchema = z
   .object({
     validator_hotkey: z.string(),
@@ -2992,59 +3046,7 @@ export const validatorFleetMemberSchema = z
     // container may still be executing. Empty in the ordinary case; a slot here
     // is NOT free capacity.
     orphaned_slots: z.array(publicOrphanedSlotSchema).catch([]),
-    updater_status: z
-      .object({
-        candidate_descriptor: z.string().nullable().optional(),
-        candidate_version: z.string().nullable().optional(),
-        channel: z.literal('compat-2').nullable().optional(),
-        current_descriptor: z.string().nullable().optional(),
-        current_version: z.string().nullable().optional(),
-        enabled: z.boolean(),
-        failed_candidate_count: z.number().int().min(0).max(100),
-        last_failure_at: z.number().int().nonnegative().nullable().optional(),
-        last_failure_reason: z
-          .enum([
-            'candidate_deploy_failed',
-            'candidate_readiness_failed',
-            'transaction_interrupted',
-            'unknown',
-          ])
-          .nullable()
-          .optional(),
-        last_success_at: z.number().int().nonnegative().nullable().optional(),
-        observed_at: z.number().int().nonnegative(),
-        retry_after: z.number().int().nonnegative().nullable().optional(),
-        state: z.enum([
-          'not_managed',
-          'disabled',
-          'unavailable',
-          'idle',
-          'prefetched',
-          'draining',
-          'replacing',
-          'verifying',
-          'rollback',
-          'backoff',
-          'retry_ready',
-          'suppressed',
-        ]),
-        suppressed: z.boolean(),
-        transaction_phase: z
-          .enum([
-            'prepared',
-            'drained',
-            'old_stopped',
-            'candidate_started',
-            'committed',
-            'rollback_pending',
-            'rollback_ready',
-          ])
-          .nullable()
-          .optional(),
-      } satisfies PlatformResponseShape<GeneratedValidatorUpdaterStatus>)
-      .nullable()
-      .optional()
-      .catch(null),
+    updater_status: validatorUpdaterStatusSchema,
   })
   .transform((member) => ({
     validator_hotkey: member.validator_hotkey,
@@ -3072,6 +3074,127 @@ export const validatorFleetSchema = z.object({
 
 export type ValidatorFleet = z.infer<typeof validatorFleetSchema>
 export type ValidatorFleetMember = z.infer<typeof validatorFleetMemberSchema>
+
+// MCP fleet observability keeps identity the slot-cap console deliberately
+// drops: software_version, protocol, stack component revisions, scorer probe
+// identity, and updater current/candidate. Calibration manifests and per-check
+// progress stay out of the parse so one heartbeat cannot flood the catalog.
+const validatorComponentIdentitySchema = z
+  .object({
+    image_digest: z.string().nullish().catch(null),
+    source_revision: z.string().nullish().catch(null),
+    version: z.string().nullish().catch(null),
+    provenance: z.string().catch('unknown'),
+  })
+  .nullish()
+  .catch(null)
+
+export const validatorFleetObservabilityMemberSchema = z
+  .object({
+    validator_hotkey: z.string(),
+    software_version: z.string().catch('unreported'),
+    protocol_version: z.number().int().positive().catch(0),
+    configured_slots: z.number().int().nonnegative().catch(1),
+    allowed_slots: z.number().int().nonnegative().nullish().catch(null),
+    issuance_paused: z.boolean().catch(false),
+    healthy_slots: z.array(z.string()).catch([]),
+    admission: z.string().catch('accepting'),
+    active_benchmarks: z.array(z.unknown()).catch([]),
+    confirmation_benchmarks: z.array(z.unknown()).catch([]),
+    online: z.boolean().catch(false),
+    health: z.string().catch('unknown'),
+    scorer_liveness: z.string().catch('unreported'),
+    health_reasons: z.array(z.string()).catch([]),
+    bench_serviceability: z
+      .enum(['serving', 'scorer_unverified', 'software_obsolete'])
+      .catch('serving'),
+    system_metrics: z
+      .object({
+        disk_percent: z.number().int().min(0).max(100).nullish().catch(null),
+        cpu_percent: z.number().int().min(0).max(100).nullish().catch(null),
+        memory_percent: z.number().int().min(0).max(100).nullish().catch(null),
+      })
+      .nullish()
+      .catch(null),
+    reported_at: z.string().nullish().catch(null),
+    seen_at: z.string().nullish().catch(null),
+    orphaned_slots: z.array(publicOrphanedSlotSchema).catch([]),
+    updater_status: validatorUpdaterStatusSchema,
+    stack: z
+      .object({
+        mode: z.string().catch('unknown'),
+        compose_schema: z.number().int().nullish().catch(null),
+        release_descriptor_digest: z.string().nullish().catch(null),
+        components: z
+          .object({
+            ditto_subnet: validatorComponentIdentitySchema,
+            dittobench_api: validatorComponentIdentitySchema,
+            sandbox_docker: validatorComponentIdentitySchema,
+            model_relay: validatorComponentIdentitySchema,
+            pylon: validatorComponentIdentitySchema,
+            ollama: validatorComponentIdentitySchema,
+          })
+          .nullish()
+          .catch(null),
+      })
+      .nullish()
+      .catch(null),
+    capabilities: z
+      .object({
+        scorer_benchmarks: z
+          .object({
+            status: z.string().catch('unreported'),
+            software_version: z.string().nullish().catch(null),
+            source_revision: z.string().nullish().catch(null),
+            supported_bench_versions: z.array(z.number().int()).catch([]),
+          })
+          .nullish()
+          .catch(null),
+      })
+      .nullish()
+      .catch(null),
+  })
+  .transform((member) => ({
+    validator_hotkey: member.validator_hotkey,
+    software_version: member.software_version,
+    protocol_version: member.protocol_version > 0 ? member.protocol_version : null,
+    online: member.online,
+    health: member.health,
+    scorer_liveness: member.scorer_liveness,
+    health_reasons: member.health_reasons,
+    bench_serviceability: member.bench_serviceability,
+    admission: member.admission,
+    issuance_paused: member.issuance_paused,
+    configured_slots: member.configured_slots,
+    allowed_slots: member.allowed_slots,
+    healthy_slot_count: member.healthy_slots.length,
+    active_benchmark_count: member.active_benchmarks.length,
+    confirmation_benchmark_count: member.confirmation_benchmarks.length,
+    orphaned_slot_count: member.orphaned_slots.length,
+    disk_percent: member.system_metrics?.disk_percent ?? null,
+    cpu_percent: member.system_metrics?.cpu_percent ?? null,
+    memory_percent: member.system_metrics?.memory_percent ?? null,
+    reported_at: member.reported_at,
+    seen_at: member.seen_at,
+    stack: member.stack,
+    scorer: member.capabilities?.scorer_benchmarks ?? null,
+    updater_status: member.updater_status ?? null,
+  }))
+
+export const validatorFleetObservabilitySchema = z.object({
+  generated_at: z.string(),
+  active_bench_version: z.number().int().positive().nullish().default(null),
+  online_window_seconds: z.number().int().positive().nullish().default(null),
+  stale_window_seconds: z.number().int().positive().nullish().default(null),
+  reported_count: z.number().int().nonnegative().nullish().default(null),
+  online_count: z.number().int().nonnegative().nullish().default(null),
+  validators: z.array(validatorFleetObservabilityMemberSchema).catch([]),
+})
+
+export type ValidatorFleetObservability = z.infer<typeof validatorFleetObservabilitySchema>
+export type ValidatorFleetObservabilityMember = z.infer<
+  typeof validatorFleetObservabilityMemberSchema
+>
 
 // Older screening attempts were created from 128 random bits before the
 // screener started setting RFC version and variant bits. They are valid UUID

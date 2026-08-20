@@ -53,6 +53,7 @@ import {
   setValidatorSlotSettings,
   setValidatorIssuancePause,
   fetchValidatorFleet,
+  fetchValidatorFleetObservability,
   fetchAgentScores,
   fetchAgentScoreHistory,
   fetchScoreLeaderboard,
@@ -4119,6 +4120,85 @@ describe('validator fleet context', () => {
     })
   })
 
+  it('keeps software and stack identity for MCP fleet observability', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        ...fleet,
+        validators: [
+          {
+            ...fleet.validators[0],
+            stack: {
+              mode: 'managed',
+              compose_schema: 2,
+              release_descriptor_digest: `sha256:${'c'.repeat(64)}`,
+              components: {
+                ditto_subnet: {
+                  image_digest: `sha256:${'a'.repeat(64)}`,
+                  source_revision: 'a'.repeat(40),
+                  version: '0.64.0',
+                  provenance: 'signed_descriptor',
+                },
+                dittobench_api: {
+                  image_digest: `sha256:${'d'.repeat(64)}`,
+                  source_revision: 'd'.repeat(40),
+                  version: '0.64.0',
+                  provenance: 'signed_descriptor',
+                },
+                sandbox_docker: {
+                  image_digest: `sha256:${'e'.repeat(64)}`,
+                  source_revision: 'e'.repeat(40),
+                  version: '0.64.0',
+                  provenance: 'signed_descriptor',
+                },
+                model_relay: {
+                  image_digest: `sha256:${'f'.repeat(64)}`,
+                  source_revision: 'f'.repeat(40),
+                  version: '0.64.0',
+                  provenance: 'signed_descriptor',
+                },
+                pylon: {
+                  image_digest: `sha256:${'g'.repeat(64)}`,
+                  source_revision: 'g'.repeat(40),
+                  version: '0.64.0',
+                  provenance: 'signed_descriptor',
+                },
+                ollama: null,
+              },
+            },
+            capabilities: {
+              scorer_benchmarks: {
+                status: 'fresh_verified',
+                software_version: '0.64.0',
+                source_revision: 'd'.repeat(40),
+                supported_bench_versions: [11],
+              },
+            },
+          },
+        ],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const parsed = await fetchValidatorFleetObservability()
+    expect(parsed.validators[0]).toMatchObject({
+      validator_hotkey: fleet.validators[0].validator_hotkey,
+      software_version: '7.0.0',
+      protocol_version: 15,
+      scorer: {
+        status: 'fresh_verified',
+        source_revision: 'd'.repeat(40),
+      },
+      stack: {
+        mode: 'managed',
+        components: {
+          dittobench_api: { source_revision: 'd'.repeat(40) },
+          model_relay: { source_revision: 'f'.repeat(40) },
+        },
+      },
+    })
+  })
+
   // Advisory context must never take down the page that carries the kill switch.
   it('resolves to null when the fleet read fails', async () => {
     process.env.DITTO_ADMIN_API_TOKEN = 'secret'
@@ -4128,6 +4208,16 @@ describe('validator fleet context', () => {
     )
 
     await expect(fetchValidatorFleet()).resolves.toBeNull()
+  })
+
+  it('fails closed when MCP fleet observability cannot read heartbeats', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'secret'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(Response.json({ detail: 'nope' }, { status: 503 })),
+    )
+
+    await expect(fetchValidatorFleetObservability()).rejects.toThrow()
   })
 })
 

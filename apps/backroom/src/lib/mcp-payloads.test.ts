@@ -4,12 +4,14 @@ import {
   screeningQuarantineListSchema,
   screeningSubmissionListSchema,
   stuckSubmissionsListSchema,
+  validatorFleetObservabilitySchema,
 } from './admin.schemas'
 import {
   compactBatchRetryResponse,
   compactScreeningQuarantines,
   compactScreeningSubmissions,
   compactStuckSubmissions,
+  compactValidatorFleet,
 } from './mcp-payloads'
 
 // The incident payload this work came from: 26 exhausted submissions recovered
@@ -382,5 +384,66 @@ describe('compactStuckSubmissions', () => {
     expect(bytes(compactStuckSubmissions(stuckSubmissionsPayload(10)))).toBeLessThan(
       4_000,
     )
+  })
+})
+
+describe('compactValidatorFleet', () => {
+  it('counts serving validators and buckets software versions before paging', () => {
+    const payload = validatorFleetObservabilitySchema.parse({
+      generated_at: '2026-08-20T13:40:00Z',
+      active_bench_version: 11,
+      validators: [
+        {
+          validator_hotkey: '5' + 'A'.repeat(47),
+          software_version: '0.64.0',
+          protocol_version: 23,
+          online: true,
+          health: 'healthy',
+          bench_serviceability: 'serving',
+          healthy_slots: ['slot-0'],
+          active_benchmarks: [],
+          updater_status: {
+            enabled: true,
+            state: 'idle',
+            current_version: '0.64.0',
+            failed_candidate_count: 0,
+            suppressed: false,
+            observed_at: 1,
+          },
+        },
+        {
+          validator_hotkey: '5' + 'B'.repeat(47),
+          software_version: '0.63.1',
+          protocol_version: 22,
+          online: true,
+          health: 'healthy',
+          bench_serviceability: 'software_obsolete',
+          healthy_slots: ['slot-0'],
+          active_benchmarks: [],
+          updater_status: {
+            enabled: true,
+            state: 'prefetched',
+            current_version: '0.63.1',
+            candidate_version: '0.64.0',
+            failed_candidate_count: 0,
+            suppressed: false,
+            observed_at: 2,
+          },
+        },
+      ],
+    })
+
+    const compact = compactValidatorFleet(payload)
+    expect(compact.serving_count).toBe(1)
+    expect(compact.online_serving_count).toBe(1)
+    expect(compact.software_obsolete_count).toBe(1)
+    expect(compact.rollout.software_versions).toEqual([
+      { value: '0.63.1', count: 1, online_count: 1, serving_count: 0 },
+      { value: '0.64.0', count: 1, online_count: 1, serving_count: 1 },
+    ])
+    expect(compact.rollout.updater_current_versions.map((row) => row.value)).toEqual([
+      '0.63.1',
+      '0.64.0',
+    ])
   })
 })

@@ -11,6 +11,8 @@ import type {
   screeningQuarantineListSchema,
   screeningSubmissionListSchema,
   stuckSubmissionsListSchema,
+  validatorAssignmentListSchema,
+  validatorFleetObservabilitySchema,
 } from './admin.schemas'
 import {
   compactListField,
@@ -23,6 +25,8 @@ type CopyReviewList = z.infer<typeof copyReviewListSchema>
 type ScreeningQuarantineList = z.infer<typeof screeningQuarantineListSchema>
 type ScreeningSubmissionList = z.infer<typeof screeningSubmissionListSchema>
 type StuckSubmissionsList = z.infer<typeof stuckSubmissionsListSchema>
+type ValidatorAssignmentList = z.infer<typeof validatorAssignmentListSchema>
+type ValidatorFleetObservability = z.infer<typeof validatorFleetObservabilitySchema>
 
 const BATCH_RETRY_STATUSES = ['granted', 'idempotent', 'skipped'] as const
 
@@ -183,5 +187,103 @@ export function compactStuckSubmissions(response: StuckSubmissionsList) {
   return compactListField(response, 'submissions', {
     pin: ['agent_id'],
     omit: ['quorum'],
+  })
+}
+
+type VersionHistogramRow = {
+  value: string | number | null
+  count: number
+  online_count: number
+  serving_count: number
+}
+
+function versionHistogram(
+  rows: ReadonlyArray<{
+    value: string | number | null | undefined
+    online: boolean
+    serving: boolean
+  }>,
+): VersionHistogramRow[] {
+  const groups = new Map<string, VersionHistogramRow>()
+  for (const row of rows) {
+    const value = row.value ?? null
+    const key = value === null ? '' : String(value)
+    const current = groups.get(key) ?? {
+      value,
+      count: 0,
+      online_count: 0,
+      serving_count: 0,
+    }
+    current.count += 1
+    if (row.online) current.online_count += 1
+    if (row.serving) current.serving_count += 1
+    groups.set(key, current)
+  }
+  return [...groups.values()].sort((left, right) => {
+    if (right.count !== left.count) return right.count - left.count
+    return String(left.value ?? '').localeCompare(String(right.value ?? ''))
+  })
+}
+
+/**
+ * Compact the public validator heartbeat view for MCP.
+ *
+ * The slot-cap console drops software/stack/scorer identity so a browser page
+ * cannot ship calibration manifests. MCP needs those identities to wait for a
+ * release, so this keeps component revisions and updater versions, counts
+ * live work instead of embedding progress blobs, and adds a fleet-wide
+ * histogram computed before any hotkey filter or page slice.
+ */
+export function compactValidatorFleet(response: ValidatorFleetObservability) {
+  const validators = response.validators
+  const serving = (row: (typeof validators)[number]) =>
+    row.bench_serviceability === 'serving'
+  const rolloutRows = (value: (row: (typeof validators)[number]) => string | number | null) =>
+    validators.map((row) => ({
+      value: value(row),
+      online: row.online,
+      serving: serving(row),
+    }))
+
+  return {
+    generated_at: response.generated_at,
+    active_bench_version: response.active_bench_version,
+    online_window_seconds: response.online_window_seconds,
+    stale_window_seconds: response.stale_window_seconds,
+    reported_count: response.reported_count ?? validators.length,
+    online_count: response.online_count ?? validators.filter((row) => row.online).length,
+    serving_count: validators.filter((row) => serving(row)).length,
+    online_serving_count: validators.filter((row) => row.online && serving(row)).length,
+    software_obsolete_count: validators.filter(
+      (row) => row.bench_serviceability === 'software_obsolete',
+    ).length,
+    scorer_unverified_count: validators.filter(
+      (row) => row.bench_serviceability === 'scorer_unverified',
+    ).length,
+    rollout: {
+      software_versions: versionHistogram(rolloutRows((row) => row.software_version)),
+      protocol_versions: versionHistogram(rolloutRows((row) => row.protocol_version)),
+      updater_current_versions: versionHistogram(
+        rolloutRows((row) => row.updater_status?.current_version ?? null),
+      ),
+      dittobench_api_revisions: versionHistogram(
+        rolloutRows((row) => row.stack?.components?.dittobench_api?.source_revision ?? null),
+      ),
+      model_relay_revisions: versionHistogram(
+        rolloutRows((row) => row.stack?.components?.model_relay?.source_revision ?? null),
+      ),
+      scorer_source_revisions: versionHistogram(
+        rolloutRows((row) => row.scorer?.source_revision ?? null),
+      ),
+    },
+    validators,
+  }
+}
+
+export function compactValidatorAssignments(
+  response: Pick<ValidatorAssignmentList, 'items'> & Record<string, unknown>,
+) {
+  return compactListField(response, 'items', {
+    pin: ['agent_id', 'validator_hotkey'],
   })
 }
