@@ -27,10 +27,12 @@
         "memory_bundle_sha256": "b943e6586a202b2ede36cee985e1ebb76d2dc0ab2734e30c174763f81bf51f53",
         "environment_image_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "environment_platform": "linux/amd64",
-        "resource_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+        "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
         "grader_bundle_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
         "grader_image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-        "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+        "grader_platform": "linux/amd64",
+        "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "grader_plan_sha256": "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e"
       }
     ]
   },
@@ -101,10 +103,12 @@
       "memory_bundle_sha256": "b943e6586a202b2ede36cee985e1ebb76d2dc0ab2734e30c174763f81bf51f53",
       "environment_image_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "environment_platform": "linux/amd64",
-      "resource_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
       "grader_bundle_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
       "grader_image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-      "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+      "grader_platform": "linux/amd64",
+      "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "grader_plan_sha256": "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e"
     },
     "authoring": {
       "model": {
@@ -140,7 +144,12 @@
       "grader_contract_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
       "grader_bundle_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
       "grader_image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+      "grader_platform": "linux/amd64",
       "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "grader_plan_sha256": "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e",
+      "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
+      "execution_receipt_root_sha256": "f46c105c107c0ca39bf7fd93497e44a4956fae2a81934cb90f4ab6feb960379b",
+      "execution_receipt_count": 6,
       "grader_integrity_before_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "grader_integrity_after_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
       "build": {"command_id": "typecheck-parser", "required": true, "passed": true},
@@ -176,10 +185,12 @@
       "memory_bundle_sha256": "b943e6586a202b2ede36cee985e1ebb76d2dc0ab2734e30c174763f81bf51f53",
       "environment_image_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "environment_platform": "linux/amd64",
-      "resource_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
       "grader_bundle_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
       "grader_image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-      "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+      "grader_platform": "linux/amd64",
+      "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "grader_plan_sha256": "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e"
     },
     "authoring": {
       "model": {
@@ -222,13 +233,13 @@
     "weight_eligible": false,
     "coding_run_id": "coding-run-001",
     "validator_ticket_id": "validator-ticket-001",
-    "run_manifest_sha256": "671a163fb25be31c89ca46ff0142de64c2d88a9688a0f7d8b3b6a3222d473344",
+    "run_manifest_sha256": "e7b431a640aca1f35a5cabe7341ee0aaba25ccee9a174ef0c8f4ab0f3ff80dc4",
     "task_set_manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
     "tasks": [
       {
         "case_id": "case-001",
         "variant_id": "variant-v1",
-        "task_evidence_sha256": "0cf7a6d66ca69f559e755df0e2dcf14e66a9c4af613e9add29eef066ff21206d",
+        "task_evidence_sha256": "dab868fbb44901e61ccd637f47d859368dade1c86471d0af225a7693182cab36",
         "terminal_domain": "resolved",
         "repair_score_micros": 1000000
       }
@@ -262,10 +273,12 @@
       "memory_bundle_sha256": "b943e6586a202b2ede36cee985e1ebb76d2dc0ab2734e30c174763f81bf51f53",
       "environment_image_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
       "environment_platform": "linux/amd64",
-      "resource_profile_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
       "grader_bundle_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
       "grader_image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
-      "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555"
+      "grader_platform": "linux/amd64",
+      "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "grader_plan_sha256": "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e"
     },
     "authoring": null,
     "grader": null,
@@ -355,6 +368,77 @@
     "scoreable_task_count": 6,
     "repair_mean_micros": 666666
   },
+  "grader_resource_profile": {
+    "schema": "dittobench-coding-grader-resource-v1",
+    "candidate_limits": {
+      "max_bundle_bytes": 536870912,
+      "max_workspace_bytes": 1073741824,
+      "max_file_bytes": 33554432,
+      "max_patch_bytes": 33554432,
+      "max_entries": 50000,
+      "max_tool_calls": 256,
+      "max_read_bytes": 32768,
+      "max_response_bytes": 262144,
+      "max_search_results": 100,
+      "max_replay_cache_bytes": 67108864,
+      "max_transcript_bytes": 134217728
+    },
+    "protected_limits": {
+      "max_bundle_bytes": 536870912,
+      "max_workspace_bytes": 1073741824,
+      "max_file_bytes": 33554432,
+      "max_patch_bytes": 33554432,
+      "max_entries": 50000,
+      "max_tool_calls": 256,
+      "max_read_bytes": 32768,
+      "max_response_bytes": 262144,
+      "max_search_results": 100,
+      "max_replay_cache_bytes": 67108864,
+      "max_transcript_bytes": 134217728
+    },
+    "max_combined_disk_bytes": 4294967296,
+    "memory_limit_bytes": 4294967296,
+    "scratch_limit_bytes": 1073741824,
+    "pids_limit": 512,
+    "cpu_quota_millis": 2000
+  },
+  "grader_plan": {
+    "schema": "dittobench-coding-grader-plan-v1",
+    "coding_contract_version": 1,
+    "case_id": "case-001",
+    "variant_id": "variant-v1",
+    "visible_bundle_sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+    "base_tree_sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "grader_contract_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+    "grader_bundle_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+    "grader_image_digest": "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+    "grader_platform": "linux/amd64",
+    "test_manifest_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+    "resource_profile_sha256": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
+    "execution_timeout_milliseconds": 1800000,
+    "build_required": true,
+    "build_command": {
+      "id": "typecheck-parser",
+      "argv": ["python", "-m", "compileall", "src"],
+      "timeout_milliseconds": 60000
+    },
+    "test_groups": [
+      {"group": "adversarial", "command": {"id": "test-adversarial", "argv": ["python", "-m", "pytest", "grader/adversarial.py"], "timeout_milliseconds": 60000}, "expected_total": 2},
+      {"group": "fail_to_pass", "command": {"id": "test-fail_to_pass", "argv": ["python", "-m", "pytest", "grader/fail_to_pass.py"], "timeout_milliseconds": 60000}, "expected_total": 3},
+      {"group": "hidden", "command": {"id": "test-hidden", "argv": ["python", "-m", "pytest", "grader/hidden.py"], "timeout_milliseconds": 60000}, "expected_total": 2},
+      {"group": "integrity", "command": {"id": "test-integrity", "argv": ["python", "-m", "pytest", "grader/integrity.py"], "timeout_milliseconds": 60000}, "expected_total": 1},
+      {"group": "pass_to_pass", "command": {"id": "test-pass_to_pass", "argv": ["python", "-m", "pytest", "grader/pass_to_pass.py"], "timeout_milliseconds": 60000}, "expected_total": 8}
+    ],
+    "execution_order": ["fail_to_pass", "pass_to_pass", "hidden", "adversarial", "integrity"]
+  },
+  "grader_execution_receipts": [
+    {"schema": "dittobench-coding-grader-receipt-v1", "sequence": 1, "phase": "build", "group": null, "command_id": "typecheck-parser", "command_sha256": "5972fa5af467d0aa2514349d4e6ae0bad4c88fba5d1f5a3e3f58125ae3758499", "executor_instance_id": "grader-executor-001", "returncode": 0, "passed": 0, "total": 0, "completed": true, "timed_out": false, "previous_receipt_sha256": "0000000000000000000000000000000000000000000000000000000000000000"},
+    {"schema": "dittobench-coding-grader-receipt-v1", "sequence": 2, "phase": "test", "group": "fail_to_pass", "command_id": "test-fail_to_pass", "command_sha256": "4aa0e32d3f51ac601da116f6cb4d2a7b1ea5378b2ed6bab7d0cfd70045cc34a2", "executor_instance_id": "grader-executor-001", "returncode": 0, "passed": 3, "total": 3, "completed": true, "timed_out": false, "previous_receipt_sha256": "78add16dddb7bef50ec3e051f8f9dcf721f618ef7a5037883f301397dfa7ee34"},
+    {"schema": "dittobench-coding-grader-receipt-v1", "sequence": 3, "phase": "test", "group": "pass_to_pass", "command_id": "test-pass_to_pass", "command_sha256": "1d5e02ed9cd6981296f298550b11e2833fcb78aabca4849c21b5565697cd6b3b", "executor_instance_id": "grader-executor-001", "returncode": 0, "passed": 8, "total": 8, "completed": true, "timed_out": false, "previous_receipt_sha256": "535d2bc237ae80eb4ae3004d69ac16eb1c522be54b12bd16fa00383469d793d9"},
+    {"schema": "dittobench-coding-grader-receipt-v1", "sequence": 4, "phase": "test", "group": "hidden", "command_id": "test-hidden", "command_sha256": "2eed9ddfeda0c8ffd98a8b95fe93fc8891f021e42b9d33d1e3940fd30eea779f", "executor_instance_id": "grader-executor-001", "returncode": 0, "passed": 2, "total": 2, "completed": true, "timed_out": false, "previous_receipt_sha256": "e97d04d330895621df23db094e4dac729e020e81d414843932fe7cae21b6de02"},
+    {"schema": "dittobench-coding-grader-receipt-v1", "sequence": 5, "phase": "test", "group": "adversarial", "command_id": "test-adversarial", "command_sha256": "bc8a291fddfa769d626a3543a046e84c999fa47197163a15b95b78b7030e9909", "executor_instance_id": "grader-executor-001", "returncode": 0, "passed": 2, "total": 2, "completed": true, "timed_out": false, "previous_receipt_sha256": "e88ec85d0218dd144fb1377b3a04fb92cc1ebdfa9685511b6b51d3b37593d578"},
+    {"schema": "dittobench-coding-grader-receipt-v1", "sequence": 6, "phase": "test", "group": "integrity", "command_id": "test-integrity", "command_sha256": "21deb4bfa263f13b21cde16bcf3fad8c88a93e2127c5cf9a53656d7fba1ed4dd", "executor_instance_id": "grader-executor-001", "returncode": 0, "passed": 1, "total": 1, "completed": true, "timed_out": false, "previous_receipt_sha256": "d440b70846d19cf8ad446e1a619c2e92b39e42cb304dd807cd967af71a99be44"}
+  ],
   "wire_boundary_vectors": {
     "paired_surrogate_json_string": "\"\\ud83d\\ude00\"",
     "escaped_surrogate_literal_json_string": "\"\\\\ud800\"",
@@ -365,15 +449,18 @@
     "reject_json_depth": 33
   },
   "digests": {
-    "manifest": "671a163fb25be31c89ca46ff0142de64c2d88a9688a0f7d8b3b6a3222d473344",
+    "manifest": "e7b431a640aca1f35a5cabe7341ee0aaba25ccee9a174ef0c8f4ab0f3ff80dc4",
     "seed_request": "dd26eadd42b7f49e06ec6e31432700805fb4a4f7a4e979d021510b233a491a1f",
     "unicode_seed_memory": "f66978af383f36680b8f3eabac472859ea11a5351685db968a186bd60afbb185",
     "run_request": "ceca845919642b58aba85d5668ed488026752c6377c760ea3f2e9f3829d26e21",
     "unicode_run_request": "e6dff86d26d9b6bd426007dbc8e3b1b65733564ab0c9e688148ca419ae5bc987",
-    "task_evidence": "0cf7a6d66ca69f559e755df0e2dcf14e66a9c4af613e9add29eef066ff21206d",
-    "zero_model_task_evidence": "200e984aa7498f103c131c8b8e2b40fac324bff6e173801e5951a0dfbf608695",
-    "run_evidence": "65e8920c8c0836747d892bcae72faf38e2956176adcc99b99b4b266c9834102b",
-    "nonresolved_task_evidence": "ade4df9b7b457892ade4a4b8c7ac77e29e972ea4baa6c9b114561729f28a50f5",
-    "aggregate_run_evidence": "e4b415e4e23a8f972dc172186323fcd0896d291f12fe796825c488caba1d1e97"
+    "task_evidence": "dab868fbb44901e61ccd637f47d859368dade1c86471d0af225a7693182cab36",
+    "zero_model_task_evidence": "17c2c998d06a724a1b8d3db53b2e20e135ee18f38a741efe2a0db6bea91ccbb1",
+    "run_evidence": "1b0ec9b1782cdf444a427f47225ad455fd2893fee7682685ae19b5194c1c2996",
+    "nonresolved_task_evidence": "460c514d8dbe5a75d90b9400e185cd152bd349fcc9df66a407868f2c1dda9418",
+    "aggregate_run_evidence": "e4b415e4e23a8f972dc172186323fcd0896d291f12fe796825c488caba1d1e97",
+    "grader_resource_profile": "5d01f16bedb5af936e58d79f7ebc9ca0356dcadb89c06607ba27131a7d3ba8e6",
+    "grader_plan": "cb517c8d7b85cfbe1277a78cf0124b0440544aae6b692ce78ff647b2b5570c3e",
+    "grader_execution_receipt_root": "f46c105c107c0ca39bf7fd93497e44a4956fae2a81934cb90f4ab6feb960379b"
   }
 }

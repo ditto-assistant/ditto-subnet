@@ -36,6 +36,21 @@ _BLOCK_HASH_PATTERN = r"^0x[0-9a-f]{64}$"
 _REQUIRED_TEST_GROUPS = frozenset(
     {"adversarial", "fail_to_pass", "hidden", "integrity", "pass_to_pass"}
 )
+_SORTED_TEST_GROUPS = (
+    "adversarial",
+    "fail_to_pass",
+    "hidden",
+    "integrity",
+    "pass_to_pass",
+)
+_GRADER_EXECUTION_ORDER = (
+    "fail_to_pass",
+    "pass_to_pass",
+    "hidden",
+    "adversarial",
+    "integrity",
+)
+_INITIAL_GRADER_RECEIPT_ROOT = "0" * 64
 
 
 def _validate_identifier(value: str, max_bytes: int) -> str:
@@ -155,7 +170,165 @@ class CodingManifestTask(CodingContractModel):
     resource_profile_sha256: Sha256
     grader_bundle_sha256: Sha256
     grader_image_digest: OciDigest
+    grader_platform: Literal["linux/amd64"]
     test_manifest_sha256: Sha256
+    grader_plan_sha256: Sha256
+
+
+class CodingGraderCommand(CodingContractModel):
+    id: CommandId
+    argv: Annotated[list[str], Field(min_length=1, max_length=64)]
+    timeout_milliseconds: Annotated[int, Field(ge=1, le=600_000)]
+
+    @model_validator(mode="after")
+    def command_is_bounded(self) -> CodingGraderCommand:
+        executable = self.argv[0]
+        if (
+            len(executable.encode()) > 128
+            or "/" in executable
+            or "\\" in executable
+            or any(
+                character.isspace() or unicodedata.category(character) == "Cc"
+                for character in executable
+            )
+            or executable.casefold()
+            in {"bash", "cmd", "dash", "env", "fish", "powershell", "pwsh", "sh", "zsh"}
+        ):
+            raise ValueError("grader command executable is outside contract bounds")
+        for argument in self.argv[1:]:
+            if not argument or len(argument.encode()) > 4096 or "\x00" in argument:
+                raise ValueError("grader command argument is outside contract bounds")
+        return self
+
+
+class CodingGraderTestGroupPlan(CodingContractModel):
+    group: Literal["fail_to_pass", "pass_to_pass", "hidden", "adversarial", "integrity"]
+    command: CodingGraderCommand
+    expected_total: Annotated[int, Field(ge=1, le=UINT32_MAX)]
+
+
+class CodingGraderPlan(CodingContractModel):
+    schema_name: Literal["dittobench-coding-grader-plan-v1"] = Field(alias="schema")
+    coding_contract_version: Literal[1]
+    case_id: OpaqueId
+    variant_id: OpaqueId
+    visible_bundle_sha256: Sha256
+    base_tree_sha256: Sha256
+    grader_contract_sha256: Sha256
+    grader_bundle_sha256: Sha256
+    grader_image_digest: OciDigest
+    grader_platform: Literal["linux/amd64"]
+    test_manifest_sha256: Sha256
+    resource_profile_sha256: Sha256
+    execution_timeout_milliseconds: Annotated[int, Field(ge=1, le=3_600_000)]
+    build_required: bool
+    build_command: CodingGraderCommand
+    test_groups: Annotated[
+        list[CodingGraderTestGroupPlan], Field(min_length=5, max_length=5)
+    ]
+    execution_order: Annotated[list[str], Field(min_length=5, max_length=5)]
+
+    @model_validator(mode="after")
+    def plan_is_canonical(self) -> CodingGraderPlan:
+        groups = tuple(group.group for group in self.test_groups)
+        if (
+            groups != _SORTED_TEST_GROUPS
+            or tuple(self.execution_order) != _GRADER_EXECUTION_ORDER
+        ):
+            raise ValueError("grader groups or execution order are not canonical")
+        command_ids = [self.build_command.id] + [
+            group.command.id for group in self.test_groups
+        ]
+        if len(command_ids) != len(set(command_ids)):
+            raise ValueError("grader command IDs must be unique")
+        return self
+
+
+class CodingGraderLimits(CodingContractModel):
+    max_bundle_bytes: Annotated[int, Field(ge=1, le=2 << 30)]
+    max_workspace_bytes: Annotated[int, Field(ge=1, le=4 << 30)]
+    max_file_bytes: Annotated[int, Field(ge=1, le=128 << 20)]
+    max_patch_bytes: Annotated[int, Field(ge=1, le=128 << 20)]
+    max_entries: Annotated[int, Field(ge=1, le=200_000)]
+    max_tool_calls: Annotated[int, Field(ge=1, le=1_000)]
+    max_read_bytes: Annotated[int, Field(ge=1, le=256 << 10)]
+    max_response_bytes: Annotated[int, Field(ge=4096, le=2 << 20)]
+    max_search_results: Annotated[int, Field(ge=1, le=1_000)]
+    max_replay_cache_bytes: Annotated[int, Field(ge=1, le=512 << 20)]
+    max_transcript_bytes: Annotated[int, Field(ge=1, le=512 << 20)]
+
+    @model_validator(mode="after")
+    def aggregate_limits_are_coherent(self) -> CodingGraderLimits:
+        if (
+            self.max_file_bytes > self.max_workspace_bytes
+            or self.max_patch_bytes > self.max_workspace_bytes
+        ):
+            raise ValueError("grader file or patch limit exceeds workspace limit")
+        if self.max_read_bytes > self.max_response_bytes - 2048:
+            raise ValueError("grader read limit exceeds response limit")
+        if self.max_tool_calls * self.max_response_bytes > self.max_replay_cache_bytes:
+            raise ValueError("grader replay cache cannot retain every response")
+        max_event_bytes = 2 * (64 << 10) + self.max_response_bytes + 8192
+        if self.max_tool_calls * max_event_bytes > self.max_transcript_bytes:
+            raise ValueError("grader transcript cannot retain every event")
+        return self
+
+
+class CodingGraderResourceProfile(CodingContractModel):
+    schema_name: Literal["dittobench-coding-grader-resource-v1"] = Field(alias="schema")
+    candidate_limits: CodingGraderLimits
+    protected_limits: CodingGraderLimits
+    max_combined_disk_bytes: Annotated[int, Field(ge=1, le=8 << 30)]
+    memory_limit_bytes: Annotated[int, Field(ge=256 << 20, le=64 << 30)]
+    scratch_limit_bytes: Annotated[int, Field(ge=1, le=8 << 30)]
+    pids_limit: Annotated[int, Field(ge=1, le=4096)]
+    cpu_quota_millis: Annotated[int, Field(ge=100, le=64_000)]
+
+    @model_validator(mode="after")
+    def combined_disk_is_bounded(self) -> CodingGraderResourceProfile:
+        peak = (
+            self.candidate_limits.max_workspace_bytes
+            + self.protected_limits.max_workspace_bytes
+            + max(
+                self.candidate_limits.max_bundle_bytes,
+                self.protected_limits.max_bundle_bytes,
+            )
+            + self.scratch_limit_bytes
+        )
+        if peak > self.max_combined_disk_bytes:
+            raise ValueError("grader combined disk peak exceeds its ceiling")
+        return self
+
+
+class CodingGraderExecutionReceipt(CodingContractModel):
+    schema_name: Literal["dittobench-coding-grader-receipt-v1"] = Field(alias="schema")
+    sequence: Annotated[int, Field(ge=1, le=6)]
+    phase: Literal["build", "test"]
+    group: (
+        Literal["fail_to_pass", "pass_to_pass", "hidden", "adversarial", "integrity"]
+        | None
+    )
+    command_id: CommandId
+    command_sha256: Sha256
+    executor_instance_id: OpaqueId
+    returncode: Annotated[int, Field(ge=-(1 << 63), le=(1 << 63) - 1)]
+    passed: Annotated[int, Field(ge=0, le=UINT32_MAX)]
+    total: Annotated[int, Field(ge=0, le=UINT32_MAX)]
+    completed: bool
+    timed_out: bool
+    previous_receipt_sha256: Sha256
+
+    @model_validator(mode="after")
+    def phase_is_coherent(self) -> CodingGraderExecutionReceipt:
+        if self.phase == "build" and (
+            self.group is not None or self.passed != 0 or self.total != 0
+        ):
+            raise ValueError("build receipt contains test fields")
+        if self.phase == "test" and (
+            self.group is None or self.total == 0 or self.passed > self.total
+        ):
+            raise ValueError("test receipt is incoherent")
+        return self
 
 
 class CodingRunManifest(CodingContractModel):
@@ -376,7 +549,12 @@ class CodingGraderEvidence(CodingContractModel):
     grader_contract_sha256: Sha256
     grader_bundle_sha256: Sha256
     grader_image_digest: OciDigest
+    grader_platform: Literal["linux/amd64"]
     test_manifest_sha256: Sha256
+    grader_plan_sha256: Sha256
+    resource_profile_sha256: Sha256
+    execution_receipt_root_sha256: Sha256
+    execution_receipt_count: Annotated[int, Field(ge=0, le=6)]
     grader_integrity_before_sha256: Sha256
     grader_integrity_after_sha256: Sha256
     build: CodingBuildEvidence
@@ -392,11 +570,13 @@ class CodingGraderEvidence(CodingContractModel):
         return self
 
     def resolved(self) -> bool:
+        expected_receipts = 5 + int(self.build.required)
         return (
             (not self.build.required or self.build.passed)
             and all(group.passed == group.total for group in self.test_groups)
             and self.grader_integrity_before_sha256
             == self.grader_integrity_after_sha256
+            and self.execution_receipt_count == expected_receipts
         )
 
 
@@ -425,8 +605,14 @@ class CodingTaskEvidence(CodingContractModel):
                 raise ValueError("grader bundle does not match manifest task")
             if self.grader.grader_image_digest != self.task.grader_image_digest:
                 raise ValueError("grader image does not match manifest task")
+            if self.grader.grader_platform != self.task.grader_platform:
+                raise ValueError("grader platform does not match manifest task")
             if self.grader.test_manifest_sha256 != self.task.test_manifest_sha256:
                 raise ValueError("test manifest does not match manifest task")
+            if self.grader.grader_plan_sha256 != self.task.grader_plan_sha256:
+                raise ValueError("grader plan does not match manifest task")
+            if self.grader.resource_profile_sha256 != self.task.resource_profile_sha256:
+                raise ValueError("grader resource profile does not match manifest task")
 
         if self.terminal_domain is CodingTerminalDomain.RESOLVED:
             if (
@@ -595,6 +781,75 @@ def canonical_digest(
     return sha256_hex(canonical_json_bytes(value))
 
 
+def grader_plan_digest(plan: CodingGraderPlan) -> str:
+    """Hash one validated, known-field grader plan projection."""
+
+    normalized = CodingGraderPlan.model_validate_json(
+        plan.model_dump_json(by_alias=True)
+    )
+    return sha256_hex(_canonical_json_bytes(normalized))
+
+
+def grader_resource_profile_digest(profile: CodingGraderResourceProfile) -> str:
+    """Hash one validated grader resource profile projection."""
+
+    normalized = CodingGraderResourceProfile.model_validate_json(
+        profile.model_dump_json(by_alias=True)
+    )
+    return sha256_hex(_canonical_json_bytes(normalized))
+
+
+def grader_execution_receipt_root(
+    plan: CodingGraderPlan,
+    receipts: list[CodingGraderExecutionReceipt],
+) -> str:
+    """Validate plan binding and replay the ordered grader receipt chain."""
+
+    normalized_plan = CodingGraderPlan.model_validate_json(
+        plan.model_dump_json(by_alias=True)
+    )
+    group_plans: dict[str, CodingGraderTestGroupPlan] = {
+        group.group: group for group in normalized_plan.test_groups
+    }
+    expected: list[tuple[str, str | None, CodingGraderCommand, int]] = []
+    if normalized_plan.build_required:
+        expected.append(("build", None, normalized_plan.build_command, 0))
+    expected.extend(
+        (
+            "test",
+            group,
+            group_plans[group].command,
+            group_plans[group].expected_total,
+        )
+        for group in normalized_plan.execution_order
+    )
+    if len(receipts) > len(expected):
+        raise ValueError("grader execution receipt chain exceeds its plan")
+    previous = _INITIAL_GRADER_RECEIPT_ROOT
+    executor_instance_id: str | None = None
+    for index, receipt in enumerate(receipts, start=1):
+        normalized = CodingGraderExecutionReceipt.model_validate_json(
+            receipt.model_dump_json(by_alias=True)
+        )
+        phase, group, command, total = expected[index - 1]
+        command_sha256 = sha256_hex(_canonical_json_bytes(command))
+        if executor_instance_id is None:
+            executor_instance_id = normalized.executor_instance_id
+        if (
+            normalized.sequence != index
+            or normalized.previous_receipt_sha256 != previous
+            or normalized.phase != phase
+            or normalized.group != group
+            or normalized.command_id != command.id
+            or normalized.command_sha256 != command_sha256
+            or normalized.executor_instance_id != executor_instance_id
+            or normalized.total != total
+        ):
+            raise ValueError("grader execution receipt chain is not plan-bound")
+        previous = sha256_hex(_canonical_json_bytes(normalized))
+    return previous
+
+
 def memory_bundle_digest(
     memories: list[CodingVisibleMemory] | list[dict[str, Any]],
 ) -> str:
@@ -683,11 +938,19 @@ def validate_task_evidence_against_manifest(
         != manifest.inference_grant_sha256
     ):
         raise ValueError("task evidence inference grant does not match manifest")
-    if (
-        evidence.grader is not None
-        and evidence.grader.grader_contract_sha256 != manifest.grader_contract_sha256
-    ):
-        raise ValueError("task evidence grader contract does not match manifest")
+    if evidence.grader is not None:
+        selected = matching[0]
+        if (
+            evidence.grader.grader_contract_sha256 != manifest.grader_contract_sha256
+            or evidence.grader.grader_bundle_sha256 != selected.grader_bundle_sha256
+            or evidence.grader.grader_image_digest != selected.grader_image_digest
+            or evidence.grader.grader_platform != selected.grader_platform
+            or evidence.grader.test_manifest_sha256 != selected.test_manifest_sha256
+            or evidence.grader.grader_plan_sha256 != selected.grader_plan_sha256
+            or evidence.grader.resource_profile_sha256
+            != selected.resource_profile_sha256
+        ):
+            raise ValueError("task evidence grader authority does not match manifest")
 
 
 def task_evidence_digest(
@@ -779,6 +1042,12 @@ __all__ = [
     "CodingBuildEvidence",
     "CodingContractModel",
     "CodingGraderEvidence",
+    "CodingGraderCommand",
+    "CodingGraderExecutionReceipt",
+    "CodingGraderLimits",
+    "CodingGraderPlan",
+    "CodingGraderResourceProfile",
+    "CodingGraderTestGroupPlan",
     "CodingIssue",
     "CodingManifestTask",
     "CodingModelEvidence",
@@ -795,6 +1064,9 @@ __all__ = [
     "CodingVisibleMemory",
     "canonical_digest",
     "canonical_json_bytes",
+    "grader_execution_receipt_root",
+    "grader_plan_digest",
+    "grader_resource_profile_digest",
     "memory_bundle_digest",
     "parse_canonical_json",
     "run_evidence_digest",

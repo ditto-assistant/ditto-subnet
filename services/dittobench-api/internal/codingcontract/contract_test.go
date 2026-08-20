@@ -350,6 +350,25 @@ func TestEvidenceDigestRequiresExactValidatorTicket(t *testing.T) {
 	if _, err := TaskEvidenceDigest(manifest, "other-ticket", evidence); err == nil {
 		t.Fatal("task evidence was digestible against the wrong validator ticket")
 	}
+	mutations := map[string]func(*GraderEvidence){
+		"bundle":   func(value *GraderEvidence) { value.GraderBundleSHA256 = strings.Repeat("1", 64) },
+		"image":    func(value *GraderEvidence) { value.GraderImageDigest = "sha256:" + strings.Repeat("1", 64) },
+		"platform": func(value *GraderEvidence) { value.GraderPlatform = "linux/arm64" },
+		"tests":    func(value *GraderEvidence) { value.TestManifestSHA256 = strings.Repeat("1", 64) },
+		"plan":     func(value *GraderEvidence) { value.GraderPlanSHA256 = strings.Repeat("1", 64) },
+		"resource": func(value *GraderEvidence) { value.ResourceProfileSHA256 = strings.Repeat("1", 64) },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			changed := evidence
+			grader := *evidence.Grader
+			mutate(&grader)
+			changed.Grader = &grader
+			if _, err := TaskEvidenceDigest(manifest, "validator-ticket-001", changed); err == nil {
+				t.Fatal("task evidence accepted grader authority outside the selected manifest")
+			}
+		})
+	}
 }
 
 func TestResolvedTaskRequiresCompletePassingGraderEvidence(t *testing.T) {
@@ -357,6 +376,10 @@ func TestResolvedTaskRequiresCompletePassingGraderEvidence(t *testing.T) {
 	failing := bytes.Replace(vectors.TaskEvidence, []byte(`"passed": 3, "total": 3`), []byte(`"passed": 2, "total": 3`), 1)
 	if _, err := ParseTaskEvidence(failing); err == nil {
 		t.Fatal("resolved evidence with a failed test was accepted")
+	}
+	missingReceipt := bytes.Replace(vectors.TaskEvidence, []byte(`"execution_receipt_count": 6`), []byte(`"execution_receipt_count": 5`), 1)
+	if _, err := ParseTaskEvidence(missingReceipt); err == nil {
+		t.Fatal("resolved evidence with an incomplete receipt chain was accepted")
 	}
 }
 
