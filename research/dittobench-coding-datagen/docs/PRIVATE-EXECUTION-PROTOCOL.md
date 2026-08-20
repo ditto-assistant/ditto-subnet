@@ -292,14 +292,20 @@ readiness only, not correctness or eligibility.
 `/coding/health` is capability discovery only. A trusted certifier must bind
 the exact screened artifact and run one content-addressed public canary through
 `health -> seed -> identical seed replay -> run -> revoke -> freeze -> pristine
-grade`. Certification expires and is invalidated by any artifact change.
+grade`. Before certification is issued, the exact canonical tool transcript
+must be durably stored and prove the required read/edit/test/diff sequence, and
+the replayable frozen submission must enter a validator-local durable outbox.
+The trusted relay must also finalize complete evidence for the manifest-bound
+Luna grant. Certification expires and is invalidated by any artifact change.
 
 An absent endpoint or missing capability means `coding_supported=false`: the
 miner remains in the existing tool-and-memory pipeline and does not receive an
 artificial zero folded into that score. A miner that advertises coding enters
 the coding pipeline only after the active canary resolves. Validator
 infrastructure, invalid task material, and control-plane integrity never count
-as miner certification failures.
+as miner certification failures. In particular, a transport failure before the
+first authoritative workspace or relay event is infrastructure; after an event,
+the scorer freezes and grades without granting a clean retry.
 
 Contract v1 certification is still `weight_eligible=false`. Platform
 persistence, rolling core qualification, a separate shadow coding ledger, and

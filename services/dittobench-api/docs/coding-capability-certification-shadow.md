@@ -24,6 +24,9 @@ sandbox artifact attestation
   -> POST /coding/run for one content-addressed public canary
   -> revoke the capability
   -> freeze the validator-owned workspace
+  -> durably publish and verify the canonical tool transcript
+  -> durably store the replayable frozen submission
+  -> finalize validator-observed inference-relay evidence
   -> replay the frozen patch into the pristine grader
   -> require a resolved executable result
 ```
@@ -53,16 +56,19 @@ runtime contexts.
 The sealed result binds the advertised coding versions/capabilities, artifact
 and harness identities, canary manifest, frozen patch, changed-path root, final
 tree, protected-path result, authoring event/transcript roots and size, pristine
-grader receipt root, issuance time, and expiry. Its states are:
+grader receipt root, locked model/provider evidence, issuance time, and expiry.
+The transcript proof requires successful `repo.read_file`, `repo.apply_patch`,
+`tests.run`, and `git.diff` events in that order. Its states are:
 
 - `unsupported`: coding is not advertised; keep the miner core-only;
 - `failed`: the miner advertised coding but failed a candidate-attributable
   health, seed, run, freeze, or grade check;
 - `certified`: the exact artifact completed the canary and pristine grade.
 
-Consumers validate the known-field digest with `Receipt.Validate()` and must
-also call `Receipt.ValidateAt(now)` before treating a persisted receipt as
-active.
+Wire consumers use `ParseReceipt()` so duplicate or missing known fields fail
+while future unknown fields remain compatible. In-memory consumers validate the
+known-field digest with `Receipt.Validate()`. Both must call
+`Receipt.ValidateAt(now)` before treating a persisted receipt as active.
 
 `certification_sha256` is a content-integrity address, not an identity
 signature. The later validator/Platform adapter must bind the canonical receipt
@@ -77,12 +83,18 @@ Validator infrastructure, invalid task material, and control-plane integrity
 failures return an error instead of de-certifying the miner. They require an
 operator retry or repair. A harness run is never retried after authoritative
 workspace activity; the capability is revoked and the workspace is frozen.
+A transport failure before the first authoritative event is infrastructure. A
+post-event disconnect cannot earn a clean retry: the durable transcript,
+trusted relay evidence, frozen patch, and pristine grade decide the result.
 
 ## Remaining integration boundary
 
 The package consumes interfaces for the already-started harness, source-bound
 capability publisher, immutable bundle store, and one trusted executor that
-implements both visible authoring commands and pristine grading. This PR
+implements both visible authoring commands and pristine grading. It also
+requires validator-local durable outboxes for the transcript and frozen
+submission plus a trusted inference-evidence source; test fixtures cannot be
+used by production adapters. This PR
 intentionally does not add the Platform persistence/screening adapter. That
 later layer must tie the receipt to the screened image digest,
 expire it when the artifact changes, and keep core qualification separate from
@@ -101,4 +113,5 @@ go test -race ./internal/codingcertifier ./internal/codingexecutor \
 go vet ./internal/codingcertifier ./internal/codingexecutor \
   ./internal/codingrunner ./internal/codinggrader ./internal/codingcontract
 go test ./...
+bash ../../scripts/test-coding-starter-practice-e2e.sh
 ```

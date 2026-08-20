@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	CertificationSchema = "dittobench-coding-capability-certification-v1"
-	minimumTTL          = time.Minute
-	maximumTTL          = 24 * time.Hour
+	CertificationSchema      = "dittobench-coding-capability-certification-v1"
+	CertificationSolverModel = "openai/gpt-5.6-luna"
+	minimumTTL               = time.Minute
+	maximumTTL               = 24 * time.Hour
 )
 
 var requiredCapabilities = []string{
@@ -115,8 +116,8 @@ func (health HealthResponse) validate() error {
 }
 
 func (health HealthResponse) normalized() HealthResponse {
-	health.SupportedCodingContractVersions = append([]int(nil), health.SupportedCodingContractVersions...)
-	health.Capabilities = append([]string(nil), health.Capabilities...)
+	health.SupportedCodingContractVersions = cloneSlice(health.SupportedCodingContractVersions)
+	health.Capabilities = cloneSlice(health.Capabilities)
 	slices.Sort(health.SupportedCodingContractVersions)
 	slices.Sort(health.Capabilities)
 	return health
@@ -211,6 +212,98 @@ type CapabilityPublisher interface {
 // pristine replay.
 type BundleOpener func() (io.ReadCloser, error)
 
+// EvidenceBinding identifies immutable authoring artifacts before any bytes
+// leave the runner.
+type EvidenceBinding struct {
+	CertificationID      string
+	AgentArtifactSHA256  string
+	HarnessInstanceID    string
+	CanaryManifestSHA256 string
+	TicketID             string
+	CaseID               string
+	ProfileCapabilityID  string
+}
+
+// TranscriptArtifact is the durable content-addressed result returned by a
+// trusted sink.
+type TranscriptArtifact struct {
+	ObjectKey string
+	SHA256    string
+	SizeBytes int64
+	Events    uint64
+}
+
+func (artifact TranscriptArtifact) validate(identity codingrunner.TranscriptIdentity) error {
+	if artifact.ObjectKey != "sha256/"+identity.SHA256 || artifact.SHA256 != identity.SHA256 ||
+		artifact.SizeBytes != identity.SizeBytes || artifact.Events != identity.Events {
+		return errors.New("coding certification transcript artifact identity mismatch")
+	}
+	return nil
+}
+
+// TranscriptWriter receives exact canonical JSONL bytes, then atomically
+// commits or aborts the artifact. Abort must be safe after Commit.
+type TranscriptWriter interface {
+	io.Writer
+	Commit(ctx context.Context, identity codingrunner.TranscriptIdentity) (TranscriptArtifact, error)
+	Abort() error
+}
+
+// TranscriptSink begins one durable, content-addressed transcript write.
+type TranscriptSink interface {
+	Begin(ctx context.Context, binding EvidenceBinding) (TranscriptWriter, error)
+}
+
+// FrozenSubmissionArtifact is the durable replayable patch accepted by the
+// local evidence outbox before pristine grading begins.
+type FrozenSubmissionArtifact struct {
+	ObjectKey         string
+	FrozenPatchSHA256 string
+	FinalTreeSHA256   string
+	ChangedPathRoot   string
+}
+
+func (artifact FrozenSubmissionArtifact) validate(submission codingrunner.FrozenSubmission) error {
+	if artifact.ObjectKey != "sha256/"+submission.FrozenPatchSHA256 ||
+		artifact.FrozenPatchSHA256 != submission.FrozenPatchSHA256 ||
+		artifact.FinalTreeSHA256 != submission.FinalTreeSHA256 ||
+		artifact.ChangedPathRoot != submission.ChangedPathRoot {
+		return errors.New("coding frozen-submission artifact identity mismatch")
+	}
+	return nil
+}
+
+// FrozenSubmissionSink durably stores a replayable frozen submission in a
+// validator-local outbox. Store must be idempotent for the binding and digest.
+type FrozenSubmissionSink interface {
+	Store(
+		ctx context.Context,
+		binding EvidenceBinding,
+		submission codingrunner.FrozenSubmission,
+	) (FrozenSubmissionArtifact, error)
+}
+
+// InferenceBinding scopes trusted relay evidence to the same artifact and
+// task as the workspace capability.
+type InferenceBinding struct {
+	CertificationID      string
+	AgentArtifactSHA256  string
+	HarnessInstanceID    string
+	TicketID             string
+	CaseID               string
+	InferenceGrantSHA256 string
+}
+
+// InferenceEvidenceSource finalizes validator-observed model evidence after
+// the harness run. It must not trust miner-reported token or provider fields.
+type InferenceEvidenceSource interface {
+	Evidence(ctx context.Context, binding InferenceBinding) (codingcontract.ModelEvidence, error)
+}
+
+// ErrInferenceNotObserved is candidate-attributable: the harness advertised
+// case-scoped inference but never used the trusted relay.
+var ErrInferenceNotObserved = errors.New("coding inference was not observed")
+
 // Request is one trusted public-canary certification input.
 type Request struct {
 	CertificationID      string
@@ -221,14 +314,61 @@ type Request struct {
 	Issue                codingcontract.Issue
 	RepositoryEpoch      string
 	InferenceBaseURL     string
+	InferenceGrantSHA256 string
+	SolverModel          string
+	SolverProvider       string
+	ProviderRouteProfile string
 	Budgets              codingcontract.Budgets
 	RunnerManifest       codingrunner.Manifest
 	GraderManifest       codinggrader.Manifest
 }
 
+func cloneRequest(request Request) Request {
+	request.Issue.Constraints = cloneSlice(request.Issue.Constraints)
+	request.Seed.Memories = cloneSlice(request.Seed.Memories)
+	for index := range request.Seed.Memories {
+		memory := &request.Seed.Memories[index]
+		memory.RepositoryCapabilityID = cloneString(memory.RepositoryCapabilityID)
+		memory.FactGroupID = cloneString(memory.FactGroupID)
+		memory.ValidFromEpoch = cloneString(memory.ValidFromEpoch)
+		memory.ValidUntilEpoch = cloneString(memory.ValidUntilEpoch)
+		memory.Supersedes = cloneSlice(memory.Supersedes)
+	}
+	request.RunnerManifest.EditablePaths = cloneSlice(request.RunnerManifest.EditablePaths)
+	request.RunnerManifest.CreatablePaths = cloneSlice(request.RunnerManifest.CreatablePaths)
+	request.RunnerManifest.DeletablePaths = cloneSlice(request.RunnerManifest.DeletablePaths)
+	request.RunnerManifest.TestCommands = cloneRunnerCommands(request.RunnerManifest.TestCommands)
+	request.RunnerManifest.BuildCommands = cloneRunnerCommands(request.RunnerManifest.BuildCommands)
+	request.GraderManifest.Build.Command.Argv = cloneSlice(request.GraderManifest.Build.Command.Argv)
+	request.GraderManifest.TestGroups = cloneSlice(request.GraderManifest.TestGroups)
+	for index := range request.GraderManifest.TestGroups {
+		request.GraderManifest.TestGroups[index].Command.Argv = cloneSlice(request.GraderManifest.TestGroups[index].Command.Argv)
+	}
+	return request
+}
+
+func cloneRunnerCommands(commands []codingrunner.CommandSpec) []codingrunner.CommandSpec {
+	result := cloneSlice(commands)
+	for index := range result {
+		result[index].Argv = cloneSlice(result[index].Argv)
+	}
+	return result
+}
+
+func cloneSlice[T any](values []T) []T {
+	if values == nil {
+		return nil
+	}
+	result := make([]T, len(values))
+	copy(result, values)
+	return result
+}
+
 func (request Request) validate(now time.Time) error {
 	if !validIdentifier(request.CertificationID, 256) || !lowerSHA256(request.AgentArtifactSHA256) ||
-		!lowerSHA256(request.CanaryManifestSHA256) {
+		!lowerSHA256(request.CanaryManifestSHA256) || !lowerSHA256(request.InferenceGrantSHA256) ||
+		request.SolverModel != CertificationSolverModel || !validIdentifier(request.SolverProvider, 128) ||
+		!validIdentifier(request.ProviderRouteProfile, 128) {
 		return errors.New("coding certification identity is invalid")
 	}
 	if err := request.HarnessAttestation.validate(request.AgentArtifactSHA256); err != nil {
@@ -337,12 +477,17 @@ type canaryManifestProjection struct {
 	GraderResourceSHA256  string                    `json:"grader_resource_sha256"`
 	GraderImageDigest     string                    `json:"grader_image_digest"`
 	GraderPlatform        string                    `json:"grader_platform"`
+	InferenceGrantSHA256  string                    `json:"inference_grant_sha256"`
+	SolverModel           string                    `json:"solver_model"`
+	SolverProvider        string                    `json:"solver_provider"`
+	ProviderRouteProfile  string                    `json:"provider_route_profile"`
 }
 
 // CanaryManifestSHA256 binds every non-ephemeral input used by the public
 // certification task. Transport capability URLs and wall-clock deadlines are
 // deliberately excluded; their authorities are separately attested.
 func CanaryManifestSHA256(request Request) (string, error) {
+	request = cloneRequest(request)
 	project := func(commands []codingrunner.CommandSpec) []canaryCommandProjection {
 		result := make([]canaryCommandProjection, len(commands))
 		for index, command := range commands {
@@ -360,9 +505,9 @@ func CanaryManifestSHA256(request Request) (string, error) {
 		ProfileCapabilityID: request.Seed.ProfileCapabilityID, MemoryBundleSHA256: request.Seed.MemoryBundleSHA256,
 		RepositoryEpoch: request.RepositoryEpoch, VisibleBundleSHA256: request.RunnerManifest.VisibleBundleSHA256,
 		BaseTreeSHA256: request.RunnerManifest.BaseTreeSHA256, Issue: request.Issue, Budgets: request.Budgets,
-		EditablePaths:  append([]string(nil), request.RunnerManifest.EditablePaths...),
-		CreatablePaths: append([]string(nil), request.RunnerManifest.CreatablePaths...),
-		DeletablePaths: append([]string(nil), request.RunnerManifest.DeletablePaths...),
+		EditablePaths:  cloneSlice(request.RunnerManifest.EditablePaths),
+		CreatablePaths: cloneSlice(request.RunnerManifest.CreatablePaths),
+		DeletablePaths: cloneSlice(request.RunnerManifest.DeletablePaths),
 		TestCommands:   project(request.RunnerManifest.TestCommands), BuildCommands: project(request.RunnerManifest.BuildCommands),
 		RunnerLimits: canaryLimitsProjection{
 			MaxBundleBytes: limits.MaxBundleBytes, MaxWorkspaceBytes: limits.MaxWorkspaceBytes,
@@ -375,6 +520,9 @@ func CanaryManifestSHA256(request Request) (string, error) {
 		GraderResourceSHA256: request.GraderManifest.ResourceProfileSHA256,
 		GraderImageDigest:    request.GraderManifest.GraderImageDigest,
 		GraderPlatform:       request.GraderManifest.GraderPlatform,
+		InferenceGrantSHA256: request.InferenceGrantSHA256,
+		SolverModel:          request.SolverModel, SolverProvider: request.SolverProvider,
+		ProviderRouteProfile: request.ProviderRouteProfile,
 	})
 }
 
@@ -398,11 +546,15 @@ type Receipt struct {
 	MemoryBundleSHA256               string                         `json:"memory_bundle_sha256"`
 	VisibleBundleSHA256              string                         `json:"visible_bundle_sha256"`
 	BaseTreeSHA256                   string                         `json:"base_tree_sha256"`
+	InferenceGrantSHA256             string                         `json:"inference_grant_sha256"`
+	ModelEvidence                    *codingcontract.ModelEvidence  `json:"model_evidence"`
 	FrozenPatchSHA256                *string                        `json:"frozen_patch_sha256"`
+	FrozenSubmissionObjectKey        *string                        `json:"frozen_submission_object_key"`
 	ChangedPathRoot                  *string                        `json:"changed_path_root"`
 	FinalTreeSHA256                  *string                        `json:"final_tree_sha256"`
 	AuthoringEventRoot               *string                        `json:"authoring_event_root"`
 	AuthoringTranscriptSHA256        *string                        `json:"authoring_transcript_sha256"`
+	AuthoringTranscriptObjectKey     *string                        `json:"authoring_transcript_object_key"`
 	AuthoringTranscriptBytes         int64                          `json:"authoring_transcript_bytes"`
 	AuthoringEventCount              uint64                         `json:"authoring_event_count"`
 	ProtectedPathsIntact             bool                           `json:"protected_paths_intact"`
@@ -430,11 +582,15 @@ type receiptProjection struct {
 	MemoryBundleSHA256               string                         `json:"memory_bundle_sha256"`
 	VisibleBundleSHA256              string                         `json:"visible_bundle_sha256"`
 	BaseTreeSHA256                   string                         `json:"base_tree_sha256"`
+	InferenceGrantSHA256             string                         `json:"inference_grant_sha256"`
+	ModelEvidence                    *codingcontract.ModelEvidence  `json:"model_evidence"`
 	FrozenPatchSHA256                *string                        `json:"frozen_patch_sha256"`
+	FrozenSubmissionObjectKey        *string                        `json:"frozen_submission_object_key"`
 	ChangedPathRoot                  *string                        `json:"changed_path_root"`
 	FinalTreeSHA256                  *string                        `json:"final_tree_sha256"`
 	AuthoringEventRoot               *string                        `json:"authoring_event_root"`
 	AuthoringTranscriptSHA256        *string                        `json:"authoring_transcript_sha256"`
+	AuthoringTranscriptObjectKey     *string                        `json:"authoring_transcript_object_key"`
 	AuthoringTranscriptBytes         int64                          `json:"authoring_transcript_bytes"`
 	AuthoringEventCount              uint64                         `json:"authoring_event_count"`
 	ProtectedPathsIntact             bool                           `json:"protected_paths_intact"`
@@ -451,14 +607,17 @@ func (receipt Receipt) projection() receiptProjection {
 		CanaryManifestSHA256: receipt.CanaryManifestSHA256, IssuedAtUnix: receipt.IssuedAtUnix,
 		ExpiresAtUnix: receipt.ExpiresAtUnix, Status: receipt.Status,
 		FailureStage: cloneStage(receipt.FailureStage), FailureCode: cloneString(receipt.FailureCode),
-		SupportedCodingContractVersions: append([]int(nil), receipt.SupportedCodingContractVersions...),
-		Capabilities:                    append([]string(nil), receipt.Capabilities...),
+		SupportedCodingContractVersions: cloneSlice(receipt.SupportedCodingContractVersions),
+		Capabilities:                    cloneSlice(receipt.Capabilities),
 		MemoryBundleSHA256:              receipt.MemoryBundleSHA256, VisibleBundleSHA256: receipt.VisibleBundleSHA256,
-		BaseTreeSHA256: receipt.BaseTreeSHA256, FrozenPatchSHA256: cloneString(receipt.FrozenPatchSHA256),
-		ChangedPathRoot: cloneString(receipt.ChangedPathRoot), FinalTreeSHA256: cloneString(receipt.FinalTreeSHA256),
-		AuthoringEventRoot:        cloneString(receipt.AuthoringEventRoot),
-		AuthoringTranscriptSHA256: cloneString(receipt.AuthoringTranscriptSHA256),
-		AuthoringTranscriptBytes:  receipt.AuthoringTranscriptBytes, AuthoringEventCount: receipt.AuthoringEventCount,
+		BaseTreeSHA256: receipt.BaseTreeSHA256, InferenceGrantSHA256: receipt.InferenceGrantSHA256,
+		ModelEvidence: cloneModelEvidence(receipt.ModelEvidence), FrozenPatchSHA256: cloneString(receipt.FrozenPatchSHA256),
+		FrozenSubmissionObjectKey: cloneString(receipt.FrozenSubmissionObjectKey),
+		ChangedPathRoot:           cloneString(receipt.ChangedPathRoot), FinalTreeSHA256: cloneString(receipt.FinalTreeSHA256),
+		AuthoringEventRoot:           cloneString(receipt.AuthoringEventRoot),
+		AuthoringTranscriptSHA256:    cloneString(receipt.AuthoringTranscriptSHA256),
+		AuthoringTranscriptObjectKey: cloneString(receipt.AuthoringTranscriptObjectKey),
+		AuthoringTranscriptBytes:     receipt.AuthoringTranscriptBytes, AuthoringEventCount: receipt.AuthoringEventCount,
 		ProtectedPathsIntact: receipt.ProtectedPathsIntact,
 		CanaryTerminalDomain: cloneDomain(receipt.CanaryTerminalDomain), GraderPlanSHA256: receipt.GraderPlanSHA256,
 		GraderExecutionReceiptRootSHA256: cloneString(receipt.GraderExecutionReceiptRootSHA256),
@@ -482,7 +641,8 @@ func (receipt Receipt) Validate() error {
 		!lowerSHA256(receipt.CanaryManifestSHA256) || receipt.IssuedAtUnix <= 0 ||
 		receipt.ExpiresAtUnix <= receipt.IssuedAtUnix || receipt.ExpiresAtUnix-receipt.IssuedAtUnix > int64(maximumTTL/time.Second) ||
 		!lowerSHA256(receipt.MemoryBundleSHA256) || !lowerSHA256(receipt.VisibleBundleSHA256) ||
-		!lowerSHA256(receipt.BaseTreeSHA256) || !lowerSHA256(receipt.GraderPlanSHA256) ||
+		!lowerSHA256(receipt.BaseTreeSHA256) || !lowerSHA256(receipt.InferenceGrantSHA256) ||
+		!lowerSHA256(receipt.GraderPlanSHA256) ||
 		receipt.AuthoringTranscriptBytes < 0 || !lowerSHA256(receipt.CertificationSHA256) {
 		return errors.New("coding certification receipt identity is invalid")
 	}
@@ -516,8 +676,10 @@ func (receipt Receipt) Validate() error {
 	}
 	if receipt.Status == StatusCertified {
 		if receipt.FailureStage != nil || receipt.FailureCode != nil || receipt.FrozenPatchSHA256 == nil ||
-			receipt.ChangedPathRoot == nil || receipt.FinalTreeSHA256 == nil || receipt.AuthoringEventRoot == nil ||
-			receipt.AuthoringTranscriptSHA256 == nil || receipt.CanaryTerminalDomain == nil ||
+			receipt.FrozenSubmissionObjectKey == nil || receipt.ChangedPathRoot == nil ||
+			receipt.FinalTreeSHA256 == nil || receipt.AuthoringEventRoot == nil ||
+			receipt.AuthoringTranscriptSHA256 == nil || receipt.AuthoringTranscriptObjectKey == nil ||
+			receipt.ModelEvidence == nil || receipt.CanaryTerminalDomain == nil ||
 			*receipt.CanaryTerminalDomain != codingcontract.DomainResolved ||
 			receipt.GraderExecutionReceiptRootSHA256 == nil || receipt.AuthoringTranscriptBytes <= 0 ||
 			receipt.AuthoringEventCount == 0 || !receipt.ProtectedPathsIntact {
@@ -535,8 +697,10 @@ func (receipt Receipt) Validate() error {
 	}
 	if receipt.Status == StatusUnsupported {
 		if *receipt.FailureStage != StageHealth || receipt.FrozenPatchSHA256 != nil ||
-			receipt.ChangedPathRoot != nil || receipt.FinalTreeSHA256 != nil || receipt.AuthoringEventRoot != nil ||
-			receipt.AuthoringTranscriptSHA256 != nil || receipt.AuthoringTranscriptBytes != 0 ||
+			receipt.FrozenSubmissionObjectKey != nil || receipt.ChangedPathRoot != nil ||
+			receipt.FinalTreeSHA256 != nil || receipt.AuthoringEventRoot != nil ||
+			receipt.AuthoringTranscriptSHA256 != nil || receipt.AuthoringTranscriptObjectKey != nil ||
+			receipt.ModelEvidence != nil || receipt.AuthoringTranscriptBytes != 0 ||
 			receipt.AuthoringEventCount != 0 || receipt.ProtectedPathsIntact ||
 			receipt.CanaryTerminalDomain != nil || receipt.GraderExecutionReceiptRootSHA256 != nil {
 			return errors.New("unsupported coding receipt contains execution evidence")
@@ -548,6 +712,31 @@ func (receipt Receipt) Validate() error {
 	} {
 		if value != nil && !lowerSHA256(*value) {
 			return errors.New("coding certification evidence digest is invalid")
+		}
+	}
+	if receipt.AuthoringTranscriptObjectKey != nil {
+		if receipt.AuthoringTranscriptSHA256 == nil ||
+			*receipt.AuthoringTranscriptObjectKey != "sha256/"+*receipt.AuthoringTranscriptSHA256 {
+			return errors.New("coding certification transcript object key is invalid")
+		}
+	} else if receipt.AuthoringTranscriptSHA256 != nil {
+		return errors.New("coding certification transcript bytes are not durably addressed")
+	}
+	if receipt.FrozenSubmissionObjectKey != nil {
+		if receipt.FrozenPatchSHA256 == nil ||
+			*receipt.FrozenSubmissionObjectKey != "sha256/"+*receipt.FrozenPatchSHA256 {
+			return errors.New("coding frozen-submission object key is invalid")
+		}
+	} else if receipt.FrozenPatchSHA256 != nil {
+		return errors.New("coding frozen submission is not durably addressed")
+	}
+	if receipt.ModelEvidence != nil {
+		if err := receipt.ModelEvidence.Validate(); err != nil ||
+			receipt.ModelEvidence.InferenceGrantSHA256 != receipt.InferenceGrantSHA256 {
+			return errors.New("coding certification model evidence is invalid")
+		}
+		if receipt.Status == StatusCertified && receipt.ModelEvidence.UsageStatus != codingcontract.ModelUsageComplete {
+			return errors.New("certified coding receipt lacks complete model evidence")
 		}
 	}
 	if receipt.CanaryTerminalDomain != nil {
@@ -623,6 +812,15 @@ func cloneDomain(value *codingcontract.TerminalDomain) *codingcontract.TerminalD
 		return nil
 	}
 	copy := *value
+	return &copy
+}
+
+func cloneModelEvidence(value *codingcontract.ModelEvidence) *codingcontract.ModelEvidence {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	copy.ProviderReceiptSetSHA256 = cloneString(value.ProviderReceiptSetSHA256)
 	return &copy
 }
 
