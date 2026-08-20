@@ -544,7 +544,20 @@ def test_ambiguous_replacement_and_replay_are_rejected() -> None:
         assert ambiguous.ok is False
         assert ambiguous.error is not None
         assert "exactly once" in ambiguous.error["message"]
-        with pytest.raises(CorpusError, match="replayed"):
+        replay = session.invoke(
+            _request(
+                session,
+                "ambiguous",
+                "repo.apply_patch",
+                {
+                    "expected_sha256": read.result["sha256"],
+                    "path": "app.py",
+                    "replacements": [{"new_text": "_", "old_text": " "}],
+                },
+            )
+        )
+        assert replay == ambiguous
+        with pytest.raises(CorpusError, match="different bytes"):
             session.invoke(_request(session, "ambiguous", "git.status", {}))
 
 

@@ -530,7 +530,7 @@ class PracticeWorkspaceSession:
         self._base_tree_sha256 = _tree_sha256(self._base)
         self._event_root = INITIAL_EVENT_ROOT
         self._sequence = 0
-        self._call_ids: set[str] = set()
+        self._call_results: dict[str, tuple[str, ToolResponse]] = {}
         self._frozen = False
         self._closed = False
         self._lock = threading.RLock()
@@ -615,22 +615,41 @@ class PracticeWorkspaceSession:
             raise CorpusError("tool request case capability mismatch")
         if request.profile_capability_id != self.case.active_user_id:
             raise CorpusError("tool request profile capability mismatch")
-        if request.call_id in self._call_ids:
-            raise CorpusError("tool request call_id was replayed")
-        if len(self._call_ids) >= MAX_CALLS:
+        request_sha256 = sha256_hex(
+            canonical_json_bytes(
+                {
+                    "arguments": request.arguments,
+                    "call_id": request.call_id,
+                    "case_id": request.case_id,
+                    "coding_contract_version": request.coding_contract_version,
+                    "name": request.name,
+                    "profile_capability_id": request.profile_capability_id,
+                }
+            )
+        )
+        replay = self._call_results.get(request.call_id)
+        if replay is not None:
+            previous_sha256, previous_response = replay
+            if request_sha256 != previous_sha256:
+                raise CorpusError(
+                    "tool request call_id was reused with different bytes"
+                )
+            return previous_response
+        if len(self._call_results) >= MAX_CALLS:
             raise CorpusError("practice workspace tool-call budget exhausted")
-        self._call_ids.add(request.call_id)
         try:
             result = self._dispatch(request.name, request.arguments)
             if len(canonical_json_bytes(result)) > MAX_TOOL_BODY_BYTES:
                 raise CorpusError("tool result exceeds the practice output limit")
-            return self._record(request, result=result, error=None)
+            response = self._record(request, result=result, error=None)
         except CorpusError as error:
-            return self._record(
+            response = self._record(
                 request,
                 result=None,
                 error={"code": "invalid_tool_request", "message": str(error)},
             )
+        self._call_results[request.call_id] = (request_sha256, response)
+        return response
 
     def _dispatch(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         handlers = {
