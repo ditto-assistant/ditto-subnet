@@ -1775,7 +1775,7 @@ export interface paths {
          *     first force-expires each live lease through the shared
          *     :func:`~ditto.db.queries.lease_liveness.force_expire_lease` chokepoint, so
          *     the slots return to the pool on the validators' next poll instead of at the
-         *     90-minute deadline. Each revoked lease gets its own ``validator_lease_audit``
+         *     150-minute deadline. Each revoked lease gets its own ``validator_lease_audit``
          *     row with the operator's name and reason, recorded under the distinct action
          *     ``operator_evicted``.
          *

@@ -1733,14 +1733,15 @@ _ARTIFACT_URL_TTL = timedelta(minutes=5)
 
 # How long a validator has to redeem a ticket with a score before it lapses and
 # the slot re-opens for another validator.
-# Keep the lease longer than the validator's 110-minute benchmark cap.
+# Keep the lease longer than the validator's 140-minute benchmark cap.
 # The remaining ten minutes cover artifact/setup time and the validator's
 # explicit two-minute signed-report margin.
-# A productive full Bench 9 run can legitimately need roughly 100 minutes.
-# The validator retains a 15-minute unchanged-progress watchdog and a separate
-# reporting margin, so a two-hour lease funds slow progress without turning a
-# wedged scorer into a two-hour silent expiry.
-_TICKET_TTL = timedelta(minutes=120)
+# A productive full Bench 11 run can legitimately need 97-109 minutes, and
+# the former 110-minute cap aborted the rest. The validator retains a
+# 15-minute unchanged-progress watchdog and a separate reporting margin, so
+# a 150-minute lease funds slow serial progress without turning a wedged
+# scorer into a silent expiry.
+_TICKET_TTL = timedelta(minutes=150)
 
 # Signed job claims outside this window are stale. A consumed nonce remains in
 # the database for the same window, making replay rejection consistent across

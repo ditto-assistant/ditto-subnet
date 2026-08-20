@@ -292,7 +292,7 @@ describe('Backroom MCP tools', () => {
     expect(evictLeases?.description).toContain('REMOVE FROM VALIDATOR QUEUE')
     expect(evictLeases?.description).toContain('remove_failed_submission_from_queue')
     expect(evictLeases?.description).toContain('can still reach quorum automatically')
-    expect(evictLeases?.description).toContain('90-minute lease')
+    expect(evictLeases?.description).toContain('150-minute lease')
     expect(evictLeases?.description).toContain('does NOT mint a no-fault retry grant')
     expect(evictLeases?.description).toContain('NOT deletion, NOT rejection, and NOT rescreening')
     // And the operator who hits the removal tool's refusal has to be told where
