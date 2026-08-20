@@ -22,6 +22,13 @@ from ditto.api_models.attestation import (
     OwnerLinkRequest,
     OwnerLinkResponse,
 )
+from ditto.api_models.coding import (
+    CodingCapabilityCertificationReceipt,
+    CodingCertificationStage,
+    CodingCertificationStatus,
+    SubmitCodingCertificationRequest,
+    SubmitCodingCertificationResponse,
+)
 from ditto.api_models.health import HealthResponse
 from ditto.api_models.miner_avatar import (
     MinerAvatarClearRequest,
@@ -61,6 +68,9 @@ from ditto.api_models.upload import (
 __all__ = [
     "AgentResponse",
     "AgentStatusResponse",
+    "CodingCapabilityCertificationReceipt",
+    "CodingCertificationStage",
+    "CodingCertificationStatus",
     "EvalPricingResponse",
     "HealthResponse",
     "MinerAvatarClearRequest",
@@ -85,6 +95,8 @@ __all__ = [
     "OwnerLinkRequest",
     "OwnerLinkResponse",
     "PublicNameHandle",
+    "SubmitCodingCertificationRequest",
+    "SubmitCodingCertificationResponse",
     "UploadAgentResponse",
     "UploadCheckRequest",
     "UploadCheckResponse",

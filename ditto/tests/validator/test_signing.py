@@ -18,6 +18,10 @@ import pytest
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
+from ditto.api_models.coding import (
+    CodingCapabilityCertificationReceipt,
+    coding_certification_signing_message,
+)
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.stack_health import (
     ValidatorComponentHealth,
@@ -39,6 +43,7 @@ from ditto.validator.signing import (
     job_signing_message,
     ledger_signing_message,
     score_signing_message,
+    sign_coding_certification,
     sign_heartbeat,
     sign_job_fail_request,
     sign_job_request,
@@ -57,6 +62,10 @@ _DEADLINE = datetime(2026, 7, 9, 12, 30, tzinfo=UTC)
 _V7_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v7.json"
 _V8_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v8.json"
 _V9_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v9.json"
+_CODING_CERTIFICATION_VECTOR = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_certification_v1.json"
+)
 
 
 def _v9_request(
@@ -96,6 +105,33 @@ def test_message_is_canonical_format() -> None:
             "2026-07-09T12:30:00.000000+00:00:run_1:0.82:8675309"
         ).encode()
     )
+
+
+def test_coding_certification_signature_matches_shared_message() -> None:
+    vector = json.loads(_CODING_CERTIFICATION_VECTOR.read_text(encoding="utf-8"))
+    expected = vector["expected"]
+    receipt = CodingCapabilityCertificationReceipt.model_validate_json(
+        json.dumps(vector["receipt"])
+    )
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_coding_certification(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=UUID(expected["agent_id"]),
+        bench_version=expected["bench_version"],
+        ticket_deadline=datetime.fromisoformat(expected["ticket_deadline"]),
+        screened_image_sha256=expected["screened_image_sha256"],
+        receipt=receipt,
+    )
+    message = coding_certification_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=UUID(expected["agent_id"]),
+        bench_version=expected["bench_version"],
+        ticket_deadline=datetime.fromisoformat(expected["ticket_deadline"]),
+        screened_image_sha256=expected["screened_image_sha256"],
+        certification_sha256=receipt.certification_sha256,
+    )
+    assert keypair.verify(message, bytes.fromhex(signature))
 
 
 def test_top5_confirmation_score_binds_all_seed_composite_pairs() -> None:

@@ -62,6 +62,7 @@ import {
   listLeaseRevocationsInputSchema,
   batchRetryValidationInputSchema,
   agentScoringReadinessInputSchema,
+  agentCodingCertificationInputSchema,
   agentScoresLookupInputSchema,
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
@@ -127,6 +128,7 @@ import {
   fetchLeaseRevocations,
   batchRetryValidation,
   fetchAgentScoringReadiness,
+  fetchAgentCodingCertifications,
   fetchBenchmarkContractRefresh,
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
@@ -1239,6 +1241,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchAgentScoringReadiness(input)),
+  )
+
+  registerTool(
+    'get_agent_coding_certifications',
+    {
+      title: 'Inspect agent coding certifications',
+      description: 'Read.',
+      inputSchema: agentCodingCertificationInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchAgentCodingCertifications(input)),
   )
 
   registerTool(

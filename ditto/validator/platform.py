@@ -16,6 +16,11 @@ from uuid import UUID, uuid4
 import httpx
 from pydantic import ValidationError
 
+from ditto.api_models.coding import (
+    CodingCapabilityCertificationReceipt,
+    SubmitCodingCertificationRequest,
+    SubmitCodingCertificationResponse,
+)
 from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
@@ -791,6 +796,42 @@ class PlatformClient:
         if resp.status_code in {408, 429} or resp.status_code >= 500:
             raise PlatformInfrastructureError(message)
         raise PlatformError(message)
+
+    async def submit_coding_certification(
+        self,
+        agent_id: UUID,
+        *,
+        bench_version: int,
+        ticket_deadline: datetime,
+        screened_image_sha256: str,
+        receipt: CodingCapabilityCertificationReceipt,
+        signature: str,
+    ) -> SubmitCodingCertificationResponse:
+        """Persist one signed, shadow-only coding capability receipt."""
+
+        url = f"{self._base}{_PREFIX}/agent/{agent_id}/coding-certification"
+        payload = SubmitCodingCertificationRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            bench_version=bench_version,
+            ticket_deadline=ticket_deadline,
+            screened_image_sha256=screened_image_sha256,
+            receipt=receipt,
+            signature=signature,
+        )
+        try:
+            response = await self._client.post(
+                url, json=payload.model_dump(mode="json"), headers=self._headers
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(
+                f"coding certification submit failed: {error}"
+            ) from error
+        if response.status_code != 200:
+            raise PlatformError(
+                "coding certification rejected "
+                f"({response.status_code}): {response.text[:200]}"
+            )
+        return SubmitCodingCertificationResponse.model_validate_json(response.content)
 
     async def submit_top5_confirmation_score(
         self,

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import MagicMock
@@ -14,6 +15,11 @@ import httpx
 import pytest
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.coding import (
+    CodingCapabilityCertificationReceipt,
+    SubmitCodingCertificationRequest,
+    coding_certification_signing_message,
+)
 from ditto.api_models.validator import (
     FAILURE_DETAIL_MAX_LENGTH,
     LEGACY_FAILURE_DETAIL_MAX_LENGTH,
@@ -32,6 +38,7 @@ from ditto.validator.signing import (
     job_fail_signing_message,
     job_signing_message,
     ledger_signing_message,
+    sign_coding_certification,
     sign_score,
 )
 
@@ -57,6 +64,77 @@ async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
         assert await platform.request_job() is None
+
+
+async def test_coding_certification_client_posts_exact_signed_envelope() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("11111111-1111-4111-8111-111111111111")
+    vector = json.loads(
+        (
+            Path(__file__).parents[3]
+            / "packages"
+            / "dittobench-coding-contract"
+            / "testdata"
+            / "coding_certification_v1.json"
+        ).read_text(encoding="utf-8")
+    )
+    receipt = CodingCapabilityCertificationReceipt.model_validate_json(
+        json.dumps(vector["receipt"])
+    )
+    expected = vector["expected"]
+    deadline = datetime.fromisoformat(expected["ticket_deadline"])
+    signature = sign_coding_certification(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        bench_version=expected["bench_version"],
+        ticket_deadline=deadline,
+        screened_image_sha256=expected["screened_image_sha256"],
+        receipt=receipt,
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith(f"/agent/{agent_id}/coding-certification")
+        payload = SubmitCodingCertificationRequest.model_validate_json(request.content)
+        message = coding_certification_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            agent_id=agent_id,
+            bench_version=payload.bench_version,
+            ticket_deadline=payload.ticket_deadline,
+            screened_image_sha256=payload.screened_image_sha256,
+            certification_sha256=payload.receipt.certification_sha256,
+        )
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        return httpx.Response(
+            200,
+            json={
+                "agent_id": str(agent_id),
+                "certification_id": receipt.certification_id,
+                "status": receipt.status.value,
+                "accepted": True,
+                "idempotent": False,
+                "active": True,
+            },
+        )
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).submit_coding_certification(
+            agent_id,
+            bench_version=expected["bench_version"],
+            ticket_deadline=deadline,
+            screened_image_sha256=expected["screened_image_sha256"],
+            receipt=receipt,
+            signature=signature,
+        )
+    assert response.accepted is True
 
 
 async def test_artifact_request_is_fresh_agent_bound_and_signed() -> None:

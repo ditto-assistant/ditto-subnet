@@ -89,6 +89,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/coding-certifications": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Agent Coding Certifications
+         * @description Return newest-first receipt history and current exact-artifact state.
+         */
+        get: operations["agent_coding_certifications_api_v1_admin_agents__agent_id__coding_certifications_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/scoring-readiness": {
         parameters: {
             query?: never;
@@ -4390,6 +4410,26 @@ export interface paths {
         get: operations["agent_artifact_api_v1_validator_agent__agent_id__artifact_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/agent/{agent_id}/coding-certification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Coding Certification
+         * @description Append one signed shadow receipt without touching score state.
+         */
+        post: operations["submit_coding_certification_api_v1_validator_agent__agent_id__coding_certification_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -8823,6 +8863,32 @@ export interface components {
             /** History */
             history: components["schemas"]["ValidatorSlotSettingsRevision"][];
         };
+        /** AgentCodingCertificationStatus */
+        AgentCodingCertificationStatus: {
+            /** Active Certification Count */
+            active_certification_count: number;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Certifications */
+            certifications: components["schemas"]["CodingCertificationRecord"][];
+            /** Coding Certified */
+            coding_certified: boolean;
+            /** Coding Supported */
+            coding_supported: boolean;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string | null;
+            /** Total */
+            total: number;
+        };
         /**
          * AgentResponse
          * @description Returned by ``GET /retrieval/agent-by-hotkey``.
@@ -9501,6 +9567,207 @@ export interface components {
              */
             v: number;
         };
+        /** CodingCapabilityCertificationReceipt */
+        CodingCapabilityCertificationReceipt: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /** Authoring Event Count */
+            authoring_event_count: number;
+            /** Authoring Event Root */
+            authoring_event_root: string | null;
+            /** Authoring Transcript Bytes */
+            authoring_transcript_bytes: number;
+            /** Authoring Transcript Object Key */
+            authoring_transcript_object_key: string | null;
+            /** Authoring Transcript Sha256 */
+            authoring_transcript_sha256: string | null;
+            /** Base Tree Sha256 */
+            base_tree_sha256: string;
+            /** Canary Manifest Sha256 */
+            canary_manifest_sha256: string;
+            canary_terminal_domain: components["schemas"]["CodingCertificationTerminalDomain"] | null;
+            /** Capabilities */
+            capabilities: string[];
+            /** Certification Id */
+            certification_id: string;
+            /** Certification Sha256 */
+            certification_sha256: string;
+            /** Changed Path Root */
+            changed_path_root: string | null;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Expires At Unix */
+            expires_at_unix: number;
+            /** Failure Code */
+            failure_code: string | null;
+            failure_stage: components["schemas"]["CodingCertificationStage"] | null;
+            /** Final Tree Sha256 */
+            final_tree_sha256: string | null;
+            /** Frozen Patch Sha256 */
+            frozen_patch_sha256: string | null;
+            /** Frozen Submission Object Key */
+            frozen_submission_object_key: string | null;
+            /** Grader Execution Receipt Root Sha256 */
+            grader_execution_receipt_root_sha256: string | null;
+            /** Grader Plan Sha256 */
+            grader_plan_sha256: string;
+            /** Harness Instance Id */
+            harness_instance_id: string;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /** Issued At Unix */
+            issued_at_unix: number;
+            /** Memory Bundle Sha256 */
+            memory_bundle_sha256: string;
+            model_evidence: components["schemas"]["CodingCertificationModelEvidence"] | null;
+            /** Protected Paths Intact */
+            protected_paths_intact: boolean;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-capability-certification-v1";
+            status: components["schemas"]["CodingCertificationStatus"];
+            /** Supported Coding Contract Versions */
+            supported_coding_contract_versions: number[];
+            /** Visible Bundle Sha256 */
+            visible_bundle_sha256: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingCertificationModelEvidence */
+        CodingCertificationModelEvidence: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /**
+             * Cost Source
+             * @constant
+             */
+            cost_source: "provider_receipt_v1";
+            /** Cost Usd Micros */
+            cost_usd_micros: number;
+            /**
+             * Currency
+             * @constant
+             */
+            currency: "USD";
+            /**
+             * Fallback Used
+             * @constant
+             */
+            fallback_used: false;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /** Model */
+            model: string;
+            /** Prompt Sha256 */
+            prompt_sha256: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Provider Receipt Set Sha256 */
+            provider_receipt_set_sha256: string | null;
+            /** Provider Route Profile */
+            provider_route_profile: string;
+            /**
+             * Reasoning Effort
+             * @constant
+             */
+            reasoning_effort: "medium";
+            /** Requests */
+            requests: number;
+            /** Retry Count */
+            retry_count: number;
+            /** Tool Schema Sha256 */
+            tool_schema_sha256: string;
+            /** Total Tokens */
+            total_tokens: number;
+            usage_status: components["schemas"]["CodingCertificationModelUsageStatus"];
+        };
+        /**
+         * CodingCertificationModelUsageStatus
+         * @enum {string}
+         */
+        CodingCertificationModelUsageStatus: "complete" | "not_invoked" | "provider_failure";
+        /** CodingCertificationRecord */
+        CodingCertificationRecord: {
+            /** Active */
+            active: boolean;
+            /** Bench Version */
+            bench_version: number;
+            /** Canary Manifest Sha256 */
+            canary_manifest_sha256: string;
+            /** Certification Id */
+            certification_id: string;
+            /**
+             * Certification Row Id
+             * Format: uuid
+             */
+            certification_row_id: string;
+            /** Certification Sha256 */
+            certification_sha256: string;
+            /** Coding Contract Version */
+            coding_contract_version: number;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Failure Code */
+            failure_code: string | null;
+            failure_stage: components["schemas"]["CodingCertificationStage"] | null;
+            /** Frozen Submission Object Key */
+            frozen_submission_object_key: string | null;
+            /**
+             * Issued At
+             * Format: date-time
+             */
+            issued_at: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /**
+             * Stale Reason
+             * @enum {string}
+             */
+            stale_reason: "active" | "expired" | "not_certified" | "artifact_changed" | "screened_image_changed";
+            status: components["schemas"]["CodingCertificationStatus"];
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /** Transcript Object Key */
+            transcript_object_key: string | null;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * CodingCertificationStage
+         * @enum {string}
+         */
+        CodingCertificationStage: "health" | "seed" | "run" | "freeze" | "grade";
+        /**
+         * CodingCertificationStatus
+         * @enum {string}
+         */
+        CodingCertificationStatus: "unsupported" | "failed" | "certified";
+        /**
+         * CodingCertificationTerminalDomain
+         * @enum {string}
+         */
+        CodingCertificationTerminalDomain: "resolved" | "repair_failure" | "candidate_integrity";
         /** ConfirmationAblationCoordinatorProfile */
         ConfirmationAblationCoordinatorProfile: {
             /**
@@ -19209,6 +19476,43 @@ export interface components {
             /** Source Url B64 */
             source_url_b64: string;
         };
+        /** SubmitCodingCertificationRequest */
+        SubmitCodingCertificationRequest: {
+            /** Bench Version */
+            bench_version: number;
+            receipt: components["schemas"]["CodingCapabilityCertificationReceipt"];
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** SubmitCodingCertificationResponse */
+        SubmitCodingCertificationResponse: {
+            /**
+             * Accepted
+             * @constant
+             */
+            accepted: true;
+            /** Active */
+            active: boolean;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Certification Id */
+            certification_id: string;
+            /** Idempotent */
+            idempotent: boolean;
+            status: components["schemas"]["CodingCertificationStatus"];
+        };
         /**
          * SubmitScoreRequest
          * @description Body of ``POST /validator/agent/{agent_id}/score``.
@@ -20873,6 +21177,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+        };
+    };
+    agent_coding_certifications_api_v1_admin_agents__agent_id__coding_certifications_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentCodingCertificationStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -28575,6 +28914,62 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    submit_coding_certification_api_v1_validator_agent__agent_id__coding_certification_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitCodingCertificationRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmitCodingCertificationResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Agent not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Artifact, ticket, receipt, or replay conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

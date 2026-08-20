@@ -3,13 +3,16 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 from pydantic import ValidationError
 
 from ditto.api_models.coding import (
+    CodingCapabilityCertificationReceipt,
     CodingGraderExecutionReceipt,
     CodingGraderPlan,
     CodingGraderResourceProfile,
@@ -18,8 +21,11 @@ from ditto.api_models.coding import (
     CodingRunRequest,
     CodingSeedRequest,
     CodingTaskEvidence,
+    SubmitCodingCertificationRequest,
     canonical_digest,
     canonical_json_bytes,
+    coding_certification_receipt_digest,
+    coding_certification_signing_message,
     grader_execution_receipt_root,
     grader_plan_digest,
     grader_resource_profile_digest,
@@ -34,6 +40,10 @@ _VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_contract_v1.json"
 )
+_CERTIFICATION_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_certification_v1.json"
+)
 
 
 def _vectors() -> dict[str, Any]:
@@ -42,6 +52,43 @@ def _vectors() -> dict[str, Any]:
 
 def _body(value: Any) -> bytes:
     return json.dumps(value, separators=(",", ":")).encode()
+
+
+def test_coding_certification_vector_matches_canonical_receipt_and_signature() -> None:
+    vector = json.loads(_CERTIFICATION_VECTOR_PATH.read_text(encoding="utf-8"))
+    receipt = parse_canonical_json(
+        CodingCapabilityCertificationReceipt, _body(vector["receipt"])
+    )
+    expected = vector["expected"]
+    assert (
+        coding_certification_receipt_digest(receipt) == expected["certification_sha256"]
+    )
+    message = coding_certification_signing_message(
+        validator_hotkey=expected["validator_hotkey"],
+        agent_id=UUID(expected["agent_id"]),
+        bench_version=expected["bench_version"],
+        ticket_deadline=datetime.fromisoformat(expected["ticket_deadline"]),
+        screened_image_sha256=expected["screened_image_sha256"],
+        certification_sha256=receipt.certification_sha256,
+    )
+    assert hashlib.sha256(message).hexdigest() == expected["signing_message_sha256"]
+
+
+def test_coding_certification_envelope_requires_aware_ticket_deadline() -> None:
+    vector = json.loads(_CERTIFICATION_VECTOR_PATH.read_text(encoding="utf-8"))
+    expected = vector["expected"]
+    payload = {
+        "validator_hotkey": expected["validator_hotkey"],
+        "bench_version": expected["bench_version"],
+        "ticket_deadline": expected["ticket_deadline"],
+        "screened_image_sha256": expected["screened_image_sha256"],
+        "receipt": vector["receipt"],
+        "signature": "00" * 64,
+    }
+    SubmitCodingCertificationRequest.model_validate_json(json.dumps(payload))
+    payload["ticket_deadline"] = "2026-08-20T16:30:00"
+    with pytest.raises(ValidationError, match="timezone-aware"):
+        SubmitCodingCertificationRequest.model_validate_json(json.dumps(payload))
 
 
 @pytest.mark.parametrize(

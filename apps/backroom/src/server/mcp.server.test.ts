@@ -125,6 +125,7 @@ describe('Backroom MCP tools', () => {
         'list_hotkey_bans',
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
+        'get_agent_coding_certifications',
         'get_agent_scores',
         'get_leaderboard',
         'get_miner_owner_footprint',
@@ -6160,6 +6161,71 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/scoring-readiness`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reports artifact-bound shadow coding certification history', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const payload = {
+      agent_id: agentId,
+      agent_name: 'coding-agent',
+      miner_hotkey: '5Miner',
+      artifact_sha256: 'a'.repeat(64),
+      screened_image_sha256: 'b'.repeat(64),
+      coding_supported: true,
+      coding_certified: true,
+      active_certification_count: 1,
+      total: 1,
+      certifications: [
+        {
+          certification_row_id: '11111111-1111-4111-8111-111111111111',
+          validator_hotkey: '5Validator',
+          bench_version: 12,
+          ticket_deadline: '2026-08-20T20:00:00Z',
+          coding_contract_version: 1,
+          certification_id: 'cert-001',
+          status: 'certified',
+          failure_stage: null,
+          failure_code: null,
+          certification_sha256: 'c'.repeat(64),
+          canary_manifest_sha256: 'd'.repeat(64),
+          screened_image_sha256: 'b'.repeat(64),
+          transcript_object_key: `sha256/${'e'.repeat(64)}`,
+          frozen_submission_object_key: `sha256/${'f'.repeat(64)}`,
+          issued_at: '2026-08-20T18:00:00Z',
+          expires_at: '2026-08-20T19:00:00Z',
+          created_at: '2026-08-20T18:00:01Z',
+          active: true,
+          stale_reason: 'active',
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_agent_coding_certifications',
+      arguments: { agentId, limit: 25 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      agent_id: agentId,
+      coding_certified: true,
+      active_certification_count: 1,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-certifications?limit=25`,
       expect.objectContaining({
         headers: expect.objectContaining({
           Authorization: 'Bearer platform-admin-token',
