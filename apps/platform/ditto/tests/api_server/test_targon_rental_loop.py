@@ -624,3 +624,56 @@ async def test_tick_finalizes_running_attempt_after_smoke(
         attempt_id = build.attempt_id
     await loop.tick()
     assert called == [attempt_id]
+
+
+@pytest.mark.asyncio
+async def test_tick_finalizes_fallback_required_build(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    called: list[UUID] = []
+
+    async def complete_screen(attempt_id: UUID) -> None:
+        called.append(attempt_id)
+
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        complete_screen=complete_screen,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.status = "fallback_required"
+        build.error_code = "CLOUDRUN_PROVISION_TIMEOUT"
+        attempt_id = build.attempt_id
+    await loop.tick()
+    assert called == [attempt_id]
+
+
+@pytest.mark.asyncio
+async def test_kaniko_uses_resolved_builder_image(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    resolved = (
+        "us-central1-docker.pkg.dev/ditto-app-dev/"
+        "ditto-public-builders/submission-builder@sha256:" + "cd" * 32
+    )
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        resolve_builder_image=lambda _image: resolved,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    assert targon.created
+    assert targon.created[0]["image"] == resolved

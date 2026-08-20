@@ -78,6 +78,7 @@ class TargonRentalLoop:
         interval_seconds: float | None = None,
         providers: Sequence[ScreeningComputeProvider] | None = None,
         complete_screen: Callable[[UUID], Awaitable[None]] | None = None,
+        resolve_builder_image: Callable[[str], str] | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._config = config
@@ -93,9 +94,18 @@ class TargonRentalLoop:
         self._providers = list(providers)
         self._interval_seconds = interval_seconds or config.interval_seconds
         self._complete_screen = complete_screen
+        self._resolve_builder_image = resolve_builder_image or (lambda image: image)
+        self._resolved_builder_image: str | None = None
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._epoch = "platform-targon-loop"
+
+    def _builder_image(self) -> str:
+        if self._resolved_builder_image is None:
+            self._resolved_builder_image = self._resolve_builder_image(
+                self._config.submission_builder_image
+            )
+        return self._resolved_builder_image
 
     async def start(self) -> None:
         if self._task is not None:
@@ -139,7 +149,7 @@ class TargonRentalLoop:
         return handled
 
     async def _finalize_ready_attempts(self) -> bool:
-        """Attest Targon passes after smoke, including leftover running attempts."""
+        """Attest Targon passes after smoke, or fail-retry after Kaniko fallback."""
         if self._complete_screen is None:
             return False
         now = datetime.now(UTC)
@@ -153,10 +163,17 @@ class TargonRentalLoop:
                     )
                     .where(
                         SubmissionImageBuild.environment == self._config.environment,
-                        SubmissionImageBuild.status.in_(("succeeded", "consumed")),
-                        SubmissionImageBuild.runtime_status == "succeeded",
                         ScreeningAttempt.status == "running",
                         ScreeningAttempt.deadline > now,
+                        or_(
+                            SubmissionImageBuild.status == "fallback_required",
+                            and_(
+                                SubmissionImageBuild.status.in_(
+                                    ("succeeded", "consumed")
+                                ),
+                                SubmissionImageBuild.runtime_status == "succeeded",
+                            ),
+                        ),
                     )
                 )
             )
@@ -259,7 +276,7 @@ class TargonRentalLoop:
             build_id = row.build_id
         spec = BuildSpec(
             name=f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32],
-            image=self._config.submission_builder_image,
+            image=self._builder_image(),
             env=(
                 ("DITTO_PLATFORM_URL", self._config.public_platform_url),
                 ("DITTO_BUILD_ID", str(build_id)),

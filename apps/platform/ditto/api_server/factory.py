@@ -343,6 +343,9 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                             config.targon,
                         )
                     )
+                from ditto.api_server.builder_image import (
+                    resolve_submission_builder_image,
+                )
                 from ditto.api_server.targon_screening import (
                     finalize_targon_screen_and_pin_dataset,
                 )
@@ -371,6 +374,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     mint_token=mint_token,
                     providers=providers,
                     complete_screen=complete_screen,
+                    resolve_builder_image=resolve_submission_builder_image,
                 )
                 stack.push_async_callback(targon_loop.aclose)
                 await targon_loop.start()

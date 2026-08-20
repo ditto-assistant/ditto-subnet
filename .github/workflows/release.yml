@@ -858,7 +858,6 @@ jobs:
       needs.plan.result == 'success' &&
       needs.release.result == 'success' &&
       needs.release.outputs.released == 'true' &&
-      needs.plan.outputs.screener_orchestrator == 'true' &&
       (needs.deploy_platform.result == 'success' || needs.deploy_platform.result == 'skipped')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
@@ -883,21 +882,40 @@ jobs:
       - name: Publish the attempt-scoped Kaniko runner
         env:
           SOURCE_SHA: ${{ needs.release.outputs.commit_sha }}
+          ORCHESTRATOR_REQUIRED: ${{ needs.plan.outputs.screener_orchestrator }}
         run: |
           set -euo pipefail
           gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
           image="$SUBMISSION_BUILDER_REPOSITORY:sha-$SOURCE_SHA"
           existing_digest="$(gcloud artifacts docker images describe "$image" \
             --format='value(image_summary.digest)' 2>/dev/null || true)"
-          if [[ ! "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+          if [[ "$existing_digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            digest="$existing_digest"
+          elif [[ "$ORCHESTRATOR_REQUIRED" == "true" ]]; then
             docker build \
               --file services/screener-orchestrator/submission-builder/Dockerfile \
               --tag "$image" \
               .
             docker push "$image"
+            digest="$(gcloud artifacts docker images describe "$image" \
+              --format='value(image_summary.digest)')"
+          else
+            latest="$(gcloud artifacts docker images list \
+              "$SUBMISSION_BUILDER_REPOSITORY" \
+              --include-tags \
+              --sort-by=~CREATE_TIME \
+              --limit=1 \
+              --format='value(version)' \
+              --quiet)"
+            if [[ ! "$latest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "no published submission-builder image to retag" >&2
+              exit 1
+            fi
+            gcloud artifacts docker tags add \
+              "$SUBMISSION_BUILDER_REPOSITORY@$latest" \
+              "$image"
+            digest="$latest"
           fi
-          digest="$(gcloud artifacts docker images describe "$image" \
-            --format='value(image_summary.digest)')"
           [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]
 
   deploy-screener-controller:

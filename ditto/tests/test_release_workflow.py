@@ -604,10 +604,16 @@ def test_submission_builder_is_immutable_and_gates_controller_deploy() -> None:
     controller = jobs["deploy-screener-controller"]
 
     assert builder["needs"] == ["plan", "release", "deploy_platform"]
-    assert "needs.plan.outputs.screener_orchestrator == 'true'" in builder["if"]
+    assert "needs.release.outputs.released == 'true'" in builder["if"]
+    assert "needs.plan.outputs.screener_orchestrator == 'true'" not in builder["if"]
     assert publish["env"]["SOURCE_SHA"] == "${{ needs.release.outputs.commit_sha }}"
+    assert (
+        publish["env"]["ORCHESTRATOR_REQUIRED"]
+        == "${{ needs.plan.outputs.screener_orchestrator }}"
+    )
     assert 'image="$SUBMISSION_BUILDER_REPOSITORY:sha-$SOURCE_SHA"' in publish["run"]
     assert 'docker push "$image"' in publish["run"]
+    assert "gcloud artifacts docker tags add" in publish["run"]
     assert "GCP_SUBNET_BUILD_SA" in str(builder)
     assert "build-submission-builder" in controller["needs"]
     assert "needs.build-submission-builder.result == 'success'" in controller["if"]
