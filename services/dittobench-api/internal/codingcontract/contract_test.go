@@ -5,21 +5,23 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 type goldenVectors struct {
-	Manifest     json.RawMessage   `json:"manifest"`
-	SeedRequest  json.RawMessage   `json:"seed_request"`
-	RunRequest   json.RawMessage   `json:"run_request"`
-	TaskEvidence json.RawMessage   `json:"task_evidence"`
-	RunEvidence  json.RawMessage   `json:"run_evidence"`
-	Digests      map[string]string `json:"digests"`
+	Manifest              json.RawMessage   `json:"manifest"`
+	SeedRequest           json.RawMessage   `json:"seed_request"`
+	RunRequest            json.RawMessage   `json:"run_request"`
+	TaskEvidence          json.RawMessage   `json:"task_evidence"`
+	ZeroModelTaskEvidence json.RawMessage   `json:"zero_model_task_evidence"`
+	RunEvidence           json.RawMessage   `json:"run_evidence"`
+	Digests               map[string]string `json:"digests"`
 }
 
 func loadGoldenVectors(t *testing.T) goldenVectors {
 	t.Helper()
-	body, err := os.ReadFile(filepath.Join("testdata", "coding_contract_v1.json"))
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "dittobench-coding-contract", "testdata", "coding_contract_v1.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,11 +56,15 @@ func TestGoldenVectorsHaveStableKnownFieldDigests(t *testing.T) {
 	}
 
 	for key, test := range map[string]func() (string, error){
-		"manifest":      func() (string, error) { return Digest(manifest) },
-		"seed_request":  func() (string, error) { return Digest(seed) },
-		"run_request":   func() (string, error) { return Digest(run) },
-		"task_evidence": func() (string, error) { return Digest(taskEvidence) },
-		"run_evidence":  func() (string, error) { return Digest(runEvidence) },
+		"manifest":     func() (string, error) { return Digest(manifest) },
+		"seed_request": func() (string, error) { return Digest(seed) },
+		"run_request":  func() (string, error) { return Digest(run) },
+		"task_evidence": func() (string, error) {
+			return TaskEvidenceDigest(manifest, "validator-ticket-001", taskEvidence)
+		},
+		"run_evidence": func() (string, error) {
+			return RunEvidenceDigest(manifest, "validator-ticket-001", runEvidence, []TaskEvidence{taskEvidence})
+		},
 	} {
 		got, err := test()
 		if err != nil {
@@ -68,7 +74,7 @@ func TestGoldenVectorsHaveStableKnownFieldDigests(t *testing.T) {
 			t.Fatalf("%s digest = %s, want %s", key, got, vectors.Digests[key])
 		}
 	}
-	if err := runEvidence.ValidateAgainst(manifest, []TaskEvidence{taskEvidence}); err != nil {
+	if err := runEvidence.ValidateAgainst(manifest, "validator-ticket-001", []TaskEvidence{taskEvidence}); err != nil {
 		t.Fatalf("cross-evidence replay: %v", err)
 	}
 }
@@ -118,6 +124,25 @@ func TestUnicodeAndHTMLCharactersHaveCrossLanguageCanonicalBytes(t *testing.T) {
 	}
 }
 
+func TestUnicodeMemoryHasCrossLanguageCanonicalBytes(t *testing.T) {
+	vectors := loadGoldenVectors(t)
+	request, err := ParseSeedRequest(vectors.SeedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Memories[0].Content = "Preserve café <tag> & separators \u2028 and \u2029."
+	projection := struct {
+		Memories []VisibleMemory `json:"memories"`
+	}{Memories: request.Memories}
+	digest, err := digestUnchecked(projection)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != vectors.Digests["unicode_seed_memory"] {
+		t.Fatalf("unicode memory digest = %s, want %s", digest, vectors.Digests["unicode_seed_memory"])
+	}
+}
+
 func TestDuplicateAndMissingKnownFieldsFailClosed(t *testing.T) {
 	if _, err := ParseRunManifest([]byte(`{"schema":"a","schema":"b"}`)); err == nil {
 		t.Fatal("duplicate field was accepted")
@@ -149,11 +174,103 @@ func TestDigestRevalidatesMutableNestedCollections(t *testing.T) {
 	}
 }
 
+func TestNullCollectionsAndExcessiveNestingFailClosed(t *testing.T) {
+	vectors := loadGoldenVectors(t)
+	seed, err := ParseSeedRequest(vectors.SeedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed.Memories[0].Supersedes = nil
+	if err := seed.Validate(); err == nil {
+		t.Fatal("nil supersedes was accepted")
+	}
+
+	run, err := ParseRunRequest(vectors.RunRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run.Issue.Constraints = nil
+	if err := run.Validate(); err == nil {
+		t.Fatal("nil issue constraints were accepted")
+	}
+
+	nested := strings.Repeat("[", 130) + `"leaf"` + strings.Repeat("]", 130)
+	extended := bytes.Replace(
+		vectors.Manifest,
+		[]byte(`"tasks"`),
+		[]byte(`"future_nested":`+nested+`,"tasks"`),
+		1,
+	)
+	if _, err := ParseRunManifest(extended); err == nil {
+		t.Fatal("excessive JSON nesting was accepted")
+	}
+}
+
+func TestIntegerWidthsFailClosedAtGoWireBoundary(t *testing.T) {
+	vectors := loadGoldenVectors(t)
+	overflow := bytes.Replace(
+		vectors.Manifest,
+		[]byte(`"selection_block_number": 123456`),
+		[]byte(`"selection_block_number": 18446744073709551616`),
+		1,
+	)
+	if _, err := ParseRunManifest(overflow); err == nil {
+		t.Fatal("selection block above uint64 was accepted")
+	}
+
+	testOverflow := bytes.Replace(
+		vectors.TaskEvidence,
+		[]byte(`"passed": 2, "total": 2`),
+		[]byte(`"passed": 2, "total": 4294967296`),
+		1,
+	)
+	if _, err := ParseTaskEvidence(testOverflow); err == nil {
+		t.Fatal("test count above uint32 was accepted")
+	}
+}
+
+func TestEvidenceDigestRequiresExactValidatorTicket(t *testing.T) {
+	vectors := loadGoldenVectors(t)
+	manifest, err := ParseRunManifest(vectors.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := ParseTaskEvidence(vectors.TaskEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := TaskEvidenceDigest(manifest, "other-ticket", evidence); err == nil {
+		t.Fatal("task evidence was digestible against the wrong validator ticket")
+	}
+}
+
 func TestResolvedTaskRequiresCompletePassingGraderEvidence(t *testing.T) {
 	vectors := loadGoldenVectors(t)
 	failing := bytes.Replace(vectors.TaskEvidence, []byte(`"passed": 3, "total": 3`), []byte(`"passed": 2, "total": 3`), 1)
 	if _, err := ParseTaskEvidence(failing); err == nil {
 		t.Fatal("resolved evidence with a failed test was accepted")
+	}
+}
+
+func TestZeroModelAttemptHasCanonicalAttributableEvidence(t *testing.T) {
+	vectors := loadGoldenVectors(t)
+	manifest, err := ParseRunManifest(vectors.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := ParseTaskEvidence(vectors.ZeroModelTaskEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if evidence.Authoring == nil || evidence.Authoring.Model.Requests != 0 {
+		t.Fatal("zero-model evidence did not preserve canonical zero accounting")
+	}
+	digest, err := TaskEvidenceDigest(manifest, "validator-ticket-001", evidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != vectors.Digests["zero_model_task_evidence"] {
+		t.Fatalf("zero-model digest = %s, want %s", digest, vectors.Digests["zero_model_task_evidence"])
 	}
 }
 

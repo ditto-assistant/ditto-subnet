@@ -11,6 +11,10 @@ import (
 )
 
 type canonicalModel interface {
+	RunManifest | SeedRequest | RunRequest
+}
+
+type parsedModel interface {
 	RunManifest | SeedRequest | RunRequest | TaskEvidence | RunEvidence
 }
 
@@ -30,6 +34,31 @@ func Digest[T canonicalModel](value T) (string, error) {
 		return "", err
 	}
 	return digestBytes(body), nil
+}
+
+// TaskEvidenceDigest is the only signing-capable task-evidence digest path.
+func TaskEvidenceDigest(
+	manifest RunManifest,
+	validatorTicketID string,
+	evidence TaskEvidence,
+) (string, error) {
+	if err := evidence.ValidateAgainst(manifest, validatorTicketID); err != nil {
+		return "", err
+	}
+	return digestUnchecked(evidence)
+}
+
+// RunEvidenceDigest is the only signing-capable run-evidence digest path.
+func RunEvidenceDigest(
+	manifest RunManifest,
+	validatorTicketID string,
+	evidence RunEvidence,
+	tasks []TaskEvidence,
+) (string, error) {
+	if err := evidence.ValidateAgainst(manifest, validatorTicketID, tasks); err != nil {
+		return "", err
+	}
+	return digestUnchecked(evidence)
 }
 
 func digestUnchecked(value any) (string, error) {
@@ -59,7 +88,7 @@ func canonicalJSONUnchecked(value any) ([]byte, error) {
 	}
 	canonical := output.Bytes()
 	if len(canonical) > MaxCanonicalJSONBytes {
-		return nil, errors.New("canonical coding JSON exceeds 1 MiB")
+		return nil, errors.New("canonical coding JSON exceeds 4 MiB")
 	}
 	return canonical, nil
 }
@@ -69,7 +98,7 @@ func digestBytes(body []byte) string {
 	return hex.EncodeToString(digest[:])
 }
 
-func validateCanonical[T canonicalModel](value T) error {
+func validateCanonical[T parsedModel](value T) error {
 	switch typed := any(value).(type) {
 	case RunManifest:
 		return typed.Validate()
@@ -106,7 +135,7 @@ func ParseRunEvidence(body []byte) (RunEvidence, error) {
 	return parseCanonical[RunEvidence](body, validateRunEvidenceShape)
 }
 
-func parseCanonical[T canonicalModel](
+func parseCanonical[T parsedModel](
 	body []byte,
 	validateShape func(map[string]any) error,
 ) (T, error) {
@@ -205,9 +234,10 @@ func validateManifestTaskShape(object map[string]any, path string) error {
 }
 
 func validateRunManifestShape(object map[string]any) error {
-	if err := requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible", "ticket_id",
+	if err := requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible", "coding_run_id",
 		"agent_id", "agent_artifact_sha256", "corpus_release_id", "catalog_merkle_root",
-		"selection_derivation_id", "selection_block_number", "selection_block_hash", "task_set_id",
+		"selection_derivation_id", "selection_chain_genesis_hash", "selection_block_number",
+		"selection_block_hash", "inference_grant_sha256", "grader_contract_sha256", "task_set_id",
 		"task_set_manifest_sha256", "tasks"); err != nil {
 		return err
 	}
@@ -256,7 +286,8 @@ func validateRunRequestShape(object map[string]any) error {
 
 func validateModelShape(object map[string]any, path string) error {
 	return requireFields(object, path, "model", "provider", "provider_route_profile", "reasoning_effort",
-		"prompt_sha256", "tool_schema_sha256", "provider_receipt_set_sha256", "requests", "prompt_tokens",
+		"inference_grant_sha256", "prompt_sha256", "tool_schema_sha256", "usage_status", "fallback_used",
+		"cost_source", "currency", "provider_receipt_set_sha256", "requests", "prompt_tokens",
 		"completion_tokens", "total_tokens", "cost_usd_micros", "retry_count")
 }
 
@@ -282,7 +313,8 @@ func validateTestGroupShape(object map[string]any, path string) error {
 }
 
 func validateGraderShape(object map[string]any, path string) error {
-	if err := requireFields(object, path, "grader_bundle_sha256", "grader_image_digest", "test_manifest_sha256",
+	if err := requireFields(object, path, "grader_contract_sha256", "grader_bundle_sha256",
+		"grader_image_digest", "test_manifest_sha256",
 		"grader_integrity_before_sha256", "grader_integrity_after_sha256", "build", "test_groups"); err != nil {
 		return err
 	}
@@ -297,7 +329,8 @@ func validateGraderShape(object map[string]any, path string) error {
 }
 
 func validateTaskEvidenceShape(object map[string]any) error {
-	if err := requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible", "ticket_id",
+	if err := requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible", "coding_run_id",
+		"validator_ticket_id",
 		"agent_id", "agent_artifact_sha256", "corpus_release_id", "task_set_id", "task_set_manifest_sha256",
 		"task", "authoring", "grader", "terminal_domain", "failure_code", "repair_score_micros"); err != nil {
 		return err
@@ -336,8 +369,10 @@ func validateTaskResultShape(object map[string]any, path string) error {
 
 func validateRunEvidenceShape(object map[string]any) error {
 	if err := requireFields(object, "$", "schema", "coding_contract_version", "weight_eligible",
+		"coding_run_id", "validator_ticket_id",
 		"run_manifest_sha256", "task_set_manifest_sha256", "tasks", "resolved_count", "repair_failure_count",
-		"infrastructure_count", "invalid_count", "integrity_incident_count", "scoreable_task_count",
+		"infrastructure_count", "invalid_count", "candidate_integrity_count", "control_plane_integrity_count",
+		"scoreable_task_count",
 		"repair_mean_micros"); err != nil {
 		return err
 	}
@@ -346,7 +381,7 @@ func validateRunEvidenceShape(object map[string]any) error {
 
 func rejectDuplicateJSONFields(body []byte) error {
 	decoder := json.NewDecoder(bytes.NewReader(body))
-	if err := scanJSONValue(decoder); err != nil {
+	if err := scanJSONValue(decoder, 0); err != nil {
 		return err
 	}
 	if _, err := decoder.Token(); err != io.EOF {
@@ -358,7 +393,10 @@ func rejectDuplicateJSONFields(body []byte) error {
 	return nil
 }
 
-func scanJSONValue(decoder *json.Decoder) error {
+func scanJSONValue(decoder *json.Decoder, depth int) error {
+	if depth > 128 {
+		return errors.New("coding JSON nesting exceeds 128 levels")
+	}
 	token, err := decoder.Token()
 	if err != nil {
 		return err
@@ -383,7 +421,7 @@ func scanJSONValue(decoder *json.Decoder) error {
 				return fmt.Errorf("coding JSON contains duplicate field %q", key)
 			}
 			seen[key] = struct{}{}
-			if err := scanJSONValue(decoder); err != nil {
+			if err := scanJSONValue(decoder, depth+1); err != nil {
 				return err
 			}
 		}
@@ -396,7 +434,7 @@ func scanJSONValue(decoder *json.Decoder) error {
 		}
 	case '[':
 		for decoder.More() {
-			if err := scanJSONValue(decoder); err != nil {
+			if err := scanJSONValue(decoder, depth+1); err != nil {
 				return err
 			}
 		}

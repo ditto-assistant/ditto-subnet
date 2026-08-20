@@ -93,6 +93,7 @@ paths = [
   "ditto/api_models/validator_capabilities.py",
   "ditto/api_models/validator_confirmation.py",
   "ditto/api_models/validator_updater.py",
+  "packages/dittobench-coding-contract/**",
   "scripts/install-validator-stack-auto-update.sh",
   "scripts/test-validator-stack-auto-update-e2e.sh",
   "scripts/test-validator-stack-release-runtime.sh",
@@ -123,6 +124,7 @@ paths = [
   "services/dittobench-api/scripts/**",
   "services/dittobench-api/skills-lock.json",
   "services/dittobench-api/testdata/**",
+  "packages/dittobench-coding-contract/**",
 ]
 
 [components.dittobench_datagen]

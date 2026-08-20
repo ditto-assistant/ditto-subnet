@@ -187,6 +187,20 @@ def test_coding_contract_models_select_scorer_and_validator_stack(
     ) == {"dittobench_api", "validator", "validator_stack"}
 
 
+def test_shared_coding_contract_vectors_select_every_consumer(
+    components, ignored_paths
+) -> None:
+    path = "packages/dittobench-coding-contract/testdata/coding_contract_v1.json"
+    assert selected(components, ignored_paths, path) == {
+        "dittobench_api",
+        "dittobench_coding_datagen",
+        "dittobench_coding_starter_kit",
+        "validator",
+        "validator_stack",
+    }
+    assert root_verification(components, ignored_paths, path) == "full"
+
+
 def test_platform_change_does_not_release_validator_stack(
     components, ignored_paths
 ) -> None:

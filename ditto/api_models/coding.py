@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import unicodedata
 from enum import StrEnum
 from typing import Annotated, Any, Literal
 
@@ -24,8 +25,10 @@ from pydantic import (
 )
 
 CODING_CONTRACT_VERSION = 1
-MAX_CANONICAL_JSON_BYTES = 1 << 20
+MAX_CANONICAL_JSON_BYTES = 4 << 20
 REPAIR_SCORE_RESOLVED_MICROS = 1_000_000
+UINT32_MAX = (1 << 32) - 1
+UINT64_MAX = (1 << 64) - 1
 
 _SHA256_PATTERN = r"^[0-9a-f]{64}$"
 _OCI_DIGEST_PATTERN = r"^sha256:[0-9a-f]{64}$"
@@ -38,7 +41,10 @@ _REQUIRED_TEST_GROUPS = frozenset(
 def _validate_identifier(value: str, max_bytes: int) -> str:
     if len(value.encode()) > max_bytes:
         raise ValueError(f"identifier must contain at most {max_bytes} UTF-8 bytes")
-    if any(character.isspace() or not character.isprintable() for character in value):
+    if any(
+        character.isspace() or unicodedata.category(character) == "Cc"
+        for character in value
+    ):
         raise ValueError("identifier must not contain whitespace or control characters")
     return value
 
@@ -70,7 +76,7 @@ def _validate_relative_path(value: str) -> str:
         or value.startswith("/")
         or "\\" in value
         or any(part in {"", ".", "..", ".git"} for part in value.split("/"))
-        or any(not character.isprintable() for character in value)
+        or any(unicodedata.category(character) == "Cc" for character in value)
     ):
         raise ValueError("editable path must be a safe workspace-relative POSIX path")
     return value
@@ -109,7 +115,13 @@ CapabilityUrl = Annotated[
 class CodingContractModel(BaseModel):
     """Immutable forward-compatible wire model."""
 
-    model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
+    model_config = ConfigDict(
+        extra="ignore",
+        frozen=True,
+        strict=True,
+        serialize_by_alias=True,
+        validate_by_name=True,
+    )
 
 
 class CodingTerminalDomain(StrEnum):
@@ -119,7 +131,16 @@ class CodingTerminalDomain(StrEnum):
     REPAIR_FAILURE = "repair_failure"
     VALIDATOR_INFRASTRUCTURE = "validator_infrastructure"
     TASK_INVALID = "task_invalid"
-    INTEGRITY_INCIDENT = "integrity_incident"
+    CANDIDATE_INTEGRITY = "candidate_integrity"
+    CONTROL_PLANE_INTEGRITY = "control_plane_integrity"
+
+
+class CodingModelUsageStatus(StrEnum):
+    """Authoritative provider-use state, including attributable zero-use."""
+
+    COMPLETE = "complete"
+    NOT_INVOKED = "not_invoked"
+    PROVIDER_FAILURE = "provider_failure"
 
 
 class CodingManifestTask(CodingContractModel):
@@ -141,14 +162,17 @@ class CodingRunManifest(CodingContractModel):
     schema_name: Literal["dittobench-coding-run-manifest-v1"] = Field(alias="schema")
     coding_contract_version: Literal[1]
     weight_eligible: Literal[False]
-    ticket_id: OpaqueId
+    coding_run_id: OpaqueId
     agent_id: OpaqueId
     agent_artifact_sha256: Sha256
     corpus_release_id: OpaqueId
     catalog_merkle_root: Sha256
     selection_derivation_id: ShortName
-    selection_block_number: Annotated[int, Field(ge=1)]
+    selection_chain_genesis_hash: BlockHash
+    selection_block_number: Annotated[int, Field(ge=1, le=UINT64_MAX)]
     selection_block_hash: BlockHash
+    inference_grant_sha256: Sha256
+    grader_contract_sha256: Sha256
     task_set_id: OpaqueId
     task_set_manifest_sha256: Sha256
     tasks: Annotated[list[CodingManifestTask], Field(min_length=1, max_length=100)]
@@ -279,14 +303,19 @@ class CodingModelEvidence(CodingContractModel):
     provider: ShortName
     provider_route_profile: ShortName
     reasoning_effort: Literal["medium"]
+    inference_grant_sha256: Sha256
     prompt_sha256: Sha256
     tool_schema_sha256: Sha256
-    provider_receipt_set_sha256: Sha256
-    requests: Annotated[int, Field(ge=1, le=10_000)]
-    prompt_tokens: Annotated[int, Field(ge=0)]
-    completion_tokens: Annotated[int, Field(ge=0)]
-    total_tokens: Annotated[int, Field(ge=0)]
-    cost_usd_micros: Annotated[int, Field(ge=0)]
+    usage_status: CodingModelUsageStatus
+    fallback_used: Literal[False]
+    cost_source: Literal["provider_receipt_v1"]
+    currency: Literal["USD"]
+    provider_receipt_set_sha256: Sha256 | None
+    requests: Annotated[int, Field(ge=0, le=10_000)]
+    prompt_tokens: Annotated[int, Field(ge=0, le=UINT64_MAX)]
+    completion_tokens: Annotated[int, Field(ge=0, le=UINT64_MAX)]
+    total_tokens: Annotated[int, Field(ge=0, le=UINT64_MAX)]
+    cost_usd_micros: Annotated[int, Field(ge=0, le=UINT64_MAX)]
     retry_count: Annotated[int, Field(ge=0, le=100)]
 
     @model_validator(mode="after")
@@ -294,6 +323,23 @@ class CodingModelEvidence(CodingContractModel):
         if self.total_tokens != self.prompt_tokens + self.completion_tokens:
             raise ValueError(
                 "total_tokens must equal prompt_tokens + completion_tokens"
+            )
+        counters = (
+            self.requests,
+            self.prompt_tokens,
+            self.completion_tokens,
+            self.total_tokens,
+            self.cost_usd_micros,
+            self.retry_count,
+        )
+        if self.usage_status is CodingModelUsageStatus.NOT_INVOKED:
+            if any(counters) or self.provider_receipt_set_sha256 is not None:
+                raise ValueError(
+                    "not_invoked model evidence requires canonical zero accounting"
+                )
+        elif self.requests == 0 or self.provider_receipt_set_sha256 is None:
+            raise ValueError(
+                "invoked model evidence requires requests and a provider receipt root"
             )
         return self
 
@@ -318,8 +364,8 @@ class CodingBuildEvidence(CodingContractModel):
 
 class CodingTestGroupEvidence(CodingContractModel):
     group: Literal["fail_to_pass", "pass_to_pass", "hidden", "adversarial", "integrity"]
-    passed: Annotated[int, Field(ge=0)]
-    total: Annotated[int, Field(ge=1)]
+    passed: Annotated[int, Field(ge=0, le=UINT32_MAX)]
+    total: Annotated[int, Field(ge=1, le=UINT32_MAX)]
 
     @model_validator(mode="after")
     def passed_does_not_exceed_total(self) -> CodingTestGroupEvidence:
@@ -329,6 +375,7 @@ class CodingTestGroupEvidence(CodingContractModel):
 
 
 class CodingGraderEvidence(CodingContractModel):
+    grader_contract_sha256: Sha256
     grader_bundle_sha256: Sha256
     grader_image_digest: OciDigest
     test_manifest_sha256: Sha256
@@ -359,7 +406,8 @@ class CodingTaskEvidence(CodingContractModel):
     schema_name: Literal["dittobench-coding-task-evidence-v1"] = Field(alias="schema")
     coding_contract_version: Literal[1]
     weight_eligible: Literal[False]
-    ticket_id: OpaqueId
+    coding_run_id: OpaqueId
+    validator_ticket_id: OpaqueId
     agent_id: OpaqueId
     agent_artifact_sha256: Sha256
     corpus_release_id: OpaqueId
@@ -400,10 +448,17 @@ class CodingTaskEvidence(CodingContractModel):
             )
 
         if (
-            self.terminal_domain is CodingTerminalDomain.REPAIR_FAILURE
+            self.terminal_domain
+            in {
+                CodingTerminalDomain.REPAIR_FAILURE,
+                CodingTerminalDomain.CANDIDATE_INTEGRITY,
+            }
             and self.authoring is None
         ):
-            raise ValueError("repair_failure requires authoritative authoring evidence")
+            raise ValueError(
+                "candidate-attributable failure requires authoritative "
+                "authoring evidence"
+            )
         return self
 
 
@@ -419,6 +474,8 @@ class CodingRunEvidence(CodingContractModel):
     schema_name: Literal["dittobench-coding-run-evidence-v1"] = Field(alias="schema")
     coding_contract_version: Literal[1]
     weight_eligible: Literal[False]
+    coding_run_id: OpaqueId
+    validator_ticket_id: OpaqueId
     run_manifest_sha256: Sha256
     task_set_manifest_sha256: Sha256
     tasks: Annotated[list[CodingTaskResult], Field(min_length=1, max_length=100)]
@@ -426,7 +483,8 @@ class CodingRunEvidence(CodingContractModel):
     repair_failure_count: Annotated[int, Field(ge=0)]
     infrastructure_count: Annotated[int, Field(ge=0)]
     invalid_count: Annotated[int, Field(ge=0)]
-    integrity_incident_count: Annotated[int, Field(ge=0)]
+    candidate_integrity_count: Annotated[int, Field(ge=0)]
+    control_plane_integrity_count: Annotated[int, Field(ge=0)]
     scoreable_task_count: Annotated[int, Field(ge=0)]
     repair_mean_micros: Annotated[int, Field(ge=0, le=REPAIR_SCORE_RESOLVED_MICROS)]
 
@@ -450,27 +508,30 @@ class CodingRunEvidence(CodingContractModel):
             if task.terminal_domain not in {
                 CodingTerminalDomain.VALIDATOR_INFRASTRUCTURE,
                 CodingTerminalDomain.TASK_INVALID,
+                CodingTerminalDomain.CONTROL_PLANE_INTEGRITY,
             }:
                 score_sum += task.repair_score_micros
 
         expected_scoreable = (
             counts[CodingTerminalDomain.RESOLVED]
             + counts[CodingTerminalDomain.REPAIR_FAILURE]
-            + counts[CodingTerminalDomain.INTEGRITY_INCIDENT]
+            + counts[CodingTerminalDomain.CANDIDATE_INTEGRITY]
         )
         observed_counts = (
             self.resolved_count,
             self.repair_failure_count,
             self.infrastructure_count,
             self.invalid_count,
-            self.integrity_incident_count,
+            self.candidate_integrity_count,
+            self.control_plane_integrity_count,
         )
         expected_counts = (
             counts[CodingTerminalDomain.RESOLVED],
             counts[CodingTerminalDomain.REPAIR_FAILURE],
             counts[CodingTerminalDomain.VALIDATOR_INFRASTRUCTURE],
             counts[CodingTerminalDomain.TASK_INVALID],
-            counts[CodingTerminalDomain.INTEGRITY_INCIDENT],
+            counts[CodingTerminalDomain.CANDIDATE_INTEGRITY],
+            counts[CodingTerminalDomain.CONTROL_PLANE_INTEGRITY],
         )
         if (
             observed_counts != expected_counts
@@ -485,17 +546,8 @@ class CodingRunEvidence(CodingContractModel):
         return self
 
 
-CodingCanonicalModel = (
-    CodingRunManifest
-    | CodingSeedRequest
-    | CodingRunRequest
-    | CodingTaskEvidence
-    | CodingRunEvidence
-)
-
-
-def canonical_json_bytes(value: BaseModel | dict[str, Any] | list[Any]) -> bytes:
-    """Serialize one known-field projection into deterministic UTF-8 JSON."""
+def _canonical_json_bytes(value: BaseModel | dict[str, Any] | list[Any]) -> bytes:
+    """Serialize one validated known-field projection into deterministic JSON."""
 
     if isinstance(value, BaseModel):
         reparsed = type(value).model_validate_json(value.model_dump_json(by_alias=True))
@@ -518,15 +570,40 @@ def canonical_json_bytes(value: BaseModel | dict[str, Any] | list[Any]) -> bytes
         .encode()
     )
     if len(body) > MAX_CANONICAL_JSON_BYTES:
-        raise ValueError("canonical coding JSON exceeds 1 MiB")
+        raise ValueError("canonical coding JSON exceeds 4 MiB")
     return body
+
+
+def canonical_json_bytes(
+    value: CodingRunManifest
+    | CodingSeedRequest
+    | CodingRunRequest
+    | dict[str, Any]
+    | list[Any],
+) -> bytes:
+    """Serialize transport models; signed evidence requires authority context."""
+
+    if isinstance(value, BaseModel) and not isinstance(
+        value, (CodingRunManifest, CodingSeedRequest, CodingRunRequest)
+    ):
+        raise TypeError(
+            "only coding transport models use the generic canonical API; "
+            "signed evidence requires a manifest-bound digest API"
+        )
+    return _canonical_json_bytes(value)
 
 
 def sha256_hex(body: bytes) -> str:
     return hashlib.sha256(body).hexdigest()
 
 
-def canonical_digest(value: BaseModel | dict[str, Any] | list[Any]) -> str:
+def canonical_digest(
+    value: CodingRunManifest
+    | CodingSeedRequest
+    | CodingRunRequest
+    | dict[str, Any]
+    | list[Any],
+) -> str:
     return sha256_hex(canonical_json_bytes(value))
 
 
@@ -546,18 +623,29 @@ def parse_canonical_json[ModelT: CodingContractModel](
             result[key] = value
         return result
 
-    json.loads(
+    decoded = json.loads(
         body,
         object_pairs_hook=object_pairs,
         parse_constant=lambda value: (_ for _ in ()).throw(
             ValueError(f"non-finite JSON number: {value}")
         ),
     )
+    stack: list[tuple[Any, int]] = [(decoded, 0)]
+    while stack:
+        value, depth = stack.pop()
+        if depth > 128:
+            raise ValueError("coding JSON nesting exceeds 128 levels")
+        if isinstance(value, dict):
+            stack.extend((nested, depth + 1) for nested in value.values())
+        elif isinstance(value, list):
+            stack.extend((nested, depth + 1) for nested in value)
     return model.model_validate_json(body)
 
 
 def validate_task_evidence_against_manifest(
-    manifest: CodingRunManifest, evidence: CodingTaskEvidence
+    manifest: CodingRunManifest,
+    validator_ticket_id: str,
+    evidence: CodingTaskEvidence,
 ) -> None:
     """Bind task evidence to one exact task in its canonical run manifest."""
 
@@ -567,6 +655,7 @@ def validate_task_evidence_against_manifest(
     evidence = type(evidence).model_validate_json(
         evidence.model_dump_json(by_alias=True)
     )
+    _validate_opaque_id(validator_ticket_id)
     matching = [
         task
         for task in manifest.tasks
@@ -576,7 +665,8 @@ def validate_task_evidence_against_manifest(
     if len(matching) != 1 or matching[0] != evidence.task:
         raise ValueError("task evidence does not match exactly one manifest task")
     if (
-        evidence.ticket_id != manifest.ticket_id
+        evidence.coding_run_id != manifest.coding_run_id
+        or evidence.validator_ticket_id != validator_ticket_id
         or evidence.agent_id != manifest.agent_id
         or evidence.agent_artifact_sha256 != manifest.agent_artifact_sha256
         or evidence.corpus_release_id != manifest.corpus_release_id
@@ -584,10 +674,33 @@ def validate_task_evidence_against_manifest(
         or evidence.task_set_manifest_sha256 != manifest.task_set_manifest_sha256
     ):
         raise ValueError("task evidence identity does not match run manifest")
+    if (
+        evidence.authoring is not None
+        and evidence.authoring.model.inference_grant_sha256
+        != manifest.inference_grant_sha256
+    ):
+        raise ValueError("task evidence inference grant does not match manifest")
+    if (
+        evidence.grader is not None
+        and evidence.grader.grader_contract_sha256 != manifest.grader_contract_sha256
+    ):
+        raise ValueError("task evidence grader contract does not match manifest")
+
+
+def task_evidence_digest(
+    manifest: CodingRunManifest,
+    validator_ticket_id: str,
+    evidence: CodingTaskEvidence,
+) -> str:
+    """Hash task evidence only after binding it to lease authority."""
+
+    validate_task_evidence_against_manifest(manifest, validator_ticket_id, evidence)
+    return sha256_hex(_canonical_json_bytes(evidence))
 
 
 def validate_run_evidence_against_manifest(
     manifest: CodingRunManifest,
+    validator_ticket_id: str,
     evidence: CodingRunEvidence,
     task_evidence: list[CodingTaskEvidence],
 ) -> None:
@@ -603,6 +716,12 @@ def validate_run_evidence_against_manifest(
         type(item).model_validate_json(item.model_dump_json(by_alias=True))
         for item in task_evidence
     ]
+    _validate_opaque_id(validator_ticket_id)
+    if (
+        evidence.coding_run_id != manifest.coding_run_id
+        or evidence.validator_ticket_id != validator_ticket_id
+    ):
+        raise ValueError("run evidence identity does not match lease authority")
     if evidence.run_manifest_sha256 != canonical_digest(manifest):
         raise ValueError("run evidence does not bind the canonical run manifest")
     if evidence.task_set_manifest_sha256 != manifest.task_set_manifest_sha256:
@@ -614,7 +733,7 @@ def validate_run_evidence_against_manifest(
 
     by_identity: dict[tuple[str, str], CodingTaskEvidence] = {}
     for item in task_evidence:
-        validate_task_evidence_against_manifest(manifest, item)
+        validate_task_evidence_against_manifest(manifest, validator_ticket_id, item)
         identity = (item.task.case_id, item.task.variant_id)
         if identity in by_identity:
             raise ValueError("duplicate per-task evidence identity")
@@ -627,11 +746,26 @@ def validate_run_evidence_against_manifest(
         matched = by_identity.get(identity)
         if (
             matched is None
-            or result.task_evidence_sha256 != canonical_digest(matched)
+            or result.task_evidence_sha256
+            != task_evidence_digest(manifest, validator_ticket_id, matched)
             or result.terminal_domain != matched.terminal_domain
             or result.repair_score_micros != matched.repair_score_micros
         ):
             raise ValueError("run task result does not match per-task evidence")
+
+
+def run_evidence_digest(
+    manifest: CodingRunManifest,
+    validator_ticket_id: str,
+    evidence: CodingRunEvidence,
+    task_evidence: list[CodingTaskEvidence],
+) -> str:
+    """Hash run evidence only after replaying manifest and task authority."""
+
+    validate_run_evidence_against_manifest(
+        manifest, validator_ticket_id, evidence, task_evidence
+    )
+    return sha256_hex(_canonical_json_bytes(evidence))
 
 
 __all__ = [
@@ -645,6 +779,7 @@ __all__ = [
     "CodingIssue",
     "CodingManifestTask",
     "CodingModelEvidence",
+    "CodingModelUsageStatus",
     "CodingRunEvidence",
     "CodingRunManifest",
     "CodingRunRequest",
@@ -658,6 +793,8 @@ __all__ = [
     "canonical_digest",
     "canonical_json_bytes",
     "parse_canonical_json",
+    "run_evidence_digest",
+    "task_evidence_digest",
     "validate_run_evidence_against_manifest",
     "validate_task_evidence_against_manifest",
 ]

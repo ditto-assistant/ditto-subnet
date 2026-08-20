@@ -37,7 +37,7 @@ func validIdentifier(value string, max int) bool {
 		return false
 	}
 	for _, character := range value {
-		if unicode.IsSpace(character) || !unicode.IsPrint(character) {
+		if unicode.IsSpace(character) || unicode.IsControl(character) {
 			return false
 		}
 	}
@@ -63,7 +63,7 @@ func validRelativePath(value string) bool {
 		}
 	}
 	for _, character := range value {
-		if !unicode.IsPrint(character) {
+		if unicode.IsControl(character) {
 			return false
 		}
 	}
@@ -112,13 +112,15 @@ func (manifest RunManifest) Validate() error {
 		manifest.CodingContractVersion != ContractVersion || manifest.WeightEligible {
 		return errors.New("run manifest is not shadow coding contract v1")
 	}
-	if !validIdentifier(manifest.TicketID, 256) || !validIdentifier(manifest.AgentID, 256) ||
+	if !validIdentifier(manifest.CodingRunID, 256) || !validIdentifier(manifest.AgentID, 256) ||
 		!validIdentifier(manifest.CorpusReleaseID, 256) || !validIdentifier(manifest.TaskSetID, 256) ||
 		!validIdentifier(manifest.SelectionDerivationID, 128) {
 		return errors.New("run manifest identity is invalid")
 	}
 	if !validSHA256(manifest.AgentArtifactSHA256) || !validSHA256(manifest.CatalogMerkleRoot) ||
 		!validSHA256(manifest.TaskSetManifestSHA256) || !validBlockHash(manifest.SelectionBlockHash) ||
+		!validBlockHash(manifest.SelectionChainGenesisHash) || !validSHA256(manifest.InferenceGrantSHA256) ||
+		!validSHA256(manifest.GraderContractSHA256) ||
 		manifest.SelectionBlockNumber == 0 {
 		return errors.New("run manifest commitment is invalid")
 	}
@@ -153,7 +155,7 @@ func (memory VisibleMemory) Validate() error {
 			return errors.New("visible memory optional identity is invalid")
 		}
 	}
-	if !slices.IsSorted(memory.Supersedes) || !uniqueStrings(memory.Supersedes) ||
+	if memory.Supersedes == nil || !slices.IsSorted(memory.Supersedes) || !uniqueStrings(memory.Supersedes) ||
 		slices.Contains(memory.Supersedes, memory.MemoryID) || len(memory.Supersedes) > 64 {
 		return errors.New("visible memory supersedes must be unique and sorted")
 	}
@@ -168,7 +170,7 @@ func (memory VisibleMemory) Validate() error {
 func (request SeedRequest) Validate() error {
 	if request.CodingContractVersion != ContractVersion || !validIdentifier(request.TicketID, 256) ||
 		!validIdentifier(request.CaseID, 256) || !validIdentifier(request.ProfileCapabilityID, 256) ||
-		!validSHA256(request.MemoryBundleSHA256) || len(request.Memories) > 128 {
+		!validSHA256(request.MemoryBundleSHA256) || request.Memories == nil || len(request.Memories) > 128 {
 		return errors.New("coding seed request identity is invalid")
 	}
 	previous := ""
@@ -212,7 +214,9 @@ func (request RunRequest) Validate() error {
 	}
 	if len(request.RuntimePolicy.EditablePaths) > 64 || len(request.RuntimePolicy.TestCommandIDs) > 64 ||
 		len(request.RuntimePolicy.BuildCommandIDs) > 64 || !uniqueStrings(request.RuntimePolicy.EditablePaths) ||
-		!uniqueStrings(request.RuntimePolicy.TestCommandIDs) || !uniqueStrings(request.RuntimePolicy.BuildCommandIDs) {
+		!uniqueStrings(request.RuntimePolicy.TestCommandIDs) || !uniqueStrings(request.RuntimePolicy.BuildCommandIDs) ||
+		request.Issue.Constraints == nil || request.RuntimePolicy.EditablePaths == nil ||
+		request.RuntimePolicy.TestCommandIDs == nil || request.RuntimePolicy.BuildCommandIDs == nil {
 		return errors.New("runtime policy entries are invalid")
 	}
 	for _, path := range request.RuntimePolicy.EditablePaths {
@@ -243,14 +247,30 @@ func (request RunRequest) Validate() error {
 func (evidence ModelEvidence) Validate() error {
 	if !validIdentifier(evidence.Model, 128) || !validIdentifier(evidence.Provider, 128) ||
 		!validIdentifier(evidence.ProviderRouteProfile, 128) || evidence.ReasoningEffort != "medium" ||
+		!validSHA256(evidence.InferenceGrantSHA256) || evidence.FallbackUsed ||
+		evidence.CostSource != "provider_receipt_v1" || evidence.Currency != "USD" ||
 		!validSHA256(evidence.PromptSHA256) || !validSHA256(evidence.ToolSchemaSHA256) ||
-		!validSHA256(evidence.ProviderReceiptSetSHA256) || evidence.Requests == 0 || evidence.Requests > 10_000 ||
-		evidence.RetryCount > 100 {
+		evidence.Requests > 10_000 || evidence.RetryCount > 100 {
 		return errors.New("model evidence identity or accounting is invalid")
 	}
 	if evidence.PromptTokens > ^uint64(0)-evidence.CompletionTokens ||
 		evidence.TotalTokens != evidence.PromptTokens+evidence.CompletionTokens {
 		return errors.New("model evidence token totals are inconsistent")
+	}
+	if evidence.UsageStatus == ModelUsageNotInvoked {
+		if evidence.Requests != 0 || evidence.PromptTokens != 0 || evidence.CompletionTokens != 0 ||
+			evidence.TotalTokens != 0 || evidence.CostUSDMicros != 0 || evidence.RetryCount != 0 ||
+			evidence.ProviderReceiptSetSHA256 != nil {
+			return errors.New("not_invoked model evidence requires canonical zero accounting")
+		}
+		return nil
+	}
+	if evidence.UsageStatus != ModelUsageComplete && evidence.UsageStatus != ModelUsageProviderFailure {
+		return errors.New("model evidence usage_status is invalid")
+	}
+	if evidence.Requests == 0 || evidence.ProviderReceiptSetSHA256 == nil ||
+		!validSHA256(*evidence.ProviderReceiptSetSHA256) {
+		return errors.New("invoked model evidence requires requests and a provider receipt root")
 	}
 	return nil
 }
@@ -269,7 +289,8 @@ func (evidence AuthoringEvidence) Validate() error {
 }
 
 func (evidence GraderEvidence) Validate() error {
-	if !validSHA256(evidence.GraderBundleSHA256) || !validOCIDigest(evidence.GraderImageDigest) ||
+	if !validSHA256(evidence.GraderContractSHA256) || !validSHA256(evidence.GraderBundleSHA256) ||
+		!validOCIDigest(evidence.GraderImageDigest) ||
 		!validSHA256(evidence.TestManifestSHA256) || !validSHA256(evidence.GraderIntegrityBeforeSHA256) ||
 		!validSHA256(evidence.GraderIntegrityAfterSHA256) || !validIdentifier(evidence.Build.CommandID, 80) {
 		return errors.New("grader evidence identity is invalid")
@@ -303,7 +324,8 @@ func (evidence GraderEvidence) resolved() bool {
 func (evidence TaskEvidence) Validate() error {
 	if evidence.Schema != "dittobench-coding-task-evidence-v1" ||
 		evidence.CodingContractVersion != ContractVersion || evidence.WeightEligible ||
-		!validIdentifier(evidence.TicketID, 256) || !validIdentifier(evidence.AgentID, 256) ||
+		!validIdentifier(evidence.CodingRunID, 256) || !validIdentifier(evidence.ValidatorTicketID, 256) ||
+		!validIdentifier(evidence.AgentID, 256) ||
 		!validIdentifier(evidence.CorpusReleaseID, 256) || !validIdentifier(evidence.TaskSetID, 256) ||
 		!validSHA256(evidence.AgentArtifactSHA256) || !validSHA256(evidence.TaskSetManifestSHA256) {
 		return errors.New("task evidence identity is invalid")
@@ -338,15 +360,17 @@ func (evidence TaskEvidence) Validate() error {
 		!validIdentifier(*evidence.FailureCode, 128) || evidence.RepairScoreMicros != 0 {
 		return errors.New("non-resolved evidence requires a failure_code and zero score")
 	}
-	if evidence.TerminalDomain == DomainRepairFailure && evidence.Authoring == nil {
-		return errors.New("repair_failure requires authoritative authoring evidence")
+	if (evidence.TerminalDomain == DomainRepairFailure || evidence.TerminalDomain == DomainCandidateIntegrity) &&
+		evidence.Authoring == nil {
+		return errors.New("candidate-attributable failure requires authoritative authoring evidence")
 	}
 	return nil
 }
 
 func validTerminalDomain(domain TerminalDomain) bool {
 	switch domain {
-	case DomainResolved, DomainRepairFailure, DomainValidatorInfrastructure, DomainTaskInvalid, DomainIntegrityIncident:
+	case DomainResolved, DomainRepairFailure, DomainValidatorInfrastructure, DomainTaskInvalid,
+		DomainCandidateIntegrity, DomainControlPlaneIntegrity:
 		return true
 	default:
 		return false
@@ -356,6 +380,7 @@ func validTerminalDomain(domain TerminalDomain) bool {
 func (evidence RunEvidence) Validate() error {
 	if evidence.Schema != "dittobench-coding-run-evidence-v1" ||
 		evidence.CodingContractVersion != ContractVersion || evidence.WeightEligible ||
+		!validIdentifier(evidence.CodingRunID, 256) || !validIdentifier(evidence.ValidatorTicketID, 256) ||
 		!validSHA256(evidence.RunManifestSHA256) || !validSHA256(evidence.TaskSetManifestSHA256) ||
 		len(evidence.Tasks) == 0 || len(evidence.Tasks) > 100 {
 		return errors.New("run evidence identity is invalid")
@@ -381,16 +406,18 @@ func (evidence RunEvidence) Validate() error {
 		} else if task.RepairScoreMicros != 0 {
 			return errors.New("non-resolved task result must score zero")
 		}
-		if task.TerminalDomain != DomainValidatorInfrastructure && task.TerminalDomain != DomainTaskInvalid {
+		if task.TerminalDomain != DomainValidatorInfrastructure && task.TerminalDomain != DomainTaskInvalid &&
+			task.TerminalDomain != DomainControlPlaneIntegrity {
 			scoreSum += uint64(task.RepairScoreMicros)
 		}
 	}
-	scoreable := counts[DomainResolved] + counts[DomainRepairFailure] + counts[DomainIntegrityIncident]
+	scoreable := counts[DomainResolved] + counts[DomainRepairFailure] + counts[DomainCandidateIntegrity]
 	if evidence.ResolvedCount != counts[DomainResolved] ||
 		evidence.RepairFailureCount != counts[DomainRepairFailure] ||
 		evidence.InfrastructureCount != counts[DomainValidatorInfrastructure] ||
 		evidence.InvalidCount != counts[DomainTaskInvalid] ||
-		evidence.IntegrityIncidentCount != counts[DomainIntegrityIncident] ||
+		evidence.CandidateIntegrityCount != counts[DomainCandidateIntegrity] ||
+		evidence.ControlPlaneIntegrityCount != counts[DomainControlPlaneIntegrity] ||
 		evidence.ScoreableTaskCount != scoreable {
 		return errors.New("run aggregate counts do not match task evidence")
 	}
@@ -404,13 +431,17 @@ func (evidence RunEvidence) Validate() error {
 	return nil
 }
 
-// ValidateAgainst binds one task-evidence object to exactly one selected task.
-func (evidence TaskEvidence) ValidateAgainst(manifest RunManifest) error {
+// ValidateAgainst binds one task-evidence object to exactly one selected task
+// and validator-specific lease ticket.
+func (evidence TaskEvidence) ValidateAgainst(manifest RunManifest, validatorTicketID string) error {
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
 	if err := evidence.Validate(); err != nil {
 		return err
+	}
+	if !validIdentifier(validatorTicketID, 256) {
+		return errors.New("validator ticket identity is invalid")
 	}
 	var selected *ManifestTask
 	for index := range manifest.Tasks {
@@ -425,22 +456,38 @@ func (evidence TaskEvidence) ValidateAgainst(manifest RunManifest) error {
 	if selected == nil || *selected != evidence.Task {
 		return errors.New("task evidence does not match exactly one manifest task")
 	}
-	if evidence.TicketID != manifest.TicketID || evidence.AgentID != manifest.AgentID ||
+	if evidence.CodingRunID != manifest.CodingRunID || evidence.ValidatorTicketID != validatorTicketID ||
+		evidence.AgentID != manifest.AgentID ||
 		evidence.AgentArtifactSHA256 != manifest.AgentArtifactSHA256 ||
 		evidence.CorpusReleaseID != manifest.CorpusReleaseID || evidence.TaskSetID != manifest.TaskSetID ||
 		evidence.TaskSetManifestSHA256 != manifest.TaskSetManifestSHA256 {
 		return errors.New("task evidence identity does not match run manifest")
 	}
+	if evidence.Authoring != nil &&
+		evidence.Authoring.Model.InferenceGrantSHA256 != manifest.InferenceGrantSHA256 {
+		return errors.New("task evidence inference grant does not match manifest")
+	}
+	if evidence.Grader != nil && evidence.Grader.GraderContractSHA256 != manifest.GraderContractSHA256 {
+		return errors.New("task evidence grader contract does not match manifest")
+	}
 	return nil
 }
 
 // ValidateAgainst replays run aggregation against the manifest and task roots.
-func (evidence RunEvidence) ValidateAgainst(manifest RunManifest, tasks []TaskEvidence) error {
+func (evidence RunEvidence) ValidateAgainst(
+	manifest RunManifest,
+	validatorTicketID string,
+	tasks []TaskEvidence,
+) error {
 	if err := manifest.Validate(); err != nil {
 		return err
 	}
 	if err := evidence.Validate(); err != nil {
 		return err
+	}
+	if !validIdentifier(validatorTicketID, 256) || evidence.CodingRunID != manifest.CodingRunID ||
+		evidence.ValidatorTicketID != validatorTicketID {
+		return errors.New("run evidence identity does not match lease authority")
 	}
 	manifestDigest, err := Digest(manifest)
 	if err != nil {
@@ -455,7 +502,7 @@ func (evidence RunEvidence) ValidateAgainst(manifest RunManifest, tasks []TaskEv
 	}
 	byIdentity := make(map[string]TaskEvidence, len(tasks))
 	for _, task := range tasks {
-		if err := task.ValidateAgainst(manifest); err != nil {
+		if err := task.ValidateAgainst(manifest, validatorTicketID); err != nil {
 			return err
 		}
 		identity := task.Task.CaseID + "\x00" + task.Task.VariantID
@@ -473,7 +520,7 @@ func (evidence RunEvidence) ValidateAgainst(manifest RunManifest, tasks []TaskEv
 		if !ok {
 			return errors.New("run task result has no per-task evidence")
 		}
-		taskDigest, err := Digest(task)
+		taskDigest, err := TaskEvidenceDigest(manifest, validatorTicketID, task)
 		if err != nil {
 			return err
 		}
