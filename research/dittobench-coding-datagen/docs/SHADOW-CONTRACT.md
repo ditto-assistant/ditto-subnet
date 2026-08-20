@@ -71,6 +71,8 @@ future block, and validators verify the canonical block hash independently.
 4. Destroy the authoring container.
 5. Apply the frozen patch to a pristine base in a fresh networkless grader.
    Inject the digest-pinned grader bundle only at this phase.
+   Import the trusted test runner from that bundle before adding candidate paths;
+   never launch a runner module resolved from the candidate working tree.
 6. Emit canonical typed evidence. Never accept miner-reported test results.
 
 ## Task result
@@ -134,3 +136,8 @@ Rollout ladder:
    test-deletion, hidden-test-inspection, timeout/OOM, and independent-valid-fix
    calibration;
 5. only then allocate the next unused immutable production `bench_version`.
+
+The public 3x3 fixtures are static protocol demonstrations with zero task
+entropy. Private task families require a separately reviewed seeded generator
+whose sampled semantic specification derives identifiers, values, structure,
+bug site, and grader expectations, with a declared minimum entropy target.

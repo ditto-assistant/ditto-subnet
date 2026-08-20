@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -12,7 +13,12 @@ from dittobench_coding_datagen.canonical import (
     safe_relative_path,
     tree_identities,
 )
-from dittobench_coding_datagen.compiler import compile_practice, grade, materialize
+from dittobench_coding_datagen.compiler import (
+    _run_unittest,
+    compile_practice,
+    grade,
+    materialize,
+)
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.validation import (
     assert_agent_view_safe,
@@ -52,6 +58,9 @@ def test_practice_source_is_disjoint_and_complete() -> None:
     assert len(source.memories) == len(
         {memory["content"] for memory in source.memories}
     )
+    raw = json.loads(SOURCE.read_text(encoding="utf-8"))
+    assert raw["generation_mode"] == "static_public_protocol_demo"
+    assert raw["task_entropy_bits"] == 0
 
 
 def test_compile_is_deterministic_and_agent_view_is_blind(tmp_path: Path) -> None:
@@ -66,6 +75,8 @@ def test_compile_is_deterministic_and_agent_view_is_blind(tmp_path: Path) -> Non
     )
     assert validate_pack(first) == first_manifest
     assert validate_pack(second) == second_manifest
+    assert first_manifest["generation_mode"] == "static_public_protocol_demo"
+    assert first_manifest["task_entropy_bits"] == 0
 
     agent_text = "\n".join(
         path.read_text(encoding="utf-8")
@@ -224,6 +235,74 @@ def test_materialize_and_grade_every_practice_task(
     assert grade(pack, task_id, workspace) == 0
 
 
+def test_every_grader_suite_alone_rejects_its_buggy_base(tmp_path: Path) -> None:
+    pack = tmp_path / "pack"
+    compile_practice(SOURCE, pack)
+    tasks = [
+        json.loads(line)
+        for line in (pack / "agent/tasks.jsonl").read_text().splitlines()
+    ]
+
+    for task in tasks:
+        task_id = task["task_id"]
+        grading = tmp_path / f"grader-{task_id}"
+        shutil.copytree(pack / task["visible_capsule"] / "workspace", grading)
+        grader = pack / "capsules" / task_id / "grader"
+        for path in grader.rglob("*"):
+            if path.is_file():
+                destination = grading / path.relative_to(grader)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(path.read_bytes())
+        assert _run_unittest(grading, pattern="test_regression.py") != 0, task_id
+
+
+def test_grade_rejects_candidate_control_files_and_protected_test_changes(
+    tmp_path: Path,
+) -> None:
+    pack = tmp_path / "pack"
+    compile_practice(SOURCE, pack)
+
+    workspace = tmp_path / "workspace-extra"
+    materialize(pack, "PRACTICE-CONFIG-001", workspace)
+    (workspace / "tests/test_visible.py").unlink()
+    (workspace / "unittest.py").write_text("import sys\nsys.exit(0)\n")
+    with pytest.raises(CorpusError, match="workspace files do not match"):
+        grade(pack, "PRACTICE-CONFIG-001", workspace)
+
+    protected = tmp_path / "workspace-protected"
+    materialize(pack, "PRACTICE-CONFIG-001", protected)
+    (protected / "tests/test_visible.py").write_text("# removed\n")
+    with pytest.raises(CorpusError, match="modified protected practice file"):
+        grade(pack, "PRACTICE-CONFIG-001", protected)
+
+
+def test_trusted_runner_does_not_import_candidate_unittest_module(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "workspace"
+    tests = workspace / "tests"
+    tests.mkdir(parents=True)
+    (workspace / "unittest.py").write_text("import sys\nsys.exit(0)\n")
+    (tests / "test_regression.py").write_text(
+        "import unittest\n\n"
+        "class FailingTest(unittest.TestCase):\n"
+        "    def test_failure(self):\n"
+        "        self.fail('trusted runner executed the test')\n"
+    )
+    assert _run_unittest(workspace, pattern="test_regression.py") != 0
+
+
+def test_grade_does_not_treat_early_candidate_zero_exit_as_success(
+    tmp_path: Path,
+) -> None:
+    pack = tmp_path / "pack"
+    workspace = tmp_path / "workspace"
+    compile_practice(SOURCE, pack)
+    materialize(pack, "PRACTICE-CONFIG-001", workspace)
+    (workspace / "app.py").write_text("import os\nos._exit(0)\n")
+    assert grade(pack, "PRACTICE-CONFIG-001", workspace) == 125
+
+
 def test_agent_view_rejects_policy_and_upstream_leaks() -> None:
     for value in (
         {"memory_condition": "required_constraint"},
@@ -247,6 +326,14 @@ def test_agent_task_lines_are_canonical_json(tmp_path: Path) -> None:
     compile_practice(SOURCE, pack)
     for line in (pack / "agent/tasks.jsonl").read_text(encoding="utf-8").splitlines():
         assert canonical_json_bytes(json.loads(line)).decode().rstrip("\n") == line
+
+
+def test_canonical_json_escapes_javascript_line_separators() -> None:
+    body = canonical_json_bytes({"value": "before\u2028middle\u2029after"})
+    assert b"\\u2028" in body
+    assert b"\\u2029" in body
+    assert "\u2028".encode() not in body
+    assert "\u2029".encode() not in body
 
 
 def test_source_rejects_unknown_supersession() -> None:

@@ -1,7 +1,9 @@
 {
   "schema": "dittobench-coding-practice-v1",
   "coding_contract_version": 1,
+  "generation_mode": "static_public_protocol_demo",
   "practice_pack_id": "coding-practice-3x3-v1",
+  "task_entropy_bits": 0,
   "weight_eligible": false,
   "users": [
     {

@@ -7,7 +7,9 @@
   "required": [
     "schema",
     "coding_contract_version",
+    "generation_mode",
     "practice_pack_id",
+    "task_entropy_bits",
     "weight_eligible",
     "users",
     "memories",
@@ -16,11 +18,13 @@
   "properties": {
     "schema": {"const": "dittobench-coding-practice-v1"},
     "coding_contract_version": {"const": 1},
+    "generation_mode": {"const": "static_public_protocol_demo"},
     "practice_pack_id": {
       "type": "string",
       "pattern": "^coding-practice-3x3-v[1-9][0-9]*$"
     },
     "weight_eligible": {"const": false},
+    "task_entropy_bits": {"const": 0},
     "users": {
       "type": "array",
       "minItems": 3,

@@ -8,6 +8,8 @@ from typing import Any, Literal
 
 CODING_CONTRACT_VERSION = 1
 PRACTICE_SCHEMA = "dittobench-coding-practice-v1"
+PRACTICE_GENERATION_MODE = "static_public_protocol_demo"
+PRACTICE_TASK_ENTROPY_BITS = 0
 PRACTICE_AGENT_INSTRUCTION = (
     "Resolve the issue in the supplied checkout. Use available user memory only "
     "when relevant; current instructions, code, and tests are authoritative."

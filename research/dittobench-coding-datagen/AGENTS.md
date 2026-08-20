@@ -7,6 +7,11 @@ Keep public practice data disjoint from evaluation data. Production corpus
 bytes, upstream instance identifiers, gold patches, hidden tests, credentials,
 and decryption keys must never enter this public tree or a normal build context.
 
+The committed practice fixtures are static protocol demonstrations with zero
+entropy. Do not reuse their fixture registry or task signatures as a private
+catalog generator; private families require post-commit seeded semantic
+generation and a declared entropy floor.
+
 The compiler emits canonical JSON bytes and a complete SHA-256 file manifest.
 Runtime consumers verify bytes before parsing them. Do not reconstruct signed
 bytes from parsed objects in another language.

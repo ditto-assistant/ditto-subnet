@@ -14,15 +14,20 @@ def canonical_json_bytes(value: Any) -> bytes:
     """Return the only JSON byte representation admitted by the contract."""
 
     return (
-        json.dumps(
-            value,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-            allow_nan=False,
+        (
+            json.dumps(
+                value,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            + "\n"
         )
-        + "\n"
-    ).encode("utf-8")
+        .replace("\u2028", "\\u2028")
+        .replace("\u2029", "\\u2029")
+        .encode("utf-8")
+    )
 
 
 def sha256_hex(body: bytes) -> str:

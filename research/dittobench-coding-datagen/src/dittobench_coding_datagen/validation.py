@@ -19,7 +19,9 @@ from dittobench_coding_datagen.model import (
     CODING_CONTRACT_VERSION,
     MEMORY_CONDITIONS,
     PRACTICE_AGENT_INSTRUCTION,
+    PRACTICE_GENERATION_MODE,
     PRACTICE_SCHEMA,
+    PRACTICE_TASK_ENTROPY_BITS,
     CorpusError,
     PracticeSource,
 )
@@ -34,10 +36,12 @@ _PACK_ID = re.compile(r"^coding-practice-3x3-v[1-9][0-9]*$")
 _SOURCE_KEYS = frozenset(
     {
         "coding_contract_version",
+        "generation_mode",
         "memories",
         "practice_pack_id",
         "schema",
         "tasks",
+        "task_entropy_bits",
         "users",
         "weight_eligible",
     }
@@ -91,11 +95,13 @@ _MANIFEST_KEYS = frozenset(
         "coding_contract_version",
         "corpus_scope",
         "files",
+        "generation_mode",
         "memory_count",
         "practice_pack_id",
         "schema",
         "source_sha256",
         "task_count",
+        "task_entropy_bits",
         "user_count",
         "weight_eligible",
     }
@@ -194,6 +200,12 @@ def load_practice_source(path: Path) -> PracticeSource:
         )
     if root.get("weight_eligible") is not False:
         raise CorpusError("public practice source must set weight_eligible=false")
+    if root.get("generation_mode") != PRACTICE_GENERATION_MODE:
+        raise CorpusError(
+            f"public practice generation_mode must be {PRACTICE_GENERATION_MODE!r}"
+        )
+    if root.get("task_entropy_bits") != PRACTICE_TASK_ENTROPY_BITS:
+        raise CorpusError("static public practice must declare task_entropy_bits=0")
     users = tuple(
         _object(value, "users[]") for value in _list(root.get("users"), "users")
     )
@@ -441,6 +453,10 @@ def validate_pack(root: Path) -> dict[str, Any]:
         raise CorpusError("public pack corpus_scope must be public_practice")
     if manifest.get("weight_eligible") is not False:
         raise CorpusError("public practice pack must never be weight eligible")
+    if manifest.get("generation_mode") != PRACTICE_GENERATION_MODE:
+        raise CorpusError("public pack must declare static protocol-demo generation")
+    if manifest.get("task_entropy_bits") != PRACTICE_TASK_ENTROPY_BITS:
+        raise CorpusError("static public pack must declare task_entropy_bits=0")
     pack_id = _string(manifest.get("practice_pack_id"), "manifest.practice_pack_id")
     if not _PACK_ID.fullmatch(pack_id):
         raise CorpusError(
