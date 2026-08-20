@@ -11,7 +11,6 @@ import type { Accessor } from "solid-js";
 import { getJSON } from "../../lib/api";
 import {
   ENTITY_PAGES,
-  PAGE_SCOPED_PARAMS,
   currentPageName,
   parseHashRoute,
   readEntityRoute,
