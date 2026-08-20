@@ -139,6 +139,12 @@ miner harness (starter-kit)              scoring engine (this repo)
   GET  /health                              health check + score
 ```
 
+The future coding-repair lane has a separate, permanently weight-zero v1
+contract. Its unexposed runner/freezer core and security boundary are documented
+in [`docs/coding-runner-shadow.md`](docs/coding-runner-shadow.md). A green core
+test does not imply a private catalog, sandboxed command executor, pristine
+grader, Platform lease, deployment, or score activation.
+
 ## Control-plane authentication
 
 The API port serves the validator's operator control plane. Every route on it
