@@ -311,15 +311,12 @@ func validateMessages(v any) *httpError {
 		if !ok {
 			return httpErrorf(400, "invalid message")
 		}
-		allowed, ok := messageAllowedKeys[role]
-		if !ok {
+		if _, ok := messageAllowedKeys[role]; !ok {
 			return httpErrorf(400, "invalid message")
 		}
-		for key := range message {
-			if _, ok := allowed[key]; !ok {
-				return httpErrorf(400, "invalid message")
-			}
-		}
+		// Extra keys are dropped in lockedUpstreamPayload, not refused.
+		// Miners echo provider-additive fields (assistant reasoning, tool_call
+		// index) and killing the run over them is the Cooking-class bug.
 		content, hasContent := message["content"]
 		if hasContent && content != nil {
 			if _, isStr := content.(string); !isStr {
@@ -349,21 +346,11 @@ func validateMessages(v any) *httpError {
 			if !ok {
 				return httpErrorf(400, "invalid tool call")
 			}
-			for key := range call {
-				if key != "id" && key != "type" && key != "function" {
-					return httpErrorf(400, "invalid tool call")
-				}
-			}
 			fn, _ := call["function"].(map[string]any)
 			id, idOk := call["id"].(string)
 			_ = id
 			if call["type"] != "function" || !idOk || fn == nil {
 				return httpErrorf(400, "invalid tool call")
-			}
-			for key := range fn {
-				if key != "name" && key != "arguments" {
-					return httpErrorf(400, "invalid tool call")
-				}
 			}
 			if _, ok := fn["name"].(string); !ok {
 				return httpErrorf(400, "invalid tool call")
@@ -543,22 +530,7 @@ func lockedUpstreamPayload(payload map[string]any, model string, maxTokens int, 
 	}
 	upstream["model"] = model
 	if messages, ok := upstream["messages"].([]any); ok {
-		stripped := make([]any, len(messages))
-		for i, raw := range messages {
-			message, ok := raw.(map[string]any)
-			if ok && message["role"] == "tool" {
-				clean := make(map[string]any, len(message))
-				for k, v := range message {
-					if k != "name" {
-						clean[k] = v
-					}
-				}
-				stripped[i] = clean
-			} else {
-				stripped[i] = raw
-			}
-		}
-		upstream["messages"] = stripped
+		upstream["messages"] = sanitizeUpstreamMessages(messages)
 	}
 	upstream["max_tokens"] = maxTokens
 	upstream["n"] = 1
@@ -573,6 +545,65 @@ func lockedUpstreamPayload(payload map[string]any, model string, maxTokens int, 
 		upstream["reasoning"] = reasoning
 	}
 	return upstream, nil
+}
+
+func sanitizeUpstreamMessages(messages []any) []any {
+	stripped := make([]any, len(messages))
+	for i, raw := range messages {
+		message, ok := raw.(map[string]any)
+		if !ok {
+			stripped[i] = raw
+			continue
+		}
+		role, _ := message["role"].(string)
+		allowed := messageAllowedKeys[role]
+		clean := make(map[string]any, len(allowed))
+		for key, value := range message {
+			if _, ok := allowed[key]; !ok {
+				continue
+			}
+			if role == "tool" && key == "name" {
+				continue
+			}
+			if key == "tool_calls" {
+				clean[key] = sanitizeUpstreamToolCalls(value)
+				continue
+			}
+			clean[key] = value
+		}
+		stripped[i] = clean
+	}
+	return stripped
+}
+
+func sanitizeUpstreamToolCalls(raw any) any {
+	calls, ok := raw.([]any)
+	if !ok {
+		return raw
+	}
+	out := make([]any, 0, len(calls))
+	for _, callRaw := range calls {
+		call, ok := callRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		fn, _ := call["function"].(map[string]any)
+		cleanFn := map[string]any{}
+		if fn != nil {
+			if name, present := fn["name"]; present {
+				cleanFn["name"] = name
+			}
+			if arguments, present := fn["arguments"]; present {
+				cleanFn["arguments"] = arguments
+			}
+		}
+		out = append(out, map[string]any{
+			"id":       call["id"],
+			"type":     call["type"],
+			"function": cleanFn,
+		})
+	}
+	return out
 }
 
 // estimatedTokens mirrors _estimated_tokens: ceil(len/4), floored at 1.

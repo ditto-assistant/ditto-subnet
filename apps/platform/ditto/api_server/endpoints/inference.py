@@ -52,7 +52,7 @@ import logging
 import math
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Annotated, Any
 from uuid import UUID
@@ -1113,6 +1113,30 @@ async def _complete_chat_with_recovery(
             fallback_phase=phase,
         )
 
+    if last_code == "upstream_http_400" and "reasoning" in payload:
+        stripped = {key: value for key, value in payload.items() if key != "reasoning"}
+        try:
+            recovered = await _complete_chat_with_recovery(
+                client,
+                config,
+                payload=stripped,
+                model=model,
+                expected_provider=expected_provider,
+                expected_quantization=expected_quantization,
+                expected_prompt_price=expected_prompt_price,
+                expected_completion_price=expected_completion_price,
+                sleep=sleep,
+            )
+        except _ChatProviderExhausted as exhausted:
+            exhausted.upstream_attempts += total_attempts
+            exhausted.openrouter_attempts += router_attempts
+            raise
+        return replace(
+            recovered,
+            upstream_attempts=recovered.upstream_attempts + total_attempts,
+            openrouter_attempts=recovered.openrouter_attempts + router_attempts,
+        )
+
     raise _ChatProviderExhausted(
         upstream_attempts=total_attempts,
         openrouter_attempts=router_attempts,
@@ -1499,8 +1523,11 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
             # below, and remove it from the locked provider payload.
             "tool": {"role", "content", "tool_call_id", "name"},
         }.get(role)
-        if allowed is None or set(message) - allowed:
+        if allowed is None:
             raise HTTPException(status_code=400, detail="invalid message")
+        # Extra keys are dropped in `_locked_upstream_payload`, not refused.
+        # Miners echo provider-additive fields (assistant reasoning, tool_call
+        # `index`) and killing the run over them is the Cooking-class bug.
         content = message.get("content")
         text_parts = (
             isinstance(content, list)
@@ -1525,14 +1552,13 @@ def _validate_request_schema(payload: dict[str, Any]) -> None:
         if not isinstance(tool_calls, list):
             raise HTTPException(status_code=400, detail="invalid tool calls")
         for call in tool_calls:
-            if not isinstance(call, dict) or set(call) - {"id", "type", "function"}:
+            if not isinstance(call, dict):
                 raise HTTPException(status_code=400, detail="invalid tool call")
             function = call.get("function")
             if (
                 call.get("type") != "function"
                 or not isinstance(call.get("id"), str)
                 or not isinstance(function, dict)
-                or set(function) - {"name", "arguments"}
                 or not isinstance(function.get("name"), str)
                 or not isinstance(function.get("arguments"), str)
             ):
@@ -1725,12 +1751,7 @@ def _locked_upstream_payload(
     # changing model-visible content by removing only that annotation.
     messages = upstream.get("messages")
     if isinstance(messages, list):
-        upstream["messages"] = [
-            {key: value for key, value in message.items() if key != "name"}
-            if isinstance(message, dict) and message.get("role") == "tool"
-            else message
-            for message in messages
-        ]
+        upstream["messages"] = _sanitize_upstream_messages(messages)
     upstream["max_tokens"] = max_tokens
     upstream["n"] = 1
     upstream["stream"] = False
@@ -1745,6 +1766,54 @@ def _locked_upstream_payload(
     else:
         upstream["reasoning"] = reasoning
     return upstream
+
+
+_MESSAGE_ALLOWED_KEYS = {
+    "system": {"role", "content"},
+    "user": {"role", "content"},
+    "assistant": {"role", "content", "tool_calls"},
+    "tool": {"role", "content", "tool_call_id", "name"},
+}
+
+
+def _sanitize_upstream_messages(messages: list[Any]) -> list[Any]:
+    """Keep the OpenAI message contract; drop provider-echo extras."""
+    sanitized: list[Any] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            sanitized.append(message)
+            continue
+        role = message.get("role")
+        allowed = _MESSAGE_ALLOWED_KEYS.get(role, set())
+        clean = {
+            key: value
+            for key, value in message.items()
+            if key in allowed and not (role == "tool" and key == "name")
+        }
+        if "tool_calls" in clean:
+            clean["tool_calls"] = _sanitize_upstream_tool_calls(clean["tool_calls"])
+        sanitized.append(clean)
+    return sanitized
+
+
+def _sanitize_upstream_tool_calls(raw: Any) -> Any:
+    if not isinstance(raw, list):
+        return raw
+    out: list[dict[str, Any]] = []
+    for call in raw:
+        if not isinstance(call, dict):
+            continue
+        function = call.get("function")
+        clean_fn: dict[str, Any] = {}
+        if isinstance(function, dict):
+            if "name" in function:
+                clean_fn["name"] = function["name"]
+            if "arguments" in function:
+                clean_fn["arguments"] = function["arguments"]
+        out.append(
+            {"id": call.get("id"), "type": call.get("type"), "function": clean_fn}
+        )
+    return out
 
 
 async def _resolve_admission_config(
@@ -2531,12 +2600,7 @@ def _locked_confirmation_chat_payload(
         upstream.pop(field, None)
     messages = upstream.get("messages")
     if isinstance(messages, list):
-        upstream["messages"] = [
-            {key: value for key, value in message.items() if key != "name"}
-            if isinstance(message, dict) and message.get("role") == "tool"
-            else message
-            for message in messages
-        ]
+        upstream["messages"] = _sanitize_upstream_messages(messages)
     upstream["model"] = grant.model
     if grant.lane == "judge":
         upstream["max_completion_tokens"] = max_tokens

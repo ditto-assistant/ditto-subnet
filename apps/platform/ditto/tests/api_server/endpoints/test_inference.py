@@ -32,6 +32,7 @@ from ditto.api_server.endpoints.inference import (
     _locked_confirmation_chat_payload,
     _locked_grant_model,
     _locked_upstream_payload,
+    _validate_request_schema,
     _max_chargeable_tokens,
     _openrouter_attempt_count,
     _openrouter_headers,
@@ -1296,6 +1297,36 @@ def test_grant_protecting_fields_are_pinned_not_forwarded() -> None:
         "max_completion_tokens",
     ):
         assert removed not in upstream, removed
+
+
+def test_echoed_provider_tool_call_index_is_stripped_not_refused() -> None:
+    """Grandmaster-style harnesses copy tool_calls back, including `index`."""
+    payload: dict[str, object] = {
+        "model": "openai/gpt-oss-20b",
+        "reasoning_effort": "medium",
+        "messages": [
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "1",
+                        "type": "function",
+                        "index": 0,
+                        "function": {"name": "search_memory", "arguments": "{}"},
+                    }
+                ],
+            }
+        ],
+    }
+    _validate_request_schema(payload)
+    upstream = _locked_upstream_payload(
+        payload, model="openai/gpt-oss-20b", max_tokens=256
+    )
+    assert "reasoning_effort" not in upstream
+    call = upstream["messages"][0]["tool_calls"][0]
+    assert "index" not in call
+    assert call["function"] == {"name": "search_memory", "arguments": "{}"}
 
 
 def test_structured_outputs_and_logprobs_are_forwarded_intact() -> None:
