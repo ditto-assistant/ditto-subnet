@@ -19,7 +19,9 @@ from ditto.tests.api_server.endpoints.test_screener import (
 
 
 class _FakeTargon:
-    def __init__(self) -> None:
+    def __init__(self, *, status: str = "running") -> None:
+        self.status = status
+        self.status_by_uid: dict[str, str] = {}
         self.created: list[dict[str, Any]] = []
         self.deployed: list[str] = []
         self.deleted: list[str] = []
@@ -35,9 +37,8 @@ class _FakeTargon:
         self.deployed.append(uid)
 
     async def state(self, uid: str) -> dict[str, Any]:
-        del uid
         return {
-            "status": "running",
+            "status": self.status_by_uid.get(uid, self.status),
             "urls": [{"port": 8080, "url": "https://runtime.example"}],
         }
 
@@ -45,22 +46,24 @@ class _FakeTargon:
         self.deleted.append(uid)
 
 
-def _config() -> TargonRentalConfig:
-    return TargonRentalConfig(
-        api_key="k" * 32,
-        org_slug="ditto",
-        resource="cpu-small",
-        public_platform_url="https://platform-api.heyditto.ai",
-        submission_builder_image=(
+def _config(**overrides: Any) -> TargonRentalConfig:
+    values: dict[str, Any] = {
+        "api_key": "k" * 32,
+        "org_slug": "ditto",
+        "resource": "cpu-small",
+        "public_platform_url": "https://platform-api.heyditto.ai",
+        "submission_builder_image": (
             "us-central1-docker.pkg.dev/ditto-app-dev/"
             "ditto-public-builders/submission-builder@sha256:" + "ab" * 32
         ),
-        candidate_writer_sa="push@example.test",
-        candidate_reader_sa="pull@example.test",
-        bootstrap_sa="boot@example.test",
-        source_review_secret_resource="projects/p/secrets/s",
-        runtime_timeout_seconds=1,
-    )
+        "candidate_writer_sa": "push@example.test",
+        "candidate_reader_sa": "pull@example.test",
+        "bootstrap_sa": "boot@example.test",
+        "source_review_secret_resource": "projects/p/secrets/s",
+        "runtime_timeout_seconds": 1,
+    }
+    values.update(overrides)
+    return TargonRentalConfig(**values)
 
 
 @pytest.mark.asyncio
@@ -267,3 +270,162 @@ async def test_reaps_expired_running_kaniko_rental(
         assert build is not None
         assert build.status == "fallback_required"
         assert build.provider_resource_id is None
+
+
+@pytest.mark.asyncio
+async def test_kaniko_provision_timeout_deletes_rental(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon(status="provisioning")
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(provision_timeout_seconds=0),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    assert await loop.tick() is True
+    assert targon.deployed == ["wrk-1"]
+    assert targon.deleted == ["wrk-1"]
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "fallback_required"
+        assert build.error_code == "TARGON_PROVISION_TIMEOUT"
+        assert build.provider_resource_id is None
+
+
+@pytest.mark.asyncio
+async def test_kaniko_provision_error_deletes_rental(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon(status="error")
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(provision_timeout_seconds=0),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    assert await loop.tick() is True
+    assert targon.deleted == ["wrk-1"]
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "fallback_required"
+        assert build.error_code == "TARGON_PROVISION_ERROR"
+        assert build.provider_resource_id is None
+
+
+@pytest.mark.asyncio
+async def test_reaps_stuck_provisioning_kaniko_before_lease(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    targon.status = "provisioning"
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.updated_at = datetime.now(UTC) - timedelta(minutes=11)
+        build.lease_expires_at = datetime.now(UTC) + timedelta(minutes=40)
+    targon.deleted.clear()
+    assert await loop.tick() is True
+    assert "wrk-1" in targon.deleted
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "fallback_required"
+        assert build.error_code == "TARGON_PROVISION_TIMEOUT"
+        assert build.provider_resource_id is None
+
+
+@pytest.mark.asyncio
+async def test_does_not_reap_compiling_kaniko_after_provision_window(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.updated_at = datetime.now(UTC) - timedelta(minutes=11)
+        build.lease_expires_at = datetime.now(UTC) + timedelta(minutes=40)
+    targon.deleted.clear()
+    await loop.tick()
+    assert targon.deleted == []
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "running"
+        assert build.provider_resource_id == "wrk-1"
+
+
+@pytest.mark.asyncio
+async def test_runtime_smoke_provision_timeout(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+
+    async def promote(key: str, destination: str, _writer: str) -> str:
+        del key, destination
+        return (
+            "us-central1-docker.pkg.dev/ditto-app-dev/"
+            "ditto-screening-candidates/miner@sha256:" + "cd" * 32
+        )
+
+    async def mint(_sa: str) -> str:
+        return "token-" + "x" * 120
+
+    async def health(_url: str) -> bool:
+        raise AssertionError("health must not run before the rental is running")
+
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(provision_timeout_seconds=0),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        promote_archive=promote,
+        mint_token=mint,
+        health_probe=health,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.status = "succeeded"
+        build.output_sha256 = "12" * 32
+        build.output_size_bytes = 123
+        build.output_key = f"remote-builds/{build.build_id}/image.tar"
+        build.runtime_status = "pending"
+        build.completed_at = datetime.now(UTC)
+    targon.status = "provisioning"
+    targon.deleted.clear()
+    assert await loop.tick() is True
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.runtime_status == "fallback_required"
+        assert build.runtime_error_code == "TARGON_PROVISION_TIMEOUT"
+        assert build.runtime_provider_resource_id is None
+    assert "wrk-2" in targon.deleted

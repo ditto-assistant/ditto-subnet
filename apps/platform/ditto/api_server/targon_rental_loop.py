@@ -39,6 +39,7 @@ _REAP_LIMIT = 16
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
 _INFLIGHT_JOB = ("leased", "running")
+_PROVISION_FAILED = frozenset({"error", "deleted", "suspended"})
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
@@ -147,6 +148,41 @@ class TargonRentalLoop:
         )
         return available >= 1
 
+    def _provision_cutoff(self, now: datetime) -> datetime:
+        return now - timedelta(seconds=self._config.provision_timeout_seconds)
+
+    async def _provision_status(self, uid: str) -> str:
+        try:
+            state = await self._targon.state(uid)
+        except TargonAPIError:
+            return ""
+        return str(state.get("status", "")).casefold()
+
+    async def _wait_for_provisioned(self, uid: str) -> str:
+        """Wait until Targon reports running, a terminal failure, or timeout.
+
+        Provision is time-to-running only. Kaniko may then compile up to the
+        existing build/lease caps. Returns ``running``, ``error``, or
+        ``timeout``.
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._config.provision_timeout_seconds
+        while True:
+            status = await self._provision_status(uid)
+            if status == "running":
+                return "running"
+            if status in _PROVISION_FAILED:
+                return "error"
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return "timeout"
+            await asyncio.sleep(min(1.0, remaining))
+
+    def _provision_error_code(self, result: str) -> str:
+        if result == "timeout":
+            return "TARGON_PROVISION_TIMEOUT"
+        return "TARGON_PROVISION_ERROR"
+
     async def _launch_kaniko(self) -> bool:
         if not await self._capacity_ok():
             return False
@@ -204,6 +240,13 @@ class TargonRentalLoop:
                     stored.provider_resource_id = uid
                     stored.updated_at = datetime.now(UTC)
             await self._targon.deploy(uid)
+            provisioned = await self._wait_for_provisioned(uid)
+            if provisioned != "running":
+                await self._fail_build_provision(build_id, provisioned)
+                if uid is not None:
+                    await self._delete_rental(uid)
+                    await self._clear_resource_id("build", build_id)
+                return True
             return True
         except (TargonAPIError, KeyError, ValueError):
             logger.exception("targon kaniko launch failed build_id=%s", build_id)
@@ -271,7 +314,10 @@ class TargonRentalLoop:
             )
             uid = str(created["uid"])
             await self._targon.deploy(uid)
-            healthy = await self._wait_for_health(uid)
+            provisioned = await self._wait_for_provisioned(uid)
+            healthy = (
+                await self._wait_for_health(uid) if provisioned == "running" else False
+            )
             async with self._session_maker() as session, session.begin():
                 stored = await session.get(SubmissionImageBuild, build_id)
                 if stored is None:
@@ -300,7 +346,11 @@ class TargonRentalLoop:
                         )
                 else:
                     stored.runtime_status = "fallback_required"
-                    stored.runtime_error_code = "TARGON_RUNTIME_HEALTH_FAILED"
+                    stored.runtime_error_code = (
+                        self._provision_error_code(provisioned)
+                        if provisioned != "running"
+                        else "TARGON_RUNTIME_HEALTH_FAILED"
+                    )
                     stored.runtime_completed_at = datetime.now(UTC)
             return True
         except Exception:
@@ -427,6 +477,13 @@ class TargonRentalLoop:
                     stored.provider_resource_id = uid
                     stored.updated_at = datetime.now(UTC)
             await self._targon.deploy(uid)
+            provisioned = await self._wait_for_provisioned(uid)
+            if provisioned != "running":
+                await self._fail_review_provision(review_id, provisioned)
+                if uid is not None:
+                    await self._delete_rental(uid)
+                    await self._clear_resource_id("review", review_id)
+                return True
             return True
         except Exception:
             logger.exception(
@@ -441,6 +498,41 @@ class TargonRentalLoop:
             if uid is not None:
                 await self._delete_rental(uid)
             return True
+
+    async def _fail_build_provision(self, build_id: UUID, result: str) -> None:
+        now = datetime.now(UTC)
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(SubmissionImageBuild, build_id)
+            if stored is None or stored.status not in _INFLIGHT_JOB:
+                return
+            stored.status = "fallback_required"
+            stored.error_code = self._provision_error_code(result)
+            stored.completed_at = now
+            stored.updated_at = now
+            stored.lease_expires_at = None
+
+    async def _fail_review_provision(self, review_id: UUID, result: str) -> None:
+        now = datetime.now(UTC)
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(SubmissionSourceReview, review_id)
+            if stored is None or stored.status not in _INFLIGHT_JOB:
+                return
+            stored.status = "fallback_required"
+            stored.error_code = self._provision_error_code(result)
+            stored.completed_at = now
+            stored.updated_at = now
+            stored.lease_expires_at = None
+
+    async def _fail_runtime_provision(self, build_id: UUID, result: str) -> None:
+        now = datetime.now(UTC)
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(SubmissionImageBuild, build_id)
+            if stored is None or stored.runtime_status != "running":
+                return
+            stored.runtime_status = "fallback_required"
+            stored.runtime_error_code = self._provision_error_code(result)
+            stored.runtime_completed_at = now
+            stored.updated_at = now
 
     async def _wait_for_health(self, uid: str) -> bool:
         if self._health_probe is None:
@@ -473,14 +565,95 @@ class TargonRentalLoop:
             return False
         return await self._delete_rental(uid)
 
+    async def _reap_unprovisioned_rentals(self) -> bool:
+        """Fail in-flight rentals that never reached Targon running."""
+        now = datetime.now(UTC)
+        cutoff = self._provision_cutoff(now)
+        candidates: list[tuple[str, UUID, str]] = []
+        async with self._session_maker() as session, session.begin():
+            builds = (
+                await session.scalars(
+                    select(SubmissionImageBuild)
+                    .where(
+                        SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
+                        SubmissionImageBuild.provider_resource_id.is_not(None),
+                        SubmissionImageBuild.updated_at < cutoff,
+                    )
+                    .order_by(SubmissionImageBuild.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in builds:
+                uid = row.provider_resource_id
+                if uid:
+                    candidates.append(("build", row.build_id, uid))
+            runtimes = (
+                await session.scalars(
+                    select(SubmissionImageBuild)
+                    .where(
+                        SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.runtime_status == "running",
+                        SubmissionImageBuild.runtime_provider_resource_id.is_not(None),
+                        SubmissionImageBuild.updated_at < cutoff,
+                    )
+                    .order_by(SubmissionImageBuild.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in runtimes:
+                uid = row.runtime_provider_resource_id
+                if uid:
+                    candidates.append(("runtime", row.build_id, uid))
+            reviews = (
+                await session.scalars(
+                    select(SubmissionSourceReview)
+                    .where(
+                        SubmissionSourceReview.environment == self._config.environment,
+                        SubmissionSourceReview.status.in_(_INFLIGHT_JOB),
+                        SubmissionSourceReview.provider_resource_id.is_not(None),
+                        SubmissionSourceReview.updated_at < cutoff,
+                    )
+                    .order_by(SubmissionSourceReview.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in reviews:
+                uid = row.provider_resource_id
+                if uid:
+                    candidates.append(("review", row.review_id, uid))
+        handled = False
+        for kind, row_id, uid in candidates:
+            status = await self._provision_status(uid)
+            if status == "running":
+                continue
+            result = "error" if status in _PROVISION_FAILED else "timeout"
+            if kind == "build":
+                await self._fail_build_provision(row_id, result)
+            elif kind == "runtime":
+                await self._fail_runtime_provision(row_id, result)
+            else:
+                await self._fail_review_provision(row_id, result)
+            if await self._delete_rental(uid):
+                await self._clear_resource_id(kind, row_id)
+            handled = True
+        return handled
+
     async def _reap_finished_rentals(self) -> bool:
         """DELETE one-shots whose Platform job is already terminal.
 
         Kaniko and L1 stay up until the job posts completion. Runtime smoke
         is deleted in `_launch_smoke`; this also drains leftovers from before
         that change. Expired in-flight Kaniko rows are treated as finished so
-        a crash-loop that never POSTs complete cannot keep billing.
+        a crash-loop that never POSTs complete cannot keep billing. Rentals
+        that never leave Targon provisioning after ``provision_timeout_seconds``
+        are failed with ``TARGON_PROVISION_TIMEOUT`` without waiting for the
+        50-minute build lease.
         """
+        handled = await self._reap_unprovisioned_rentals()
         pending: list[tuple[str, UUID, str]] = []
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
@@ -564,7 +737,6 @@ class TargonRentalLoop:
                 uid = row.provider_resource_id
                 if uid:
                     pending.append(("review", row.review_id, uid))
-        handled = False
         for kind, row_id, uid in pending:
             if await self._delete_rental(uid):
                 await self._clear_resource_id(kind, row_id)
