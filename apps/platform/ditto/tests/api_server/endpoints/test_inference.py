@@ -487,9 +487,7 @@ def test_output_token_alias_cannot_bypass_ticket_limit() -> None:
     [
         {"models": ["attacker/model"]},
         {"plugins": [{"id": "web"}]},
-        {"provider": {"allow_fallbacks": True}},
         {"transforms": ["middle-out"]},
-        {"route": "fallback"},
         {
             "messages": [
                 {
@@ -501,7 +499,7 @@ def test_output_token_alias_cannot_bypass_ticket_limit() -> None:
         {"tools": [{"type": "web_search", "web_search": {}}]},
     ],
 )
-def test_proxy_schema_rejects_model_provider_and_network_escapes(
+def test_proxy_schema_rejects_model_and_network_escapes(
     escape: dict[str, object],
 ) -> None:
     payload: dict[str, object] = {
@@ -511,6 +509,27 @@ def test_proxy_schema_rejects_model_provider_and_network_escapes(
     payload.update(escape)
     with pytest.raises(HTTPException):
         _validate_request_schema(payload)
+
+
+def test_proxy_schema_drops_openrouter_routing_hints() -> None:
+    """lets_5.6 injects OpenRouter ``provider``; we pin routing ourselves."""
+    payload: dict[str, object] = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "provider": {
+            "only": ["parasail", "amazon-bedrock", "novita"],
+            "allow_fallbacks": True,
+        },
+        "route": "fallback",
+        "preset": "fast",
+    }
+    _validate_request_schema(payload)
+    upstream = _locked_upstream_payload(
+        payload, model="openai/gpt-oss-20b", max_tokens=256
+    )
+    assert "provider" not in upstream
+    assert "route" not in upstream
+    assert "preset" not in upstream
 
 
 def test_proxy_schema_allows_only_local_function_tools() -> None:
@@ -1502,9 +1521,12 @@ def test_every_field_has_exactly_one_decided_fate() -> None:
     ):
         assert lever in _PINNED_REQUEST_FIELDS, lever
         assert lever not in _FORWARDED_REQUEST_FIELDS, lever
-    for escape in ("models", "provider", "plugins", "transforms", "route"):
+    for escape in ("models", "plugins", "transforms"):
         assert escape not in _ALLOWED_REQUEST_FIELDS
         assert escape in _REFUSED_REQUEST_FIELDS
+    for routing_hint in ("provider", "route", "preset"):
+        assert routing_hint in _DROPPED_REQUEST_FIELDS
+        assert routing_hint not in _REFUSED_REQUEST_FIELDS
 
     # The fields the operator explicitly asked to be usable by harnesses.
     for normal in (

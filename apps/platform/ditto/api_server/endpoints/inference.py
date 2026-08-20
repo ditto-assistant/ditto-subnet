@@ -1252,6 +1252,15 @@ _DROPPED_REQUEST_FIELDS = {
     "store",
     # Only meaningful alongside ``stream: true``, which this lane refuses.
     "stream_options",
+    # OpenRouter routing extras. The platform overwrites ``provider`` with its
+    # own pin in ``_complete_chat_with_recovery`` / confirmation lock. Refusing
+    # them 400'd ordinary OpenAI-compat harnesses that inject OpenRouter extras
+    # (lets_5.6) before any reservation, then labeled the run as a spent grant.
+    # Dropping keeps the pin: the caller cannot select a cheaper or stronger
+    # host, and the request is scored.
+    "provider",
+    "route",
+    "preset",
 }
 
 # Everything else a reasonable OpenAI-compatible harness sends. Validated where
@@ -1313,13 +1322,10 @@ _ALLOWED_REQUEST_FIELDS = (
 # refusal is only acceptable when it is legible, so every entry here explains
 # itself rather than saying "unsupported".
 _REFUSED_REQUEST_FIELDS = {
-    # Route identity and model selection. The platform sets provider preferences
-    # itself; letting a caller choose is the evasion path this lane exists to
-    # close.
+    # Model *selection* remains refused: ``models`` would pick a different
+    # model. Routing extras (``provider`` / ``route`` / ``preset``) are dropped
+    # instead, because the platform already overwrites them.
     "models": "the model is pinned by the ticket, not chosen by the request",
-    "provider": "provider routing is pinned by the platform",
-    "route": "provider routing is pinned by the platform",
-    "preset": "provider routing is pinned by the platform",
     "transforms": "prompt transforms would change benchmark semantics",
     # Server-side network egress. The harness runs sandboxed without egress and
     # these would hand it some through the provider.

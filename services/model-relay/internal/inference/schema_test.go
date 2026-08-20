@@ -31,10 +31,10 @@ func TestValidateRequestSchema(t *testing.T) {
 		wantErr string // "" means valid
 	}{
 		{"minimal valid", `{` + minimalMessages + `}`, ""},
-		{"refused provider", `{"provider":{},` + minimalMessages + `}`,
-			"unsupported inference parameter: provider (provider routing is pinned by the platform)"},
-		{"refused multiple sorted", `{"route":1,"models":[],` + minimalMessages + `}`,
-			"unsupported inference parameter: models (the model is pinned by the ticket, not chosen by the request); route (provider routing is pinned by the platform)"},
+		{"dropped provider", `{"provider":{},` + minimalMessages + `}`, ""},
+		{"dropped route", `{"route":1,` + minimalMessages + `}`, ""},
+		{"refused models", `{"models":[],` + minimalMessages + `}`,
+			"unsupported inference parameter: models (the model is pinned by the ticket, not chosen by the request)"},
 		{"unknown keys sorted", `{"zzz":1,"aaa":2,` + minimalMessages + `}`,
 			"unsupported inference parameter: aaa, zzz"},
 		{"stream true refused", `{"stream":true,` + minimalMessages + `}`,
