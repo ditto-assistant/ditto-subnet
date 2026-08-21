@@ -33,6 +33,8 @@ uv sync --group dev
 uv run pytest
 scripts/targon-smoke.sh inventory
 scripts/targon-smoke.sh list
+scripts/targon-smoke.sh state wrk-xxxxxxxxxxxxxxxx
+scripts/targon-smoke.sh logs wrk-xxxxxxxxxxxxxxxx --tail 400 --include-state
 scripts/targon-smoke.sh sweep-oneshots
 scripts/targon-smoke.sh sweep-oneshots --apply --workers 8
 scripts/targon-smoke.sh kaniko-probe --resource cpu-small --roundtrip

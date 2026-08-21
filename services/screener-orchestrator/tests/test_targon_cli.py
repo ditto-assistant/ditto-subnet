@@ -7,7 +7,9 @@ from screener_capacity.targon_cli import (
     _source_review_probe_archive,
     command_agent_probe,
     command_kaniko_probe,
+    command_logs,
     command_source_review_probe,
+    command_state,
 )
 
 
@@ -257,3 +259,75 @@ def test_source_review_probe_fixture_and_mock_script_are_self_contained() -> Non
     compile(script, "<source-review-mock>", "exec")
     assert archive.startswith(b"\x1f\x8b")
     assert "SOURCE_REVIEW_COMPLETE=" in script
+
+
+def test_logs_command_prints_redacted_tail(monkeypatch, capsys) -> None:
+    client = _Targon()
+
+    def logs(uid: str, *, tail: int) -> str:
+        assert uid == "wrk-by6akuyvjqyd"
+        assert tail == 12
+        return "kaniko ok\nAuthorization: Bearer secret-token\n"
+
+    monkeypatch.setattr(client, "logs", logs)
+    monkeypatch.setattr(
+        "screener_capacity.targon_cli._client", lambda *_args, **_kwargs: client
+    )
+    args = Namespace(uid="wrk-by6akuyvjqyd", tail=12, include_state=False)
+
+    assert command_logs(args) == 0
+
+    output = capsys.readouterr().out
+    assert "kaniko ok" in output
+    assert "secret-token" not in output
+    assert "[redacted]" in output
+
+
+def test_logs_command_can_include_safe_state(monkeypatch, capsys) -> None:
+    client = _Targon()
+    monkeypatch.setattr(
+        "screener_capacity.targon_cli._client", lambda *_args, **_kwargs: client
+    )
+    args = Namespace(uid="wrk-by6akuyvjqyd", tail=8, include_state=True)
+
+    assert command_logs(args) == 0
+
+    output = capsys.readouterr().out
+    assert '"uid": "wrk-by6akuyvjqyd"' in output
+    assert "---LOGS---" in output
+    assert "AGENT_RUNTIME_AVAILABLE" in output
+
+
+def test_state_command_rejects_invalid_uid() -> None:
+    try:
+        command_state(Namespace(uid="not-a-workload"))
+    except SystemExit as error:
+        assert "workload uid" in str(error)
+    else:
+        raise AssertionError("expected invalid uid to fail closed")
+
+
+def test_logs_command_explains_404_after_replica_exits(monkeypatch) -> None:
+    client = _Targon()
+
+    def logs(_uid: str, *, tail: int) -> str:
+        del tail
+        raise TargonAPIError(
+            operation="GET /workloads/wrk-by6akuyvjqyd/logs",
+            status=404,
+            reason="HTTP error",
+        )
+
+    monkeypatch.setattr(client, "logs", logs)
+    monkeypatch.setattr(
+        "screener_capacity.targon_cli._client", lambda *_args, **_kwargs: client
+    )
+    args = Namespace(uid="wrk-by6akuyvjqyd", tail=12, include_state=False)
+
+    try:
+        command_logs(args)
+    except TargonAPIError as error:
+        assert error.status == 404
+        assert "left running" in error.reason
+    else:
+        raise AssertionError("expected 404 logs to fail closed")

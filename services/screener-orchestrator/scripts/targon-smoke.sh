@@ -13,7 +13,7 @@ ORG_SLUG="${TARGON_ORG_SLUG:-ditto}"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/targon-smoke.sh <inventory|list|sweep-oneshots|kaniko-probe|agent-probe|runtime-probe|source-review-probe> [options]
+Usage: scripts/targon-smoke.sh <inventory|list|logs|state|sweep-oneshots|kaniko-probe|agent-probe|runtime-probe|source-review-probe> [options]
 
 Authenticated commands read TARGON_API_KEY from GCP Secret Manager without
 placing it in the shell environment, command line, or output.
@@ -32,7 +32,7 @@ case "${command}" in
     PYTHONPATH="${REPO_ROOT}" python3 -m screener_capacity.targon_cli \
       inventory "$@"
     ;;
-  list|sweep-oneshots|kaniko-probe|agent-probe|runtime-probe|source-review-probe)
+  list|logs|state|sweep-oneshots|kaniko-probe|agent-probe|runtime-probe|source-review-probe)
     gcloud secrets versions access latest \
       --project="${PROJECT}" \
       --secret="${SECRET}" \

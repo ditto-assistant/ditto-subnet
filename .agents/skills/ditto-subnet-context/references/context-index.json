@@ -62,6 +62,18 @@
       "related": ["validator-miner", "platform-api"]
     },
     {
+      "id": "targon-operations",
+      "title": "Targon rental logs and workload state",
+      "keywords": ["targon", "targon api", "targon logs", "rental logs", "workload logs", "kaniko logs", "wrk-", "TARGON_API_KEY", "submission builder logs"],
+      "summary": "Read bounded Targon rental logs and state through Secret Manager and the v3 workloads API, then corroborate with Platform or builder identity.",
+      "owns": [".agents/skills/gcloud-ditto-targon-readonly"],
+      "read": [".agents/skills/gcloud-ditto-targon-readonly/SKILL.md"],
+      "search": ["rg -n 'def logs|TARGON_API_KEY|targon_cli' services/screener-orchestrator apps/platform"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/gcloud-ditto-targon-readonly", "bash -n .agents/skills/gcloud-ditto-targon-readonly/scripts/query_targon.sh", "uv run --project services/screener-orchestrator pytest services/screener-orchestrator/tests/test_targon_cli.py services/screener-orchestrator/tests/test_targon_client.py -q"],
+      "invariants": ["Never print or inspect TARGON_API_KEY; stream it from Secret Manager into --api-key-stdin.", "This workflow is read-only; do not create, probe, suspend, or delete rentals from it."],
+      "related": ["screener-capacity", "platform-api", "infra-cloud"]
+    },
+    {
       "id": "runtime-profiling",
       "title": "Private Python and Go runtime profiling",
       "keywords": ["profile", "profiling", "py-spy", "pprof", "flamegraph", "speedscope", "cpu hotspot", "heap", "allocation", "goroutine", "route latency", "caddy access log", "performance win", "port to go", "inference metrics", "runtime profile", "backroom profile"],

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ditto Targon Rental Logs"
+  short_description: "Safely read Targon rental logs via gcloud"
+  default_prompt: "Use $gcloud-ditto-targon-readonly to fetch Targon rental logs and workload state without printing TARGON_API_KEY."

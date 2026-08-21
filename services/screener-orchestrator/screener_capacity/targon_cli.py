@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import sys
 import tarfile
@@ -23,6 +24,9 @@ from screener_capacity.oneshot import (
     sweep_oneshot_rentals,
 )
 from screener_capacity.targon import TargonAPIError, TargonClient, workload_summary
+
+_WORKLOAD_UID = re.compile(r"^wrk-[a-z0-9]{8,64}$")
+_MAX_LOG_TAIL = 10000
 
 
 def _client(args: argparse.Namespace, *, authenticated: bool) -> TargonClient:
@@ -58,6 +62,51 @@ def _safe_logs(client: TargonClient, uid: str, *, tail: int) -> str:
         return client.logs(uid, tail=tail)
     except TargonAPIError:
         return "provider logs unavailable"
+
+
+def _require_workload_uid(uid: str) -> str:
+    if _WORKLOAD_UID.fullmatch(uid) is None:
+        raise SystemExit("error: workload uid must match wrk-[a-z0-9]+")
+    return uid
+
+
+def _redact_provider_text(text: str) -> str:
+    text = re.sub(r"(?i)(authorization:\s*bearer\s+)\S+", r"\1[redacted]", text)
+    text = re.sub(
+        r"(?i)(\b(?:api[_-]?key|token|secret|password)\b\s*[=:]\s*)\S+",
+        r"\1[redacted]",
+        text,
+    )
+    return re.sub(r"\bsvt_[A-Za-z0-9]+\b", "[redacted-key]", text)
+
+
+def command_state(args: argparse.Namespace) -> int:
+    uid = _require_workload_uid(args.uid)
+    state = _safe_state(_client(args, authenticated=True), uid)
+    print(json.dumps(state, indent=2, sort_keys=True))
+    return 0
+
+
+def command_logs(args: argparse.Namespace) -> int:
+    uid = _require_workload_uid(args.uid)
+    if args.tail < 1 or args.tail > _MAX_LOG_TAIL:
+        raise SystemExit("error: --tail must be an integer from 1 through 10000")
+    client = _client(args, authenticated=True)
+    if args.include_state:
+        print(json.dumps(_safe_state(client, uid), indent=2, sort_keys=True))
+        print("---LOGS---")
+    try:
+        logs = client.logs(uid, tail=args.tail)
+    except TargonAPIError as error:
+        if error.status == 404:
+            raise TargonAPIError(
+                operation=error.operation,
+                status=404,
+                reason="logs unavailable after replica left running",
+            ) from None
+        raise
+    sys.stdout.write(_redact_provider_text(logs))
+    return 0
 
 
 def _cleanup_probe_workload(client: TargonClient, uid: str) -> dict[str, object]:
@@ -723,6 +772,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     list_command = subparsers.add_parser("list")
     list_command.set_defaults(handler=command_list)
+
+    logs_command = subparsers.add_parser("logs")
+    logs_command.add_argument("uid")
+    logs_command.add_argument("--tail", type=int, default=400)
+    logs_command.add_argument("--include-state", action="store_true")
+    logs_command.set_defaults(handler=command_logs)
+
+    state_command = subparsers.add_parser("state")
+    state_command.add_argument("uid")
+    state_command.set_defaults(handler=command_state)
 
     sweep = subparsers.add_parser("sweep-oneshots")
     sweep.add_argument(

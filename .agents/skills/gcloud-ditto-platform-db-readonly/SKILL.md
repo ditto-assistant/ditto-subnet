@@ -43,3 +43,5 @@ Use the bundled scripts for every production query. Do not retrieve the database
 - If authentication or SSH fails, report the exact non-secret error and suggest `gcloud auth login` or checking the active account; do not seek alternate credentials.
 - If validation rejects a legitimate read, simplify it into `SELECT`, `WITH ... SELECT`, `TABLE`, `VALUES`, `EXPLAIN`, or `SHOW` statements without psql meta-commands. Use `explain_analyze_prod_db.sh` instead of hand-writing an analyzed plan.
 - If the database reports a read-only violation, stop. Do not retry outside the protected transaction.
+
+Targon rental logs and workload state use `$gcloud-ditto-targon-readonly`. That workflow reads `TARGON_API_KEY` from Secret Manager; this database workflow does not.
