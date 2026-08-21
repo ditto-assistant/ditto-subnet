@@ -321,6 +321,8 @@ function completedBundle(): ConfirmationBundleView {
         failure_class: null,
         failure_stage: null,
         failed_at: null,
+        prepare_rejection: null,
+        prepare_rejected_at: null,
       },
     ],
     subjects: [

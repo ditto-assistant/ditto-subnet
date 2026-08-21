@@ -880,6 +880,8 @@ function confirmationBundle() {
         deadline: '2026-08-08T13:30:00Z',
         failure_reason: null,
         failed_at: null,
+        prepare_rejection: null,
+        prepare_rejected_at: null,
       },
     ],
   } satisfies GeneratedConfirmationBundleView

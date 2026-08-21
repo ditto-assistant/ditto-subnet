@@ -34,6 +34,7 @@ from ditto.api_models.confirmation_bundles import (
     ConfirmationShadowCalibrationView,
     EffectiveConfirmationBundleSettings,
     LongMemEvidence,
+    PrepareRejectionCode,
 )
 from ditto.api_server.confirmation_candidate_reconciliation import (
     reconcile_confirmation_candidates,
@@ -313,6 +314,10 @@ async def _bundle_view(
                 failure_class=row.failure_class,
                 failure_stage=row.failure_stage,
                 failed_at=row.failed_at,
+                prepare_rejection=cast(
+                    PrepareRejectionCode | None, row.prepare_rejection
+                ),
+                prepare_rejected_at=row.prepare_rejected_at,
             )
             for row in tickets
         ],

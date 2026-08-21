@@ -2948,6 +2948,54 @@ class TestV9ConfirmationPrepareAdmission:
             assert "producer_version" not in response.json()["longmemeval"]
         await _assert_unsettled(session_maker, seeded=seeded)
 
+    async def test_prepare_persists_allowlisted_wire_rejection_without_settlement(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        seeded, _, ticket = await _seed_claimed_go_case(app, client, session_maker)
+        fixture = _go_fixture()
+        inference = fixture["inference_ablation"]
+        assert isinstance(inference, dict)
+        evidence = inference["evidence"]
+        assert isinstance(evidence, dict)
+        del evidence["selected_cases_sha256"]
+        payload = _prepare_payload(
+            bundle_id=seeded.bundle_id,
+            ticket_id=ticket.ticket_id,
+            fixture=fixture,
+        )
+
+        response = await _prepare(client, bundle_id=seeded.bundle_id, payload=payload)
+
+        assert response.status_code == 409, response.text
+        assert "fields drifted" in response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.status == "issued"
+            assert stored.failure_reason is None
+            assert stored.prepare_rejection == "go_evidence_fields_drifted"
+            assert stored.prepare_rejected_at is not None
+        await _assert_unsettled(session_maker, seeded=seeded)
+
+        accepted = await _prepare(
+            client,
+            bundle_id=seeded.bundle_id,
+            payload=_prepare_payload(
+                bundle_id=seeded.bundle_id,
+                ticket_id=ticket.ticket_id,
+            ),
+        )
+        assert accepted.status_code == 200, accepted.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.prepare_rejection is None
+            assert stored.prepare_rejected_at is None
+        await _assert_unsettled(session_maker, seeded=seeded)
+
     async def test_prepare_returns_canonical_typed_root_without_settlement(
         self,
         app: FastAPI,

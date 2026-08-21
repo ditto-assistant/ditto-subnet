@@ -9163,6 +9163,10 @@ export interface components {
              * Format: date-time
              */
             issued_at: string;
+            /** Prepare Rejected At */
+            prepare_rejected_at?: string | null;
+            /** Prepare Rejection */
+            prepare_rejection?: ("go_evidence_digest_mismatch" | "go_evidence_fields_drifted" | "unsupported_ablation_status" | "unsupported_ablation_contract" | "ablation_profile_drift" | "ablation_accounting" | "ablation_digest_mismatch" | "longmem_profile_drift" | "longmem_accounting" | "longmem_digest_mismatch" | "longmem_latency_drift" | "unsupported_bench_version" | "confirmation_wire" | "confirmation_evidence" | "unclassified") | null;
             /** Slot Id */
             slot_id: string;
             /**
