@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.api_server.dependencies import get_session, get_storage_client
 from ditto.api_server.fingerprint import reference_corpus_provenance
 from ditto.api_server.storage import ObjectDownloadFailedError
@@ -30,6 +31,7 @@ from ditto.db.models import (
     AthReviewAction,
     BenchmarkRollout,
     Score,
+    ValidatorTicket,
 )
 from ditto.db.queries.benchmark_rollout import MIN_SCOREABLE_BENCH_VERSION
 from ditto.db.queries.scores import list_eligible_ledger
@@ -610,6 +612,54 @@ async def test_rejected_review_reopens_and_clear_restores_previous_status(
         )
         assert agent is not None and agent.status == previous_status
         assert len(scores) == 3
+
+
+async def test_reject_expires_live_retest_leases(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    agent_id, sha256 = await _seed_scored_agent(maker)
+    _install(app, maker)
+    opened = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/open",
+        json={
+            "expected_sha256": sha256,
+            "expected_score_count": 3,
+            "reason": "Manual benchmark-overfit review",
+        },
+        headers=_HEADERS,
+    )
+    assert opened.status_code == 200
+    async with maker() as session, session.begin():
+        session.add(
+            ValidatorTicket(
+                agent_id=agent_id,
+                validator_hotkey="5RetestValidator",
+                slot_id="slot-0",
+                status=TicketStatus.ISSUED,
+                purpose=TicketPurpose.CONTINUAL_RETEST,
+                purpose_revision=1,
+                issued_at=datetime.now(UTC),
+                deadline=datetime.now(UTC) + timedelta(hours=7),
+                bench_version=MIN_SCOREABLE_BENCH_VERSION,
+                attempt_count=1,
+            )
+        )
+    rejected = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={"resolution": "reject", "reason": "Family compiler on served /run"},
+        headers=_HEADERS,
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["agent_status"] == AgentStatus.BANNED
+    async with maker() as session:
+        ticket = await session.get(
+            ValidatorTicket,
+            (agent_id, MIN_SCOREABLE_BENCH_VERSION, "5RetestValidator"),
+        )
+        agent = await session.get(Agent, agent_id)
+    assert agent is not None and agent.status == AgentStatus.BANNED
+    assert ticket is not None
+    assert ticket.status == TicketStatus.EXPIRED
 
 
 async def test_resolved_clear_does_not_reopen_an_unrelated_ban(

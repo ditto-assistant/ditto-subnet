@@ -225,12 +225,26 @@ def withdrawal_gate(
     return True, None
 
 
+def eviction_closes_era(*, agent: Agent, scores: list[Score]) -> bool:
+    """Whether an eviction should also withdraw the submission from this era.
+
+    Evaluating-below-quorum is the original 2026-07-27 escape hatch: revoke the
+    live leases *and* close assignment. Continual-retest zombies on scored or
+    banned agents need the leases gone without kicking a finalized miner off
+    the retest cohort — a withdrawal would 409 the next eviction after the
+    lane re-issued a fresh ticket.
+    """
+
+    return agent.status == AgentStatus.EVALUATING and len(scores) < SCORING_QUORUM
+
+
 def eviction_gate(
     *,
     agent: Agent,
     scores: list[Score],
+    tickets: list[ValidatorTicket],
 ) -> tuple[bool, str | None]:
-    """Allow an operator eviction: the same terminal state, reachable sooner.
+    """Allow an operator eviction of live canonical or continual-retest leases.
 
     :func:`withdrawal_gate` is a *cleanup* tool. It only accepts a submission
     that has already stopped consuming validator capacity — enough exhausted
@@ -255,18 +269,24 @@ def eviction_gate(
     current policy is no longer leasable, but it can still be *holding* a lease
     issued before the bump, and that slot is just as stuck.
 
-    What remains is the pair of conditions under which eviction would be
-    meaningless rather than merely dangerous — the submission is not waiting for
-    validator scores at all, or it already has its quorum. Everything else that
-    makes this safe is at the route: an exact expected-state snapshot, a written
-    reason, a distinct confirmation phrase, a named actor, and one audit row per
-    evicted lease.
+    A live issued ticket is always evictable, including continual-retest
+    leases on scored or banned agents. Evaluating-below-quorum remains
+    evictable even with no live ticket so the original era-close path still
+    works. Everything else that makes this safe is at the route: an exact
+    expected-state snapshot, a written reason, a distinct confirmation phrase,
+    a named actor, and one audit row per evicted lease.
     """
 
+    if any(ticket.status == TicketStatus.ISSUED for ticket in tickets):
+        return True, None
     if agent.status != AgentStatus.EVALUATING:
-        return False, "submission is not waiting for validator scores"
+        return False, (
+            "submission is not waiting for validator scores and has no live leases"
+        )
     if len(scores) >= SCORING_QUORUM:
-        return False, "submission already reached scoring quorum"
+        return False, (
+            "submission already reached scoring quorum and has no live leases"
+        )
     return True, None
 
 

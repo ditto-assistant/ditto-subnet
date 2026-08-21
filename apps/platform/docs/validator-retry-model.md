@@ -161,10 +161,11 @@ a rejection or a rescreen.
 | | `POST .../withdraw` | `POST .../evict` |
 |---|---|---|
 | confirmation | `REMOVE FROM VALIDATOR QUEUE` | `EVICT LIVE VALIDATOR LEASES` |
-| gate | needs enough exhausted tickets that quorum is unreachable, **and** no live lease | needs only `evaluating` and below quorum |
+| gate | needs enough exhausted tickets that quorum is unreachable, **and** no live lease | a live issued ticket (canonical or continual-retest), **or** evaluating-below-quorum |
 | live leases | refuses to act while one exists | force-expires each one, freeing the slot now |
-| audit | the withdrawal row | the withdrawal row **plus** one `validator_lease_audit` row per revoked lease (`action = operator_evicted`) |
-| `evicted_validator_hotkeys` | `NULL` | the revoked set (possibly `[]`) |
+| era close | always writes a withdrawal | only for evaluating-below-quorum; scored/banned agents are lease-only (`era_closed=false`) |
+| audit | the withdrawal row | one `validator_lease_audit` row per revoked lease (`action = operator_evicted`); a withdrawal row only when the era closes |
+| `evicted_validator_hotkeys` | `NULL` | the revoked set (possibly `[]`) on an era-closing eviction |
 
 **Why eviction exists.** Withdrawal is a cleanup tool: by construction it only
 accepts a submission that had already stopped consuming validator capacity. On
@@ -180,6 +181,12 @@ blanket "a lease that never reported is not revocable" rule. That rule stays
 exactly as strict — pre-v16 validators still omit a leased-but-quiet slot
 entirely, so absence remains uninterpretable for every automatic path, and
 nothing here relaxes it.
+
+ATH reject expires any still-issued leases (canonical or continual-retest) in
+the same transaction as the ban, with `compensate=False` and
+`context=ath_reject`. Continual-retest issuance resumes a live same-slot ticket
+after a validator restart; an ineligible (banned or folded-out) live retest is
+reclaimed on the next poll instead of 409-and-stranding the slot.
 
 The operator route asks a different question, and since ditto-subnet#274
 (v0.35.0, accepted by ditto-platform#499) it can answer it with **positive

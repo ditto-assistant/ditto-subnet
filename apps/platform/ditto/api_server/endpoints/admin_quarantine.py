@@ -549,6 +549,10 @@ async def list_validator_assignments(
                 if provisional_composite is not None
                 else None
             ),
+            slot_id=ticket.slot_id,
+            purpose=str(ticket.purpose),  # type: ignore[arg-type]
+            agent_status=agent.status.value,
+            first_reported_at=ticket.first_reported_at,
         )
         for ticket, agent, score_count, provisional_composite in rows
     ]

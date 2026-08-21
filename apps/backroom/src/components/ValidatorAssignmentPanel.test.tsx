@@ -37,6 +37,10 @@ const assignment: ValidatorAssignment = {
   attempt_count: 1,
   score_count: 2,
   provisional_composite: 0.81,
+  slot_id: 'slot-0',
+  purpose: 'canonical_quorum',
+  agent_status: 'evaluating',
+  first_reported_at: null,
 }
 
 describe('ValidatorAssignmentPanel', () => {

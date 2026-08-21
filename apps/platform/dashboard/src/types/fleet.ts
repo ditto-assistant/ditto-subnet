@@ -191,6 +191,7 @@ export interface FleetEntry {
   active_benchmarks?: BenchmarkProgress[];
   assigned_benchmarks?: BenchmarkProgress[];
   confirmation_benchmarks?: ConfirmationProgress[];
+  claimed_slots?: Array<{ slot_id: string; agent_id: string }>;
   healthy_slots?: string[];
   configured_slots?: number | null;
   /** Backroom refuses new work for this exact validator; live leases may drain. */

@@ -33,6 +33,7 @@ from ditto.api_models.admin_copy_review import (
     AdminSourceDiffFileDetail,
     AdminSourceDiffManifest,
 )
+from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.anti_copy_comparison import compare_anti_copy_pair
 from ditto.api_server.artifact_audit import client_ip, request_detail
 from ditto.api_server.dependencies import get_session, get_storage_client
@@ -47,7 +48,14 @@ from ditto.api_server.source_inspect import (
     TarSourceInspector,
 )
 from ditto.api_server.storage import ObjectDownloadFailedError, S3StorageClient
-from ditto.db.models import Agent, AgentStatus, AthReview, AthReviewAction, Score
+from ditto.db.models import (
+    Agent,
+    AgentStatus,
+    AthReview,
+    AthReviewAction,
+    Score,
+    ValidatorTicket,
+)
 from ditto.db.queries.artifact_fetch_audit import (
     ENDPOINT_ADMIN_COPY_REVIEW_DIFF,
     ENDPOINT_ADMIN_COPY_REVIEW_DIFF_FILE,
@@ -57,6 +65,10 @@ from ditto.db.queries.benchmark_rollout import (
     active_bench_version,
     open_rollout,
     preserve_desired_authority,
+)
+from ditto.db.queries.lease_liveness import (
+    ACTION_FORCE_EXPIRED,
+    expire_issued_tickets,
 )
 from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
@@ -1026,6 +1038,7 @@ async def resolve_copy_review(
         )
         if canonical != "clear":
             await preserve_desired_authority(session, now=datetime.now(UTC))
+        now = datetime.now(UTC)
         agent.status = (
             AgentStatus.LIVE
             if canonical == "clear" and previous_status == AgentStatus.LIVE.value
@@ -1033,8 +1046,33 @@ async def resolve_copy_review(
             if canonical == "clear"
             else AgentStatus.BANNED
         )
+        if canonical == "reject":
+            live_tickets = list(
+                (
+                    await session.scalars(
+                        select(ValidatorTicket)
+                        .where(
+                            ValidatorTicket.agent_id == agent.agent_id,
+                            ValidatorTicket.status == TicketStatus.ISSUED,
+                            ValidatorTicket.deadline > now,
+                        )
+                        .with_for_update()
+                    )
+                ).all()
+            )
+            await expire_issued_tickets(
+                session,
+                tickets=live_tickets,
+                now=now,
+                context="ath_reject",
+                action=ACTION_FORCE_EXPIRED,
+                actor=actor,
+                reason=payload.reason,
+                request_id=review.review_id,
+                compensate=False,
+            )
         review.status = "resolved"
-        review.resolved_at = datetime.now(UTC)
+        review.resolved_at = now
         review.resolved_by = actor
         review.resolution = canonical
         review.resolution_reason = payload.reason

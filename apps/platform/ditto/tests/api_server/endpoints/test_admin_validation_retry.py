@@ -768,6 +768,7 @@ async def _seed_live_lease(
     validator_hotkey: str = "validator-0",
     slot_id: str = "slot-0",
     bench_version: int = _BENCH_VERSION,
+    purpose: TicketPurpose = TicketPurpose.CANONICAL_QUORUM,
 ) -> datetime:
     """Seat the 2026-07-27 signature: a live 90-minute lease that never reported.
 
@@ -792,7 +793,7 @@ async def _seed_live_lease(
                     validator_hotkey=validator_hotkey,
                     slot_id=slot_id,
                     status=TicketStatus.ISSUED,
-                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose=purpose,
                     purpose_revision=1,
                     issued_at=issued_at,
                     deadline=deadline,
@@ -1177,6 +1178,78 @@ async def test_evict_stops_a_submission_withdrawal_refuses_to_touch(
             },
         )
         assert allowed.status_code == 200, allowed.text
+
+
+async def test_evict_revokes_continual_retest_without_closing_scored_era(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed(retry_maker, score_count=3, ticket_count=3)
+    async with retry_maker() as session, session.begin():
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        agent.status = AgentStatus.SCORED
+    await _seed_live_lease(
+        retry_maker,
+        agent_id,
+        validator_hotkey="validator-retest",
+        slot_id="slot-2",
+        purpose=TicketPurpose.CONTINUAL_RETEST,
+    )
+    _install(app, retry_maker)
+
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    assert detail.status_code == 200, detail.text
+    body = detail.json()
+    assert body["agent_status"] == AgentStatus.SCORED
+    assert body["score_count"] == 3
+    assert body["eviction_allowed"] is True
+    assert body["eviction_blocking_reason"] is None
+    assert body["live_ticket_count"] == 1
+    retest = next(
+        ticket
+        for ticket in body["tickets"]
+        if ticket["validator_hotkey"] == "validator-retest"
+    )
+    assert retest["purpose"] == TicketPurpose.CONTINUAL_RETEST
+    assert retest["first_reported_at"] is None
+    assert retest["status"] == "issued"
+
+    response = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/evict",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": body["snapshot"],
+            "reason": _EVICT_REASON,
+            "confirmation": _EVICT_CONFIRMATION,
+        },
+    )
+    assert response.status_code == 200, response.text
+    evicted = response.json()
+    assert evicted["era_closed"] is False
+    assert evicted["eviction"] is None
+    assert evicted["freed_slots"] == 1
+    assert evicted["evicted_leases"][0]["validator_hotkey"] == "validator-retest"
+    assert evicted["evicted_leases"][0]["slot_id"] == "slot-2"
+
+    async with retry_maker() as session:
+        ticket = await session.get(
+            ValidatorTicket, (agent_id, _BENCH_VERSION, "validator-retest")
+        )
+        withdrawal = await session.scalar(
+            select(ValidatorQueueWithdrawal).where(
+                ValidatorQueueWithdrawal.agent_id == agent_id
+            )
+        )
+        agent = await session.get(Agent, agent_id)
+    assert ticket is not None
+    assert ticket.status == TicketStatus.EXPIRED
+    assert withdrawal is None
+    assert agent is not None and agent.status == AgentStatus.SCORED
 
 
 async def test_evict_interlocks_reject_a_mismatched_or_malformed_call(

@@ -2411,6 +2411,10 @@ class PublicBenchmarkProgress(BaseModel):
             ),
         ),
     ] = False
+    purpose: TicketPurpose = TicketPurpose.LEGACY_UNCLASSIFIED
+    """Why the occupying lease was issued. Continual-retest tickets on already
+    scored agents look identical to canonical work until this field is set.
+    """
 
 
 class PublicConfirmationSubject(BaseModel):
@@ -3618,6 +3622,13 @@ class PublicOrphanedSlot(BaseModel):
     ]
 
 
+class PublicClaimedSlot(BaseModel):
+    """One slot the validator signed as busy, before ticket confirmation."""
+
+    slot_id: str
+    agent_id: UUID
+
+
 class PublicValidatorSlotPolicy(BaseModel):
     """The operator slot policy ticket dispatch is applying to the fleet.
 
@@ -3717,6 +3728,18 @@ class PublicValidatorHeartbeat(BaseModel):
                 "ordinary case. A slot listed here is NOT free: treat it as "
                 "occupied when reasoning about fleet headroom, even in the "
                 "`indeterminate` state."
+            ),
+        ),
+    ]
+    claimed_slots: Annotated[
+        list[PublicClaimedSlot],
+        Field(
+            default_factory=list,
+            description=(
+                "Signed occupancy the validator advertised before ticket "
+                "confirmation. A slot listed here but missing from "
+                "active_benchmarks is occupied locally and unconfirmed on the "
+                "ledger — the awaiting-progress zombie shape."
             ),
         ),
     ]

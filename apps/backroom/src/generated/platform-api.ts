@@ -7736,9 +7736,14 @@ export interface components {
         };
         /** AdminValidationQueueEvictionResponse */
         AdminValidationQueueEvictionResponse: {
+            /**
+             * Era Closed
+             * @default true
+             */
+            era_closed: boolean;
             /** Evicted Leases */
             evicted_leases: components["schemas"]["AdminEvictedLease"][];
-            eviction: components["schemas"]["AdminValidationQueueEviction"];
+            eviction?: components["schemas"]["AdminValidationQueueEviction"] | null;
             /** Freed Slots */
             freed_slots: number;
             /** Idempotent */
@@ -7995,6 +8000,8 @@ export interface components {
             failure_detail?: string | null;
             /** Failure Reason */
             failure_reason: string | null;
+            /** First Reported At */
+            first_reported_at?: string | null;
             /** Infra Retry Grants */
             infra_retry_grants: number;
             /**
@@ -8004,6 +8011,12 @@ export interface components {
             issued_at: string;
             /** Manual Retry Grants */
             manual_retry_grants: number;
+            /**
+             * Purpose
+             * @default legacy_unclassified
+             * @enum {string}
+             */
+            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
             /** Retry After */
             retry_after: string | null;
             /** Retry Budget Exhausted */
@@ -8029,6 +8042,8 @@ export interface components {
             agent_id: string;
             /** Agent Name */
             agent_name: string;
+            /** Agent Status */
+            agent_status?: string | null;
             /** Attempt Count */
             attempt_count: number;
             /** Bench Version */
@@ -8038,6 +8053,8 @@ export interface components {
              * Format: date-time
              */
             deadline: string;
+            /** First Reported At */
+            first_reported_at?: string | null;
             /**
              * Issued At
              * Format: date-time
@@ -8047,8 +8064,19 @@ export interface components {
             miner_hotkey: string;
             /** Provisional Composite */
             provisional_composite: number | null;
+            /**
+             * Purpose
+             * @default legacy_unclassified
+             * @enum {string}
+             */
+            purpose: "legacy_unclassified" | "canonical_quorum" | "continual_retest";
             /** Score Count */
             score_count: number;
+            /**
+             * Slot Id
+             * @default slot-0
+             */
+            slot_id: string;
             /** Validator Hotkey */
             validator_hotkey: string;
         };
@@ -12925,6 +12953,8 @@ export interface components {
              * @description Exact completion percentage from the reported check counts. Held below 100 until the run reaches finalizing/submitting, so a full bar always means the work is actually finished.
              */
             percent?: number | null;
+            /** @default legacy_unclassified */
+            purpose: components["schemas"]["TicketPurpose"];
             /**
              * Slot Id
              * @default slot-0
@@ -13257,6 +13287,19 @@ export interface components {
             stale: boolean;
             /** Vectors */
             vectors?: components["schemas"]["PublicValidatorWeightVector"][];
+        };
+        /**
+         * PublicClaimedSlot
+         * @description One slot the validator signed as busy, before ticket confirmation.
+         */
+        PublicClaimedSlot: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Slot Id */
+            slot_id: string;
         };
         /**
          * PublicCompositeBreakdown
@@ -15722,6 +15765,11 @@ export interface components {
              */
             bench_serviceability: "serving" | "scorer_unverified" | "software_obsolete";
             capabilities?: components["schemas"]["ValidatorCapabilities"] | null;
+            /**
+             * Claimed Slots
+             * @description Signed occupancy the validator advertised before ticket confirmation. A slot listed here but missing from active_benchmarks is occupied locally and unconfirmed on the ledger — the awaiting-progress zombie shape.
+             */
+            claimed_slots?: components["schemas"]["PublicClaimedSlot"][];
             /**
              * Configured Slots
              * @default 1

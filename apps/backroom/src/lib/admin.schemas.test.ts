@@ -3079,6 +3079,29 @@ describe('validator queue eviction schemas', () => {
       '22222222-2222-4222-8222-222222222222',
     )
   })
+
+  it('parses a lease-only eviction that leaves the era open', () => {
+    const parsed = evictValidationResponseSchema.parse({
+      eviction: null,
+      evicted_leases: [
+        {
+          validator_hotkey: '5ValidatorA',
+          slot_id: 'slot-2',
+          bench_version: 11,
+          issued_at: '2026-08-21T19:20:31Z',
+          original_deadline: '2026-08-22T02:30:31Z',
+          attempt_count: 3,
+          audit_id: '22222222-2222-4222-8222-222222222222',
+        },
+      ],
+      freed_slots: 1,
+      idempotent: false,
+      era_closed: false,
+    })
+    expect(parsed.eviction).toBeNull()
+    expect(parsed.era_closed).toBe(false)
+    expect(parsed.freed_slots).toBe(1)
+  })
 })
 
 describe('validator queue reinstatement schemas', () => {

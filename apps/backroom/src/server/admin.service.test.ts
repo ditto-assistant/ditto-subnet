@@ -2226,7 +2226,7 @@ describe('copy review admin service', () => {
     )
 
     expect(result.freed_slots).toBe(2)
-    expect(result.eviction.evicted_validator_hotkeys).toEqual([
+    expect(result.eviction?.evicted_validator_hotkeys).toEqual([
       '5ValidatorA',
       '5ValidatorB',
     ])

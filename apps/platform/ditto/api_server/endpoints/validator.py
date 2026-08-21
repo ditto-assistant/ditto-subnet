@@ -268,6 +268,10 @@ from ditto.db.queries.king_reign import (
     record_first_crowned,
     record_weight_confirmed,
 )
+from ditto.db.queries.lease_liveness import (
+    ACTION_FORCE_EXPIRED,
+    expire_issued_tickets,
+)
 from ditto.db.queries.payments import get_miner_coldkey_for_agent
 from ditto.db.queries.queue_order import miner_has_newer_canonical_work
 from ditto.db.queries.retry_budget import (
@@ -4712,6 +4716,18 @@ async def request_top5_confirmation_job(
         emission_member_ids = frozenset(member.agent_id for member in emission_members)
         if not members:
             if auto_routed:
+                if live_retest is not None:
+                    await expire_issued_tickets(
+                        session,
+                        tickets=[live_retest],
+                        now=now,
+                        context="ineligible_continual_retest",
+                        action=ACTION_FORCE_EXPIRED,
+                        actor="platform",
+                        reason="continual retest target is no longer in the cohort",
+                        request_id=payload.nonce,
+                        compensate=False,
+                    )
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
@@ -4738,6 +4754,23 @@ async def request_top5_confirmation_job(
         )
         member_ids = tuple(member.agent_id for member in members)
         if requested_member_id is not None and requested_member_id not in member_ids:
+            if auto_routed and live_retest is not None:
+                # A banned or folded-out agent still holding a 430-minute
+                # retest lease occupies the slot until deadline unless we
+                # reclaim it. Canonical issue_ticket resumes; this lane used
+                # to 409 and leave the ticket issued with nothing executing.
+                await expire_issued_tickets(
+                    session,
+                    tickets=[live_retest],
+                    now=now,
+                    context="ineligible_continual_retest",
+                    action=ACTION_FORCE_EXPIRED,
+                    actor="platform",
+                    reason="continual retest target is no longer in the cohort",
+                    request_id=payload.nonce,
+                    compensate=False,
+                )
+                return Response(status_code=204, headers={"Cache-Control": "no-store"})
             raise HTTPException(
                 status_code=409,
                 detail=(

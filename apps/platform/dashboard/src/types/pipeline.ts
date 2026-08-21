@@ -92,6 +92,7 @@ export interface BenchmarkProgress {
   agent_id?: string | null;
   agent_name?: string | null;
   slot_id?: string | null;
+  purpose?: string | null;
   /** Stamped client-side when a fast poll carries no telemetry for a slot the
    * previous poll reported: the prior signed progress is preserved through a
    * bounded grace and labeled as delayed rather than missing. */

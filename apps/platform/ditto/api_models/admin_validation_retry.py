@@ -79,6 +79,17 @@ class AdminValidationTicket(BaseModel):
     ``expired`` with nothing reported, and the triage feed could not tell that
     apart from an ordinary reported failure, so the incident ran unnoticed.
     """
+    purpose: Literal["legacy_unclassified", "canonical_quorum", "continual_retest"] = (
+        "legacy_unclassified"
+    )
+    """Why this lease was issued. Continual-retest tickets on already-scored
+    agents occupy a slot the same way a canonical quorum ticket does.
+    """
+    first_reported_at: datetime | None = None
+    """When heartbeat ingest first confirmed this lease. ``None`` means the
+    validator has never advertised the slot as active — the never-started
+    zombie shape that automatic revocation will not touch.
+    """
 
 
 class AdminValidationRecovery(BaseModel):
@@ -327,10 +338,20 @@ class AdminValidationQueueEviction(BaseModel):
 
 
 class AdminValidationQueueEvictionResponse(BaseModel):
-    eviction: AdminValidationQueueEviction
+    eviction: AdminValidationQueueEviction | None = None
+    """Queue-withdrawal row when this eviction also closed the benchmark era.
+
+    ``None`` for a lease-only eviction of a scored or banned agent: the live
+    tickets are revoked and the era stays open so a later retest can still be
+    issued.
+    """
     evicted_leases: list[AdminEvictedLease]
     freed_slots: int
     idempotent: bool
+    era_closed: bool = True
+    """Whether assignment for this era was withdrawn. False when only live
+    leases were revoked (continual-retest zombies on scored/banned agents).
+    """
 
 
 class AdminValidationQueueReinstatementRequest(BaseModel):

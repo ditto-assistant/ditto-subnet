@@ -76,6 +76,7 @@ for every automatic path, because pre-v16 validators still omit a quiet slot.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -91,8 +92,6 @@ from ditto.db.models import ValidatorHeartbeat, ValidatorLeaseAudit, ValidatorTi
 from ditto.db.queries.retry_budget import grant_no_fault_retry
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from sqlalchemy import Select
     from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -617,6 +616,49 @@ async def force_expire_lease(
     return audit
 
 
+async def expire_issued_tickets(
+    session: AsyncSession,
+    *,
+    tickets: Sequence[ValidatorTicket],
+    now: datetime,
+    context: str,
+    action: str,
+    actor: str,
+    reason: str,
+    request_id: UUID,
+    compensate: bool = False,
+) -> list[tuple[ValidatorTicket, ValidatorLeaseAudit]]:
+    """Revoke every still-issued lease in ``tickets`` through the shared chokepoint.
+
+    Used by operator eviction (canonical and continual-retest) and by ATH
+    reject, which must free slots a banned agent is still occupying. Never
+    mints a no-fault grant unless the caller opts in: these paths are ending
+    the lease, not preparing a reissue.
+    """
+    expired: list[tuple[ValidatorTicket, ValidatorLeaseAudit]] = []
+    for ticket in sorted(tickets, key=lambda item: item.validator_hotkey):
+        if ticket.status != TicketStatus.ISSUED:
+            continue
+        audit = await force_expire_lease(
+            session,
+            ticket=ticket,
+            now=now,
+            liveness=await operator_eviction_liveness(
+                session,
+                ticket=ticket,
+                now=now,
+                actor=actor,
+                reason=reason,
+                request_id=request_id,
+            ),
+            context=context,
+            action=action,
+            compensate=compensate,
+        )
+        expired.append((ticket, audit))
+    return expired
+
+
 def record_declined_force_expiry(
     *,
     ticket: ValidatorTicket,
@@ -693,6 +735,7 @@ __all__ = [
     "REASON_EVICT_OCCUPIED_NOT_PROGRESSING",
     "REASON_EVICT_OCCUPIED_PROGRESSING",
     "LeaseLiveness",
+    "expire_issued_tickets",
     "force_expire_lease",
     "lease_liveness",
     "maybe_force_expire_lease",

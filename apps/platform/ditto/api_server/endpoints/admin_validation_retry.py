@@ -69,6 +69,7 @@ from ditto.db.models import (
     Score,
     ScoreAuditEntry,
     ValidatorHeartbeat,
+    ValidatorLeaseAudit,
     ValidatorQueueReinstatement,
     ValidatorQueueWithdrawal,
     ValidatorRetryRecovery,
@@ -90,8 +91,7 @@ from ditto.db.queries.benchmark_rollout import (
 )
 from ditto.db.queries.lease_liveness import (
     ACTION_OPERATOR_EVICTED,
-    force_expire_lease,
-    operator_eviction_liveness,
+    expire_issued_tickets,
 )
 from ditto.db.queries.queue_removal import (
     is_in_force,
@@ -104,6 +104,7 @@ from ditto.db.queries.retry_budget import (
 )
 from ditto.db.queries.retry_state import (
     classify_agent_retry_states,
+    eviction_closes_era,
     eviction_gate,
     is_exhausted,
     is_open_rollout_qualification,
@@ -378,6 +379,25 @@ def _eviction_item(row: ValidatorQueueWithdrawal) -> AdminValidationQueueEvictio
     )
 
 
+def _evicted_lease_from_audit(row: ValidatorLeaseAudit) -> AdminEvictedLease:
+    evidence = row.evidence if isinstance(row.evidence, dict) else {}
+    issued_at = evidence.get("issued_at")
+    original_deadline = evidence.get("original_deadline")
+    return AdminEvictedLease(
+        validator_hotkey=row.validator_hotkey,
+        slot_id=row.slot_id,
+        bench_version=row.bench_version,
+        issued_at=_aware(datetime.fromisoformat(str(issued_at)))
+        if issued_at is not None
+        else row.recorded_at,
+        original_deadline=_aware(datetime.fromisoformat(str(original_deadline)))
+        if original_deadline is not None
+        else row.recorded_at,
+        attempt_count=int(evidence.get("attempt_count") or 1),
+        audit_id=row.audit_id,
+    )
+
+
 def _silently_expired(ticket: ValidatorTicket) -> bool:
     """The lease ran out with nothing reported about *this* attempt.
 
@@ -416,6 +436,8 @@ def _ticket_item(ticket: ValidatorTicket) -> AdminValidationTicket:
         container_log_tail_attempt=ticket.container_log_tail_attempt,
         container_log_tail_stale=ticket_log_is_stale(ticket),
         silently_expired=_silently_expired(ticket),
+        purpose=str(ticket.purpose),  # type: ignore[arg-type]
+        first_reported_at=ticket.first_reported_at,
     )
 
 
@@ -683,7 +705,9 @@ async def get_validation_retry(
         if withdrawal is not None
         else withdrawal_reason
     )
-    eviction_allowed, eviction_reason = eviction_gate(agent=agent, scores=scores)
+    eviction_allowed, eviction_reason = eviction_gate(
+        agent=agent, scores=scores, tickets=tickets
+    )
     eviction_allowed = eviction_allowed and withdrawal is None
     eviction_blocking_reason = (
         "submission is already removed from this benchmark queue"
@@ -983,6 +1007,7 @@ async def evict_submission_from_validator_queue(
                 evicted_leases=[],
                 freed_slots=len(hotkeys),
                 idempotent=True,
+                era_closed=True,
             )
 
         existing = await _load_withdrawal(
@@ -997,11 +1022,36 @@ async def evict_submission_from_validator_queue(
                 detail="submission is already removed from this benchmark queue",
             )
 
+        prior_lease_only = list(
+            (
+                await session.scalars(
+                    select(ValidatorLeaseAudit)
+                    .where(
+                        ValidatorLeaseAudit.agent_id == agent_id,
+                        ValidatorLeaseAudit.action == ACTION_OPERATOR_EVICTED,
+                        ValidatorLeaseAudit.evidence["operator_request_id"].as_string()
+                        == str(payload.request_id),
+                    )
+                    .order_by(ValidatorLeaseAudit.recorded_at.asc())
+                )
+            ).all()
+        )
+        if prior_lease_only:
+            return AdminValidationQueueEvictionResponse(
+                eviction=None,
+                evicted_leases=[
+                    _evicted_lease_from_audit(row) for row in prior_lease_only
+                ],
+                freed_slots=len(prior_lease_only),
+                idempotent=True,
+                era_closed=False,
+            )
+
         current_snapshot = _snapshot(agent=agent, scores=scores, tickets=tickets)
         if current_snapshot != payload.expected_snapshot:
             raise HTTPException(status_code=409, detail="validation state changed")
 
-        allowed, reason = eviction_gate(agent=agent, scores=scores)
+        allowed, reason = eviction_gate(agent=agent, scores=scores, tickets=tickets)
         if not allowed:
             raise HTTPException(
                 status_code=409, detail=reason or "queue eviction unavailable"
@@ -1011,45 +1061,47 @@ async def evict_submission_from_validator_queue(
         # the audit record preserves what the operator actually acted on.
         ticket_snapshot = [_ticket_wire(ticket) for ticket in tickets]
         live = [ticket for ticket in tickets if ticket.status == TicketStatus.ISSUED]
-        evicted: list[AdminEvictedLease] = []
-        for ticket in sorted(live, key=lambda item: item.validator_hotkey):
-            original_deadline = _aware(ticket.deadline)
-            audit = await force_expire_lease(
-                session,
-                ticket=ticket,
-                now=now,
-                # Not an inferred idleness verdict. See
-                # operator_eviction_liveness: it reads protocol-16's positive
-                # "occupied, not progressing" report rather than inferring from
-                # a slot's absence, and it relaxes nothing in the automatic gate.
-                liveness=await operator_eviction_liveness(
-                    session,
-                    ticket=ticket,
-                    now=now,
-                    actor=actor,
-                    reason=payload.reason,
-                    request_id=payload.request_id,
-                ),
-                context="admin_queue_eviction",
-                action=ACTION_OPERATOR_EVICTED,
-                # THE correctness property of this feature. The no-fault grant
-                # offsets the attempt a coming reissue would charge; an eviction
-                # is the decision that there is no reissue. Granting anyway would
-                # raise the cap on the artifact just evicted and rebuild the
-                # amplifier that produced mnemox-v55's 9 attempts against a base
-                # budget of 2 (ditto-subnet#279).
-                compensate=False,
+        original_deadlines = {
+            ticket.validator_hotkey: _aware(ticket.deadline) for ticket in live
+        }
+        expired = await expire_issued_tickets(
+            session,
+            tickets=live,
+            now=now,
+            context="admin_queue_eviction",
+            action=ACTION_OPERATOR_EVICTED,
+            actor=actor,
+            reason=payload.reason,
+            request_id=payload.request_id,
+            # THE correctness property of this feature. The no-fault grant
+            # offsets the attempt a coming reissue would charge; an eviction
+            # is the decision that there is no reissue. Granting anyway would
+            # raise the cap on the artifact just evicted and rebuild the
+            # amplifier that produced mnemox-v55's 9 attempts against a base
+            # budget of 2 (ditto-subnet#279).
+            compensate=False,
+        )
+        evicted = [
+            AdminEvictedLease(
+                validator_hotkey=ticket.validator_hotkey,
+                slot_id=ticket.slot_id,
+                bench_version=ticket.bench_version,
+                issued_at=_aware(ticket.issued_at),
+                original_deadline=original_deadlines[ticket.validator_hotkey],
+                attempt_count=ticket.attempt_count,
+                audit_id=audit.audit_id,
             )
-            evicted.append(
-                AdminEvictedLease(
-                    validator_hotkey=ticket.validator_hotkey,
-                    slot_id=ticket.slot_id,
-                    bench_version=ticket.bench_version,
-                    issued_at=_aware(ticket.issued_at),
-                    original_deadline=original_deadline,
-                    attempt_count=ticket.attempt_count,
-                    audit_id=audit.audit_id,
-                )
+            for ticket, audit in expired
+        ]
+        close_era = eviction_closes_era(agent=agent, scores=scores)
+        if not close_era:
+            await session.flush()
+            return AdminValidationQueueEvictionResponse(
+                eviction=None,
+                evicted_leases=evicted,
+                freed_slots=len(evicted),
+                idempotent=False,
+                era_closed=False,
             )
 
         eviction = ValidatorQueueWithdrawal(
@@ -1071,6 +1123,7 @@ async def evict_submission_from_validator_queue(
             evicted_leases=evicted,
             freed_slots=len(evicted),
             idempotent=False,
+            era_closed=True,
         )
 
 

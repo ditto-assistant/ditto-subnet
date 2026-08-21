@@ -983,11 +983,13 @@ async def issue_confirmation_ticket(
         return None
     # Find this exact retest before the slot rail. A live ticket is already an
     # execution claim, even when the validator's latest heartbeat temporarily
-    # omits its slot. Returning that ticket lets a second local task bind the
-    # same slot, rotate the active inference grant, and restart the stateless
-    # 351-case run from zero. Refuse every duplicate until the original lease
-    # is scored, handed back, or expires; the next claim then receives a fresh
-    # full lease through the ordinary reissue path below.
+    # omits its slot. Returning that ticket to a *second* local task on a
+    # different slot lets it bind the same lease, rotate the active inference
+    # grant, and restart the stateless 351-case run from zero — refuse that.
+    # The same slot polling again, including after a process restart, must
+    # resume: canonical ``issue_ticket`` already does, and refusing here is how
+    # a 430-minute continual-retest ticket occupies a slot forever with nothing
+    # executing.
     existing_retest = await session.scalar(
         select(ValidatorTicket)
         .where(
@@ -1001,6 +1003,11 @@ async def issue_confirmation_ticket(
         .with_for_update()
     )
     if existing_retest is not None:
+        if (
+            existing_retest.slot_id == slot_id
+            and existing_retest.purpose == TicketPurpose.CONTINUAL_RETEST
+        ):
+            return existing_retest
         return None
     # One live lease per execution slot, whatever lane issued it. A canonical
     # benchmark on this slot owns it until its deadline; a retest must take a

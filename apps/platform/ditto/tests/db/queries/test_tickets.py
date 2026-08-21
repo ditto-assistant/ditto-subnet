@@ -3774,6 +3774,49 @@ class TestIssueConfirmationTicket:
         assert stored.infra_retry_grants == 2
         assert stored.first_reported_at == first_reported_at
 
+    async def test_resumes_same_slot_live_confirmation_claim(
+        self, session: AsyncSession
+    ) -> None:
+        aid = await _seed_scored(session)
+        original_deadline = _NOW + _TTL
+        async with session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=aid,
+                    validator_hotkey="5V1",
+                    slot_id="slot-0",
+                    status=TicketStatus.ISSUED,
+                    purpose=TicketPurpose.CONTINUAL_RETEST,
+                    purpose_revision=4,
+                    issued_at=_NOW,
+                    deadline=original_deadline,
+                    bench_version=_BENCH,
+                    seed=123,
+                    dataset_sha256="ab" * 32,
+                    attempt_count=7,
+                    first_reported_at=None,
+                )
+            )
+
+        async with session.begin():
+            ticket = await issue_confirmation_ticket(
+                session,
+                agent_id=aid,
+                validator_hotkey="5V1",
+                now=_NOW + timedelta(minutes=10),
+                ttl=_TTL,
+                bench_version=_BENCH,
+                seed=123,
+                dataset_sha256="ab" * 32,
+                slot_id="slot-0",
+            )
+
+        assert ticket is not None
+        assert ticket.deadline == original_deadline
+        assert ticket.attempt_count == 7
+        assert ticket.first_reported_at is None
+        assert ticket.slot_id == "slot-0"
+
     async def test_reissues_scored_validator_slot_with_fresh_lease(
         self, session: AsyncSession
     ) -> None:
