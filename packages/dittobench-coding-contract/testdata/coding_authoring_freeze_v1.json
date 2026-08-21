@@ -1,0 +1,71 @@
+{
+  "schema": "dittobench-coding-authoring-freeze-vector-v1",
+  "coding_contract_version": 1,
+  "weight_eligible": false,
+  "agent_id": "11111111-1111-4111-8111-111111111111",
+  "expected": {
+    "authoring_evidence_sha256": "4e63fece4539d15ca915c30409b97ad41f1554732631b55d633642622ea6aac9",
+    "signing_message_sha256": "a56dfe8f3ae6ca0e02c33ac716e4d812743b80afcf3249a1927c3bb499451c30"
+  },
+  "request": {
+    "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "agent_id": "11111111-1111-4111-8111-111111111111",
+    "bench_version": 12,
+    "run_row_id": "22222222-2222-4222-8222-222222222222",
+    "ticket_id": "33333333-3333-4333-8333-333333333333",
+    "ticket_deadline": "2026-08-21T13:00:00Z",
+    "coding_run_id": "coding-run-001",
+    "agent_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "screened_image_sha256": "abababababababababababababababababababababababababababababababab",
+    "run_manifest_sha256": "e7b431a640aca1f35a5cabe7341ee0aaba25ccee9a174ef0c8f4ab0f3ff80dc4",
+    "task_set_manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "authoring_evidence_sha256": "4e63fece4539d15ca915c30409b97ad41f1554732631b55d633642622ea6aac9",
+    "evidence": {
+      "model": {
+        "model": "openai/gpt-5.6-luna",
+        "provider": "azure/eu",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "reasoning_effort": "medium",
+        "inference_grant_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "prompt_sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+        "tool_schema_sha256": "7777777777777777777777777777777777777777777777777777777777777777",
+        "usage_status": "complete",
+        "fallback_used": false,
+        "cost_source": "provider_receipt_v1",
+        "currency": "USD",
+        "provider_receipt_set_sha256": "8888888888888888888888888888888888888888888888888888888888888888",
+        "requests": 3,
+        "prompt_tokens": 1200,
+        "completion_tokens": 300,
+        "total_tokens": 1500,
+        "cost_usd_micros": 4200,
+        "retry_count": 0
+      },
+      "authoring_event_root": "9999999999999999999999999999999999999999999999999999999999999999",
+      "authoring_transcript_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "frozen_patch_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "changed_path_root": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "final_tree_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "changed_path_count": 1,
+      "changed_bytes": 128,
+      "protected_paths_intact": true
+    },
+    "authoring_transcript_object_key": "sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "authoring_transcript_bytes": 4096,
+    "authoring_event_count": 4,
+    "frozen_submission_object_key": "sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "signature": "88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888"
+  },
+  "response": {
+    "freeze_id": "44444444-4444-4444-8444-444444444444",
+    "agent_id": "11111111-1111-4111-8111-111111111111",
+    "run_row_id": "22222222-2222-4222-8222-222222222222",
+    "ticket_id": "33333333-3333-4333-8333-333333333333",
+    "coding_run_id": "coding-run-001",
+    "authoring_evidence_sha256": "4e63fece4539d15ca915c30409b97ad41f1554732631b55d633642622ea6aac9",
+    "frozen_at": "2026-08-21T12:30:00Z",
+    "accepted": true,
+    "idempotent": false,
+    "weight_eligible": false
+  }
+}

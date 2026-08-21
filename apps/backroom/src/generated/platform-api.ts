@@ -4846,6 +4846,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-shadow/authoring-freeze": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Submit Coding Authoring Freeze
+         * @description Persist authoring evidence without releasing any grader capability.
+         */
+        post: operations["submit_coding_authoring_freeze_api_v1_validator_coding_shadow_authoring_freeze_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-shadow/authoring-lease": {
         parameters: {
             query?: never;
@@ -10153,6 +10173,77 @@ export interface components {
          */
         CodingArtifactKind: "visible-bundle" | "memory-bundle" | "resource-profile" | "grader-bundle";
         /**
+         * CodingAuthoringEvidence
+         * @description Canonical authoring evidence fixed before any grader release.
+         */
+        CodingAuthoringEvidence: {
+            /** Authoring Event Root */
+            authoring_event_root: string;
+            /** Authoring Transcript Sha256 */
+            authoring_transcript_sha256: string;
+            /** Changed Bytes */
+            changed_bytes: number;
+            /** Changed Path Count */
+            changed_path_count: number;
+            /** Changed Path Root */
+            changed_path_root: string;
+            /** Final Tree Sha256 */
+            final_tree_sha256: string;
+            /** Frozen Patch Sha256 */
+            frozen_patch_sha256: string;
+            model: components["schemas"]["CodingAuthoringModelEvidence"];
+            /** Protected Paths Intact */
+            protected_paths_intact: boolean;
+        };
+        /** CodingAuthoringFreezeRecord */
+        CodingAuthoringFreezeRecord: {
+            /** Authoring Event Count */
+            authoring_event_count: number;
+            /** Authoring Event Root */
+            authoring_event_root: string;
+            /** Authoring Evidence Sha256 */
+            authoring_evidence_sha256: string;
+            /** Authoring Transcript Bytes */
+            authoring_transcript_bytes: number;
+            /** Authoring Transcript Sha256 */
+            authoring_transcript_sha256: string;
+            /** Changed Bytes */
+            changed_bytes: number;
+            /** Changed Path Count */
+            changed_path_count: number;
+            /** Changed Path Root */
+            changed_path_root: string;
+            /** Final Tree Sha256 */
+            final_tree_sha256: string;
+            /**
+             * Freeze Id
+             * Format: uuid
+             */
+            freeze_id: string;
+            /**
+             * Frozen At
+             * Format: date-time
+             */
+            frozen_at: string;
+            /** Frozen Patch Sha256 */
+            frozen_patch_sha256: string;
+            /** Protected Paths Intact */
+            protected_paths_intact: boolean;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
          * CodingAuthoringLeaseRequest
          * @description Signed request for one validator-owned shadow authoring lease.
          */
@@ -10227,6 +10318,56 @@ export interface components {
              * @constant
              */
             weight_eligible: false;
+        };
+        /** CodingAuthoringModelEvidence */
+        CodingAuthoringModelEvidence: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /**
+             * Cost Source
+             * @constant
+             */
+            cost_source: "provider_receipt_v1";
+            /** Cost Usd Micros */
+            cost_usd_micros: number;
+            /**
+             * Currency
+             * @constant
+             */
+            currency: "USD";
+            /**
+             * Fallback Used
+             * @constant
+             */
+            fallback_used: false;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /** Model */
+            model: string;
+            /** Prompt Sha256 */
+            prompt_sha256: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Provider Receipt Set Sha256 */
+            provider_receipt_set_sha256: string | null;
+            /** Provider Route Profile */
+            provider_route_profile: string;
+            /**
+             * Reasoning Effort
+             * @constant
+             */
+            reasoning_effort: "medium";
+            /** Requests */
+            requests: number;
+            /** Retry Count */
+            retry_count: number;
+            /** Tool Schema Sha256 */
+            tool_schema_sha256: string;
+            /** Total Tokens */
+            total_tokens: number;
+            usage_status: components["schemas"]["CodingCertificationModelUsageStatus"];
         };
         /** CodingCapabilityCertificationReceipt */
         CodingCapabilityCertificationReceipt: {
@@ -10870,6 +11011,7 @@ export interface components {
         };
         /** CodingShadowTicketRecord */
         CodingShadowTicketRecord: {
+            authoring_freeze: components["schemas"]["CodingAuthoringFreezeRecord"] | null;
             /**
              * Certification Row Id
              * Format: uuid
@@ -21125,6 +21267,104 @@ export interface components {
             artifact_sha256: string;
             /** Source Url B64 */
             source_url_b64: string;
+        };
+        /**
+         * SubmitCodingAuthoringFreezeRequest
+         * @description One validator-signed immutable transition out of authoring.
+         */
+        SubmitCodingAuthoringFreezeRequest: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Authoring Event Count */
+            authoring_event_count: number;
+            /** Authoring Evidence Sha256 */
+            authoring_evidence_sha256: string;
+            /** Authoring Transcript Bytes */
+            authoring_transcript_bytes: number;
+            /** Authoring Transcript Object Key */
+            authoring_transcript_object_key: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Coding Run Id */
+            coding_run_id: string;
+            evidence: components["schemas"]["CodingAuthoringEvidence"];
+            /** Frozen Submission Object Key */
+            frozen_submission_object_key: string;
+            /** Run Manifest Sha256 */
+            run_manifest_sha256: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Signature */
+            signature: string;
+            /** Task Set Manifest Sha256 */
+            task_set_manifest_sha256: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** SubmitCodingAuthoringFreezeResponse */
+        SubmitCodingAuthoringFreezeResponse: {
+            /**
+             * Accepted
+             * @constant
+             */
+            accepted: true;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Authoring Evidence Sha256 */
+            authoring_evidence_sha256: string;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /**
+             * Freeze Id
+             * Format: uuid
+             */
+            freeze_id: string;
+            /**
+             * Frozen At
+             * Format: date-time
+             */
+            frozen_at: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
         };
         /** SubmitCodingCertificationRequest */
         SubmitCodingCertificationRequest: {
@@ -31666,6 +31906,60 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["SubmitTranscriptResponse"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    submit_coding_authoring_freeze_api_v1_validator_coding_shadow_authoring_freeze_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SubmitCodingAuthoringFreezeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SubmitCodingAuthoringFreezeResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Agent or coding shadow lease not found. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Authority, deadline, or immutable freeze conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {

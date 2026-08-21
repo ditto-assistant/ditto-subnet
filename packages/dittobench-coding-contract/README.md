@@ -29,6 +29,11 @@ Its URLs use the reserved `.invalid` domain and synthetic signatures. They are
 transport examples, never identity, credentials, or usable capabilities. Rust
 and miner-facing code must not consume this validator-only vector.
 
+`coding_authoring_freeze_v1.json` freezes the validator-only authoring evidence
+digest, content-addressed evidence references, signed phase-transition message,
+and accepted response. It contains no patch or transcript bytes and grants no
+grader capability.
+
 The vectors contain only synthetic identifiers, digests, policies, and reserved
 domain transport examples. Private catalog records, repository bundles, hidden
 tests, policy labels, provider credentials, signing keys, and usable bearer

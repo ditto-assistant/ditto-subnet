@@ -33,6 +33,7 @@ from ditto.api_models.benchmark_progress import (
 )
 from ditto.api_models.coding import (
     CodingCapabilityCertificationReceipt,
+    coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
 )
@@ -222,6 +223,50 @@ def sign_coding_authoring_lease(
         ticket_id=ticket_id,
         nonce=nonce,
         requested_at=requested_at,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def sign_coding_authoring_freeze(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    bench_version: int,
+    run_row_id: UUID,
+    ticket_id: UUID,
+    ticket_deadline: datetime,
+    coding_run_id: str,
+    agent_artifact_sha256: str,
+    screened_image_sha256: str,
+    run_manifest_sha256: str,
+    task_set_manifest_sha256: str,
+    authoring_evidence_sha256: str,
+    authoring_transcript_object_key: str,
+    authoring_transcript_bytes: int,
+    authoring_event_count: int,
+    frozen_submission_object_key: str,
+) -> str:
+    """Sign one immutable shadow authoring-freeze transition."""
+
+    message = coding_authoring_freeze_signing_message(
+        validator_hotkey=validator_hotkey,
+        agent_id=agent_id,
+        bench_version=bench_version,
+        run_row_id=run_row_id,
+        ticket_id=ticket_id,
+        ticket_deadline=ticket_deadline,
+        coding_run_id=coding_run_id,
+        agent_artifact_sha256=agent_artifact_sha256,
+        screened_image_sha256=screened_image_sha256,
+        run_manifest_sha256=run_manifest_sha256,
+        task_set_manifest_sha256=task_set_manifest_sha256,
+        authoring_evidence_sha256=authoring_evidence_sha256,
+        authoring_transcript_object_key=authoring_transcript_object_key,
+        authoring_transcript_bytes=authoring_transcript_bytes,
+        authoring_event_count=authoring_event_count,
+        frozen_submission_object_key=frozen_submission_object_key,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()
