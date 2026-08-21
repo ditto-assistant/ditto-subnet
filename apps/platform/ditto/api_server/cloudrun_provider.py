@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from typing import Any
 
 import httpx
 
@@ -188,15 +189,16 @@ class CloudRunComputeProvider:
         if not name:
             return "pending"
         detail = await self._client.get_execution(name)
-        if int(detail.get("failedCount", 0) or 0) > 0:
+        counts = _execution_status(detail)
+        if int(counts.get("failedCount", 0) or 0) > 0:
             return "error"
-        if int(detail.get("cancelledCount", 0) or 0) > 0:
+        if int(counts.get("cancelledCount", 0) or 0) > 0:
             return "error"
-        if int(detail.get("runningCount", 0) or 0) > 0:
+        if int(counts.get("runningCount", 0) or 0) > 0:
             return "running"
-        if int(detail.get("succeededCount", 0) or 0) > 0:
+        if int(counts.get("succeededCount", 0) or 0) > 0:
             return "running"
-        if detail.get("completionTime"):
+        if counts.get("completionTime") or detail.get("completionTime"):
             return "running"
         return "pending"
 
@@ -219,6 +221,14 @@ class CloudRunComputeProvider:
                 ) == ("CONDITION_SUCCEEDED"):
                     return "running"
         return "pending"
+
+
+def _execution_status(detail: dict[str, Any]) -> dict[str, Any]:
+    """Cloud Run v2 nests counts under ``status``; tolerate flattened doubles."""
+    nested = detail.get("status")
+    if isinstance(nested, dict):
+        return nested
+    return detail
 
 
 def _split(resource_id: str) -> tuple[str, str]:
