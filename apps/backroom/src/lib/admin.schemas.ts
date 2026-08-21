@@ -4994,6 +4994,8 @@ export const codingShadowTicketRecordSchema = z.object({
 
 export const codingShadowRunRecordSchema = z.object({
   run_row_id: z.string().uuid(),
+  assignment_row_id: z.string().uuid().nullable(),
+  assignment_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
   coding_run_id: z.string(),
   bench_version: z.number().int().min(7),
   coding_contract_version: z.literal(1),
@@ -5003,6 +5005,10 @@ export const codingShadowRunRecordSchema = z.object({
   run_manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   task_set_manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/),
   task_count: z.number().int().min(1).max(100),
+  selection_block_number: z.number().int().min(1),
+  selection_block_hash: z.string().regex(/^0x[0-9a-f]{64}$/),
+  selection_block_timestamp: z.string().nullable(),
+  issued: z.boolean(),
   core_qualification_observation_id: z.string().uuid(),
   ticket_count: z.number().int().nonnegative(),
   result_count: z.number().int().nonnegative(),
@@ -5016,6 +5022,7 @@ export const codingShadowRunRecordSchema = z.object({
     'policy_changed',
     'qualification_stale',
     'catalog_retired',
+    'issuance_missing',
   ]),
   tickets: z.array(codingShadowTicketRecordSchema),
   created_at: z.string(),

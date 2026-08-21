@@ -36,6 +36,7 @@ from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
     CodingShadowResult,
+    CodingShadowRunIssuance,
     CodingShadowTicket,
     Score,
 )
@@ -72,7 +73,7 @@ class _FinalizedBlocks:
         return "0x" + "33" * 32
 
     async def get_finalized_block(self) -> BlockInfo:
-        return BlockInfo(number=1_000, hash="0x" + "ff" * 32)
+        return BlockInfo(number=103, hash="0x" + "ff" * 32)
 
 
 def _catalog_commitment() -> CodingCatalogCommitment:
@@ -300,12 +301,12 @@ async def _seed(
             )
         )
     async with maker() as session, session.begin():
-        await create_coding_selection_assignment(
+        assignment = await create_coding_selection_assignment(
             session,
             finalized_source=_FinalizedBlocks(),
             agent_id=agent_id,
             bench_version=_BENCH,
-            coding_run_id="coding-assignment-endpoint-001",
+            coding_run_id="coding-run-001",
             corpus_release_id="private-coding-corpus-v1",
             policy=CodingAssignmentPolicy(selection_delay_blocks=20),
         )
@@ -318,6 +319,32 @@ async def _seed(
             run_row_id=run.row.run_row_id,
             exposures=[_task_exposure()],
         )
+        session.add(
+            CodingShadowRunIssuance(
+                assignment_row_id=assignment.row.assignment_row_id,
+                run_row_id=run.row.run_row_id,
+                assignment_sha256=assignment.row.assignment_sha256,
+                agent_id=agent_id,
+                artifact_sha256="ab" * 32,
+                screened_image_sha256="cd" * 32,
+                bench_version=_BENCH,
+                coding_contract_version=1,
+                coding_run_id="coding-run-001",
+                corpus_release_id="private-coding-corpus-v1",
+                selection_block_number=123,
+                selection_block_hash="0x" + "33" * 32,
+                selection_candidate_probe=0,
+                selection_catalog_index=0,
+                selection_proof_sha256="ab" * 32,
+                selection_block_timestamp=(
+                    assignment.row.created_at + timedelta(seconds=1)
+                ),
+                task_count=1,
+                weight_eligible=False,
+                issued_at=assignment.row.created_at + timedelta(seconds=2),
+            )
+        )
+        await session.flush()
         ticket = await issue_coding_shadow_ticket(
             session,
             run_row_id=run.row.run_row_id,
@@ -419,7 +446,12 @@ async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
     assert body["shadow_only"] is True
     assert body["total_assignments"] == 1
     assert body["assignments"][0]["current"] is True
-    assert body["assignments"][0]["selection_block_number"] == 1_020
+    assert body["assignments"][0]["selection_block_number"] == 123
+    assert body["runs"][0]["issued"] is True
+    assert (
+        body["runs"][0]["assignment_row_id"]
+        == body["assignments"][0]["assignment_row_id"]
+    )
     assert body["runs"][0]["result_count"] == 1
     assert body["runs"][0]["quorum_complete"] is False
     assert body["runs"][0]["median_repair_mean_micros"] is None

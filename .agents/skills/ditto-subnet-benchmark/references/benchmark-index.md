@@ -19,6 +19,7 @@
 | Shadow coding sandbox executor | `services/dittobench-api/internal/codingexecutor/` |
 | Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |
 | Shadow selection assignment ledger | `apps/platform/ditto/db/queries/coding_assignments.py` |
+| Shadow finalized run issuer | `apps/platform/ditto/db/queries/coding_issuance.py` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |

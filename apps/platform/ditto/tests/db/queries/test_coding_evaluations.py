@@ -34,6 +34,7 @@ from ditto.db.models import (
     CodingSelectionAssignmentRow,
     CodingShadowResult,
     CodingShadowRun,
+    CodingShadowRunIssuance,
     CodingShadowTicket,
 )
 from ditto.db.queries.coding_assignments import (
@@ -45,6 +46,7 @@ from ditto.db.queries.coding_assignments import (
 from ditto.db.queries.coding_catalog import (
     CodingCatalogConflictError,
     CodingCatalogInactiveError,
+    coding_shadow_run_ready_for_ticket,
     expose_coding_shadow_run_tasks,
     insert_coding_catalog_release,
     retire_coding_catalog_release,
@@ -62,7 +64,8 @@ from ditto.db.queries.core_qualification import (
 )
 from ditto.db.queries.scores import MIN_ELIGIBLE_CASES, upsert_score
 
-_NOW = datetime(2026, 8, 21, 12, tzinfo=UTC)
+_NOW = datetime.now(UTC)
+_AGENT_CREATED_AT = _NOW + timedelta(minutes=5)
 _BENCH = 12
 _VALIDATOR = "5" + "B" * 47
 
@@ -206,7 +209,7 @@ def _authority(agent_id) -> CodingShadowRunAuthority:
 async def _seed_qualified_agent(
     session: AsyncSession,
     *,
-    created_at: datetime = _NOW,
+    created_at: datetime = _AGENT_CREATED_AT,
 ) -> Agent:
     agent = Agent(
         agent_id=uuid4(),
@@ -306,11 +309,8 @@ async def _seed_certification(session: AsyncSession, agent_id: UUID) -> None:
 async def test_selection_assignment_is_future_bound_idempotent_and_append_only(
     session: AsyncSession,
 ) -> None:
-    registered_at = await _seed_catalog(session)
-    agent = await _seed_qualified_agent(
-        session,
-        created_at=registered_at + timedelta(seconds=1),
-    )
+    await _seed_catalog(session)
+    agent = await _seed_qualified_agent(session)
     await _seed_certification(session, agent.agent_id)
     source = _FinalizedBlocks()
     policy = CodingAssignmentPolicy(selection_delay_blocks=20)
@@ -391,11 +391,8 @@ async def test_selection_assignment_is_future_bound_idempotent_and_append_only(
 async def test_selection_assignment_requires_all_shadow_authority(
     session: AsyncSession,
 ) -> None:
-    registered_at = await _seed_catalog(session)
-    agent = await _seed_qualified_agent(
-        session,
-        created_at=registered_at + timedelta(seconds=1),
-    )
+    await _seed_catalog(session)
+    agent = await _seed_qualified_agent(session)
     agent_id = agent.agent_id
     source = _FinalizedBlocks()
     policy = CodingAssignmentPolicy(selection_delay_blocks=20)
@@ -444,11 +441,8 @@ async def test_concurrent_assignment_attempts_cannot_grind_multiple_heights(
     session: AsyncSession,
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    registered_at = await _seed_catalog(session)
-    agent = await _seed_qualified_agent(
-        session,
-        created_at=registered_at + timedelta(seconds=1),
-    )
+    await _seed_catalog(session)
+    agent = await _seed_qualified_agent(session)
     await _seed_certification(session, agent.agent_id)
     barrier = asyncio.Barrier(2)
 
@@ -491,11 +485,8 @@ async def test_concurrent_assignment_attempts_cannot_grind_multiple_heights(
 async def test_selection_assignment_rejects_stale_core_policy(
     session: AsyncSession,
 ) -> None:
-    registered_at = await _seed_catalog(session)
-    agent = await _seed_qualified_agent(
-        session,
-        created_at=registered_at + timedelta(seconds=1),
-    )
+    await _seed_catalog(session)
+    agent = await _seed_qualified_agent(session)
     await _seed_certification(session, agent.agent_id)
     async with session.begin():
         await insert_core_qualification_policy(
@@ -531,7 +522,7 @@ async def test_selection_assignment_rejects_stale_core_policy(
 
 
 async def test_run_requires_core_qualification(session: AsyncSession) -> None:
-    registered_at = await _seed_catalog(session)
+    await _seed_catalog(session)
     agent = Agent(
         agent_id=uuid4(),
         miner_hotkey="5UnqualifiedCodingMiner1111111111111111111111111111",
@@ -545,7 +536,7 @@ async def test_run_requires_core_qualification(session: AsyncSession) -> None:
         screened_image_ref="ditto-screen/unqualified-coding:latest",
         screened_image_upload_id=uuid4(),
         screened_image_verified_at=_NOW,
-        created_at=registered_at + timedelta(seconds=1),
+        created_at=_AGENT_CREATED_AT,
     )
     async with session.begin():
         session.add(agent)
@@ -572,7 +563,7 @@ async def test_catalog_commitment_must_predate_candidate_artifact(
     agent = await _seed_qualified_agent(session)
     commitment = _catalog_commitment(
         corpus_release_id="late-private-coding-corpus-v1",
-        committed_at_unix=int(_NOW.timestamp()) + 1,
+        committed_at_unix=int(agent.created_at.timestamp()) + 1,
     )
     async with session.begin():
         await insert_coding_catalog_release(
@@ -593,17 +584,49 @@ async def test_catalog_commitment_must_predate_candidate_artifact(
 async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
     session: AsyncSession,
 ) -> None:
-    registered_at = await _seed_catalog(session)
-    agent = await _seed_qualified_agent(
-        session,
-        created_at=registered_at + timedelta(seconds=1),
-    )
+    await _seed_catalog(session)
+    agent = await _seed_qualified_agent(session)
     await _seed_certification(session, agent.agent_id)
     authority = _authority(agent.agent_id)
     async with session.begin():
+        assignment = await create_coding_selection_assignment(
+            session,
+            finalized_source=_FinalizedBlocks(anchor_number=103),
+            agent_id=agent.agent_id,
+            bench_version=_BENCH,
+            coding_run_id=authority.coding_run_id,
+            corpus_release_id=authority.corpus_release_id,
+            policy=CodingAssignmentPolicy(selection_delay_blocks=20),
+        )
         created = await insert_coding_shadow_run(session, authority=authority)
         assert isinstance(created.row, CodingShadowRun)
         run_row_id = created.row.run_row_id
+        session.add(
+            CodingShadowRunIssuance(
+                assignment_row_id=assignment.row.assignment_row_id,
+                run_row_id=run_row_id,
+                assignment_sha256=assignment.row.assignment_sha256,
+                agent_id=authority.agent_id,
+                artifact_sha256=authority.agent_artifact_sha256,
+                screened_image_sha256=authority.screened_image_sha256,
+                bench_version=authority.bench_version,
+                coding_contract_version=authority.coding_contract_version,
+                coding_run_id=authority.coding_run_id,
+                corpus_release_id=authority.corpus_release_id,
+                selection_block_number=authority.selection_block_number,
+                selection_block_hash=authority.selection_block_hash,
+                selection_candidate_probe=0,
+                selection_catalog_index=0,
+                selection_proof_sha256="ab" * 32,
+                selection_block_timestamp=(
+                    assignment.row.created_at + timedelta(seconds=1)
+                ),
+                task_count=authority.task_count,
+                weight_eligible=False,
+                issued_at=assignment.row.created_at + timedelta(seconds=2),
+            )
+        )
+        await session.flush()
     assert created.idempotent is False
     async with session.begin():
         replay = await insert_coding_shadow_run(session, authority=authority)
@@ -758,10 +781,7 @@ async def test_catalog_exposure_is_single_use_and_retirement_is_terminal(
             reason="register successor private catalog",
             actor="test-admin",
         )
-    agent = await _seed_qualified_agent(
-        session,
-        created_at=second_catalog.row.created_at + timedelta(seconds=1),
-    )
+    agent = await _seed_qualified_agent(session)
     authority = _authority(agent.agent_id)
     async with session.begin():
         first_run = await insert_coding_shadow_run(session, authority=authority)
@@ -773,6 +793,13 @@ async def test_catalog_exposure_is_single_use_and_retirement_is_terminal(
             exposures=[_task_exposure()],
         )
     assert first_exposure.idempotent is False
+    async with session.begin():
+        stored_first_run = await session.get(CodingShadowRun, first_run_row_id)
+        assert stored_first_run is not None
+        assert not await coding_shadow_run_ready_for_ticket(
+            session,
+            run=stored_first_run,
+        )
 
     # A catalog retirement eventually permits public corpus disclosure.  The
     # task-version namespace is therefore global: changing the catalog release
