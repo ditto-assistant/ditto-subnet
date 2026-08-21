@@ -64,7 +64,7 @@
     {
       "id": "targon-operations",
       "title": "Targon rental logs and workload state",
-      "keywords": ["targon", "targon api", "targon logs", "rental logs", "workload logs", "kaniko logs", "wrk-", "TARGON_API_KEY", "submission builder logs"],
+      "keywords": ["targon rental logs", "targon rental", "rental logs", "workload logs", "kaniko logs", "wrk-"],
       "summary": "Read bounded Targon rental logs and state through Secret Manager and the v3 workloads API, then corroborate with Platform or builder identity.",
       "owns": [".agents/skills/gcloud-ditto-targon-readonly"],
       "read": [".agents/skills/gcloud-ditto-targon-readonly/SKILL.md"],

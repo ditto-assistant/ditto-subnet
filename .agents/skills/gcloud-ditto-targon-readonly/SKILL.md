@@ -27,7 +27,7 @@ Use the bundled script for every production Targon log or state read. Do not exp
 ## Guardrails
 
 - Treat this workflow as read-only even if the user has broader credentials.
-- Stream `TARGON_API_KEY` from `gcloud secrets versions access latest --project=ditto-app-dev --secret=TARGON_API_KEY` into `targon_cli --api-key-stdin`. Never assign the key to a shell variable, write it to a file, or ask the user to paste it.
+- Stream `TARGON_API_KEY` only through `scripts/query_targon.sh` into `targon_cli --api-key-stdin`. Never run Secret Manager access outside that wrapper, assign the key to a shell variable, write it to a file, or ask the user to paste it.
 - Do not use `/opt/ditto-platform/.env` for this key. That file is the database workflow; Targon uses Secret Manager.
 - Do not invoke `targon-smoke.sh` probes, `sweep-oneshots --apply`, or other mutating CLI commands from this skill.
 - Default API timeout is 60 seconds. Set `TARGON_TIMEOUT_SECONDS` only to a positive number no greater than 120.
