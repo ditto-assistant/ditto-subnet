@@ -74,7 +74,6 @@ def test_resolve_keeps_tag_when_registry_is_unavailable(
 
 def test_upload_request_requires_tar_config_digest() -> None:
     with pytest.raises(ValidationError):
-        SubmissionBuildUploadRequest(
-            output_sha256="12" * 32,
-            output_size_bytes=123,
+        SubmissionBuildUploadRequest.model_validate(
+            {"output_sha256": "12" * 32, "output_size_bytes": 123}
         )
