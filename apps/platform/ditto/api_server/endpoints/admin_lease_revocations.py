@@ -7,7 +7,7 @@ this run killed" is reachable solely through a psql session against production.
 
 This is the product surface for that question, and the one Backroom wraps. It is
 deliberately not the *only* way in: the repo also carries the
-``gcloud-ditto-platform-db-readonly`` skill, which is the diagnostic escape hatch
+``gcloud-ditto-readonly`` skill, which is the diagnostic escape hatch
 for the next table someone forgets to expose. An endpoint answers a question
 somebody anticipated; direct read access answers the one they did not.
 

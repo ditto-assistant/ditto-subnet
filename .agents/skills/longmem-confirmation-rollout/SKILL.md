@@ -24,7 +24,7 @@ Use these companion skills when their boundary is active:
 - `ditto-subnet-platform` for policy, tickets, persisted evidence, API, or schema changes.
 - `ditto-subnet-release-ops` for exact release identity and fleet activation.
 - `ditto-subnet-worktree` and `github` for isolated implementation and PR publication.
-- `wandb-ops` and `gcloud-ditto-platform-db-readonly` for live read-only diagnosis.
+- `wandb-ops` and `gcloud-ditto-readonly` for live read-only diagnosis.
 
 Read [the evidence ladder](references/evidence-ladder.md) before making a live
 success claim. Read [the role prompts](references/independent-review-prompts.md)

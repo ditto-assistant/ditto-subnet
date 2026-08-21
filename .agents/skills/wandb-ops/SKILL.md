@@ -46,7 +46,7 @@ zsh -ic 'exec uv run --with wandb python \
 4. Inspect a named table only when scalar telemetry is insufficient.
 5. Compare at least one successful or progressing peer before calling a failure
    fleet-wide.
-6. Corroborate W&B with the authoritative Platform API, production read-only DB,
+6. Corroborate W&B with the authoritative Platform API, `$gcloud-ditto-readonly`,
    deployed release identity, or chain state as appropriate.
 
 Separate scoring failures from telemetry-only failures, host pressure or process
