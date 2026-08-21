@@ -1,44 +1,60 @@
-# SN118 preview channels
+# SN118 preview control harness
 
-Same profiles and cheatcodes locally and in GitHub Actions. Previews never
-publish GitHub Releases, `v*` images, or `compat-2`.
+This directory provides preview plan validation plus a loopback-only mock
+control and inference fault proxy. The same checks run locally and in GitHub
+Actions. It does **not** launch or deploy Platform, dashboard, Backroom, a
+chain, scorer, or validator, and it never publishes a release or `compat-2`.
 
-## Profiles (multi-select)
+## Profiles
 
-| Profiles | What runs | Talks to |
-|---|---|---|
-| `dashboard`, `backroom`, or both | SPA / Worker preview | **Production Platform** |
-| `stack` | Platform + one **localnet** validator + scorer | Isolated only |
-| `stack-copy` | `stack` plus a restored snapshot, then `align_from_db` | Isolated only |
+| Profile | Contract |
+|---|---|
+| `dashboard` | Public dashboard plan; may attach to production Platform |
+| `stack` | Isolated-stack requirements, including one localnet validator |
+| `stack-copy` | `stack` requirements plus a sanitized Postgres snapshot |
 
-Illegal: preview Platform attached to production validators.
+Backroom is an authenticated write control plane. It is only part of an
+isolated `stack` plan and must never receive production OAuth, session, MCP, or
+Platform admin credentials from preview code.
 
 ```bash
-./scripts/preview compose dashboard,backroom
+./scripts/preview compose dashboard
 ./scripts/preview compose stack
 ./scripts/preview compose stack --attach-prod-api   # exits 2
+./scripts/preview compose backroom                   # exits 2
 ```
 
-## Local
+`compose` reports required/planned URLs. It does not claim they are live.
+
+## Local mock controls
+
+Start localstack separately if healthy forwarding is needed, then run:
 
 ```bash
-# Frontends against prod API (no validator).
-./scripts/preview compose dashboard,backroom
+uv run python -m ditto.preview up stack \
+  --sha "$(git rev-parse HEAD)" \
+  --upstream http://127.0.0.1:11434
+```
 
-# Isolated stack: overlay engine + optional Postgres + fault proxy.
-uv run python -m ditto.preview up stack --sha "$(git rev-parse HEAD)"
-# Ctrl-C stops it.
+`up` stays in the foreground and starts only preview-control and the fault
+proxy. Press Ctrl-C to stop them. The worktree writes the random bearer token
+to a mode-0600 state file, so a second terminal in the same worktree can run:
 
-# Cheatcodes (Foundry analog) against the running control URL:
-export PREVIEW_CONTROL_URL=http://127.0.0.1:…..  # printed by `up`
-./scripts/preview ctl register --hotkey 5EexQS8UxChmkZ6vGeacAkwcf3TARR1Go5rd684Mf69dwgTY --permit
+```bash
+./scripts/preview ctl register \
+  --hotkey 5EexQS8UxChmkZ6vGeacAkwcf3TARR1Go5rd684Mf69dwgTY --permit
 ./scripts/preview ctl warp_block --n 20
 ./scripts/preview ctl inject_provider --status 429
 ./scripts/preview ctl inject_provider --clear
 ./scripts/preview ctl align_from_db --json-path preview/fixtures/hotkeys.json
 ```
 
-`stack-copy` after Postgres is up:
+Set `FAULT_PROXY_URL` to the printed fault-proxy URL before starting the
+localstack harness when inference should pass through injected faults.
+
+## Snapshot guard
+
+The helper only permits the checked-in loopback Postgres identity:
 
 ```bash
 docker compose -f preview/compose.yml up -d
@@ -46,30 +62,12 @@ PREVIEW_DATABASE_URL=postgres://ditto:preview@127.0.0.1:5433/ditto_platform_prev
   ./scripts/preview-restore-snapshot.sh /path/to/sanitized.dump
 ```
 
-Point localstack's relay at the fault proxy so injected 429s hit inference:
+It runs destructive `pg_restore --clean`, so other hosts, ports, users, and
+database names fail closed. Restoring a snapshot does not launch a stack or
+connect the in-memory overlay to Platform/validator behavior.
 
-```bash
-FAULT_PROXY_URL=http://127.0.0.1:….. HARNESS_GATEWAY_URL=$FAULT_PROXY_URL make localstack-up
-```
+## GitHub Actions
 
-## Cheatcodes
-
-| Command | Effect |
-|---|---|
-| `register` / `permit` | God-register a hotkey on the overlay (no mnemonic) |
-| `warp_block` / `warp_tempo` | Advance overlay time; leases expire when due |
-| `issue_lease` / `expire_lease` | Preview leases |
-| `issue_grant` / `exhaust_allowance` | `inference_allowance_exhausted` |
-| `inject_provider` | Fault proxy returns 429 or 503 |
-| `drop_relay` | Fault proxy returns 502 |
-| `align_from_db` | Register every hotkey from a snapshot JSON or Postgres |
-| `snapshot` / `revert` | Named overlay checkpoints |
-
-The engine refuses `finney` and OpenTensor public endpoints.
-
-## GitHub
-
-`.github/workflows/preview.yml` accepts comma-separated `profiles` and an
-optional SHA. It always proves composition + cheatcodes. Cloud publish of
-dashboard/backroom URLs needs the `preview` environment secrets and a
-Terraform-applied `*.preview.dittobench.ai` wildcard.
+`.github/workflows/preview.yml` checks out one exact SHA, resolves a plan, and
+runs the mock-control tests with read-only repository permissions. It does not
+create URLs or cloud resources, and therefore has no teardown job.

@@ -1,8 +1,8 @@
 """Multi-select preview profiles and the illegal combinations.
 
-``dashboard`` and ``backroom`` may attach to production Platform. Anything
-that needs a Platform API is ``stack`` or ``stack-copy`` and always brings
-one localnet validator. Preview Platform plus prod validators is refused.
+Only the public dashboard may attach to production Platform. Backroom is an
+authenticated operator control plane and therefore requires an isolated
+``stack`` / ``stack-copy`` plan.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 PREVIEW_PROFILES = frozenset({"dashboard", "backroom", "stack", "stack-copy"})
-_FRONTEND = frozenset({"dashboard", "backroom"})
+_PROD_FRONTEND = frozenset({"dashboard"})
 
 
 class CompositionError(ValueError):
@@ -54,7 +54,7 @@ def compose(
 
     ``stack-copy`` implies ``stack``. ``stack`` implies one localnet validator
     and forbids attaching the preview Platform to production validators.
-    Frontends without ``stack`` may attach to production Platform.
+    The dashboard without ``stack`` may attach to production Platform.
     """
 
     selected = {item.strip().lower() for item in profiles if str(item).strip()}
@@ -66,6 +66,11 @@ def compose(
 
     copy_database = "stack-copy" in selected
     stack = copy_database or "stack" in selected
+    if "backroom" in selected and not stack:
+        raise CompositionError(
+            "backroom is an authenticated write control plane and cannot attach "
+            "to production Platform; select stack or stack-copy"
+        )
     dashboard = "dashboard" in selected or stack
     backroom = "backroom" in selected or stack
     # Selecting only stack still gets dashboard+backroom URLs pointed at the
@@ -80,11 +85,11 @@ def compose(
             "issue leases into mainnet; use stack/stack-copy on localnet, "
             "or dashboard/backroom without stack against prod Platform"
         )
-    if attach_prod_api and not (selected & _FRONTEND):
+    if attach_prod_api and not (selected & _PROD_FRONTEND):
         raise CompositionError(
             "attach_prod_api is only valid with dashboard and/or backroom"
         )
-    if attach_prod_api and selected - _FRONTEND:
+    if attach_prod_api and selected - _PROD_FRONTEND:
         raise CompositionError(
             "attach_prod_api cannot combine with stack or stack-copy"
         )
@@ -92,7 +97,7 @@ def compose(
     # Frontends-only default to prod API so a dashboard PR does not spin a
     # validator. Explicit attach_prod_api=False still talks to prod unless
     # stack is on — there is no preview Platform without stack.
-    use_prod_api = (not stack) and (attach_prod_api or bool(selected & _FRONTEND))
+    use_prod_api = (not stack) and (attach_prod_api or bool(selected & _PROD_FRONTEND))
 
     return PreviewPlan(
         profiles=frozenset(selected | ({"stack"} if copy_database else set())),

@@ -5,7 +5,6 @@
 ignored_paths = [
   "localstack/**",
   "preview/**",
-  "ditto/preview/**",
   "scripts/preview",
   "scripts/preview-restore-snapshot.sh",
   ".env.example",
@@ -52,6 +51,7 @@ depends_on = ["screening_protocol"]
 paths = [
   "ditto/__init__.py",
   "ditto/miner_cli/**",
+  "ditto/preview/**",
   "ditto/api_models/__init__.py",
   "ditto/api_models/agent_status.py",
   "ditto/api_models/attestation.py",
@@ -79,6 +79,7 @@ paths = [
   "ditto/chain/**",
   "ditto/system_health.py",
   "ditto/validator/**",
+  "ditto/preview/**",
   "ditto/api_models/agent_status.py",
   "ditto/api_models/benchmark_capacity.py",
   "ditto/api_models/benchmark_progress.py",

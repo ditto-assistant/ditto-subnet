@@ -17,13 +17,17 @@ def _engine() -> PreviewEngine:
 
 
 def test_refuses_finney() -> None:
-    with pytest.raises(IsolationError, match="public network"):
+    with pytest.raises(IsolationError, match="local network"):
         PreviewEngine(network="finney", endpoint="ws://127.0.0.1:9944")
-    with pytest.raises(IsolationError, match="opentensor"):
+    with pytest.raises(IsolationError, match="non-loopback"):
         PreviewEngine(
             network="local",
             endpoint="wss://entrypoint.finney.opentensor.ai:443",
         )
+    with pytest.raises(IsolationError, match="non-loopback"):
+        PreviewEngine(network="local", endpoint="wss://public.example.com:443")
+    with pytest.raises(IsolationError, match="ws://"):
+        PreviewEngine(network="local", endpoint="https://127.0.0.1:9944")
 
 
 def test_register_permit_warp_and_snapshot() -> None:
@@ -52,6 +56,8 @@ def test_lease_expires_on_warp_and_via_cheatcode() -> None:
     second = engine.issue_lease(HOTKEY, lifetime_blocks=100)
     engine.expire_lease(second.lease_id)
     assert engine.leases[second.lease_id].expired is True
+    with pytest.raises(ValueError, match="positive"):
+        engine.issue_lease(HOTKEY, lifetime_blocks=0)
 
 
 def test_allowance_and_provider_faults() -> None:
@@ -77,4 +83,15 @@ def test_align_from_json_snapshot(tmp_path: Path) -> None:
     assert aligned == [HOTKEY, HOTKEY_B]
     assert engine.neurons[HOTKEY].permit is True
     assert engine.neurons[HOTKEY_B].uid == 1
+    assert hotkeys_from_json(path) == [HOTKEY, HOTKEY_B]
+
+
+def test_alignment_is_atomic_and_mixed_rows_are_preserved(tmp_path: Path) -> None:
+    engine = _engine()
+    with pytest.raises(ValueError, match="SS58"):
+        engine.align_from_hotkeys([HOTKEY, "invalid"])
+    assert engine.neurons == {}
+
+    path = tmp_path / "mixed.json"
+    path.write_text(json.dumps([{"miner_hotkey": HOTKEY}, {"hotkey": HOTKEY_B}]))
     assert hotkeys_from_json(path) == [HOTKEY, HOTKEY_B]

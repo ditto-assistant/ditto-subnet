@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
 import httpx
+import pytest
 
+import ditto.preview.orchestrator as orchestrator
 from ditto.preview.client import PreviewClient
-from ditto.preview.engine import PreviewEngine
+from ditto.preview.engine import IsolationError, PreviewEngine
 from ditto.preview.orchestrator import up
 from ditto.preview.proxy import FaultProxy
 from ditto.preview.server import PreviewServer
@@ -20,7 +23,7 @@ def test_http_cheatcodes_roundtrip() -> None:
     server = PreviewServer(engine, host="127.0.0.1", port=0)
     server.start()
     try:
-        client = PreviewClient(server.url)
+        client = PreviewClient(server.url, token=server.token)
         assert client.health()["ok"] is True
         client.register(HOTKEY, permit=True, stake=2)
         client.warp_block(3)
@@ -44,16 +47,52 @@ def test_http_cheatcodes_roundtrip() -> None:
         server.stop()
 
 
+def test_http_control_requires_auth_json_and_loopback() -> None:
+    engine = PreviewEngine(network="local", endpoint="ws://127.0.0.1:9944")
+    with pytest.raises(IsolationError, match="loopback"):
+        PreviewServer(engine, host="0.0.0.0", port=0)
+
+    server = PreviewServer(engine, host="127.0.0.1", port=0)
+    server.start()
+    try:
+        unauthorized = httpx.post(
+            server.url + "/v1/cheat/warp_block",
+            content='{"n": 5}',
+            headers={"Content-Type": "text/plain"},
+        )
+        assert unauthorized.status_code == 401
+        assert engine.block == 1
+
+        wrong_type = httpx.post(
+            server.url + "/v1/cheat/warp_block",
+            content='{"n": 5}',
+            headers={
+                "Authorization": f"Bearer {server.token}",
+                "Content-Type": "text/plain",
+            },
+        )
+        assert wrong_type.status_code == 400
+        assert engine.block == 1
+    finally:
+        server.stop()
+
+
 def test_fault_proxy_injects_429_then_forwards() -> None:
     upstream = _Upstream()
     upstream.start()
     engine = PreviewEngine(network="local", endpoint="ws://127.0.0.1:9944")
     control = PreviewServer(engine, host="127.0.0.1", port=0)
     control.start()
-    proxy = FaultProxy(control.url, upstream.url, host="127.0.0.1", port=0)
+    proxy = FaultProxy(
+        control.url,
+        upstream.url,
+        host="127.0.0.1",
+        port=0,
+        control_token=control.token,
+    )
     proxy.start()
     try:
-        client = PreviewClient(control.url)
+        client = PreviewClient(control.url, token=control.token)
         client.inject_provider(429)
         denied = httpx.get(proxy.url + "/v1/chat/completions", timeout=2)
         assert denied.status_code == 429
@@ -61,10 +100,47 @@ def test_fault_proxy_injects_429_then_forwards() -> None:
         ok = httpx.get(proxy.url + "/v1/chat/completions", timeout=2)
         assert ok.status_code == 200
         assert ok.json()["ok"] is True
+        assert upstream.paths[-1] == "/v1/chat/completions"
         client.drop_relay(True)
         dropped = httpx.get(proxy.url + "/health", timeout=2)
         assert dropped.status_code == 502
     finally:
+        proxy.stop()
+        control.stop()
+        upstream.stop()
+
+
+def test_fault_proxy_preserves_base_path_and_bounds_upstream_failure() -> None:
+    upstream = _Upstream()
+    upstream.start()
+    engine = PreviewEngine(network="local", endpoint="ws://127.0.0.1:9944")
+    control = PreviewServer(engine, host="127.0.0.1", port=0)
+    control.start()
+    proxy = FaultProxy(
+        control.url,
+        upstream.url + "/base",
+        host="127.0.0.1",
+        port=0,
+        control_token=control.token,
+    )
+    dead = FaultProxy(
+        control.url,
+        "http://127.0.0.1:1/base",
+        host="127.0.0.1",
+        port=0,
+        control_token=control.token,
+    )
+    proxy.start()
+    dead.start()
+    try:
+        response = httpx.get(proxy.url + "/child?q=1", timeout=2)
+        assert response.status_code == 200
+        assert upstream.paths[-1] == "/base/child?q=1"
+        unavailable = httpx.get(dead.url + "/child", timeout=2)
+        assert unavailable.status_code == 502
+        assert "upstream unreachable" in unavailable.text
+    finally:
+        dead.stop()
         proxy.stop()
         control.stop()
         upstream.stop()
@@ -76,19 +152,55 @@ def test_up_stack_writes_urls_and_control() -> None:
         assert handle.plan.localnet_validator is True
         assert handle.urls["control"].startswith("http://127.0.0.1:")
         assert "fault_proxy" in handle.urls
-        client = PreviewClient(handle.urls["control"])
+        client = PreviewClient(handle.urls["control"], token=handle.control_token)
         assert client.health()["ok"] is True
     finally:
         handle.down()
 
 
+def test_up_unwinds_servers_when_compose_start_fails(monkeypatch) -> None:
+    controls: list[PreviewServer] = []
+    proxies: list[FaultProxy] = []
+
+    class RecordingServer(PreviewServer):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            controls.append(self)
+
+    class RecordingProxy(FaultProxy):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__(*args, **kwargs)
+            proxies.append(self)
+
+    def fail_compose(*_args, **_kwargs):
+        raise subprocess.CalledProcessError(1, ["docker", "compose"])
+
+    monkeypatch.setattr(orchestrator, "PreviewServer", RecordingServer)
+    monkeypatch.setattr(orchestrator, "FaultProxy", RecordingProxy)
+    monkeypatch.setattr(orchestrator.subprocess, "run", fail_compose)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        orchestrator.up(
+            ["stack"],
+            ref="feat/fail",
+            sha="abc1234567890fff",
+            start_postgres=True,
+        )
+    assert controls and controls[0]._thread is None
+    assert proxies and proxies[0]._thread is None
+
+
 class _Upstream:
     def __init__(self) -> None:
+        self.paths: list[str] = []
+        owner = self
+
         class Handler(BaseHTTPRequestHandler):
             def log_message(self, *_args: object) -> None:
                 return
 
             def do_GET(self) -> None:  # noqa: N802
+                owner.paths.append(self.path)
                 blob = json.dumps({"ok": True}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")

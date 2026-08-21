@@ -7,7 +7,7 @@ import subprocess
 from collections.abc import Sequence
 from pathlib import Path
 
-from ditto.preview.engine import PreviewEngine, hotkeys_from_mapping
+from ditto.preview.engine import PreviewEngine
 
 # Distinct miner hotkeys on a Platform snapshot. Validators and screeners
 # that only exist on chain (not as agents) can be passed via extra JSON.
@@ -22,9 +22,7 @@ def hotkeys_from_json(path: Path) -> list[str]:
     payload = json.loads(path.read_text())
     if isinstance(payload, list):
         if payload and isinstance(payload[0], dict):
-            return hotkeys_from_mapping(
-                payload, "miner_hotkey"
-            ) or hotkeys_from_mapping(payload, "hotkey")
+            return _hotkeys_from_rows(payload)
         return [str(item).strip() for item in payload if str(item).strip()]
     if isinstance(payload, dict):
         if "hotkeys" in payload:
@@ -38,10 +36,21 @@ def hotkeys_from_json(path: Path) -> list[str]:
             return unique
         rows = payload.get("agents") or payload.get("rows") or []
         if isinstance(rows, list):
-            return hotkeys_from_mapping(rows, "miner_hotkey") or hotkeys_from_mapping(
-                rows, "hotkey"
-            )
+            return _hotkeys_from_rows(rows)
     raise ValueError(f"unrecognized hotkey snapshot: {path}")
+
+
+def _hotkeys_from_rows(rows: Sequence[object]) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        value = str(row.get("miner_hotkey") or row.get("hotkey") or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            found.append(value)
+    return found
 
 
 def hotkeys_from_postgres(database_url: str) -> list[str]:

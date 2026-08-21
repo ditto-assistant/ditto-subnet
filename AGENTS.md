@@ -18,16 +18,16 @@ multi-repository temp clones or cross-repository synchronization for components
 already present in this tree. Read the nearest nested `AGENTS.md` or `CLAUDE.md`
 before editing a component.
 
-## Preview channels
+## Preview control harness
 
-From a worktree, compose and prove an isolated preview with the same cranks
-GitHub Actions uses. `dashboard`/`backroom` talk to production Platform.
-`stack` / `stack-copy` always include one localnet validator. Never attach a
-preview Platform to production validators. Never publish `compat-2` from a
-preview.
+From a worktree, resolve a preview plan and run the loopback-only mock control
+and fault proxy with the same checks GitHub Actions uses. `up` does not launch
+Platform, Backroom, a chain, scorer, or validator; those are requirements in a
+`stack` plan, not implemented services. Only the public dashboard may target
+production Platform. Backroom always requires an isolated stack.
 
 ```bash
-./scripts/preview compose dashboard,backroom
+./scripts/preview compose dashboard
 uv run python -m ditto.preview up stack --sha "$(git rev-parse HEAD)"
 ```
 

@@ -396,6 +396,16 @@ def test_live_runtime_inputs_are_mapped(
     assert selected(components, ignored_paths, path) == expected
 
 
+def test_preview_package_changes_release_every_shipped_owner(
+    components, ignored_paths
+) -> None:
+    assert selected(components, ignored_paths, "ditto/preview/engine.py") == {
+        "miner_cli",
+        "validator",
+        "validator_stack",
+    }
+
+
 def test_unmapped_change_fails_closed(components, ignored_paths) -> None:
     with pytest.raises(ValueError, match="not mapped"):
         selected(components, ignored_paths, "new-runtime-entrypoint.sh")

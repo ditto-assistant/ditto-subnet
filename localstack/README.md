@@ -1,9 +1,10 @@
 # Bench localstack
 
-For isolated Platform+validator previews and Foundry-style cheatcodes (429s,
+For the loopback-only mock controls and Foundry-style fault injection (429s,
 lease expiry, overlay metagraph), see [`preview/README.md`](../preview/README.md)
-and `./scripts/preview`. Set `FAULT_PROXY_URL` before `make localstack-up` to
-route harness traffic through preview-control faults.
+and `./scripts/preview`. The preview harness does not launch Platform or a
+validator. Start localstack first, then set `FAULT_PROXY_URL` to route harness
+traffic through preview-control faults.
 
 Run a **real, scored DittoBench run end to end on one machine** and print a
 composite score, so bench versions (currently **v12**) can be validated against

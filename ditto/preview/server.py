@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hmac
 import json
+import secrets
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -16,13 +18,13 @@ from ditto.preview.engine import IsolationError, PreviewEngine
 
 
 class _Ignore(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", strict=True)
 
 
 class RegisterBody(_Ignore):
     hotkey: str
     permit: bool = False
-    stake: float = 0.0
+    stake: float = Field(default=0.0, ge=0, allow_inf_nan=False)
 
 
 class PermitBody(_Ignore):
@@ -31,13 +33,13 @@ class PermitBody(_Ignore):
 
 
 class WarpBody(_Ignore):
-    n: int = 1
+    n: int = Field(default=1, ge=0)
 
 
 class LeaseBody(_Ignore):
     hotkey: str | None = None
     lease_id: str | None = None
-    lifetime_blocks: int = 100
+    lifetime_blocks: int = Field(default=100, ge=1)
 
 
 class GrantBody(_Ignore):
@@ -53,7 +55,7 @@ class DropBody(_Ignore):
 
 
 class SnapshotBody(_Ignore):
-    name: str
+    name: str = Field(min_length=1, max_length=128)
 
 
 class AlignBody(_Ignore):
@@ -68,8 +70,13 @@ def _bind_host(host: object) -> str:
     return str(host)
 
 
-def make_handler(engine: PreviewEngine) -> type[BaseHTTPRequestHandler]:
+_MAX_REQUEST_BYTES = 1024 * 1024
+
+
+def make_handler(engine: PreviewEngine, token: str) -> type[BaseHTTPRequestHandler]:
     """Build a request handler closed over ``engine``."""
+
+    engine_lock = threading.RLock()
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_args: object) -> None:
@@ -81,15 +88,21 @@ def make_handler(engine: PreviewEngine) -> type[BaseHTTPRequestHandler]:
                 self._send(200, {"ok": True, "network": engine.network})
                 return
             if path == "/v1/state":
-                self._send(200, engine.state())
+                if not self._authorized():
+                    return
+                with engine_lock:
+                    self._send(200, engine.state())
                 return
             self._send(404, {"error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802
             path = urlparse(self.path).path
+            if not self._authorized():
+                return
             try:
                 body = self._json()
-                payload = self._dispatch(path, body)
+                with engine_lock:
+                    payload = self._dispatch(path, body)
             except IsolationError as exc:
                 self._send(403, {"error": str(exc)})
                 return
@@ -171,24 +184,49 @@ def make_handler(engine: PreviewEngine) -> type[BaseHTTPRequestHandler]:
             return None
 
         def _json(self) -> dict[str, Any]:
-            length = int(self.headers.get("Content-Length") or "0")
+            if self.headers.get("Transfer-Encoding"):
+                raise ValueError("Transfer-Encoding is not supported")
+            content_type = self.headers.get_content_type()
+            if content_type != "application/json":
+                raise ValueError("Content-Type must be application/json")
+            try:
+                length = int(self.headers.get("Content-Length") or "0")
+            except ValueError as exc:
+                raise ValueError("invalid Content-Length") from exc
+            if length < 0 or length > _MAX_REQUEST_BYTES:
+                raise ValueError(
+                    f"Content-Length must be between 0 and {_MAX_REQUEST_BYTES}"
+                )
             if length == 0:
                 return {}
             raw = self.rfile.read(length)
             if not raw:
                 return {}
-            parsed = json.loads(raw)
+            parsed = json.loads(
+                raw,
+                parse_constant=lambda value: (_ for _ in ()).throw(
+                    ValueError(f"invalid JSON number {value}")
+                ),
+            )
             if not isinstance(parsed, dict):
                 raise ValueError("JSON object required")
             return parsed
 
         def _send(self, status: int, payload: dict[str, Any]) -> None:
-            blob = json.dumps(payload).encode("utf-8")
+            blob = json.dumps(payload, allow_nan=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(blob)))
             self.end_headers()
             self.wfile.write(blob)
+
+        def _authorized(self) -> bool:
+            supplied = self.headers.get("Authorization", "")
+            expected = f"Bearer {token}"
+            if hmac.compare_digest(supplied, expected):
+                return True
+            self._send(401, {"error": "preview-control authorization required"})
+            return False
 
     return Handler
 
@@ -196,9 +234,21 @@ def make_handler(engine: PreviewEngine) -> type[BaseHTTPRequestHandler]:
 class PreviewServer:
     """Threading HTTP server for one :class:`PreviewEngine`."""
 
-    def __init__(self, engine: PreviewEngine, host: str = "127.0.0.1", port: int = 0):
+    def __init__(
+        self,
+        engine: PreviewEngine,
+        host: str = "127.0.0.1",
+        port: int = 0,
+        *,
+        token: str | None = None,
+    ):
+        if host != "127.0.0.1":
+            raise IsolationError("preview-control only binds to loopback")
         self.engine = engine
-        self._httpd = ThreadingHTTPServer((host, port), make_handler(engine))
+        self.token = token or secrets.token_urlsafe(32)
+        self._httpd = ThreadingHTTPServer(
+            (host, port), make_handler(engine, self.token)
+        )
         self._thread: threading.Thread | None = None
 
     @property
@@ -228,9 +278,12 @@ def serve_forever(
     *,
     host: str = "127.0.0.1",
     port: int = 4077,
+    token: str,
 ) -> None:
     """Block serving cheatcodes on ``host:port``."""
-    httpd = ThreadingHTTPServer((host, port), make_handler(engine))
+    if host != "127.0.0.1":
+        raise IsolationError("preview-control only binds to loopback")
+    httpd = ThreadingHTTPServer((host, port), make_handler(engine, token))
     try:
         httpd.serve_forever()
     finally:

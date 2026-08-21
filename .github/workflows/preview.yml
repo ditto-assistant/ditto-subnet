@@ -1,35 +1,34 @@
-name: Preview
+name: Preview controls
 
-# Isolated SN118 previews. Never publishes GitHub Releases, v* tags, or
-# compat-2. Dashboard/backroom without stack talk to production Platform.
-# stack / stack-copy always include one localnet validator.
+# Resolve and test the source-checkout preview control harness. This workflow
+# does not deploy a Platform, validator, Backroom, DNS record, or cloud resource.
 
 on:
   workflow_dispatch:
     inputs:
       profiles:
-        description: Comma-separated profiles (dashboard, backroom, stack, stack-copy)
+        description: Comma-separated profiles (dashboard, stack, stack-copy)
         required: true
         type: string
-        default: dashboard,backroom
+        default: dashboard
       attach_prod_api:
-        description: Frontends against prod Platform (illegal with stack)
+        description: Public dashboard against prod Platform (illegal with stack)
         type: boolean
         default: false
       ref:
-        description: Branch or tag (empty uses this workflow ref)
+        description: Branch or tag label (empty uses this workflow ref)
         type: string
         required: false
       sha:
-        description: 40-character commit (empty uses github.sha)
+        description: Exact 40-character commit to check out and test
         type: string
         required: false
   pull_request:
-    types: [opened, synchronize, closed]
+    types: [opened, synchronize]
 
 permissions:
   contents: read
-  pull-requests: write
+  pull-requests: read
 
 concurrency:
   group: preview-${{ github.event.pull_request.number || github.ref }}
@@ -37,54 +36,71 @@ concurrency:
 
 jobs:
   plan:
-    if: github.event.action != 'closed'
     runs-on: ubuntu-24.04
     outputs:
       profiles: ${{ steps.resolve.outputs.profiles }}
       attach: ${{ steps.resolve.outputs.attach }}
+      sha: ${{ steps.resolve.outputs.sha }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          ref: ${{ inputs.ref || github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || inputs.sha || inputs.ref || github.sha }}
 
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
 
-      - name: Resolve profiles
+      - name: Resolve profiles at the checked-out SHA
         id: resolve
         env:
           INPUT_PROFILES: ${{ inputs.profiles }}
           INPUT_ATTACH: ${{ inputs.attach_prod_api && 'true' || 'false' }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_SHA: ${{ inputs.sha }}
+          EVENT_REF: ${{ github.head_ref || github.ref_name }}
           PR_FILES: ${{ github.event_name == 'pull_request' && 'true' || 'false' }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          actual_sha="$(git rev-parse HEAD)"
+          [[ "$actual_sha" =~ ^[0-9a-f]{40}$ ]]
+          if [ -n "$INPUT_SHA" ] && [ "$INPUT_SHA" != "$actual_sha" ]; then
+            echo "requested SHA does not match checked out commit" >&2
+            exit 2
+          fi
+
           profiles="${INPUT_PROFILES:-}"
           attach="${INPUT_ATTACH}"
           if [ -z "$profiles" ] && [ "$PR_FILES" = true ]; then
-            files="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${{ github.event.pull_request.number }}/files" --jq '.[].filename')"
+            files="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename')"
             profiles=""
             echo "$files" | grep -q '^apps/platform/dashboard/' && profiles="${profiles},dashboard"
-            echo "$files" | grep -q '^apps/backroom/' && profiles="${profiles},backroom"
-            echo "$files" | grep -Eq '^(apps/platform/ditto/|apps/platform/alembic/|ditto/validator/)' && profiles="${profiles},stack"
+            echo "$files" | grep -Eq '^(apps/backroom/|apps/platform/ditto/|apps/platform/alembic/|ditto/(api_models|chain|validator)/|services/dittobench-api/)' && profiles="${profiles},stack"
             echo "$files" | grep -q '^apps/platform/alembic/' && profiles="${profiles},stack-copy"
             profiles="${profiles#,}"
-            [ -n "$profiles" ] || profiles="dashboard,backroom"
+            [ -n "$profiles" ] || profiles="stack"
             if echo "$profiles" | grep -Eq '(^|,)stack'; then
               attach=false
             else
               attach=true
             fi
           fi
-          [ -n "$profiles" ] || profiles="dashboard,backroom"
-          extra=()
-          if [ "$attach" = true ]; then extra+=(--attach-prod-api); fi
-          uv run python -m ditto.preview compose "$profiles" \
-            "${extra[@]}" \
-            --ref "${{ github.head_ref || github.ref_name }}" \
-            --sha "${{ inputs.sha || github.sha }}"
-          echo "profiles=$profiles" >>"$GITHUB_OUTPUT"
-          echo "attach=$attach" >>"$GITHUB_OUTPUT"
+
+          [ -n "$profiles" ] || profiles="dashboard"
+          if [ "$attach" = true ]; then
+            plan_json="$(uv run python -m ditto.preview compose "$profiles" \
+              --attach-prod-api \
+              --ref "${INPUT_REF:-$EVENT_REF}" \
+              --sha "$actual_sha")"
+          else
+            plan_json="$(uv run python -m ditto.preview compose "$profiles" \
+              --ref "${INPUT_REF:-$EVENT_REF}" \
+              --sha "$actual_sha")"
+          fi
+          printf '%s\n' "$plan_json"
+          echo "profiles=$(jq -r '.profiles | join(",")' <<<"$plan_json")" >>"$GITHUB_OUTPUT"
+          echo "attach=$(jq -r '.attach_prod_api' <<<"$plan_json")" >>"$GITHUB_OUTPUT"
+          echo "sha=$actual_sha" >>"$GITHUB_OUTPUT"
 
   cheatcodes:
     needs: plan
@@ -93,20 +109,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ needs.plan.outputs.sha }}
 
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
 
       - name: Prove overlay cheatcodes
         run: uv run pytest ditto/tests/preview -q
-
-  teardown:
-    if: github.event.action == 'closed'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Record teardown
-        run: |
-          echo "Tear down preview for PR #${{ github.event.pull_request.number }} (TTL janitor also reap labeled GCP/Cloudflare resources)."
-          echo "No compat-2 or GitHub Release is ever created by this workflow."

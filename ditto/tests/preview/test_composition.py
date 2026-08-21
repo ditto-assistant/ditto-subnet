@@ -6,12 +6,20 @@ from ditto.preview.composition import CompositionError, compose
 from ditto.preview.identity import preview_host, preview_id
 
 
-def test_dashboard_and_backroom_attach_to_prod_platform() -> None:
-    plan = compose(["dashboard", "backroom"])
-    assert plan.dashboard and plan.backroom
+def test_dashboard_attaches_to_prod_platform() -> None:
+    plan = compose(["dashboard"])
+    assert plan.dashboard and not plan.backroom
     assert plan.stack is False
     assert plan.attach_prod_api is True
     assert plan.localnet_validator is False
+
+
+def test_backroom_requires_isolated_stack() -> None:
+    with pytest.raises(CompositionError, match="write control plane"):
+        compose(["backroom"])
+    plan = compose(["backroom", "stack"])
+    assert plan.backroom and plan.stack
+    assert plan.attach_prod_api is False
 
 
 def test_stack_implies_one_localnet_validator_and_frontends() -> None:
@@ -50,3 +58,5 @@ def test_preview_id_uses_branch_and_sha() -> None:
     host = preview_host(identity, "dash")
     assert host.endswith(".preview.dittobench.ai")
     assert "dash-" in host
+    with pytest.raises(ValueError, match="hexadecimal SHA"):
+        preview_id("feat/x", "not-a-sha-deadbeef")

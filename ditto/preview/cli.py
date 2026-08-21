@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import secrets
+import signal
 import sys
 
 from ditto.preview.client import PreviewClient
@@ -55,6 +57,11 @@ def main(argv: list[str] | None = None) -> int:
     up_p.add_argument(
         "--postgres", action="store_true", help="docker compose up postgres"
     )
+    up_p.add_argument(
+        "--upstream",
+        default=os.environ.get("PREVIEW_UPSTREAM_URL", "http://127.0.0.1:11434"),
+        help="local relay upstream for the fault proxy",
+    )
 
     sub.add_parser("down", help="Print how to stop the latest local preview")
     sub.add_parser("urls", help="Print the latest local preview URLs")
@@ -103,6 +110,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         print(json.dumps(payload, indent=2, default=list))
         return 0
     if args.cmd == "serve":
+        token = os.environ.get("PREVIEW_CONTROL_TOKEN") or secrets.token_urlsafe(32)
         engine = PreviewEngine(
             network=args.network,
             endpoint=args.endpoint,
@@ -112,7 +120,8 @@ def _dispatch(args: argparse.Namespace) -> int:
             f"preview-control on http://{args.host}:{args.port} network={args.network}",
             flush=True,
         )
-        serve_forever(engine, host=args.host, port=args.port)
+        print(f"PREVIEW_CONTROL_TOKEN={token}", file=sys.stderr, flush=True)
+        serve_forever(engine, host=args.host, port=args.port, token=token)
         return 0
     if args.cmd == "up":
         import threading
@@ -123,33 +132,37 @@ def _dispatch(args: argparse.Namespace) -> int:
             sha=args.sha,
             attach_prod_api=args.attach_prod_api,
             start_postgres=args.postgres,
+            upstream=args.upstream,
         )
         print(
             json.dumps({"id": handle.identity, "urls": handle.urls}, indent=2),
             flush=True,
         )
         print("preview-control running; Ctrl-C to stop", file=sys.stderr, flush=True)
+        previous_sigterm = signal.getsignal(signal.SIGTERM)
+        signal.signal(
+            signal.SIGTERM,
+            lambda _signum, _frame: (_ for _ in ()).throw(KeyboardInterrupt()),
+        )
         try:
             threading.Event().wait()
         except KeyboardInterrupt:
+            pass
+        finally:
             handle.down()
+            signal.signal(signal.SIGTERM, previous_sigterm)
         return 0
     if args.cmd == "down":
-        state = load_latest_state()
-        print(
-            json.dumps(
-                {
-                    "id": state.get("id"),
-                    "hint": "kill the serve pid or PreviewHandle.down()",
-                }
-            )
+        raise RuntimeError(
+            "preview up runs in the foreground; press Ctrl-C in its terminal "
+            "so cleanup can be verified"
         )
-        return 0
     if args.cmd == "urls":
         print(json.dumps(load_latest_state().get("urls", {}), indent=2))
         return 0
     if args.cmd == "state":
-        client = PreviewClient(_control_url(args if hasattr(args, "url") else None))
+        url, token = _control_config(args if hasattr(args, "url") else None)
+        client = PreviewClient(url, token=token)
         print(json.dumps(client.state(), indent=2))
         return 0
     if args.cmd == "ctl":
@@ -157,22 +170,42 @@ def _dispatch(args: argparse.Namespace) -> int:
     return 2
 
 
-def _control_url(args: argparse.Namespace | None) -> str:
+def _control_config(args: argparse.Namespace | None) -> tuple[str, str]:
     if args is not None and getattr(args, "url", None):
-        return str(args.url)
-    env = os.environ.get("PREVIEW_CONTROL_URL", "").strip()
-    if env:
-        return env
-    state = load_latest_state()
-    urls = state.get("urls") or {}
-    url = urls.get("control")
+        url = str(args.url)
+    else:
+        env = os.environ.get("PREVIEW_CONTROL_URL", "").strip()
+        url = env
+    token = os.environ.get("PREVIEW_CONTROL_TOKEN", "").strip()
+    state: dict[str, object] = {}
+    try:
+        state = load_latest_state()
+    except FileNotFoundError:
+        if not url:
+            raise
+    if not url:
+        urls = state.get("urls") or {}
+        if isinstance(urls, dict):
+            url = str(urls.get("control") or "")
+    if not token:
+        state_urls = state.get("urls") or {}
+        state_url = (
+            str(state_urls.get("control") or "") if isinstance(state_urls, dict) else ""
+        )
+        if not state_url or state_url == url:
+            token = str(state.get("control_token") or "")
     if not url:
         raise FileNotFoundError("set PREVIEW_CONTROL_URL or run ditto-preview up")
-    return str(url)
+    if not token:
+        raise FileNotFoundError(
+            "set PREVIEW_CONTROL_TOKEN or use the worktree that started the preview"
+        )
+    return url, token
 
 
 def _ctl(args: argparse.Namespace) -> int:
-    client = PreviewClient(_control_url(args))
+    url, token = _control_config(args)
+    client = PreviewClient(url, token=token)
     cheat = args.cheat.replace("-", "_")
     if cheat == "register":
         if not args.hotkey:

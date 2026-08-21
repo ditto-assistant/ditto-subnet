@@ -1,32 +1,34 @@
 ---
 name: ditto-subnet-preview
-description: Spin isolated SN118 preview channels from a worktree or PR — dashboard/backroom against prod Platform, or stack/stack-copy with one localnet validator and Foundry-style cheatcodes. Use when the user wants a preview URL, localstack with injected faults, stack-copy migrations, or to trigger .github/workflows/preview.yml.
+description: Resolve SN118 preview plans and run the loopback-only mock control/fault harness from a worktree or PR. Use for Foundry-style overlay tests, localstack fault injection, guarded snapshot alignment, or .github/workflows/preview.yml. This skill does not deploy a clickable Platform, Backroom, validator, or cloud preview.
 ---
 
-# SN118 preview channels
+# SN118 preview control harness
 
-Same cranks locally and in GitHub Actions. Previews never mint GitHub Releases, `v*` images, or `compat-2`.
+Same plan and mock-control checks locally and in GitHub Actions. The workflow
+does not deploy resources or mint GitHub Releases, `v*` images, or `compat-2`.
 
 ## Compose first
 
 ```bash
-./scripts/preview compose dashboard,backroom
+./scripts/preview compose dashboard
 ./scripts/preview compose stack
 ```
 
 | Selection | Isolated? | Validator |
 |---|---|---|
-| `dashboard` and/or `backroom` | no | none; frontends use prod Platform |
-| `stack` | yes | one localnet validator |
-| `stack-copy` | yes | `stack` plus snapshot + `align_from_db` |
+| `dashboard` | no | may use prod Platform; this tool does not launch the SPA |
+| `stack` | required | plan requires one localnet validator; not launched here |
+| `stack-copy` | required | `stack` requirements plus guarded snapshot alignment |
 
-Refuse preview Platform + prod validators (`--attach-prod-api` with `stack`).
+Backroom is never attached to production Platform. Refuse `--attach-prod-api`
+with `stack` or `stack-copy`.
 
 ## Local
 
 ```bash
 uv run python -m ditto.preview up stack --sha "$(git rev-parse HEAD)"
-export PREVIEW_CONTROL_URL=…   # printed under urls.control
+# `up` starts only preview-control and the fault proxy; it stays foreground.
 ./scripts/preview ctl register --hotkey 5EexQS8UxChmkZ6vGeacAkwcf3TARR1Go5rd684Mf69dwgTY --permit
 ./scripts/preview ctl warp_block --n 10
 ./scripts/preview ctl inject_provider --status 429
@@ -36,10 +38,13 @@ Point localstack at the fault proxy: `HARNESS_GATEWAY_URL=$FAULT_PROXY_URL make 
 
 ## GitHub
 
-Dispatch `.github/workflows/preview.yml` with `profiles` and optional `sha`. Path-based PR defaults: dashboard/backroom files → those profiles against prod; API/alembic/validator → `stack` (alembic → `stack-copy`).
+Dispatch `.github/workflows/preview.yml` with `profiles` and an optional exact
+SHA. It validates composition and the mock controls at that SHA; it does not
+publish a URL. PR selection fails closed to `stack` for unknown runtime paths.
 
 ## Invariants
 
-- Engine refuses `finney` and OpenTensor endpoints.
+- Engine and control server accept only loopback chain endpoints and binds.
 - `align_from_db` after a snapshot restore; do not copy prod onto a public unauthenticated hostname.
-- Tear down on PR close; cheatcode proof job must stay green without cloud secrets.
+- Backroom never receives production OAuth/admin credentials in a preview.
+- The proof job stays green without cloud secrets.

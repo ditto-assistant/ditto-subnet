@@ -219,14 +219,14 @@
     },
     {
       "id": "preview-channels",
-      "title": "Isolated preview stacks and the mock engine",
+      "title": "Preview planning and the loopback mock engine",
       "keywords": ["preview", "localstack", "cheatcode", "foundry", "stack-copy", "preview-control", "fault injection", "localnet"],
-      "summary": "Multi-select preview profiles and a Foundry-style overlay engine that works locally and in GitHub Actions without publishing compat-2.",
+      "summary": "Preview plan validation and a loopback-only overlay/fault harness tested locally and in GitHub Actions; it does not deploy the planned stack.",
       "owns": ["ditto/preview", "preview", "scripts/preview", ".github/workflows/preview.yml", ".agents/skills/ditto-subnet-preview"],
       "read": ["preview/README.md", ".agents/skills/ditto-subnet-preview/SKILL.md"],
       "search": ["rg -n 'compose\\(|assert_isolated|inject_provider' ditto/preview", "rg -n 'profiles:' .github/workflows/preview.yml"],
-      "validate": ["uv run pytest ditto/tests/preview -q", "uv run python -m ditto.preview compose dashboard,backroom"],
-      "invariants": ["Preview Platform never attaches to production validators.", "preview-control refuses finney and OpenTensor endpoints.", "Previews never publish GitHub Releases, v* tags, or compat-2."],
+      "validate": ["uv run pytest ditto/tests/preview -q", "uv run python -m ditto.preview compose dashboard"],
+      "invariants": ["Only dashboard plans may attach to production Platform; Backroom requires isolation.", "preview-control accepts only loopback endpoints and binds.", "The workflow validates controls but does not deploy resources or publish releases."],
       "related": ["worktrees", "platform-api", "backroom", "infra-cloud"]
     }
   ]

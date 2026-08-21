@@ -15,7 +15,6 @@ from ditto.preview.engine import PreviewEngine
 from ditto.preview.identity import preview_id
 from ditto.preview.proxy import FaultProxy
 from ditto.preview.server import PreviewServer
-from ditto.preview.urls import plan_urls
 
 ROOT = Path(__file__).resolve().parents[2]
 RUN_ROOT = ROOT / "preview" / ".run"
@@ -32,6 +31,7 @@ class PreviewHandle:
     control: PreviewServer
     proxy: FaultProxy | None
     urls: dict[str, str]
+    control_token: str
     compose_project: str | None = None
 
     def down(self) -> None:
@@ -39,7 +39,7 @@ class PreviewHandle:
             self.proxy.stop()
         self.control.stop()
         if self.compose_project and COMPOSE_FILE.exists():
-            subprocess.run(
+            result = subprocess.run(
                 [
                     "docker",
                     "compose",
@@ -53,9 +53,17 @@ class PreviewHandle:
                 check=False,
                 capture_output=True,
             )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    "docker compose failed to tear down the preview; "
+                    "state was preserved for retry"
+                )
         state_path = RUN_ROOT / self.identity / "state.json"
         if state_path.exists():
             state_path.unlink()
+        latest = RUN_ROOT / "latest"
+        if latest.is_symlink() and latest.resolve() == state_path.parent.resolve():
+            latest.unlink()
 
 
 def up(
@@ -68,52 +76,77 @@ def up(
     endpoint: str = "ws://127.0.0.1:9944",
     netuid: int = 3,
     start_postgres: bool = False,
-    upstream: str = "http://127.0.0.1:9",
+    upstream: str = "http://127.0.0.1:11434",
 ) -> PreviewHandle:
     """Bring up preview-control (and optional postgres/fault-proxy) for ``profiles``."""
     plan = compose(profiles, attach_prod_api=attach_prod_api)
     identity = preview_id(ref, sha)
     engine = PreviewEngine(network=network, endpoint=endpoint, netuid=netuid)
     control = PreviewServer(engine, host="127.0.0.1", port=0)
-    control.start()
     proxy: FaultProxy | None = None
-    if plan.stack:
-        # Dummy upstream is fine until a real relay is attached; cheatcodes still
-        # inject 429/503 without forwarding.
-        proxy = FaultProxy(control.url, upstream=upstream, host="127.0.0.1", port=0)
-        proxy.start()
     compose_project = None
-    if plan.stack and start_postgres and COMPOSE_FILE.exists():
-        compose_project = f"preview-{identity}"
-        subprocess.run(
-            [
-                "docker",
-                "compose",
-                "-f",
-                str(COMPOSE_FILE),
-                "-p",
-                compose_project,
-                "up",
-                "-d",
-                "postgres",
-            ],
-            check=True,
+    try:
+        control.start()
+        if plan.stack:
+            proxy = FaultProxy(
+                control.url,
+                upstream=upstream,
+                host="127.0.0.1",
+                port=0,
+                control_token=control.token,
+            )
+            proxy.start()
+        if plan.stack and start_postgres and COMPOSE_FILE.exists():
+            compose_project = f"preview-{identity}"
+            subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(COMPOSE_FILE),
+                    "-p",
+                    compose_project,
+                    "up",
+                    "-d",
+                    "postgres",
+                ],
+                check=True,
+            )
+        urls = {"id": identity, "control": control.url}
+        if proxy is not None:
+            urls["fault_proxy"] = proxy.url
+        handle = PreviewHandle(
+            identity=identity,
+            plan=plan,
+            engine=engine,
+            control=control,
+            proxy=proxy,
+            urls=urls,
+            control_token=control.token,
+            compose_project=compose_project,
         )
-    urls = plan_urls(plan, identity, control_url=control.url, local=True)
-    urls["control"] = control.url
-    if proxy is not None:
-        urls["fault_proxy"] = proxy.url
-    handle = PreviewHandle(
-        identity=identity,
-        plan=plan,
-        engine=engine,
-        control=control,
-        proxy=proxy,
-        urls=urls,
-        compose_project=compose_project,
-    )
-    _write_state(handle)
-    return handle
+        _write_state(handle)
+        return handle
+    except BaseException:
+        if proxy is not None:
+            proxy.stop()
+        control.stop()
+        if compose_project:
+            subprocess.run(
+                [
+                    "docker",
+                    "compose",
+                    "-f",
+                    str(COMPOSE_FILE),
+                    "-p",
+                    compose_project,
+                    "down",
+                    "-v",
+                ],
+                check=False,
+                capture_output=True,
+            )
+        raise
 
 
 def _write_state(handle: PreviewHandle) -> None:
@@ -127,10 +160,13 @@ def _write_state(handle: PreviewHandle) -> None:
         "attach_prod_api": handle.plan.attach_prod_api,
         "localnet_validator": handle.plan.localnet_validator,
         "urls": handle.urls,
+        "control_token": handle.control_token,
         "control_port": handle.control.port,
         "pid": os.getpid(),
     }
-    (directory / "state.json").write_text(json.dumps(payload, indent=2) + "\n")
+    state_path = directory / "state.json"
+    state_path.write_text(json.dumps(payload, indent=2) + "\n")
+    state_path.chmod(0o600)
     latest = RUN_ROOT / "latest"
     if latest.exists() or latest.is_symlink():
         latest.unlink()

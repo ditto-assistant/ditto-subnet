@@ -18,15 +18,3 @@ resource "cloudflare_workers_kv_namespace" "backroom_oauth" {
   account_id = var.cloudflare_account_id
   title      = "${var.backroom_worker_name}-oauth"
 }
-
-# Preview hostnames (dash-*, br-*, api-*). Origin is a preview runner or Pages
-# project; leave preview_wildcard_origin empty until that origin exists.
-resource "cloudflare_dns_record" "preview_wildcard" {
-  count   = var.preview_wildcard_origin == "" ? 0 : 1
-  zone_id = var.cloudflare_zone_id
-  name    = "*.preview"
-  type    = "CNAME"
-  content = var.preview_wildcard_origin
-  proxied = true
-  ttl     = 1
-}

@@ -22,14 +22,15 @@ def plan_urls(
     """Hostnames or loopback URLs for a resolved plan."""
     urls: dict[str, str] = {"control": control_url, "id": identity}
     if local:
-        urls["dashboard"] = (
-            f"http://127.0.0.1:5173/?api={PROD_PLATFORM if plan.attach_prod_api else 'http://127.0.0.1:8000/api/v1'}"
-        )
-        urls["backroom"] = "http://127.0.0.1:3000"
-        urls["platform"] = (
-            PROD_PLATFORM if plan.attach_prod_api else "http://127.0.0.1:8000"
-        )
-        urls["fault_proxy"] = f"http://127.0.0.1:{local_control_port + 1}"
+        platform = PROD_PLATFORM if plan.attach_prod_api else "http://127.0.0.1:8000"
+        if plan.dashboard:
+            api = platform if plan.attach_prod_api else f"{platform}/api/v1"
+            urls["dashboard"] = f"http://127.0.0.1:5173/?api={api}"
+        if plan.backroom:
+            urls["backroom"] = "http://127.0.0.1:3000"
+        if plan.stack:
+            urls["platform"] = platform
+            urls["fault_proxy"] = f"http://127.0.0.1:{local_control_port + 1}"
         return urls
     platform = (
         PROD_PLATFORM

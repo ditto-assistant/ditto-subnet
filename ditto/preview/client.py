@@ -7,12 +7,17 @@ from typing import Any
 import httpx
 
 
+class PreviewClientError(RuntimeError):
+    """A bounded preview-control transport or response failure."""
+
+
 class PreviewClient:
     """Talk to a running preview-control server."""
 
-    def __init__(self, base_url: str, timeout: float = 5.0):
+    def __init__(self, base_url: str, timeout: float = 5.0, *, token: str = ""):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.token = token
 
     def health(self) -> dict[str, Any]:
         return self._get("/health")
@@ -81,15 +86,22 @@ class PreviewClient:
         )
 
     def _get(self, path: str) -> dict[str, Any]:
-        response = httpx.get(self.base_url + path, timeout=self.timeout)
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            raise RuntimeError("preview-control returned a non-object")
-        return payload
+        return self._request("GET", path)
 
-    def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        response = httpx.post(self.base_url + path, json=body, timeout=self.timeout)
+    def _request(
+        self, method: str, path: str, body: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
+        headers = {"Authorization": f"Bearer {self.token}"} if self.token else {}
+        try:
+            response = httpx.request(
+                method,
+                self.base_url + path,
+                json=body if method != "GET" else None,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        except httpx.HTTPError as exc:
+            raise PreviewClientError(f"preview-control request failed: {exc}") from exc
         if response.status_code >= 400:
             detail = response.text
             try:
@@ -98,8 +110,14 @@ class PreviewClient:
                     detail = str(parsed["error"])
             except ValueError:
                 pass
-            raise RuntimeError(detail)
-        payload = response.json()
+            raise PreviewClientError(detail)
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise PreviewClientError("preview-control returned invalid JSON") from exc
         if not isinstance(payload, dict):
-            raise RuntimeError("preview-control returned a non-object")
+            raise PreviewClientError("preview-control returned a non-object")
         return payload
+
+    def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", path, body)

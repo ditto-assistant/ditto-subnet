@@ -9,19 +9,16 @@ restored Postgres match the overlay.
 from __future__ import annotations
 
 import copy
+import ipaddress
+import math
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlparse
 
-_FORBIDDEN_NETWORKS = frozenset({"finney", "mainnet", "nao"})
-_FORBIDDEN_ENDPOINT_MARKERS = (
-    "finney",
-    "opentensor.ai",
-    "entrypoint.chain",
-    "ws://entrypoint",
-    "wss://entrypoint",
-)
+_LOCAL_NETWORKS = frozenset({"local", "localnet", "preview", "dev"})
+_LOCAL_ENDPOINT_HOSTS = frozenset({"localhost"})
 _HOTKEY_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{46,50}$")
 
 
@@ -87,6 +84,12 @@ class PreviewEngine:
 
     def __post_init__(self) -> None:
         assert_isolated(self.network, self.endpoint)
+        if self.netuid < 0:
+            raise ValueError("netuid must be non-negative")
+        if self.block < 0:
+            raise ValueError("block must be non-negative")
+        if self.tempo <= 0:
+            raise ValueError("tempo must be positive")
 
     # -- cheatcodes ---------------------------------------------------------
 
@@ -99,6 +102,8 @@ class PreviewEngine:
     ) -> Neuron:
         """God-register ``hotkey`` without a mnemonic."""
         _require_hotkey(hotkey)
+        if not math.isfinite(stake) or stake < 0:
+            raise ValueError("stake must be a finite non-negative number")
         existing = self.neurons.get(hotkey)
         if existing is not None:
             existing.registered = True
@@ -139,6 +144,8 @@ class PreviewEngine:
     def issue_lease(self, hotkey: str, *, lifetime_blocks: int = 100) -> Lease:
         """Issue a preview lease against the overlay metagraph."""
         self._require_neuron(hotkey)
+        if lifetime_blocks <= 0:
+            raise ValueError("lifetime_blocks must be positive")
         self._next_lease += 1
         lease = Lease(
             lease_id=f"lease-{self._next_lease}",
@@ -196,7 +203,7 @@ class PreviewEngine:
 
     def align_from_hotkeys(self, hotkeys: Iterable[str]) -> list[str]:
         """Register every distinct hotkey with a validator permit (logical fork)."""
-        aligned: list[str] = []
+        normalized: list[str] = []
         seen: set[str] = set()
         for raw in hotkeys:
             hotkey = str(raw).strip()
@@ -204,6 +211,10 @@ class PreviewEngine:
                 continue
             _require_hotkey(hotkey)
             seen.add(hotkey)
+            normalized.append(hotkey)
+
+        aligned: list[str] = []
+        for hotkey in normalized:
             self.register(hotkey, permit=True, stake=1.0)
             aligned.append(hotkey)
         return aligned
@@ -292,33 +303,29 @@ class PreviewEngine:
 def assert_isolated(network: str, endpoint: str) -> None:
     """Refuse public Bittensor networks. Preview never targets finney."""
     name = (network or "").strip().lower()
-    target = (endpoint or "").strip().lower()
-    if name in _FORBIDDEN_NETWORKS:
+    if name not in _LOCAL_NETWORKS:
         raise IsolationError(
-            f"preview-control refuses public network {network!r}; "
-            "use localnet / ws://127.0.0.1"
+            f"preview-control requires a local network, got {network!r}; "
+            "use local, localnet, preview, or dev"
         )
-    for marker in _FORBIDDEN_ENDPOINT_MARKERS:
-        if marker in target:
-            raise IsolationError(
-                f"preview-control refuses endpoint {endpoint!r} ({marker})"
-            )
-    if not target:
-        raise IsolationError("preview-control requires a local endpoint")
+    parsed = urlparse((endpoint or "").strip())
+    if parsed.scheme not in {"ws", "wss"} or not parsed.hostname:
+        raise IsolationError(
+            "preview-control requires a local ws:// or wss:// endpoint"
+        )
+    host = parsed.hostname.lower().rstrip(".")
+    local = host in _LOCAL_ENDPOINT_HOSTS
+    if not local:
+        try:
+            local = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            local = False
+    if not local:
+        raise IsolationError(
+            f"preview-control refuses non-loopback endpoint {endpoint!r}"
+        )
 
 
 def _require_hotkey(hotkey: str) -> None:
     if not _HOTKEY_RE.match(hotkey):
         raise ValueError(f"not an SS58 hotkey: {hotkey!r}")
-
-
-def hotkeys_from_mapping(rows: Iterable[Mapping[str, Any]], key: str) -> list[str]:
-    """Collect distinct hotkeys from dict rows (JSON snapshot / query)."""
-    found: list[str] = []
-    seen: set[str] = set()
-    for row in rows:
-        value = str(row.get(key, "")).strip()
-        if value and value not in seen:
-            seen.add(value)
-            found.append(value)
-    return found
