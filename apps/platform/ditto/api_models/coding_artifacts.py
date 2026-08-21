@@ -13,13 +13,36 @@ from typing import Annotated, Any, Literal
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
-from pydantic import Field, ValidationError, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
-from ditto.api_models.coding_evaluation import CodingEvaluationModel, Sha256
+from ditto.api_models.coding_evaluation import (
+    CodingEvaluationModel,
+    OpaqueId,
+    Sha256,
+)
+from ditto.api_models.coding_selection import (
+    CodingCatalogBudgets,
+    CodingCatalogIssue,
+    CodingCatalogRuntimePolicy,
+    CodingSelectionRunManifest,
+    coding_catalog_budgets_digest,
+    coding_catalog_issue_digest,
+    coding_catalog_runtime_policy_digest,
+    coding_selection_run_manifest_digest,
+)
 
 _MAX_JSON_BYTES = 32 << 10
 _MAX_SIGNED_URL_BYTES = 16 << 10
 _MAX_CAPABILITY_SECONDS = 900
+_SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
+_SIGNATURE_PATTERN = r"^[0-9a-fA-F]{128}$"
 _RFC3339 = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$"
 )
@@ -155,6 +178,134 @@ class CodingArtifactCapabilityEnvelope(CodingEvaluationModel):
             raise ValueError("coding artifact kind is forbidden in this delivery phase")
         _validate_signed_url(self)
         return self
+
+
+class CodingAuthoringLeaseRequest(BaseModel):
+    """Signed request for one validator-owned shadow authoring lease."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    ticket_id: UUID
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIGNATURE_PATTERN)]
+
+    @field_validator("requested_at")
+    @classmethod
+    def requested_at_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError(
+                "coding authoring request timestamp must be timezone-aware"
+            )
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def identifiers_are_nonzero(self) -> CodingAuthoringLeaseRequest:
+        if self.ticket_id.int == 0 or self.nonce.int == 0:
+            raise ValueError("coding authoring request UUIDs must be nonzero")
+        return self
+
+
+class CodingAuthoringLeaseResponse(CodingEvaluationModel):
+    """One selected task and exactly three authoring artifact capabilities."""
+
+    schema_name: Literal["dittobench-coding-authoring-lease-v1"] = Field(alias="schema")
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    ticket_id: UUID
+    ticket_deadline: datetime
+    coding_run_id: OpaqueId
+    run_manifest_sha256: Sha256
+    task_set_manifest_sha256: Sha256
+    repository_epoch: OpaqueId
+    issue_sha256: Sha256
+    runtime_policy_sha256: Sha256
+    budgets_sha256: Sha256
+    issue: CodingCatalogIssue
+    runtime_policy: CodingCatalogRuntimePolicy
+    budgets: CodingCatalogBudgets
+    run_manifest: CodingSelectionRunManifest
+    capabilities: Annotated[
+        list[CodingArtifactCapabilityEnvelope], Field(min_length=3, max_length=3)
+    ]
+
+    @field_validator("ticket_deadline")
+    @classmethod
+    def ticket_deadline_is_aware(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("coding authoring ticket deadline must be timezone-aware")
+        return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def authoring_authority_is_coherent(self) -> CodingAuthoringLeaseResponse:
+        if self.ticket_id.int == 0 or len(self.run_manifest.tasks) != 1:
+            raise ValueError(
+                "coding authoring lease requires one task and nonzero ticket"
+            )
+        if (
+            self.run_manifest.coding_run_id != self.coding_run_id
+            or self.run_manifest.task_set_manifest_sha256
+            != self.task_set_manifest_sha256
+            or coding_selection_run_manifest_digest(self.run_manifest)
+            != self.run_manifest_sha256
+            or coding_catalog_issue_digest(self.issue) != self.issue_sha256
+            or coding_catalog_runtime_policy_digest(self.runtime_policy)
+            != self.runtime_policy_sha256
+            or coding_catalog_budgets_digest(self.budgets) != self.budgets_sha256
+        ):
+            raise ValueError("coding authoring lease material disagrees with authority")
+        expected_kinds = [
+            CodingArtifactKind.VISIBLE_BUNDLE,
+            CodingArtifactKind.MEMORY_BUNDLE,
+            CodingArtifactKind.RESOURCE_PROFILE,
+        ]
+        if [
+            capability.artifact_kind for capability in self.capabilities
+        ] != expected_kinds:
+            raise ValueError(
+                "coding authoring capabilities are incomplete or unordered"
+            )
+        task = self.run_manifest.tasks[0]
+        expected_digests = [
+            task.visible_bundle_sha256,
+            task.memory_bundle_sha256,
+            task.resource_profile_sha256,
+        ]
+        if any(
+            capability.ticket_id != self.ticket_id
+            or capability.ticket_deadline != self.ticket_deadline
+            or capability.delivery_phase is not CodingArtifactDeliveryPhase.AUTHORING
+            or capability.sha256 != expected_digest
+            for capability, expected_digest in zip(
+                self.capabilities, expected_digests, strict=True
+            )
+        ):
+            raise ValueError("coding authoring capabilities disagree with the lease")
+        return self
+
+
+def coding_authoring_lease_signing_message(
+    *,
+    validator_hotkey: str,
+    ticket_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    """Bind one authoring request to a validator, ticket, nonce, and time."""
+
+    if requested_at.tzinfo is None or requested_at.utcoffset() is None:
+        raise ValueError("coding authoring request timestamp must be timezone-aware")
+    timestamp = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return "\x00".join(
+        (
+            "dittobench-coding-authoring-lease:v1",
+            validator_hotkey,
+            str(ticket_id),
+            str(nonce),
+            timestamp,
+        )
+    ).encode()
 
 
 def parse_coding_artifact_capability_json(

@@ -29,7 +29,7 @@ from ditto.api_server.coding_artifact_capabilities import (
     project_coding_artifact_capability,
 )
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
-from ditto.api_server.storage.errors import ObjectUploadFailedError
+from ditto.api_server.storage.errors import ObjectNotFoundError, ObjectUploadFailedError
 from ditto.api_server.storage.models import ObjectMetadata
 from ditto.db.queries.coding_task_leases import CodingShadowTaskLeaseCore
 
@@ -172,6 +172,20 @@ async def test_mints_exact_four_digest_derived_capabilities() -> None:
     assert result.weight_eligible is False
 
 
+async def test_authoring_mint_never_heads_or_signs_grader_bundle() -> None:
+    store = _Store()
+    result = await _minter(store).mint_authoring(_lease())
+    assert [capability.kind for capability in result.capabilities] == [
+        CodingArtifactKind.VISIBLE_BUNDLE,
+        CodingArtifactKind.MEMORY_BUNDLE,
+        CodingArtifactKind.RESOURCE_PROFILE,
+    ]
+    assert len(store.head_calls) == 3
+    assert len(store.url_calls) == 3
+    assert all("grader-bundle" not in key for key in store.head_calls)
+    assert all("grader-bundle" not in key for key, _ttl in store.url_calls)
+
+
 async def test_projects_only_phase_appropriate_single_capabilities() -> None:
     result = await _minter(_Store()).mint(_lease())
     visible = project_coding_artifact_capability(
@@ -273,6 +287,15 @@ async def test_storage_failure_is_retryable_and_redacted() -> None:
     rendered = "".join(traceback.format_exception(captured.value))
     assert "private/key" not in rendered
     assert "signature=secret" not in rendered
+
+
+async def test_missing_catalog_object_is_retryable_and_redacted() -> None:
+    store = _Store(head_error=ObjectNotFoundError("private/missing/grader-bundle"))
+    with pytest.raises(CodingArtifactCapabilityUnavailableError) as captured:
+        await _minter(store).mint_authoring(_lease())
+    rendered = "".join(traceback.format_exception(captured.value))
+    assert "private/missing" not in rendered
+    assert "grader-bundle" not in rendered
 
 
 async def test_rejects_signer_expiry_beyond_ticket() -> None:

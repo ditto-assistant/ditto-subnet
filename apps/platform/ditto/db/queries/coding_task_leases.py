@@ -72,6 +72,28 @@ class CodingShadowTaskLeaseCore:
     weight_eligible: Literal[False] = False
 
 
+async def authorize_coding_shadow_task_delivery(
+    session: AsyncSession,
+    *,
+    ticket_id: UUID,
+    validator_hotkey: str,
+) -> None:
+    """Fail before private-catalog access unless this validator owns the lease."""
+
+    ticket = await session.get(CodingShadowTicket, ticket_id)
+    database_now = await session.scalar(select(func.clock_timestamp()))
+    if not isinstance(database_now, datetime):  # pragma: no cover - DB invariant
+        raise RuntimeError("database clock did not return a timestamp")
+    if (
+        ticket is None
+        or ticket.validator_hotkey != validator_hotkey
+        or _aware(ticket.deadline) <= _aware(database_now)
+    ):
+        raise CodingTaskLeaseNotAvailableError(
+            "coding shadow ticket is unavailable for this validator"
+        )
+
+
 def _aware(value: datetime) -> datetime:
     return value.astimezone(UTC) if value.tzinfo else value.replace(tzinfo=UTC)
 

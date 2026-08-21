@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,8 +17,10 @@ import pytest
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.coding import (
+    CodingAuthoringLeaseRequest,
     CodingCapabilityCertificationReceipt,
     SubmitCodingCertificationRequest,
+    coding_authoring_lease_signing_message,
     coding_certification_signing_message,
 )
 from ditto.api_models.validator import (
@@ -41,6 +44,42 @@ from ditto.validator.signing import (
     sign_score,
 )
 
+_SELECTION_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_selection_v1.json"
+)
+_ARTIFACT_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json"
+)
+
+
+def _authoring_response() -> dict[str, Any]:
+    selection = json.loads(_SELECTION_VECTOR_PATH.read_text(encoding="utf-8"))
+    artifacts = json.loads(_ARTIFACT_VECTOR_PATH.read_text(encoding="utf-8"))
+    task = selection["task_version"]["payload"]
+    return {
+        "schema": "dittobench-coding-authoring-lease-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": False,
+        "ticket_id": artifacts["capabilities"][0]["ticket_id"],
+        "ticket_deadline": artifacts["capabilities"][0]["ticket_deadline"],
+        "coding_run_id": selection["run_manifest"]["coding_run_id"],
+        "run_manifest_sha256": selection["run_authority"]["run_manifest_sha256"],
+        "task_set_manifest_sha256": selection["run_manifest"][
+            "task_set_manifest_sha256"
+        ],
+        "repository_epoch": task["repository_epoch"],
+        "issue_sha256": task["issue_sha256"],
+        "runtime_policy_sha256": task["runtime_policy_sha256"],
+        "budgets_sha256": task["budgets_sha256"],
+        "issue": selection["issue"],
+        "runtime_policy": selection["runtime_policy"],
+        "budgets": selection["budgets"],
+        "run_manifest": selection["run_manifest"],
+        "capabilities": artifacts["capabilities"][:3],
+    }
+
 
 async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
     keypair = bittensor.Keypair.create_from_uri("//Alice")
@@ -63,6 +102,152 @@ async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         platform = PlatformClient(config, http, keypair)  # type: ignore[arg-type]
         assert await platform.request_job() is None
+
+
+async def test_coding_authoring_client_posts_signed_request_and_parses_lease() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    response_body = _authoring_response()
+    ticket_id = UUID(response_body["ticket_id"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/validator/coding-shadow/authoring-lease")
+        payload = CodingAuthoringLeaseRequest.model_validate_json(request.content)
+        assert payload.ticket_id == ticket_id
+        message = coding_authoring_lease_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            ticket_id=payload.ticket_id,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        )
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        return httpx.Response(200, json=response_body)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        lease = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).request_coding_authoring_lease(ticket_id)
+    assert lease.ticket_id == ticket_id
+    assert [item.artifact_kind.value for item in lease.capabilities] == [
+        "visible-bundle",
+        "memory-bundle",
+        "resource-profile",
+    ]
+
+
+async def test_coding_authoring_client_redacts_invalid_bearer_response() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    response_body = _authoring_response()
+    response_body["capabilities"][0]["sha256"] = "ff" * 32
+    ticket_id = UUID(response_body["ticket_id"])
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response_body)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError) as captured:
+            await PlatformClient(
+                config,  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).request_coding_authoring_lease(ticket_id)
+    assert "X-Amz-Signature" not in str(captured.value)
+    assert response_body["capabilities"][0]["url"] not in str(captured.value)
+
+
+async def test_coding_authoring_client_rejects_oversized_response() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    seen_chunks = 0
+
+    class OversizedStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            nonlocal seen_chunks
+            for _ in range(9):
+                seen_chunks += 1
+                yield b"x" * (64 << 10)
+            raise AssertionError("validator consumed data after the response bound")
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, stream=OversizedStream())
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="size"):
+            await PlatformClient(
+                config,  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).request_coding_authoring_lease(ticket_id)
+    assert seen_chunks == 9
+
+
+async def test_coding_authoring_client_rejects_ticket_identity_drift() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    response_body = _authoring_response()
+    requested_ticket_id = UUID(response_body["ticket_id"])
+    different_ticket_id = UUID("99999999-9999-4999-8999-999999999999")
+    response_body["ticket_id"] = str(different_ticket_id)
+    for capability in response_body["capabilities"]:
+        capability["ticket_id"] = str(different_ticket_id)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=response_body)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="identity"):
+            await PlatformClient(
+                config,  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).request_coding_authoring_lease(requested_ticket_id)
+
+
+async def test_coding_authoring_client_never_follows_redirects() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
+    observed_paths: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        observed_paths.append(request.url.path)
+        if request.url.host == "platform.test":
+            return httpx.Response(
+                307,
+                headers={"Location": "https://redirect.invalid/capture"},
+            )
+        raise AssertionError("signed authoring request followed a redirect")
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler),
+        follow_redirects=True,
+    ) as http:
+        with pytest.raises(PlatformError, match="307"):
+            await PlatformClient(
+                config,  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).request_coding_authoring_lease(ticket_id)
+    assert observed_paths == ["/api/v1/validator/coding-shadow/authoring-lease"]
 
 
 async def test_coding_certification_client_posts_exact_signed_envelope() -> None:

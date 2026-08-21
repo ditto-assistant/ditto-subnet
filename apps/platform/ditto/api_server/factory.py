@@ -23,6 +23,9 @@ from fastapi.responses import FileResponse, HTMLResponse, Response
 
 import ditto
 from ditto.api_server.burn_settings import BurnSettingsResolver
+from ditto.api_server.coding_artifact_capabilities import (
+    CodingArtifactCapabilityMinter,
+)
 from ditto.api_server.coding_private_catalog import (
     create_coding_private_catalog_source,
 )
@@ -99,6 +102,7 @@ from ditto.api_server.endpoints import (
     screener_router,
     upload_router,
     validator_coding_certification_router,
+    validator_coding_delivery_router,
     validator_coding_evaluation_router,
     validator_confirmation_router,
     validator_router,
@@ -238,6 +242,12 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             app.state.storage = storage
             app.state.coding_private_catalog_source = (
                 create_coding_private_catalog_source(config.coding_private_catalog)
+                if config.coding_private_catalog is not None
+                and _process_role() == PLATFORM_ROLE
+                else None
+            )
+            app.state.coding_artifact_capability_minter = (
+                CodingArtifactCapabilityMinter(config.coding_private_catalog)
                 if config.coding_private_catalog is not None
                 and _process_role() == PLATFORM_ROLE
                 else None
@@ -432,6 +442,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     # This internal source has no HTTP route and is absent unless Platform has
     # a separate least-privilege private-catalog credential set.
     app.state.coding_private_catalog_source = None
+    app.state.coding_artifact_capability_minter = None
     # Hot-swappable efficiency-bonus policy: the compute path resolves the
     # latest append-only revision through this resolver (short TTL), falling
     # back to the env seed (config.efficiency_bonus) when none exists. The DB
@@ -502,6 +513,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(retrieval_router, prefix="/api/v1")
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_coding_certification_router, prefix="/api/v1")
+    app.include_router(validator_coding_delivery_router, prefix="/api/v1")
     app.include_router(validator_coding_evaluation_router, prefix="/api/v1")
     app.include_router(validator_confirmation_router, prefix="/api/v1")
     app.include_router(inference_router, prefix="/api/v1")

@@ -265,6 +265,14 @@ visible, memory, and resource artifacts; grading permits only visible,
 resource, and grader artifacts. The vector URL is transport-only, excluded
 from canonical identity, and never consumed by Rust or miner-facing code.
 
+The authoring delivery request is signed over validator hotkey, ticket UUID,
+one-use nonce, and UTC request time. Platform authenticates and authorizes the
+ticket before private-catalog access, then returns the visible issue and
+runtime/budget material plus exactly the visible, memory, and resource
+capabilities. Its authoring-only minter does not inspect or sign the grader
+object, and grader capability is structurally absent. The route remains unused
+until a separate scheduler and validator-orchestration review.
+
 `coding_run_id` and the manifest are shared across k=3. Validator-specific
 ticket IDs, deadlines, hotkeys, and transport capabilities remain in each lease
 envelope and signed validator evidence; they cannot make the selected task-set
