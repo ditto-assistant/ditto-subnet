@@ -23,8 +23,10 @@ from ditto.api_server.endpoints.inference import (
     _ALLOWED_REQUEST_FIELDS,
     _DROPPED_REQUEST_FIELDS,
     _FORWARDED_REQUEST_FIELDS,
+    _HISTORICAL_CHAT_REQUEST_BODY_BYTES,
     _PINNED_REQUEST_FIELDS,
     _REFUSED_REQUEST_FIELDS,
+    _attach_platform_middle_out,
     _bounded_provider_cost,
     _complete_chat_with_recovery,
     _estimated_tokens,
@@ -530,6 +532,37 @@ def test_proxy_schema_drops_openrouter_routing_hints() -> None:
     assert "provider" not in upstream
     assert "route" not in upstream
     assert "preset" not in upstream
+    assert "transforms" not in upstream
+
+
+def test_platform_attaches_middle_out_only_on_oversized_bodies() -> None:
+    payload: dict[str, object] = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+    }
+    upstream = _locked_upstream_payload(
+        payload, model="openai/gpt-oss-20b", max_tokens=256
+    )
+    _attach_platform_middle_out(
+        upstream, original_body_bytes=_HISTORICAL_CHAT_REQUEST_BODY_BYTES
+    )
+    assert "transforms" not in upstream
+    _attach_platform_middle_out(
+        upstream, original_body_bytes=_HISTORICAL_CHAT_REQUEST_BODY_BYTES + 1
+    )
+    assert upstream["transforms"] == ["middle-out"]
+
+
+def test_miner_transforms_remain_a_named_refusal() -> None:
+    payload: dict[str, object] = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "transforms": ["middle-out"],
+    }
+    with pytest.raises(HTTPException) as refused:
+        _validate_request_schema(payload)
+    assert refused.value.status_code == 400
+    assert "transforms" in str(refused.value.detail)
 
 
 def test_proxy_schema_allows_only_local_function_tools() -> None:

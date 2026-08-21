@@ -46,7 +46,9 @@ var forwardedRequestFields = map[string]struct{}{
 }
 
 var refusedRequestFields = map[string]string{
-	"models":             "the model is pinned by the ticket, not chosen by the request",
+	"models": "the model is pinned by the ticket, not chosen by the request",
+	// Miners cannot set this. The platform may attach middle-out after lock
+	// on oversized bodies (see attachPlatformMiddleOut).
 	"transforms":         "prompt transforms would change benchmark semantics",
 	"plugins":            "server-side plugins are not available on this lane",
 	"web_search_options": "server-side web search is not available on this lane",
@@ -564,6 +566,20 @@ func lockedUpstreamPayload(payload map[string]any, model string, maxTokens int, 
 		upstream["reasoning"] = reasoning
 	}
 	return upstream, nil
+}
+
+// historicalChatRequestBodyBytes is the default that 413'd gate v11 finishers
+// at 256 KiB + 1. Bodies at or under it keep the historical upstream shape.
+// Larger bodies get a platform-owned OpenRouter middle-out transform so a
+// prompt that then exceeds the pinned model's context window can still
+// complete. Miners cannot set transforms; this is applied after lock.
+const historicalChatRequestBodyBytes = 256 * 1024
+
+func attachPlatformMiddleOut(upstream map[string]any, originalBodyBytes int) {
+	if upstream == nil || originalBodyBytes <= historicalChatRequestBodyBytes {
+		return
+	}
+	upstream["transforms"] = []any{"middle-out"}
 }
 
 func sanitizeUpstreamMessages(messages []any) []any {

@@ -35,6 +35,8 @@ func TestValidateRequestSchema(t *testing.T) {
 		{"dropped route", `{"route":1,` + minimalMessages + `}`, ""},
 		{"refused models", `{"models":[],` + minimalMessages + `}`,
 			"unsupported inference parameter: models (the model is pinned by the ticket, not chosen by the request)"},
+		{"refused miner transforms", `{"transforms":["middle-out"],` + minimalMessages + `}`,
+			"unsupported inference parameter: transforms (prompt transforms would change benchmark semantics)"},
 		{"unknown keys sorted", `{"zzz":1,"aaa":2,` + minimalMessages + `}`,
 			"unsupported inference parameter: aaa, zzz"},
 		{"stream true refused", `{"stream":true,` + minimalMessages + `}`,
@@ -261,6 +263,23 @@ func TestLockedUpstreamPayload(t *testing.T) {
 	if upstream["temperature"] == nil {
 		t.Fatalf("forwarded field lost")
 	}
+	if _, present := upstream["transforms"]; present {
+		t.Fatalf("lock must not attach transforms; that is a post-lock platform pin")
+	}
+}
+
+func TestAttachPlatformMiddleOut(t *testing.T) {
+	small := map[string]any{"model": v7Model}
+	attachPlatformMiddleOut(small, historicalChatRequestBodyBytes)
+	if _, present := small["transforms"]; present {
+		t.Fatalf("bodies at the historical 256 KiB cap must not get middle-out")
+	}
+	attachPlatformMiddleOut(small, historicalChatRequestBodyBytes+1)
+	got, _ := small["transforms"].([]any)
+	if len(got) != 1 || got[0] != "middle-out" {
+		t.Fatalf("oversized body must get platform middle-out, got %v", small["transforms"])
+	}
+	attachPlatformMiddleOut(nil, historicalChatRequestBodyBytes+1)
 }
 
 func TestEstimatedAndChargeableTokens(t *testing.T) {

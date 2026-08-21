@@ -158,7 +158,7 @@ type InferenceProxyConfig struct {
 	ValidatorRPM         int // DITTO_INFERENCE_VALIDATOR_RPM, default 960
 	GlobalRPM            int // DITTO_INFERENCE_GLOBAL_RPM, default 2880, cap 100000
 
-	RequestBodyBytes  int64 // DITTO_INFERENCE_REQUEST_BODY_BYTES, default 262144, max 1 MiB
+	RequestBodyBytes  int64 // DITTO_INFERENCE_REQUEST_BODY_BYTES, default 1 MiB, max 1 MiB
 	ResponseBodyBytes int64 // DITTO_INFERENCE_RESPONSE_BODY_BYTES, default 2 MiB, max 8 MiB
 	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,120]
 	MaxOutputTokens   int   // DITTO_INFERENCE_MAX_OUTPUT_TOKENS, default 8192, max 32768
@@ -388,7 +388,7 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		ValidatorRPM:         r.intval("DITTO_INFERENCE_VALIDATOR_RPM", 960),
 		GlobalRPM:            r.intval("DITTO_INFERENCE_GLOBAL_RPM", 2880),
 
-		RequestBodyBytes:  r.int64val("DITTO_INFERENCE_REQUEST_BODY_BYTES", 262144),
+		RequestBodyBytes:  r.int64val("DITTO_INFERENCE_REQUEST_BODY_BYTES", 1*1024*1024),
 		ResponseBodyBytes: r.int64val("DITTO_INFERENCE_RESPONSE_BODY_BYTES", 2*1024*1024),
 		TimeoutSeconds:    r.intval("DITTO_INFERENCE_TIMEOUT_SECONDS", 90),
 		MaxOutputTokens:   r.intval("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", 8192),

@@ -316,6 +316,7 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeHTTPError(w, r, herr)
 		return
 	}
+	attachPlatformMiddleOut(upstreamPayload, len(body))
 	if !reservedGrant.RouteProvider.Valid || reservedGrant.RouteProvider.String == "" {
 		// KNOWN PYTHON QUIRK reproduced deliberately: this path leaks the
 		// just-made reservation until the 2x-timeout stale sweep reclaims
