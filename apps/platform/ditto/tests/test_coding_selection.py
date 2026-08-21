@@ -267,6 +267,9 @@ def _assignment(commitment: CodingCatalogCommitment) -> CodingSelectionAssignmen
         "screened_image_sha256": "66" * 32,
         "corpus_release_id": commitment.corpus_release_id,
         "catalog_commitment_sha256": commitment.commitment_sha256,
+        "anchor_block_number": 123_436,
+        "anchor_block_hash": "0x" + "70" * 32,
+        "selection_delay_blocks": 20,
         "selection_block_number": 123_456,
         "assigned_at": datetime(2026, 8, 21, 0, 0, tzinfo=UTC).isoformat(),
         "task_count": 1,
@@ -596,6 +599,10 @@ def test_task_assignment_and_membership_digests_fail_closed() -> None:
         bind_coding_selection_assignment(equivalent_assignment).assignment_sha256
         == assignment.assignment_sha256
     )
+    invalid_height = equivalent_assignment.copy()
+    invalid_height["selection_block_number"] = 123_457
+    with pytest.raises(ValidationError, match="anchor plus fixed delay"):
+        bind_coding_selection_assignment(invalid_height)
     assert coding_catalog_commitment_digest(commitment) == commitment.commitment_sha256
 
     changed_task = task.model_dump(mode="json")

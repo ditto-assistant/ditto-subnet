@@ -1463,6 +1463,143 @@ class CodingCatalogExposure(Base):
     )
 
 
+class CodingSelectionAssignmentRow(Base):
+    """One immutable future-height assignment created before task selection."""
+
+    __tablename__ = "coding_selection_assignments"
+
+    assignment_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    assignment_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    release_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    coding_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    coding_run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    corpus_release_id: Mapped[str] = mapped_column(Text, nullable=False)
+    catalog_commitment_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    anchor_block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    anchor_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_delay_blocks: Mapped[int] = mapped_column(Integer, nullable=False)
+    selection_block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    assigned_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    core_qualification_observation_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    certification_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), nullable=False
+    )
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    assignment: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("clock_timestamp()"),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="RESTRICT",
+            name="coding_selection_assignments_agent_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["release_row_id", "corpus_release_id"],
+            [
+                "coding_catalog_releases.release_row_id",
+                "coding_catalog_releases.corpus_release_id",
+            ],
+            ondelete="RESTRICT",
+            name="coding_selection_assignments_release_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["release_row_id", "catalog_commitment_sha256"],
+            [
+                "coding_catalog_releases.release_row_id",
+                "coding_catalog_releases.commitment_sha256",
+            ],
+            ondelete="RESTRICT",
+            name="coding_selection_assignments_commitment_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["core_qualification_observation_id"],
+            ["core_qualification_observations.observation_id"],
+            ondelete="RESTRICT",
+            name="coding_selection_assignments_core_observation_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["certification_row_id"],
+            ["coding_capability_certifications.certification_row_id"],
+            ondelete="RESTRICT",
+            name="coding_selection_assignments_certification_fkey",
+        ),
+        UniqueConstraint(
+            "assignment_sha256",
+            name="coding_selection_assignments_assignment_sha256_key",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "coding_contract_version",
+            "coding_run_id",
+            name="coding_selection_assignments_identity_key",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "artifact_sha256",
+            "screened_image_sha256",
+            "coding_contract_version",
+            name="coding_selection_assignments_artifact_key",
+        ),
+        CheckConstraint(
+            "assignment_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND artifact_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND catalog_commitment_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_selection_assignments_hashes_check",
+        ),
+        CheckConstraint(
+            "anchor_block_hash ~ '^0x[0-9a-f]{64}$'",
+            name="coding_selection_assignments_anchor_hash_check",
+        ),
+        CheckConstraint(
+            "bench_version >= 7 AND coding_contract_version = 1 "
+            "AND anchor_block_number > 0 "
+            "AND selection_delay_blocks BETWEEN 1 AND 10000 "
+            "AND selection_block_number = anchor_block_number + selection_delay_blocks "
+            "AND task_count = 1 AND weight_eligible = false",
+            name="coding_selection_assignments_contract_check",
+        ),
+        CheckConstraint(
+            "octet_length(coding_run_id) BETWEEN 1 AND 256 "
+            "AND octet_length(corpus_release_id) BETWEEN 1 AND 256 "
+            "AND coding_run_id !~ '[[:space:][:cntrl:]]' "
+            "AND corpus_release_id !~ '[[:space:][:cntrl:]]'",
+            name="coding_selection_assignments_identifiers_check",
+        ),
+        CheckConstraint(
+            "assigned_at = created_at",
+            name="coding_selection_assignments_time_check",
+        ),
+        Index(
+            "coding_selection_assignments_agent_created_idx",
+            "agent_id",
+            "created_at",
+        ),
+        Index(
+            "coding_selection_assignments_height_idx",
+            "selection_block_number",
+            "created_at",
+        ),
+    )
+
+
 class CodingShadowRun(Base):
     """One immutable shared run authority for the shadow coding pipeline."""
 

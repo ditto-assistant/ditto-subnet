@@ -196,6 +196,9 @@ class CodingSelectionAssignmentFields(CodingEvaluationModel):
     screened_image_sha256: Sha256
     corpus_release_id: OpaqueId
     catalog_commitment_sha256: Sha256
+    anchor_block_number: Annotated[int, Field(ge=1, le=(1 << 63) - 1)]
+    anchor_block_hash: BlockHash
+    selection_delay_blocks: Annotated[int, Field(ge=1, le=10_000)]
     selection_block_number: Annotated[int, Field(ge=1, le=(1 << 63) - 1)]
     assigned_at: datetime
     task_count: Literal[1]
@@ -206,6 +209,17 @@ class CodingSelectionAssignmentFields(CodingEvaluationModel):
         if value.tzinfo is None or value.utcoffset() is None:
             raise ValueError("selection assignment time must be timezone-aware")
         return value.astimezone(UTC)
+
+    @model_validator(mode="after")
+    def selected_height_follows_anchor(self) -> CodingSelectionAssignmentFields:
+        if (
+            self.anchor_block_number + self.selection_delay_blocks
+            != self.selection_block_number
+        ):
+            raise ValueError(
+                "selection block number must equal anchor plus fixed delay"
+            )
+        return self
 
 
 class CodingSelectionAssignment(CodingSelectionAssignmentFields):
