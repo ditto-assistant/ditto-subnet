@@ -30,6 +30,7 @@ def test_manifest_classifies_every_file_status() -> None:
     assert manifest["modified_count"] == 1
     assert manifest["added_count"] == 1
     assert manifest["removed_count"] == 1
+    assert manifest["renamed_count"] == 0
     assert by_path["same.py"]["status"] == "identical"
     assert by_path["same.py"]["similarity"] == 1.0
     assert by_path["changed.py"]["status"] == "modified"
@@ -37,6 +38,81 @@ def test_manifest_classifies_every_file_status() -> None:
     assert by_path["changed.py"]["removed_lines"] == 1
     assert by_path["added.py"]["status"] == "added"
     assert by_path["removed.py"]["status"] == "removed"
+
+
+def test_exact_path_identical_is_not_reclassified_as_rename() -> None:
+    # Exact-path pairing still wins: a file present on both sides stays
+    # identical even when leftover add/remove files exist alongside it.
+    body = "fn stolen() {\n    1 + 1\n}\n"
+    candidate = {"src/whitycat.rs": body, "src/extra.rs": "fn extra() {}\n"}
+    reference = {"src/whitycat.rs": body, "src/gone.rs": "fn gone() {}\n"}
+    manifest = build_source_diff_manifest(candidate, reference)
+    by_path = {entry["path"]: entry for entry in manifest["files"]}
+
+    assert by_path["src/whitycat.rs"]["status"] == "identical"
+    assert by_path["src/whitycat.rs"]["normalized_identical"] is True
+    assert by_path["src/extra.rs"]["status"] == "added"
+    assert by_path["src/gone.rs"]["status"] == "removed"
+    assert manifest["renamed_count"] == 0
+
+
+def test_renamed_identical_normalized_content_is_not_added_and_removed() -> None:
+    # Copiers rename the stolen residual (whitycat.rs -> operating_rules.rs)
+    # so exact-path pairing would otherwise report added + removed and hide
+    # that the miner-authored file is still in the tarball.
+    body = "fn stolen() {\n    1 + 1\n}\n"
+    candidate = {"src/operating_rules.rs": body}
+    reference = {"src/whitycat.rs": body}
+    manifest = build_source_diff_manifest(candidate, reference)
+    assert manifest["added_count"] == 0
+    assert manifest["removed_count"] == 0
+    assert manifest["renamed_count"] == 1
+    assert len(manifest["files"]) == 1
+    entry = manifest["files"][0]
+    assert entry["status"] == "renamed"
+    assert entry["path"] == "src/operating_rules.rs"
+    assert entry["from_path"] == "src/whitycat.rs"
+    assert entry["to_path"] == "src/operating_rules.rs"
+    assert entry["normalized_identical"] is True
+    assert entry["similarity"] == 1.0
+    assert "src/whitycat.rs" not in {row["path"] for row in manifest["files"]}
+
+
+def test_reformatted_rename_is_normalized_identical() -> None:
+    reference = {
+        "src/whitycat.rs": "fn f(x: i32) -> i32 {\n    x + 1  // add one\n}\n"
+    }
+    candidate = {
+        "src/agent_policy.rs": (
+            "fn f(x: i32) -> i32 {\n        x+1   /* incremented */\n}\n"
+        )
+    }
+    manifest = build_source_diff_manifest(candidate, reference)
+    entry = manifest["files"][0]
+    assert entry["status"] == "renamed"
+    assert entry["from_path"] == "src/whitycat.rs"
+    assert entry["to_path"] == "src/agent_policy.rs"
+    assert entry["normalized_identical"] is True
+    assert manifest["added_count"] == 0
+    assert manifest["removed_count"] == 0
+
+
+def test_genuinely_different_added_file_stays_added() -> None:
+    candidate = {
+        "same.py": "a\nb\nc\n",
+        "added.py": "fn brand_new_solver() -> u64 { 42 }\n",
+    }
+    reference = {
+        "same.py": "a\nb\nc\n",
+        "removed.py": "mod leftover_kit_shim { fn unused() {} }\n",
+    }
+    manifest = build_source_diff_manifest(candidate, reference)
+    by_path = {entry["path"]: entry for entry in manifest["files"]}
+    assert by_path["added.py"]["status"] == "added"
+    assert by_path["removed.py"]["status"] == "removed"
+    assert manifest["added_count"] == 1
+    assert manifest["removed_count"] == 1
+    assert manifest["renamed_count"] == 0
 
 
 def test_reformatted_copy_is_flagged_normalized_identical() -> None:
@@ -69,6 +145,19 @@ def test_unified_diff_of_added_file_marks_reference_absent() -> None:
     detail = unified_diff_for_file("new.py", {"new.py": "x\n"}, {})
     assert detail["candidate_present"] is True
     assert detail["reference_present"] is False
+
+
+def test_unified_diff_of_renamed_file_pairs_the_counterpart() -> None:
+    body = "fn stolen() {\n    1 + 1\n}\n"
+    candidate = {"src/operating_rules.rs": body}
+    reference = {"src/whitycat.rs": body}
+    detail = unified_diff_for_file("src/operating_rules.rs", candidate, reference)
+    assert detail["candidate_present"] is True
+    assert detail["reference_present"] is True
+    assert detail["identical"] is True
+    assert detail["from_path"] == "src/whitycat.rs"
+    assert detail["to_path"] == "src/operating_rules.rs"
+    assert detail["diff_lines"] == []
 
 
 def test_unified_diff_missing_path_raises_keyerror() -> None:

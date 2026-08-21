@@ -34,6 +34,7 @@ function manifest(): SourceDiffManifest {
     modified_count: 1,
     added_count: 0,
     removed_count: 0,
+    renamed_count: 0,
     truncated: false,
     files: [
       {
@@ -125,6 +126,48 @@ describe('CopyReviewSourceDiff', () => {
     fireEvent.click(screen.getByText('src/lib.rs'))
     await waitFor(() =>
       expect(screen.getByText(/byte-for-byte identical/i)).toBeTruthy(),
+    )
+    expect(getCopyReviewSourceDiffFile).not.toHaveBeenCalled()
+  })
+
+  it('classifies a renamed normalized-identical file instead of added+removed', async () => {
+    vi.mocked(getCopyReviewSourceDiff).mockResolvedValue({
+      ...manifest(),
+      file_count: 2,
+      identical_count: 0,
+      modified_count: 0,
+      added_count: 0,
+      removed_count: 0,
+      renamed_count: 1,
+      files: [
+        {
+          path: 'src/operating_rules.rs',
+          status: 'renamed',
+          candidate_lines: 20,
+          reference_lines: 20,
+          added_lines: 0,
+          removed_lines: 0,
+          similarity: 1,
+          normalized_identical: true,
+          from_path: 'src/whitycat.rs',
+          to_path: 'src/operating_rules.rs',
+        },
+      ],
+    })
+
+    render(<CopyReviewSourceDiff agentId={AGENT_ID} canView={true} />)
+    fireEvent.click(screen.getByRole('button', { name: /load file-by-file diff/i }))
+
+    await waitFor(() =>
+      expect(screen.getByText(/whitycat\.rs → src\/operating_rules\.rs/)).toBeTruthy(),
+    )
+    expect(screen.getByText('copy (renamed)')).toBeTruthy()
+    expect(screen.queryByText('added')).toBeNull()
+    expect(screen.queryByText('removed')).toBeNull()
+
+    fireEvent.click(screen.getByText(/whitycat\.rs → src\/operating_rules\.rs/))
+    await waitFor(() =>
+      expect(screen.getByText(/renamed from src\/whitycat\.rs/i)).toBeTruthy(),
     )
     expect(getCopyReviewSourceDiffFile).not.toHaveBeenCalled()
   })

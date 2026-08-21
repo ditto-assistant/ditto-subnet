@@ -518,9 +518,10 @@ export interface paths {
          * Get Copy Review Source Diff
          * @description Per-file diff manifest between a held agent and the agent it copied.
          *
-         *     Classifies every path as added / removed / modified / identical with change
-         *     stats so an operator can see at a glance which files were copied verbatim
-         *     and which were altered. Unified-diff bodies come from the per-file endpoint.
+         *     Classifies every path as added / removed / modified / identical / renamed
+         *     with change stats so an operator can see at a glance which files were copied
+         *     verbatim, which were altered, and which were only moved. Unified-diff
+         *     bodies come from the per-file endpoint.
          */
         get: operations["get_copy_review_source_diff_api_v1_admin_copy_reviews__agent_id__source_diff_get"];
         put?: never;
@@ -7235,6 +7236,8 @@ export interface components {
             added_lines: number;
             /** Candidate Lines */
             candidate_lines: number;
+            /** From Path */
+            from_path?: string | null;
             /** Normalized Identical */
             normalized_identical: boolean;
             /** Path */
@@ -7249,7 +7252,9 @@ export interface components {
              * Status
              * @enum {string}
              */
-            status: "added" | "removed" | "modified" | "identical";
+            status: "added" | "removed" | "modified" | "identical" | "renamed";
+            /** To Path */
+            to_path?: string | null;
         };
         /** AdminSourceDiffFileDetail */
         AdminSourceDiffFileDetail: {
@@ -7262,6 +7267,8 @@ export interface components {
             candidate_present: boolean;
             /** Diff Lines */
             diff_lines: string[];
+            /** From Path */
+            from_path?: string | null;
             /** Identical */
             identical: boolean;
             /** Path */
@@ -7273,6 +7280,8 @@ export interface components {
             reference_agent_id: string;
             /** Reference Present */
             reference_present: boolean;
+            /** To Path */
+            to_path?: string | null;
             /** Truncated */
             truncated: boolean;
         };
@@ -7304,6 +7313,11 @@ export interface components {
             reference_sha256: string;
             /** Removed Count */
             removed_count: number;
+            /**
+             * Renamed Count
+             * @default 0
+             */
+            renamed_count: number;
             /** Truncated */
             truncated: boolean;
         };

@@ -1172,9 +1172,10 @@ async def get_copy_review_source_diff(
 ) -> AdminSourceDiffManifest:
     """Per-file diff manifest between a held agent and the agent it copied.
 
-    Classifies every path as added / removed / modified / identical with change
-    stats so an operator can see at a glance which files were copied verbatim
-    and which were altered. Unified-diff bodies come from the per-file endpoint.
+    Classifies every path as added / removed / modified / identical / renamed
+    with change stats so an operator can see at a glance which files were copied
+    verbatim, which were altered, and which were only moved. Unified-diff
+    bodies come from the per-file endpoint.
     """
     if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
         raise HTTPException(status_code=422, detail="X-Admin-Actor is required")

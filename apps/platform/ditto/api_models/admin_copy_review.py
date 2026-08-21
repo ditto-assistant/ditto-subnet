@@ -187,8 +187,9 @@ class AdminCopyReviewAudit(BaseModel):
 
 
 class AdminSourceDiffFile(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     path: str
-    status: Literal["added", "removed", "modified", "identical"]
+    status: Literal["added", "removed", "modified", "identical", "renamed"]
     candidate_lines: int
     reference_lines: int
     added_lines: int
@@ -197,9 +198,14 @@ class AdminSourceDiffFile(BaseModel):
     # Identical after comments/whitespace are canonicalized — a reformatted or
     # re-commented copy of the same code even when the raw text differs.
     normalized_identical: bool
+    # Set when status == "renamed": the reference path the candidate file was
+    # moved from, and the candidate path it lives at now.
+    from_path: str | None = None
+    to_path: str | None = None
 
 
 class AdminSourceDiffManifest(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     agent_id: UUID
     reference_agent_id: UUID
     candidate_sha256: str
@@ -210,12 +216,14 @@ class AdminSourceDiffManifest(BaseModel):
     modified_count: int
     added_count: int
     removed_count: int
+    renamed_count: int = 0
     # True when more files exist than the manifest bound returns; file_count
     # still reflects the real total so the omission is never silent.
     truncated: bool
 
 
 class AdminSourceDiffFileDetail(BaseModel):
+    model_config = ConfigDict(extra="ignore")
     agent_id: UUID
     reference_agent_id: UUID
     path: str
@@ -224,6 +232,8 @@ class AdminSourceDiffFileDetail(BaseModel):
     identical: bool
     diff_lines: list[str]
     truncated: bool
+    from_path: str | None = None
+    to_path: str | None = None
 
 
 class AdminCopyReviewResolveRequest(BaseModel):

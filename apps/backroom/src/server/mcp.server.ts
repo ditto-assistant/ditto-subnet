@@ -790,7 +790,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get copy-review source diff',
       description:
-        'Return a per-file diff manifest between a held (ath_pending_review) agent and the agent it was matched against: every path classified as added, removed, modified, or identical with added/removed line counts and a normalized-identical flag (true when the code matches once comments and whitespace are canonicalized — a reformatted copy). Use it to see at a glance which files were copied verbatim before reading individual diffs. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
+        'Return a per-file diff manifest between a held (ath_pending_review) agent and the agent it was matched against: every path classified as added, removed, modified, identical, or renamed (from_path → to_path) with added/removed line counts and a normalized-identical flag (true when the code matches once comments and whitespace are canonicalized — a reformatted copy). Use it to see at a glance which files were copied verbatim before reading individual diffs. Requires the dedicated backroom:artifact:read scope because miner source is sensitive.',
       inputSchema: { agentId: z.string().uuid() },
       annotations: toolAnnotations('read'),
     },

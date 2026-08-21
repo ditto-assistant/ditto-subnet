@@ -12,16 +12,20 @@ const STATUS_STYLES: Record<SourceDiffFile['status'], string> = {
   added: 'text-[var(--acid)] border-[var(--acid)]/30 bg-[var(--acid-dim)]/40',
   removed: 'text-[var(--red)] border-[var(--red)]/30 bg-[var(--red-dim)]/40',
   modified: 'text-[var(--amber)] border-[var(--amber)]/30 bg-[var(--amber-dim)]/40',
+  renamed: 'text-[var(--amber)] border-[var(--amber)]/30 bg-[var(--amber-dim)]/40',
   identical: 'text-[var(--muted)] border-white/10 bg-white/[0.03]',
 }
 
 // Show verbatim copies and near-copies first; identical-but-boilerplate files
 // (mostly the shared starter kit) sink to the bottom where they don't distract.
+// Renames of a copied residual go first so they cannot read as "the stolen
+// file was deleted".
 const STATUS_ORDER: Record<SourceDiffFile['status'], number> = {
-  modified: 0,
-  added: 1,
-  removed: 2,
-  identical: 3,
+  renamed: 0,
+  modified: 1,
+  added: 2,
+  removed: 3,
+  identical: 4,
 }
 
 function DiffBody({ lines }: { lines: Array<string> }) {
@@ -87,21 +91,24 @@ export function CopyReviewSourceDiff({
     }
   }
 
-  async function toggleFile(path: string, status: SourceDiffFile['status']) {
-    if (openPath === path) {
+  async function toggleFile(file: SourceDiffFile) {
+    if (openPath === file.path) {
       setOpenPath(null)
       return
     }
-    setOpenPath(path)
+    setOpenPath(file.path)
     setFileLines(null)
     setFileError(null)
-    if (status === 'identical') {
+    if (
+      file.status === 'identical' ||
+      (file.status === 'renamed' && file.normalized_identical)
+    ) {
       setFileLines([])
       return
     }
     setFileLoading(true)
     try {
-      const detail = await fileFn({ data: { agentId, path } })
+      const detail = await fileFn({ data: { agentId, path: file.path } })
       setFileLines(detail.diff_lines)
     } catch (cause) {
       setFileError(cause instanceof Error ? cause.message : 'Failed to load file diff')
@@ -140,7 +147,8 @@ export function CopyReviewSourceDiff({
         {manifest ? (
           <span className="text-xs text-[var(--muted)]">
             {manifest.identical_count} identical · {manifest.modified_count} modified ·{' '}
-            {manifest.added_count} added · {manifest.removed_count} removed
+            {manifest.renamed_count} renamed · {manifest.added_count} added ·{' '}
+            {manifest.removed_count} removed
           </span>
         ) : null}
       </div>
@@ -174,7 +182,7 @@ export function CopyReviewSourceDiff({
             <div key={file.path} className="rounded-md border border-white/5">
               <button
                 type="button"
-                onClick={() => void toggleFile(file.path, file.status)}
+                onClick={() => void toggleFile(file)}
                 className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-xs transition-colors hover:bg-white/[0.04]"
               >
                 <span className="flex items-center gap-2 truncate font-mono">
@@ -183,7 +191,11 @@ export function CopyReviewSourceDiff({
                   >
                     {file.status}
                   </span>
-                  <span className="truncate">{file.path}</span>
+                  <span className="truncate">
+                    {file.status === 'renamed' && file.from_path
+                      ? `${file.from_path} → ${file.to_path ?? file.path}`
+                      : file.path}
+                  </span>
                   {file.status === 'modified' && file.normalized_identical ? (
                     <span
                       className="rounded bg-[var(--red-dim)]/60 px-1.5 py-0.5 text-[10px] text-[var(--red)]"
@@ -192,14 +204,24 @@ export function CopyReviewSourceDiff({
                       copy (reformatted)
                     </span>
                   ) : null}
+                  {file.status === 'renamed' && file.normalized_identical ? (
+                    <span
+                      className="rounded bg-[var(--red-dim)]/60 px-1.5 py-0.5 text-[10px] text-[var(--red)]"
+                      title="Same canonical source under a new path"
+                    >
+                      copy (renamed)
+                    </span>
+                  ) : null}
                 </span>
                 <span className="shrink-0 font-mono text-[var(--muted)]">
-                  {file.status === 'modified' ? (
+                  {file.status === 'modified' ||
+                  (file.status === 'renamed' && !file.normalized_identical) ? (
                     <>
                       <span className="text-[var(--acid)]">+{file.added_lines}</span>{' '}
                       <span className="text-[var(--red)]">−{file.removed_lines}</span>
                     </>
-                  ) : file.status === 'identical' ? (
+                  ) : file.status === 'identical' ||
+                    (file.status === 'renamed' && file.normalized_identical) ? (
                     '—'
                   ) : file.status === 'added' ? (
                     <span className="text-[var(--acid)]">+{file.added_lines}</span>
@@ -219,6 +241,11 @@ export function CopyReviewSourceDiff({
                   ) : file.status === 'identical' ? (
                     <p className="mt-2 text-xs text-[var(--muted)]">
                       Byte-for-byte identical to the copied submission.
+                    </p>
+                  ) : file.status === 'renamed' && file.normalized_identical ? (
+                    <p className="mt-2 text-xs text-[var(--muted)]">
+                      Renamed from {file.from_path}. Identical once comments and
+                      whitespace are canonicalized.
                     </p>
                   ) : fileLines ? (
                     <DiffBody lines={fileLines} />

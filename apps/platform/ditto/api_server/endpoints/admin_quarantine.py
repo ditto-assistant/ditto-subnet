@@ -3201,7 +3201,11 @@ async def read_screening_baseline_diff_file(
     )
     try:
         detail = await asyncio.to_thread(
-            unified_diff_for_file, normalized, candidate, baseline
+            unified_diff_for_file,
+            normalized,
+            candidate,
+            baseline,
+            pair_renames=False,
         )
     except KeyError as error:
         raise HTTPException(

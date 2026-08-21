@@ -5062,13 +5062,15 @@ export const sourceDiffInputSchema = z.object({ agentId: z.string().uuid() })
 
 export const sourceDiffFileSchema = z.object({
   path: z.string(),
-  status: z.enum(['added', 'removed', 'modified', 'identical']),
+  status: z.enum(['added', 'removed', 'modified', 'identical', 'renamed']),
   candidate_lines: z.number().int().nonnegative(),
   reference_lines: z.number().int().nonnegative(),
   added_lines: z.number().int().nonnegative(),
   removed_lines: z.number().int().nonnegative(),
   similarity: z.number().min(0).max(1),
   normalized_identical: z.boolean(),
+  from_path: z.string().nullish(),
+  to_path: z.string().nullish(),
 })
 
 export const sourceDiffManifestSchema = z.object({
@@ -5082,6 +5084,7 @@ export const sourceDiffManifestSchema = z.object({
   modified_count: z.number().int().nonnegative(),
   added_count: z.number().int().nonnegative(),
   removed_count: z.number().int().nonnegative(),
+  renamed_count: z.number().int().nonnegative().default(0),
   truncated: z.boolean(),
 })
 
@@ -5099,6 +5102,8 @@ export const sourceDiffFileDetailSchema = z.object({
   identical: z.boolean(),
   diff_lines: z.array(z.string()),
   truncated: z.boolean(),
+  from_path: z.string().nullish(),
+  to_path: z.string().nullish(),
 })
 
 // --- Starter-kit baseline diff -------------------------------------------
