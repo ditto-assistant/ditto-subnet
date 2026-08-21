@@ -17,17 +17,17 @@ miners/dittobench-starter-kit  ──depends on──►  ditto-harness
    (your Rust harness)                    (Rust crate, pinned rev)
 ```
 
-You iterate with the kit's built-in `evaluate` (fixed benchmark), then run the
-monorepo's real v9 generator/scorer locally with one command. The hosted service
-is a useful reachability rehearsal, but remote harness tool calls cannot be
-observed through its loopback tool endpoint; see §2.
+You iterate with the kit's built-in `evaluate` (fixed name-only subset), then
+run the monorepo's real generator/scorer locally with one command. The hosted
+service is a useful reachability rehearsal, but remote harness tool calls cannot
+be observed through its loopback tool endpoint; see §2.
 
 ---
 
 ## 0. Prerequisites
 
 - Rust (latest stable; this reference needs >= 1.85). Install via [rustup](https://rustup.rs).
-- Go >= 1.23 for the one-command local v9 practice, which builds the
+- Go >= 1.23 for the one-command local practice, which builds the
   monorepo's scorer. The standalone harness commands do not need Go.
 - Ollama, for memory embeddings (`embeddinggemma`, 768-dim):
   ```bash
@@ -71,8 +71,9 @@ cargo run -- evaluate            # FIXED local submission test: static user + sa
 cargo run -- practice --n 20     # ROTATING random dataset (anti-overfit), like the hosted validator
 cargo run -- serve --port 8080   # expose GET /health, POST /run, POST /seed for the validator
 
-# Recommended before submission: full local v9 path with observed tools.
+# Recommended before submission: live-bench path with observed tools.
 cd ../.. && uv run ditto practice --run-size small
+# On-chain-shaped envelope (hours): --run-size full
 ```
 
 > `evaluate` is fixed; the local v9 and hosted rehearsal paths generate a fresh

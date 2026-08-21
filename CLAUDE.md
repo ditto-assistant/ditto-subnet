@@ -12,6 +12,8 @@ python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py "<task>"
 
 Load only the returned anchors and the relevant specialized skill:
 
+- `.agents/skills/mine` for miner setup, local rehearsal vs on-chain scoring,
+  packaging, and upload;
 - `.agents/skills/ditto-subnet-platform` for Platform, migrations, dashboard,
   and Backroom;
 - `.agents/skills/ditto-subnet-benchmark` for validator, scoring, DittoBench,
@@ -34,6 +36,7 @@ Load only the returned anchors and the relevant specialized skill:
 
 | Surface | Path |
 |---|---|
+| Miner starter kit and local rehearsal | `miners/dittobench-starter-kit/`, `.agents/skills/mine/` |
 | Miner CLI, validator, chain client | `ditto/` |
 | Validator Compose and updater | `docker-compose.yml`, `scripts/` |
 | Platform API, DB, dashboard | `apps/platform/` |
@@ -43,7 +46,6 @@ Load only the returned anchors and the relevant specialized skill:
 | Screener worker | `workers/screener/` |
 | Shared screening protocol | `packages/ditto-screening-protocol/` |
 | Benchmark datagen research | `research/dittobench-datagen/` |
-| Miner starter kit | `miners/dittobench-starter-kit/` |
 | Terraform and Ansible | `infra/` |
 | Release ownership graph | `release/components.toml` |
 | Backroom quarantine and ATH review | `.agents/skills/backroom-review/` |

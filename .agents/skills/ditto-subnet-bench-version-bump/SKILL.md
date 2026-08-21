@@ -134,7 +134,15 @@ Not an opt-in per-version feature: every new `bench_version` is expected to run 
   - `apps/platform/dashboard/src/types/` (hand-written unions mirrored by `expectTypeOf` tests)
   - any label/enum map keyed by version or by a new enum value.
 
-### 8. Release + CI
+### 8. Miner rehearsal (otherwise miners keep scoring v(N-1) locally)
+
+- `miners/dittobench-starter-kit/scripts/local-rehearsal.py` `LIVE_SCORING_BENCH_VERSION` and `MAX_BENCH_VERSION`
+- `miners/dittobench-starter-kit/src/protocol.rs` `MAX_SUPPORTED_BENCH_VERSION` (accept the new version on `/run`; do not change `ACTIVE_BENCH_VERSION` unless cargo-evaluate should follow)
+- `.agents/skills/mine/SKILL.md` live bench number
+
+A kit that 400s the new `bench_version` on `/run` looks like "scoring is broken" to miners.
+
+### 9. Release + CI
 - `.github/workflows/release.yml` — the deploy identity gate asserting
   `supported_bench_versions | sort == [...]` **fails closed**; update it with the bump.
 - `release/components.toml` — every new path needs a release owner or an `ignored_paths` entry

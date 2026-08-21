@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run a miner harness through self-contained local Bench v9 practice."""
+"""Run a miner harness through self-contained local DittoBench practice."""
 
 from __future__ import annotations
 
@@ -26,7 +26,11 @@ DEFAULT_KIT_DIR = SCRIPT_DIR.parent
 REPO_ROOT = DEFAULT_KIT_DIR.parents[1]
 API_DIR = REPO_ROOT / "services" / "dittobench-api"
 LONGMEM_DIR = API_DIR / "integrations" / "longmemeval"
-ACTIVE_BENCH_VERSION = 9
+# Live SN118 scoring contract. Update with Platform current_bench_version
+# activation; do not confuse with research CurrentBenchVersion (still v8).
+LIVE_SCORING_BENCH_VERSION = 11
+MIN_BENCH_VERSION = 8
+MAX_BENCH_VERSION = 12
 LONGMEM_DATASET_SHA256 = (
     "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442"
 )
@@ -52,9 +56,10 @@ class RehearsalError(RuntimeError):
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Build the starter harness and local DittoBench API, run a v9 "
-            "rehearsal with validator-observed tools, print the report, and "
-            "optionally append the separate LongMemEval-S score."
+            "Build the starter harness and local DittoBench API, run a "
+            "rehearsal with validator-observed tools against the live scoring "
+            "bench version, print the report, and optionally append the "
+            "separate LongMemEval-S score."
         )
     )
     parser.add_argument(
@@ -67,7 +72,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--run-size",
         choices=("small", "medium", "full"),
         default="small",
-        help="v9 profile to run (default: small smoke profile)",
+        help="dataset envelope to run (default: small smoke profile)",
+    )
+    parser.add_argument(
+        "--bench-version",
+        type=int,
+        default=LIVE_SCORING_BENCH_VERSION,
+        help=(
+            "DittoBench contract to generate and score "
+            f"(default: {LIVE_SCORING_BENCH_VERSION}, live SN118 scoring)"
+        ),
     )
     parser.add_argument(
         "--seed",
@@ -110,6 +124,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--longmem-limit must be between 1 and 500")
     if args.longmem_limit is not None and not args.longmem_eval:
         parser.error("--longmem-limit requires --longmem-eval")
+    if not MIN_BENCH_VERSION <= args.bench_version <= MAX_BENCH_VERSION:
+        parser.error(
+            f"--bench-version must be between {MIN_BENCH_VERSION} and "
+            f"{MAX_BENCH_VERSION}"
+        )
     return args
 
 
@@ -201,9 +220,14 @@ def wait_for_health(
     raise RehearsalError(f"timed out waiting for {base_url}/health")
 
 
-def submit_body(run_size: str, harness_url: str, seed: int | None) -> dict[str, Any]:
+def submit_body(
+    run_size: str,
+    harness_url: str,
+    seed: int | None,
+    bench_version: int = LIVE_SCORING_BENCH_VERSION,
+) -> dict[str, Any]:
     body: dict[str, Any] = {
-        "bench_version": ACTIVE_BENCH_VERSION,
+        "bench_version": bench_version,
         "harness_url": harness_url,
         "run_size": run_size,
     }
@@ -234,9 +258,13 @@ def poll_run(api_url: str, run_id: str, *, timeout: float) -> dict[str, Any]:
 def format_summary(run: dict[str, Any]) -> str:
     report = run.get("report") or {}
     details = report.get("details") or {}
+    bench_version = report.get("bench_version", run.get("bench_version", "unknown"))
+    run_size = run.get("run_size") or details.get("run_size") or "unknown"
     lines = [
         "",
-        f"=== DittoBench local v9 rehearsal ({run.get('run_id', 'unknown')}) ===",
+        f"=== DittoBench local rehearsal ({run.get('run_id', 'unknown')}) ===",
+        f"bench_version:       {bench_version}",
+        f"run_size:            {run_size}",
         f"seed:                {report.get('seed', run.get('seed', 'unknown'))}",
         f"dataset_sha256:      {details.get('dataset_sha256', 'unknown')}",
         f"composite:           {float(report.get('composite', 0)):.3f}",
@@ -245,10 +273,12 @@ def format_summary(run: dict[str, Any]) -> str:
         f"observed_tool_cases: {details.get('observed_tool_cases', 0)}",
         f"capped_tool_cases:   {details.get('capped_tool_cases', 0)}",
         "",
-        "This run used the real local v9 generator, staged seeding, scorer, and",
+        "This run used the real local generator, staged seeding, scorer, and",
         "validator-visible tool endpoint. It is still a rehearsal, not submission",
         "certification: chat and embeddings came from your local .env, and no",
         "screened container or ticket-bound platform inference was used.",
+        "`cargo run -- evaluate` is a different, name-only scorer and will not",
+        "match this report.",
     ]
     return "\n".join(lines)
 
@@ -269,7 +299,7 @@ def format_longmem_summary(result: dict[str, Any]) -> str:
             f"abstention:{result['abstention_correct']}/{result['abstention_n']}",
             "",
             "LongMemEval is a separate offline adapter score. It is not folded",
-            "into the Bench v9 composite, KOTH rank, confirmation, or payout.",
+            "into the Bench composite, KOTH rank, confirmation, or payout.",
         ]
     )
 
@@ -453,7 +483,9 @@ def start_process(
     return process, output
 
 
-def summarize_longmem(evaluation_path: Path, *, limit: int | None) -> dict[str, Any]:
+def summarize_longmem(
+    evaluation_path: Path, *, limit: int | None, bench_version: int
+) -> dict[str, Any]:
     rows = [
         json.loads(line)
         for line in evaluation_path.read_text(encoding="utf-8").splitlines()
@@ -490,7 +522,7 @@ def summarize_longmem(evaluation_path: Path, *, limit: int | None) -> dict[str, 
     return {
         "schema_version": 1,
         "condition": LONGMEM_CONDITION,
-        "bench_version": ACTIVE_BENCH_VERSION,
+        "bench_version": bench_version,
         "dataset_sha256": LONGMEM_DATASET_SHA256,
         "dataset_revision": LONGMEM_DATASET_REVISION,
         "source_revision": LONGMEM_SOURCE_REVISION,
@@ -534,7 +566,7 @@ def longmem_adapter_command(
         "--agent-label",
         kit_dir.name,
         "--bench-version",
-        str(ACTIVE_BENCH_VERSION),
+        str(args.bench_version),
         "--retrieval-mode",
         "native-memory-tools",
         "--answer-model",
@@ -659,7 +691,11 @@ def run_longmem(
             check=True,
         )
         evaluation = tmp / "longmemeval-hypotheses.jsonl.eval-results-gpt-4o"
-        result = summarize_longmem(evaluation, limit=args.longmem_limit)
+        result = summarize_longmem(
+            evaluation,
+            limit=args.longmem_limit,
+            bench_version=args.bench_version,
+        )
         result["hypotheses_sha256"] = sha256_file(hypotheses)
         result["manifest_sha256"] = sha256_file(manifest)
         return result
@@ -753,7 +789,12 @@ def run(args: argparse.Namespace) -> int:
                 accepted = request_json(
                     f"{api_url}/v1/submit",
                     method="POST",
-                    payload=submit_body(args.run_size, harness_url, args.seed),
+                    payload=submit_body(
+                        args.run_size,
+                        harness_url,
+                        args.seed,
+                        args.bench_version,
+                    ),
                 )
                 run_id = accepted.get("run_id")
                 if not isinstance(run_id, str) or not run_id:

@@ -51,6 +51,10 @@ LongMemEval adapter in one command, run from the monorepo root:
 ```sh
 uv run ditto practice --run-size small
 
+# On-chain-shaped envelope (same generator and observed-tool scorer as
+# validators; still local .env inference, not the screened image).
+uv run ditto practice --run-size full --report /tmp/dittobench-report.json
+
 # Add the separate cleaned LongMemEval-S score (500 questions by default).
 uv run ditto practice --run-size small --longmem-eval
 
@@ -58,10 +62,15 @@ uv run ditto practice --run-size small --longmem-eval
 uv run ditto practice --run-size small --longmem-eval --longmem-limit 5
 ```
 
-The command starts and tears down the harness, Bench v9 scorer, trusted local
-reader/judge proxies, and isolated LongMemEval stores. Nothing is exposed to the
-public internet. LongMemEval remains a separately labeled offline score and is
-never folded into the Bench composite, KOTH rank, confirmation, or payout.
+The command starts and tears down the harness, live-bench (currently 11) scorer,
+trusted local reader/judge proxies, and isolated LongMemEval stores. Default
+`--run-size small` is a smoke profile, not the on-chain case count. Nothing is
+exposed to the public internet. LongMemEval remains a separately labeled
+offline score and is never folded into the Bench composite, KOTH rank,
+confirmation, or payout.
+
+Coding agents should load `/mine` (`.agents/skills/mine`) instead of treating
+`cargo run -- evaluate` as on-chain scoring.
 
 Edit and test this repository until you are ready to submit. If you implement
 the contract in another language, use its normal build and test tools. Docker

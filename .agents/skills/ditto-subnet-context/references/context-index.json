@@ -47,7 +47,19 @@
       "search": ["rg -n 'request_job|submit_score|set_weights|heartbeat' ditto/validator", "rg -n 'upload|payment|tarball' ditto/miner_cli"],
       "validate": ["uv run pytest ditto/tests/validator ditto/tests/miner_cli -q", "RELAY_API_KEY=validation-placeholder docker compose config --quiet"],
       "invariants": ["The validator is stateless; durable queue and score state belong to Platform.", "Never expose signing material or provider credentials to untrusted jobs."],
-      "related": ["dittobench-scoring", "contracts", "release-delivery"]
+      "related": ["mine", "dittobench-scoring", "contracts", "release-delivery"]
+    },
+    {
+      "id": "mine",
+      "title": "Mine on SN118: practice, score, and submit a harness",
+      "keywords": ["mine", "miner", "starter kit", "practice", "evaluate", "ditto practice", "run-size", "run size full", "upload", "submit agent", "local score", "onchain score", "tool_mean", "openrouter", "rehearsal"],
+      "summary": "Route miners and coding agents to the correct local scoring loop. cargo evaluate is name-only; ditto practice --run-size small/medium/full is live-bench rehearsal; full is the on-chain envelope and is required before upload.",
+      "owns": [".agents/skills/mine", "miners/dittobench-starter-kit", "ditto/miner_cli/commands/practice.py"],
+      "read": [".agents/skills/mine/SKILL.md", "miners/dittobench-starter-kit/SETUP.md", "docs/MINER.md"],
+      "search": ["rg -n 'LIVE_SCORING_BENCH_VERSION|run-size|tool_endpoint' miners/dittobench-starter-kit/scripts ditto/miner_cli/commands/practice.py", "rg -n 'evaluate|practice' miners/dittobench-starter-kit/README.md docs/MINER.md"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/mine", "python3 miners/dittobench-starter-kit/scripts/test_local_rehearsal.py", "uv run pytest ditto/tests/miner_cli/commands/test_practice.py -q"],
+      "invariants": ["Do not treat cargo evaluate or hosted rehearsal as on-chain certification.", "Local ditto practice --run-size full matches the on-chain dataset envelope and observed-tool scorer, not the locked model or screened image."],
+      "related": ["validator-miner", "dittobench-scoring"]
     },
     {
       "id": "wandb-operations",
@@ -155,7 +167,7 @@
       "search": ["rg -n 'BenchVersion|v8|Composite|Score' services/dittobench-api/internal services/dittobench-api/cmd", "rg -n 'relay|inference|embedding' services/dittobench-api/cmd services/dittobench-api/internal"],
       "validate": ["cd services/dittobench-api && go test ./...", "uv run pytest ditto/tests/test_validator_compose.py ditto/tests/test_compose_stack.py -q"],
       "invariants": ["Research adapters do not create alternate production scoring paths.", "Any scoring change must preserve explicit version negotiation and frozen calibration inputs."],
-      "related": ["validator-miner", "research-adapters", "contracts"]
+      "related": ["validator-miner", "mine", "research-adapters", "contracts"]
     },
     {
       "id": "research-adapters",

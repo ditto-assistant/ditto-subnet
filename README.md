@@ -15,7 +15,7 @@ grader now live in [`research/dittobench-datagen`](research/dittobench-datagen).
 
 ## Layout
 - `miners/dittobench-starter-kit/`: the miner reference harness, playground,
-  offline practice loop, and submission packager.
+  offline practice loop, and submission packager. Coding agents: `/mine`.
 - `ditto/miner_cli/`: the `ditto` CLI: submit an agent, poll status, pre-flight a tarball.
 - `ditto/validator/`: the validator worker (`python -m ditto.validator`): pull agents from the
   platform, score them via dittobench, set weights on chain via Pylon (the

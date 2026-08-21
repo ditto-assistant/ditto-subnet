@@ -18,15 +18,20 @@ SPEC.loader.exec_module(LOCAL)
 
 
 class LocalRehearsalTest(unittest.TestCase):
-    def test_submit_body_is_explicitly_v9_and_omits_unpinned_seed(self) -> None:
+    def test_submit_body_defaults_to_live_scoring_version(self) -> None:
         self.assertEqual(
             LOCAL.submit_body("small", "http://127.0.0.1:8080", None),
             {
-                "bench_version": 9,
+                "bench_version": LOCAL.LIVE_SCORING_BENCH_VERSION,
                 "harness_url": "http://127.0.0.1:8080",
                 "run_size": "small",
             },
         )
+        self.assertEqual(LOCAL.LIVE_SCORING_BENCH_VERSION, 11)
+
+    def test_submit_body_can_pin_an_older_contract(self) -> None:
+        body = LOCAL.submit_body("small", "http://127.0.0.1:8080", None, 9)
+        self.assertEqual(body["bench_version"], 9)
 
     def test_submit_body_keeps_reproducible_seed(self) -> None:
         body = LOCAL.submit_body("medium", "http://127.0.0.1:8080", 42)
@@ -69,7 +74,8 @@ class LocalRehearsalTest(unittest.TestCase):
         self.assertIn("observed_tool_cases: 5", summary)
         self.assertIn("capped_tool_cases:   1", summary)
         self.assertIn("not submission", summary)
-        self.assertIn("local v9", summary)
+        self.assertIn("name-only scorer", summary)
+        self.assertIn("local rehearsal", summary)
 
     def test_log_redaction_covers_openrouter_and_bearer_tokens(self) -> None:
         redacted = LOCAL.redact(
@@ -82,6 +88,15 @@ class LocalRehearsalTest(unittest.TestCase):
     def test_timeout_must_be_positive(self) -> None:
         with self.assertRaises(SystemExit):
             LOCAL.parse_args(["--timeout", "0"])
+
+    def test_default_and_rejected_bench_versions(self) -> None:
+        self.assertEqual(
+            LOCAL.parse_args([]).bench_version, LOCAL.LIVE_SCORING_BENCH_VERSION
+        )
+        with self.assertRaises(SystemExit):
+            LOCAL.parse_args(["--bench-version", "7"])
+        with self.assertRaises(SystemExit):
+            LOCAL.parse_args(["--bench-version", "13"])
 
     def test_longmem_limit_requires_longmem_flag(self) -> None:
         with self.assertRaises(SystemExit):
@@ -127,7 +142,10 @@ class LocalRehearsalTest(unittest.TestCase):
         )
         self.assertNotIn("--resume", command)
         self.assertNotIn("--rebalance-pending", command)
-        self.assertEqual(command[command.index("--bench-version") + 1], "9")
+        self.assertEqual(
+            command[command.index("--bench-version") + 1],
+            str(LOCAL.LIVE_SCORING_BENCH_VERSION),
+        )
         self.assertEqual(command[command.index("--limit") + 1], "1")
 
     def test_summarize_longmem_requires_exact_unique_cardinality(self) -> None:
@@ -142,7 +160,7 @@ class LocalRehearsalTest(unittest.TestCase):
             }
             path.write_text(json.dumps(row) + "\n" + json.dumps(row) + "\n")
             with self.assertRaisesRegex(LOCAL.RehearsalError, "unique rows"):
-                LOCAL.summarize_longmem(path, limit=2)
+                LOCAL.summarize_longmem(path, limit=2, bench_version=11)
 
     def test_summarize_longmem_pins_judge_and_scope(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -164,7 +182,8 @@ class LocalRehearsalTest(unittest.TestCase):
                 },
             ]
             path.write_text("".join(json.dumps(row) + "\n" for row in rows))
-            result = LOCAL.summarize_longmem(path, limit=2)
+            result = LOCAL.summarize_longmem(path, limit=2, bench_version=11)
+            self.assertEqual(result["bench_version"], 11)
             self.assertEqual(result["accuracy"], 0.5)
             self.assertEqual(result["abstention_n"], 1)
             self.assertEqual(result["abstention_correct"], 0)
@@ -185,7 +204,7 @@ class LocalRehearsalTest(unittest.TestCase):
                 + "\n"
             )
             with self.assertRaisesRegex(LOCAL.RehearsalError, "pinned official judge"):
-                LOCAL.summarize_longmem(path, limit=1)
+                LOCAL.summarize_longmem(path, limit=1, bench_version=11)
 
     def test_build_environment_drops_provider_credentials(self) -> None:
         with patch.dict(

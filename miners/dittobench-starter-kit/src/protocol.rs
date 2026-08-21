@@ -19,16 +19,24 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// The benchmark contract selected by local practice and playground flows.
+/// The benchmark contract selected by `cargo run -- evaluate` / `-- practice`
+/// and the playground Submit tab. That path is a local subset, not live SN118
+/// scoring. The one-command rehearsal (`uv run ditto practice`) sends the live
+/// scoring version separately.
 pub const ACTIVE_BENCH_VERSION: u32 = 9;
 
-/// Wire-compatible contracts this starter can execute. Local practice remains
-/// pinned independently; accepting V10 lets the same screened image consume
-/// its opaque UUID and case-scoped inference capabilities.
-pub const SUPPORTED_BENCH_VERSIONS: [u32; 3] = [8, 9, 10];
+/// Inclusive floor of contracts this image will execute. Do not raise it:
+/// older validators still send 8.
+pub const MIN_SUPPORTED_BENCH_VERSION: u32 = 8;
+
+/// Inclusive ceiling matching the scorer's advertised set. Bump this when
+/// DittoBench advertises a new version so a submitted image does not 400
+/// every `/run`. Accepting a version is not the same as activating it as
+/// `ACTIVE_BENCH_VERSION`.
+pub const MAX_SUPPORTED_BENCH_VERSION: u32 = 12;
 
 pub fn supports_bench_version(version: u32) -> bool {
-    SUPPORTED_BENCH_VERSIONS.contains(&version)
+    (MIN_SUPPORTED_BENCH_VERSION..=MAX_SUPPORTED_BENCH_VERSION).contains(&version)
 }
 
 /// An expected tool in a dataset case (Go: `ToolSpec`).
@@ -111,7 +119,7 @@ pub struct RunRequest {
     pub user_input: String,
     #[serde(default)]
     pub tools: Vec<ToolDefWire>,
-    /// Required benchmark contract selector. See [`SUPPORTED_BENCH_VERSIONS`].
+    /// Required benchmark contract selector. See [`supports_bench_version`].
     #[serde(default)]
     pub bench_version: u32,
     /// Optional observed-execution URL served by the validator. When present,
@@ -340,8 +348,11 @@ mod tests {
         assert_eq!(ACTIVE_BENCH_VERSION, 9);
         assert!(supports_bench_version(8));
         assert!(supports_bench_version(9));
-        assert!(!supports_bench_version(7));
         assert!(supports_bench_version(10));
+        assert!(supports_bench_version(11));
+        assert!(supports_bench_version(12));
+        assert!(!supports_bench_version(7));
+        assert!(!supports_bench_version(13));
     }
 
     #[test]

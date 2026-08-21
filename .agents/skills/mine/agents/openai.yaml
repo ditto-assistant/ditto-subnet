@@ -1,0 +1,4 @@
+interface:
+  display_name: "Mine SN118"
+  short_description: "Practice, score, and submit a miner harness"
+  default_prompt: "Use $mine to set up the starter kit, run the on-chain-shaped local rehearsal, and interpret scores before upload."

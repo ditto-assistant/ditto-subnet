@@ -132,12 +132,14 @@ The loop is: edit this kit, test locally, submit this kit. In order:
    iterating) or `cargo run -- practice` (rotating inputs). Watch the composite,
    the per-category tool means, and the slowest cases. Run this after any change
    to the prompt or tools.
-4. Rehearse through the real v8 generator/scorer (recommended before you
+4. Rehearse through the real generator/scorer (recommended before you
    submit): `uv run ditto practice --run-size small` from the monorepo root. One command
    builds and starts your harness plus the local validator, supplies a
-   validator-visible `tool_endpoint`, runs fresh v8 data including staged
+   validator-visible `tool_endpoint`, runs fresh live-bench (currently 11) data including staged
    seeding, prints observed/capped tool counts, and tears both down. Move to
-   `medium` or `full` when the smoke run is healthy.
+   `medium` or `full` when the smoke run is healthy. `--run-size full` is the
+   on-chain-shaped envelope; it still uses your `.env` model. Coding agents:
+   load `/mine`.
 5. Package: `cargo run -- submit` builds `dittobench-submission.tgz` from your
    whole crate.
 6. Go on-chain: register a hotkey on netuid 118 and upload with the eval fee. The
@@ -244,13 +246,13 @@ below.
 
 - `evaluate` (local, fixed): scores your submission against the same inputs every run: the static seed user, the same bundled LongMemEval questions, and a fixed-seed tool set. Inputs are reproducible and model output is still stochastic.
 - `practice` (local, rotating): re-rolls prompts per run, but from a small fixed template pool (10 memory facts). It varies wording, not substance, and never exercises the seeding tiers/waves.
-- `uv run ditto practice` (local, full v9 path): starts your harness and the monorepo's v9 scorer together, generates a fresh version-9 dataset, exercises staged seeding and graph isolation for the selected run size, and gives the harness a reachable validator-owned `tool_endpoint`. Use this when debugging tool arguments, order, result use, or `observed_tool_cases` / `capped_tool_cases`.
+- `uv run ditto practice` (local, live-bench path, default `--run-size small`): starts your harness and the monorepo's scorer together, generates a fresh live-bench (currently 11) dataset, exercises staged seeding and graph isolation for the selected run size, and gives the harness a reachable validator-owned `tool_endpoint`. `--run-size full` is the on-chain-shaped envelope. Use this when debugging tool arguments, order, result use, or `observed_tool_cases` / `capped_tool_cases`. `cargo run -- evaluate` is a different name-only scorer.
 - Hosted rehearsal (remote): generates a fresh v8 dataset and exercises the seeding/question mix, but a publicly tunneled harness cannot reach a loopback-only tool endpoint on the hosted scorer. Observable tool cases are therefore self-report-capped. Use it for reachability and hosted orchestration, not for an exact tool score or screening/submission certification.
 - On-chain scoring: runs the screened image with locked, ticket-bound chat and Perplexity embedding routes. Neither local nor hosted rehearsal proves that boundary.
 
 Use `evaluate` to develop.
 
-#### One-command local Bench v9 practice
+#### One-command local live-bench practice
 
 From the monorepo root, the supported miner CLI starts every local component:
 
@@ -261,8 +263,10 @@ uv run ditto practice --run-size small
 The command requires Rust and Go, plus the same local provider setup as
 `serve`: Ollama `embeddinggemma` is required for memory, and chat uses the
 provider selected in `.env`. It builds both binaries, uses an isolated temporary
-database, selects free loopback ports, submits a version-9 run, displays
-progress and the final score/provenance counts, and cleans up on exit.
+database, selects free loopback ports, submits a live-bench (currently 11) run,
+displays progress and the final score/provenance counts, and cleans up on exit.
+`--run-size small` is a smoke profile. `--run-size full` is the on-chain-shaped
+envelope.
 
 Useful variants:
 
@@ -272,6 +276,9 @@ uv run ditto practice --run-size small --seed 12345
 
 # Exercise Tier B/C seeding and isolation more deeply; expect a longer run.
 uv run ditto practice --run-size medium
+
+# On-chain-shaped envelope (hours). Still local .env inference.
+uv run ditto practice --run-size full --report /tmp/dittobench-report.json
 
 # Keep the complete run envelope for comparing changes.
 uv run ditto practice --run-size small --report /tmp/dittobench-report.json
@@ -283,7 +290,7 @@ uv run ditto practice --run-size small --longmem-eval
 uv run ditto practice --run-size small --longmem-eval --longmem-limit 1
 ```
 
-This runs the real public v9 generator and scorer, including observed tool
+This runs the real public generator and scorer, including observed tool
 execution. It is still a rehearsal: the harness uses your `.env` chat and
 embedding configuration, runs as a local process rather than a screened
 container, and does not receive canonical ticket-bound inference.
@@ -294,7 +301,7 @@ official GPT-4o judge proxies, and runs the unmodified evaluator from the pinned
 upstream revision. Export `OPENROUTER_API_KEY` for that option; the key remains
 in the trusted proxy processes and is removed from build, harness, scorer, and
 judge-container environments. The LongMemEval accuracy is reported separately
-and never changes the Bench v9 composite.
+and never changes the Bench composite.
 
 ### Hosted rehearsal
 
