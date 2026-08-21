@@ -21,12 +21,16 @@ from ditto.api_models.coding import (
     CodingAuthoringLeaseRequest,
     CodingCapabilityCertificationReceipt,
     CodingGradingLeaseRequest,
+    CodingRunManifest,
+    CodingTaskEvidence,
     SubmitCodingAuthoringFreezeRequest,
     SubmitCodingCertificationRequest,
+    SubmitCodingShadowResultRequest,
     coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
     coding_grading_lease_signing_message,
+    coding_shadow_result_signing_message,
 )
 from ditto.api_models.validator import (
     FAILURE_DETAIL_MAX_LENGTH,
@@ -66,6 +70,13 @@ _GRADING_LEASE_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json"
 )
+_SHADOW_RESULT_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_shadow_result_submission_v1.json"
+)
 
 
 def _authoring_response() -> dict[str, Any]:
@@ -97,6 +108,23 @@ def _authoring_response() -> dict[str, Any]:
 
 def _grading_vector() -> dict[str, Any]:
     return json.loads(_GRADING_LEASE_VECTOR_PATH.read_text(encoding="utf-8"))
+
+
+def _shadow_result_vector() -> dict[str, Any]:
+    return json.loads(_SHADOW_RESULT_VECTOR_PATH.read_text(encoding="utf-8"))
+
+
+def _shadow_result_authority(
+    vector: dict[str, Any],
+) -> tuple[CodingRunManifest, list[CodingTaskEvidence]]:
+    manifest = CodingRunManifest.model_validate_json(
+        json.dumps(vector["authority"]["run_manifest"])
+    )
+    tasks = [
+        CodingTaskEvidence.model_validate_json(json.dumps(item))
+        for item in vector["authority"]["task_evidence"]
+    ]
+    return manifest, tasks
 
 
 async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
@@ -434,6 +462,196 @@ async def test_coding_grading_client_rejects_frozen_patch_drift() -> None:
                 freeze_id=UUID(raw["freeze_id"]),
                 authoring_evidence_sha256=raw["authoring_evidence_sha256"],
                 expected_frozen_patch_sha256=expected_patch_sha256,
+            )
+
+
+async def test_coding_shadow_result_client_posts_signed_evidence() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _shadow_result_vector()
+    raw = vector["request"]
+    manifest, task_evidence = _shadow_result_authority(vector)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith(
+            f"/validator/agent/{vector['agent_id']}/coding-shadow-result"
+        )
+        payload = SubmitCodingShadowResultRequest.model_validate_json(request.content)
+        message = coding_shadow_result_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            agent_id=UUID(vector["agent_id"]),
+            run_row_id=payload.run_row_id,
+            ticket_id=payload.ticket_id,
+            bench_version=payload.bench_version,
+            ticket_deadline=payload.ticket_deadline,
+            agent_artifact_sha256=payload.agent_artifact_sha256,
+            screened_image_sha256=payload.screened_image_sha256,
+            run_evidence_sha256=payload.run_evidence_sha256,
+        )
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        return httpx.Response(200, json=vector["response"])
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        accepted = await PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.test",
+                validator_hotkey=keypair.ss58_address,
+            ),  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).submit_coding_shadow_result(
+            UUID(vector["agent_id"]),
+            bench_version=raw["bench_version"],
+            run_row_id=UUID(raw["run_row_id"]),
+            ticket_id=UUID(raw["ticket_id"]),
+            ticket_deadline=datetime.fromisoformat(raw["ticket_deadline"]),
+            agent_artifact_sha256=raw["agent_artifact_sha256"],
+            screened_image_sha256=raw["screened_image_sha256"],
+            run_manifest=manifest,
+            evidence=SubmitCodingShadowResultRequest.model_validate_json(
+                json.dumps(raw)
+            ).evidence,
+            task_evidence=task_evidence,
+        )
+    assert accepted.accepted is True
+    assert accepted.weight_eligible is False
+
+
+async def test_coding_shadow_result_client_bounds_and_refuses_redirects() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _shadow_result_vector()
+    raw = SubmitCodingShadowResultRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    manifest, task_evidence = _shadow_result_authority(vector)
+
+    async def submit(http: httpx.AsyncClient) -> None:
+        await PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.test",
+                validator_hotkey=keypair.ss58_address,
+            ),  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).submit_coding_shadow_result(
+            UUID(vector["agent_id"]),
+            bench_version=raw.bench_version,
+            run_row_id=raw.run_row_id,
+            ticket_id=raw.ticket_id,
+            ticket_deadline=raw.ticket_deadline,
+            agent_artifact_sha256=raw.agent_artifact_sha256,
+            screened_image_sha256=raw.screened_image_sha256,
+            run_manifest=manifest,
+            evidence=raw.evidence,
+            task_evidence=task_evidence,
+        )
+
+    observed: list[str] = []
+
+    def redirect_handler(request: httpx.Request) -> httpx.Response:
+        observed.append(str(request.url))
+        return httpx.Response(
+            307,
+            headers={"Location": "https://redirect.invalid/capture"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(redirect_handler),
+        follow_redirects=True,
+    ) as http:
+        with pytest.raises(PlatformError, match="307"):
+            await submit(http)
+    assert len(observed) == 1
+
+    seen_chunks = 0
+
+    class OversizedStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            nonlocal seen_chunks
+            for _ in range(5):
+                seen_chunks += 1
+                yield b"x" * (16 << 10)
+            raise AssertionError("validator consumed data after the response bound")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, stream=OversizedStream())
+        )
+    ) as http:
+        with pytest.raises(PlatformInfrastructureError, match="size"):
+            await submit(http)
+    assert seen_chunks == 5
+
+
+async def test_coding_shadow_result_client_rejects_response_identity_drift() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _shadow_result_vector()
+    raw = SubmitCodingShadowResultRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    manifest, task_evidence = _shadow_result_authority(vector)
+    response = {**vector["response"], "coding_run_id": "different-run"}
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=response)
+        )
+    ) as http:
+        with pytest.raises(PlatformInfrastructureError, match="identity"):
+            await PlatformClient(
+                SimpleNamespace(
+                    platform_api_url="https://platform.test",
+                    validator_hotkey=keypair.ss58_address,
+                ),  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).submit_coding_shadow_result(
+                UUID(vector["agent_id"]),
+                bench_version=raw.bench_version,
+                run_row_id=raw.run_row_id,
+                ticket_id=raw.ticket_id,
+                ticket_deadline=raw.ticket_deadline,
+                agent_artifact_sha256=raw.agent_artifact_sha256,
+                screened_image_sha256=raw.screened_image_sha256,
+                run_manifest=manifest,
+                evidence=raw.evidence,
+                task_evidence=task_evidence,
+            )
+
+
+async def test_coding_shadow_result_client_rejects_local_authority_before_http() -> (
+    None
+):
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _shadow_result_vector()
+    raw = SubmitCodingShadowResultRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    manifest, task_evidence = _shadow_result_authority(vector)
+    drifted_manifest = manifest.model_copy(update={"agent_artifact_sha256": "ff" * 32})
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise AssertionError("invalid local evidence reached Platform")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformInfrastructureError, match="local authority"):
+            await PlatformClient(
+                SimpleNamespace(
+                    platform_api_url="https://platform.test",
+                    validator_hotkey=keypair.ss58_address,
+                ),  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).submit_coding_shadow_result(
+                UUID(vector["agent_id"]),
+                bench_version=raw.bench_version,
+                run_row_id=raw.run_row_id,
+                ticket_id=raw.ticket_id,
+                ticket_deadline=raw.ticket_deadline,
+                agent_artifact_sha256=raw.agent_artifact_sha256,
+                screened_image_sha256=raw.screened_image_sha256,
+                run_manifest=drifted_manifest,
+                evidence=raw.evidence,
+                task_evidence=task_evidence,
             )
 
 
