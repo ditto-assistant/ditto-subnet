@@ -34,19 +34,31 @@ Each object uses `dittobench-coding-private-catalog-record-v1` and contains:
   "schema": "dittobench-coding-private-catalog-record-v1",
   "catalog_commitment_sha256": "...",
   "task_version": {},
-  "membership_proof": {}
+  "membership_proof": {},
+  "issue": {},
+  "runtime_policy": {},
+  "budgets": {}
 }
 ```
 
 Input is byte- and depth-bounded. Duplicate fields and non-finite JSON values
 are rejected. Unknown fields are ignored for rolling compatibility and never
 become digest authority. The existing task and proof models revalidate their
-known fields and canonical digests.
+known fields and canonical digests. The issue, model-visible runtime policy,
+and model/tool/wall budgets are hydrated in the same envelope and must
+reproduce the three digests committed by the selected task leaf.
+
+The default and hard record bound is 1 MiB. This covers the contract maximum
+issue and constraint material after canonical JSON escaping without permitting
+an operator to expand the in-memory transport budget further. Tabs, newlines,
+and carriage returns remain valid issue text; other control characters are
+rejected so a contract-valid maximum cannot expand sixfold during JSON encoding.
 
 Before returning a record, the loader independently checks the exact registered
 commitment digest, contract version, release, catalog index, Merkle root, task
-count, task commitment, proof digest, and position-bound Merkle membership. The
-selector repeats the authority and membership checks before constructing a run.
+count, task commitment, proof digest, issue digest, runtime-policy digest,
+budget digest, and position-bound Merkle membership. The selector repeats the
+authority and membership checks before constructing a run.
 
 Missing objects, object-store failures, and timeouts are retryable unavailable
 errors. Oversized, malformed, digest-drifted, or non-member records are

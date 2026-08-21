@@ -20,6 +20,15 @@ from ditto.api_models.coding_evaluation import (
 )
 
 _MAX_CANONICAL_JSON_BYTES = 4 << 20
+_ALLOWED_TEXT_CONTROLS = frozenset({"\t", "\n", "\r"})
+
+
+def _contains_unsafe_control(value: str) -> bool:
+    return any(
+        unicodedata.category(character) == "Cc"
+        and character not in _ALLOWED_TEXT_CONTROLS
+        for character in value
+    )
 
 
 def _validate_relative_path(value: str) -> str:
@@ -63,8 +72,13 @@ class CodingCatalogIssue(CodingEvaluationModel):
     @field_validator("constraints")
     @classmethod
     def constraints_fit_byte_bounds(cls, values: list[str]) -> list[str]:
-        if any(not value or len(value.encode()) > 4096 for value in values):
-            raise ValueError("constraints must contain 1..=4096 UTF-8 bytes")
+        if any(
+            not value or len(value.encode()) > 4096 or _contains_unsafe_control(value)
+            for value in values
+        ):
+            raise ValueError(
+                "constraints must contain 1..=4096 UTF-8 bytes and no unsafe controls"
+            )
         return values
 
     @model_validator(mode="after")
@@ -72,8 +86,13 @@ class CodingCatalogIssue(CodingEvaluationModel):
         if (
             len(self.title.encode()) > 1024
             or len(self.description.encode()) > 64 * 1024
+            or _contains_unsafe_control(self.title)
+            or _contains_unsafe_control(self.description)
         ):
-            raise ValueError("issue title or description exceeds its UTF-8 byte bound")
+            raise ValueError(
+                "issue title or description exceeds its UTF-8 byte bound "
+                "or contains unsafe controls"
+            )
         return self
 
 
@@ -192,6 +211,9 @@ class CodingPrivateCatalogRecord(CodingEvaluationModel):
     catalog_commitment_sha256: Sha256
     task_version: CodingCatalogTaskVersion
     membership_proof: CodingCatalogMembershipProof
+    issue: CodingCatalogIssue
+    runtime_policy: CodingCatalogRuntimePolicy
+    budgets: CodingCatalogBudgets
 
     @model_validator(mode="after")
     def task_and_membership_are_coherent(self) -> CodingPrivateCatalogRecord:
@@ -202,8 +224,13 @@ class CodingPrivateCatalogRecord(CodingEvaluationModel):
             or task.payload.corpus_release_id != proof.corpus_release_id
             or task.payload.catalog_index != proof.catalog_index
             or task.task_commitment_sha256 != proof.task_commitment_sha256
+            or coding_catalog_issue_digest(self.issue) != task.payload.issue_sha256
+            or coding_catalog_runtime_policy_digest(self.runtime_policy)
+            != task.payload.runtime_policy_sha256
+            or coding_catalog_budgets_digest(self.budgets)
+            != task.payload.budgets_sha256
         ):
-            raise ValueError("private catalog task and membership proof disagree")
+            raise ValueError("private catalog task material disagrees with its digests")
         return self
 
 

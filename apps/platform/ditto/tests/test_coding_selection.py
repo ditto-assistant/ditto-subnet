@@ -10,7 +10,10 @@ from uuid import UUID
 import pytest
 from pydantic import ValidationError
 
-from ditto.api_models.coding_canonical import coding_canonical_sha256
+from ditto.api_models.coding_canonical import (
+    coding_canonical_json_bytes,
+    coding_canonical_sha256,
+)
 from ditto.api_models.coding_catalog import (
     CodingCatalogCommitment,
     coding_catalog_commitment_digest,
@@ -442,6 +445,33 @@ async def test_shared_selection_vector_replays_exactly() -> None:
         == vector["run_authority"]
     )
     assert result.exposure.model_dump(mode="json", by_alias=True) == vector["exposure"]
+
+
+def test_issue_maximum_safe_json_escaping_fits_private_record_budget() -> None:
+    issue = CodingCatalogIssue(
+        title="\\" * 1024,
+        description="\\" * (64 * 1024),
+        constraints=["\\" * 4096] * 64,
+    )
+    body = coding_canonical_json_bytes(
+        issue.model_dump(mode="json"),
+        maximum_bytes=1 << 20,
+        label="coding catalog issue",
+    )
+
+    assert len(body) < 700 << 10
+    with pytest.raises(ValidationError, match="unsafe controls"):
+        CodingCatalogIssue(
+            title="Unsafe NUL",
+            description="not transportable\x00",
+            constraints=[],
+        )
+    with pytest.raises(ValidationError, match="unsafe controls"):
+        CodingCatalogIssue(
+            title="Unsafe constraint",
+            description="still transportable",
+            constraints=["not transportable\x00"],
+        )
 
 
 async def test_consumed_first_probe_advances_without_repeating_an_index() -> None:
