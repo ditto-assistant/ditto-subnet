@@ -116,9 +116,16 @@ async def get_inference_runtime_metrics(
     config = request.app.state.config.inference_proxy
     latest = await latest_inference_concurrency_settings_revision(session)
     settings = settings_from_row(latest)
-    current_rows, window_rows, peak_rows = await load_inference_runtime_rows(
-        session,
-        stale_after_seconds=config.timeout_seconds * 2,
+    # The relay probes share nothing with the session, so their up-to-5s
+    # timeouts overlap the ledger reads instead of queueing behind them.
+    (current_rows, window_rows, peak_rows), relays = await asyncio.gather(
+        load_inference_runtime_rows(
+            session,
+            stale_after_seconds=config.timeout_seconds * 2,
+        ),
+        asyncio.gather(
+            *(_relay_snapshot(target, port) for target, port in _RELAY_PORTS.items())
+        ),
     )
     peaks = {
         (str(row["scope"]), str(row["request_kind"])): int(row["peak"])
@@ -181,9 +188,6 @@ async def get_inference_runtime_metrics(
                 peak_global_concurrency_60m=global_peaks.get(kind, 0),
             )
         )
-    relays = await asyncio.gather(
-        *(_relay_snapshot(target, port) for target, port in _RELAY_PORTS.items())
-    )
     return InferenceRuntimeMetrics(
         observed_at=datetime.now(UTC),
         settings_revision=latest.revision if latest is not None else 0,

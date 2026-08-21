@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock
@@ -8,8 +9,10 @@ from uuid import UUID
 import httpx
 import pytest
 from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.inference_observability import RuntimeProfileArtifact
+from ditto.api_server.dependencies import get_session
 
 pytestmark = pytest.mark.asyncio
 _ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
@@ -121,3 +124,60 @@ async def test_download_requires_actor_even_behind_admin_token(
         headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
     )
     assert response.status_code == 422
+
+
+def _install_session(
+    app: FastAPI, session_maker: async_sessionmaker[AsyncSession]
+) -> None:
+    async def _session() -> AsyncIterator[AsyncSession]:
+        async with session_maker() as session:
+            yield session
+
+    app.dependency_overrides[get_session] = _session
+
+
+async def test_runtime_metrics_reads_the_ledger_and_keeps_its_shape(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """The Backroom contract, end to end against a real ledger.
+
+    The relay probes hit loopback ports nothing listens on in a test and must
+    come back ``unavailable`` rather than take the endpoint down with them.
+    """
+    _install(app)
+    _install_session(app, session_maker)
+    response = await client.get(
+        "/api/v1/admin/inference-runtime-metrics", headers=_HEADERS
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == {
+        "observed_at",
+        "settings_revision",
+        "settings_checksum",
+        "lanes",
+        "windows",
+        "relays",
+    }
+    assert [lane["request_kind"] for lane in body["lanes"]] == ["chat", "embedding"]
+    for lane in body["lanes"]:
+        assert set(lane) >= {
+            "active_requests",
+            "live_grants",
+            "stale_started_requests",
+            "per_ticket_limit",
+            "per_validator_limit",
+            "global_limit",
+            "peak_per_ticket_concurrency_60m",
+            "peak_per_validator_concurrency_60m",
+            "peak_global_concurrency_60m",
+        }
+    # An empty hour has no window rows; the shape is a list either way.
+    assert body["windows"] == []
+    assert [relay["target"] for relay in body["relays"]] == [
+        "platform-relay-1",
+        "platform-relay-2",
+    ]
+    assert {relay["status"] for relay in body["relays"]} == {"unavailable"}

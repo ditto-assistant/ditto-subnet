@@ -3479,6 +3479,16 @@ class InferenceRequest(Base):
             name="inference_requests_fallback_phase",
         ),
         Index("inference_requests_started_idx", "started_at"),
+        # In-flight rows only: the runtime-metrics stale count and the
+        # admission path's live-request counts test ``status = 'started'``
+        # against a ledger of tens of millions of settled rows. See the
+        # 2026_08_21 migration for why this is partial and built concurrently.
+        Index(
+            "inference_requests_inflight_idx",
+            "request_kind",
+            "started_at",
+            postgresql_where=text("status = 'started'"),
+        ),
     )
 
 
