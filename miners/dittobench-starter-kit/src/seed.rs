@@ -10,11 +10,17 @@
 //! we recompute embeddings at load time with the kit's embedder so pairs,
 //! subjects, and queries share one vector space.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use ditto_harness::memory::{SaveMemoryRequest, Store, SubjectInput};
+use ditto_harness::types::{
+    EmbedRequest, EmbedResponse, Embedder, Error as HarnessError, Result as HarnessResult,
+};
 use serde::{Deserialize, Serialize};
+use tokio::sync::{Mutex, RwLock};
 
 use crate::baseline::USER_ID;
 
@@ -22,6 +28,134 @@ const PAIRS_JSON: &str = include_str!("../fixtures/seed-user/pairs.json");
 const SUBJECTS_JSON: &str = include_str!("../fixtures/seed-user/subjects.json");
 const LINKS_JSON: &str = include_str!("../fixtures/seed-user/subject_links.json");
 const MEMORY_CASES_JSON: &str = include_str!("../fixtures/seed-user/memory_cases.json");
+// The validator broker and Platform route both admit at most 256 inputs. Keep
+// the starter harness on that reviewed boundary even though direct Perplexity
+// currently accepts a larger batch.
+const SEED_EMBED_BATCH_SIZE: usize = 256;
+// Perplexity caps a request at 120k combined tokens. Since a token cannot
+// contain less than one UTF-8 byte, 96 KiB of JSON-encoded input strings stays
+// below that boundary and the broker/Platform 1 MiB body limits with ample room
+// for the envelope. A single larger input is still sent alone because splitting
+// it would change the embedding.
+const SEED_EMBED_BATCH_JSON_BYTES: usize = 96 << 10;
+
+tokio::task_local! {
+    /// Prevents unrelated `/run` tasks from reading the temporary seed cache
+    /// while a seed request is in flight on the shared Store.
+    static SEED_CACHE_ACTIVE: bool;
+}
+
+/// Short-lived read-through cache used only while one `/seed` wave is loaded.
+///
+/// `Store::save_memory` embeds one pair and then its subjects. Preloading those
+/// exact strings lets the provider do the expensive work in bounded batches
+/// while retaining the ordinary Store write/upsert path. The cache is cleared
+/// before the seed response returns, so later benchmark queries remain real,
+/// metered embedding requests and one run cannot retain another wave's text.
+pub struct SeedBatchEmbedder {
+    inner: Arc<dyn Embedder>,
+    cache: RwLock<HashMap<String, Vec<f32>>>,
+    seed_lock: Mutex<()>,
+}
+
+impl SeedBatchEmbedder {
+    pub fn new(inner: Arc<dyn Embedder>) -> Self {
+        Self {
+            inner,
+            cache: RwLock::new(HashMap::new()),
+            seed_lock: Mutex::new(()),
+        }
+    }
+
+    async fn prefetch(&self, texts: &[String]) -> HarnessResult<()> {
+        // A failed provider call must not leave vectors from an earlier wave
+        // eligible for read-through.
+        self.clear().await;
+        let mut seen = HashSet::new();
+        let unique: Vec<String> = texts
+            .iter()
+            .filter(|text| !text.trim().is_empty())
+            .filter(|text| seen.insert((*text).clone()))
+            .cloned()
+            .collect();
+        let mut loaded = HashMap::with_capacity(unique.len());
+        for chunk in seed_embedding_batches(unique)? {
+            let response = self
+                .inner
+                .embed(EmbedRequest {
+                    texts: chunk.clone(),
+                })
+                .await?;
+            if response.embeddings.len() != chunk.len() {
+                return Err(HarnessError::Embedding(format!(
+                    "seed embedding batch returned {} vectors for {} inputs",
+                    response.embeddings.len(),
+                    chunk.len()
+                )));
+            }
+            for (text, embedding) in chunk.into_iter().zip(response.embeddings) {
+                loaded.insert(text, embedding);
+            }
+        }
+        *self.cache.write().await = loaded;
+        Ok(())
+    }
+
+    async fn clear(&self) {
+        self.cache.write().await.clear();
+    }
+}
+
+fn seed_embedding_batches(unique: Vec<String>) -> HarnessResult<Vec<Vec<String>>> {
+    let mut batches: Vec<Vec<String>> = Vec::new();
+    let mut batch: Vec<String> = Vec::new();
+    let mut batch_json_bytes = 2; // Array brackets.
+    for text in unique {
+        let text_json_bytes = serde_json::to_vec(&text)
+            .map_err(|error| HarnessError::Embedding(format!("encode seed input: {error}")))?
+            .len()
+            + usize::from(!batch.is_empty()); // Array comma.
+        if !batch.is_empty()
+            && (batch.len() == SEED_EMBED_BATCH_SIZE
+                || batch_json_bytes + text_json_bytes > SEED_EMBED_BATCH_JSON_BYTES)
+        {
+            batches.push(std::mem::take(&mut batch));
+            batch_json_bytes = 2;
+        }
+        batch_json_bytes += text_json_bytes;
+        batch.push(text);
+    }
+    if !batch.is_empty() {
+        batches.push(batch);
+    }
+    Ok(batches)
+}
+
+#[async_trait]
+impl Embedder for SeedBatchEmbedder {
+    async fn embed(&self, req: EmbedRequest) -> HarnessResult<EmbedResponse> {
+        if !SEED_CACHE_ACTIVE
+            .try_with(|active| *active)
+            .unwrap_or(false)
+        {
+            return self.inner.embed(req).await;
+        }
+        let cache = self.cache.read().await;
+        let cached: Option<Vec<Vec<f32>>> = req
+            .texts
+            .iter()
+            .map(|text| cache.get(text).cloned())
+            .collect();
+        drop(cache);
+        if let Some(embeddings) = cached {
+            return Ok(EmbedResponse {
+                embeddings,
+                ..EmbedResponse::default()
+            });
+        }
+        self.inner.embed(req).await
+    }
+}
 
 #[derive(Deserialize)]
 pub struct Pair {
@@ -97,6 +231,77 @@ pub async fn load_seed_user(store: &Store) -> anyhow::Result<SeedStats> {
     let subjects: Vec<Subject> = serde_json::from_str(SUBJECTS_JSON)?;
     let links: Vec<Link> = serde_json::from_str(LINKS_JSON)?;
     load_haystack(store, USER_ID, &pairs, &subjects, &links, true).await
+}
+
+/// Batched variant used by the reference harness. The public unbatched helper
+/// above stays available to custom stores that do not use [`SeedBatchEmbedder`].
+pub async fn load_seed_user_batched(
+    store: &Store,
+    embedder: &SeedBatchEmbedder,
+) -> anyhow::Result<SeedStats> {
+    let pairs: Vec<Pair> = serde_json::from_str(PAIRS_JSON)?;
+    let subjects: Vec<Subject> = serde_json::from_str(SUBJECTS_JSON)?;
+    let links: Vec<Link> = serde_json::from_str(LINKS_JSON)?;
+    load_haystack_batched(store, embedder, USER_ID, &pairs, &subjects, &links, true).await
+}
+
+fn memory_embedding_text(pair: &Pair) -> String {
+    // Keep byte-identical with ditto-harness Store::save_memory, whose summary
+    // is empty on this seed path.
+    format!("{}\n{}\n", pair.prompt, pair.response)
+        .trim()
+        .to_string()
+}
+
+fn subject_embedding_text(subject: &Subject) -> String {
+    format!("{}\n{}", subject.subject_text, subject.description_text)
+        .trim()
+        .to_string()
+}
+
+fn seed_embedding_inputs(pairs: &[Pair], subjects: &[Subject], links: &[Link]) -> Vec<String> {
+    let pair_ids: HashSet<&str> = pairs.iter().map(|pair| pair.pair_id.as_str()).collect();
+    let linked_subject_ids: HashSet<&str> = links
+        .iter()
+        .filter(|link| pair_ids.contains(link.pair_id.as_str()))
+        .map(|link| link.subject_id.as_str())
+        .collect();
+    pairs
+        .iter()
+        .map(memory_embedding_text)
+        .chain(
+            subjects
+                .iter()
+                .filter(|subject| linked_subject_ids.contains(subject.id.as_str()))
+                .map(subject_embedding_text),
+        )
+        .collect()
+}
+
+async fn load_haystack_batched(
+    store: &Store,
+    embedder: &SeedBatchEmbedder,
+    user_id: &str,
+    pairs: &[Pair],
+    subjects: &[Subject],
+    links: &[Link],
+    log_progress: bool,
+) -> anyhow::Result<SeedStats> {
+    // The wrapper is shared by the HTTP server. Keep each seed wave's cache
+    // lifecycle atomic even if a client submits overlapping `/seed` calls.
+    let _seed_guard = embedder.seed_lock.lock().await;
+    embedder
+        .prefetch(&seed_embedding_inputs(pairs, subjects, links))
+        .await
+        .map_err(|error| anyhow::anyhow!("prefetch seed embeddings: {error}"))?;
+    let result = SEED_CACHE_ACTIVE
+        .scope(
+            true,
+            load_haystack(store, user_id, pairs, subjects, links, log_progress),
+        )
+        .await;
+    embedder.clear().await;
+    result
 }
 
 /// Shared loader used by both the bundled seed user and the `/seed` endpoint.
@@ -228,9 +433,239 @@ pub async fn seed_from_request(store: &Store, req: SeedRequest) -> anyhow::Resul
     })
 }
 
+/// Loads one validator seed wave after pre-embedding its exact Store inputs in
+/// provider-sized batches. Provider usage remains on this ticket; only the
+/// number of HTTP round trips changes.
+pub async fn seed_from_request_batched(
+    store: &Store,
+    embedder: &SeedBatchEmbedder,
+    req: SeedRequest,
+) -> anyhow::Result<SeedResponse> {
+    let user_id = req
+        .user_id
+        .as_deref()
+        .filter(|s| !s.is_empty())
+        .unwrap_or(USER_ID);
+    let stats = load_haystack_batched(
+        store,
+        embedder,
+        user_id,
+        &req.pairs,
+        &req.subjects,
+        &req.links,
+        false,
+    )
+    .await?;
+    Ok(SeedResponse {
+        pairs: stats.pairs,
+        subjects: stats.subjects,
+        links: stats.links,
+    })
+}
+
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex as StdMutex;
+
+    use ditto_harness::db::Db;
+    use ditto_harness::memory::StoreOptions;
+
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingEmbedder {
+        calls: StdMutex<Vec<Vec<String>>>,
+    }
+
+    #[async_trait]
+    impl Embedder for RecordingEmbedder {
+        async fn embed(&self, req: EmbedRequest) -> HarnessResult<EmbedResponse> {
+            self.calls
+                .lock()
+                .expect("lock calls")
+                .push(req.texts.clone());
+            Ok(EmbedResponse {
+                embeddings: req
+                    .texts
+                    .iter()
+                    .map(|text| vec![text.len() as f32; 768])
+                    .collect(),
+                ..EmbedResponse::default()
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_embedder_prefetches_bounded_unique_batches_and_clears() {
+        let inner = Arc::new(RecordingEmbedder::default());
+        let embedder = SeedBatchEmbedder::new(inner.clone());
+        let mut texts: Vec<String> = (0..258).map(|index| format!("text-{index}")).collect();
+        texts.push("text-0".to_string());
+
+        embedder.prefetch(&texts).await.expect("prefetch");
+        let calls = inner.calls.lock().expect("lock calls").clone();
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].len(), SEED_EMBED_BATCH_SIZE);
+        assert_eq!(calls[1].len(), 2);
+
+        let uncached = embedder
+            .embed(EmbedRequest {
+                texts: vec!["text-257".to_string(), "text-0".to_string()],
+            })
+            .await
+            .expect("embedding outside seed scope");
+        assert_eq!(uncached.embeddings[0], vec![8.0; 768]);
+        assert_eq!(uncached.embeddings[1], vec![6.0; 768]);
+        assert_eq!(inner.calls.lock().expect("lock calls").len(), 3);
+
+        let cached = SEED_CACHE_ACTIVE
+            .scope(
+                true,
+                embedder.embed(EmbedRequest {
+                    texts: vec!["text-257".to_string(), "text-0".to_string()],
+                }),
+            )
+            .await
+            .expect("cached embeddings");
+        assert_eq!(cached.embeddings[0], vec![8.0; 768]);
+        assert_eq!(cached.embeddings[1], vec![6.0; 768]);
+        assert_eq!(inner.calls.lock().expect("lock calls").len(), 3);
+
+        embedder.clear().await;
+        SEED_CACHE_ACTIVE
+            .scope(
+                true,
+                embedder.embed(EmbedRequest {
+                    texts: vec!["text-0".to_string()],
+                }),
+            )
+            .await
+            .expect("uncached embedding");
+        assert_eq!(inner.calls.lock().expect("lock calls").len(), 4);
+    }
+
+    #[tokio::test]
+    async fn seed_embedder_batches_below_combined_payload_limit() {
+        let inner = Arc::new(RecordingEmbedder::default());
+        let embedder = SeedBatchEmbedder::new(inner.clone());
+
+        embedder
+            .prefetch(&["x".repeat(60 << 10), "y".repeat(60 << 10)])
+            .await
+            .expect("prefetch long seed inputs");
+
+        let calls = inner.calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 2);
+        assert_eq!(calls[0].len(), 1);
+        assert_eq!(calls[1].len(), 1);
+    }
+
+    #[tokio::test]
+    async fn batched_seed_uses_prefetched_vectors_through_real_store() {
+        let inner = Arc::new(RecordingEmbedder::default());
+        let embedder = Arc::new(SeedBatchEmbedder::new(inner.clone()));
+        let store = Store::new(StoreOptions {
+            db: Arc::new(Db::open_memory().await.expect("open memory db")),
+            embedder: embedder.clone(),
+            predictor: None,
+            reranker: None,
+        });
+        let pairs = vec![
+            Pair {
+                pair_id: "pair-1".to_string(),
+                session_id: "session-1".to_string(),
+                timestamp: "2026-01-01T00:00:00Z".to_string(),
+                prompt: "first prompt".to_string(),
+                response: "first response".to_string(),
+            },
+            Pair {
+                pair_id: "pair-2".to_string(),
+                session_id: "session-1".to_string(),
+                timestamp: "2026-01-01T00:01:00Z".to_string(),
+                prompt: "second prompt".to_string(),
+                response: "second response".to_string(),
+            },
+        ];
+        let subjects = vec![Subject {
+            id: "subject-1".to_string(),
+            subject_text: "shared subject".to_string(),
+            description_text: "description".to_string(),
+        }];
+        let links = vec![
+            Link {
+                subject_id: "subject-1".to_string(),
+                pair_id: "pair-1".to_string(),
+            },
+            Link {
+                subject_id: "subject-1".to_string(),
+                pair_id: "pair-2".to_string(),
+            },
+        ];
+
+        let stats = load_haystack_batched(
+            &store,
+            &embedder,
+            "seed-user",
+            &pairs,
+            &subjects,
+            &links,
+            false,
+        )
+        .await
+        .expect("load batched seed");
+
+        assert_eq!(stats.pairs, 2);
+        assert_eq!(stats.subjects, 1);
+        assert_eq!(stats.links, 2);
+        let calls = inner.calls.lock().expect("lock calls");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            vec![
+                "first prompt\nfirst response",
+                "second prompt\nsecond response",
+                "shared subject\ndescription",
+            ]
+        );
+    }
+
+    #[test]
+    fn seed_prefetch_inputs_match_store_text_and_skip_unlinked_subjects() {
+        let pairs = vec![Pair {
+            pair_id: "pair-1".to_string(),
+            session_id: String::new(),
+            timestamp: String::new(),
+            prompt: " prompt ".to_string(),
+            response: " response ".to_string(),
+        }];
+        let subjects = vec![
+            Subject {
+                id: "linked".to_string(),
+                subject_text: " subject ".to_string(),
+                description_text: " description ".to_string(),
+            },
+            Subject {
+                id: "unused".to_string(),
+                subject_text: "must not embed".to_string(),
+                description_text: String::new(),
+            },
+        ];
+        let links = vec![
+            Link {
+                subject_id: "linked".to_string(),
+                pair_id: "pair-1".to_string(),
+            },
+            Link {
+                subject_id: "unused".to_string(),
+                pair_id: "missing-pair".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            seed_embedding_inputs(&pairs, &subjects, &links),
+            vec!["prompt \n response", "subject \n description"]
+        );
+    }
 
     #[test]
     fn v9_seed_accepts_uuid_capabilities_without_wave() {

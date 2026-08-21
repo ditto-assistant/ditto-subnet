@@ -234,7 +234,13 @@ async fn seed_handler(
     State(state): State<AppState>,
     Json(req): Json<dittobench_starter_kit::seed::SeedRequest>,
 ) -> impl IntoResponse {
-    match dittobench_starter_kit::seed::seed_from_request(state.baseline.store(), req).await {
+    match dittobench_starter_kit::seed::seed_from_request_batched(
+        state.baseline.store(),
+        state.baseline.seed_embedder(),
+        req,
+    )
+    .await
+    {
         Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
         Err(err) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -251,7 +257,11 @@ async fn seed_user() -> anyhow::Result<()> {
     eprintln!(
         "loading bundled LongMemEval seed user into the vector DB (embeds pairs + subjects)..."
     );
-    let stats = dittobench_starter_kit::seed::load_seed_user(baseline.store()).await?;
+    let stats = dittobench_starter_kit::seed::load_seed_user_batched(
+        baseline.store(),
+        baseline.seed_embedder(),
+    )
+    .await?;
     println!(
         "seeded user {USER_ID:?}: {} pairs, {} subjects, {} subject links — ready for retrieval",
         stats.pairs, stats.subjects, stats.links
