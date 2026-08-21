@@ -479,7 +479,7 @@ class SubmissionBuildUploadRequest(BaseModel):
 
     output_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     output_size_bytes: Annotated[int, Field(gt=0, le=4 * 1024**3)]
-    image_id: Annotated[str | None, Field(pattern=r"^sha256:[0-9a-f]{64}$")] = None
+    image_id: Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 
 
 class SubmissionBuildUploadResponse(BaseModel):

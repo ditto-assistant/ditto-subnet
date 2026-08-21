@@ -677,3 +677,54 @@ async def test_kaniko_uses_resolved_builder_image(
     await loop.tick()
     assert targon.created
     assert targon.created[0]["image"] == resolved
+
+
+@pytest.mark.asyncio
+async def test_kaniko_reresolves_builder_image_each_launch(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    images = [
+        "us-central1-docker.pkg.dev/ditto-app-dev/"
+        "ditto-public-builders/submission-builder@sha256:" + "aa" * 32,
+        "us-central1-docker.pkg.dev/ditto-app-dev/"
+        "ditto-public-builders/submission-builder@sha256:" + "bb" * 32,
+    ]
+
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=_FakeTargon(),
+        screener_hotkey=_SCREENER_HOTKEY,
+        resolve_builder_image=lambda _image: images.pop(0),
+        interval_seconds=60,
+    )
+    assert loop._builder_image().endswith("aa" * 32)
+    assert loop._builder_image().endswith("bb" * 32)
+
+
+@pytest.mark.asyncio
+async def test_kaniko_does_not_launch_unpinned_builder_image(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(
+            submission_builder_image=(
+                "us-central1-docker.pkg.dev/ditto-app-dev/"
+                "ditto-public-builders/submission-builder:sha-" + "ab" * 20
+            )
+        ),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        resolve_builder_image=lambda image: image,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    assert targon.created == []
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "queued"

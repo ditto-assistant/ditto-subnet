@@ -8,29 +8,36 @@ import subprocess
 
 logger = logging.getLogger(__name__)
 
-_DIGEST = re.compile(r"sha256:[0-9a-f]{64}")
+_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+_COMMIT_TAG = re.compile(r"^sha-[0-9a-f]{40}$")
+
+
+def is_digest_pinned_image(image: str) -> bool:
+    """True when the reference already names an immutable config digest."""
+    name = image.rsplit("/", 1)[-1]
+    if "@" not in name:
+        return False
+    return _DIGEST.fullmatch(name.rsplit("@", 1)[-1]) is not None
 
 
 def resolve_submission_builder_image(image: str) -> str:
-    """Return ``repo@sha256:...`` when Artifact Registry has a published digest.
+    """Return ``repo@sha256:...`` for the requested tag, never a stale latest.
 
-    Platform tags Cloud Run / Targon with ``:sha-{running_commit}``. Builder
-    images are only published when the release plan includes the orchestrator,
-    so skip-ci and platform-only SHAs often have no tag. Cloud Run then sits
-    Ready=False for the full provision window. Prefer the requested tag, then
-    the newest published digest, then the original reference.
+    Platform tags Cloud Run / Targon with ``:sha-{running_commit}``. Falling
+    back to the newest published digest when that tag is missing launches an
+    older Kaniko helper that does not post ``image_id``. Bind then fail-closes.
+    Commit tags must match exactly. Floating tags may still use latest.
     """
     requested = image.strip()
     if not requested:
         return image
-    if "@" in requested.rsplit("/", 1)[-1]:
-        pinned = requested.rsplit("@", 1)[-1]
-        return requested if _DIGEST.fullmatch(pinned) else image
+    if is_digest_pinned_image(requested):
+        return requested
     repository, _sep, tag = requested.rpartition(":")
     if not repository or not tag or "/" not in repository:
         return image
     digest = _describe_digest(f"{repository}:{tag}")
-    if digest is None:
+    if digest is None and not _COMMIT_TAG.fullmatch(tag):
         digest = _latest_digest(repository)
         if digest is not None:
             logger.warning(

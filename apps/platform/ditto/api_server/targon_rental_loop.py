@@ -19,6 +19,7 @@ from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from ditto.api_server.builder_image import is_digest_pinned_image
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
     BuildSpec,
@@ -96,18 +97,16 @@ class TargonRentalLoop:
         self._interval_seconds = interval_seconds or config.interval_seconds
         self._complete_screen = complete_screen
         self._resolve_builder_image = resolve_builder_image or (lambda image: image)
-        self._resolved_builder_image: str | None = None
         self._storage = storage
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._epoch = "platform-targon-loop"
 
     def _builder_image(self) -> str:
-        if self._resolved_builder_image is None:
-            self._resolved_builder_image = self._resolve_builder_image(
-                self._config.submission_builder_image
-            )
-        return self._resolved_builder_image
+        # Resolve on every launch. The requested ``:sha-{commit}`` tag is
+        # published after Platform boots, and caching the latest fallback
+        # keeps the previous Kaniko helper for the whole process lifetime.
+        return self._resolve_builder_image(self._config.submission_builder_image)
 
     async def start(self) -> None:
         if self._task is not None:
@@ -254,6 +253,13 @@ class TargonRentalLoop:
         return now - timedelta(seconds=self._config.provision_timeout_seconds)
 
     async def _launch_kaniko(self) -> bool:
+        image = self._builder_image()
+        if not is_digest_pinned_image(image):
+            logger.error(
+                "submission builder image is unpublished; not launching image=%s",
+                image,
+            )
+            return False
         if not await self._any_capacity():
             return False
         now = datetime.now(UTC)
@@ -287,7 +293,7 @@ class TargonRentalLoop:
             build_id = row.build_id
         spec = BuildSpec(
             name=f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32],
-            image=self._builder_image(),
+            image=image,
             env=(
                 ("DITTO_PLATFORM_URL", self._config.public_platform_url),
                 ("DITTO_BUILD_ID", str(build_id)),

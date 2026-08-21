@@ -17701,7 +17701,7 @@ export interface components {
         /** SubmissionBuildCompleteRequest */
         SubmissionBuildCompleteRequest: {
             /** Image Id */
-            image_id?: string | null;
+            image_id: string;
             /** Output Sha256 */
             output_sha256: string;
             /** Output Size Bytes */
@@ -17727,7 +17727,7 @@ export interface components {
         /** SubmissionBuildUploadRequest */
         SubmissionBuildUploadRequest: {
             /** Image Id */
-            image_id?: string | null;
+            image_id: string;
             /** Output Sha256 */
             output_sha256: string;
             /** Output Size Bytes */
