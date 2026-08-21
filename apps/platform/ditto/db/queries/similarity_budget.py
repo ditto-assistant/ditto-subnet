@@ -116,7 +116,7 @@ from typing import TYPE_CHECKING
 
 from sqlalchemy import select
 
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import Agent, ValidatorTicket
 
 if TYPE_CHECKING:
@@ -183,10 +183,12 @@ async def live_lease_agent_ids(session: AsyncSession, *, now: datetime) -> set[U
 
     The similarity rail's counterpart to
     :func:`~ditto.db.queries.queue_order.owner_live_lease_agent_ids`, and
-    deliberately the same shape: ``ISSUED`` tickets whose deadline has not
-    passed, read through without sweeping, because the allocator expires overdue
-    tickets on its own pass and a gate that wrote here would be taking a lock to
-    answer a question.
+    deliberately the same shape: canonical ``ISSUED`` tickets whose deadline
+    has not passed. Continual-retest leases are omitted so spare-capacity
+    rescoring of an older twin cannot serialize a newer family submission
+    out of its first quorum. Read through without sweeping, because the
+    allocator expires overdue tickets on its own pass and a gate that wrote
+    here would be taking a lock to answer a question.
 
     It differs in scope only. The owner rail asks "which of *this owner's*
     submissions are running", because owner identity partitions the fleet
@@ -202,6 +204,7 @@ async def live_lease_agent_ids(session: AsyncSession, *, now: datetime) -> set[U
             .where(
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.deadline > now,
+                ValidatorTicket.purpose != TicketPurpose.CONTINUAL_RETEST,
             )
             .distinct()
         )

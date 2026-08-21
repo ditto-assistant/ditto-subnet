@@ -50,18 +50,21 @@ async def _seed(
     lease_validator: str | None = None,
     lease_status: TicketStatus = TicketStatus.ISSUED,
     lease_deadline: datetime | None = None,
+    lease_purpose: TicketPurpose = TicketPurpose.CANONICAL_QUORUM,
+    miner_hotkey: str | None = None,
+    created_at: datetime | None = None,
 ) -> UUID:
     agent_id = uuid4()
     async with session.begin():
         session.add(
             Agent(
                 agent_id=agent_id,
-                miner_hotkey=f"5Hotkey{agent_id.hex[:8]}",
+                miner_hotkey=miner_hotkey or f"5Hotkey{agent_id.hex[:8]}",
                 name=f"agent-{agent_id.hex[:6]}",
                 sha256="ab" * 32,
                 status=AgentStatus.EVALUATING,
                 content_fingerprint=fingerprint,
-                created_at=_NOW - timedelta(hours=1),
+                created_at=created_at or (_NOW - timedelta(hours=1)),
             )
         )
         await session.flush()
@@ -73,7 +76,7 @@ async def _seed(
                     validator_hotkey=lease_validator,
                     slot_id="slot-0",
                     status=lease_status,
-                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    purpose=lease_purpose,
                     purpose_revision=1,
                     issued_at=_NOW - timedelta(minutes=10),
                     deadline=lease_deadline or (_NOW + _TTL),
@@ -146,6 +149,25 @@ async def test_live_leases_are_issued_and_unexpired_only(
     assert waiting not in await live_lease_agent_ids(session, now=_NOW)
 
 
+async def test_continual_retest_leases_do_not_occupy_the_similarity_budget(
+    session: AsyncSession,
+) -> None:
+    """Spare-capacity rescoring of an older twin must not serialize a newer one."""
+    canonical = await _seed(
+        session, fingerprint=_sketch("aa"), lease_validator="5ValidatorA"
+    )
+    retest = await _seed(
+        session,
+        fingerprint=_sketch("bb"),
+        lease_validator="5ValidatorB",
+        lease_purpose=TicketPurpose.CONTINUAL_RETEST,
+    )
+
+    live = await live_lease_agent_ids(session, now=_NOW)
+    assert live == {canonical}
+    assert retest not in live
+
+
 async def test_live_lease_sketches_exclude_the_candidate_itself(
     session: AsyncSession,
 ) -> None:
@@ -165,3 +187,53 @@ async def test_live_lease_sketches_exclude_the_candidate_itself(
     sketches = await live_lease_sketches(session, now=_NOW, exclude=[candidate])
 
     assert [s.agent_id for s in sketches] == [other]
+
+
+async def test_miner_has_newer_canonical_work_when_a_later_version_is_waiting(
+    session: AsyncSession,
+) -> None:
+    from ditto.db.queries.queue_order import miner_has_newer_canonical_work
+
+    hotkey = "5SameMinerHotkey00000000000000000000000000000"
+    older = await _seed(
+        session,
+        fingerprint=_sketch("aa"),
+        miner_hotkey=hotkey,
+        created_at=_NOW - timedelta(hours=2),
+    )
+    await _seed(
+        session,
+        fingerprint=_sketch("bb"),
+        miner_hotkey=hotkey,
+        created_at=_NOW - timedelta(minutes=5),
+    )
+
+    assert (
+        await miner_has_newer_canonical_work(
+            session,
+            miner_hotkey=hotkey,
+            created_before=_NOW - timedelta(hours=2),
+            bench_version=_BENCH,
+        )
+        is True
+    )
+    older_row = await session.get(Agent, older)
+    assert older_row is not None
+    assert (
+        await miner_has_newer_canonical_work(
+            session,
+            miner_hotkey=hotkey,
+            created_before=older_row.created_at,
+            bench_version=_BENCH,
+        )
+        is True
+    )
+    assert (
+        await miner_has_newer_canonical_work(
+            session,
+            miner_hotkey=hotkey,
+            created_before=_NOW,
+            bench_version=_BENCH,
+        )
+        is False
+    )

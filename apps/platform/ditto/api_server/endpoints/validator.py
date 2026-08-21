@@ -269,6 +269,7 @@ from ditto.db.queries.king_reign import (
     record_weight_confirmed,
 )
 from ditto.db.queries.payments import get_miner_coldkey_for_agent
+from ditto.db.queries.queue_order import miner_has_newer_canonical_work
 from ditto.db.queries.retry_budget import (
     INFRA_RETRY_BACKOFF_CAP,
     agent_infra_retry_grants,
@@ -4817,6 +4818,23 @@ async def request_top5_confirmation_job(
             ):
                 legacy_decline = (
                     "top-5 shared-seed rescore round is not due at this block"
+                )
+                continue
+            candidate_agent = await get_agent_by_id(
+                session, agent_id=candidate_member_id
+            )
+            if (
+                candidate_agent is not None
+                and not scheduled_round
+                and await miner_has_newer_canonical_work(
+                    session,
+                    miner_hotkey=candidate_agent.miner_hotkey,
+                    created_before=candidate_agent.created_at,
+                    bench_version=canonical_version,
+                )
+            ):
+                legacy_decline = (
+                    "miner has a newer submission awaiting canonical quorum"
                 )
                 continue
             seeds = await _top5_confirmation_seed_plan(

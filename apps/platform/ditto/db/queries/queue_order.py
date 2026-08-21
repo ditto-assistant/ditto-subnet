@@ -69,7 +69,7 @@ from sqlalchemy.orm import aliased
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
-from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import (
     Agent,
     BenchmarkDataset,
@@ -790,11 +790,12 @@ async def owner_live_lease_agent_ids(
 ) -> set[UUID]:
     """Which of this owner's submissions currently hold a live lease.
 
-    One paid owner may have many generations, but only one generation may
-    occupy validator capacity at a time, so a non-empty result minus the
-    candidate itself is what blocks issuance. Returning the set rather than a
-    count lets the preview answer the question once per owner instead of once
-    per row, from the same statement the allocator uses.
+    One paid owner may have many generations, but only one *canonical*
+    generation may occupy validator capacity at a time. Continual-retest
+    leases are spare-capacity work on already-scored rows and must not
+    serialize a newer sibling out of its first quorum. Returning the set
+    rather than a count lets the preview answer the question once per owner
+    instead of once per row, from the same statement the allocator uses.
     """
     sibling_agent = _OWNER_LIVE_AGENT
     sibling_payment = _OWNER_LIVE_PAYMENT
@@ -810,12 +811,54 @@ async def owner_live_lease_agent_ids(
             .where(
                 ValidatorTicket.status == TicketStatus.ISSUED,
                 ValidatorTicket.deadline > now,
+                ValidatorTicket.purpose != TicketPurpose.CONTINUAL_RETEST,
                 linkage.same_owner_predicate(
                     agent=sibling_agent, payment=sibling_payment
                 ),
             )
             .distinct()
         )
+    )
+
+
+async def miner_has_newer_canonical_work(
+    session: AsyncSession,
+    *,
+    miner_hotkey: str,
+    created_before: datetime,
+    bench_version: int,
+) -> bool:
+    """Whether this miner has a newer evaluating submission still short of quorum.
+
+    Idle continual retests of an older generation must not consume a slot
+    while that newer row is waiting for its first canonical scores. Already
+    issued retest leases are left alone; this only answers whether to mint
+    another one.
+    """
+    from ditto.db.queries.scores import SCORING_QUORUM
+
+    scored = (
+        select(func.count())
+        .where(
+            ValidatorTicket.agent_id == Agent.agent_id,
+            ValidatorTicket.bench_version == bench_version,
+            ValidatorTicket.status == TicketStatus.SCORED,
+        )
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    return (
+        await session.scalar(
+            select(Agent.agent_id)
+            .where(
+                Agent.miner_hotkey == miner_hotkey,
+                Agent.created_at > created_before,
+                Agent.status == AgentStatus.EVALUATING,
+                scored < SCORING_QUORUM,
+            )
+            .limit(1)
+        )
+        is not None
     )
 
 
