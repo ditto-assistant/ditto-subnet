@@ -897,10 +897,15 @@ class TestFederatedScreenerNodes:
         assert source.json()["artifact_sha256"] == _SHA256
 
         output_sha = "12" * 32
+        image_id = "sha256:" + "ab" * 32
         upload = await client.post(
             f"/api/v1/screener/submission-image-builds/{build_id}/upload",
             headers=job_headers,
-            json={"output_sha256": output_sha, "output_size_bytes": 123},
+            json={
+                "output_sha256": output_sha,
+                "output_size_bytes": 123,
+                "image_id": image_id,
+            },
         )
         assert upload.status_code == 200, upload.text
         assert base64.b64decode(upload.json()["upload_url_b64"]).startswith(b"https://")
@@ -923,10 +928,18 @@ class TestFederatedScreenerNodes:
         complete = await client.post(
             f"/api/v1/screener/submission-image-builds/{build_id}/complete",
             headers=job_headers,
-            json={"output_sha256": output_sha, "output_size_bytes": 123},
+            json={
+                "output_sha256": output_sha,
+                "output_size_bytes": 123,
+                "image_id": image_id,
+            },
         )
         assert complete.status_code == 200, complete.text
         assert complete.json() == {"verified": True}
+        async with session_maker() as session:
+            stored = await session.get(SubmissionImageBuild, UUID(build_id))
+            assert stored is not None
+            assert stored.output_image_id == image_id
         controller_complete = await client.get(
             f"/api/v1/screener/controller/submission-image-builds/{build_id}",
             headers=controller_headers,
@@ -1114,7 +1127,6 @@ class TestFederatedScreenerNodes:
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
-        monkeypatch: pytest.MonkeyPatch,
     ) -> None:
         agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
         _install_db(app, session_maker)
@@ -1123,15 +1135,6 @@ class TestFederatedScreenerNodes:
         generator = _FakeGenerator(sha="ee" * 32)
         _install_generator(app, generator)
         config_digest = "ab" * 32
-
-        async def _inspect(ref: str | None) -> str | None:
-            del ref
-            return "sha256:" + config_digest
-
-        monkeypatch.setattr(
-            "ditto.api_server.targon_screening.config_digest_from_runtime_image",
-            _inspect,
-        )
         app.state.config = replace(
             app.state.config,
             screener_auth=replace(
@@ -1179,6 +1182,7 @@ class TestFederatedScreenerNodes:
             row.status = "succeeded"
             row.output_sha256 = "12" * 32
             row.output_size_bytes = 123
+            row.output_image_id = "sha256:" + config_digest
             row.runtime_status = "running"
             row.controller_epoch = "builder:test"
             row.completed_at = datetime.now(UTC)

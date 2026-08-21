@@ -1943,10 +1943,17 @@ async def mint_submission_build_upload(
         if row.upload_minted_at is not None and (
             row.output_sha256 != payload.output_sha256
             or row.output_size_bytes != payload.output_size_bytes
+            or (
+                payload.image_id is not None
+                and row.output_image_id is not None
+                and row.output_image_id != payload.image_id
+            )
         ):
             raise HTTPException(status_code=409, detail="remote build output changed")
         row.output_sha256 = payload.output_sha256
         row.output_size_bytes = payload.output_size_bytes
+        if payload.image_id is not None:
+            row.output_image_id = payload.image_id
         row.upload_minted_at = row.upload_minted_at or now
         row.updated_at = now
         key = row.output_key
@@ -1994,8 +2001,15 @@ async def complete_submission_build_upload(
             row.output_sha256 != payload.output_sha256
             or row.output_size_bytes != payload.output_size_bytes
             or row.upload_minted_at is None
+            or (
+                payload.image_id is not None
+                and row.output_image_id is not None
+                and row.output_image_id != payload.image_id
+            )
         ):
             raise HTTPException(status_code=409, detail="remote build output changed")
+        if payload.image_id is not None:
+            row.output_image_id = payload.image_id
         key = row.output_key
         metadata = {
             "sha256": payload.output_sha256,

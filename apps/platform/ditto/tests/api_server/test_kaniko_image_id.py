@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -8,7 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
-from ditto.api_server.targon_screening import repair_kaniko_screened_image_identities
+from ditto.api_server.storage.client import S3StorageClient
+from ditto.api_server.targon_screening import (
+    maybe_finalize_targon_screen,
+    repair_kaniko_screened_image_identities,
+)
 from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
@@ -33,6 +38,7 @@ async def _seed_evaluating_kaniko(
     maker: async_sessionmaker[AsyncSession],
     *,
     screened_image_id: str,
+    output_image_id: str | None = _CONFIG_DIGEST,
     runtime_image_reference: str | None = _RUNTIME_REF,
 ) -> tuple[UUID, UUID]:
     agent_id = await _seed_agent(maker, status=AgentStatus.EVALUATING)
@@ -82,6 +88,7 @@ async def _seed_evaluating_kaniko(
                 provider="targon",
                 output_sha256="12" * 32,
                 output_size_bytes=123,
+                output_image_id=output_image_id,
                 runtime_status="succeeded",
                 runtime_image_reference=runtime_image_reference,
                 attempt_count=1,
@@ -104,21 +111,11 @@ async def _seed_evaluating_kaniko(
 
 
 @pytest.mark.asyncio
-async def test_repair_repins_artifact_registry_digest_to_config_digest(
+async def test_repair_repins_stored_tar_config_digest(
     session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     agent_id, _upload_id = await _seed_evaluating_kaniko(
-        session_maker, screened_image_id=_AR_DIGEST
-    )
-
-    async def _inspect(ref: str | None) -> str | None:
-        assert ref == _RUNTIME_REF
-        return _CONFIG_DIGEST
-
-    monkeypatch.setattr(
-        "ditto.api_server.targon_screening.config_digest_from_runtime_image",
-        _inspect,
+        session_maker, screened_image_id=_AR_DIGEST, output_image_id=_CONFIG_DIGEST
     )
 
     repaired = await repair_kaniko_screened_image_identities(session_maker)
@@ -134,23 +131,140 @@ async def test_repair_repins_artifact_registry_digest_to_config_digest(
 
 
 @pytest.mark.asyncio
-async def test_repair_skips_already_pinned_config_digest(
+async def test_repair_skips_already_pinned_tar_config_digest(
     session_maker: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    await _seed_evaluating_kaniko(session_maker, screened_image_id=_CONFIG_DIGEST)
-    calls: list[str] = []
-
-    async def _inspect(ref: str | None) -> str | None:
-        calls.append(ref or "")
-        return _CONFIG_DIGEST
-
-    monkeypatch.setattr(
-        "ditto.api_server.targon_screening.config_digest_from_runtime_image",
-        _inspect,
+    await _seed_evaluating_kaniko(
+        session_maker, screened_image_id=_CONFIG_DIGEST, output_image_id=_CONFIG_DIGEST
     )
 
     repaired = await repair_kaniko_screened_image_identities(session_maker)
 
     assert repaired == 0
-    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_repair_skips_when_builder_did_not_post_tar_config_digest(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id, _upload_id = await _seed_evaluating_kaniko(
+        session_maker, screened_image_id=_AR_DIGEST, output_image_id=None
+    )
+
+    repaired = await repair_kaniko_screened_image_identities(session_maker)
+
+    assert repaired == 0
+    async with session_maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        assert agent.screened_image_id == _AR_DIGEST
+
+
+class _FakeStorage:
+    def __init__(self) -> None:
+        self.copied: list[tuple[str, str]] = []
+
+    async def copy_object(self, *, source_key: str, dest_key: str) -> None:
+        self.copied.append((source_key, dest_key))
+
+
+async def _seed_running_kaniko(
+    maker: async_sessionmaker[AsyncSession],
+    *,
+    output_image_id: str | None,
+) -> UUID:
+    agent_id = await _seed_agent(maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                build_only=True,
+                started_at=now - timedelta(minutes=10),
+                deadline=now + timedelta(minutes=60),
+            )
+        )
+        await session.flush()
+        session.add(
+            SubmissionImageBuild(
+                build_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                output_key=f"{agent_id}/builds/{attempt_id}.tar",
+                status="succeeded",
+                provider="targon",
+                output_sha256="12" * 32,
+                output_size_bytes=123,
+                output_image_id=output_image_id,
+                runtime_status="succeeded",
+                runtime_image_reference=_RUNTIME_REF,
+                attempt_count=1,
+                created_at=now - timedelta(minutes=10),
+                started_at=now - timedelta(minutes=9),
+                completed_at=now - timedelta(minutes=2),
+                updated_at=now - timedelta(minutes=1),
+            )
+        )
+    return attempt_id
+
+
+@pytest.mark.asyncio
+async def test_bind_uses_stored_tar_config_digest(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    attempt_id = await _seed_running_kaniko(
+        session_maker, output_image_id=_CONFIG_DIGEST
+    )
+    storage = _FakeStorage()
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, storage),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=datetime.now(UTC),
+        )
+    assert finalized is True
+    assert storage.copied
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        agent = await session.get(Agent, attempt.agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.EVALUATING
+        assert agent.screened_image_id == _CONFIG_DIGEST
+
+
+@pytest.mark.asyncio
+async def test_bind_fails_closed_without_tar_config_digest(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    attempt_id = await _seed_running_kaniko(session_maker, output_image_id=None)
+    storage = _FakeStorage()
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, storage),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=datetime.now(UTC),
+        )
+    assert finalized is True
+    assert storage.copied == []
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "failed"
+        assert attempt.reason_code == "targon-image-bind-failed"
+        agent = await session.get(Agent, attempt.agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.SCREENING_FAILED
+        assert agent.screened_image_id is None

@@ -2245,6 +2245,7 @@ class SubmissionImageBuild(Base):
     provider_resource_id: Mapped[str | None] = mapped_column(Text)
     output_sha256: Mapped[str | None] = mapped_column(Text)
     output_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    output_image_id: Mapped[str | None] = mapped_column(Text)
     error_code: Mapped[str | None] = mapped_column(Text)
     runtime_status: Mapped[str] = mapped_column(
         Text, nullable=False, server_default="skipped"
@@ -2323,6 +2324,10 @@ class SubmissionImageBuild(Base):
         CheckConstraint(
             "output_sha256 IS NULL OR output_sha256 ~ '^[0-9a-f]{64}$'",
             name="submission_image_builds_output_sha_check",
+        ),
+        CheckConstraint(
+            "output_image_id IS NULL OR output_image_id ~ '^sha256:[0-9a-f]{64}$'",
+            name="submission_image_builds_output_image_id_check",
         ),
         CheckConstraint(
             "output_size_bytes IS NULL OR output_size_bytes BETWEEN 1 AND 4294967296",

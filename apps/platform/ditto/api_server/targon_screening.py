@@ -8,7 +8,6 @@ identity; Platform does not hold or use the mnemonic.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import logging
 import secrets
@@ -465,10 +464,10 @@ async def _bind_screened_image(
         or build.output_key is None
     ):
         return None
-    image_id = await config_digest_from_runtime_image(build.runtime_image_reference)
+    image_id = build.output_image_id
     if image_id is None:
         logger.error(
-            "Kaniko config digest inspect failed agent_id=%s build_id=%s",
+            "Kaniko tar config digest missing agent_id=%s build_id=%s",
             agent.agent_id,
             build.build_id,
         )
@@ -505,37 +504,6 @@ async def _bind_screened_image(
 
 
 _REPAIR_LIMIT = 8
-_runtime_image_reader_sa: str | None = None
-
-
-def configure_runtime_image_inspect(*, reader_sa: str) -> None:
-    """Use this reader SA to inspect candidate registry manifests."""
-    global _runtime_image_reader_sa
-    _runtime_image_reader_sa = reader_sa
-
-
-async def config_digest_from_runtime_image(image_reference: str | None) -> str | None:
-    """Resolve the image-config digest from a registry ref. Never downloads a tar."""
-    if not image_reference or _runtime_image_reader_sa is None:
-        return None
-    from ditto.api_server.targon_promote import (
-        TargonPromoteError,
-        inspect_registry_config_digest,
-        mint_access_token,
-    )
-
-    try:
-        token = await asyncio.to_thread(mint_access_token, _runtime_image_reader_sa)
-        return await asyncio.to_thread(
-            inspect_registry_config_digest, image_reference, token
-        )
-    except TargonPromoteError:
-        logger.warning(
-            "Kaniko registry config digest inspect failed ref=%s",
-            image_reference,
-            exc_info=True,
-        )
-        return None
 
 
 async def repair_kaniko_screened_image_identities(
@@ -543,10 +511,13 @@ async def repair_kaniko_screened_image_identities(
     *,
     limit: int = _REPAIR_LIMIT,
 ) -> int:
-    """Re-pin Targon/Cloud Run images to the registry config digest.
+    """Re-pin Targon/Cloud Run images to the builder-posted tar config digest.
 
-    Does not download screened tars. Validators keep fetching the archive
-    through a presigned URL; this only updates ``screened_image_id``.
+    The builder hashes ``{configDigest}.json`` from the Kaniko docker-save
+    and stores it as ``output_image_id``. Artifact Registry inspect is a
+    different identity. Rows without a stored digest are skipped — rebuild
+    them after this pin is live. Never downloads a tar and never inspects
+    the registry.
     """
     async with session_maker() as session:
         rows = (
@@ -566,25 +537,17 @@ async def repair_kaniko_screened_image_identities(
                     Agent.screened_image_id.is_not(None),
                     SubmissionImageBuild.status.in_(("succeeded", "consumed")),
                     SubmissionImageBuild.provider.in_(("targon", "gcp")),
+                    SubmissionImageBuild.output_image_id.is_not(None),
+                    Agent.screened_image_id != SubmissionImageBuild.output_image_id,
                 )
+                .limit(limit)
             )
         ).all()
-    candidates: list[tuple[Agent, ScreenedImageUpload, str, str]] = []
-    for agent_row, upload_row, build in rows:
-        current_id = agent_row.screened_image_id
-        runtime_ref = build.runtime_image_reference or ""
-        if current_id is None or not runtime_ref:
-            continue
-        tar_id = f"sha256:{build.output_sha256}" if build.output_sha256 else ""
-        if current_id not in runtime_ref and current_id != tar_id:
-            continue
-        candidates.append((agent_row, upload_row, current_id, runtime_ref))
-        if len(candidates) >= limit:
-            break
     repaired = 0
-    for agent_row, upload_row, current_id, runtime_ref in candidates:
-        digest = await config_digest_from_runtime_image(runtime_ref)
-        if digest is None or digest == current_id:
+    for agent_row, upload_row, build in rows:
+        digest = build.output_image_id
+        current_id = agent_row.screened_image_id
+        if digest is None or current_id is None or digest == current_id:
             continue
         async with session_maker() as session, session.begin():
             agent = await session.get(Agent, agent_row.agent_id, with_for_update=True)

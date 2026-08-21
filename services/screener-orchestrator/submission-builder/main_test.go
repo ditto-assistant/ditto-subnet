@@ -1,8 +1,12 @@
 package main
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -88,5 +92,101 @@ func TestHashBoundedReportsExactBytesAndDigest(t *testing.T) {
 	expected := sha256.Sum256(content)
 	if digest != hex.EncodeToString(expected[:]) || size != int64(len(content)) {
 		t.Fatalf("unexpected digest/size: %s %d", digest, size)
+	}
+}
+
+func TestConfigDigestFromClassicDockerSave(t *testing.T) {
+	config := []byte(`{"architecture":"amd64","os":"linux"}`)
+	digest := sha256.Sum256(config)
+	hexDigest := hex.EncodeToString(digest[:])
+	manifest, err := json.Marshal([]map[string]any{{
+		"Config":   hexDigest + ".json",
+		"RepoTags": []string{"ditto-screen/11111111-1111-4111-8111-111111111111-22222222-2222-4222-8222-222222222222:latest"},
+		"Layers":   []string{},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for _, member := range []struct {
+		name string
+		body []byte
+	}{
+		{name: hexDigest + ".json", body: config},
+		{name: "manifest.json", body: manifest},
+	} {
+		if err := writer.WriteHeader(&tar.Header{Name: member.name, Size: int64(len(member.body)), Mode: 0o600}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(member.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "image.tar")
+	if err := os.WriteFile(path, archive.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := configDigestFromDockerSave(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "sha256:"+hexDigest {
+		t.Fatalf("unexpected config digest: %s", got)
+	}
+}
+
+func TestConfigDigestFromGzipDockerSave(t *testing.T) {
+	config := []byte(`{"architecture":"amd64","os":"linux"}`)
+	digest := sha256.Sum256(config)
+	hexDigest := hex.EncodeToString(digest[:])
+	manifest, err := json.Marshal([]map[string]any{{
+		"Config":   hexDigest + ".json",
+		"RepoTags": []string{"ditto-screen/11111111-1111-4111-8111-111111111111-22222222-2222-4222-8222-222222222222:latest"},
+		"Layers":   []string{},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for _, member := range []struct {
+		name string
+		body []byte
+	}{
+		{name: hexDigest + ".json", body: config},
+		{name: "manifest.json", body: manifest},
+	} {
+		if err := writer.WriteHeader(&tar.Header{Name: member.name, Size: int64(len(member.body)), Mode: 0o600}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(member.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var gzipped bytes.Buffer
+	zipper := gzip.NewWriter(&gzipped)
+	if _, err := zipper.Write(archive.Bytes()); err != nil {
+		t.Fatal(err)
+	}
+	if err := zipper.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "image.tar.gz")
+	if err := os.WriteFile(path, gzipped.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := configDigestFromDockerSave(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "sha256:"+hexDigest {
+		t.Fatalf("unexpected config digest: %s", got)
 	}
 }

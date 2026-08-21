@@ -347,15 +347,11 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     resolve_submission_builder_image,
                 )
                 from ditto.api_server.targon_screening import (
-                    configure_runtime_image_inspect,
                     finalize_targon_screen_and_pin_dataset,
                 )
 
                 attester = config.screener_auth.hotkey
                 assert attester is not None
-                configure_runtime_image_inspect(
-                    reader_sa=config.targon.candidate_reader_sa
-                )
 
                 async def complete_screen(attempt_id: UUID) -> None:
                     async with app.state.session_maker() as session:

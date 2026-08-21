@@ -6,7 +6,10 @@
 package main
 
 import (
+	"archive/tar"
+	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -48,6 +51,7 @@ type sourceResponse struct {
 type uploadRequest struct {
 	OutputSHA256    string `json:"output_sha256"`
 	OutputSizeBytes int64  `json:"output_size_bytes"`
+	ImageID         string `json:"image_id,omitempty"`
 }
 
 type uploadResponse struct {
@@ -158,11 +162,19 @@ func run() error {
 		return stageFailure("KANIKO", fmt.Errorf("kaniko build failed: %w", err))
 	}
 
+	imageID, err := configDigestFromDockerSave("/workspace/image.tar")
+	if err != nil {
+		return stageFailure("ARCHIVE", err)
+	}
 	outputSHA, outputSize, err := hashBounded("/workspace/image.tar", maxOutputBytes)
 	if err != nil {
 		return stageFailure("ARCHIVE", err)
 	}
-	payload := uploadRequest{OutputSHA256: outputSHA, OutputSizeBytes: outputSize}
+	payload := uploadRequest{
+		OutputSHA256:    outputSHA,
+		OutputSizeBytes: outputSize,
+		ImageID:         imageID,
+	}
 	var upload uploadResponse
 	if err := jobJSON(client, http.MethodPost, base+"/upload", token, payload, &upload); err != nil {
 		return stageFailure("UPLOAD", err)
@@ -286,6 +298,101 @@ func downloadVerified(client *http.Client, url, path, expected string) error {
 		return errors.New("source digest mismatch")
 	}
 	return nil
+}
+
+func configDigestFromDockerSave(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	buffered := bufio.NewReader(file)
+	magic, err := buffered.Peek(2)
+	if err != nil {
+		return "", err
+	}
+	var source io.Reader = buffered
+	if len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		unzipped, err := gzip.NewReader(buffered)
+		if err != nil {
+			return "", err
+		}
+		defer unzipped.Close()
+		source = unzipped
+	}
+	archive := tar.NewReader(source)
+	hashed := map[string]string{}
+	var manifest []struct {
+		Config string `json:"Config"`
+	}
+	for {
+		header, err := archive.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
+		name := strings.TrimPrefix(header.Name, "./")
+		if name == "manifest.json" {
+			if header.Size <= 0 || header.Size > 1<<20 {
+				return "", errors.New("manifest.json has invalid size")
+			}
+			raw, err := io.ReadAll(io.LimitReader(archive, header.Size+1))
+			if err != nil {
+				return "", err
+			}
+			if int64(len(raw)) != header.Size {
+				return "", errors.New("manifest.json truncated")
+			}
+			if err := json.Unmarshal(raw, &manifest); err != nil {
+				return "", err
+			}
+			continue
+		}
+		digestHex := namedConfigDigest(name)
+		if digestHex == "" || header.Size <= 0 || header.Size > 4<<20 {
+			continue
+		}
+		hasher := sha256.New()
+		written, err := io.Copy(hasher, io.LimitReader(archive, header.Size+1))
+		if err != nil {
+			return "", err
+		}
+		if written != header.Size {
+			return "", errors.New("image config truncated")
+		}
+		got := hex.EncodeToString(hasher.Sum(nil))
+		if got == digestHex {
+			hashed[name] = digestHex
+		}
+	}
+	if len(manifest) != 1 {
+		return "", errors.New("archive must contain exactly one image")
+	}
+	configName := strings.TrimPrefix(manifest[0].Config, "./")
+	digestHex, ok := hashed[configName]
+	if !ok {
+		return "", errors.New("docker-save config digest is missing")
+	}
+	return "sha256:" + digestHex, nil
+}
+
+func namedConfigDigest(name string) string {
+	if strings.HasSuffix(name, ".json") {
+		stem := strings.TrimSuffix(name, ".json")
+		if !strings.Contains(stem, "/") && digestPattern.MatchString(stem) {
+			return stem
+		}
+	}
+	const prefix = "blobs/sha256/"
+	if strings.HasPrefix(name, prefix) {
+		digest := name[len(prefix):]
+		if digestPattern.MatchString(digest) {
+			return digest
+		}
+	}
+	return ""
 }
 
 func hashBounded(path string, maximum int64) (string, int64, error) {

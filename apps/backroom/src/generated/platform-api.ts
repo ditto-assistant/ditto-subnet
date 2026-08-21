@@ -17700,6 +17700,8 @@ export interface components {
         SourceReviewScorerVisibleEffect: "final_text" | "answer" | "abstain" | "tool_calls" | "validator_observed_trajectory" | "graded_outcome";
         /** SubmissionBuildCompleteRequest */
         SubmissionBuildCompleteRequest: {
+            /** Image Id */
+            image_id?: string | null;
             /** Output Sha256 */
             output_sha256: string;
             /** Output Size Bytes */
@@ -17724,6 +17726,8 @@ export interface components {
         };
         /** SubmissionBuildUploadRequest */
         SubmissionBuildUploadRequest: {
+            /** Image Id */
+            image_id?: string | null;
             /** Output Sha256 */
             output_sha256: string;
             /** Output Size Bytes */
