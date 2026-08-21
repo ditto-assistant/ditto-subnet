@@ -60,6 +60,7 @@ from ditto.api_server.endpoints import (
     admin_confirmation_bundles_router,
     admin_continual_retest_settings_router,
     admin_copy_review_router,
+    admin_core_qualification_router,
     admin_efficiency_bonus_settings_router,
     admin_inference_concurrency_settings_router,
     admin_inference_observability_router,
@@ -515,6 +516,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_coding_certifications_router, prefix="/api/v1")
     app.include_router(admin_confirmation_bundles_router, prefix="/api/v1")
     app.include_router(admin_continual_retest_settings_router, prefix="/api/v1")
+    app.include_router(admin_core_qualification_router, prefix="/api/v1")
     app.include_router(admin_burn_settings_router, prefix="/api/v1")
     app.include_router(admin_miner_fees_router, prefix="/api/v1")
 

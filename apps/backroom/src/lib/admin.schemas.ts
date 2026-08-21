@@ -4393,6 +4393,151 @@ export const agentCodingCertificationStatusSchema = z.object({
   certifications: z.array(codingCertificationRecordSchema),
 })
 
+const coreQualificationScoreSchema = z.number().min(0).max(1)
+
+export const coreQualificationPolicySchema = z
+  .object({
+    schema: z.literal('ditto-core-qualification-policy-v1'),
+    weight_eligible: z.literal(false),
+    bench_version: z.number().int().min(7),
+    enter_composite: coreQualificationScoreSchema,
+    enter_tool_mean: coreQualificationScoreSchema,
+    enter_memory_mean: coreQualificationScoreSchema,
+    exit_composite: coreQualificationScoreSchema,
+    exit_tool_mean: coreQualificationScoreSchema,
+    exit_memory_mean: coreQualificationScoreSchema,
+    enter_observations: z.number().int().min(1).max(20),
+    exit_observations: z.number().int().min(1).max(20),
+  })
+  .superRefine((value, context) => {
+    for (const dimension of ['composite', 'tool_mean', 'memory_mean'] as const) {
+      if (value[`exit_${dimension}`] > value[`enter_${dimension}`]) {
+        context.addIssue({
+          code: 'custom',
+          path: [`exit_${dimension}`],
+          message: `exit_${dimension} cannot exceed enter_${dimension}`,
+        })
+      }
+    }
+  })
+
+export const coreQualificationPolicyRevisionSchema = z.object({
+  revision: z.number().int().positive(),
+  parent_revision: z.number().int().nonnegative(),
+  policy: coreQualificationPolicySchema,
+  checksum: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
+})
+
+export const getCoreQualificationPolicyInputSchema = z.object({
+  benchVersion: z.number().int().min(7),
+  historyLimit: z.number().int().min(0).max(200).default(0),
+})
+
+export const setCoreQualificationPolicyInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  policy: coreQualificationPolicySchema,
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+// The MCP catalog carries every tool schema in every session. Keep this
+// envelope compact and perform the complete policy validation above inside the
+// service before any Platform call. Operators read the current full shape from
+// get_core_qualification_policy rather than paying for it in every prompt.
+export const setCoreQualificationPolicyMcpInputSchema = z.object({
+  expectedRevision: z.number().int().nonnegative(),
+  policy: z.record(z.string(), z.unknown()),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export const coreQualificationPolicyControlSchema = z.object({
+  bench_version: z.number().int().min(7),
+  configured: z.boolean(),
+  current: coreQualificationPolicyRevisionSchema.nullable(),
+  history: z.array(coreQualificationPolicyRevisionSchema),
+  required_confirmation: z.string(),
+  shadow_only: z.literal(true),
+})
+
+export const agentCoreQualificationInputSchema = z.object({
+  agentId: z.string().uuid(),
+  benchVersion: z.number().int().min(7),
+  limit: z.number().int().min(1).max(200).default(50),
+})
+
+export const refreshAgentCoreQualificationInputSchema = z.object({
+  agentId: z.string().uuid(),
+  benchVersion: z.number().int().min(7),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export const coreQualificationObservationSchema = z.object({
+  sequence: z.number().int().positive(),
+  observation_id: z.string().uuid(),
+  agent_id: z.string().uuid(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  screened_image_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  bench_version: z.number().int().min(7),
+  policy_revision: z.number().int().positive(),
+  policy_checksum: z.string().regex(/^[0-9a-f]{64}$/),
+  score_evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  score_count: z.number().int().min(3),
+  full_size: z.boolean(),
+  complete_wave: z.boolean(),
+  validator_hotkeys: z.array(z.string()).min(3),
+  run_ids: z.array(z.string()).min(3),
+  median_composite: coreQualificationScoreSchema,
+  median_tool_mean: coreQualificationScoreSchema,
+  median_memory_mean: coreQualificationScoreSchema,
+  entry_passed: z.boolean(),
+  retention_passed: z.boolean(),
+  qualified: z.boolean(),
+  enter_streak: z.number().int().min(0).max(20),
+  exit_streak: z.number().int().min(0).max(20),
+  decision: z.enum([
+    'partial_wave',
+    'below_entry',
+    'pending_entry',
+    'entered',
+    'held',
+    'pending_exit',
+    'exited',
+  ]),
+  source: z.enum(['score_commit', 'admin_refresh']),
+  actor: z.string().nullable(),
+  reason: z.string().nullable(),
+  observed_at: z.string(),
+  weight_eligible: z.literal(false),
+  current: z.boolean(),
+  stale_reason: z.enum([
+    'current',
+    'artifact_changed',
+    'screened_image_changed',
+    'benchmark_changed',
+    'policy_changed',
+  ]),
+})
+
+export const agentCoreQualificationStatusSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  miner_hotkey: z.string(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  screened_image_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  bench_version: z.number().int().min(7),
+  configured: z.boolean(),
+  qualified: z.boolean(),
+  current_observation: coreQualificationObservationSchema.nullable(),
+  total: z.number().int().nonnegative(),
+  observations: z.array(coreQualificationObservationSchema),
+  shadow_only: z.literal(true),
+})
+
 export const validatorScoreReplacementLookupInputSchema = z.object({
   agentId: z.string().uuid(),
   validatorHotkey: z.string().min(1),

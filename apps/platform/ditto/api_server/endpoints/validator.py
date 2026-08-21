@@ -251,6 +251,7 @@ from ditto.db.queries.confirmation_scores import (
     confirmation_composites_by_seed,
     fold_eligible_seeds_by_agent,
 )
+from ditto.db.queries.core_qualification import observe_core_qualification
 from ditto.db.queries.desired_era_backlog import desired_era_work_outstanding
 from ditto.db.queries.heartbeats import (
     HeartbeatProgressRegressionError,
@@ -6692,6 +6693,24 @@ async def submit_score(
         # normal issuance lock, and admin queue actions activate it directly, so
         # removing this eager handoff delays nothing and leaves one lock owner.
         result_status = agent.status
+
+    # Shadow core qualification is deliberately post-commit and fail-open.
+    # The ordinary score and consumed ticket above remain canonical even if the
+    # policy is absent, the observer schema is mid-rollout, or the diagnostic
+    # write fails. This ledger is not read by admission, rank, or weights.
+    try:
+        async with session.begin():
+            await observe_core_qualification(
+                session,
+                agent_id=agent_id,
+                bench_version=report_version,
+                now=audit_now,
+            )
+    except Exception:
+        logger.exception(
+            "shadow core qualification observation failed for agent %s",
+            agent_id,
+        )
 
     # LongMem's expensive dimensions live on a separate bounded ledger. Once the
     # canonical score transaction commits, persist its physical lower-median

@@ -61,6 +61,10 @@ import {
   batchRetryValidationInputSchema,
   agentScoringReadinessInputSchema,
   agentCodingCertificationInputSchema,
+  agentCoreQualificationInputSchema,
+  getCoreQualificationPolicyInputSchema,
+  refreshAgentCoreQualificationInputSchema,
+  setCoreQualificationPolicyMcpInputSchema,
   agentScoresLookupInputSchema,
   scoreLeaderboardInputSchema,
   ownerFootprintLookupInputSchema,
@@ -116,6 +120,10 @@ import {
   batchRetryValidation,
   fetchAgentScoringReadiness,
   fetchAgentCodingCertifications,
+  fetchAgentCoreQualification,
+  fetchCoreQualificationPolicy,
+  refreshAgentCoreQualification,
+  setCoreQualificationPolicy,
   fetchBenchmarkContractRefresh,
   fetchBenchmarkContractMigration,
   migrateBenchmarkContract,
@@ -207,6 +215,8 @@ export const WRITE_TOOL_NAMES = new Set([
   'expand_benchmark_rollout_cohort',
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
+  'set_core_qualification_policy',
+  'refresh_agent_core_qualification',
   'set_queue_policy_settings',
   'apply_screener_review_settings',
   'set_validator_slot_settings',
@@ -403,6 +413,14 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  get_core_qualification_policy:
+    'Read the benchmark-scoped shadow core qualification policy.',
+  set_core_qualification_policy:
+    'Apply an append-only shadow policy. Never changes admission or weights.',
+  get_agent_core_qualification:
+    'Read one artifact-bound shadow qualification history.',
+  refresh_agent_core_qualification:
+    'Idempotently observe one current score snapshot. No scoring effect.',
   get_screener_review_settings:
     'Read L1/L2/L3 source-review settings, last-applied worker instances, and shadow observations. bypass lives on get_queue_policy_settings.',
   apply_screener_review_settings:
@@ -1190,6 +1208,56 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchAgentCodingCertifications(input)),
+  )
+
+  registerTool(
+    'get_core_qualification_policy',
+    {
+      title: 'Get shadow core qualification policy',
+      description:
+        'Read one benchmark-scoped append-only shadow policy. No policy exists by default. Entry requires every composite/tool/memory floor for enter_observations distinct full-score snapshots; an already-qualified artifact exits only after exit_observations snapshots below any lower exit floor. This never changes admission, rank, scores, weights, or emissions.',
+      inputSchema: getCoreQualificationPolicyInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchCoreQualificationPolicy(input)),
+  )
+
+  registerTool(
+    'set_core_qualification_policy',
+    {
+      title: 'Set shadow core qualification policy',
+      description:
+        'Write one complete append-only shadow policy after reading the current revision. policy must carry schema, weight_eligible=false, bench_version, all six entry/exit floors, and both observation streaks; exit floors cannot exceed entry floors. Confirm APPLY SHADOW CORE QUALIFICATION V{bench_version}. This starts observation only and never activates coding admission or weights.',
+      inputSchema: setCoreQualificationPolicyMcpInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => setCoreQualificationPolicy(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_agent_core_qualification',
+    {
+      title: 'Inspect agent core qualification',
+      description:
+        'Read exact-artifact, exact-screened-image, benchmark-version, and policy-bound shadow qualification history. current_observation is null after any binding changes until fresh score evidence arrives. Qualification remains diagnostic and weight-ineligible.',
+      inputSchema: agentCoreQualificationInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchAgentCoreQualification(input)),
+  )
+
+  registerTool(
+    'refresh_agent_core_qualification',
+    {
+      title: 'Refresh agent core qualification',
+      description:
+        'Idempotently backfill or recover one agent from its current accepted quorum scores. Requires reason and REFRESH SHADOW CORE QUALIFICATION V{bench_version}. This writes only the shadow observation ledger and cannot re-score, admit coding, rank, or change weights.',
+      inputSchema: refreshAgentCoreQualificationInputSchema,
+      annotations: toolAnnotations('write', false),
+    },
+    async (input) =>
+      write(() => refreshAgentCoreQualification(input, props.session.email)),
   )
 
   registerTool(
