@@ -260,6 +260,13 @@ DNS validation is request-bounded, capability logging is redacted, and the
 server-internal consumer type fails closed rather than JSON-serializing a
 bearer URL.
 
+The single-capability delivery wire is
+`dittobench-coding-artifact-capability-v1`, frozen by the public synthetic
+Python/Go vector `coding_artifact_capability_v1.json`. Authoring permits only
+visible, memory, and resource artifacts; grading permits only visible,
+resource, and grader artifacts. The vector URL is transport-only, excluded
+from canonical identity, and never consumed by Rust or miner-facing code.
+
 `coding_run_id` and the manifest are shared across k=3. Validator-specific
 ticket IDs, deadlines, hotkeys, and transport capabilities remain in each lease
 envelope and signed validator evidence; they cannot make the selected task-set

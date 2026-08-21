@@ -27,6 +27,7 @@
 | Shadow task lease core | `apps/platform/ditto/db/queries/coding_task_leases.py` |
 | Shadow artifact capabilities | `apps/platform/ditto/api_server/coding_artifact_capabilities.py` |
 | Shadow verified artifact fetcher | `services/dittobench-api/internal/codingartifacts/` |
+| Shadow artifact delivery contract | `packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json`, `apps/platform/ditto/api_models/coding_artifacts.py`, `services/dittobench-api/internal/codingartifacts/delivery.go` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |

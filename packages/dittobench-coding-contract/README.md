@@ -22,9 +22,17 @@ task-set identity, shared public run manifest, Platform run authority, and
 exposure projection. It contains digest-only synthetic records and no usable
 private corpus material.
 
-The vectors contain synthetic identifiers and digests only. Private catalog
-records, repository bundles, hidden tests, policy labels, provider credentials,
-and signing keys must never enter this package.
+`coding_artifact_capability_v1.json` freezes the single-capability delivery
+wire shared by Platform and the trusted Go artifact fetcher. It covers every
+allowed authoring/grading phase, kind, audience, and size-policy combination.
+Its URLs use the reserved `.invalid` domain and synthetic signatures. They are
+transport examples, never identity, credentials, or usable capabilities. Rust
+and miner-facing code must not consume this validator-only vector.
+
+The vectors contain only synthetic identifiers, digests, policies, and reserved
+domain transport examples. Private catalog records, repository bundles, hidden
+tests, policy labels, provider credentials, signing keys, and usable bearer
+capabilities must never enter this package.
 
 Canonical JSON uses lexicographically sorted object keys, compact separators,
 UTF-8, no unpaired surrogate escapes, at most 32 nesting levels, escaped
