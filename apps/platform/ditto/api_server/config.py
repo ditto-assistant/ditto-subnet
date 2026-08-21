@@ -362,7 +362,7 @@ class ApiServerConfig:
             per_ticket_requests_per_minute=240,
             per_validator_requests_per_minute=960,
             global_requests_per_minute=2880,
-            request_body_bytes=256 << 10,
+            request_body_bytes=1 << 20,
             response_body_bytes=2 << 20,
             timeout_seconds=90.0,
             max_output_tokens=8192,
@@ -671,7 +671,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
                 os.environ.get("DITTO_INFERENCE_GLOBAL_RPM", "2880")
             ),
             request_body_bytes=int(
-                os.environ.get("DITTO_INFERENCE_REQUEST_BODY_BYTES", str(256 << 10))
+                os.environ.get("DITTO_INFERENCE_REQUEST_BODY_BYTES", str(1 << 20))
             ),
             response_body_bytes=int(
                 os.environ.get("DITTO_INFERENCE_RESPONSE_BODY_BYTES", str(2 << 20))

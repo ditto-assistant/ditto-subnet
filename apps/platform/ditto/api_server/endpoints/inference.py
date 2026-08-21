@@ -1330,6 +1330,8 @@ _REFUSED_REQUEST_FIELDS = {
     # model. Routing extras (``provider`` / ``route`` / ``preset``) are dropped
     # instead, because the platform already overwrites them.
     "models": "the model is pinned by the ticket, not chosen by the request",
+    # Miners cannot set this. The platform may attach middle-out after lock
+    # on oversized bodies (see ``_attach_platform_middle_out``).
     "transforms": "prompt transforms would change benchmark semantics",
     # Server-side network egress. The harness runs sandboxed without egress and
     # these would hand it some through the provider.
@@ -1764,6 +1766,23 @@ def _locked_upstream_payload(
     return upstream
 
 
+# Historical default that 413'd gate v11 finishers at 256 KiB + 1. Bodies at
+# or under it keep the historical upstream shape. Larger bodies get a
+# platform-owned OpenRouter middle-out transform so a prompt that then
+# exceeds the pinned model's context window can still complete. Miners
+# cannot set ``transforms``; this is applied after lock.
+_HISTORICAL_CHAT_REQUEST_BODY_BYTES = 256 << 10
+
+
+def _attach_platform_middle_out(
+    upstream: dict[str, Any], *, original_body_bytes: int
+) -> None:
+    """Pin OpenRouter middle-out on the oversized class that used to 413."""
+    if original_body_bytes <= _HISTORICAL_CHAT_REQUEST_BODY_BYTES:
+        return
+    upstream["transforms"] = ["middle-out"]
+
+
 def _sanitize_upstream_messages(messages: list[Any]) -> list[Any]:
     """Drop only the legacy tool-role ``name`` some upstreams reject.
 
@@ -2158,6 +2177,7 @@ async def proxy_chat_completions(
         max_tokens=max_tokens,
         bench_version=reserved_grant.bench_version,
     )
+    _attach_platform_middle_out(upstream_payload, original_body_bytes=len(body))
     if not reserved_grant.route_provider:
         raise HTTPException(status_code=409, detail="inference route unavailable")
     status = "failed"

@@ -63,15 +63,25 @@ fi
 # A cold postgres:16-alpine on a busy CI runner can take well over 30s to
 # finish initdb; 30 one-second probes flaked there. pg_isready is the cheap
 # in-container probe; the psql check stays as the authoritative gate.
+# Do not call psql_admin from `&&` under `set -e`: a function's failing
+# docker exec can abort the script before the 120s loop finishes (release
+# then reports "after 120s" on a ~few-second cold start).
+postgres_ready=0
 for i in $(seq 1 120); do
-  if docker exec "${CONTAINER_NAME}" pg_isready -U "${ADMIN_USER}" -d "${ADMIN_DB}" >/dev/null 2>&1 \
-    && psql_admin "SELECT 1" >/dev/null 2>&1; then
-    break
+  if docker exec "${CONTAINER_NAME}" pg_isready -U "${ADMIN_USER}" -d "${ADMIN_DB}" >/dev/null 2>&1; then
+    if docker exec -i "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
+      -U "${ADMIN_USER}" -d "${ADMIN_DB}" -qAt -c "SELECT 1" >/dev/null 2>&1; then
+      postgres_ready=1
+      break
+    fi
   fi
   [[ $((i % 15)) -eq 0 ]] && log "still waiting for postgres (${i}s)"
   sleep 1
 done
-psql_admin "SELECT 1" >/dev/null || { log "postgres did not become ready after 120s"; exit 1; }
+if [[ "${postgres_ready}" != 1 ]]; then
+  log "postgres did not become ready after 120s"
+  exit 1
+fi
 
 # ── 2. Scratch database ─────────────────────────────────────────────────────
 cleanup() {

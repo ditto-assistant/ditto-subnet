@@ -53,7 +53,7 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	if ip.EmbeddingTicketConcurrency != 12 || ip.EmbeddingValidatorConcurrency != 48 || ip.EmbeddingGlobalConcurrency != 96 {
 		t.Errorf("embedding concurrency defaults wrong: %+v", ip)
 	}
-	if ip.RequestBodyBytes != 262144 || ip.ResponseBodyBytes != 2*1024*1024 {
+	if ip.RequestBodyBytes != 1024*1024 || ip.ResponseBodyBytes != 2*1024*1024 {
 		t.Errorf("chat body caps wrong: %d/%d", ip.RequestBodyBytes, ip.ResponseBodyBytes)
 	}
 	if ip.EmbeddingRequestBodyBytes != 1024*1024 || ip.EmbeddingResponseBodyBytes != 16*1024*1024 {

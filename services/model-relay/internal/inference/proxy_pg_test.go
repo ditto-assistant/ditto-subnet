@@ -211,6 +211,9 @@ func TestChatFullFlow(t *testing.T) {
 	if _, present := captured["provider"]; !present {
 		t.Fatalf("provider preferences missing upstream")
 	}
+	if _, present := captured["transforms"]; present {
+		t.Fatalf("small payloads must not get platform middle-out: %v", captured["transforms"])
+	}
 	reasoning, _ := captured["reasoning"].(map[string]any)
 	if reasoning["effort"] != "medium" || reasoning["exclude"] != true {
 		t.Fatalf("reasoning not pinned upstream: %v", captured["reasoning"])
@@ -249,6 +252,76 @@ func TestChatFullFlow(t *testing.T) {
 	}
 	if sampleCount != 1 || routeStatus != "healthy" {
 		t.Fatalf("route observation: samples=%d status=%s", sampleCount, routeStatus)
+	}
+}
+
+func TestChatOversizedBodyForwardsPlatformMiddleOut(t *testing.T) {
+	var captured map[string]any
+	upstream := fakeChatUpstream(t, &captured)
+	defer upstream.Close()
+	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
+	f.seedRoute(t)
+
+	payload := map[string]any{
+		"model": pgTestModel,
+		"messages": []any{
+			map[string]any{"role": "user", "content": strings.Repeat("x", historicalChatRequestBodyBytes)},
+		},
+		"max_tokens": 64,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal oversized fixture: %v", err)
+	}
+	if len(body) <= historicalChatRequestBodyBytes {
+		t.Fatalf("fixture must exceed the historical 256 KiB cap, got %d", len(body))
+	}
+	if int64(len(body)) > f.deps.Cfg.Inference.RequestBodyBytes {
+		t.Fatalf("fixture must fit the 1 MiB default, got %d", len(body))
+	}
+
+	nonce := uuid.New()
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, nonce, body)))
+	if w.Code != 200 {
+		t.Fatalf("want 200 for the former 413 class, got %d: %s", w.Code, w.Body.String())
+	}
+	got, _ := captured["transforms"].([]any)
+	if len(got) != 1 || got[0] != "middle-out" {
+		t.Fatalf("platform middle-out missing upstream: %v", captured["transforms"])
+	}
+	if captured["model"] != pgTestModel {
+		t.Fatalf("model must stay locked, got %v", captured["model"])
+	}
+}
+
+func TestChatMinerTransformsStillRefusedWhenOversized(t *testing.T) {
+	upstream := fakeChatUpstream(t, nil)
+	defer upstream.Close()
+	f := newPGFixture(t, chatTestConfig(t, upstream.URL))
+	f.seedRoute(t)
+
+	payload := map[string]any{
+		"model":      pgTestModel,
+		"transforms": []any{"middle-out"},
+		"messages": []any{
+			map[string]any{"role": "user", "content": strings.Repeat("x", historicalChatRequestBodyBytes)},
+		},
+		"max_tokens": 64,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal miner-transforms fixture: %v", err)
+	}
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, uuid.New(), body)))
+	expectEnvelope(t, w, 400, relayhttp.CodeHTTPException,
+		"unsupported inference parameter: transforms (prompt transforms would change benchmark semantics)")
+	var rows int
+	if err := f.pool.QueryRow(t.Context(),
+		`SELECT count(*) FROM inference_requests WHERE grant_id = $1`, f.grantID).Scan(&rows); err != nil {
+		t.Fatalf("count requests: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("refused miner transforms must not admit, got %d rows", rows)
 	}
 }
 
