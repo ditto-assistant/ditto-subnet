@@ -88,12 +88,24 @@ _DEFAULT_SIZE_TOL = 8192
 # in place; containment (overlap coefficient) catches one padded with junk files
 # to dilute Jaccard. Containment's bar is higher because it is the more
 # false-positive-prone of the two on shared reference-harness scaffolding — only a
-# near-total subset should trip it. Both are paired with score proximity below, and
-# a hold only routes to *human* review, so these are deliberately conservative
-# signals, not an autoban. They want tuning against a real score/similarity corpus
-# (see the subnet's KOTH-parameter validation task).
+# near-total subset should trip it — and it is direction-and-size-guarded (see
+# :func:`_copy_lexical_match`) so a *smaller* residual that is a subset of
+# someone else's large residual cannot fire it. Both are paired with score
+# proximity below, and a hold only routes to *human* review, so these are
+# deliberately conservative signals, not an autoban. They want tuning against a
+# real score/similarity corpus (see the subnet's KOTH-parameter validation task).
 _DEFAULT_JACCARD_TOL = 0.75
 _DEFAULT_CONTAINMENT_TOL = 0.95
+# Candidate residual must be at least this multiple of the matched residual
+# before copy-gate containment can fire. 15% is the same bulk as the
+# resubmission padding recut: junk bolted onto an unchanged original, not a
+# tiny residual that happens to sit inside someone else's large one. lucky v2
+# ``5addb1b0`` and cursor-miner-v1 ``4904c032`` vs kaelith-ditto-miner v6
+# (2026-08-21) sat at Jaccard 0.004 and containment 1.000 on an 8-shingle
+# residual fully contained in a ~2000-shingle residual — coincidence at the
+# cardinality floor, the opposite of padding. Jaccard is undirected and
+# unchanged; missing ``card`` silences containment.
+_DEFAULT_COPY_PADDING_RATIO = 1.15
 # Resubmission thresholds (:func:`evaluate_rejected_resubmission`). Deliberately
 # NOT the copy thresholds above, which is the one thing the rule got wrong when
 # it shipped: it reused them "so one lexical bar governs the codebase", but the
@@ -316,20 +328,26 @@ def _lexical_strength(
 ) -> float:
     """Threshold-normalized closeness of the lexical channel for one pair.
 
-    Rule 2 fires on ``jaccard >= jaccard_tol OR containment >= containment_tol``,
-    two measures on different scales. Dividing each by its own bar and taking
-    the larger collapses that disjunction into one comparable scalar: ``>= 1.0``
-    is exactly "this pair would trigger", and between two pairs the larger value
-    is the closer match *in the terms the rule itself uses*. Comparing raw
-    Jaccard against raw containment would not be meaningful; comparing the two
-    normalized margins is.
+    Rule 2 fires on ``jaccard >= jaccard_tol``, or on
+    ``containment >= containment_tol`` only when the left-hand residual is
+    substantially larger than the right-hand one (the padding direction; see
+    :func:`_copy_lexical_match`). Dividing each *firing* measure by its own bar
+    and taking the larger collapses that disjunction into one comparable
+    scalar: ``>= 1.0`` is exactly "this pair would trigger", and between two
+    pairs the larger value is the closer match *in the terms the rule itself
+    uses*. Containment without the padding-size guard is not a trigger, so it
+    does not contribute. Comparing raw Jaccard against raw containment would
+    not be meaningful; comparing the two normalized margins is.
 
     Returns ``0.0`` for an uncomparable pair (missing / cross-version /
     cross-corpus sketch), which is what :func:`content_similarity` already
     reports and what "no evidence" should score.
     """
     j, c = content_similarity(a, b)
-    return max(j / jaccard_tol, c / containment_tol)
+    strength = j / jaccard_tol
+    if _copy_residual_is_padded(a, b):
+        strength = max(strength, c / containment_tol)
+    return strength
 
 
 def _residual_cardinality(sketch: dict | None) -> int | None:
@@ -346,6 +364,59 @@ def _residual_cardinality(sketch: dict | None) -> int | None:
     if card is None:
         return None
     return int(card)
+
+
+def _copy_residual_is_padded(candidate: dict | None, matched: dict | None) -> bool:
+    """Whether the candidate residual is substantially larger than the matched one.
+
+    Copy-gate containment exists to catch padding: the candidate grew, every
+    original shingle survived, junk was bolted on to dilute Jaccard. A *smaller*
+    residual that is a subset of someone else's large residual is the opposite
+    of that attack — coincidence at the cardinality floor, not a padded copy.
+    Missing ``card`` makes the direction unknown, so containment stays silent.
+    """
+    candidate_card = _residual_cardinality(candidate)
+    matched_card = _residual_cardinality(matched)
+    return (
+        candidate_card is not None
+        and matched_card is not None
+        and candidate_card >= ceil(matched_card * _DEFAULT_COPY_PADDING_RATIO)
+    )
+
+
+def _copy_lexical_match(
+    candidate: dict | None,
+    matched: dict | None,
+    *,
+    jaccard_tol: float,
+    containment_tol: float,
+) -> tuple[float, float] | None:
+    """``(jaccard, containment)`` when the copy rule's lexical channel fires.
+
+    Returns ``None`` when it does not, so the caller never has to re-derive which
+    arm spoke.
+
+    **Jaccard is undirected.** An in-place edit keeps residual size roughly
+    the same; ``jaccard >= jaccard_tol`` holds regardless of ``card``.
+
+    **Containment is direction-and-size-guarded.** Containment is
+    ``|A ∩ B| / min(|A|, |B|)``, i.e. "is the smaller residual a subset of the
+    larger". That is the padded-copy attack only when the *candidate* is the
+    larger side: every original shingle survived and junk was added on top.
+    The opposite direction — candidate smaller, fully contained in a much
+    larger residual — is what lucky v2 / cursor-miner-v1 vs kaelith-ditto-miner
+    v6 measured (Jaccard 0.004, containment 1.000 on an 8-shingle residual
+    inside a ~2000-shingle one). Containment may fire only when
+    ``candidate_card >= ceil(matched_card * _DEFAULT_COPY_PADDING_RATIO)``.
+    When either sketch omits ``card`` the direction is unknown and this arm
+    stays silent; Jaccard still covers the pair.
+    """
+    j, c = content_similarity(candidate, matched)
+    if j >= jaccard_tol:
+        return (j, c)
+    if _copy_residual_is_padded(candidate, matched) and c >= containment_tol:
+        return (j, c)
+    return None
 
 
 def _resubmission_lexical_match(
@@ -508,10 +579,17 @@ def evaluate_duplicate_signals(
        happened to land.
     2. **Near-duplicate lexical fingerprint** — the lexical channel
        (``content_fingerprint``, reference-aware) at least ``jaccard_tol`` Jaccard
-       or ``containment_tol`` contained — survives re-indent / reformat /
-       localized edits / junk-file padding. Like rules 1 and 1b this is held on the
-       fingerprint alone: **no score proximity**. Score similarity is not evidence
-       of copying and score dissimilarity is not evidence of independence — see
+       (in-place edits, regardless of residual size), or at least
+       ``containment_tol`` contained *in the padding direction only* and only
+       when the candidate residual is at least ``_DEFAULT_COPY_PADDING_RATIO``
+       (1.15) times the matched residual (see :func:`_copy_lexical_match`).
+       Undirected containment treated an 8-shingle residual fully contained in
+       a ~2000-shingle one as a padded copy: lucky v2 / cursor-miner-v1 vs
+       kaelith-ditto-miner v6 (2026-08-21) sat at Jaccard 0.004 and
+       containment 1.000. Missing ``card`` silences containment; Jaccard still
+       covers the pair. Like rules 1 and 1b this is held on the fingerprint
+       alone: **no score proximity**. Score similarity is not evidence of
+       copying and score dissimilarity is not evidence of independence — see
        ``_DEFAULT_SCORE_TOL`` for the production measurement that retired the
        precondition. Structural (``structural_fingerprint``, whole-crate AST from
        dittobench — measured at/above its thresholds for 12 of the 66 audited
@@ -905,8 +983,15 @@ def evaluate_duplicate_signals(
                 content_fingerprint, row.content_fingerprint
             ):
                 return False
-            j, c = content_similarity(content_fingerprint, row.content_fingerprint)
-            if j < jaccard_tol and c < containment_tol:
+            if (
+                _copy_lexical_match(
+                    content_fingerprint,
+                    row.content_fingerprint,
+                    jaccard_tol=jaccard_tol,
+                    containment_tol=containment_tol,
+                )
+                is None
+            ):
                 return False
             return (
                 _lexical_strength(
@@ -1027,8 +1112,19 @@ def evaluate_duplicate_signals(
                     "individual operator review required"
                 ),
             )
-        lex_j, lex_c = content_similarity(content_fingerprint, e.content_fingerprint)
-        if lex_j >= jaccard_tol or lex_c >= containment_tol:
+        fired = _copy_lexical_match(
+            content_fingerprint,
+            e.content_fingerprint,
+            jaccard_tol=jaccard_tol,
+            containment_tol=containment_tol,
+        )
+        if fired is not None:
+            reference_strength = _lexical_strength(
+                content_fingerprint,
+                e.content_fingerprint,
+                jaccard_tol=jaccard_tol,
+                containment_tol=containment_tol,
+            )
             released = _withdraw_ranked(
                 e,
                 signal="lexical",
@@ -1042,7 +1138,7 @@ def evaluate_duplicate_signals(
                     jaccard_tol=jaccard_tol,
                     containment_tol=containment_tol,
                 ),
-                reference_strength=max(lex_j / jaccard_tol, lex_c / containment_tol),
+                reference_strength=reference_strength,
             )
             if released is not None:
                 withdrawn = withdrawn or released
@@ -1051,10 +1147,7 @@ def evaluate_duplicate_signals(
                 e,
                 signal="lexical",
                 in_cluster=_lexical_cluster_for(
-                    e,
-                    reference_strength=max(
-                        lex_j / jaccard_tol, lex_c / containment_tol
-                    ),
+                    e, reference_strength=reference_strength
                 ),
                 reason_for=_lexical_reason,
             )

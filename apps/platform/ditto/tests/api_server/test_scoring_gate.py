@@ -6,7 +6,12 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID, uuid4
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_server.fingerprint import _FP_VERSION, _MINHASH_K, _PROMPT_VERSION
+from ditto.api_server.fingerprint import (
+    _FP_VERSION,
+    _MINHASH_K,
+    _PROMPT_VERSION,
+    content_similarity,
+)
 from ditto.api_server.scoring_gate import PublicSourceRelease
 from ditto.api_server.scoring_gate import (
     evaluate_duplicate_signals as _evaluate_duplicate_signals,
@@ -23,18 +28,19 @@ def evaluate_duplicate_signals(**kwargs):
     return _evaluate_duplicate_signals(**kwargs)
 
 
-def _sk(shingles: set[str]) -> dict:
+def _sk(shingles: set[str], *, k: int = _MINHASH_K) -> dict:
     """Build a fingerprint sketch from a set of shingle hashes.
 
     The sets here are far smaller than the bottom-k budget, so the sketch is the
     whole set and :func:`content_similarity` computes Jaccard/containment exactly —
-    letting these gate tests assert on precise thresholds.
+    letting these gate tests assert on precise thresholds. Pass ``k`` at least
+    the union size when a fixture must stay exact above ``_MINHASH_K``.
     """
     return {
         "v": _FP_VERSION,
-        "k": _MINHASH_K,
+        "k": k,
         "card": len(shingles),
-        "m": sorted(shingles)[:_MINHASH_K],
+        "m": sorted(shingles)[:k],
     }
 
 
@@ -365,6 +371,9 @@ class TestEvaluateAntidup:
     def test_padding_held_by_containment(self) -> None:
         # A verbatim copy padded with junk files dilutes Jaccard below the tol but
         # stays fully contained => the containment arm of rule 2 holds it.
+        # Candidate is 3x the original (20 + 40), well above the 1.15 padding
+        # ratio; Jaccard 20/60 = 0.333 stays under 0.75 so containment is the
+        # arm that fires.
         shared = {f"{i:016x}" for i in range(20)}
         incumbent = _entry(
             composite=0.80,
@@ -384,6 +393,73 @@ class TestEvaluateAntidup:
         )
         assert decision.held is True
         assert "containment" in (decision.reason or "")
+
+    def test_lucky_cursor_tiny_residual_containment_is_not_held(self) -> None:
+        """Containment without a size direction held coincidental floor residuals.
+
+        Production 2026-08-21: lucky v2 ``5addb1b0`` and cursor-miner-v1
+        ``4904c032`` vs kaelith-ditto-miner v6 sat at Jaccard 0.004 and
+        containment 1.000. An 8-shingle residual fully contained in a
+        ~2000-shingle residual is Jaccard ≈ 8/2000 = 0.004 — coincidence at
+        the cardinality floor, not a padded copy. The candidate is the
+        *smaller* side, so the padding-ratio guard must refuse a
+        containment-only hold. Jaccard stays well under 0.75.
+        """
+        kaelith = {f"{i:016x}" for i in range(2000)}
+        lucky = {f"{i:016x}" for i in range(8)}
+        k = 2048
+        incumbent = _entry(
+            composite=0.80,
+            miner="5Kaelith",
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=_sk(kaelith, k=k),
+        )
+        candidate_fp = _sk(lucky, k=k)
+        jaccard, containment = content_similarity(
+            candidate_fp, incumbent.content_fingerprint
+        )
+        assert 0.003 <= jaccard <= 0.05
+        assert containment == 1.0
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Lucky",
+            sha256="bb" * 32,
+            composite=0.25,
+            size_bytes=120000,
+            content_fingerprint=candidate_fp,
+            eligible=[incumbent],
+        )
+        assert decision.held is False
+
+    def test_containment_is_silent_when_copy_cards_are_missing(self) -> None:
+        """No ``card`` means the subset direction cannot be established.
+
+        Same pair as the padded-copy test — containment is a full 1.0 — but
+        with the matched sketch's cardinality missing, so the rule cannot tell
+        a padded copy from a tiny residual sitting inside a large one. Jaccard
+        (0.333) still had its say and is under the bar.
+        """
+        shared = {f"{i:016x}" for i in range(20)}
+        uncounted = _sk(shared)
+        del uncounted["card"]
+        incumbent = _entry(
+            composite=0.80,
+            sha256="aa" * 32,
+            size_bytes=500000,
+            content_fingerprint=uncounted,
+        )
+        padded = _sk(shared | {f"pad{i:013x}" for i in range(40)})
+        decision = evaluate_duplicate_signals(
+            agent_id=uuid4(),
+            miner_hotkey="5Copier",
+            sha256="bb" * 32,
+            composite=0.805,
+            size_bytes=900000,
+            content_fingerprint=padded,
+            eligible=[incumbent],
+        )
+        assert decision.held is False
 
     def test_structural_match_alone_never_holds(self) -> None:
         # The structural (AST) sketch is whole-crate — astfp performs no
