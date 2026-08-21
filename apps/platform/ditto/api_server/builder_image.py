@@ -27,6 +27,10 @@ def resolve_submission_builder_image(image: str) -> str:
     back to the newest published digest when that tag is missing launches an
     older Kaniko helper that does not post ``image_id``. Bind then fail-closes.
     Commit tags must match exactly. Floating tags may still use latest.
+
+    The helper at that tag must parse Kaniko/go-containerregistry docker-save
+    config members named ``sha256:<hex>``. Classic ``<hex>.json`` names are
+    not what ``--tar-path`` writes.
     """
     requested = image.strip()
     if not requested:
