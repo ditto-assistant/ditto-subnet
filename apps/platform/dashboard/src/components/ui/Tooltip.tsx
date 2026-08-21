@@ -3,7 +3,7 @@
 // gets a hidden #tipdesc-N description span in the #tip-descs host, wired via
 // aria-describedby (wireTips 5244–5263; here per-Tip instead of a full-page
 // rescan).
-import { onCleanup, onMount } from "solid-js";
+import { createEffect, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 let tipDescSeq = 0;
@@ -28,14 +28,24 @@ export interface TipProps {
 /** `<span class="tip" tabindex="0" data-tooltip>` with its SR description. */
 export function Tip(props: TipProps): JSX.Element {
   const id = "tipdesc-" + ++tipDescSeq;
+  let span: HTMLSpanElement | null = null;
   onMount(() => {
-    const span = document.createElement("span");
+    span = document.createElement("span");
     span.id = id;
-    span.textContent = props.text;
     descHost().appendChild(span);
     onCleanup(() => {
-      span.remove();
+      span?.remove();
+      span = null;
     });
+  });
+  // The description has to FOLLOW the tooltip, not snapshot it at mount:
+  // `data-tooltip` below is reactive, so a tip whose text changes after mount
+  // (the epoch countdown gains its "projected" caveat once the chain read goes
+  // stale) would show one thing on hover and announce another to a screen
+  // reader. ChipTip already does this; Tip did not.
+  createEffect(() => {
+    const text = props.text;
+    if (span) span.textContent = text;
   });
   return (
     <span
