@@ -19,7 +19,7 @@ function InferenceConcurrencyPage() {
       <PageHeader
         label="SN118 inference"
         title="Inference & benchmark runtime"
-        description="Control hosted inference budgets, chat and embedding admission, v10 case concurrency, and relay delay fingerprints. Changes are lease-stamped from an append-only audited revision; legacy v10 harnesses retain serial attribution."
+        description="Control hosted inference budgets, chat and embedding admission, v10 case concurrency, and relay delay fingerprints. Changes are lease-stamped from an append-only audited revision. Case concurrency overlaps /run against the process-wide inference URL."
         aside={
           <div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted-strong)]">
             <Gauge className="h-3.5 w-3.5 text-[var(--cyan)]" />

@@ -107,7 +107,7 @@ describe('admin API schemas', () => {
       embedding_per_validator_concurrency: 24,
       embedding_global_concurrency: 32,
       benchmark_runtime: {
-        case_concurrency: 1,
+        case_concurrency: 4,
         relay_delay_fingerprint_mode: 'off' as const,
         relay_delay_fingerprint_min_ms: 25,
         relay_delay_fingerprint_max_ms: 250,
@@ -159,7 +159,7 @@ describe('admin API schemas', () => {
       embedding_global_concurrency: 96,
     }
     expect(inferenceConcurrencySettingsSchema.parse(settings).benchmark_runtime).toEqual({
-      case_concurrency: 1,
+      case_concurrency: 4,
       relay_delay_fingerprint_mode: 'off',
       relay_delay_fingerprint_min_ms: 25,
       relay_delay_fingerprint_max_ms: 250,

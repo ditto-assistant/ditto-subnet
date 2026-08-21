@@ -134,8 +134,8 @@ DEFAULT_CHAT_TOKEN_BUDGET = 25_000_000
 # revision this board accepts can never be a value the next restart rejects.
 MAX_CHAT_TOKEN_BUDGET = 100_000_000
 
-DEFAULT_BENCHMARK_CASE_CONCURRENCY = 1
-MAX_BENCHMARK_CASE_CONCURRENCY = 16
+DEFAULT_BENCHMARK_CASE_CONCURRENCY = 4
+MAX_BENCHMARK_CASE_CONCURRENCY = 64
 DEFAULT_RELAY_DELAY_FINGERPRINT_MIN_MS = 25
 DEFAULT_RELAY_DELAY_FINGERPRINT_MAX_MS = 250
 MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
@@ -144,10 +144,9 @@ MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
 class BenchmarkRuntimeSettings(BaseModel):
     """Per-ticket v10 execution controls delivered to capable validators.
 
-    These defaults reproduce the deployed behavior exactly: scored cases are
-    serial and relay delay fingerprinting is disabled.  The object is additive
-    on both the settings JSON and validator job wire, so an older Platform,
-    validator, scorer, or harness keeps that behavior during a rolling upgrade.
+    These defaults overlap four /run calls per ticket. Relay delay fingerprinting
+    stays off. The object is additive on both the settings JSON and validator
+    job wire. Backroom can raise case_concurrency up to 64.
     """
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)

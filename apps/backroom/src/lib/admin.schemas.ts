@@ -1730,7 +1730,7 @@ export const MAX_CHAT_REQUEST_BUDGET = 16384
 export const MAX_CHAT_TOKEN_BUDGET = 100_000_000
 export const MAX_CHAT_CONCURRENCY = 512
 export const MAX_EMBEDDING_CONCURRENCY = 512
-export const MAX_BENCHMARK_CASE_CONCURRENCY = 16
+export const MAX_BENCHMARK_CASE_CONCURRENCY = 64
 export const MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
 
 export const benchmarkRuntimeSettingsSchema = z
@@ -1749,7 +1749,7 @@ export const benchmarkRuntimeSettingsSchema = z
   )
 
 export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
-  case_concurrency: 1,
+  case_concurrency: 4,
   relay_delay_fingerprint_mode: 'off' as const,
   relay_delay_fingerprint_min_ms: 25,
   relay_delay_fingerprint_max_ms: 250,

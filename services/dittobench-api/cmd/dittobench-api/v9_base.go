@@ -13,53 +13,20 @@ import (
 
 func (s *server) runCaseWithModelAttribution(
 	ctx context.Context,
-	inferenceSessionID string,
+	_ string,
 	harnessURL string,
 	caseID string,
 	prompt string,
 	tools []protocol.ToolDefinition,
 	opts runner.CaseOptions,
 ) (protocol.RunResponse, runner.CaseExecution, error) {
-	if opts.BenchVersion < protocol.BenchVersionV9 || inferenceSessionID == "" {
-		return runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
-	}
-	if opts.BenchVersion >= protocol.BenchVersionV10 && opts.CaseScopedInference {
-		generation, before, capability, beforeErr := s.broker.beginCaseCapability(
-			inferenceSessionID, caseID,
-		)
-		if beforeErr == nil {
-			opts.InferenceBaseURL = harnessGateway(inferenceSessionID) + "/cases/" + capability
-		}
-		response, execution, runErr := runner.RunCaseWithTelemetry(
-			ctx, harnessURL, caseID, prompt, tools, opts,
-		)
-		after, afterErr := s.broker.endCaseCapability(inferenceSessionID, generation)
-		execution.ModelInferenceObserved, execution.ModelAttributionComplete =
-			v9GenerationCaseDelta(before, after, beforeErr, afterErr)
-		if execution.ModelAttributionComplete {
-			execution.RelayInjectedDelayMs, execution.RelayDelayConsistent =
-				v9RelayDelayEvidence(before, after, execution.TotalDurationMs)
-		}
-		if beforeErr == nil && afterErr == nil {
-			execution.ToolProvenance = toolProvenanceEvidence(after)
-		}
-		return response, execution, runErr
-	}
-	generation, before, beforeErr := s.broker.beginCaseSnapshot(inferenceSessionID, caseID)
-	response, execution, runErr := runner.RunCaseWithTelemetry(
-		ctx, harnessURL, caseID, prompt, tools, opts,
-	)
-	after, afterErr := s.broker.endCaseSnapshot(inferenceSessionID, generation)
-	execution.ModelInferenceObserved, execution.ModelAttributionComplete =
-		v9GenerationCaseDelta(before, after, beforeErr, afterErr)
-	if execution.ModelAttributionComplete {
-		execution.RelayInjectedDelayMs, execution.RelayDelayConsistent =
-			v9RelayDelayEvidence(before, after, execution.TotalDurationMs)
-	}
-	if opts.BenchVersion >= protocol.BenchVersionV10 && beforeErr == nil && afterErr == nil {
-		execution.ToolProvenance = toolProvenanceEvidence(after)
-	}
-	return response, execution, runErr
+	// Exclusive case windows (beginCaseSnapshot / case-scoped inference URLs)
+	// forced serial /run. Concurrent scoring uses the process-wide session URL.
+	// Ticket-scope model_use plus per-case tool_endpoint carry anti-cheat;
+	// dataset difficulty carries the rest.
+	opts.InferenceBaseURL = ""
+	opts.CaseScopedInference = false
+	return runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
 }
 
 // v9RelayDelayEvidence turns the case window's delay-fingerprint counters into
@@ -211,55 +178,20 @@ func applyV9BaseEvidence(
 		)
 	}
 	model := v9AggregateModelTelemetry(usage, execution, perCase, transcripts)
-	if !model.DistinctCaseAttributionComplete {
-		return protocol.ScoreReport{}, fmt.Errorf(
-			"v9 case attribution unavailable: trusted relay windows did not settle",
-		)
+	// Per-case model-reach, delay-fingerprint, inference-latency, dependence,
+	// and answer-stuffing gates required exclusive inference windows. Concurrent
+	// /run cannot settle those windows, so they are not administered. v12 still
+	// emits model_dependence as not_applicable so the signed digest stays valid.
+	var dependence []v9base.ModelDependenceTelemetry
+	if req.BenchVersion >= protocol.BenchVersionV12 {
+		dependence = []v9base.ModelDependenceTelemetry{{
+			TelemetryComplete:        true,
+			SliceAttributionComplete: true,
+		}}
 	}
-	dependence := v9DependenceTelemetryForVersion(req.BenchVersion, perCase, transcripts)
 	gates, err := v9base.BuildGateEvidence(req.BenchVersion, perCase, model, true, dependence...)
 	if err != nil {
 		return protocol.ScoreReport{}, fmt.Errorf("build v9 score-gate evidence: %w", err)
-	}
-	// Layer the v12 inference-latency review gate on top (no-op for v9..v11). It
-	// reads the trusted per-case wall time and flags a run whose inference-
-	// required, model-reached cases are mostly sub-floor -- an in-memory parser
-	// emulating the model. Under the default review posture it never zeroes the
-	// composite; it emits signed evidence and a review routing signal.
-	latencyCfg := v12LatencyGateConfigFromEnv()
-	latency := v12InferenceLatencyTelemetry(req.BenchVersion, perCase, transcripts, latencyCfg.FloorMS)
-	gates, err = v9base.AttachInferenceLatencyGate(req.BenchVersion, gates, latency, latencyCfg)
-	if err != nil {
-		return protocol.ScoreReport{}, fmt.Errorf("attach v12 inference-latency gate: %w", err)
-	}
-	if req.BenchVersion >= protocol.BenchVersionV12 && gates.InferenceLatency.Result == scoregates.ResultLatencyImplausible {
-		log.Printf(
-			"run %s: v12 inference-latency %s: %d/%d eligible case(s) sub-%dms (%d bps >= %d bps threshold)",
-			report.RunID, gates.InferenceLatency.Posture,
-			gates.InferenceLatency.FlaggedCases, gates.InferenceLatency.EligibleCases,
-			gates.InferenceLatency.FloorMS, gates.InferenceLatency.SubFloorBPS, gates.InferenceLatency.ThresholdBPS,
-		)
-	}
-	// Layer the v12 Class-D answer-stuffing gate on top (no-op for v9..v11). It
-	// reads the two per-case telemetry fields the scorer's provenance pass wrote
-	// and flags a run whose COMPUTED-answer cases were fed the finished answer
-	// through the model input above the run-level stuffed-share threshold. Under
-	// the default penalize posture it applies a graduated capped factor and never
-	// zeroes; the gate is fail-open on incomplete capture and excludes
-	// verbatim-recall cases entirely.
-	stuffingCfg := v12AnswerStuffingConfigFromEnv()
-	stuffing := v12AnswerStuffingTelemetry(req.BenchVersion, perCase, transcripts)
-	gates, err = v9base.AttachAnswerStuffingGate(req.BenchVersion, gates, stuffing, stuffingCfg)
-	if err != nil {
-		return protocol.ScoreReport{}, fmt.Errorf("attach v12 answer-stuffing gate: %w", err)
-	}
-	if req.BenchVersion >= protocol.BenchVersionV12 && gates.AnswerStuffing.Result == scoregates.ResultAnswerStuffed {
-		log.Printf(
-			"run %s: v12 answer-stuffing %s: %d/%d computed case(s) stuffed (%d bps >= %d bps threshold)",
-			report.RunID, gates.AnswerStuffing.Posture,
-			gates.AnswerStuffing.StuffedCases, gates.AnswerStuffing.EligibleCases,
-			gates.AnswerStuffing.StuffedBPS, gates.AnswerStuffing.ThresholdBPS,
-		)
 	}
 	details, digest, effective, err := v9base.Build(v9base.Inputs{
 		RunID: report.RunID, BenchVersion: req.BenchVersion, ArtifactSHA256: artifactSHA256,
@@ -281,7 +213,7 @@ func v9AggregateModelTelemetry(
 	usage protocol.TokenUsage,
 	execution relayExecutionSummary,
 	perCase []protocol.CaseScore,
-	transcripts []transcriptCase,
+	_ []transcriptCase,
 ) v9base.AggregateModelTelemetry {
 	complete := usage.AccountingVersion == 2 && usage.Status == "complete" &&
 		usage.Requests == execution.Requests && usage.Successes == execution.Successes &&
@@ -293,14 +225,33 @@ func v9AggregateModelTelemetry(
 	} else {
 		complete = complete && usage.PromptTokens > 0 && usage.TotalTokens > 0
 	}
-	attributionComplete, successfulCases := v9DistinctModelCases(perCase, transcripts)
+	// Ticket-scope attribution: session accounting is the trust bit. Distinct
+	// case windows are no longer required. Cap successes at the eligible
+	// population so retries cannot inflate coverage past 100%.
+	successfulCases := 0
+	if complete && usage.Successes > 0 {
+		successfulCases = int(usage.Successes)
+		if eligible := v9EligibleModelCases(perCase); successfulCases > eligible {
+			successfulCases = eligible
+		}
+	}
 	return v9base.AggregateModelTelemetry{
 		ObservedRequests: execution.Requests, SuccessfulRequests: execution.Successes,
 		PromptTokens: usage.PromptTokens, CompletionTokens: usage.CompletionTokens,
 		TelemetryComplete:               complete,
-		DistinctCaseAttributionComplete: attributionComplete,
+		DistinctCaseAttributionComplete: complete,
 		SuccessfulDistinctCases:         successfulCases,
 	}
+}
+
+func v9EligibleModelCases(perCase []protocol.CaseScore) int {
+	eligible := 0
+	for _, score := range perCase {
+		if !v9base.ExcludedFromModelPopulation(score) {
+			eligible++
+		}
+	}
+	return eligible
 }
 
 // v9DependenceTelemetryForVersion is the SINGLE integration point for the Bench

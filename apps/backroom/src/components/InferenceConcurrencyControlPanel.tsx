@@ -380,8 +380,8 @@ export function InferenceConcurrencyControlPanel({
                 className="mt-2 block min-h-11 w-44 rounded-lg border border-[var(--line)] bg-[var(--panel)] px-3 text-sm outline-none focus:border-[var(--cyan)] disabled:opacity-45"
               />
               <span className="mt-2 block text-[11px] font-normal leading-4 text-[var(--muted)]">
-                Applied only when a v10 harness advertises case-scoped inference. Older v10
-                harnesses remain serial so trusted attribution never degrades.
+                How many /run calls one ticket may overlap. Default 4. Miners keep one
+                process-wide inference URL.
               </span>
             </label>
 

@@ -18,174 +18,61 @@ import (
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 )
 
-func TestRunCaseWithModelAttributionExcludesBrokerTailFromReturnedAnswer(t *testing.T) {
-	broker := newInferenceBroker(1)
-	sessionID := "case-attribution-tail"
-	session := &brokerSession{requests: 10, successes: 10}
-	broker.mu.Lock()
-	broker.sessions[sessionID] = session
-	broker.mu.Unlock()
-
-	requestStarted := make(chan struct{})
-	releaseRequest := make(chan struct{})
+func TestRunCaseWithModelAttributionOverlapsWithoutCaseWindows(t *testing.T) {
+	started := make(chan struct{}, 2)
+	release := make(chan struct{})
 	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/run" {
 			http.NotFound(w, r)
 			return
 		}
-		session.mu.Lock()
-		generation := session.activeCaseGeneration
-		snapshot := session.caseSnapshots[generation]
-		snapshot.Requests++
-		snapshot.InFlight++
-		session.caseSnapshots[generation] = snapshot
-		session.requests++
-		session.inFlight++
-		session.mu.Unlock()
-		close(requestStarted)
-		go func() {
-			<-releaseRequest
-			session.mu.Lock()
-			snapshot := session.caseSnapshots[generation]
-			snapshot.Successes++
-			snapshot.InFlight--
-			session.caseSnapshots[generation] = snapshot
-			session.successes++
-			session.inFlight--
-			session.mu.Unlock()
-		}()
+		var req protocol.RunRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.InferenceBaseURL != "" {
+			t.Errorf("inference_base_url=%q, want empty", req.InferenceBaseURL)
+		}
+		started <- struct{}{}
+		<-release
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"final_text":"ok"}`))
 	}))
 	defer harness.Close()
 
-	type outcome struct {
-		execution runner.CaseExecution
-		err       error
+	srv := &server{}
+	errCh := make(chan error, 2)
+	for _, caseID := range []string{"a", "b"} {
+		go func(caseID string) {
+			_, execution, err := srv.runCaseWithModelAttribution(
+				runner.TrustSandbox(context.Background()), "session", harness.URL,
+				caseID, "question", nil, runner.CaseOptions{
+					BenchVersion:        protocol.BenchVersionV10,
+					CaseScopedInference: true,
+					InferenceBaseURL:    "http://should-be-cleared",
+				},
+			)
+			if err != nil {
+				errCh <- err
+				return
+			}
+			if execution.ModelAttributionComplete || execution.ModelInferenceObserved || execution.ToolProvenance != nil {
+				errCh <- fmt.Errorf("per-case attribution leaked: %+v", execution)
+				return
+			}
+			errCh <- nil
+		}(caseID)
 	}
-	result := make(chan outcome, 1)
-	go func() {
-		_, execution, err := (&server{broker: broker}).runCaseWithModelAttribution(
-			runner.TrustSandbox(context.Background()), sessionID, harness.URL,
-			"case-1", "question", nil, runner.CaseOptions{BenchVersion: protocol.BenchVersionV9},
-		)
-		result <- outcome{execution: execution, err: err}
-	}()
-	<-requestStarted
-	select {
-	case got := <-result:
-		if got.err != nil {
-			t.Fatal(got.err)
+	for i := 0; i < 2; i++ {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("overlapping /run did not start")
 		}
-		if !got.execution.ModelAttributionComplete || got.execution.ModelInferenceObserved {
-			t.Fatalf("model attribution = %+v", got.execution)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("case waited for a request that could not inform its returned answer")
 	}
-	close(releaseRequest)
-	deadline := time.Now().Add(time.Second)
-	for {
-		snapshot, err := broker.generationCaseSnapshot(sessionID, 1)
-		if err != nil {
+	close(release)
+	for i := 0; i < 2; i++ {
+		if err := <-errCh; err != nil {
 			t.Fatal(err)
 		}
-		if snapshot == (brokerCaseSnapshot{Requests: 1, Successes: 1}) {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("tail did not remain on original generation: %+v", snapshot)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
-func TestRunCaseWithModelAttributionExcludesAdmittedUncountedTail(t *testing.T) {
-	broker := newInferenceBroker(1)
-	sessionID := "case-attribution-admitted-tail"
-	session := &brokerSession{}
-	broker.mu.Lock()
-	broker.sessions[sessionID] = session
-	broker.mu.Unlock()
-
-	requestStarted := make(chan struct{})
-	releaseRequest := make(chan struct{})
-	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		session.mu.Lock()
-		generation := session.activeCaseGeneration
-		snapshot := session.caseSnapshots[generation]
-		snapshot.InFlight++
-		session.caseSnapshots[generation] = snapshot
-		session.inFlight++
-		session.mu.Unlock()
-		close(requestStarted)
-		go func() {
-			<-releaseRequest
-			session.mu.Lock()
-			snapshot := session.caseSnapshots[generation]
-			snapshot.InFlight--
-			session.caseSnapshots[generation] = snapshot
-			session.inFlight--
-			session.mu.Unlock()
-		}()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"final_text":"ok"}`))
-	}))
-	defer harness.Close()
-
-	type outcome struct {
-		execution runner.CaseExecution
-		err       error
-	}
-	result := make(chan outcome, 1)
-	go func() {
-		_, execution, err := (&server{broker: broker}).runCaseWithModelAttribution(
-			runner.TrustSandbox(context.Background()), sessionID, harness.URL,
-			"case-1", "question", nil, runner.CaseOptions{BenchVersion: protocol.BenchVersionV9},
-		)
-		result <- outcome{execution: execution, err: err}
-	}()
-	<-requestStarted
-	got := <-result
-	if got.err != nil {
-		t.Fatal(got.err)
-	}
-	if !got.execution.ModelAttributionComplete || got.execution.ModelInferenceObserved {
-		t.Fatalf("model attribution = %+v", got.execution)
-	}
-	close(releaseRequest)
-}
-
-func TestRunCaseWithModelAttributionCountsSettledGenerationSuccess(t *testing.T) {
-	broker := newInferenceBroker(1)
-	sessionID := "case-attribution-success"
-	session := &brokerSession{}
-	broker.mu.Lock()
-	broker.sessions[sessionID] = session
-	broker.mu.Unlock()
-	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		session.mu.Lock()
-		generation := session.activeCaseGeneration
-		snapshot := session.caseSnapshots[generation]
-		snapshot.Requests++
-		snapshot.Successes++
-		session.caseSnapshots[generation] = snapshot
-		session.requests++
-		session.successes++
-		session.mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"final_text":"ok"}`))
-	}))
-	defer harness.Close()
-	_, execution, err := (&server{broker: broker}).runCaseWithModelAttribution(
-		runner.TrustSandbox(context.Background()), sessionID, harness.URL,
-		"case-1", "question", nil, runner.CaseOptions{BenchVersion: protocol.BenchVersionV9},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !execution.ModelAttributionComplete || !execution.ModelInferenceObserved {
-		t.Fatalf("model attribution = %+v", execution)
 	}
 }
 
@@ -362,39 +249,64 @@ func TestApplyV9BaseEvidenceAssemblesV10RootWithSettledAttribution(t *testing.T)
 	}
 }
 
-func TestApplyV9BaseEvidenceRejectsIncompleteCaseAttribution(t *testing.T) {
+func TestApplyV9BaseEvidenceAcceptsSessionLevelAttribution(t *testing.T) {
 	perCase := []protocol.CaseScore{{CaseID: "memory"}}
-	tests := []struct {
-		name      string
-		usage     protocol.TokenUsage
-		execution relayExecutionSummary
-	}{
-		{
-			name:      "successful relay request",
-			usage:     completeUsage(1, 1, 100, 20),
-			execution: relayExecutionSummary{Requests: 1, Successes: 1},
-		},
-		{
-			name:      "zero inference",
-			usage:     completeUsage(0, 0, 0, 0),
-			execution: relayExecutionSummary{},
-		},
+	got, err := applyV9BaseEvidence(
+		sampleV9Report(),
+		submitRequest{BenchVersion: protocol.BenchVersionV9, TarballSHA256: v9ArtifactSHA},
+		perCase,
+		[]transcriptCase{{CaseID: "memory"}},
+		completeUsage(1, 1, 100, 20),
+		relayExecutionSummary{Requests: 1, Successes: 1},
+		v9TranscriptSHA,
+	)
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := applyV9BaseEvidence(
-				sampleV9Report(),
-				submitRequest{BenchVersion: protocol.BenchVersionV9, TarballSHA256: v9ArtifactSHA},
-				perCase,
-				[]transcriptCase{{CaseID: "memory"}},
-				tt.usage,
-				tt.execution,
-				v9TranscriptSHA,
-			)
-			if err == nil || !strings.Contains(err.Error(), "v9 case attribution unavailable") {
-				t.Fatalf("error = %v, want typed attribution failure", err)
-			}
-		})
+	if !got.Details.V9Base.ScoreGates.ModelUse.CaseAttributionComplete ||
+		got.Details.V9Base.ScoreGates.ModelUse.Result != string(scoregates.ResultPassed) {
+		t.Fatalf("session-level model_use = %+v", got.Details.V9Base.ScoreGates.ModelUse)
+	}
+
+	zero, err := applyV9BaseEvidence(
+		sampleV9Report(),
+		submitRequest{BenchVersion: protocol.BenchVersionV9, TarballSHA256: v9ArtifactSHA},
+		perCase,
+		[]transcriptCase{{CaseID: "memory"}},
+		completeUsage(0, 0, 0, 0),
+		relayExecutionSummary{},
+		v9TranscriptSHA,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zero.Details.V9Base.ScoreGates.ModelUse.Result != string(scoregates.ResultZeroInference) {
+		t.Fatalf("zero inference = %+v", zero.Details.V9Base.ScoreGates.ModelUse)
+	}
+}
+
+func TestApplyV9BaseEvidenceOmitsV12PerCaseGates(t *testing.T) {
+	report := sampleV9Report()
+	report.Details.BenchVersion = protocol.BenchVersionV12
+	got, err := applyV9BaseEvidence(
+		report,
+		submitRequest{BenchVersion: protocol.BenchVersionV12, TarballSHA256: v9ArtifactSHA},
+		[]protocol.CaseScore{{CaseID: "memory"}},
+		[]transcriptCase{{CaseID: "memory"}},
+		completeUsage(1, 1, 100, 20),
+		relayExecutionSummary{Requests: 1, Successes: 1},
+		v9TranscriptSHA,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dep := got.Details.V9Base.ScoreGates.ModelDependence
+	if dep.Result != string(scoregates.ResultNotApplicable) || dep.FactorBPS != scoregates.BasisPointScale {
+		t.Fatalf("v12 dependence should be not_applicable: %+v", dep)
+	}
+	if got.Details.V9Base.ScoreGates.InferenceLatency.Result != "" ||
+		got.Details.V9Base.ScoreGates.AnswerStuffing.Result != "" {
+		t.Fatalf("v12 per-case gates still attached: %+v", got.Details.V9Base.ScoreGates)
 	}
 }
 
@@ -473,8 +385,8 @@ func TestV9AggregateModelTelemetryUsesOnlyTrustedDistinctCases(t *testing.T) {
 		perCase,
 		completeModelTranscripts(perCase, true, false, true),
 	)
-	if !got.TelemetryComplete || !got.DistinctCaseAttributionComplete || got.SuccessfulDistinctCases != 1 {
-		t.Fatalf("trusted case attribution wrong: %+v", got)
+	if !got.TelemetryComplete || !got.DistinctCaseAttributionComplete || got.SuccessfulDistinctCases != 2 {
+		t.Fatalf("session-level attribution wrong: %+v", got)
 	}
 }
 

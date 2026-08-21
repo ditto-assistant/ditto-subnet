@@ -129,7 +129,7 @@ class TestRead:
             "embedding_per_validator_concurrency": 48,
             "embedding_global_concurrency": 96,
             "benchmark_runtime": {
-                "case_concurrency": 1,
+                "case_concurrency": 4,
                 "relay_delay_fingerprint_mode": "off",
                 "relay_delay_fingerprint_min_ms": 25,
                 "relay_delay_fingerprint_max_ms": 250,

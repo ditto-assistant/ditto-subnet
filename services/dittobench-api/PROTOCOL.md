@@ -135,8 +135,10 @@ receives expected answers, only the prompt and the tool catalog.
 ## `GET /health` (harness)
 
 Returns any 2xx to signal readiness. Probed before each evaluation. A v10
-harness may additionally advertise `capabilities: ["case_scoped_inference_v1"]`;
-the scorer never raises v10 case concurrency without that explicit capability.
+harness may additionally advertise `capabilities: ["case_scoped_inference_v1"]`.
+That flag is ignored: the scorer may POST `/run` concurrently against the
+process-wide inference URL. Anti-cheat is ticket-scope model use plus
+per-case `tool_endpoint`, not miner-routed case URLs.
 
 ## `POST /run` (harness)
 
@@ -160,11 +162,10 @@ The validator sends one `RunRequest` per case; the harness returns a
 }
 ```
 
-`inference_base_url` is broker-minted and valid only while this `/run` is
-active. Capability-aware v10 harnesses must use it instead of the process-wide
-inference URL for every chat request in that case. Older v10 harnesses ignore
-the additive field and the scorer automatically retains serial attribution;
-dataset generation and scoring semantics are unchanged.
+`inference_base_url` is additive-optional and ignored. Harnesses keep the
+process-wide inference URL. The scorer may overlap `/run` up to the operator
+`benchmark_runtime.case_concurrency` (default 4, max 64). Dataset generation
+and scoring semantics are unchanged.
 
 ```jsonc
 // ToolDefinition

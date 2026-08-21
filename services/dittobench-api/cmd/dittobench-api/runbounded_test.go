@@ -7,6 +7,21 @@ import (
 	"testing"
 )
 
+func TestCaseConcurrencyForRunUsesRuntimeAndCaps(t *testing.T) {
+	if got := caseConcurrencyForRun(nil); got != activeCaseConcurrency() {
+		t.Fatalf("nil runtime = %d, want env default %d", got, activeCaseConcurrency())
+	}
+	if got := caseConcurrencyForRun(&benchmarkRuntimeSettings{CaseConcurrency: 4}); got != 4 {
+		t.Fatalf("runtime 4 = %d", got)
+	}
+	if got := caseConcurrencyForRun(&benchmarkRuntimeSettings{CaseConcurrency: 64}); got != 64 {
+		t.Fatalf("runtime 64 = %d", got)
+	}
+	if got := caseConcurrencyForRun(&benchmarkRuntimeSettings{CaseConcurrency: 65}); got != maxBenchmarkCaseConcurrency {
+		t.Fatalf("runtime 65 = %d, want cap %d", got, maxBenchmarkCaseConcurrency)
+	}
+}
+
 func TestV8DefaultsShipParallel(t *testing.T) {
 	if activeCaseConcurrency() < 2 {
 		t.Fatalf("default v8 case concurrency = %d, want > 1", activeCaseConcurrency())

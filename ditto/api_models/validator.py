@@ -267,7 +267,7 @@ class BenchmarkRuntimeSettings(BaseModel):
 
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
-    case_concurrency: Annotated[int, Field(ge=1, le=16)] = 1
+    case_concurrency: Annotated[int, Field(ge=1, le=64)] = 4
     relay_delay_fingerprint_mode: Literal["off", "shadow"] = "off"
     relay_delay_fingerprint_min_ms: Annotated[int, Field(ge=0, le=5_000)] = 25
     relay_delay_fingerprint_max_ms: Annotated[int, Field(ge=0, le=5_000)] = 250

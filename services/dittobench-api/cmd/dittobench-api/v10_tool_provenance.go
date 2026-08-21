@@ -30,13 +30,11 @@ func applyV10ToolProvenance(
 	}
 	evidence := execution.ToolProvenance
 	if evidence == nil {
-		evidence = &protocol.ToolProvenanceEvidence{
+		// Concurrent /run no longer opens exclusive case windows, so model-emitted
+		// tool calls cannot be attributed per case. Observed tool_endpoint remains
+		// the scoring authority; missing provenance is informational.
+		cs.ToolProvenance = &protocol.ToolProvenanceEvidence{
 			Findings: []string{"tool_provenance_unavailable"},
-		}
-		cs.ToolProvenance = evidence
-		if scope == scorer.ScopeScored && cs.Kind == protocol.KindTool {
-			cs.ToolScore = 0
-			cs.Notes = append(cs.Notes, "v10 tool provenance unavailable; trajectory receives zero credit")
 		}
 		return cs
 	}

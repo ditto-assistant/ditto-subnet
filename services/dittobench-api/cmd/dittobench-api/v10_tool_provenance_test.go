@@ -299,6 +299,14 @@ func TestV10ToolProvenanceControlsScoredCreditAndLeavesV9Frozen(t *testing.T) {
 	if v9.ToolScore != base.ToolScore || v9.ToolProvenance != nil || len(v9.Notes) != 0 {
 		t.Fatalf("v9 score changed: got=%+v want=%+v", v9, base)
 	}
+
+	missing := applyV10ToolProvenance(
+		protocol.BenchVersionV10, scorer.ScopeScored, base, response, observed, runner.CaseExecution{},
+	)
+	if missing.ToolScore != 1 || missing.ToolProvenance == nil ||
+		!slices.Contains(missing.ToolProvenance.Findings, "tool_provenance_unavailable") {
+		t.Fatalf("missing provenance should keep observed score: %+v", missing)
+	}
 }
 
 func TestV10ToolProvenanceSummaryAggregatesTrustedCounts(t *testing.T) {
