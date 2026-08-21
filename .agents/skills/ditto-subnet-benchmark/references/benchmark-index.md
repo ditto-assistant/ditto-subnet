@@ -21,6 +21,7 @@
 | Shadow private catalog loader | `apps/platform/ditto/api_server/coding_private_catalog.py` |
 | Shadow selection assignment ledger | `apps/platform/ditto/db/queries/coding_assignments.py` |
 | Shadow finalized run issuer | `apps/platform/ditto/db/queries/coding_issuance.py` |
+| Shadow single-run reconciler | `apps/platform/ditto/db/queries/coding_reconciliation.py` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
