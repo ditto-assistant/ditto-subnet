@@ -2970,7 +2970,8 @@ class TestV9ConfirmationPrepareAdmission:
         response = await _prepare(client, bundle_id=seeded.bundle_id, payload=payload)
 
         assert response.status_code == 409, response.text
-        assert "fields drifted" in response.text
+        assert "go_evidence_fields_drifted" in response.text
+        assert "selected_cases_sha256" not in response.text
         async with session_maker() as session:
             stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
             assert stored is not None
@@ -2994,6 +2995,36 @@ class TestV9ConfirmationPrepareAdmission:
             assert stored is not None
             assert stored.prepare_rejection is None
             assert stored.prepare_rejected_at is None
+        await _assert_unsettled(session_maker, seeded=seeded)
+
+    async def test_prepare_rejection_ignores_submitter_controlled_extra_keys(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        seeded, _, ticket = await _seed_claimed_go_case(app, client, session_maker)
+        fixture = _go_fixture()
+        inference = fixture["inference_ablation"]
+        assert isinstance(inference, dict)
+        evidence = inference["evidence"]
+        assert isinstance(evidence, dict)
+        evidence["Go evidence digest mismatch"] = "forged"
+        payload = _prepare_payload(
+            bundle_id=seeded.bundle_id,
+            ticket_id=ticket.ticket_id,
+            fixture=fixture,
+        )
+
+        response = await _prepare(client, bundle_id=seeded.bundle_id, payload=payload)
+
+        assert response.status_code == 409, response.text
+        assert "go_evidence_fields_drifted" in response.text
+        assert "go_evidence_digest_mismatch" not in response.text
+        async with session_maker() as session:
+            stored = await session.get(ConfirmationBundleTicket, ticket.ticket_id)
+            assert stored is not None
+            assert stored.prepare_rejection == "go_evidence_fields_drifted"
         await _assert_unsettled(session_maker, seeded=seeded)
 
     async def test_prepare_returns_canonical_typed_root_without_settlement(

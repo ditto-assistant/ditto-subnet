@@ -931,7 +931,7 @@ async def prepare_v9_confirmation_report(
         payload.validator_hotkey,
         network=config.subtensor_network,
     )
-    prepare_rejection_detail: str | None = None
+    prepare_rejection: str | None = None
     try:
         async with session.begin():
             try:
@@ -1006,11 +1006,14 @@ async def prepare_v9_confirmation_report(
                     profile=profile,
                 )
             except (ConfirmationEvidenceError, ConfirmationWireError) as error:
-                # Persist, then 409 *after* this transaction commits. Raising
-                # here would roll the diagnostic back with the 409.
-                attempt.ticket.prepare_rejection = classify_prepare_rejection(error)
+                # Persist the allowlisted code, then 409 *after* this
+                # transaction commits. Raising here would roll the diagnostic
+                # back with the 409. The HTTP detail is the same closed code,
+                # never the interpolated exception string.
+                code = classify_prepare_rejection(error)
+                attempt.ticket.prepare_rejection = code
                 attempt.ticket.prepare_rejected_at = now
-                prepare_rejection_detail = str(error)
+                prepare_rejection = code
             else:
                 attempt.ticket.prepare_rejection = None
                 attempt.ticket.prepare_rejected_at = None
@@ -1027,8 +1030,8 @@ async def prepare_v9_confirmation_report(
                 )
     except ConfirmationBundlePersistenceError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
-    if prepare_rejection_detail is not None:
-        raise HTTPException(status_code=409, detail=prepare_rejection_detail)
+    if prepare_rejection is not None:
+        raise HTTPException(status_code=409, detail=prepare_rejection)
     raise RuntimeError("confirmation prepare exited without a report")
 
 

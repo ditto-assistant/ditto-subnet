@@ -84,3 +84,11 @@ def test_known_prepare_failures_map_onto_the_closed_allowlist() -> None:
     for error, code in cases:
         assert classify_prepare_rejection(error) == code
         assert code in PREPARE_REJECTION_CODES
+
+
+def test_submitter_controlled_extra_keys_cannot_forge_another_code() -> None:
+    forged = ConfirmationWireError(
+        "inference ablation evidence fields drifted: missing=[], "
+        "extra=['Go evidence digest mismatch']"
+    )
+    assert classify_prepare_rejection(forged) == "go_evidence_fields_drifted"
