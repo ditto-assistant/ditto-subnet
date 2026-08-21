@@ -156,12 +156,51 @@ def test_remediated_descendant_is_not_held() -> None:
     assert decision.held is False
 
 
+def test_hogwarts_replacement_remediation_is_not_held() -> None:
+    """Containment must not treat a same-owner replacement as padding.
+
+    Hogwarts_v2 v4–v9 (2026-08-20/21) shared an owner with banned Hogwarts_v1
+    v16. Operators later cleared them: the Gryffindor family dispatcher
+    (``asks_outstanding`` / ``JOIN_IS_THE_WORK``) was deleted and replaced with
+    a generic ``integer_arithmetic`` closer. Adding those replacement files
+    made ``candidate_card >= rejected_card``, so the old ``>=`` direction guard
+    treated an honest remediation as a padded re-upload.
+
+    Production pair: Jaccard 0.945–0.973, containment 0.996, candidate only
+    slightly larger than rejected. This fixture is 199 shared of 200 rejected
+    plus 6 replacements (card 205 vs 200): Jaccard 0.966, containment 0.995.
+    Jaccard stays under 0.98; containment would have fired under ``>=``. A 15%
+    padding floor still holds the 200+30 junk attack while this replacement
+    shape does not.
+    """
+    kept = {f"h{i}" for i in range(199)}
+    cited_removed = {"asks_outstanding"}
+    replacement = {f"integer_arithmetic{i}" for i in range(6)}
+    decision = evaluate_rejected_resubmission(
+        agent_id=_CANDIDATE,
+        submitted_at=_NOW,
+        sha256="different-sha",
+        normalized_source_hash="different-normalized",
+        miner_hotkey="5Hogwarts",
+        content_fingerprint=_fp(kept | replacement),
+        rejected=[
+            _rejected(
+                hotkey="5Hogwarts",
+                name="Hogwarts_v1",
+                version=16,
+                content_fingerprint=_fp(kept | cited_removed),
+            )
+        ],
+    )
+    assert decision.held is False
+
+
 def test_padded_reupload_is_held_on_containment() -> None:
     """Containment still catches the attack it exists for.
 
     Every shingle of the rejected artifact survives and junk is bolted on to
-    dilute Jaccard (here to 0.870, well under the bar) — so the candidate is the
-    *larger* residual and the padding direction fires.
+    dilute Jaccard (here to 0.870, well under the bar) — so the candidate is
+    15% larger (200 rejected + 30 junk) and the padding-ratio guard fires.
     """
     rejected_shingles = {f"h{i}" for i in range(200)}
     padding = {f"junk{i}" for i in range(30)}

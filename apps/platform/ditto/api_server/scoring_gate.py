@@ -47,6 +47,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from math import ceil
 from typing import TYPE_CHECKING
 
 from ditto.api_server.fingerprint import content_similarity
@@ -115,10 +116,18 @@ _DEFAULT_CONTAINMENT_TOL = 0.95
 _DEFAULT_RESUBMISSION_JACCARD_TOL = 0.98
 # Containment sits at the same bar rather than above it, unlike the copy pair.
 # The copy rule keeps containment looser because there it is the weaker of the
-# two measures; here it is direction-guarded (see
-# :func:`_resubmission_lexical_match`) so only the padding direction reaches it,
-# and that direction should be near-total to mean anything.
+# two measures; here it is direction-guarded *and* size-guarded (see
+# :func:`_resubmission_lexical_match`) so only a substantially padded residual
+# reaches it, and that direction should be near-total to mean anything.
 _DEFAULT_RESUBMISSION_CONTAINMENT_TOL = 0.98
+# Candidate residual must be at least this multiple of the rejected residual
+# before containment can fire. 15% is the padded-reupload unit test
+# (200 rejected shingles + 30 junk) and is the smallest bulk that reads as
+# padding rather than a 1:1 replacement of cited files. ``>=`` without this
+# ratio held Hogwarts_v2 v4–v9: adding replacement files made the candidate
+# the same size or slightly larger, so containment treated a remediation as a
+# padded re-upload.
+_DEFAULT_RESUBMISSION_PADDING_RATIO = 1.15
 # Structural (AST) thresholds gate the ADVISORY structural annotation on a hold
 # (see _structural_note): higher than the lexical ones because the structural
 # sketch discards identifiers + formatting, so two independent crates built on the
@@ -367,11 +376,19 @@ def _resubmission_lexical_match(
     miner complied. It is not weak evidence in that direction, it is evidence
     pointing backwards, and it produced the rule's worst false positives
     (Crown-v11-v3 measured containment 0.996 on a 574-line deletion an operator
-    then cleared as a textbook remediation). So containment may fire only when
-    the candidate is the same size or larger — the padded-re-upload direction,
-    where every shingle of the rejected artifact survived and bulk was added on
-    top. When either sketch omits ``card`` the direction is unknown and the
-    channel stays silent; Jaccard still covers the pair.
+    then cleared as a textbook remediation). Same-size-or-larger is still too
+    weak: a miner who deletes the cited files and adds replacements of similar
+    size is not padding. Hogwarts_v2 v4–v9 vs banned Hogwarts_v1 v16
+    (2026-08-20/21) sat at Jaccard 0.945–0.973 and containment 0.996 once the
+    Gryffindor family dispatcher (``asks_outstanding`` / ``JOIN_IS_THE_WORK``)
+    was swapped for a generic ``integer_arithmetic`` closer — adding those
+    files made ``candidate_card >= rejected_card``, so ``>=`` treated an honest
+    remediation as a padded re-upload. Containment may fire only when the
+    candidate residual is *substantially* larger than the rejected one —
+    ``candidate_card >= ceil(rejected_card * _DEFAULT_RESUBMISSION_PADDING_RATIO)``
+    (15%, the 200+30 junk shape) — so bulk was bolted on and every rejected
+    shingle still survived. When either sketch omits ``card`` the direction is
+    unknown and the channel stays silent; Jaccard still covers the pair.
     """
     j, c = content_similarity(candidate, rejected)
     if j >= jaccard_tol:
@@ -381,7 +398,7 @@ def _resubmission_lexical_match(
     if (
         candidate_card is not None
         and rejected_card is not None
-        and candidate_card >= rejected_card
+        and candidate_card >= ceil(rejected_card * _DEFAULT_RESUBMISSION_PADDING_RATIO)
         and c >= containment_tol
     ):
         return (j, c)
@@ -1163,8 +1180,14 @@ def evaluate_rejected_resubmission(
     3. **Near-duplicate lexical fingerprint** — reference-aware
        ``content_fingerprint`` at or above ``jaccard_tol`` Jaccard, or at or
        above ``containment_tol`` containment *in the padding direction only*
-       (see :func:`_resubmission_lexical_match`), which survives re-indentation
-       and localized edits.
+       and only when the candidate residual is at least
+       ``_DEFAULT_RESUBMISSION_PADDING_RATIO`` (1.15) times the rejected
+       residual (see :func:`_resubmission_lexical_match`). ``>=`` alone was a
+       false positive on remediations that add replacement files: Hogwarts_v2
+       v4–v9 (same owner as banned Hogwarts_v1 v16) sat at Jaccard 0.945–0.973
+       and containment 0.996 once the Gryffindor dispatcher was swapped for a
+       generic closer, which made ``candidate_card >= rejected_card`` without
+       being a padded re-upload. The Jaccard bar is unchanged.
 
     Where rule 3's thresholds come from
     ==================================
@@ -1205,6 +1228,14 @@ def evaluate_rejected_resubmission(
     0.98 the rule holds exactly the two artifacts an operator found had
     remediated nothing, and releases all four it cleared by hand — 7 holds
     become 2, with no clear retained and no hand-cleared artifact stopped.
+
+    Containment needed a second production recut. After Jaccard sat at 0.98,
+    Hogwarts_v2 v4–v9 (2026-08-20/21, same owner as banned Hogwarts_v1 v16)
+    were still auto-held at Jaccard 0.945–0.973 and containment 0.996: the
+    Gryffindor dispatcher was gone and a generic closer had been added, so
+    ``candidate_card >= rejected_card`` and the padding direction fired on a
+    replacement, not on junk bolted onto an unchanged residual. The 1.15
+    padding-ratio guard is that recut. Jaccard is unchanged.
 
     One further contributor to the false-positive rate is *not* fixed here and
     is worth knowing about when these numbers are next re-cut: the residual
