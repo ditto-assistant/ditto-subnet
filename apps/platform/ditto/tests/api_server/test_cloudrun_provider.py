@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
+from ditto.api_server.cloudrun_client import AsyncCloudRunClient
 from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
 from ditto.api_server.config import CloudRunScreeningConfig, TargonRentalConfig
 
@@ -42,7 +43,7 @@ def _provider(execution: dict[str, Any]) -> CloudRunComputeProvider:
         source_review_secret_resource="projects/p/secrets/s",
     )
     return CloudRunComputeProvider(
-        _FakeCloudRunClient(execution),
+        cast(AsyncCloudRunClient, _FakeCloudRunClient(execution)),
         CloudRunScreeningConfig(
             project="ditto-app-dev",
             region="us-central1",
