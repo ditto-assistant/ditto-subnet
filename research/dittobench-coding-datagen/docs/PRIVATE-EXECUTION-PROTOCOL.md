@@ -132,10 +132,11 @@ of this rule. It accepts a content-addressed future-height assignment, fetches
 finalized genesis and that finalized height independently, derives an
 artifact-bound affine permutation over catalog indexes, and verifies a
 position-bound Merkle proof before producing the shared run and exposure
-projections. It does not persist the assignment. The later issuer must commit
-the assignment in an append-only ledger before block revelation and atomically
-insert the selected run plus its irreversible exposures; otherwise a caller
-could still grind heights despite a correct block lookup.
+projections. Platform's append-only assignment ledger commits a finalized
+anchor plus fixed delay before the future hash is available. The later issuer
+must wait for the selected height to become finalized, prove the assignment
+row's immutable database insertion time predates its timestamp, then atomically
+insert the selected run plus its irreversible exposures.
 
 The private catalog leaf also commits the repository epoch plus canonical issue,
 model-visible runtime-policy, and model/tool/wall-budget digests. These fields

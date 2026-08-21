@@ -9300,6 +9300,8 @@ export interface components {
             agent_name: string;
             /** Artifact Sha256 */
             artifact_sha256: string;
+            /** Assignments */
+            assignments: components["schemas"]["CodingSelectionAssignmentRecord"][];
             /** Miner Hotkey */
             miner_hotkey: string;
             /** Runs */
@@ -9312,6 +9314,8 @@ export interface components {
              * @constant
              */
             shadow_only: true;
+            /** Total Assignments */
+            total_assignments: number;
             /** Total Runs */
             total_runs: number;
         };
@@ -10350,6 +10354,79 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** CodingSelectionAssignmentRecord */
+        CodingSelectionAssignmentRecord: {
+            /** Anchor Block Hash */
+            anchor_block_hash: string;
+            /** Anchor Block Number */
+            anchor_block_number: number;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /**
+             * Assigned At
+             * Format: date-time
+             */
+            assigned_at: string;
+            /**
+             * Assignment Row Id
+             * Format: uuid
+             */
+            assignment_row_id: string;
+            /** Assignment Sha256 */
+            assignment_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Catalog Commitment Sha256 */
+            catalog_commitment_sha256: string;
+            /**
+             * Certification Row Id
+             * Format: uuid
+             */
+            certification_row_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /**
+             * Core Qualification Observation Id
+             * Format: uuid
+             */
+            core_qualification_observation_id: string;
+            /** Corpus Release Id */
+            corpus_release_id: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Current */
+            current: boolean;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Selection Block Number */
+            selection_block_number: number;
+            /** Selection Delay Blocks */
+            selection_delay_blocks: number;
+            /**
+             * Stale Reason
+             * @enum {string}
+             */
+            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "catalog_retired" | "policy_changed" | "qualification_stale" | "certification_stale";
+            /**
+             * Task Count
+             * @constant
+             */
+            task_count: 1;
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /** CodingShadowResultRecord */
         CodingShadowResultRecord: {
             /** Candidate Integrity Count */
@@ -10442,7 +10519,7 @@ export interface components {
              * Stale Reason
              * @enum {string}
              */
-            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "policy_changed" | "catalog_retired";
+            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "policy_changed" | "qualification_stale" | "catalog_retired";
             /** Task Count */
             task_count: number;
             /** Task Set Manifest Sha256 */

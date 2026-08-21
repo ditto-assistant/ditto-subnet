@@ -327,6 +327,60 @@ class ChainClient:
             )
         return str(block_hash).lower()
 
+    async def get_finalized_block(self) -> BlockInfo:
+        """Return the current finalized chain block from Substrate."""
+
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+                block_hash = await substrate.get_chain_finalised_head()
+                block_number = await substrate.get_block_number(block_hash)
+        except TimeoutError as e:
+            raise ChainTimeoutError("get_finalized_block() timed out") from e
+        except Exception as e:
+            raise ChainConnectionError(
+                f"get_finalized_block() failed: {self._safe_rpc_error(e)}"
+            ) from e
+        if not block_hash or block_number is None:
+            raise ExtrinsicNotFoundError("finalized chain head is unavailable")
+        return BlockInfo(number=int(block_number), hash=str(block_hash).lower())
+
+    async def get_finalized_block_hash(self, block_number: int) -> str:
+        """Resolve one block hash only when that height is finalized."""
+
+        if block_number < 0:
+            raise ExtrinsicNotFoundError(
+                f"finalized block number {block_number} is invalid"
+            )
+        from async_substrate_interface import AsyncSubstrateInterface
+
+        try:
+            async with AsyncSubstrateInterface(url=self._substrate_url()) as substrate:
+                finalized_hash = await substrate.get_chain_finalised_head()
+                finalized_number = await substrate.get_block_number(finalized_hash)
+                if finalized_number is None or block_number > int(finalized_number):
+                    raise ExtrinsicNotFoundError(
+                        f"block {block_number} is not finalized"
+                    )
+                block_hash = await substrate.get_block_hash(block_number)
+        except (ExtrinsicNotFoundError, ChainTimeoutError, ChainConnectionError):
+            raise
+        except TimeoutError as e:
+            raise ChainTimeoutError(
+                f"get_finalized_block_hash({block_number}) timed out"
+            ) from e
+        except Exception as e:
+            raise ChainConnectionError(
+                "get_finalized_block_hash"
+                f"({block_number}) failed: {self._safe_rpc_error(e)}"
+            ) from e
+        if not block_hash:
+            raise ExtrinsicNotFoundError(
+                f"no finalized block hash found for block number {block_number}"
+            )
+        return str(block_hash).lower()
+
     # --- Weight setting ---
 
     async def put_weights(self, weights: dict[str, float]) -> None:

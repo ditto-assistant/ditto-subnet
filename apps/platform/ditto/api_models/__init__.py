@@ -44,6 +44,7 @@ from ditto.api_models.coding_certification import (
 from ditto.api_models.coding_evaluation import (
     AgentCodingShadowEvaluationStatus,
     CodingRunEvidence,
+    CodingSelectionAssignmentRecord,
     CodingShadowResultRecord,
     CodingShadowRunAuthority,
     CodingShadowRunRecord,
@@ -281,6 +282,7 @@ __all__ = [
     "CodingCertificationStage",
     "CodingCertificationStatus",
     "CodingRunEvidence",
+    "CodingSelectionAssignmentRecord",
     "CodingShadowResultRecord",
     "CodingShadowRunAuthority",
     "CodingShadowRunRecord",

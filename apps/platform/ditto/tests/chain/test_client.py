@@ -16,7 +16,7 @@ from ditto.chain.errors import (
     ChainTimeoutError,
     ExtrinsicNotFoundError,
 )
-from ditto.chain.models import ChainConfig
+from ditto.chain.models import BlockInfo, ChainConfig
 from ditto.tests.chain.conftest import make_event_record
 
 
@@ -721,6 +721,43 @@ class TestGetBlockHash:
         async with ChainClient(make_chain_config()) as client:
             with pytest.raises(ChainTimeoutError):
                 await client.get_block_hash(123)
+
+
+@pytest.mark.usefixtures("install_pylon_module")
+class TestFinalizedBlocks:
+    async def test_returns_finalized_head(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_chain_finalised_head.return_value = "0xABCD"
+        install_substrate_module.get_block_number.return_value = 456
+
+        async with ChainClient(make_chain_config()) as client:
+            block = await client.get_finalized_block()
+
+        assert block == BlockInfo(number=456, hash="0xabcd")
+        install_substrate_module.get_block_number.assert_awaited_once_with("0xABCD")
+
+    async def test_hash_requires_finalized_height(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_chain_finalised_head.return_value = "0xfinal"
+        install_substrate_module.get_block_number.return_value = 456
+        install_substrate_module.get_block_hash.return_value = "0xABCD"
+
+        async with ChainClient(make_chain_config()) as client:
+            assert await client.get_finalized_block_hash(123) == "0xabcd"
+            with pytest.raises(ExtrinsicNotFoundError, match="not finalized"):
+                await client.get_finalized_block_hash(457)
+
+        install_substrate_module.get_block_hash.assert_awaited_once_with(123)
+
+    async def test_finalized_lookup_failures_are_wrapped(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        install_substrate_module.get_chain_finalised_head.side_effect = TimeoutError()
+        async with ChainClient(make_chain_config()) as client:
+            with pytest.raises(ChainTimeoutError, match="finalized"):
+                await client.get_finalized_block()
 
 
 @pytest.mark.usefixtures("install_pylon_module")

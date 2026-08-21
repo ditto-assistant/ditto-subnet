@@ -18,6 +18,7 @@
 | Shadow pristine coding grader | `services/dittobench-api/internal/codinggrader/` |
 | Shadow coding sandbox executor | `services/dittobench-api/internal/codingexecutor/` |
 | Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |
+| Shadow selection assignment ledger | `apps/platform/ditto/db/queries/coding_assignments.py` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
