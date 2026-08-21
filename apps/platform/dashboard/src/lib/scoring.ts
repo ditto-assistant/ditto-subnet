@@ -12,6 +12,7 @@ import { fx, fxScore, num } from "./format";
 import type {
   ChainWeight,
   ChainWeightInfo,
+  ChainEpoch,
   ChainWeightsSnapshot,
   CompositeBreakdown,
   EmissionsFold,
@@ -1088,6 +1089,83 @@ export function foldChainWeights(
     (a, b) => (championCounts[b] as number) - (championCounts[a] as number) || a.localeCompare(b),
   );
   return { byHotkey, championCounts, minerVectors, leaders };
+}
+
+// ── Epoch countdown (/public/weights `epoch`) ────────────────
+
+/** A resolved countdown to the subnet's next weight fold and payout. */
+export interface EpochCountdown {
+  /** Seconds until the next tick, never negative. */
+  secondsRemaining: number;
+  /** The tick this counts down to, as epoch millis. */
+  targetMs: number;
+  /** Nominal seconds in one full cycle (tempo x block time). */
+  epochSeconds: number;
+  tempoBlocks: number;
+  /** The block the tick is due at, rolled forward with `targetMs`. */
+  nextEpochBlock: number | null;
+  /** True when the served target had already passed and was rolled forward —
+   * the countdown is then a projection off a stale snapshot, not a fresh read. */
+  projected: boolean;
+  commitRevealEnabled: boolean;
+  revealPeriodEpochs: number | null;
+}
+
+/**
+ * Resolve the served epoch into a live countdown at `nowMs`.
+ *
+ * The API stamps an absolute `next_epoch_at` precisely so a cached response
+ * cannot hand out a spent duration — but a cached response can still outlive
+ * the tick it named. Rolling forward by whole epochs rather than clamping to
+ * zero is what keeps the panel honest across that window: the cycle is fixed
+ * at `tempo` blocks, so the tick after a missed one is exactly one epoch
+ * later, and a client that clamped would sit at 00:00 claiming a payout was
+ * perpetually imminent. `projected` marks that the number is extrapolated so
+ * the UI can say so rather than imply a fresh read.
+ *
+ * Null when the snapshot carries no epoch (hyperparameter reads failed) or the
+ * numbers are unusable — the board states absence rather than inventing a
+ * countdown, the same rule the rest of this module follows.
+ */
+export function epochCountdown(
+  epoch: ChainEpoch | null | undefined,
+  nowMs: number,
+): EpochCountdown | null {
+  if (!epoch || !epoch.next_epoch_at) return null;
+  const targetMs = Date.parse(epoch.next_epoch_at);
+  const tempoBlocks = Number(epoch.tempo_blocks) || 0;
+  const blockSeconds = Number(epoch.block_seconds) || 0;
+  const epochSeconds = Number(epoch.epoch_seconds) || tempoBlocks * blockSeconds;
+  if (!Number.isFinite(targetMs) || tempoBlocks <= 0 || epochSeconds <= 0) return null;
+
+  const missedEpochs = Math.max(0, Math.ceil((nowMs - targetMs) / (epochSeconds * 1000)));
+  const rolledMs = targetMs + missedEpochs * epochSeconds * 1000;
+  const nextBlock =
+    epoch.next_epoch_block == null ? null : epoch.next_epoch_block + missedEpochs * tempoBlocks;
+  return {
+    secondsRemaining: Math.max(0, Math.round((rolledMs - nowMs) / 1000)),
+    targetMs: rolledMs,
+    epochSeconds,
+    tempoBlocks,
+    nextEpochBlock: nextBlock,
+    projected: missedEpochs > 0,
+    commitRevealEnabled: epoch.commit_reveal_enabled === true,
+    revealPeriodEpochs: epoch.reveal_period_epochs ?? null,
+  };
+}
+
+function pad2(n: number): string {
+  return n < 10 ? "0" + n : String(n);
+}
+
+/** `m:ss` under an hour, `h:mm:ss` above it — a clock, not a prose duration,
+ * because this is the one number on the board that changes every second. */
+export function countdownClock(seconds: number): string {
+  const total = Math.max(0, Math.floor(seconds));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const secs = total % 60;
+  return hours > 0 ? hours + ":" + pad2(minutes) + ":" + pad2(secs) : minutes + ":" + pad2(secs);
 }
 
 // ── Per-validator revealed weight views (fleet + raw-matrix panel) ──

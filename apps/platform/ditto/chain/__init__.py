@@ -45,6 +45,7 @@ from ditto.chain.factory import create_chain_client
 from ditto.chain.models import (
     BlockInfo,
     ChainConfig,
+    ChainEpoch,
     ChainWeight,
     ChainWeightsSnapshot,
     ChainWeightVector,
@@ -61,6 +62,7 @@ __all__ = [
     "parse_chain_config_from_env",
     # Result models
     "BlockInfo",
+    "ChainEpoch",
     "ChainWeight",
     "ChainWeightsSnapshot",
     "ChainWeightVector",

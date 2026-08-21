@@ -80,6 +80,7 @@ from ditto.api_models import (
     PublicCaseResult,
     PublicCategoryDoc,
     PublicCategoryStat,
+    PublicChainEpoch,
     PublicChainWeight,
     PublicChainWeightsResponse,
     PublicCompositeBreakdown,
@@ -226,6 +227,7 @@ from ditto.api_server.validator_slot_settings import (
     validator_issuance_paused,
 )
 from ditto.chain import ChainError
+from ditto.chain.models import ChainWeightsSnapshot
 from ditto.db.models import (
     Agent,
     AthReview,
@@ -417,6 +419,10 @@ _CHAIN_WEIGHTS_FAILURE_BACKOFF_SECONDS = 30.0
 # pins is too old to present even as explicitly stale, and the endpoint reverts
 # to 503 rather than implying the chain state is roughly current.
 _CHAIN_WEIGHTS_MAX_STALE_SECONDS = 1800.0
+# Subtensor's target block time. Only ever used to turn a block *count* into an
+# estimated duration for readers; nothing on the scoring or weight path derives
+# timing from it.
+_BLOCK_SECONDS = 12.0
 _TRANSCRIPT_MAX_BYTES = 32 << 20
 _TRANSCRIPT_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 # Historical reproduction must fail closed: only benchmark epochs whose exact
@@ -612,6 +618,41 @@ def _schedule_chain_weights_refresh(request: Request) -> None:
     task.add_done_callback(tasks.discard)
 
 
+def _public_epoch(snapshot: ChainWeightsSnapshot) -> PublicChainEpoch | None:
+    """Project a chain snapshot's tempo position onto the wire, or ``None``.
+
+    ``next_epoch_at`` is resolved to an absolute instant here rather than left
+    as a block count, because this response is cached and re-served: a duration
+    computed at read time would be silently spent by the time a later reader
+    got it, whereas an absolute target stays correct however long the snapshot
+    is held. It is anchored on the snapshot block's own on-chain timestamp when
+    that read succeeded, so the target does not move with the API server's
+    clock; only if that read failed does it fall back to server time.
+    """
+    epoch = snapshot.epoch
+    if epoch is None:
+        return None
+    anchor = (
+        datetime.fromtimestamp(snapshot.block_timestamp, UTC)
+        if snapshot.block_timestamp is not None
+        else datetime.now(UTC)
+    )
+    return PublicChainEpoch(
+        tempo_blocks=epoch.tempo,
+        block_seconds=_BLOCK_SECONDS,
+        epoch_seconds=epoch.tempo * _BLOCK_SECONDS,
+        last_epoch_block=epoch.last_step_block,
+        next_epoch_block=epoch.next_epoch_block,
+        blocks_since_last_epoch=epoch.blocks_since_last_step,
+        blocks_until_next_epoch=epoch.blocks_until_next_epoch,
+        next_epoch_at=anchor
+        + timedelta(seconds=epoch.blocks_until_next_epoch * _BLOCK_SECONDS),
+        commit_reveal_enabled=epoch.commit_reveal_enabled,
+        reveal_period_epochs=epoch.reveal_period_epochs,
+        weights_rate_limit_blocks=epoch.weights_rate_limit,
+    )
+
+
 async def _refresh_chain_weights(request: Request) -> _ChainWeightsSnapshot | None:
     """Read the matrix from chain and cache it, or return ``None`` on failure.
 
@@ -638,6 +679,7 @@ async def _refresh_chain_weights(request: Request) -> _ChainWeightsSnapshot | No
     refreshed = _ChainWeightsSnapshot(
         payload=PublicChainWeightsResponse(
             generated_at=datetime.now(UTC),
+            epoch=_public_epoch(snapshot),
             netuid=snapshot.netuid,
             block=snapshot.block,
             block_hash=snapshot.block_hash,

@@ -1894,6 +1894,123 @@ class PublicValidatorWeightVector(BaseModel):
     weights: list[PublicChainWeight] = Field(default_factory=list)
 
 
+class PublicChainEpoch(BaseModel):
+    """When SN118 next folds weights into emissions, and how often it does.
+
+    Answers the question the weight matrix cannot: validators commit weights
+    *asynchronously* — each one only has to respect ``weights_rate_limit_blocks``
+    between its own submissions — so there is no single moment at which "the
+    validators set weights". What is synchronised is the subnet's epoch tick:
+    every ``tempo_blocks`` blocks Subtensor runs Yuma consensus over whatever
+    weights are revealed at that moment and pays out the emission accumulated
+    since the last tick. That tick is the same instant for every miner on the
+    subnet, and it is what a miner asking "when do I get emissions" means.
+
+    Under commit-reveal a commit is not folded at the next tick but at the one
+    ``reveal_period_epochs`` later, which is why a validator's newest opinion
+    can be invisible in the matrix beside this.
+    """
+
+    tempo_blocks: Annotated[
+        int,
+        Field(
+            gt=0,
+            description=(
+                "Blocks between epoch ticks (`SubtensorModule.Tempo`). SN118 "
+                "runs 360, about 72 minutes."
+            ),
+        ),
+    ]
+    block_seconds: Annotated[
+        float,
+        Field(
+            gt=0.0,
+            description=(
+                "Nominal seconds per block used to turn the block counts here "
+                "into times. Subtensor targets 12s; real blocks vary slightly, "
+                "so every time on this object is an estimate, not a promise."
+            ),
+        ),
+    ]
+    epoch_seconds: Annotated[
+        float,
+        Field(
+            gt=0.0,
+            description=(
+                "Nominal seconds per epoch (`tempo_blocks` x `block_seconds`). "
+                "A client whose `next_epoch_at` has already passed — because it "
+                "is holding a cached snapshot — can roll it forward by this."
+            ),
+        ),
+    ]
+    last_epoch_block: Annotated[
+        int,
+        Field(
+            ge=0,
+            description=(
+                "Block at which the subnet's last epoch tick ran, read from "
+                "chain rather than computed, so the phase cannot drift from "
+                "what Subtensor actually did."
+            ),
+        ),
+    ]
+    next_epoch_block: Annotated[
+        int,
+        Field(ge=0, description="Block at which the next tick is due."),
+    ]
+    blocks_since_last_epoch: Annotated[
+        int, Field(ge=0, description="Blocks elapsed at the snapshot's block.")
+    ]
+    blocks_until_next_epoch: Annotated[
+        int, Field(ge=0, description="Blocks remaining at the snapshot's block.")
+    ]
+    next_epoch_at: Annotated[
+        datetime,
+        Field(
+            description=(
+                "Estimated UTC time of the next tick, anchored on the snapshot "
+                "block's own on-chain timestamp (not the API server's clock). "
+                "Absolute rather than a duration so a cached response does not "
+                "hand out a countdown that is already spent."
+            )
+        ),
+    ]
+    commit_reveal_enabled: Annotated[
+        bool | None,
+        Field(
+            default=None,
+            description=(
+                "Whether weight commitments are timelock-encrypted. When true "
+                "the published matrix necessarily lags active commitments."
+            ),
+        ),
+    ] = None
+    reveal_period_epochs: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Epochs between a commit and its reveal. With commit-reveal on "
+                "and this at 1, weights committed during one epoch are folded "
+                "at the end of the next one."
+            ),
+        ),
+    ] = None
+    weights_rate_limit_blocks: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                "Chain-enforced minimum blocks between one hotkey's weight "
+                "submissions. This is the only cadence a validator is held to; "
+                "it is why submissions are staggered rather than simultaneous."
+            ),
+        ),
+    ] = None
+
+
 class PublicChainWeightsResponse(BaseModel):
     """Block-consistent SN118 weight matrix read from Subtensor storage."""
 
@@ -1932,6 +2049,20 @@ class PublicChainWeightsResponse(BaseModel):
             description="Seconds between the chain read and this response.",
         ),
     ] = 0.0
+    epoch: Annotated[
+        PublicChainEpoch | None,
+        Field(
+            default=None,
+            description=(
+                "Where the subnet sits in its tempo cycle at `block` — the "
+                "countdown to the next weight fold and emission payout. Null "
+                "when the hyperparameter reads failed; the matrix is this "
+                "endpoint's contract and the epoch is decoration on it, so a "
+                "failed epoch read degrades the countdown rather than the "
+                "response."
+            ),
+        ),
+    ] = None
 
 
 class PublicValidatorScore(BaseModel):

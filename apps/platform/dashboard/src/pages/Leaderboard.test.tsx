@@ -1318,3 +1318,76 @@ describe("on-chain weight visibility", () => {
     expect(vectors[0]?.querySelector(".chain-vector-uid")?.textContent).toBe("UID 0");
   });
 });
+
+// The single most-asked question on the subnet — "when do I get emissions?" —
+// is not answerable from the weight matrix beside it. Validators commit
+// asynchronously; the payout is the subnet's epoch tick, every tempo blocks,
+// identical for everyone. This is that clock.
+//
+// The board store is a module singleton, so a previous test's snapshot is
+// still mounted when the next render begins: every assertion here waits for
+// the condition itself rather than for the element to merely exist.
+describe("next-emission countdown", () => {
+  const withEpochAt = (secondsFromNow: number): FetchOptions => ({
+    patch: (name, body) => {
+      if (name !== "weights") return body;
+      const snapshot = body as { epoch: Record<string, unknown> };
+      return {
+        ...snapshot,
+        epoch: {
+          ...snapshot.epoch,
+          next_epoch_at: new Date(Date.now() + secondsFromNow * 1000).toISOString(),
+        },
+      };
+    },
+  });
+
+  const countdownText = (): string => document.getElementById("epoch-countdown")?.textContent ?? "";
+
+  it("counts down to the next tick and names the tempo it runs on", async () => {
+    renderPage(withEpochAt(605));
+    await waitForBoard();
+    // A clock, not prose: this is the one number on the board that moves every
+    // second, so it must not re-wrap or re-word as it ticks.
+    await waitFor(() =>
+      expect(
+        document.querySelector("#epoch-countdown .epoch-countdown-clock")?.textContent,
+      ).toMatch(/^10:0\d$/),
+    );
+    expect(countdownText()).toContain("Weights fold into emissions in");
+    expect(countdownText()).toContain("block 8,741,869");
+    expect(countdownText()).toContain("every 360 blocks (~72 min)");
+    expect(document.querySelector("#epoch-countdown .epoch-countdown-projected")).toBeNull();
+  });
+
+  it("rolls a spent target forward and says the tick is projected", async () => {
+    // The recorded fixture's tick is long past. A cached or stale snapshot must
+    // not park the clock at 00:00 implying a payout is perpetually imminent.
+    renderPage();
+    await waitForBoard();
+    await waitFor(() =>
+      expect(
+        document.querySelector("#epoch-countdown .epoch-countdown-projected")?.textContent,
+      ).toContain("projected"),
+    );
+    expect(
+      document.querySelector("#epoch-countdown .epoch-countdown-clock")?.textContent,
+    ).not.toBe("0:00");
+    // Rolled forward in whole epochs, so the block it names has advanced from
+    // the recorded 8,741,869 by a multiple of the 360-block tempo.
+    const block = /block ([\d,]+)/.exec(countdownText())?.[1]?.replace(/,/g, "");
+    expect((Number(block) - 8_741_869) % 360).toBe(0);
+  });
+
+  it("says nothing at all when the chain read carried no epoch", async () => {
+    // Stated absence over an invented countdown: the hyperparameter read can
+    // fail while the matrix succeeds, and a fabricated clock would be worse
+    // than none for the exact question it answers.
+    renderPage({
+      patch: (name, body) => (name === "weights" ? { ...(body as object), epoch: null } : body),
+    });
+    await waitForBoard();
+    await waitFor(() => expect(document.getElementById("epoch-countdown")).toBeNull());
+    expect(document.querySelector(".chain-weight-note")).toBeTruthy();
+  });
+});

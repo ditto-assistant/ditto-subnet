@@ -474,6 +474,35 @@ class TestPutWeights:
                 await client.put_weights({"5HK1": 1.0})
 
 
+def _storage_reader(values: dict[str, Any]) -> Any:
+    """Answer ``substrate.query`` by storage function rather than by call order.
+
+    ``get_weights`` reads the owner hotkey, six tempo hyperparameters and the
+    block timestamp through the same ``query``; keying on the storage name keeps
+    these tests from re-encoding that call order, which is an implementation
+    detail rather than the contract.
+    """
+
+    async def _query(**kwargs: Any) -> Any:
+        return values.get(str(kwargs.get("storage_function")))
+
+    return _query
+
+
+# The live SN118 values this was built against (block 8,895,495): tempo 360
+# blocks, last epoch tick at 8,895,229, commit-reveal on with a one-epoch
+# reveal, and a 100-block per-hotkey submission floor.
+_EPOCH_STORAGE = {
+    "Tempo": 360,
+    "LastMechansimStepBlock": 12_000,
+    "BlocksSinceLastStep": 345,
+    "CommitRevealWeightsEnabled": True,
+    "RevealPeriodEpochs": 1,
+    "WeightsSetRateLimit": 100,
+    "Now": 1_787_342_712_000,
+}
+
+
 @pytest.mark.usefixtures("install_pylon_module")
 class TestGetWeights:
     async def test_reads_block_consistent_revealed_matrix(
@@ -489,7 +518,9 @@ class TestGetWeights:
             AsyncRows([(25, [(169, 14745), (0, 65535)])]),
             AsyncRows([(0, "5" + "B" * 47), (25, validator), (169, miner)]),
         ]
-        install_substrate_module.query.return_value = "5" + "B" * 47
+        install_substrate_module.query.side_effect = _storage_reader(
+            {"SubnetOwnerHotkey": "5" + "B" * 47, **_EPOCH_STORAGE}
+        )
 
         async with ChainClient(make_chain_config()) as client:
             snapshot = await client.get_weights(118)
@@ -509,9 +540,117 @@ class TestGetWeights:
             "Keys",
         ]
         assert all(call.kwargs["block_hash"] == snapshot.block_hash for call in calls)
-        assert install_substrate_module.query.await_args.kwargs["storage_function"] == (
-            "SubnetOwnerHotkey"
+        storage_reads = [
+            call.kwargs["storage_function"]
+            for call in install_substrate_module.query.await_args_list
+        ]
+        assert "SubnetOwnerHotkey" in storage_reads
+        # Every read that feeds the snapshot is pinned to the one block hash, so
+        # the countdown a reader sees belongs to the matrix printed beside it
+        # rather than to whatever the chain head moved on to mid-read.
+        assert all(
+            call.kwargs["block_hash"] == snapshot.block_hash
+            for call in install_substrate_module.query.await_args_list
         )
+
+    async def test_carries_the_subnets_tempo_position(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        """The epoch tick, not any validator's submission, is the payout clock."""
+        install_substrate_module.get_chain_head.return_value = "0x" + "ab" * 32
+        install_substrate_module.get_block_header.return_value = {
+            "header": {"number": 12_345}
+        }
+        install_substrate_module.query_map.side_effect = [
+            AsyncRows([]),
+            AsyncRows([]),
+        ]
+        install_substrate_module.query.side_effect = _storage_reader(_EPOCH_STORAGE)
+
+        async with ChainClient(make_chain_config()) as client:
+            snapshot = await client.get_weights(118)
+
+        assert snapshot.epoch is not None
+        assert snapshot.epoch.tempo == 360
+        assert snapshot.epoch.last_step_block == 12_000
+        assert snapshot.epoch.blocks_since_last_step == 345
+        # Phase comes from the chain's own last-tick record, so the next tick is
+        # last_step + tempo — never a reimplementation of Subtensor's predicate.
+        assert snapshot.epoch.next_epoch_block == 12_360
+        assert snapshot.epoch.blocks_until_next_epoch == 15
+        assert snapshot.epoch.commit_reveal_enabled is True
+        assert snapshot.epoch.reveal_period_epochs == 1
+        assert snapshot.epoch.weights_rate_limit == 100
+        assert snapshot.block_timestamp == 1_787_342_712
+
+    async def test_epoch_read_failure_leaves_the_matrix_intact(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        """A failed hyperparameter read degrades the countdown, not the matrix."""
+        validator = "5" + "V" * 47
+        miner = "5" + "M" * 47
+        install_substrate_module.get_chain_head.return_value = "0x" + "ab" * 32
+        install_substrate_module.get_block_header.return_value = {
+            "header": {"number": 12_345}
+        }
+        install_substrate_module.query_map.side_effect = [
+            AsyncRows([(25, [(169, 14745)])]),
+            AsyncRows([(25, validator), (169, miner)]),
+        ]
+
+        async def _query(**kwargs: Any) -> Any:
+            if kwargs.get("storage_function") == "SubnetOwnerHotkey":
+                return None
+            raise RuntimeError("storage unavailable")
+
+        install_substrate_module.query.side_effect = _query
+
+        async with ChainClient(make_chain_config()) as client:
+            snapshot = await client.get_weights(118)
+
+        assert snapshot.epoch is None
+        assert snapshot.block_timestamp is None
+        assert snapshot.vectors[0].weights[0].hotkey == miner
+
+    async def test_no_countdown_when_the_subnet_never_steps(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        """Tempo 0 is Subtensor's "this subnet never steps"; publish nothing."""
+        install_substrate_module.get_chain_head.return_value = "0x" + "ab" * 32
+        install_substrate_module.get_block_header.return_value = {
+            "header": {"number": 12_345}
+        }
+        install_substrate_module.query_map.side_effect = [
+            AsyncRows([]),
+            AsyncRows([]),
+        ]
+        install_substrate_module.query.side_effect = _storage_reader(
+            {**_EPOCH_STORAGE, "Tempo": 0}
+        )
+
+        async with ChainClient(make_chain_config()) as client:
+            snapshot = await client.get_weights(118)
+
+        assert snapshot.epoch is None
+
+    async def test_no_countdown_when_last_step_is_ahead_of_the_block(
+        self, install_substrate_module: AsyncMock
+    ) -> None:
+        """A tick recorded after the read block cannot be reconciled; say nothing."""
+        install_substrate_module.get_chain_head.return_value = "0x" + "ab" * 32
+        install_substrate_module.get_block_header.return_value = {
+            "header": {"number": 11_999}
+        }
+        install_substrate_module.query_map.side_effect = [
+            AsyncRows([]),
+            AsyncRows([]),
+        ]
+        install_substrate_module.query.side_effect = _storage_reader(_EPOCH_STORAGE)
+
+        async with ChainClient(make_chain_config()) as client:
+            snapshot = await client.get_weights(118)
+
+        assert snapshot.epoch is None
 
     async def test_skips_unknown_uids_and_malformed_weights(
         self, install_substrate_module: AsyncMock

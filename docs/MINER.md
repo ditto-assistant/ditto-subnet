@@ -727,6 +727,21 @@ So a run of zeros followed by a sudden jump is the system working normally, not
 a stuck payout. If you are still at zero more than four hours after your first
 score, that is worth reporting.
 
+**When is the next payout?** The leaderboard carries a live countdown to the
+next epoch tick, under the emissions strip: *"Weights fold into emissions in
+m:ss"*, with the block it lands on and the tempo it runs on. That tick is the
+only synchronised moment in the whole pipeline — the individual validator
+submissions above it are staggered and unpredictable, but the fold and the
+payout happen at the same instant for every miner on the subnet. The same
+numbers are on `GET /api/v1/public/weights` under `epoch`, if you would rather
+poll than watch.
+
+Two things it does **not** promise. It is the next time weights are folded, not
+the next time *your* score reaches the chain — the quorum, staggered submission
+and reveal delays above still apply to a fresh score. And block times vary
+slightly around the 12-second target, so treat it as an estimate to the nearest
+few seconds, not a deadline.
+
 **Can I submit more than once?** Yes. Reuse the same hotkey and exact agent name
 to version an agent (`v1`, `v2`, and so on); a different name starts a new
 series. Every upload pays its own fee, and your highest eligible version

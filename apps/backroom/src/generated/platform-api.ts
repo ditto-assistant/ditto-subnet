@@ -13136,6 +13136,81 @@ export interface components {
             mean: number;
         };
         /**
+         * PublicChainEpoch
+         * @description When SN118 next folds weights into emissions, and how often it does.
+         *
+         *     Answers the question the weight matrix cannot: validators commit weights
+         *     *asynchronously* — each one only has to respect ``weights_rate_limit_blocks``
+         *     between its own submissions — so there is no single moment at which "the
+         *     validators set weights". What is synchronised is the subnet's epoch tick:
+         *     every ``tempo_blocks`` blocks Subtensor runs Yuma consensus over whatever
+         *     weights are revealed at that moment and pays out the emission accumulated
+         *     since the last tick. That tick is the same instant for every miner on the
+         *     subnet, and it is what a miner asking "when do I get emissions" means.
+         *
+         *     Under commit-reveal a commit is not folded at the next tick but at the one
+         *     ``reveal_period_epochs`` later, which is why a validator's newest opinion
+         *     can be invisible in the matrix beside this.
+         */
+        PublicChainEpoch: {
+            /**
+             * Block Seconds
+             * @description Nominal seconds per block used to turn the block counts here into times. Subtensor targets 12s; real blocks vary slightly, so every time on this object is an estimate, not a promise.
+             */
+            block_seconds: number;
+            /**
+             * Blocks Since Last Epoch
+             * @description Blocks elapsed at the snapshot's block.
+             */
+            blocks_since_last_epoch: number;
+            /**
+             * Blocks Until Next Epoch
+             * @description Blocks remaining at the snapshot's block.
+             */
+            blocks_until_next_epoch: number;
+            /**
+             * Commit Reveal Enabled
+             * @description Whether weight commitments are timelock-encrypted. When true the published matrix necessarily lags active commitments.
+             */
+            commit_reveal_enabled?: boolean | null;
+            /**
+             * Epoch Seconds
+             * @description Nominal seconds per epoch (`tempo_blocks` x `block_seconds`). A client whose `next_epoch_at` has already passed — because it is holding a cached snapshot — can roll it forward by this.
+             */
+            epoch_seconds: number;
+            /**
+             * Last Epoch Block
+             * @description Block at which the subnet's last epoch tick ran, read from chain rather than computed, so the phase cannot drift from what Subtensor actually did.
+             */
+            last_epoch_block: number;
+            /**
+             * Next Epoch At
+             * Format: date-time
+             * @description Estimated UTC time of the next tick, anchored on the snapshot block's own on-chain timestamp (not the API server's clock). Absolute rather than a duration so a cached response does not hand out a countdown that is already spent.
+             */
+            next_epoch_at: string;
+            /**
+             * Next Epoch Block
+             * @description Block at which the next tick is due.
+             */
+            next_epoch_block: number;
+            /**
+             * Reveal Period Epochs
+             * @description Epochs between a commit and its reveal. With commit-reveal on and this at 1, weights committed during one epoch are folded at the end of the next one.
+             */
+            reveal_period_epochs?: number | null;
+            /**
+             * Tempo Blocks
+             * @description Blocks between epoch ticks (`SubtensorModule.Tempo`). SN118 runs 360, about 72 minutes.
+             */
+            tempo_blocks: number;
+            /**
+             * Weights Rate Limit Blocks
+             * @description Chain-enforced minimum blocks between one hotkey's weight submissions. This is the only cadence a validator is held to; it is why submissions are staggered rather than simultaneous.
+             */
+            weights_rate_limit_blocks?: number | null;
+        };
+        /**
          * PublicChainWeight
          * @description One non-zero destination in a validator's revealed chain vector.
          */
@@ -13162,6 +13237,8 @@ export interface components {
             block: number;
             /** Block Hash */
             block_hash: string;
+            /** @description Where the subnet sits in its tempo cycle at `block` — the countdown to the next weight fold and emission payout. Null when the hyperparameter reads failed; the matrix is this endpoint's contract and the epoch is decoration on it, so a failed epoch read degrades the countdown rather than the response. */
+            epoch?: components["schemas"]["PublicChainEpoch"] | null;
             /**
              * Generated At
              * Format: date-time

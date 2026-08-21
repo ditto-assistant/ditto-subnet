@@ -51,7 +51,12 @@ export interface ChipTipProps {
  * order; header .tip terms add tabindex + role="button" as the keyboard sort
  * control). */
 export function ChipTip(props: ChipTipProps): JSX.Element {
-  const descId = "tipdesc-" + ++tipDescSeq;
+  // Its OWN id prefix, not the shared `Tip`'s. Both components mint ids from a
+  // module-local counter that starts at 0, so sharing the `tipdesc-` namespace
+  // put duplicate ids in the same document the moment a page rendered both —
+  // and `aria-describedby` resolves to whichever the document happens to hold
+  // first, so a screen reader read out some other element's tooltip.
+  const descId = "chiptipdesc-" + ++tipDescSeq;
   let span: HTMLSpanElement | null = null;
   onMount(() => {
     span = document.createElement("span");

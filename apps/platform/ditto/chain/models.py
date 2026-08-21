@@ -231,6 +231,49 @@ class ChainWeightVector:
 
 
 @dataclass(frozen=True)
+class ChainEpoch:
+    """Where the subnet sits in its tempo cycle, read at one block.
+
+    Subtensor runs a subnet's epoch every ``tempo`` blocks, and that tick — not
+    any individual validator's submission — is when Yuma consensus folds the
+    weight matrix and the accumulated emission is paid out. Validators commit
+    weights asynchronously (each throttled only by ``WeightsSetRateLimit``), so
+    "when do weights get set" has no single answer; "when does the next fold
+    and payout happen" does, and it is the same instant for every miner on the
+    subnet.
+
+    The phase comes from ``LastMechansimStepBlock`` (the chain's own record of
+    the last epoch tick, misspelling included) rather than from reimplementing
+    Subtensor's epoch predicate, so a runtime change to that predicate cannot
+    silently desynchronise this from the chain.
+    """
+
+    tempo: int
+    """Blocks between epoch ticks (``SubtensorModule.Tempo``). SN118 runs 360."""
+
+    last_step_block: int
+    """Block at which the subnet's last epoch tick ran."""
+
+    blocks_since_last_step: int
+    """Blocks elapsed since that tick, at the snapshot block."""
+
+    next_epoch_block: int
+    """Block at which the next tick is due: ``last_step_block + tempo``."""
+
+    blocks_until_next_epoch: int
+    """Blocks remaining to that tick, at the snapshot block. Never negative."""
+
+    commit_reveal_enabled: bool | None
+    """Whether weight commitments are timelock-encrypted (``None`` if unread)."""
+
+    reveal_period_epochs: int | None
+    """Epochs between a commit and its reveal (``None`` if unread)."""
+
+    weights_rate_limit: int | None
+    """Chain-enforced blocks between one hotkey's weight submissions."""
+
+
+@dataclass(frozen=True)
 class ChainWeightsSnapshot:
     """A block-consistent read of the subnet's public weight matrix."""
 
@@ -239,6 +282,16 @@ class ChainWeightsSnapshot:
     block_hash: str
     owner_hotkey: str | None
     vectors: tuple[ChainWeightVector, ...]
+    epoch: ChainEpoch | None = None
+    """Tempo position at ``block``, or ``None`` when those reads failed.
+
+    Optional because the matrix is the endpoint's contract and the epoch is
+    decoration on it: a hyperparameter read that fails must degrade the
+    countdown, never take the weight matrix down with it.
+    """
+
+    block_timestamp: int | None = None
+    """Unix seconds of ``block``, the anchor a countdown is measured from."""
 
 
 def _axon_info_to_dict(axon: Any) -> dict[str, Any]:

@@ -11,6 +11,8 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  countdownClock,
+  epochCountdown,
   COMPOSITE_CALC_HEADING,
   COMPOSITE_CALC_NOTE,
   boardEntryCompare,
@@ -1154,5 +1156,77 @@ describe("efficiencyBoardStatus", () => {
     expect(status?.detail).toContain("lower-quality agent never passes a higher-quality agent");
     expect(status?.minimumFactor).toBe(0.85);
     expect(status?.maximumFactor).toBe(1.1);
+  });
+});
+
+describe("epochCountdown", () => {
+  // SN118 as observed on 2026-08-21: a 360-block tempo (~72 min) whose next
+  // tick was 15 blocks (180s) out at 20:05:12Z.
+  const epoch = {
+    tempo_blocks: 360,
+    block_seconds: 12,
+    epoch_seconds: 4320,
+    last_epoch_block: 8_895_229,
+    next_epoch_block: 8_895_589,
+    blocks_since_last_epoch: 345,
+    blocks_until_next_epoch: 15,
+    next_epoch_at: "2026-08-21T20:08:12Z",
+    commit_reveal_enabled: true,
+    reveal_period_epochs: 1,
+    weights_rate_limit_blocks: 100,
+  };
+  const at = (iso: string): number => Date.parse(iso);
+
+  it("counts down to the served tick", () => {
+    const countdown = epochCountdown(epoch, at("2026-08-21T20:05:12Z"));
+    expect(countdown?.secondsRemaining).toBe(180);
+    expect(countdown?.nextEpochBlock).toBe(8_895_589);
+    expect(countdown?.projected).toBe(false);
+    expect(countdown?.commitRevealEnabled).toBe(true);
+    expect(countdown?.revealPeriodEpochs).toBe(1);
+  });
+
+  it("rolls a spent target forward a whole epoch instead of pinning zero", () => {
+    // A cached snapshot can outlive the tick it named. Clamping to zero would
+    // claim a payout is perpetually imminent; the cycle is fixed, so the next
+    // tick is exactly one epoch (and one tempo of blocks) later.
+    const countdown = epochCountdown(epoch, at("2026-08-21T20:10:12Z"));
+    expect(countdown?.secondsRemaining).toBe(4200);
+    expect(countdown?.nextEpochBlock).toBe(8_895_949);
+    expect(countdown?.projected).toBe(true);
+  });
+
+  it("rolls forward by as many whole epochs as have elapsed", () => {
+    const countdown = epochCountdown(epoch, at("2026-08-21T22:00:12Z"));
+    expect(countdown?.targetMs).toBe(at("2026-08-21T22:32:12Z"));
+    expect(countdown?.nextEpochBlock).toBe(8_896_309);
+    expect(countdown?.projected).toBe(true);
+  });
+
+  it("does not roll forward at the exact tick", () => {
+    const countdown = epochCountdown(epoch, at("2026-08-21T20:08:12Z"));
+    expect(countdown?.secondsRemaining).toBe(0);
+    expect(countdown?.projected).toBe(false);
+  });
+
+  it("states absence rather than inventing a countdown", () => {
+    expect(epochCountdown(null, at("2026-08-21T20:05:12Z"))).toBeNull();
+    expect(epochCountdown({ tempo_blocks: 360 }, at("2026-08-21T20:05:12Z"))).toBeNull();
+    expect(
+      epochCountdown({ ...epoch, tempo_blocks: 0, epoch_seconds: 0 }, at("2026-08-21T20:05:12Z")),
+    ).toBeNull();
+    expect(
+      epochCountdown({ ...epoch, next_epoch_at: "not a date" }, at("2026-08-21T20:05:12Z")),
+    ).toBeNull();
+  });
+});
+
+describe("countdownClock", () => {
+  it("renders a clock, padded, and never negative", () => {
+    expect(countdownClock(0)).toBe("0:00");
+    expect(countdownClock(9)).toBe("0:09");
+    expect(countdownClock(180)).toBe("3:00");
+    expect(countdownClock(4200)).toBe("1:10:00");
+    expect(countdownClock(-5)).toBe("0:00");
   });
 });

@@ -77,6 +77,7 @@ from ditto.api_server.validator_slot_settings import (
 )
 from ditto.chain import ChainError
 from ditto.chain.models import (
+    ChainEpoch,
     ChainWeight,
     ChainWeightsSnapshot,
     ChainWeightVector,
@@ -1484,7 +1485,7 @@ async def _drain_weight_refreshes(app: FastAPI) -> None:
         await asyncio.gather(*list(tasks), return_exceptions=True)
 
 
-def _weights_snapshot() -> ChainWeightsSnapshot:
+def _weights_snapshot(epoch: ChainEpoch | None = None) -> ChainWeightsSnapshot:
     """One revealed vector, enough to assert the projection and the cache."""
     return ChainWeightsSnapshot(
         netuid=118,
@@ -1498,6 +1499,22 @@ def _weights_snapshot() -> ChainWeightsSnapshot:
                 weights=(ChainWeight(uid=169, hotkey=_MINER_A, value=14745),),
             ),
         ),
+        epoch=epoch,
+        block_timestamp=None if epoch is None else 1_787_342_712,
+    )
+
+
+def _chain_epoch() -> ChainEpoch:
+    """SN118's real cadence: a 360-block tempo with 15 blocks left to run."""
+    return ChainEpoch(
+        tempo=360,
+        last_step_block=8_639_158,
+        blocks_since_last_step=345,
+        next_epoch_block=8_639_518,
+        blocks_until_next_epoch=15,
+        commit_reveal_enabled=True,
+        reveal_period_epochs=1,
+        weights_rate_limit=100,
     )
 
 
@@ -1528,6 +1545,50 @@ class TestPublicChainWeights:
                 "weights": [{"uid": 169, "hotkey": _MINER_A, "value": 14745}],
             }
         ]
+        app.state.chain.get_weights.assert_awaited_once_with(118)
+        # No epoch on this snapshot, so the countdown is absent rather than
+        # guessed — the matrix is the contract, the countdown decorates it.
+        assert body["epoch"] is None
+
+    async def test_publishes_the_countdown_to_the_next_emission(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        """Miners ask when they get paid; the epoch tick is the honest answer."""
+        app.state.chain = SimpleNamespace(
+            get_weights=AsyncMock(return_value=_weights_snapshot(_chain_epoch()))
+        )
+
+        response = await client.get("/api/v1/public/weights")
+
+        assert response.status_code == 200
+        epoch = response.json()["epoch"]
+        assert epoch["tempo_blocks"] == 360
+        assert epoch["block_seconds"] == 12.0
+        assert epoch["epoch_seconds"] == 4320.0
+        assert epoch["last_epoch_block"] == 8_639_158
+        assert epoch["next_epoch_block"] == 8_639_518
+        assert epoch["blocks_since_last_epoch"] == 345
+        assert epoch["blocks_until_next_epoch"] == 15
+        assert epoch["commit_reveal_enabled"] is True
+        assert epoch["reveal_period_epochs"] == 1
+        assert epoch["weights_rate_limit_blocks"] == 100
+        # Anchored on the snapshot block's own on-chain clock (1787342712) plus
+        # 15 blocks of 12s, NOT on the API server's clock: the target has to be
+        # the same instant for every reader, including one served from cache.
+        assert epoch["next_epoch_at"] == "2026-08-21T20:08:12Z"
+
+    async def test_countdown_target_is_absolute_across_a_cached_reserve(
+        self, app: FastAPI, client: httpx.AsyncClient
+    ) -> None:
+        """A re-served response must not hand out a countdown already spent."""
+        app.state.chain = SimpleNamespace(
+            get_weights=AsyncMock(return_value=_weights_snapshot(_chain_epoch()))
+        )
+
+        first = await client.get("/api/v1/public/weights")
+        second = await client.get("/api/v1/public/weights")
+
+        assert first.json()["epoch"] == second.json()["epoch"]
         app.state.chain.get_weights.assert_awaited_once_with(118)
 
     async def test_returns_503_when_chain_read_is_unavailable(

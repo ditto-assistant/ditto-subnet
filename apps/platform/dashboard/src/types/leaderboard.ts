@@ -357,10 +357,39 @@ export interface ChainWeightVector {
   weights?: ChainWeight[];
 }
 
+/** /public/weights `epoch` — the subnet's position in its tempo cycle.
+ *
+ * Validators commit weights asynchronously, each held only to
+ * `weights_rate_limit_blocks` between its own submissions, so there is no one
+ * moment when "the validators set weights". The synchronised event is the
+ * epoch tick: every `tempo_blocks` blocks Subtensor folds the revealed matrix
+ * through Yuma and pays out the emission accrued since the last tick. That
+ * tick is the same instant for every miner, and it is what "when do I get
+ * emissions" actually asks about. */
+export interface ChainEpoch {
+  tempo_blocks?: number;
+  block_seconds?: number;
+  epoch_seconds?: number;
+  last_epoch_block?: number;
+  next_epoch_block?: number;
+  blocks_since_last_epoch?: number;
+  blocks_until_next_epoch?: number;
+  /** Estimated UTC instant of the next tick, anchored on the snapshot block's
+   * own on-chain timestamp. Absolute rather than a duration so a cached
+   * response cannot hand out a countdown that is already spent. */
+  next_epoch_at?: string;
+  commit_reveal_enabled?: boolean | null;
+  reveal_period_epochs?: number | null;
+  weights_rate_limit_blocks?: number | null;
+}
+
 export interface ChainWeightsSnapshot {
   vectors?: ChainWeightVector[];
   owner_hotkey?: string | null;
   block?: number;
+  /** Absent when the hyperparameter reads failed; the matrix is the endpoint's
+   * contract and this decorates it, so its absence hides only the countdown. */
+  epoch?: ChainEpoch | null;
 }
 
 // ── Consensus scores (/public/agent/{id}/scores) ─────────────

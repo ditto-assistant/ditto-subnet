@@ -215,6 +215,31 @@
 .emission-badge.tail {
   color: var(--accent-2);
 }
+/* The payout clock sits on its own full-width row above the chain observation,
+   sharing its badge/rule treatment: the matrix says what is set, this says
+   when it next pays. Tabular figures on the clock so a ticking countdown does
+   not jitter the line every second. */
+.epoch-countdown {
+  display: flex;
+  grid-column: 1 / -1;
+  align-items: flex-start;
+  gap: 9px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+.epoch-countdown-clock {
+  color: var(--text);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.epoch-countdown-projected {
+  color: var(--warn);
+  font-weight: 700;
+}
 .chain-observation {
   display: none;
   grid-column: 1 / -1;

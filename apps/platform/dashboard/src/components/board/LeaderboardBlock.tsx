@@ -47,6 +47,7 @@ import type { BandDecayParams } from "../../lib/scoring";
 import { Tip } from "../ui/Tooltip";
 import { EntityButton } from "../ui/EntityButton";
 import { BoardTable } from "./BoardTable";
+import { EpochCountdownLine } from "./EpochCountdown";
 import {
   leaderboardVersionView,
   restoreBoardPage,
@@ -670,6 +671,12 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
     const fold = store.chainFold();
     return Boolean(fold && fold.minerVectors);
   });
+  // The countdown survives a matrix with no miner-bearing vectors: "nobody has
+  // revealed weights yet" and "the next payout is 12 minutes out" are separate
+  // facts, and the second is the one miners came for.
+  const countdownShown = createMemo(
+    () => !store.unavailable() && Boolean(store.chainWeights()?.epoch),
+  );
   const chainCopy = (): string => {
     const fold = store.chainFold();
     const snapshot = store.chainWeights();
@@ -724,7 +731,9 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
     <div
       class="emissions-strip"
       id="emissions-strip"
-      classList={{ show: (Boolean(emissions()) || chainShown()) && !store.unavailable() }}
+      classList={{
+        show: (Boolean(emissions()) || chainShown() || countdownShown()) && !store.unavailable(),
+      }}
       role="status"
       aria-live="polite"
       aria-label="KOTH emissions"
@@ -833,6 +842,7 @@ function EmissionsStrip(props: { store: LeaderboardStore }): JSX.Element {
           </Show>
         </Show>
       </div>
+      <EpochCountdownLine store={store} />
       <div class="chain-observation" id="chain-observation" classList={{ show: chainShown() }}>
         <span class="chain-badge">On chain</span>
         <span id="chain-observation-copy">{chainCopy()}</span>

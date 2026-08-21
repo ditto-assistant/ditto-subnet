@@ -17,6 +17,7 @@ from ditto.chain.errors import (
 from ditto.chain.models import (
     BlockInfo,
     ChainConfig,
+    ChainEpoch,
     ChainWeight,
     ChainWeightsSnapshot,
     ChainWeightVector,
@@ -56,6 +57,19 @@ _KEYS_STORAGE = "Keys"
 _WEIGHTS_STORAGE = "Weights"
 _TIMESTAMP_MODULE = "Timestamp"
 _TIMESTAMP_NOW_STORAGE = "Now"
+
+# --- substrate storage identifiers for the subnet's tempo position ---
+
+_TEMPO_STORAGE = "Tempo"
+# The chain's own misspelling. This is the block the subnet's last epoch tick
+# ran at; reading it keeps the countdown's phase tied to what the chain
+# actually did, rather than to a reimplementation of Subtensor's epoch
+# predicate that a runtime upgrade could silently invalidate.
+_LAST_STEP_STORAGE = "LastMechansimStepBlock"
+_BLOCKS_SINCE_STEP_STORAGE = "BlocksSinceLastStep"
+_COMMIT_REVEAL_ENABLED_STORAGE = "CommitRevealWeightsEnabled"
+_REVEAL_PERIOD_STORAGE = "RevealPeriodEpochs"
+_WEIGHTS_RATE_LIMIT_STORAGE = "WeightsSetRateLimit"
 
 
 class ChainClient:
@@ -352,6 +366,12 @@ class ChainClient:
         Under commit-reveal it intentionally lags encrypted active commitments;
         callers must present it as observed chain state, not as a pending vector
         or a direct miner-emission calculation.
+
+        The snapshot also carries the subnet's tempo position (:class:`ChainEpoch`)
+        and the block's own timestamp, read at the same block hash, so a reader
+        can say when the matrix is next folded into emissions without opening a
+        second substrate connection. Both are optional decoration: a failed
+        hyperparameter read yields ``epoch=None`` and leaves the matrix intact.
         """
         from async_substrate_interface import AsyncSubstrateInterface
 
@@ -387,6 +407,15 @@ class ChainClient:
                     int(uid): str(hotkey) async for uid, hotkey in key_map if hotkey
                 }
                 owner_hotkey_value = _unwrap_substrate_value(owner_result)
+                # Same connection, same block hash: the tempo position a reader
+                # sees therefore belongs to the very matrix beside it, and the
+                # extra reads cost one round trip each on a socket the matrix
+                # read already paid to open. Both are decoration on the matrix,
+                # so neither may fail the call -- see :meth:`_read_epoch`.
+                epoch = await self._read_epoch(substrate, netuid, block, block_hash)
+                block_timestamp = await self._read_block_timestamp(
+                    substrate, block_hash
+                )
         except TimeoutError as e:
             raise ChainTimeoutError(f"get_weights(netuid={netuid}) timed out") from e
         except Exception as e:
@@ -421,7 +450,144 @@ class ChainClient:
             block_hash=str(block_hash),
             owner_hotkey=(str(owner_hotkey_value) if owner_hotkey_value else None),
             vectors=tuple(vectors),
+            epoch=epoch,
+            block_timestamp=block_timestamp,
         )
+
+    async def _read_epoch(
+        self, substrate: Any, netuid: int, block: int, block_hash: str
+    ) -> ChainEpoch | None:
+        """Read the subnet's tempo position at the caller's block, fail-soft.
+
+        ``tempo`` and ``LastMechansimStepBlock`` between them pin both the
+        length and the phase of the epoch cycle, so the next tick is simply
+        ``last_step + tempo``. Deriving the phase from chain state rather than
+        recomputing Subtensor's epoch predicate matters: the predicate has
+        changed shape across runtimes (SN118's observed cycle is ``tempo``
+        blocks, not the ``tempo + 1`` the older published formula implies), and
+        a stale reimplementation would put out a confidently wrong countdown
+        instead of no countdown.
+
+        Returns ``None`` -- never raises -- when any required read fails or
+        comes back empty. The caller's contract is the weight matrix; a missing
+        countdown is a degraded panel, a failed matrix read is a dead one.
+        """
+        try:
+            tempo = _as_int(
+                await substrate.query(
+                    module=_SUBTENSOR_MODULE,
+                    storage_function=_TEMPO_STORAGE,
+                    params=[netuid],
+                    block_hash=block_hash,
+                )
+            )
+            last_step = _as_int(
+                await substrate.query(
+                    module=_SUBTENSOR_MODULE,
+                    storage_function=_LAST_STEP_STORAGE,
+                    params=[netuid],
+                    block_hash=block_hash,
+                )
+            )
+            blocks_since = _as_int(
+                await substrate.query(
+                    module=_SUBTENSOR_MODULE,
+                    storage_function=_BLOCKS_SINCE_STEP_STORAGE,
+                    params=[netuid],
+                    block_hash=block_hash,
+                )
+            )
+            commit_reveal = _unwrap_substrate_value(
+                await substrate.query(
+                    module=_SUBTENSOR_MODULE,
+                    storage_function=_COMMIT_REVEAL_ENABLED_STORAGE,
+                    params=[netuid],
+                    block_hash=block_hash,
+                )
+            )
+            reveal_period = _as_int(
+                await substrate.query(
+                    module=_SUBTENSOR_MODULE,
+                    storage_function=_REVEAL_PERIOD_STORAGE,
+                    params=[netuid],
+                    block_hash=block_hash,
+                )
+            )
+            rate_limit = _as_int(
+                await substrate.query(
+                    module=_SUBTENSOR_MODULE,
+                    storage_function=_WEIGHTS_RATE_LIMIT_STORAGE,
+                    params=[netuid],
+                    block_hash=block_hash,
+                )
+            )
+        except Exception as e:  # noqa: BLE001 - decoration must not fail the matrix
+            logger.warning("epoch read for netuid=%s failed: %s", netuid, e)
+            return None
+
+        # A zero (or absent) tempo is Subtensor's "this subnet never steps"
+        # encoding, and a last step ahead of the read block is nonsense; either
+        # way there is no honest countdown to publish.
+        if not tempo or last_step is None or last_step > block:
+            logger.warning(
+                "epoch read for netuid=%s unusable (tempo=%s last_step=%s block=%s)",
+                netuid,
+                tempo,
+                last_step,
+                block,
+            )
+            return None
+
+        elapsed = block - last_step
+        # ``BlocksSinceLastStep`` is the chain's own counter for the same
+        # quantity and agrees with the subtraction today. It is read purely as a
+        # tripwire: a divergence means the runtime changed what one of these two
+        # storage items means, which is the failure that would let this publish
+        # a confidently wrong countdown. Log it rather than pick a winner.
+        if blocks_since is not None and blocks_since != elapsed:
+            logger.warning(
+                "epoch counters disagree for netuid=%s: block-last_step=%d but "
+                "BlocksSinceLastStep=%d; the countdown may be off by the gap",
+                netuid,
+                elapsed,
+                blocks_since,
+            )
+        next_block = last_step + tempo
+        return ChainEpoch(
+            tempo=tempo,
+            last_step_block=last_step,
+            blocks_since_last_step=elapsed,
+            next_epoch_block=next_block,
+            blocks_until_next_epoch=max(0, next_block - block),
+            commit_reveal_enabled=(
+                None if commit_reveal is None else bool(commit_reveal)
+            ),
+            reveal_period_epochs=reveal_period,
+            weights_rate_limit=rate_limit,
+        )
+
+    async def _read_block_timestamp(
+        self, substrate: Any, block_hash: str
+    ) -> int | None:
+        """Unix seconds of ``block_hash`` from ``Timestamp.Now``, fail-soft.
+
+        The countdown anchors on the block's own clock rather than on the API
+        server's, so a server whose clock has drifted cannot shift the target
+        every reader sees. Fail-soft for the same reason as :meth:`_read_epoch`:
+        consumers fall back to the response's ``generated_at``.
+        """
+        try:
+            raw = _unwrap_substrate_value(
+                await substrate.query(
+                    module=_TIMESTAMP_MODULE,
+                    storage_function=_TIMESTAMP_NOW_STORAGE,
+                    block_hash=block_hash,
+                )
+            )
+        except Exception as e:  # noqa: BLE001 - decoration must not fail the matrix
+            logger.warning("block timestamp read failed: %s", e)
+            return None
+        return None if raw is None else int(raw) // 1000
 
     # --- Success status (Pylon gap) ---
 
@@ -760,3 +926,19 @@ def _unwrap_substrate_value(result: Any) -> Any:
     if result is None:
         return None
     return getattr(result, "value", result)
+
+
+def _as_int(result: Any) -> int | None:
+    """Unwrap a scalar storage read to ``int``, or ``None`` when absent.
+
+    Subtensor stores absent numeric hyperparameters as empty rather than zero,
+    and a zero read means something different from an unread one (a zero tempo
+    is a subnet that never steps), so the two must not collapse together.
+    """
+    value = _unwrap_substrate_value(result)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
