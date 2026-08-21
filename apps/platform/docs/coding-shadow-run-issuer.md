@@ -62,7 +62,8 @@ grader material, issue text, or patches.
 
 ## Activation boundary
 
-This is an internal, caller-driven shadow transaction. It adds no automatic
-scheduler, private catalog transport implementation, validator task delivery,
-Luna grant, ticket issuer, score fold, deployment, or emissions reader. Coding
-contract v1 remains permanently `weight_eligible=false`.
+This is an internal, caller-driven shadow transaction. A separate optional
+loader can now supply one commitment-addressed private record, but no automatic
+scheduler invokes the two components. This layer still adds no validator task
+delivery, Luna grant, ticket issuer, score fold, deployment, or emissions
+reader. Coding contract v1 remains permanently `weight_eligible=false`.
