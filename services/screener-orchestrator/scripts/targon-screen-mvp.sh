@@ -16,10 +16,13 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 usage() {
   cat <<'EOF'
 Usage: scripts/targon-screen-mvp.sh export --image-tar PATH
+       scripts/targon-screen-mvp.sh starter-kit [--tiny] [--live]
        scripts/targon-screen-mvp.sh live [--source-tar PATH]
 
-export  Normalize a real miner image tar to the portable screened-image contract.
-live    Run source-review-probe and runtime-probe (requires gcloud + Targon secret).
+export       Normalize a real miner image tar to the portable screened-image contract.
+starter-kit  Docker-build the miner harness using production Kaniko destination tags
+             and validate the docker-save config digest. --tiny uses busybox.
+live         Run source-review-probe and runtime-probe (requires gcloud + Targon secret).
 EOF
 }
 
@@ -73,6 +76,9 @@ finally:
     if portable_path is not None:
         Path(portable_path).unlink(missing_ok=True)
 PY
+    ;;
+  starter-kit)
+    exec "${SCRIPT_DIR}/targon-screen-starter-kit.sh" "$@"
     ;;
   live)
     "${SCRIPT_DIR}/targon-smoke.sh" source-review-probe

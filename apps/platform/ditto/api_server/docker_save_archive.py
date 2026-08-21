@@ -93,4 +93,10 @@ def _named_config_digest(name: str) -> str | None:
         digest = name[len(prefix) :]
         if _HEX.fullmatch(digest):
             return digest
+    # go-containerregistry (Kaniko --tar-path) names the config "sha256:<hex>".
+    algo_prefix = "sha256:"
+    if name.startswith(algo_prefix) and "/" not in name:
+        digest = name[len(algo_prefix) :]
+        if _HEX.fullmatch(digest):
+            return digest
     return None
