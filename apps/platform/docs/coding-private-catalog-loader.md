@@ -68,8 +68,8 @@ translated into either domain.
 ## Activation boundary
 
 The API lifespan constructs this source only when its separate configuration is
-present. The single-run reconciler may consume it only when explicitly invoked;
-there is no background or fleet caller. Automatic scheduling, task delivery,
-Luna inference grants, validator tickets, scoring, deployment, and emissions
-require later reviewed layers. Coding contract v1 remains permanently
-`weight_eligible=false`.
+present. The single-run reconciler and ticket-bound task-lease builder may
+consume it only when explicitly invoked; there is no background or fleet
+caller. Automatic scheduling, HTTP task delivery, Luna inference grants,
+validator execution, scoring, deployment, and emissions require later reviewed
+layers. Coding contract v1 remains permanently `weight_eligible=false`.
