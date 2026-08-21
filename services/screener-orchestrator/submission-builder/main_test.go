@@ -95,6 +95,23 @@ func TestHashBoundedReportsExactBytesAndDigest(t *testing.T) {
 	}
 }
 
+func TestNamedConfigDigestAcceptsKanikoTarNames(t *testing.T) {
+	hexDigest := strings.Repeat("ab", 32)
+	cases := map[string]string{
+		hexDigest + ".json":         hexDigest,
+		"sha256:" + hexDigest:       hexDigest,
+		"blobs/sha256/" + hexDigest: hexDigest,
+		"./sha256:" + hexDigest:     hexDigest,
+		"index.json":                "",
+		"sha256:not-a-digest":       "",
+	}
+	for name, want := range cases {
+		if got := namedConfigDigest(name); got != want {
+			t.Fatalf("%s: got %q want %q", name, got, want)
+		}
+	}
+}
+
 func TestConfigDigestFromClassicDockerSave(t *testing.T) {
 	config := []byte(`{"architecture":"amd64","os":"linux"}`)
 	digest := sha256.Sum256(config)
@@ -114,6 +131,50 @@ func TestConfigDigestFromClassicDockerSave(t *testing.T) {
 		body []byte
 	}{
 		{name: hexDigest + ".json", body: config},
+		{name: "manifest.json", body: manifest},
+	} {
+		if err := writer.WriteHeader(&tar.Header{Name: member.name, Size: int64(len(member.body)), Mode: 0o600}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(member.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "image.tar")
+	if err := os.WriteFile(path, archive.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := configDigestFromDockerSave(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "sha256:"+hexDigest {
+		t.Fatalf("unexpected config digest: %s", got)
+	}
+}
+
+func TestConfigDigestFromKanikoGoContainerRegistryTar(t *testing.T) {
+	config := []byte(`{"architecture":"amd64","os":"linux"}`)
+	digest := sha256.Sum256(config)
+	hexDigest := hex.EncodeToString(digest[:])
+	manifest, err := json.Marshal([]map[string]any{{
+		"Config":   "sha256:" + hexDigest,
+		"RepoTags": []string{"ditto-screen/11111111-1111-4111-8111-111111111111-22222222-2222-4222-8222-222222222222:latest"},
+		"Layers":   []string{},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for _, member := range []struct {
+		name string
+		body []byte
+	}{
+		{name: "sha256:" + hexDigest, body: config},
 		{name: "manifest.json", body: manifest},
 	} {
 		if err := writer.WriteHeader(&tar.Header{Name: member.name, Size: int64(len(member.body)), Mode: 0o600}); err != nil {

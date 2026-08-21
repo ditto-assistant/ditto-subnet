@@ -379,15 +379,24 @@ func configDigestFromDockerSave(path string) (string, error) {
 }
 
 func namedConfigDigest(name string) string {
+	name = strings.TrimPrefix(name, "./")
 	if strings.HasSuffix(name, ".json") {
 		stem := strings.TrimSuffix(name, ".json")
 		if !strings.Contains(stem, "/") && digestPattern.MatchString(stem) {
 			return stem
 		}
 	}
-	const prefix = "blobs/sha256/"
-	if strings.HasPrefix(name, prefix) {
-		digest := name[len(prefix):]
+	const blobPrefix = "blobs/sha256/"
+	if strings.HasPrefix(name, blobPrefix) {
+		digest := name[len(blobPrefix):]
+		if digestPattern.MatchString(digest) {
+			return digest
+		}
+	}
+	// go-containerregistry (Kaniko --tar-path) names the config "sha256:<hex>".
+	const algoPrefix = "sha256:"
+	if strings.HasPrefix(name, algoPrefix) && !strings.Contains(name, "/") {
+		digest := name[len(algoPrefix):]
 		if digestPattern.MatchString(digest) {
 			return digest
 		}
