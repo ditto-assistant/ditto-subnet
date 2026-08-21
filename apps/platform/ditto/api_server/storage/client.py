@@ -616,7 +616,8 @@ class S3StorageClient:
         """Server-side copy inside the private bucket.
 
         Used to bind a Platform-verified Kaniko archive as the screened image
-        without streaming the tar through the API process.
+        without streaming the tar through the API process. The copied object
+        may be gzip; sha256/size stay those of the stored bytes.
         """
         from botocore.exceptions import BotoCoreError, ClientError
 

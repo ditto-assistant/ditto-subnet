@@ -1,9 +1,12 @@
 package main
 
 import (
+	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -88,5 +91,90 @@ func TestHashBoundedReportsExactBytesAndDigest(t *testing.T) {
 	expected := sha256.Sum256(content)
 	if digest != hex.EncodeToString(expected[:]) || size != int64(len(content)) {
 		t.Fatalf("unexpected digest/size: %s %d", digest, size)
+	}
+}
+
+func TestPrepareStoredImageGzipsUncompressedTar(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "image.tar")
+	dst := filepath.Join(t.TempDir(), "image.tar.gz")
+	content := []byte("oci archive")
+	if err := os.WriteFile(src, content, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, digest, size, err := prepareStoredImage(src, dst, 1024, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != dst {
+		t.Fatalf("uncompressed tar was not gzipped: %s", path)
+	}
+	stored, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) < 2 || stored[0] != 0x1f || stored[1] != 0x8b {
+		t.Fatal("stored object is not gzip")
+	}
+	expected := sha256.Sum256(stored)
+	if digest != hex.EncodeToString(expected[:]) || size != int64(len(stored)) {
+		t.Fatalf("gzip digest/size pin the uncompressed tar: %s %d", digest, size)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(stored))
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := io.ReadAll(gz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(decoded, content) {
+		t.Fatalf("gzip payload = %q, want %q", decoded, content)
+	}
+}
+
+func TestPrepareStoredImagePassesThroughExistingGzip(t *testing.T) {
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	if _, err := gz.Write([]byte("oci archive")); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(t.TempDir(), "image.tar")
+	dst := filepath.Join(t.TempDir(), "image.tar.gz")
+	if err := os.WriteFile(src, buf.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path, digest, size, err := prepareStoredImage(src, dst, 1024, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != src {
+		t.Fatal("already-gzipped Kaniko output was re-compressed")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatal("pass-through gzip wrote a destination file")
+	}
+	expected := sha256.Sum256(buf.Bytes())
+	if digest != hex.EncodeToString(expected[:]) || size != int64(buf.Len()) {
+		t.Fatalf("unexpected pass-through digest/size: %s %d", digest, size)
+	}
+}
+
+func TestPrepareStoredImageRejectsOversizeUncompressed(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "image.tar")
+	dst := filepath.Join(t.TempDir(), "image.tar.gz")
+	if err := os.WriteFile(src, []byte("oci archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := prepareStoredImage(src, dst, 4, 1024); err == nil {
+		t.Fatal("oversize uncompressed tar was accepted")
+	}
+	if _, err := os.Stat(dst); !os.IsNotExist(err) {
+		t.Fatal("failed gzip left a destination file")
 	}
 }

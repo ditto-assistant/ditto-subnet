@@ -906,6 +906,7 @@ class TestFederatedScreenerNodes:
         assert base64.b64decode(upload.json()["upload_url_b64"]).startswith(b"https://")
         required = upload.json()["required_headers"]
         assert required["Content-Length"] == "123"
+        assert required["Content-Type"] == "application/gzip"
         assert required["x-amz-meta-artifact-sha256"] == _SHA256
         expected_metadata = {
             "sha256": output_sha,
@@ -5686,6 +5687,7 @@ class TestScreenedImageUpload:
                 "attempt-id": attempt_id,
                 "image-upload-id": body["image_upload_id"],
             },
+            "content_type": "application/gzip",
         }
 
     async def test_multipart_completion_hashes_full_bytes_before_verification(

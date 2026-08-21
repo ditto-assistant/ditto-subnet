@@ -1,4 +1,5 @@
 import base64
+import gzip
 import json
 import shutil
 import urllib.error
@@ -15,6 +16,7 @@ from screener_capacity.builder import (
     _docker_config,
     _image_archive_sources,
     _kaniko_script,
+    _materialize_image_archive,
     _promote_runtime_archive,
     _skopeo_detail,
     _skopeo_env,
@@ -60,6 +62,17 @@ def test_image_archive_prefers_oci_layout_then_docker_manifest(tmp_path: Path) -
     _write_tar(docker, ["manifest.json", "sha256:abc"])
     assert _image_archive_sources(oci)[0].startswith("oci-archive:")
     assert _image_archive_sources(docker)[0].startswith("docker-archive:")
+
+
+def test_materialize_image_archive_unwraps_gzip(tmp_path: Path) -> None:
+    plain = tmp_path / "image.tar"
+    _write_tar(plain, ["manifest.json"])
+    compressed = tmp_path / "image.tar.gz"
+    compressed.write_bytes(gzip.compress(plain.read_bytes(), mtime=0))
+    unpacked = _materialize_image_archive(compressed)
+    assert unpacked != compressed
+    assert unpacked.read_bytes() == plain.read_bytes()
+    assert _materialize_image_archive(plain) == plain
 
 
 class _Proc:
