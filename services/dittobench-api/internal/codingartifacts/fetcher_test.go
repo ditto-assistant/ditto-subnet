@@ -32,7 +32,7 @@ func signedCapability(serverURL string, body []byte, now time.Time) Capability {
 	sha := digest(body)
 	expiresAt := now.Add(5 * time.Minute)
 	return Capability{
-		TicketID: testTicketID, Kind: KindVisibleBundle,
+		TicketID: testTicketID, Phase: PhaseAuthoring, Kind: KindVisibleBundle,
 		Audience: AudienceWorkspaceMaterializer, SHA256: sha, SizeBytes: int64(len(body)),
 		URL: serverURL + "/private-coding/coding-artifacts/v1/visible-bundle/sha256/" + sha +
 			"?AWSAccessKeyId=placeholder&Expires=" + fmt.Sprint(expiresAt.Unix()) + "&Signature=secret-query",
@@ -119,6 +119,7 @@ func TestOpenRejectsCapabilityDriftBeforeRequest(t *testing.T) {
 	base := signedCapability(server.URL, body, now)
 	tests := map[string]func(*Capability){
 		"ticket":            func(value *Capability) { value.TicketID = "not-a-ticket" },
+		"phase":             func(value *Capability) { value.Phase = DeliveryPhase("unknown") },
 		"zero ticket":       func(value *Capability) { value.TicketID = "00000000-0000-0000-0000-000000000000" },
 		"kind":              func(value *Capability) { value.Kind = Kind("unknown") },
 		"audience":          func(value *Capability) { value.Audience = AudienceProtectedGrader },
@@ -482,6 +483,24 @@ func TestKindPoliciesAreExhaustive(t *testing.T) {
 	}
 	if _, _, ok := kindPolicy(Kind("unknown")); ok {
 		t.Fatal("unknown kind has a policy")
+	}
+}
+
+func TestDeliveryPhasesRejectCrossBoundaryArtifacts(t *testing.T) {
+	allowed := map[DeliveryPhase]map[Kind]bool{
+		PhaseAuthoring: {
+			KindVisibleBundle: true, KindMemoryBundle: true, KindResourceProfile: true,
+		},
+		PhaseGrading: {
+			KindVisibleBundle: true, KindResourceProfile: true, KindGraderBundle: true,
+		},
+	}
+	for _, phase := range []DeliveryPhase{PhaseAuthoring, PhaseGrading, DeliveryPhase("unknown")} {
+		for _, kind := range []Kind{KindVisibleBundle, KindMemoryBundle, KindResourceProfile, KindGraderBundle} {
+			if phaseAllows(phase, kind) != allowed[phase][kind] {
+				t.Fatalf("phase %q kind %q allowance drifted", phase, kind)
+			}
+		}
 	}
 }
 

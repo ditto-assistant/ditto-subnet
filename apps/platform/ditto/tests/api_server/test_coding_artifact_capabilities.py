@@ -11,6 +11,7 @@ from uuid import uuid4
 
 import pytest
 
+from ditto.api_models.coding_artifacts import CodingArtifactDeliveryPhase
 from ditto.api_models.coding_selection import (
     CodingCatalogBudgets,
     CodingCatalogIssue,
@@ -25,6 +26,7 @@ from ditto.api_server.coding_artifact_capabilities import (
     CodingArtifactCapabilityUnavailableError,
     CodingArtifactKind,
     coding_artifact_object_key,
+    project_coding_artifact_capability,
 )
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.storage.errors import ObjectUploadFailedError
@@ -163,10 +165,45 @@ async def test_mints_exact_four_digest_derived_capabilities() -> None:
     ]
     assert store.head_calls == expected
     assert store.url_calls == [(key, 300) for key in expected]
+    assert result.ticket_deadline == lease.deadline
     assert result.expires_at == _NOW + timedelta(seconds=300)
     assert "coding-artifacts/" not in repr(result)
     assert "signature=secret" not in repr(result)
     assert result.weight_eligible is False
+
+
+async def test_projects_only_phase_appropriate_single_capabilities() -> None:
+    result = await _minter(_Store()).mint(_lease())
+    visible = project_coding_artifact_capability(
+        result,
+        kind=CodingArtifactKind.VISIBLE_BUNDLE,
+        phase=CodingArtifactDeliveryPhase.AUTHORING,
+    )
+    grader = project_coding_artifact_capability(
+        result,
+        kind=CodingArtifactKind.GRADER_BUNDLE,
+        phase=CodingArtifactDeliveryPhase.GRADING,
+    )
+    assert visible.ticket_id == result.ticket_id
+    assert visible.url.startswith("https://storage.example.com/")
+    assert grader.delivery_phase is CodingArtifactDeliveryPhase.GRADING
+    assert "signature=secret" not in repr(visible)
+
+    with pytest.raises(
+        CodingArtifactCapabilityIntegrityError, match="projection"
+    ) as captured:
+        project_coding_artifact_capability(
+            result,
+            kind=CodingArtifactKind.GRADER_BUNDLE,
+            phase=CodingArtifactDeliveryPhase.AUTHORING,
+        )
+    assert "signature=secret" not in "".join(traceback.format_exception(captured.value))
+    with pytest.raises(CodingArtifactCapabilityIntegrityError, match="projection"):
+        project_coding_artifact_capability(
+            result,
+            kind=CodingArtifactKind.MEMORY_BUNDLE,
+            phase=CodingArtifactDeliveryPhase.GRADING,
+        )
 
 
 async def test_capability_ttl_never_outlives_ticket() -> None:

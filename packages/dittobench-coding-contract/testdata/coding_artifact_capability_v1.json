@@ -1,0 +1,127 @@
+{
+  "schema": "dittobench-coding-artifact-capability-vector-v1",
+  "coding_contract_version": 1,
+  "weight_eligible": false,
+  "policies": [
+    {
+      "artifact_kind": "visible-bundle",
+      "audience": "workspace-materializer",
+      "maximum_size_bytes": 2147483648,
+      "delivery_phases": [
+        "authoring",
+        "grading"
+      ]
+    },
+    {
+      "artifact_kind": "memory-bundle",
+      "audience": "memory-seed-projector",
+      "maximum_size_bytes": 67108864,
+      "delivery_phases": [
+        "authoring"
+      ]
+    },
+    {
+      "artifact_kind": "resource-profile",
+      "audience": "resource-supervisor",
+      "maximum_size_bytes": 4194304,
+      "delivery_phases": [
+        "authoring",
+        "grading"
+      ]
+    },
+    {
+      "artifact_kind": "grader-bundle",
+      "audience": "protected-grader",
+      "maximum_size_bytes": 536870912,
+      "delivery_phases": [
+        "grading"
+      ]
+    }
+  ],
+  "capabilities": [
+    {
+      "schema": "dittobench-coding-artifact-capability-v1",
+      "coding_contract_version": 1,
+      "weight_eligible": false,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "ticket_deadline": "2026-08-21T13:00:00Z",
+      "delivery_phase": "authoring",
+      "artifact_kind": "visible-bundle",
+      "audience": "workspace-materializer",
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "size_bytes": 1024,
+      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/visible-bundle/sha256/1111111111111111111111111111111111111111111111111111111111111111?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-visible-authoring",
+      "expires_at": "2026-08-21T12:05:00Z"
+    },
+    {
+      "schema": "dittobench-coding-artifact-capability-v1",
+      "coding_contract_version": 1,
+      "weight_eligible": false,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "ticket_deadline": "2026-08-21T13:00:00Z",
+      "delivery_phase": "authoring",
+      "artifact_kind": "memory-bundle",
+      "audience": "memory-seed-projector",
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "size_bytes": 2048,
+      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/memory-bundle/sha256/2222222222222222222222222222222222222222222222222222222222222222?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-memory-authoring",
+      "expires_at": "2026-08-21T12:05:00Z"
+    },
+    {
+      "schema": "dittobench-coding-artifact-capability-v1",
+      "coding_contract_version": 1,
+      "weight_eligible": false,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "ticket_deadline": "2026-08-21T13:00:00Z",
+      "delivery_phase": "authoring",
+      "artifact_kind": "resource-profile",
+      "audience": "resource-supervisor",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "size_bytes": 4096,
+      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/3333333333333333333333333333333333333333333333333333333333333333?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-authoring",
+      "expires_at": "2026-08-21T12:05:00Z"
+    },
+    {
+      "schema": "dittobench-coding-artifact-capability-v1",
+      "coding_contract_version": 1,
+      "weight_eligible": false,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "ticket_deadline": "2026-08-21T13:00:00Z",
+      "delivery_phase": "grading",
+      "artifact_kind": "visible-bundle",
+      "audience": "workspace-materializer",
+      "sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "size_bytes": 1024,
+      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/visible-bundle/sha256/4444444444444444444444444444444444444444444444444444444444444444?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-visible-grading",
+      "expires_at": "2026-08-21T12:05:00Z"
+    },
+    {
+      "schema": "dittobench-coding-artifact-capability-v1",
+      "coding_contract_version": 1,
+      "weight_eligible": false,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "ticket_deadline": "2026-08-21T13:00:00Z",
+      "delivery_phase": "grading",
+      "artifact_kind": "resource-profile",
+      "audience": "resource-supervisor",
+      "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "size_bytes": 4096,
+      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/5555555555555555555555555555555555555555555555555555555555555555?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-grading",
+      "expires_at": "2026-08-21T12:05:00Z"
+    },
+    {
+      "schema": "dittobench-coding-artifact-capability-v1",
+      "coding_contract_version": 1,
+      "weight_eligible": false,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "ticket_deadline": "2026-08-21T13:00:00Z",
+      "delivery_phase": "grading",
+      "artifact_kind": "grader-bundle",
+      "audience": "protected-grader",
+      "sha256": "6666666666666666666666666666666666666666666666666666666666666666",
+      "size_bytes": 8192,
+      "url": "https://storage.invalid/private-coding/coding-artifacts/v1/grader-bundle/sha256/6666666666666666666666666666666666666666666666666666666666666666?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-grader-grading",
+      "expires_at": "2026-08-21T12:05:00Z"
+    }
+  ]
+}
