@@ -26,6 +26,9 @@ from ditto.api_server.endpoints.admin_continual_retest_settings import (
 from ditto.api_server.endpoints.admin_copy_review import (
     router as admin_copy_review_router,
 )
+from ditto.api_server.endpoints.admin_core_qualification import (
+    router as admin_core_qualification_router,
+)
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
@@ -131,6 +134,7 @@ __all__ = [
     "admin_coding_certifications_router",
     "admin_confirmation_bundles_router",
     "admin_continual_retest_settings_router",
+    "admin_core_qualification_router",
     "admin_miner_fees_router",
     "admin_owner_router",
     "admin_quarantine_router",

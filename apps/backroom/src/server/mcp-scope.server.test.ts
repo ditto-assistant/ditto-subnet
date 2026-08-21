@@ -315,6 +315,49 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
   })
 
+  it('keeps shadow core qualification reads separate from its policy write', async () => {
+    for (const name of [
+      'get_core_qualification_policy',
+      'get_agent_core_qualification',
+    ]) {
+      const request = new Request('https://backroom.dittobench.ai/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name, arguments: {} },
+        }),
+      })
+      expect(await callsWriteTool(request)).toBe(false)
+      expect(await requiredScopesForRequest(request)).toEqual([])
+    }
+
+    const write = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'set_core_qualification_policy', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(write)).toBe(true)
+    expect(await requiredScopesForRequest(write)).toEqual([BACKROOM_WRITE_SCOPE])
+
+    const refresh = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'refresh_agent_core_qualification', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(refresh)).toBe(true)
+    expect(await requiredScopesForRequest(refresh)).toEqual([BACKROOM_WRITE_SCOPE])
+  })
+
   it('recognizes a queue policy revision as write-scoped and its read as not', async () => {
     const write = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',
@@ -483,6 +526,8 @@ describe('MCP scope challenges', () => {
       'list_stuck_submissions',
       'agent_scoring_readiness',
       'get_agent_coding_certifications',
+      'get_core_qualification_policy',
+      'get_agent_core_qualification',
     ]) {
       const request = new Request('https://backroom.dittobench.ai/mcp', {
         method: 'POST',
