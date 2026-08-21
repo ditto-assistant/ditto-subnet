@@ -62,6 +62,12 @@ class AlignBody(_Ignore):
     database_url: str | None = None
 
 
+def _bind_host(host: object) -> str:
+    if isinstance(host, (bytes, bytearray)):
+        return bytes(host).decode()
+    return str(host)
+
+
 def make_handler(engine: PreviewEngine) -> type[BaseHTTPRequestHandler]:
     """Build a request handler closed over ``engine``."""
 
@@ -108,58 +114,58 @@ def make_handler(engine: PreviewEngine) -> type[BaseHTTPRequestHandler]:
                     "permit": neuron.permit,
                 }
             if path == "/v1/cheat/permit":
-                req = PermitBody.model_validate(body)
-                neuron = engine.permit(req.hotkey, req.enabled)
+                permit = PermitBody.model_validate(body)
+                neuron = engine.permit(permit.hotkey, permit.enabled)
                 return {"hotkey": neuron.hotkey, "permit": neuron.permit}
             if path == "/v1/cheat/warp_block":
-                req = WarpBody.model_validate(body)
-                return {"block": engine.warp_block(req.n)}
+                warp = WarpBody.model_validate(body)
+                return {"block": engine.warp_block(warp.n)}
             if path == "/v1/cheat/warp_tempo":
-                req = WarpBody.model_validate(body)
-                return {"block": engine.warp_tempo(req.n)}
+                tempo = WarpBody.model_validate(body)
+                return {"block": engine.warp_tempo(tempo.n)}
             if path == "/v1/cheat/issue_lease":
-                req = LeaseBody.model_validate(body)
-                if not req.hotkey:
+                lease_req = LeaseBody.model_validate(body)
+                if not lease_req.hotkey:
                     raise ValueError("hotkey is required")
                 lease = engine.issue_lease(
-                    req.hotkey, lifetime_blocks=req.lifetime_blocks
+                    lease_req.hotkey, lifetime_blocks=lease_req.lifetime_blocks
                 )
                 return {
                     "lease_id": lease.lease_id,
                     "expires_at_block": lease.expires_at_block,
                 }
             if path == "/v1/cheat/expire_lease":
-                req = LeaseBody.model_validate(body)
-                return {"expired": engine.expire_lease(req.lease_id)}
+                expire = LeaseBody.model_validate(body)
+                return {"expired": engine.expire_lease(expire.lease_id)}
             if path == "/v1/cheat/issue_grant":
                 grant = engine.issue_grant()
                 return {"grant_id": grant.grant_id}
             if path == "/v1/cheat/exhaust_allowance":
-                req = GrantBody.model_validate(body)
-                return {"exhausted": engine.exhaust_allowance(req.grant_id)}
+                grant_req = GrantBody.model_validate(body)
+                return {"exhausted": engine.exhaust_allowance(grant_req.grant_id)}
             if path == "/v1/cheat/inject_provider":
-                req = ProviderBody.model_validate(body)
-                engine.inject_provider(req.status)
+                provider = ProviderBody.model_validate(body)
+                engine.inject_provider(provider.status)
                 return {"provider_status": engine.provider_status}
             if path == "/v1/cheat/drop_relay":
-                req = DropBody.model_validate(body)
-                engine.drop_relay(req.dropped)
+                drop = DropBody.model_validate(body)
+                engine.drop_relay(drop.dropped)
                 return {"relay_dropped": engine.relay_dropped}
             if path == "/v1/cheat/snapshot":
-                req = SnapshotBody.model_validate(body)
-                engine.snapshot(req.name)
-                return {"snapshot": req.name}
+                snap = SnapshotBody.model_validate(body)
+                engine.snapshot(snap.name)
+                return {"snapshot": snap.name}
             if path == "/v1/cheat/revert":
-                req = SnapshotBody.model_validate(body)
-                engine.revert(req.name)
-                return {"reverted": req.name, "block": engine.block}
+                revert = SnapshotBody.model_validate(body)
+                engine.revert(revert.name)
+                return {"reverted": revert.name, "block": engine.block}
             if path == "/v1/cheat/align_from_db":
-                req = AlignBody.model_validate(body)
+                align = AlignBody.model_validate(body)
                 aligned = align_engine(
                     engine,
-                    hotkeys=req.hotkeys or None,
-                    json_path=Path(req.json_path) if req.json_path else None,
-                    database_url=req.database_url,
+                    hotkeys=align.hotkeys or None,
+                    json_path=Path(align.json_path) if align.json_path else None,
+                    database_url=align.database_url,
                 )
                 return {"aligned": aligned}
             return None
@@ -198,7 +204,7 @@ class PreviewServer:
     @property
     def url(self) -> str:
         host, port = self._httpd.server_address[:2]
-        return f"http://{host}:{port}"
+        return f"http://{_bind_host(host)}:{int(port)}"
 
     @property
     def port(self) -> int:

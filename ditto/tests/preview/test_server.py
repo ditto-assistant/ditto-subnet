@@ -102,7 +102,8 @@ class _Upstream:
     @property
     def url(self) -> str:
         host, port = self._httpd.server_address[:2]
-        return f"http://{host}:{port}"
+        name = host.decode() if isinstance(host, bytes) else str(host)
+        return f"http://{name}:{int(port)}"
 
     def start(self) -> None:
         self._thread.start()

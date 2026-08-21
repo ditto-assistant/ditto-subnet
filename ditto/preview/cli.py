@@ -158,7 +158,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
 
 def _control_url(args: argparse.Namespace | None) -> str:
-    if args is not None and getattr(args, "url", ""):
+    if args is not None and getattr(args, "url", None):
         return str(args.url)
     env = os.environ.get("PREVIEW_CONTROL_URL", "").strip()
     if env:

@@ -33,7 +33,8 @@ class FaultProxy:
     @property
     def url(self) -> str:
         bound_host, bound_port = self._httpd.server_address[:2]
-        return f"http://{bound_host}:{bound_port}"
+        host = bound_host.decode() if isinstance(bound_host, bytes) else str(bound_host)
+        return f"http://{host}:{int(bound_port)}"
 
     def start(self) -> str:
         self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
