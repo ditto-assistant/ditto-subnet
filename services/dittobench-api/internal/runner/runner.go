@@ -120,38 +120,6 @@ func Health(ctx context.Context, harnessURL string) error {
 	return nil
 }
 
-// SupportsCaseScopedInference reads the additive harness health capability.
-// Any legacy, malformed, or non-JSON 2xx response safely means unsupported;
-// callers then retain serial case windows.
-func SupportsCaseScopedInference(ctx context.Context, harnessURL string) bool {
-	ctx, cancel := context.WithTimeout(ctx, healthTimeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, harnessURL+"/health", nil)
-	if err != nil {
-		return false
-	}
-	resp, err := clientFor(ctx).Do(req)
-	if err != nil {
-		return false
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return false
-	}
-	var health struct {
-		Capabilities []string `json:"capabilities"`
-	}
-	if json.NewDecoder(io.LimitReader(resp.Body, 1<<16)).Decode(&health) != nil {
-		return false
-	}
-	for _, capability := range health.Capabilities {
-		if capability == "case_scoped_inference_v1" {
-			return true
-		}
-	}
-	return false
-}
-
 // WaitHealthy polls <harnessURL>/health until it returns 2xx or the deadline
 // passes. Used by the sandbox path to wait for a freshly started container to
 // come up before spending the evaluation on it.
@@ -295,11 +263,9 @@ func marshalSeedRequest(req protocol.SeedRequest, benchVersion int) ([]byte, err
 // the user_id the case's memory graph was seeded under (multi-graph isolation).
 // The zero value reproduces self-report behavior (no endpoint, default user).
 type CaseOptions struct {
-	ToolEndpoint        string
-	UserID              string
-	BenchVersion        int
-	InferenceBaseURL    string
-	CaseScopedInference bool
+	ToolEndpoint string
+	UserID       string
+	BenchVersion int
 }
 
 // AttemptTelemetry is validator-observed execution evidence for one HTTP
@@ -344,10 +310,11 @@ type CaseExecution struct {
 	// administered (pending); Observed=true with a nil verdict means it WAS
 	// administered but the clean run was already incorrect, so the case is excluded
 	// from the dependent/independent tally while still counting toward
-	// slice-attribution completeness. Populated only by the v12 relay path; consumed
-	// at cmd/dittobench-api/v9_base.go v9DependenceTelemetryForVersion, the single
-	// model-dependence integration point. Until the relay sets these, the v12 gate
-	// fails closed.
+	// slice-attribution completeness. The counterfactual relay pass and the scorer
+	// aggregator that consumed these fields required exclusive per-case inference
+	// windows and were removed when /run became concurrent, so nothing populates
+	// them today; the fields stay in the published transcript contract for a
+	// restored per-case dependence pass.
 	ModelCounterfactualObserved  bool  `json:"model_counterfactual_observed,omitempty"`
 	ModelCounterfactualDependent *bool `json:"model_counterfactual_dependent,omitempty"`
 	// AnswerStuffObserved reports that the trusted relay captured this case's
@@ -365,10 +332,10 @@ type CaseExecution struct {
 	// of the stuffed/clean tally while still counting toward attribution
 	// completeness. The provenance value tokens are never stored here: only the
 	// bounded verdict is published, so the answer key and prompt never enter the
-	// transcript. Populated only by the v12 relay/scorer path; consumed at
-	// cmd/dittobench-api/v9_base.go v12AnswerStuffingTelemetry. Until the relay and
-	// scorer settle these, the v12 answer-stuffing gate fails OPEN (a detection
-	// gate never penalizes an honest run for missing capture).
+	// transcript. The scorer pass that settled these required exclusive per-case
+	// inference windows and was removed when /run became concurrent; the broker
+	// still captures the underlying model I/O (cmd/dittobench-api/answer_io_capture.go),
+	// so a restored per-case pass can settle them again.
 	AnswerStuffObserved bool  `json:"answer_stuff_observed,omitempty"`
 	AnswerStuffed       *bool `json:"answer_stuffed,omitempty"`
 	// AnswerStuffLoose is the "loose" answer-stuffing verdict for a COMPUTED case
@@ -378,11 +345,9 @@ type CaseExecution struct {
 	// SUPERSET of AnswerStuffed -- a case whose answer value ALSO appears in memory (a
 	// coinciding-value stuffer) cannot be auto-proven against RAG, so AnswerStuffed
 	// stays nil (excluded from the provable auto-gate) while this loose verdict is
-	// still recorded. Aggregated at cmd/dittobench-api/v9_base.go
-	// v12AnswerStuffingTelemetry into the loose systematic-review signal, which only
-	// ROUTES a run to human review (never an auto-zero). It is set only for a settled,
-	// fully-captured, computed, model-reached case by the v12 scorer path; nil
-	// otherwise. Populated only for bench_version>=12.
+	// still recorded. It fed a loose systematic-review signal that only ROUTED a run
+	// to human review (never an auto-zero). Like AnswerStuffed, nothing populates it
+	// since the per-case scorer pass was removed.
 	AnswerStuffLoose *bool `json:"answer_stuff_loose,omitempty"`
 	// AnswerStuffReviewRequired marks a COMPUTED, model-reached case whose clean-pass
 	// model I/O was captured but overflowed the per-side value-token ceiling (a
@@ -390,12 +355,12 @@ type CaseExecution struct {
 	// anything a legitimate deep-RAG agent can produce). Provenance could not be
 	// settled, so instead of leaving the case pending (fail OPEN, the prior
 	// truncation bug) or auto-zeroing (which would risk an honest giant-context
-	// agent) the scorer sets this bit; the v12 answer-stuffing gate then routes the
-	// whole run to human REVIEW with a full factor (ResultReviewRequired). It is set
-	// only alongside AnswerStuffObserved=true with a nil AnswerStuffed verdict, and
-	// only by the v12 relay/scorer path; consumed at cmd/dittobench-api/v9_base.go
-	// v12AnswerStuffingTelemetry. Prompt size is never itself a signal -- this bit is
-	// a last-resort safety net, never expected to fire on normal full-context use.
+	// agent) the scorer set this bit, routing the whole run to human REVIEW with a
+	// full factor. It is set only alongside AnswerStuffObserved=true with a nil
+	// AnswerStuffed verdict, and only by the per-case scorer pass that was removed
+	// when /run became concurrent. Prompt size is never itself a signal -- this bit
+	// is a last-resort safety net, never expected to fire on normal full-context
+	// use.
 	AnswerStuffReviewRequired bool `json:"answer_stuff_review_required,omitempty"`
 }
 
@@ -459,14 +424,13 @@ func runOneWithTelemetry(ctx context.Context, harnessURL string, c protocol.Tool
 
 	wireBenchVersion := harnessWireBenchVersion(opts.BenchVersion)
 	reqBody := protocol.RunRequest{
-		CaseID:           c.ID,
-		SystemPrompt:     "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request.",
-		UserInput:        c.Prompt,
-		Tools:            tools,
-		BenchVersion:     wireBenchVersion,
-		ToolEndpoint:     opts.ToolEndpoint,
-		UserID:           opts.UserID,
-		InferenceBaseURL: opts.InferenceBaseURL,
+		CaseID:       c.ID,
+		SystemPrompt: "You are Ditto, a helpful assistant with access to tools. Call a tool only when it is the right action for the user's request.",
+		UserInput:    c.Prompt,
+		Tools:        tools,
+		BenchVersion: wireBenchVersion,
+		ToolEndpoint: opts.ToolEndpoint,
+		UserID:       opts.UserID,
 	}
 	buf, err := json.Marshal(reqBody)
 	if err != nil {

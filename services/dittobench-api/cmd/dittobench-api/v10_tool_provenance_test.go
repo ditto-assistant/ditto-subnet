@@ -123,11 +123,10 @@ func TestV10ToolRouteRequiresAndConsumesMatchingModelEmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence := toolProvenanceEvidence(after)
-	if evidence == nil || evidence.ModelEmitted != 1 || evidence.EndpointAttempts != 2 ||
-		evidence.Matched != 1 || evidence.Unmatched != 1 || !evidence.Complete ||
-		!slices.Contains(evidence.Findings, "duplicate_tool_execution") {
-		t.Fatalf("provenance evidence=%+v", evidence)
+	if after.ModelToolCalls != 1 || after.EndpointAttempts != 2 ||
+		after.MatchedToolCalls != 1 || after.UnmatchedToolCalls != 1 ||
+		!toolEvidenceComplete(after) || after.ToolFindings&toolFindingDuplicateExecution == 0 {
+		t.Fatalf("provenance counters=%+v", after)
 	}
 }
 
@@ -176,10 +175,8 @@ func TestV10BrokerResponseRecordsModelToolCallsForActiveCase(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence := toolProvenanceEvidence(after)
-	if evidence == nil || evidence.ModelEmitted != 1 || evidence.ModelSelectedNotExecuted != 1 ||
-		!evidence.Complete || !slices.Contains(evidence.Findings, "model_selected_not_executed") {
-		t.Fatalf("broker provenance evidence=%+v", evidence)
+	if after.ModelToolCalls != 1 || toolSelectedNotExecuted(after) != 1 || !toolEvidenceComplete(after) {
+		t.Fatalf("broker provenance counters=%+v", after)
 	}
 }
 
@@ -202,11 +199,8 @@ func TestV10InvalidModelToolEmissionFailsEvidenceClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence := toolProvenanceEvidence(after)
-	if evidence == nil || evidence.Complete ||
-		!slices.Contains(evidence.Findings, "invalid_model_tool_emission") ||
-		!slices.Contains(evidence.Findings, "tool_provenance_incomplete") {
-		t.Fatalf("invalid-emission evidence=%+v", evidence)
+	if toolEvidenceComplete(after) || after.ToolFindings&toolFindingInvalidModelEmission == 0 {
+		t.Fatalf("invalid-emission counters=%+v", after)
 	}
 }
 
@@ -217,25 +211,25 @@ func TestV10ToolRouteFailsClosedOnUnbackedMismatchAndCrossCaseCalls(t *testing.T
 		requestCase string
 		modelCalls  string
 		call        protocol.ToolExecRequest
-		finding     string
+		finding     uint64
 	}{
 		{
 			name: "unbacked", activeCase: "case-a", requestCase: "case-a",
 			modelCalls: `{"choices":[{"message":{}}]}`,
 			call:       protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "search_web", Args: json.RawMessage(`{"query":"x"}`)},
-			finding:    "unbacked_harness_execution",
+			finding:    toolFindingUnbacked,
 		},
 		{
 			name: "argument mismatch", activeCase: "case-a", requestCase: "case-a",
 			modelCalls: `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"search_web","arguments":"{\"query\":\"expected\"}"}}]}}]}`,
 			call:       protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "search_web", Args: json.RawMessage(`{"query":"different"}`)},
-			finding:    "name_argument_mismatch",
+			finding:    toolFindingNameArgumentMismatch,
 		},
 		{
 			name: "cross case replay", activeCase: "case-b", requestCase: "case-a",
 			modelCalls: `{"choices":[{"message":{"tool_calls":[{"id":"call-1","type":"function","function":{"name":"search_web","arguments":"{\"query\":\"x\"}"}}]}}]}`,
 			call:       protocol.ToolExecRequest{CaseID: "case-a", UserID: "user-a", Name: "search_web", Args: json.RawMessage(`{"query":"x"}`)},
-			finding:    "cross_case_replay",
+			finding:    toolFindingCrossCaseReplay,
 		},
 	}
 	for _, test := range tests {
@@ -265,10 +259,9 @@ func TestV10ToolRouteFailsClosedOnUnbackedMismatchAndCrossCaseCalls(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			evidence := toolProvenanceEvidence(after)
-			if evidence == nil || evidence.EndpointAttempts != 1 || evidence.Unmatched != 1 ||
-				!slices.Contains(evidence.Findings, test.finding) {
-				t.Fatalf("evidence=%+v", evidence)
+			if after.EndpointAttempts != 1 || after.UnmatchedToolCalls != 1 ||
+				after.ToolFindings&test.finding == 0 {
+				t.Fatalf("counters=%+v", after)
 			}
 		})
 	}
@@ -287,10 +280,8 @@ func TestV10ToolProvenanceReportsModelSelectionWithoutExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evidence := toolProvenanceEvidence(after)
-	if evidence == nil || evidence.ModelSelectedNotExecuted != 1 ||
-		!slices.Contains(evidence.Findings, "model_selected_not_executed") {
-		t.Fatalf("evidence=%+v", evidence)
+	if toolSelectedNotExecuted(after) != 1 {
+		t.Fatalf("counters=%+v", after)
 	}
 }
 
@@ -640,4 +631,20 @@ func TestV10BrokerResponseRecordsModelToolCallsAtSessionLevelUnderConcurrentRun(
 	if !ok || totals != (sessionToolProvenanceTotals{ModelEmitted: 2, Consumed: 2}) {
 		t.Fatalf("totals after consumption=%+v ok=%t", totals, ok)
 	}
+}
+
+// toolEvidenceComplete and toolSelectedNotExecuted mirror how the broker's
+// per-case tool counters were published. The production publisher was removed
+// with the exclusive per-case windows that fed it; the counters themselves are
+// still recorded on the session's success path, so these tests assert them
+// directly.
+func toolEvidenceComplete(snapshot brokerCaseSnapshot) bool {
+	return snapshot.ToolEvidenceComplete && snapshot.InFlight == 0
+}
+
+func toolSelectedNotExecuted(snapshot brokerCaseSnapshot) uint64 {
+	if snapshot.ModelToolCalls <= snapshot.MatchedToolCalls {
+		return 0
+	}
+	return snapshot.ModelToolCalls - snapshot.MatchedToolCalls
 }

@@ -45,9 +45,7 @@ func TestRunCaseWithModelAttributionOverlapsWithoutCaseWindows(t *testing.T) {
 			_, execution, err := srv.runCaseWithModelAttribution(
 				runner.TrustSandbox(context.Background()), "session", harness.URL,
 				caseID, "question", nil, runner.CaseOptions{
-					BenchVersion:        protocol.BenchVersionV10,
-					CaseScopedInference: true,
-					InferenceBaseURL:    "http://should-be-cleared",
+					BenchVersion: protocol.BenchVersionV10,
 				},
 			)
 			if err != nil {
@@ -199,12 +197,11 @@ func TestApplyV9BaseEvidenceAcceptsHealthyZeroInferenceAsFactorZero(t *testing.T
 }
 
 func TestApplyV9BaseEvidenceAssemblesV10RootWithSettledAttribution(t *testing.T) {
-	// The flip of the transitional v10 skip. The v10 case-scoped inference path
-	// now settles complete per-case attribution -- v9GenerationCaseDelta accepts
-	// the non-zero ToolEvidenceComplete opening snapshot every v10 window carries
-	// (see TestV9GenerationCaseDeltaAcceptsV10OpeningSnapshot) -- so a healthy
-	// v10 run assembles the same signed base-evidence root v9 does, restoring the
-	// score gates and the curve-v3 efficiency factor for v10/v11.
+	// The flip of the transitional v10 skip: base evidence is assembled for every
+	// bench version >= 9 on ticket-scope model-use evidence, which survives
+	// overlapping /run. A healthy v10 run therefore assembles the same signed
+	// base-evidence root v9 does, restoring the score gates and the curve-v3
+	// efficiency factor for v10/v11.
 	report := sampleV9Report()
 	report.Details.BenchVersion = protocol.BenchVersionV10
 	req := submitRequest{
@@ -414,66 +411,6 @@ func TestV9AggregateModelTelemetryCompletenessMatrix(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := v9AggregateModelTelemetry(tt.usage, tt.execution, nil, nil).TelemetryComplete; got != tt.want {
 				t.Fatalf("complete = %t, want %t", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestV9GenerationCaseDeltaExcludesUnsettledTail(t *testing.T) {
-	tests := []struct {
-		name                string
-		before, after       brokerCaseSnapshot
-		beforeErr, afterErr error
-		observed, complete  bool
-	}{
-		{name: "zero use", complete: true},
-		{name: "one success", after: brokerCaseSnapshot{Requests: 1, Successes: 1}, observed: true, complete: true},
-		{name: "failed request", after: brokerCaseSnapshot{Requests: 1}, complete: true},
-		{name: "unfinished counted request", after: brokerCaseSnapshot{Requests: 1, InFlight: 1}, complete: true},
-		{name: "admitted before request count", after: brokerCaseSnapshot{InFlight: 1}, complete: true},
-		{name: "multiple unfinished handlers", after: brokerCaseSnapshot{Requests: 1, InFlight: 2}, complete: true},
-		{name: "nonzero new-generation baseline", before: brokerCaseSnapshot{Requests: 1}, after: brokerCaseSnapshot{Requests: 1}},
-		{name: "negative in-flight", after: brokerCaseSnapshot{InFlight: -1}},
-		{name: "success exceeds requests", after: brokerCaseSnapshot{Successes: 1}},
-		{name: "before unavailable", beforeErr: fmt.Errorf("missing")},
-		{name: "after unavailable", afterErr: fmt.Errorf("missing")},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			observed, complete := v9GenerationCaseDelta(tt.before, tt.after, tt.beforeErr, tt.afterErr)
-			if observed != tt.observed || complete != tt.complete {
-				t.Fatalf("got observed=%t complete=%t, want %t/%t", observed, complete, tt.observed, tt.complete)
-			}
-		})
-	}
-}
-
-func TestV9DistinctModelCasesRequiresExactEligibleTranscriptPopulation(t *testing.T) {
-	base := []protocol.CaseScore{{CaseID: "a"}, {CaseID: "b"}, {CaseID: "c", Undelivered: true}}
-	tests := []struct {
-		name       string
-		perCase    []protocol.CaseScore
-		transcript []transcriptCase
-		complete   bool
-		successful int
-	}{
-		{name: "complete", perCase: base, transcript: completeModelTranscripts(base, true, false, true), complete: true, successful: 1},
-		{name: "missing transcript", perCase: base, transcript: completeModelTranscripts(base[:2], true, false)},
-		{name: "wrong order", perCase: base, transcript: []transcriptCase{{CaseID: "b"}, {CaseID: "a"}, {CaseID: "c"}}},
-		{name: "duplicate case", perCase: []protocol.CaseScore{{CaseID: "a"}, {CaseID: "a"}}, transcript: completeModelTranscripts([]protocol.CaseScore{{CaseID: "a"}, {CaseID: "a"}}, true, true)},
-		{name: "empty case", perCase: []protocol.CaseScore{{CaseID: ""}}, transcript: completeModelTranscripts([]protocol.CaseScore{{CaseID: ""}}, true)},
-		{name: "eligible attribution missing", perCase: base, transcript: []transcriptCase{{CaseID: "a"}, {CaseID: "b"}, {CaseID: "c"}}},
-		{name: "excluded attribution missing", perCase: base, transcript: []transcriptCase{
-			{CaseID: "a", Execution: runner.CaseExecution{ModelAttributionComplete: true}},
-			{CaseID: "b", Execution: runner.CaseExecution{ModelAttributionComplete: true}},
-			{CaseID: "c"},
-		}, complete: true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			complete, successful := v9DistinctModelCases(tt.perCase, tt.transcript)
-			if complete != tt.complete || successful != tt.successful {
-				t.Fatalf("got complete=%t successful=%d, want %t/%d", complete, successful, tt.complete, tt.successful)
 			}
 		})
 	}
