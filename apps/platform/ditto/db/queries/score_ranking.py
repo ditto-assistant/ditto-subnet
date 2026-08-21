@@ -13,9 +13,11 @@ Two things are canonical here and nowhere else:
 
 **The comparator** (:func:`score_order_key`, and its SQL twin
 :func:`score_order_terms`) -- ``unranked last, highest score first, earliest
-first_seen, lowest agent_id``. The trailing terms are not decoration: they are
-what makes a tie deterministic across the API, the queue, and the fold, so two
-readers of the same ledger never see two different fifth places.
+lineage arrival, lowest agent_id``. The trailing terms are not decoration: they
+are what makes a tie deterministic across the API, the queue, and the fold, so
+two readers of the same ledger never see two different fifth places. Lineage
+arrival is ``fold_first_seen`` when the row carries a crown, otherwise the
+tarball's ``first_seen``.
 
 **The scores it orders by** (:func:`official_composites`) -- authoritative
 quality first, then an optional exact-tie secondary. Legacy eras start on the
@@ -53,8 +55,10 @@ from ditto.score_order import (
     ScoreOrderKey,
     owner_family_order_terms,
     rank_submissions,
+    ranking_first_seen,
     score_order_key,
     score_order_terms,
+    select_owner_representative,
 )
 
 if TYPE_CHECKING:
@@ -74,11 +78,13 @@ __all__ = [
     "official_composites",
     "owner_family_order_terms",
     "rank_submissions",
+    "ranking_first_seen",
     "resolve_efficiency_adjustments",
     "resolve_official_composites",
     "resolve_ranking_scores",
     "score_order_key",
     "score_order_terms",
+    "select_owner_representative",
 ]
 
 # Kept in step with ``endpoints/public.py``: the continual mean only becomes the
@@ -137,8 +143,10 @@ def dedupe_owner_rows(
 
     Callers pass authoritative quality plus the optional curve-v3 secondary,
     so a leaner equal-quality generation wins before first-seen without ever
-    crossing a quality tier. Rows without an internal owner root fall back to a
-    unique agent key, preserving fixtures and historical value objects.
+    crossing a quality tier. Inside a family the newest tied generation is
+    shown; between owners the lineage clock breaks remaining ties. Rows
+    without an internal owner root fall back to a unique agent key, preserving
+    fixtures and historical value objects.
     """
     secondary = (
         secondary_scores
@@ -151,9 +159,9 @@ def dedupe_owner_rows(
         by_owner.setdefault(str(owner), []).append(row)
     winners = [
         _with_resolved_crown(
-            rank_submissions(group, scores=scores, secondary_scores=secondary_scores)[
-                0
-            ],
+            select_owner_representative(
+                group, scores=scores, secondary_scores=secondary_scores
+            )[0],
             group=group,
             scores=scores,
             secondary_scores=secondary,
@@ -170,16 +178,18 @@ def _with_resolved_crown(
     scores: Mapping[UUID, float],
     secondary_scores: Mapping[UUID, float],
 ) -> F:
-    """Re-anchor owner seniority on the same ranking tier that chose its row.
+    """Re-anchor owner seniority on the quality the winner now defends.
 
     PostgreSQL computes ``crown_first_seen`` before Platform efficiency is
-    available. In protocol-21 curve-v3 order, an expensive early sibling must
-    not lend seniority to a later efficient winner unless both its quality and
-    efficiency projection are exactly tied with the winner. Legacy continuous
-    scores retain the historical flat dethrone-band anchor. Ledger rows are
-    frozen dataclasses, so replace only that derived field; lightweight test
-    or moderation rows without it retain their ordinary upload timestamp.
+    available. Efficiency is a within-quality tiebreak, not a new reign: a
+    later leaner sibling at the same quality keeps the earlier clock, and a
+    marginal quality improvement does too. A jump outside the crown-anchor
+    band resets the clock so a planted low score cannot backdate a massive
+    improvement. Ledger rows are frozen dataclasses, so replace only that
+    derived field; lightweight test or moderation rows without it retain
+    their ordinary upload timestamp.
     """
+    del secondary_scores
     if not is_dataclass(winner) or not hasattr(winner, "crown_first_seen"):
         return winner
 
@@ -187,38 +197,28 @@ def _with_resolved_crown(
         KOTH_BAND_DECAY_MIN_BENCH_VERSION,
         KOTH_BAND_DECAY_RATE,
         KOTH_BAND_DECAY_START_COMPOSITE,
-        KOTH_MARGIN,
+    )
+    from ditto.db.queries.scores import (
+        CROWN_ANCHOR_MARGIN,
+        MIN_RESOLVABLE_COMPOSITE_STEP,
     )
 
     winner_score = scores.get(winner.agent_id, winner.composite)
-    if secondary_scores:
-        winner_secondary = secondary_scores.get(winner.agent_id, winner_score)
-        ancestors = [
-            row.first_seen
-            for row in group
-            if bool(getattr(row, "eligible", True))
-            and row.bench_version == winner.bench_version
-            and scores.get(row.agent_id, row.composite) == winner_score
-            and secondary_scores.get(
-                row.agent_id, scores.get(row.agent_id, row.composite)
-            )
-            == winner_secondary
-        ]
-    else:
-        scale = 1.0
-        if winner.bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION:
-            bounded = min(max(winner_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
-            scale = exp(
-                -KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE)
-            )
-        threshold = winner_score - KOTH_MARGIN * scale
-        ancestors = [
-            row.first_seen
-            for row in group
-            if bool(getattr(row, "eligible", True))
-            and row.bench_version == winner.bench_version
-            and scores.get(row.agent_id, row.composite) >= threshold
-        ]
+    scale = 1.0
+    if winner.bench_version >= KOTH_BAND_DECAY_MIN_BENCH_VERSION:
+        bounded = min(max(winner_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
+        scale = exp(-KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE))
+    ceiling = CROWN_ANCHOR_MARGIN * scale
+    floor = max(ceiling, MIN_RESOLVABLE_COMPOSITE_STEP)
+    ancestors = [
+        row.first_seen
+        for row in group
+        if bool(getattr(row, "eligible", True))
+        and row.bench_version == winner.bench_version
+        and winner_score - floor
+        <= scores.get(row.agent_id, row.composite)
+        <= winner_score + ceiling
+    ]
     anchor = min(ancestors, default=winner.first_seen)
     return cast(F, replace(winner, crown_first_seen=anchor))
 

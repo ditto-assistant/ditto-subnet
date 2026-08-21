@@ -55,7 +55,12 @@ from ditto.db.queries.tickets import (
     get_score_priority_floor_rows,
     score_priority_floor_rows_from_resolved_ledger,
 )
-from ditto.score_order import rank_submissions, score_order_key
+from ditto.score_order import (
+    rank_submissions,
+    ranking_first_seen,
+    score_order_key,
+    select_owner_representative,
+)
 
 _BENCH = MIN_SCOREABLE_BENCH_VERSION
 _BASE = datetime(2026, 6, 1, 12, 0, 0, tzinfo=UTC)
@@ -175,6 +180,202 @@ class TestComparator:
 
         assert winner.agent_id == later_lean.agent_id
         assert winner.fold_first_seen == later_lean.first_seen
+
+    def test_a_worse_resubmission_never_represents_the_owner(self) -> None:
+        strong = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        weak_and_newer = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=1),
+            composite=0.80,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE + timedelta(days=1),
+        )
+
+        [winner] = dedupe_owner_rows(
+            [strong, weak_and_newer],
+            scores={strong.agent_id: 0.90, weak_and_newer.agent_id: 0.80},
+        )
+
+        assert winner.agent_id == strong.agent_id
+        assert winner.composite == pytest.approx(0.90)
+
+    def test_a_tied_resubmission_is_shown_and_keeps_the_crown(self) -> None:
+        first = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        later = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=1),
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+
+        [winner] = dedupe_owner_rows(
+            [first, later],
+            scores={first.agent_id: 0.90, later.agent_id: 0.90},
+        )
+
+        assert winner.agent_id == later.agent_id
+        assert winner.fold_first_seen == _BASE
+        assert select_owner_representative([first, later])[0].agent_id == later.agent_id
+
+    def test_equal_quality_keeps_the_earlier_crown_across_efficiency(self) -> None:
+        early_expensive = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        later_lean = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=2),
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+
+        [winner] = dedupe_owner_rows(
+            [early_expensive, later_lean],
+            scores={
+                early_expensive.agent_id: 0.90,
+                later_lean.agent_id: 0.90,
+            },
+            secondary_scores={
+                early_expensive.agent_id: 0.90 * 0.85,
+                later_lean.agent_id: 0.90 * 1.10,
+            },
+        )
+
+        assert winner.agent_id == later_lean.agent_id
+        assert winner.fold_first_seen == _BASE
+
+    def test_a_marginal_quality_improvement_keeps_the_crown(self) -> None:
+        early = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.8991,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        later = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=2),
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE + timedelta(days=2),
+        )
+
+        [winner] = dedupe_owner_rows(
+            [early, later],
+            scores={early.agent_id: 0.8991, later.agent_id: 0.90},
+            secondary_scores={early.agent_id: 0.8991, later.agent_id: 0.90},
+        )
+
+        assert winner.agent_id == later.agent_id
+        assert winner.fold_first_seen == _BASE
+
+    def test_a_massive_quality_jump_resets_the_crown(self) -> None:
+        early = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.50,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        later = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=2),
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE + timedelta(days=2),
+        )
+
+        [winner] = dedupe_owner_rows(
+            [early, later],
+            scores={early.agent_id: 0.50, later.agent_id: 0.90},
+            secondary_scores={early.agent_id: 0.50, later.agent_id: 0.90},
+        )
+
+        assert winner.agent_id == later.agent_id
+        assert winner.fold_first_seen == later.first_seen
+
+    def test_owners_rank_by_crown_not_the_winning_upload(self) -> None:
+        early = _CrownRow(
+            agent_id=_uuid("0"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        iterating = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "C" * 47,
+            first_seen=_BASE + timedelta(days=2),
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        later_rival = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=1),
+            composite=0.90,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-b",
+            crown_first_seen=_BASE + timedelta(days=1),
+        )
+
+        ranked = dedupe_owner_rows(
+            [early, iterating, later_rival],
+            scores={
+                early.agent_id: 0.90,
+                iterating.agent_id: 0.90,
+                later_rival.agent_id: 0.90,
+            },
+        )
+
+        assert [row.emission_owner_root for row in ranked] == [
+            "coldkey:owner-a",
+            "coldkey:owner-b",
+        ]
+        assert ranked[0].agent_id == iterating.agent_id
+        assert ranked[0].fold_first_seen == _BASE
+        assert ranking_first_seen(later_rival) == _BASE + timedelta(days=1)
 
     def test_a_score_tie_is_broken_by_the_earlier_first_seen(self) -> None:
         later = _Row(_uuid("2"), _BASE + timedelta(days=1), 0.50)

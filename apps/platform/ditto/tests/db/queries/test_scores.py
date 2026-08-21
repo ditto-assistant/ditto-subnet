@@ -1270,6 +1270,43 @@ class TestCrownFirstSeen:
         assert by_hotkey[_MINER].crown_first_seen == own_time
         assert by_hotkey[_MINER_B].crown_first_seen == rival_time
 
+    async def test_the_ledger_ranks_owners_by_crown_not_the_winning_upload(
+        self, session: AsyncSession
+    ) -> None:
+        """Iterating at a plateau must not hand a later rival the earlier clock.
+
+        The representative tarball is the newest tied generation, but the
+        between-owner order reads the lineage arrival. A miner who resubmits
+        the same score after a rival arrives still ranks ahead of that rival.
+        """
+        first = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        rival = datetime(2026, 6, 8, 12, 0, tzinfo=UTC)
+        resubmitted = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        for created_at in (first, resubmitted):
+            await _seed_scored(
+                session,
+                miner=_MINER,
+                composite=_WINNER_COMPOSITE,
+                created_at=created_at,
+                n=MIN_ELIGIBLE_CASES,
+            )
+        await _seed_scored(
+            session,
+            miner=_MINER_B,
+            composite=_WINNER_COMPOSITE,
+            created_at=rival,
+            n=MIN_ELIGIBLE_CASES,
+        )
+
+        rows = await list_eligible_ledger(session)
+        by_hotkey = {row.miner_hotkey: row for row in rows}
+
+        assert [row.miner_hotkey for row in rows] == [_MINER, _MINER_B]
+        assert by_hotkey[_MINER].first_seen == resubmitted
+        assert by_hotkey[_MINER].crown_first_seen == first
+        assert by_hotkey[_MINER].fold_first_seen == first
+        assert by_hotkey[_MINER_B].first_seen == rival
+
     async def test_provisional_rows_fall_back_to_their_own_upload_time(
         self, session: AsyncSession
     ) -> None:

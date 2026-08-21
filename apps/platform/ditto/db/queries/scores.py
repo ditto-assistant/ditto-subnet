@@ -414,14 +414,14 @@ class LedgerRow:
 
     @property
     def fold_first_seen(self) -> datetime:
-        """The anchor the KOTH champion fold orders on.
+        """The anchor the KOTH champion fold and the canonical rank order on.
 
-        Every consumer that reproduces or serves the fold reads this; every
-        consumer that means "when did this tarball arrive" — anti-copy priority,
-        the scoring gate, the public board's displayed timestamp, the canonical
-        rank comparator — keeps reading :attr:`first_seen`. Splitting them is the
-        point: those two questions had one answer, and the fold was getting the
-        wrong one.
+        Every consumer that reproduces or serves the fold, the public ``rank``,
+        or a queue floor reads this. Consumers that mean "when did this tarball
+        arrive" — anti-copy priority, the scoring gate, the public board's
+        displayed upload timestamp — keep reading :attr:`first_seen`. Splitting
+        them is the point: those two questions had one answer, and ranking was
+        charging a miner its seniority for iterating.
         """
         return self.crown_first_seen or self.first_seen
 
@@ -1724,7 +1724,7 @@ async def list_eligible_ledger(
     row/agent, so neither an inflated small run nor a zero-scoring full run
     shadows a miner's real ranked run.
 
-    Ordering (``eligible DESC, composite DESC, first_seen ASC, agent_id ASC``)
+    Ordering (``eligible DESC, composite DESC, crown_first_seen ASC, agent_id ASC``)
     matches the validator fold's eligibility gate + champion/tail tie-breaks.
     During an open rollout the whole ledger sits on ONE benchmark version,
     chosen by the threshold rule below
@@ -2418,7 +2418,10 @@ async def list_eligible_ledger(
         winner_order = score_order_terms(
             eligible=winner_projection.c.eligible,
             composite=winner_projection.c.official_score,
-            first_seen=winner_projection.c.first_seen,
+            first_seen=func.coalesce(
+                winner_projection.c.crown_first_seen,
+                winner_projection.c.first_seen,
+            ),
             agent_id=winner_projection.c.agent_id,
         )
         stmt = (
@@ -2437,7 +2440,9 @@ async def list_eligible_ledger(
             *score_order_terms(
                 eligible=winners.c.eligible,
                 composite=winners.c.official_score,
-                first_seen=winners.c.first_seen,
+                first_seen=func.coalesce(
+                    winners.c.crown_first_seen, winners.c.first_seen
+                ),
                 agent_id=winners.c.agent_id,
             )
         )
