@@ -20,11 +20,13 @@ from ditto.api_models.coding import (
     CodingAuthoringEvidence,
     CodingAuthoringLeaseRequest,
     CodingCapabilityCertificationReceipt,
+    CodingGradingLeaseRequest,
     SubmitCodingAuthoringFreezeRequest,
     SubmitCodingCertificationRequest,
     coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
+    coding_grading_lease_signing_message,
 )
 from ditto.api_models.validator import (
     FAILURE_DETAIL_MAX_LENGTH,
@@ -60,6 +62,10 @@ _AUTHORING_FREEZE_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json"
 )
+_GRADING_LEASE_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json"
+)
 
 
 def _authoring_response() -> dict[str, Any]:
@@ -87,6 +93,10 @@ def _authoring_response() -> dict[str, Any]:
         "run_manifest": selection["run_manifest"],
         "capabilities": artifacts["capabilities"][:3],
     }
+
+
+def _grading_vector() -> dict[str, Any]:
+    return json.loads(_GRADING_LEASE_VECTOR_PATH.read_text(encoding="utf-8"))
 
 
 async def test_job_claim_is_fresh_and_signed_by_validator_hotkey() -> None:
@@ -256,6 +266,175 @@ async def test_coding_authoring_client_never_follows_redirects() -> None:
                 keypair,
             ).request_coding_authoring_lease(ticket_id)
     assert observed_paths == ["/api/v1/validator/coding-shadow/authoring-lease"]
+
+
+async def test_coding_grading_client_posts_signed_request_and_parses_lease() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _grading_vector()
+    raw_request = vector["request"]
+    response_body = vector["response"]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/validator/coding-shadow/grading-lease")
+        payload = CodingGradingLeaseRequest.model_validate_json(request.content)
+        message = coding_grading_lease_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            agent_id=payload.agent_id,
+            run_row_id=payload.run_row_id,
+            ticket_id=payload.ticket_id,
+            freeze_id=payload.freeze_id,
+            authoring_evidence_sha256=payload.authoring_evidence_sha256,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        )
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        return httpx.Response(200, json=response_body)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        lease = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).request_coding_grading_lease(
+            agent_id=UUID(raw_request["agent_id"]),
+            run_row_id=UUID(raw_request["run_row_id"]),
+            ticket_id=UUID(raw_request["ticket_id"]),
+            freeze_id=UUID(raw_request["freeze_id"]),
+            authoring_evidence_sha256=raw_request["authoring_evidence_sha256"],
+            expected_frozen_patch_sha256=response_body["frozen_patch_sha256"],
+        )
+    assert [item.artifact_kind.value for item in lease.capabilities] == [
+        "visible-bundle",
+        "resource-profile",
+        "grader-bundle",
+    ]
+    assert "memory-bundle" not in lease.model_dump_json()
+
+
+async def test_coding_grading_client_bounds_and_refuses_redirects() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _grading_vector()
+    raw = vector["request"]
+
+    async def request_lease(http: httpx.AsyncClient) -> None:
+        await PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.test",
+                validator_hotkey=keypair.ss58_address,
+            ),  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).request_coding_grading_lease(
+            agent_id=UUID(raw["agent_id"]),
+            run_row_id=UUID(raw["run_row_id"]),
+            ticket_id=UUID(raw["ticket_id"]),
+            freeze_id=UUID(raw["freeze_id"]),
+            authoring_evidence_sha256=raw["authoring_evidence_sha256"],
+            expected_frozen_patch_sha256=vector["response"]["frozen_patch_sha256"],
+        )
+
+    observed: list[str] = []
+
+    def redirect_handler(request: httpx.Request) -> httpx.Response:
+        observed.append(str(request.url))
+        return httpx.Response(
+            307,
+            headers={"Location": "https://redirect.invalid/capture"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(redirect_handler),
+        follow_redirects=True,
+    ) as http:
+        with pytest.raises(PlatformError, match="307"):
+            await request_lease(http)
+    assert len(observed) == 1
+
+    seen_chunks = 0
+
+    class OversizedStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            nonlocal seen_chunks
+            for _ in range(5):
+                seen_chunks += 1
+                yield b"x" * (64 << 10)
+            raise AssertionError("validator consumed data after the response bound")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, stream=OversizedStream())
+        )
+    ) as http:
+        with pytest.raises(PlatformInfrastructureError, match="size"):
+            await request_lease(http)
+    assert seen_chunks == 5
+
+
+async def test_coding_grading_client_rejects_identity_drift_without_url_leak() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _grading_vector()
+    raw = vector["request"]
+    response_body = vector["response"]
+    response_body["freeze_id"] = "99999999-9999-4999-8999-999999999999"
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=response_body)
+        )
+    ) as http:
+        with pytest.raises(PlatformInfrastructureError, match="identity") as captured:
+            await PlatformClient(
+                SimpleNamespace(
+                    platform_api_url="https://platform.test",
+                    validator_hotkey=keypair.ss58_address,
+                ),  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).request_coding_grading_lease(
+                agent_id=UUID(raw["agent_id"]),
+                run_row_id=UUID(raw["run_row_id"]),
+                ticket_id=UUID(raw["ticket_id"]),
+                freeze_id=UUID(raw["freeze_id"]),
+                authoring_evidence_sha256=raw["authoring_evidence_sha256"],
+                expected_frozen_patch_sha256=vector["response"]["frozen_patch_sha256"],
+            )
+    assert "X-Amz-Signature" not in str(captured.value)
+
+
+async def test_coding_grading_client_rejects_frozen_patch_drift() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = _grading_vector()
+    raw = vector["request"]
+    response_body = vector["response"]
+    expected_patch_sha256 = response_body["frozen_patch_sha256"]
+    response_body["frozen_patch_sha256"] = "cc" * 32
+    response_body["frozen_submission_object_key"] = "sha256/" + "cc" * 32
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, json=response_body)
+        )
+    ) as http:
+        with pytest.raises(PlatformInfrastructureError, match="identity"):
+            await PlatformClient(
+                SimpleNamespace(
+                    platform_api_url="https://platform.test",
+                    validator_hotkey=keypair.ss58_address,
+                ),  # type: ignore[arg-type]
+                http,
+                keypair,
+            ).request_coding_grading_lease(
+                agent_id=UUID(raw["agent_id"]),
+                run_row_id=UUID(raw["run_row_id"]),
+                ticket_id=UUID(raw["ticket_id"]),
+                freeze_id=UUID(raw["freeze_id"]),
+                authoring_evidence_sha256=raw["authoring_evidence_sha256"],
+                expected_frozen_patch_sha256=expected_patch_sha256,
+            )
 
 
 async def test_coding_authoring_freeze_client_posts_signed_evidence() -> None:

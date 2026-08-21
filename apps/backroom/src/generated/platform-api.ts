@@ -4886,6 +4886,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-shadow/grading-lease": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Coding Grading Lease
+         * @description Return visible, resource, and grader capabilities; never memory.
+         */
+        post: operations["request_coding_grading_lease_api_v1_validator_coding_shadow_grading_lease_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/heartbeat": {
         parameters: {
             query?: never;
@@ -10715,6 +10735,109 @@ export interface components {
          * @enum {string}
          */
         CodingCertificationTerminalDomain: "resolved" | "repair_failure" | "candidate_integrity";
+        /**
+         * CodingGradingLeaseRequest
+         * @description Signed request for one freeze-gated shadow grading lease.
+         */
+        CodingGradingLeaseRequest: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Authoring Evidence Sha256 */
+            authoring_evidence_sha256: string;
+            /**
+             * Freeze Id
+             * Format: uuid
+             */
+            freeze_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * CodingGradingLeaseResponse
+         * @description One frozen task and exactly three grading artifact capabilities.
+         */
+        CodingGradingLeaseResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Authoring Evidence Sha256 */
+            authoring_evidence_sha256: string;
+            /** Capabilities */
+            capabilities: components["schemas"]["CodingArtifactCapabilityEnvelope"][];
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /**
+             * Freeze Id
+             * Format: uuid
+             */
+            freeze_id: string;
+            /** Frozen Patch Sha256 */
+            frozen_patch_sha256: string;
+            /** Frozen Submission Object Key */
+            frozen_submission_object_key: string;
+            run_manifest: components["schemas"]["CodingSelectionRunManifest"];
+            /** Run Manifest Sha256 */
+            run_manifest_sha256: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-grading-lease-v1";
+            /** Task Set Manifest Sha256 */
+            task_set_manifest_sha256: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /**
          * CodingRunEvidence
          * @description Known-field mirror of the shared coding run-evidence v1 contract.
@@ -32009,6 +32132,67 @@ export interface operations {
                 content?: never;
             };
             /** @description Replay, expiry, or immutable authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Private catalog or artifact signer unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    request_coding_grading_lease_api_v1_validator_coding_shadow_grading_lease_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingGradingLeaseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingGradingLeaseResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Grading lease not available to this validator. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay, phase, or immutable authority conflict. */
             409: {
                 headers: {
                     [name: string]: unknown;

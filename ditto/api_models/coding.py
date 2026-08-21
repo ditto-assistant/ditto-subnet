@@ -1122,6 +1122,111 @@ class CodingAuthoringLeaseResponse(CodingContractModel):
         return self
 
 
+class CodingGradingLeaseRequest(BaseModel):
+    """Signed request for one freeze-gated shadow grading lease."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    validator_hotkey: Annotated[str, Field(pattern=_SS58_PATTERN)]
+    agent_id: UUID
+    run_row_id: UUID
+    ticket_id: UUID
+    freeze_id: UUID
+    authoring_evidence_sha256: Sha256
+    nonce: UUID
+    requested_at: datetime
+    signature: Annotated[str, Field(pattern=_SIGNATURE_HEX_PATTERN)]
+
+    @model_validator(mode="after")
+    def request_is_coherent(self) -> CodingGradingLeaseRequest:
+        if (
+            any(
+                value.int == 0
+                for value in (
+                    self.agent_id,
+                    self.run_row_id,
+                    self.ticket_id,
+                    self.freeze_id,
+                    self.nonce,
+                )
+            )
+            or self.requested_at.tzinfo is None
+        ):
+            raise ValueError("coding grading request authority is invalid")
+        return self
+
+
+class CodingGradingLeaseResponse(CodingContractModel):
+    schema_name: Literal["dittobench-coding-grading-lease-v1"] = Field(alias="schema")
+    coding_contract_version: Literal[1]
+    weight_eligible: Literal[False]
+    agent_id: UUID
+    run_row_id: UUID
+    ticket_id: UUID
+    ticket_deadline: datetime
+    coding_run_id: OpaqueId
+    run_manifest_sha256: Sha256
+    task_set_manifest_sha256: Sha256
+    freeze_id: UUID
+    authoring_evidence_sha256: Sha256
+    frozen_patch_sha256: Sha256
+    frozen_submission_object_key: ContentAddressedKey
+    run_manifest: CodingRunManifest
+    capabilities: Annotated[
+        list[CodingArtifactCapabilityEnvelope], Field(min_length=3, max_length=3)
+    ]
+
+    @model_validator(mode="after")
+    def grading_authority_is_coherent(self) -> CodingGradingLeaseResponse:
+        if (
+            any(
+                value.int == 0
+                for value in (
+                    self.agent_id,
+                    self.run_row_id,
+                    self.ticket_id,
+                    self.freeze_id,
+                )
+            )
+            or self.ticket_deadline.tzinfo is None
+            or len(self.run_manifest.tasks) != 1
+        ):
+            raise ValueError("coding grading lease identity is invalid")
+        if (
+            self.run_manifest.agent_id != str(self.agent_id)
+            or self.run_manifest.coding_run_id != self.coding_run_id
+            or self.run_manifest.task_set_manifest_sha256
+            != self.task_set_manifest_sha256
+            or canonical_digest(self.run_manifest) != self.run_manifest_sha256
+            or self.frozen_submission_object_key != f"sha256/{self.frozen_patch_sha256}"
+        ):
+            raise ValueError("coding grading lease material disagrees with authority")
+        expected_kinds = [
+            CodingArtifactKind.VISIBLE_BUNDLE,
+            CodingArtifactKind.RESOURCE_PROFILE,
+            CodingArtifactKind.GRADER_BUNDLE,
+        ]
+        if [item.artifact_kind for item in self.capabilities] != expected_kinds:
+            raise ValueError("coding grading capabilities are incomplete or unordered")
+        task = self.run_manifest.tasks[0]
+        expected_digests = [
+            task.visible_bundle_sha256,
+            task.resource_profile_sha256,
+            task.grader_bundle_sha256,
+        ]
+        if any(
+            capability.ticket_id != self.ticket_id
+            or capability.ticket_deadline != self.ticket_deadline
+            or capability.delivery_phase is not CodingArtifactDeliveryPhase.GRADING
+            or capability.sha256 != digest
+            for capability, digest in zip(
+                self.capabilities, expected_digests, strict=True
+            )
+        ):
+            raise ValueError("coding grading capabilities disagree with the lease")
+        return self
+
+
 class SubmitCodingAuthoringFreezeRequest(BaseModel):
     """One validator-signed immutable transition out of authoring."""
 
@@ -1214,6 +1319,35 @@ def coding_authoring_lease_signing_message(
             "dittobench-coding-authoring-lease:v1",
             validator_hotkey,
             str(ticket_id),
+            str(nonce),
+            timestamp,
+        )
+    ).encode()
+
+
+def coding_grading_lease_signing_message(
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_row_id: UUID,
+    ticket_id: UUID,
+    freeze_id: UUID,
+    authoring_evidence_sha256: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> bytes:
+    if requested_at.tzinfo is None or requested_at.utcoffset() is None:
+        raise ValueError("coding grading request timestamp must be timezone-aware")
+    timestamp = requested_at.astimezone(UTC).isoformat(timespec="microseconds")
+    return "\x00".join(
+        (
+            "dittobench-coding-grading-lease:v1",
+            validator_hotkey,
+            str(agent_id),
+            str(run_row_id),
+            str(ticket_id),
+            str(freeze_id),
+            authoring_evidence_sha256,
             str(nonce),
             timestamp,
         )
@@ -1735,6 +1869,8 @@ __all__ = [
     "CodingAuthoringLeaseResponse",
     "CodingAuthoringEvidence",
     "CodingAuthoringModelEvidence",
+    "CodingGradingLeaseRequest",
+    "CodingGradingLeaseResponse",
     "CodingBudgets",
     "CodingBuildEvidence",
     "CodingCapabilityCertificationReceipt",
@@ -1771,6 +1907,7 @@ __all__ = [
     "coding_certification_receipt_digest",
     "coding_certification_signing_message",
     "coding_authoring_lease_signing_message",
+    "coding_grading_lease_signing_message",
     "coding_authoring_evidence_digest",
     "coding_authoring_freeze_signing_message",
     "coding_budgets_digest",

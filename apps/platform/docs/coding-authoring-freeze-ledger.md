@@ -43,14 +43,13 @@ revoking the workspace and inference capabilities before submitting the
 freeze, persisting bytes under the declared content addresses, and destroying
 the authoring environment.
 
-This endpoint returns no artifact capability. A later grading-delivery route
-must require the exact stored freeze and may release visible, resource, and
-grader artifacts only when the freeze is gradeable. Memory delivery during
-grading remains forbidden.
+This endpoint returns no artifact capability. The separate grading-lease route
+requires the exact stored freeze and may release visible, resource, and grader
+artifacts only when the freeze is gradeable. It rechecks phase authority after
+URL minting and never checks or signs the memory bundle.
 
 ## Activation boundary
 
-No scheduler or validator worker calls the endpoint. It does not start Luna,
-materialize a workspace, release grader material, grade a patch, write an
-ordinary score, or affect emissions. Every row is permanently
-`weight_eligible=false`.
+No scheduler or validator worker calls either delivery endpoint. They do not
+start Luna, materialize a workspace, grade a patch, write an ordinary score, or
+affect emissions. Every row and lease is permanently `weight_eligible=false`.
