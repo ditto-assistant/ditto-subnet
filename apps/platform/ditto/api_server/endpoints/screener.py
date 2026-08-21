@@ -222,6 +222,11 @@ def _targon_first(providers: tuple[str, ...]) -> bool:
     return bool(providers) and providers[0] == "targon"
 
 
+def _platform_owns_miner_rentals(request: Request) -> bool:
+    """True when this process runs TargonRentalLoop for miner Kaniko/smoke/L1."""
+    return getattr(request.app.state, "targon_rental_loop", None) is not None
+
+
 async def _release_targon_rental(request: Request, uid: str | None) -> bool:
     loop = getattr(request.app.state, "targon_rental_loop", None)
     if loop is None or not uid:
@@ -1438,6 +1443,8 @@ async def claim_submission_image_build(
     session: SessionDep,
 ) -> SubmissionImageBuildClaimResponse:
     """Lease one miner build and mint only its short-lived job capability."""
+    if _platform_owns_miner_rentals(request):
+        return SubmissionImageBuildClaimResponse(build=None)
     now = datetime.now(UTC)
     async with session.begin():
         _, provider_settings = await resolve_screener_provider_settings(
@@ -1635,10 +1642,13 @@ async def get_controller_submission_image_build(
 )
 async def claim_submission_runtime_smoke(
     payload: TrustedImageBuildClaimRequest,
+    request: Request,
     _controller: ControllerDep,
     session: SessionDep,
     storage: StorageDep,
 ) -> SubmissionRuntimeArtifactClaimResponse:
+    if _platform_owns_miner_rentals(request):
+        return SubmissionRuntimeArtifactClaimResponse(artifact=None)
     now = datetime.now(UTC)
     async with session.begin():
         _, provider_settings = await resolve_screener_provider_settings(
@@ -2193,9 +2203,12 @@ async def consume_submission_source_review(
 )
 async def claim_submission_source_review(
     payload: TrustedImageBuildClaimRequest,
+    request: Request,
     _controller: ControllerDep,
     session: SessionDep,
 ) -> SubmissionSourceReviewClaimResponse:
+    if _platform_owns_miner_rentals(request):
+        return SubmissionSourceReviewClaimResponse(review=None)
     now = datetime.now(UTC)
     async with session.begin():
         _, provider_settings = await resolve_screener_provider_settings(

@@ -1122,6 +1122,53 @@ class TestFederatedScreenerNodes:
             assert agent is not None
             assert agent.status == AgentStatus.SCREENING
 
+    async def test_controller_claim_is_refused_when_platform_owns_miner_rentals(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        app.state.targon_rental_loop = object()
+        app.state.config = replace(
+            app.state.config,
+            screener_auth=replace(
+                app.state.config.screener_auth,
+                controller_api_token=_CONTROLLER_TOKEN,
+            ),
+        )
+        claimed = await client.post(
+            "/api/v1/screener/controller/submission-image-builds/claim",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:ditto-screener-capacity-prod:1",
+            },
+        )
+        assert claimed.status_code == 200, claimed.text
+        assert claimed.json()["build"] is None
+        smoke = await client.post(
+            "/api/v1/screener/controller/submission-runtime-smokes/claim",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:ditto-screener-capacity-prod:1",
+            },
+        )
+        assert smoke.status_code == 200, smoke.text
+        assert smoke.json()["artifact"] is None
+        review = await client.post(
+            "/api/v1/screener/controller/submission-source-reviews/claim",
+            headers={"Authorization": f"Bearer {_CONTROLLER_TOKEN}"},
+            json={
+                "environment": "prod",
+                "controller_epoch": "builder:ditto-screener-capacity-prod:1",
+            },
+        )
+        assert review.status_code == 200, review.text
+        assert review.json()["review"] is None
+
     async def test_platform_attests_targon_pass_without_screener_signature(
         self,
         app: FastAPI,
