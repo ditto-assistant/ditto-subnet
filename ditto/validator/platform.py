@@ -22,6 +22,8 @@ from ditto.api_models.coding import (
     CodingAuthoringLeaseRequest,
     CodingAuthoringLeaseResponse,
     CodingCapabilityCertificationReceipt,
+    CodingGradingLeaseRequest,
+    CodingGradingLeaseResponse,
     SubmitCodingAuthoringFreezeRequest,
     SubmitCodingAuthoringFreezeResponse,
     SubmitCodingCertificationRequest,
@@ -69,6 +71,7 @@ from ditto.validator.signing import (
     sign_artifact_request,
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
+    sign_coding_grading_lease,
     sign_inference_exchange,
     sign_job_fail_request,
     sign_job_request,
@@ -107,6 +110,7 @@ _INFERENCE_BUDGET_EVIDENCE_HEADERS = {
 _INFERENCE_BUDGET_EVIDENCE_FIELDS = tuple(_INFERENCE_BUDGET_EVIDENCE_HEADERS)
 _CODING_AUTHORING_LEASE_MAX_BYTES = 512 << 10
 _CODING_AUTHORING_FREEZE_MAX_BYTES = 64 << 10
+_CODING_GRADING_LEASE_MAX_BYTES = 256 << 10
 
 
 def _json_budget_evidence(exchange: InferenceExchangeResponse) -> dict[str, int] | None:
@@ -399,6 +403,91 @@ class PlatformClient:
                 "coding authoring freeze response identity is invalid"
             )
         return accepted
+
+    async def request_coding_grading_lease(
+        self,
+        *,
+        agent_id: UUID,
+        run_row_id: UUID,
+        ticket_id: UUID,
+        freeze_id: UUID,
+        authoring_evidence_sha256: str,
+        expected_frozen_patch_sha256: str,
+    ) -> CodingGradingLeaseResponse:
+        """Fetch a grading lease bound to the validator's local frozen patch."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingGradingLeaseRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=agent_id,
+            run_row_id=run_row_id,
+            ticket_id=ticket_id,
+            freeze_id=freeze_id,
+            authoring_evidence_sha256=authoring_evidence_sha256,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_grading_lease(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                run_row_id=run_row_id,
+                ticket_id=ticket_id,
+                freeze_id=freeze_id,
+                authoring_evidence_sha256=authoring_evidence_sha256,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}/coding-shadow/grading-lease",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding grading lease delivery is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding grading lease rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=64 << 10):
+                    if len(body) + len(chunk) > _CODING_GRADING_LEASE_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding grading lease response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding grading lease request failed"
+            ) from error
+        if not body:
+            raise PlatformInfrastructureError(
+                "coding grading lease response size is invalid"
+            )
+        try:
+            lease = CodingGradingLeaseResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding grading lease response is invalid"
+            ) from None
+        if (
+            lease.agent_id != agent_id
+            or lease.run_row_id != run_row_id
+            or lease.ticket_id != ticket_id
+            or lease.freeze_id != freeze_id
+            or lease.authoring_evidence_sha256 != authoring_evidence_sha256
+            or lease.frozen_patch_sha256 != expected_frozen_patch_sha256
+        ):
+            raise PlatformInfrastructureError(
+                "coding grading lease response identity is invalid"
+            )
+        return lease
 
     async def request_v9_confirmation_job(
         self,

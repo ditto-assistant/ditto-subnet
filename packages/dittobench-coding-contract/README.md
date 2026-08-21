@@ -34,6 +34,12 @@ digest, content-addressed evidence references, signed phase-transition message,
 and accepted response. It contains no patch or transcript bytes and grants no
 grader capability.
 
+`coding_grading_lease_v1.json` freezes the signed request and freeze-bound
+grading response shared by Platform and the validator client. The response
+contains exactly visible, resource, and grader capabilities; memory is
+structurally absent. Its URLs use reserved `.invalid` transport examples and
+are never usable credentials.
+
 The vectors contain only synthetic identifiers, digests, policies, and reserved
 domain transport examples. Private catalog records, repository bundles, hidden
 tests, policy labels, provider credentials, signing keys, and usable bearer

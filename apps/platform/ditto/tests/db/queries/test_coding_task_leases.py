@@ -22,13 +22,16 @@ from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
     CodingSelectionAssignmentRow,
+    CodingShadowAuthoringFreeze,
     CodingShadowRun,
     CodingShadowTicket,
 )
 from ditto.db.queries import coding_task_leases
 from ditto.db.queries.coding_task_leases import (
+    CodingShadowGradingAuthority,
     CodingTaskLeaseIntegrityError,
     CodingTaskLeaseNotAvailableError,
+    authorize_coding_shadow_grading_delivery,
     authorize_coding_shadow_task_delivery,
     build_coding_shadow_task_lease,
 )
@@ -40,10 +43,19 @@ _VECTOR_PATH = (
     / "testdata"
     / "coding_selection_v1.json"
 )
+_FREEZE_VECTOR_PATH = (
+    Path(__file__).parents[6]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_authoring_freeze_v1.json"
+)
 
 
 def _fixture() -> SimpleNamespace:
     vector = json.loads(_VECTOR_PATH.read_text(encoding="utf-8"))
+    freeze_vector = json.loads(_FREEZE_VECTOR_PATH.read_text(encoding="utf-8"))
+    freeze_evidence = freeze_vector["request"]["evidence"]
     commitment = CodingCatalogCommitment.model_validate(vector["commitment"])
     assignment = CodingSelectionAssignment.model_validate(vector["assignment"])
     task = CodingCatalogTaskVersion.model_validate(vector["task_version"])
@@ -149,6 +161,30 @@ def _fixture() -> SimpleNamespace:
         weight_eligible=False,
         **rebuilt.exposure.model_dump(mode="python"),
     )
+    freeze = SimpleNamespace(
+        freeze_id=uuid4(),
+        ticket_id=ticket_id,
+        run_row_id=run_row_id,
+        task_count=1,
+        authoring_evidence_sha256=freeze_vector["expected"][
+            "authoring_evidence_sha256"
+        ],
+        authoring_event_root=freeze_evidence["authoring_event_root"],
+        authoring_transcript_sha256=freeze_evidence["authoring_transcript_sha256"],
+        authoring_transcript_bytes=1024,
+        authoring_event_count=8,
+        frozen_patch_sha256=freeze_evidence["frozen_patch_sha256"],
+        frozen_submission_object_key=freeze_vector["request"][
+            "frozen_submission_object_key"
+        ],
+        changed_path_root=freeze_evidence["changed_path_root"],
+        final_tree_sha256=freeze_evidence["final_tree_sha256"],
+        changed_path_count=freeze_evidence["changed_path_count"],
+        changed_bytes=freeze_evidence["changed_bytes"],
+        protected_paths_intact=freeze_evidence["protected_paths_intact"],
+        weight_eligible=False,
+        evidence=freeze_evidence,
+    )
     return SimpleNamespace(
         commitment=commitment,
         assignment=assignment,
@@ -160,6 +196,8 @@ def _fixture() -> SimpleNamespace:
         agent=agent,
         issuance=issuance,
         exposure=exposure,
+        freeze=freeze,
+        result_id=None,
         assignment_row=object(),
         now=now,
     )
@@ -205,6 +243,44 @@ class _AuthorizationSession:
     async def scalar(self, statement):
         del statement
         return self.fixture.now
+
+
+class _GradingAuthorizationSession:
+    def __init__(self, fixture: SimpleNamespace) -> None:
+        self.fixture = fixture
+        self.scalar_index = 0
+
+    async def get(self, model, identity):
+        return {
+            CodingShadowTicket: (
+                self.fixture.ticket
+                if identity == self.fixture.ticket.ticket_id
+                else None
+            ),
+            CodingShadowRun: (
+                self.fixture.run if identity == self.fixture.run.run_row_id else None
+            ),
+            CodingShadowAuthoringFreeze: (
+                self.fixture.freeze
+                if identity == self.fixture.freeze.freeze_id
+                else None
+            ),
+            CodingCapabilityCertification: (
+                self.fixture.certification
+                if identity == self.fixture.ticket.certification_row_id
+                else None
+            ),
+            Agent: (
+                self.fixture.agent if identity == self.fixture.run.agent_id else None
+            ),
+        }.get(model)
+
+    async def scalar(self, statement):
+        del statement
+        values = (self.fixture.now, self.fixture.result_id)
+        value = values[self.scalar_index]
+        self.scalar_index += 1
+        return value
 
 
 async def _build(monkeypatch, fixture: SimpleNamespace):
@@ -269,6 +345,142 @@ async def test_delivery_authorization_precedes_private_catalog_access() -> None:
         )
 
 
+async def test_grading_authorization_requires_complete_immutable_freeze() -> None:
+    fixture = _fixture()
+    authority = await authorize_coding_shadow_grading_delivery(
+        _GradingAuthorizationSession(fixture),  # type: ignore[arg-type]
+        validator_hotkey=fixture.ticket.validator_hotkey,
+        agent_id=fixture.run.agent_id,
+        run_row_id=fixture.run.run_row_id,
+        ticket_id=fixture.ticket.ticket_id,
+        freeze_id=fixture.freeze.freeze_id,
+        authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+    )
+    assert authority == CodingShadowGradingAuthority(
+        agent_id=fixture.run.agent_id,
+        freeze_id=fixture.freeze.freeze_id,
+        authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+        frozen_patch_sha256=fixture.freeze.frozen_patch_sha256,
+        frozen_submission_object_key=fixture.freeze.frozen_submission_object_key,
+    )
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        "zero transcript",
+        "zero events",
+        "no changed paths",
+        "protected paths changed",
+        "model usage incomplete",
+        "evidence nonobject",
+        "evidence field drift",
+        "weighted run",
+        "existing result",
+        "evidence digest",
+    ],
+)
+async def test_grading_authorization_rejects_ungradeable_freeze(drift: str) -> None:
+    fixture = _fixture()
+    requested_digest = fixture.freeze.authoring_evidence_sha256
+    if drift == "zero transcript":
+        fixture.freeze.authoring_transcript_bytes = 0
+    elif drift == "zero events":
+        fixture.freeze.authoring_event_count = 0
+    elif drift == "no changed paths":
+        fixture.freeze.changed_path_count = 0
+    elif drift == "protected paths changed":
+        fixture.freeze.protected_paths_intact = False
+    elif drift == "model usage incomplete":
+        fixture.freeze.evidence = {
+            **fixture.freeze.evidence,
+            "model": {
+                **fixture.freeze.evidence["model"],
+                "usage_status": "provider_failure",
+            },
+        }
+    elif drift == "evidence nonobject":
+        fixture.freeze.evidence = []
+    elif drift == "evidence field drift":
+        fixture.freeze.authoring_event_root = "ff" * 32
+    elif drift == "weighted run":
+        fixture.run.weight_eligible = True
+    elif drift == "existing result":
+        fixture.result_id = uuid4()
+    else:
+        requested_digest = "ff" * 32
+
+    with pytest.raises(CodingTaskLeaseIntegrityError, match="not gradeable"):
+        await authorize_coding_shadow_grading_delivery(
+            _GradingAuthorizationSession(fixture),  # type: ignore[arg-type]
+            validator_hotkey=fixture.ticket.validator_hotkey,
+            agent_id=fixture.run.agent_id,
+            run_row_id=fixture.run.run_row_id,
+            ticket_id=fixture.ticket.ticket_id,
+            freeze_id=fixture.freeze.freeze_id,
+            authoring_evidence_sha256=requested_digest,
+        )
+
+
+async def test_grading_authorization_hides_wrong_owner_or_expired_ticket() -> None:
+    fixture = _fixture()
+    for validator_hotkey, agent_id in (
+        ("5" + "X" * 47, fixture.run.agent_id),
+        (fixture.ticket.validator_hotkey, uuid4()),
+        (fixture.ticket.validator_hotkey, fixture.run.agent_id),
+    ):
+        if (
+            agent_id == fixture.run.agent_id
+            and validator_hotkey == fixture.ticket.validator_hotkey
+        ):
+            fixture.now = fixture.ticket.deadline
+        with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
+            await authorize_coding_shadow_grading_delivery(
+                _GradingAuthorizationSession(fixture),  # type: ignore[arg-type]
+                validator_hotkey=validator_hotkey,
+                agent_id=agent_id,
+                run_row_id=fixture.run.run_row_id,
+                ticket_id=fixture.ticket.ticket_id,
+                freeze_id=fixture.freeze.freeze_id,
+                authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+            )
+
+    fixture = _fixture()
+    fixture.freeze.ticket_id = uuid4()
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
+        await authorize_coding_shadow_grading_delivery(
+            _GradingAuthorizationSession(fixture),  # type: ignore[arg-type]
+            validator_hotkey=fixture.ticket.validator_hotkey,
+            agent_id=fixture.run.agent_id,
+            run_row_id=fixture.run.run_row_id,
+            ticket_id=fixture.ticket.ticket_id,
+            freeze_id=fixture.freeze.freeze_id,
+            authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+        )
+
+
+@pytest.mark.parametrize("drift", ["artifact", "certification expiry"])
+async def test_grading_authorization_rechecks_artifact_certification(
+    drift: str,
+) -> None:
+    fixture = _fixture()
+    if drift == "artifact":
+        fixture.agent.sha256 = "ff" * 32
+        fixture.certification.artifact_sha256 = "ff" * 32
+    else:
+        fixture.certification.expires_at = fixture.now
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
+        await authorize_coding_shadow_grading_delivery(
+            _GradingAuthorizationSession(fixture),  # type: ignore[arg-type]
+            validator_hotkey=fixture.ticket.validator_hotkey,
+            agent_id=fixture.run.agent_id,
+            run_row_id=fixture.run.run_row_id,
+            ticket_id=fixture.ticket.ticket_id,
+            freeze_id=fixture.freeze.freeze_id,
+            authoring_evidence_sha256=fixture.freeze.authoring_evidence_sha256,
+        )
+
+
 async def test_different_validator_tickets_share_identical_manifests(
     monkeypatch,
 ) -> None:
@@ -320,9 +532,14 @@ async def test_task_lease_rejects_expired_ticket_before_catalog_read() -> None:
     source.get_task_material.assert_not_awaited()
 
 
-async def test_task_lease_rejects_cross_benchmark_certification() -> None:
+@pytest.mark.parametrize("drift", ["benchmark", "artifact"])
+async def test_task_lease_rejects_stale_certification(drift: str) -> None:
     fixture = _fixture()
-    fixture.certification.bench_version = fixture.run.bench_version - 1
+    if drift == "benchmark":
+        fixture.certification.bench_version = fixture.run.bench_version - 1
+    else:
+        fixture.agent.sha256 = "ff" * 32
+        fixture.certification.artifact_sha256 = "ff" * 32
     source = AsyncMock()
     with pytest.raises(CodingTaskLeaseNotAvailableError, match="no longer active"):
         await build_coding_shadow_task_lease(

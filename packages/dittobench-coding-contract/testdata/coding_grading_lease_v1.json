@@ -1,0 +1,116 @@
+{
+  "schema": "dittobench-coding-grading-lease-vector-v1",
+  "coding_contract_version": 1,
+  "weight_eligible": false,
+  "expected": {
+    "signing_message_sha256": "c79e05198c6c4d5c966e89c57e221265ecd1a3f89a344d9e6b4f11647eef5446"
+  },
+  "request": {
+    "validator_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
+    "agent_id": "00000000-0000-4000-8000-000000000001",
+    "run_row_id": "22222222-2222-4222-8222-222222222222",
+    "ticket_id": "33333333-3333-4333-8333-333333333333",
+    "freeze_id": "44444444-4444-4444-8444-444444444444",
+    "authoring_evidence_sha256": "4e63fece4539d15ca915c30409b97ad41f1554732631b55d633642622ea6aac9",
+    "nonce": "77777777-7777-4777-8777-777777777777",
+    "requested_at": "2026-08-21T12:00:00Z",
+    "signature": "88888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888888"
+  },
+  "response": {
+    "schema": "dittobench-coding-grading-lease-v1",
+    "coding_contract_version": 1,
+    "weight_eligible": false,
+    "agent_id": "00000000-0000-4000-8000-000000000001",
+    "run_row_id": "22222222-2222-4222-8222-222222222222",
+    "ticket_id": "33333333-3333-4333-8333-333333333333",
+    "ticket_deadline": "2026-08-21T13:00:00Z",
+    "coding_run_id": "coding-run-private-001",
+    "run_manifest_sha256": "2337b09196f9193cf38fe66ee2d28672b572ba667137679cb26cee65353c7b18",
+    "task_set_manifest_sha256": "c4d5de09716f3f61e0a9ff0eff46f2d3a21006ed2f221b283e35773a426b0a80",
+    "freeze_id": "44444444-4444-4444-8444-444444444444",
+    "authoring_evidence_sha256": "4e63fece4539d15ca915c30409b97ad41f1554732631b55d633642622ea6aac9",
+    "frozen_patch_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "frozen_submission_object_key": "sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "run_manifest": {
+      "schema": "dittobench-coding-run-manifest-v1",
+      "coding_contract_version": 1,
+      "bench_family": "coding",
+      "weight_eligible": false,
+      "coding_run_id": "coding-run-private-001",
+      "agent_id": "00000000-0000-4000-8000-000000000001",
+      "agent_artifact_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+      "corpus_release_id": "private-coding-corpus-v1",
+      "catalog_merkle_root": "0f832d36b225cee4abf6b04ebcc50f697cc86a4132a43fa0c67c4993003ab3cc",
+      "selection_derivation_id": "coding-selection-v1",
+      "selection_chain_genesis_hash": "0x2222222222222222222222222222222222222222222222222222222222222222",
+      "selection_block_number": 123456,
+      "selection_block_hash": "0x7777777777777777777777777777777777777777777777777777777777777777",
+      "inference_grant_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "grader_contract_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "task_set_id": "coding-task-set-v1-c4d5de09716f3f61e0a9ff0eff46f2d3a21006ed2f221b283e35773a426b0a80",
+      "task_set_manifest_sha256": "c4d5de09716f3f61e0a9ff0eff46f2d3a21006ed2f221b283e35773a426b0a80",
+      "tasks": [
+        {
+          "case_id": "private-case-004",
+          "variant_id": "v1",
+          "profile_capability_id": "private-profile-1",
+          "visible_bundle_sha256": "0505050505050505050505050505050505050505050505050505050505050505",
+          "base_tree_sha256": "1515151515151515151515151515151515151515151515151515151515151515",
+          "memory_bundle_sha256": "2525252525252525252525252525252525252525252525252525252525252525",
+          "environment_image_digest": "sha256:3535353535353535353535353535353535353535353535353535353535353535",
+          "environment_platform": "linux/amd64",
+          "resource_profile_sha256": "4545454545454545454545454545454545454545454545454545454545454545",
+          "grader_bundle_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+          "grader_image_digest": "sha256:6565656565656565656565656565656565656565656565656565656565656565",
+          "grader_platform": "linux/amd64",
+          "test_manifest_sha256": "7575757575757575757575757575757575757575757575757575757575757575",
+          "grader_plan_sha256": "8585858585858585858585858585858585858585858585858585858585858585"
+        }
+      ]
+    },
+    "capabilities": [
+      {
+        "schema": "dittobench-coding-artifact-capability-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": false,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "ticket_deadline": "2026-08-21T13:00:00Z",
+        "delivery_phase": "grading",
+        "artifact_kind": "visible-bundle",
+        "audience": "workspace-materializer",
+        "sha256": "0505050505050505050505050505050505050505050505050505050505050505",
+        "size_bytes": 1024,
+        "url": "https://storage.invalid/private-coding/coding-artifacts/v1/visible-bundle/sha256/0505050505050505050505050505050505050505050505050505050505050505?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-visible-grading",
+        "expires_at": "2026-08-21T12:05:00Z"
+      },
+      {
+        "schema": "dittobench-coding-artifact-capability-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": false,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "ticket_deadline": "2026-08-21T13:00:00Z",
+        "delivery_phase": "grading",
+        "artifact_kind": "resource-profile",
+        "audience": "resource-supervisor",
+        "sha256": "4545454545454545454545454545454545454545454545454545454545454545",
+        "size_bytes": 4096,
+        "url": "https://storage.invalid/private-coding/coding-artifacts/v1/resource-profile/sha256/4545454545454545454545454545454545454545454545454545454545454545?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-resource-grading",
+        "expires_at": "2026-08-21T12:05:00Z"
+      },
+      {
+        "schema": "dittobench-coding-artifact-capability-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": false,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "ticket_deadline": "2026-08-21T13:00:00Z",
+        "delivery_phase": "grading",
+        "artifact_kind": "grader-bundle",
+        "audience": "protected-grader",
+        "sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+        "size_bytes": 8192,
+        "url": "https://storage.invalid/private-coding/coding-artifacts/v1/grader-bundle/sha256/5555555555555555555555555555555555555555555555555555555555555555?X-Amz-Date=20260821T120000Z&X-Amz-Expires=300&X-Amz-Signature=synthetic-grader-grading",
+        "expires_at": "2026-08-21T12:05:00Z"
+      }
+    ]
+  }
+}

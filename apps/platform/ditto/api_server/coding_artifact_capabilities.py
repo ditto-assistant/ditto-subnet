@@ -155,6 +155,21 @@ class CodingArtifactCapabilityMinter:
             ),
         )
 
+    async def mint_grading(
+        self,
+        lease: CodingShadowTaskLeaseCore,
+    ) -> CodingArtifactCapabilitySet:
+        """Mint only visible, resource, and protected-grader capabilities."""
+
+        return await self._mint(
+            lease,
+            kinds=(
+                CodingArtifactKind.VISIBLE_BUNDLE,
+                CodingArtifactKind.RESOURCE_PROFILE,
+                CodingArtifactKind.GRADER_BUNDLE,
+            ),
+        )
+
     async def _mint(
         self,
         lease: CodingShadowTaskLeaseCore,

@@ -280,6 +280,19 @@ idempotent and drift conflicts. This record is an audit and phase authority,
 not independent proof of validator-local process termination, and it releases
 no grader capability by itself.
 
+The grading delivery request is separately signed over validator, agent, run,
+ticket, freeze, authoring-evidence digest, one-use nonce, and UTC request time.
+Platform requires a nonempty immutable freeze with complete model usage, a
+changed path, intact protected paths, an active ticket, and no terminal result
+before private-catalog access. It returns the frozen patch identity plus exactly
+the visible, resource, and grader capabilities. Its grading-only minter never
+checks or signs memory, and Platform reauthorizes the freeze after URL minting
+along with the active ticket and exact artifact certification before returning
+the `no-store` response. This transport route remains unused until the
+validator supervisor and pristine grader are wired in a separate review.
+The validator client compares the response patch identity to its locally frozen
+patch before accepting any grading capability.
+
 `coding_run_id` and the manifest are shared across k=3. Validator-specific
 ticket IDs, deadlines, hotkeys, and transport capabilities remain in each lease
 envelope and signed validator evidence; they cannot make the selected task-set
@@ -597,9 +610,12 @@ sequence.
    or count/byte overflow.
 8. Bind the base tree, frozen patch, changed-path root, and final tree digests.
 9. Destroy the authoring environment.
-10. Apply the frozen patch to a pristine base in a fresh networkless grader.
-11. Inject the digest-pinned private grader bundle only after the patch is fixed.
-12. Start the plan-bound candidate execution timeout, then run build,
+10. Request the grading lease for the exact stored freeze and independently
+    verify the visible, resource, and grader artifact bytes against their
+    content digests. Do not request or deliver memory in this phase.
+11. Apply the frozen patch to a pristine base in a fresh networkless grader.
+12. Inject the digest-pinned private grader bundle only after the patch is fixed.
+13. Start the plan-bound candidate execution timeout, then run build,
     fail-to-pass, pass-to-pass, hidden, adversarial, and integrity
     in that fail-fast order, then emit typed canonical evidence. Evidence keeps
     the five test groups in canonical lexical order.
