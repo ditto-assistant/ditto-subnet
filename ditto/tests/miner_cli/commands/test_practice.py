@@ -93,7 +93,10 @@ def test_run_fails_actionably_without_source_assets() -> None:
 @pytest.mark.parametrize(
     ("argv", "expected"),
     [
-        (["practice"], {"run_size": "small", "bench_version": None, "longmem_eval": False}),
+        (
+            ["practice"],
+            {"run_size": "small", "bench_version": None, "longmem_eval": False},
+        ),
         (
             ["practice", "--bench-version", "11", "--run-size", "full"],
             {"bench_version": 11, "run_size": "full"},
