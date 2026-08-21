@@ -183,6 +183,11 @@ type brokerSession struct {
 	confirmationGrants        map[string]brokerConfirmationGrant
 	embeddingGrant            brokerConfirmationGrant
 	inFlight                  int
+	// chatConcurrency is the per-source in-flight chat admission for this
+	// session. Zero means brokerPerSourceConcurrency; the scorer raises it to
+	// the run's effective case concurrency so overlapping /run calls are not
+	// starved by a cap sized for serial scoring (see configureCaseConcurrency).
+	chatConcurrency int
 	// caseGeneration binds every admitted v9+ chat request to the ordinary case
 	// window in which it started. A harness may return its /run response while
 	// a background request is still inside the broker's bounded recovery loop;
@@ -1466,6 +1471,55 @@ func (b *inferenceBroker) registerToolWithProvenance(
 	requireCaseCapability bool,
 	provenanceSessionID string,
 ) (registeredToolRoute, func(), error) {
+	return b.registerToolRoute(
+		h, expectedSourceIP, allowNATFallback, requireCaseCapability, provenanceSessionID,
+		brokerPerSourceConcurrency,
+	)
+}
+
+// sourceConcurrencyFor sizes a per-source admission cap for a run that overlaps
+// caseConcurrency /run calls: at least one in-flight call per overlapping case,
+// never below the serial-era floor.
+func sourceConcurrencyFor(caseConcurrency int) int {
+	if caseConcurrency > brokerPerSourceConcurrency {
+		return caseConcurrency
+	}
+	return brokerPerSourceConcurrency
+}
+
+func (s *brokerSession) chatConcurrencyLimit() int {
+	return sourceConcurrencyFor(s.chatConcurrency)
+}
+
+// configureCaseConcurrency raises the bound run's per-source chat admission to
+// cover caseConcurrency overlapping /run calls. It never lowers the cap below
+// brokerPerSourceConcurrency and is a no-op for an unbound or foreign run.
+func (b *inferenceBroker) configureCaseConcurrency(id, runID string, caseConcurrency int) bool {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.boundRunID != runID {
+		return false
+	}
+	session.chatConcurrency = sourceConcurrencyFor(caseConcurrency)
+	return true
+}
+
+// registerToolRoute registers a tool route whose per-source slot count covers
+// caseConcurrency overlapping /run calls (floor brokerPerSourceConcurrency).
+func (b *inferenceBroker) registerToolRoute(
+	h http.Handler,
+	expectedSourceIP string,
+	allowNATFallback bool,
+	requireCaseCapability bool,
+	provenanceSessionID string,
+	caseConcurrency int,
+) (registeredToolRoute, func(), error) {
 	id, err := randomToken(18)
 	if err != nil {
 		return registeredToolRoute{}, func() {}, err
@@ -1482,7 +1536,7 @@ func (b *inferenceBroker) registerToolWithProvenance(
 		provenanceSessionID:   provenanceSessionID,
 		capabilityKey:         key,
 		handler:               h,
-		slots:                 make(chan struct{}, brokerPerSourceConcurrency),
+		slots:                 make(chan struct{}, sourceConcurrencyFor(caseConcurrency)),
 	}
 	b.mu.Unlock()
 	stop := func() {
@@ -2739,7 +2793,7 @@ func (b *inferenceBroker) handleChat(
 		}
 		session.mu.Unlock()
 	}()
-	if session.inFlight >= brokerPerSourceConcurrency {
+	if session.inFlight >= session.chatConcurrencyLimit() {
 		session.mu.Unlock()
 		w.Header().Set("Retry-After", "1")
 		writeError(w, http.StatusTooManyRequests, "inference source is at capacity")

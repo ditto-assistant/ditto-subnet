@@ -213,6 +213,11 @@ func AttachAnswerStuffingGate(benchVersion int, gates scoregates.Evidence, telem
 // AggregateModelTelemetry combines trusted run-level broker accounting with
 // scorer-observed non-overlapping ordinary-case windows. Aggregate request
 // counts alone still cannot prove how many different cases reached inference.
+// AggregateModelTelemetry is the ticket-scope model-use evidence. The scorer
+// overlaps /run without per-case inference windows, so
+// DistinctCaseAttributionComplete is the session-accounting trust bit and
+// SuccessfulDistinctCases is the session's successful chat requests capped at
+// the eligible population (a coverage proxy, not a distinct-case count).
 type AggregateModelTelemetry struct {
 	ObservedRequests                uint64
 	SuccessfulRequests              uint64

@@ -1755,8 +1755,18 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	if handle != nil {
 		toolSourceIP = handle.SourceIP
 	}
+	// The broker's per-source chat and tool admission was sized for serial
+	// scoring (4). Raise both to the run's effective case concurrency before any
+	// case starts, or overlapping /run calls are answered 429 before the call is
+	// booked or observed and an honest harness loses credit silently.
+	effectiveCaseConcurrency := caseConcurrencyForRun(req.BenchmarkRuntime)
+	if inferenceSessionID != "" &&
+		!s.broker.configureCaseConcurrency(inferenceSessionID, runID, effectiveCaseConcurrency) {
+		s.store.FailWith(runID, "ticket inference session is unavailable", toolEndpointInfrastructureFailure())
+		return
+	}
 	toolEndpoint, stopToolSrv, err := s.startToolServerForSession(
-		toolSrv, toolSourceIP, req.BenchVersion, inferenceSessionID,
+		toolSrv, toolSourceIP, req.BenchVersion, effectiveCaseConcurrency,
 	)
 	if err != nil {
 		s.store.FailWith(runID, "tool endpoint start failed: "+err.Error(), toolEndpointInfrastructureFailure())
@@ -1801,7 +1811,6 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 			}
 		}
 	}
-	effectiveCaseConcurrency := caseConcurrencyForRun(req.BenchmarkRuntime)
 	toolRunUserID := ""
 	if harnessProjection != nil {
 		toolRunUserID = harnessProjection.WireUserID(gen.PrimaryUser)
@@ -2421,22 +2430,23 @@ func (s *server) startToolServer(
 	sandboxSourceIP string,
 	benchVersion int,
 ) (endpoint observedToolEndpoint, stop func(), err error) {
-	return s.startToolServerForSession(h, sandboxSourceIP, benchVersion, "")
+	return s.startToolServerForSession(h, sandboxSourceIP, benchVersion, caseConcurrencyForRun(nil))
 }
 
 func (s *server) startToolServerForSession(
 	h http.Handler,
 	sandboxSourceIP string,
 	benchVersion int,
-	_ string,
+	caseConcurrency int,
 ) (endpoint observedToolEndpoint, stop func(), err error) {
 	if sandboxSourceIP != "" {
 		requireCaseCapability := benchVersion >= protocol.BenchVersionV9
 		// Concurrent /run does not open exclusive case windows, so model-emitted
 		// tool matching cannot be attributed per case. HMAC case capability plus
-		// source IP remain the authorization; the mock records observation.
-		route, unregister, registerErr := s.broker.registerToolWithProvenance(
-			h, sandboxSourceIP, s.allowPrivate, requireCaseCapability, "",
+		// source IP remain the authorization; the mock records observation. The
+		// route's per-source slots cover the run's overlapping cases.
+		route, unregister, registerErr := s.broker.registerToolRoute(
+			h, sandboxSourceIP, s.allowPrivate, requireCaseCapability, "", caseConcurrency,
 		)
 		if registerErr != nil {
 			return observedToolEndpoint{}, func() {}, registerErr

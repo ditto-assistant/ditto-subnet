@@ -93,10 +93,12 @@ type ModelUseInput struct {
 	CompletionTokens         uint64          `json:"completion_tokens"`
 	Excluded                 ExclusionCounts `json:"excluded"`
 	TelemetryComplete        bool            `json:"telemetry_complete"`
-	// CaseAttributionComplete is true only when trusted runner/broker evidence
-	// identifies the distinct administered cases that reached controlled
-	// inference. Aggregate request counts cannot set it: repeated requests from
-	// one case must never satisfy a multi-case coverage gate.
+	// CaseAttributionComplete is true when trusted broker evidence backs
+	// SuccessfulInferenceCases. Since the scorer overlaps /run without per-case
+	// inference windows, that evidence is the ticket's complete session
+	// accounting: SuccessfulInferenceCases is the session's successful chat
+	// requests capped at EligibleCases, not a distinct-case count. A harness
+	// with zero successful chat requests still fails this gate.
 	CaseAttributionComplete bool `json:"case_attribution_complete"`
 }
 

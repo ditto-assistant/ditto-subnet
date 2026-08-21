@@ -162,8 +162,11 @@ The validator sends one `RunRequest` per case; the harness returns a
 
 `inference_base_url` is additive-optional and ignored. Harnesses keep the
 process-wide inference URL. The scorer may overlap `/run` up to the operator
-`benchmark_runtime.case_concurrency` (default 4, max 64). Dataset generation
-and scoring semantics are unchanged.
+`benchmark_runtime.case_concurrency` (default 4, max 64). The broker admits
+`max(4, case_concurrency)` in-flight chat calls and tool calls per harness
+source; above that it answers `429` with `Retry-After: 1`, so a harness that
+parallelises inside a case should retry on 429. Dataset generation and scoring
+semantics are unchanged.
 
 ```jsonc
 // ToolDefinition

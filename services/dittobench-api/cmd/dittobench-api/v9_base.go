@@ -181,12 +181,16 @@ func applyV9BaseEvidence(
 	// Per-case model-reach, delay-fingerprint, inference-latency, dependence,
 	// and answer-stuffing gates required exclusive inference windows. Concurrent
 	// /run cannot settle those windows, so they are not administered. v12 still
-	// emits model_dependence as not_applicable so the signed digest stays valid.
+	// emits model_dependence so the signed digest stays valid, using the
+	// contract's fail-open encoding for an unsettled counterfactual slice:
+	// SliceAttributionComplete=false -> insufficient_evidence with a full factor.
+	// (not_applicable would assert a settled slice with no model cases, which is
+	// not what happened.)
 	var dependence []v9base.ModelDependenceTelemetry
 	if req.BenchVersion >= protocol.BenchVersionV12 {
 		dependence = []v9base.ModelDependenceTelemetry{{
 			TelemetryComplete:        true,
-			SliceAttributionComplete: true,
+			SliceAttributionComplete: false,
 		}}
 	}
 	gates, err := v9base.BuildGateEvidence(req.BenchVersion, perCase, model, true, dependence...)

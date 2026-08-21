@@ -301,8 +301,9 @@ func TestApplyV9BaseEvidenceOmitsV12PerCaseGates(t *testing.T) {
 		t.Fatal(err)
 	}
 	dep := got.Details.V9Base.ScoreGates.ModelDependence
-	if dep.Result != string(scoregates.ResultNotApplicable) || dep.FactorBPS != scoregates.BasisPointScale {
-		t.Fatalf("v12 dependence should be not_applicable: %+v", dep)
+	if dep.Result != string(scoregates.ResultInsufficientEvidence) || dep.FactorBPS != scoregates.BasisPointScale ||
+		dep.SliceAttributionComplete {
+		t.Fatalf("v12 dependence should be fail-open insufficient_evidence: %+v", dep)
 	}
 	if got.Details.V9Base.ScoreGates.InferenceLatency.Result != "" ||
 		got.Details.V9Base.ScoreGates.AnswerStuffing.Result != "" {

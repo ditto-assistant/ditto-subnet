@@ -42,8 +42,8 @@ function ModelUseRow(props: { gate: V9ModelUseGate }): JSX.Element {
           {percentage(props.gate.threshold_bps)}
         </span>
         <span>
-          {props.gate.successful_inference_cases} of {props.gate.eligible_cases} eligible cases used
-          successful inference · {props.gate.missing_inference_cases} missing
+          {props.gate.successful_inference_cases} of {props.gate.eligible_cases} eligible cases
+          covered by successful inference requests · {props.gate.missing_inference_cases} uncovered
         </span>
         <span>
           {props.gate.successful_requests} of {props.gate.observed_requests} relay requests

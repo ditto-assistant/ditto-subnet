@@ -16,22 +16,24 @@ no inference is explicitly `zero_inference` with factor `0`, so it remains a
 completed, signable agent outcome rather than becoming retryable infrastructure
 failure.
 
-Aggregate broker request counts are not distinct-case evidence. They are
-published separately as `request_coverage_bps`; when trusted distinct-case
-attribution is unavailable, `case_attribution_complete` is false, semantic
+Aggregate broker request counts are published separately as
+`request_coverage_bps`. When the integration layer cannot vouch for
+`successful_inference_cases`, `case_attribution_complete` is false, semantic
 `coverage_bps` is zero, and the result is `insufficient_evidence` with factor
-zero. Repeated requests from one case therefore cannot satisfy a multi-case
-gate.
+zero. The production scorer overlaps `/run` without per-case inference
+windows, so its `successful_inference_cases` is the ticket's successful chat
+requests capped at the eligible population, vouched for by complete session
+accounting (a coverage proxy, not a distinct-case count).
 
 ## Trust boundary
 
 The package does not collect or infer telemetry. The integration layer must:
 
-1. set distinct successful-inference case counts only when the controlled
-   broker/runner path can prove case attribution. The v9 scorer serializes
-   ordinary cases and snapshots the source-bound ticket broker at both edges;
-   any overlapping request makes attribution incomplete. Aggregate request
-   totals alone must leave `CaseAttributionComplete` false;
+1. set `SuccessfulInferenceCases` and `CaseAttributionComplete` only from
+   trusted broker accounting. The scorer overlaps ordinary cases against one
+   session URL and uses the ticket's complete session accounting (successful
+   chat requests capped at the eligible population); incomplete accounting
+   must leave `CaseAttributionComplete` false;
 2. exclude protocol preflight, ablation, undelivered, and validator-fault cases;
 3. derive tool matches and unexpected executions only from validator-observed
    `tool_endpoint` transcript events; and
