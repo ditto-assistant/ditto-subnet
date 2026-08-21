@@ -20,6 +20,7 @@ from ditto.db.models import (
     CodingCatalogRelease,
     CodingCatalogRetirement,
     CodingShadowRun,
+    CodingShadowRunIssuance,
 )
 
 if TYPE_CHECKING:
@@ -384,6 +385,13 @@ async def coding_shadow_run_ready_for_ticket(
     *,
     run: CodingShadowRun,
 ) -> bool:
+    issuance = await session.scalar(
+        select(CodingShadowRunIssuance).where(
+            CodingShadowRunIssuance.run_row_id == run.run_row_id
+        )
+    )
+    if issuance is None:
+        return False
     release = await active_coding_catalog_release(
         session,
         corpus_release_id=run.corpus_release_id,

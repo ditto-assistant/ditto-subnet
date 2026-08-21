@@ -104,8 +104,8 @@ selection under the same assignment.
 
 ## Activation boundary
 
-This core is not a production selector service. These layers add no private
-catalog transport, scheduler, run/ticket endpoint, validator task transport,
-score fold, or emissions reader. A later issuer must wait for finality and
-atomically combine selection, shared-run insertion, and exposure. Coding
-contract v1 remains permanently shadow-only.
+This core is not a production selector service. The separate shadow issuer
+combines finalized selection, shared-run insertion, and exposure, but these
+layers add no private catalog transport, scheduler, run/ticket endpoint,
+validator task transport, score fold, or emissions reader. Coding contract v1
+remains permanently shadow-only.

@@ -31,9 +31,9 @@ signed catalog/exposure layer requires a registered active commitment and full
 irreversible exposure before any new ticket. The separate selector core can
 verify one assigned block and private task proof, while the assignment ledger
 persists the predetermined future height. Neither schedules nor inserts a run.
-The validator submission route therefore has no live lease to accept. Internal
-insertion functions and real PostgreSQL tests freeze the authority contract for
-that later work.
+The separate issuer can now atomically create the run and exposure, but no
+scheduler or ticket issuer invokes it. The validator submission route therefore
+has no live lease to accept.
 
 Persisting a selection block number/hash is not chain verification. The selector
 core independently fetches the canonical block hash and validates the selected
@@ -76,7 +76,7 @@ qualification marks historical runs stale without deleting or relabeling them.
 ## Activation boundary
 
 This ledger is calibration infrastructure, not a second emissions authority.
-Production still requires the issuer, private catalog transport, shadow
-scheduler, validator/scorer adapter, and measured calibration.
+Production still requires private catalog transport, a shadow scheduler,
+validator/scorer adapter, and measured calibration.
 Any coding emissions allocation requires coding contract v2 and a separate
 owner-approved PR.

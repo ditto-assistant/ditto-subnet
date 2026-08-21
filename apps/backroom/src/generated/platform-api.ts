@@ -9818,6 +9818,10 @@ export interface components {
         CodingShadowRunRecord: {
             /** Artifact Sha256 */
             artifact_sha256: string;
+            /** Assignment Row Id */
+            assignment_row_id: string | null;
+            /** Assignment Sha256 */
+            assignment_sha256: string | null;
             /** Bench Version */
             bench_version: number;
             /**
@@ -9841,6 +9845,8 @@ export interface components {
             created_at: string;
             /** Current */
             current: boolean;
+            /** Issued */
+            issued: boolean;
             /** Median Repair Mean Micros */
             median_repair_mean_micros: number | null;
             /** Quorum Complete */
@@ -9856,11 +9862,17 @@ export interface components {
             run_row_id: string;
             /** Screened Image Sha256 */
             screened_image_sha256: string;
+            /** Selection Block Hash */
+            selection_block_hash: string;
+            /** Selection Block Number */
+            selection_block_number: number;
+            /** Selection Block Timestamp */
+            selection_block_timestamp: string | null;
             /**
              * Stale Reason
              * @enum {string}
              */
-            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "policy_changed" | "qualification_stale" | "catalog_retired";
+            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "policy_changed" | "qualification_stale" | "catalog_retired" | "issuance_missing";
             /** Task Count */
             task_count: number;
             /** Task Set Manifest Sha256 */

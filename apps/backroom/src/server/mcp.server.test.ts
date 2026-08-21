@@ -5699,6 +5699,8 @@ describe('Backroom MCP tools', () => {
       runs: [
         {
           run_row_id: '11111111-1111-4111-8111-111111111111',
+          assignment_row_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+          assignment_sha256: '1'.repeat(64),
           coding_run_id: 'coding-run-001',
           bench_version: 12,
           coding_contract_version: 1,
@@ -5708,6 +5710,10 @@ describe('Backroom MCP tools', () => {
           run_manifest_sha256: 'c'.repeat(64),
           task_set_manifest_sha256: 'd'.repeat(64),
           task_count: 1,
+          selection_block_number: 1_020,
+          selection_block_hash: `0x${'4'.repeat(64)}`,
+          selection_block_timestamp: '2026-08-21T00:01:00Z',
+          issued: true,
           core_qualification_observation_id: '22222222-2222-4222-8222-222222222222',
           ticket_count: 1,
           result_count: 1,
@@ -5761,6 +5767,7 @@ describe('Backroom MCP tools', () => {
       agent_id: agentId,
       total_assignments: 1,
       total_runs: 1,
+      runs: [{ issued: true }],
       shadow_only: true,
     })
     expect(fetchMock).toHaveBeenCalledWith(

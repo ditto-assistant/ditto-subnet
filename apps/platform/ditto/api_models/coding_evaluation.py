@@ -243,6 +243,8 @@ class CodingShadowTicketRecord(CodingEvaluationModel):
 
 class CodingShadowRunRecord(CodingEvaluationModel):
     run_row_id: UUID
+    assignment_row_id: UUID | None
+    assignment_sha256: Sha256 | None
     coding_run_id: OpaqueId
     bench_version: Annotated[int, Field(ge=7)]
     coding_contract_version: Literal[1]
@@ -252,6 +254,10 @@ class CodingShadowRunRecord(CodingEvaluationModel):
     run_manifest_sha256: Sha256
     task_set_manifest_sha256: Sha256
     task_count: Annotated[int, Field(ge=1, le=100)]
+    selection_block_number: Annotated[int, Field(ge=1)]
+    selection_block_hash: BlockHash
+    selection_block_timestamp: datetime | None
+    issued: bool
     core_qualification_observation_id: UUID
     ticket_count: Annotated[int, Field(ge=0)]
     result_count: Annotated[int, Field(ge=0)]
@@ -267,6 +273,7 @@ class CodingShadowRunRecord(CodingEvaluationModel):
         "policy_changed",
         "qualification_stale",
         "catalog_retired",
+        "issuance_missing",
     ]
     tickets: list[CodingShadowTicketRecord]
     created_at: datetime

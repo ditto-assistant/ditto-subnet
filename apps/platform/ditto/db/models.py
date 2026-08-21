@@ -1557,6 +1557,20 @@ class CodingSelectionAssignmentRow(Base):
             "coding_contract_version",
             name="coding_selection_assignments_artifact_key",
         ),
+        UniqueConstraint(
+            "assignment_row_id",
+            "assignment_sha256",
+            "agent_id",
+            "artifact_sha256",
+            "screened_image_sha256",
+            "bench_version",
+            "coding_contract_version",
+            "coding_run_id",
+            "corpus_release_id",
+            "selection_block_number",
+            "task_count",
+            name="coding_selection_assignments_run_authority_key",
+        ),
         CheckConstraint(
             "assignment_sha256 ~ '^[0-9a-f]{64}$' "
             "AND artifact_sha256 ~ '^[0-9a-f]{64}$' "
@@ -1664,6 +1678,20 @@ class CodingShadowRun(Base):
             "task_count",
             name="coding_shadow_runs_run_corpus_task_count_key",
         ),
+        UniqueConstraint(
+            "run_row_id",
+            "agent_id",
+            "artifact_sha256",
+            "screened_image_sha256",
+            "bench_version",
+            "coding_contract_version",
+            "coding_run_id",
+            "corpus_release_id",
+            "selection_block_number",
+            "selection_block_hash",
+            "task_count",
+            name="coding_shadow_runs_issuance_authority_key",
+        ),
         CheckConstraint(
             "artifact_sha256 ~ '^[0-9a-f]{64}$' "
             "AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
@@ -1703,6 +1731,139 @@ class CodingShadowRun(Base):
             "coding_shadow_runs_agent_created_idx",
             "agent_id",
             "created_at",
+        ),
+    )
+
+
+class CodingShadowRunIssuance(Base):
+    """One immutable finalized assignment-to-run issuance bridge."""
+
+    __tablename__ = "coding_shadow_run_issuances"
+
+    assignment_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True
+    )
+    run_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    assignment_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    coding_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    coding_run_id: Mapped[str] = mapped_column(Text, nullable=False)
+    corpus_release_id: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_block_number: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    selection_block_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_candidate_probe: Mapped[int] = mapped_column(Integer, nullable=False)
+    selection_catalog_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    selection_proof_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_block_timestamp: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True),
+        nullable=False,
+        server_default=text("clock_timestamp()"),
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "run_row_id",
+            name="coding_shadow_run_issuances_run_key",
+        ),
+        ForeignKeyConstraint(
+            [
+                "assignment_row_id",
+                "assignment_sha256",
+                "agent_id",
+                "artifact_sha256",
+                "screened_image_sha256",
+                "bench_version",
+                "coding_contract_version",
+                "coding_run_id",
+                "corpus_release_id",
+                "selection_block_number",
+                "task_count",
+            ],
+            [
+                "coding_selection_assignments.assignment_row_id",
+                "coding_selection_assignments.assignment_sha256",
+                "coding_selection_assignments.agent_id",
+                "coding_selection_assignments.artifact_sha256",
+                "coding_selection_assignments.screened_image_sha256",
+                "coding_selection_assignments.bench_version",
+                "coding_selection_assignments.coding_contract_version",
+                "coding_selection_assignments.coding_run_id",
+                "coding_selection_assignments.corpus_release_id",
+                "coding_selection_assignments.selection_block_number",
+                "coding_selection_assignments.task_count",
+            ],
+            ondelete="RESTRICT",
+            name="coding_shadow_run_issuances_assignment_fkey",
+        ),
+        ForeignKeyConstraint(
+            [
+                "run_row_id",
+                "agent_id",
+                "artifact_sha256",
+                "screened_image_sha256",
+                "bench_version",
+                "coding_contract_version",
+                "coding_run_id",
+                "corpus_release_id",
+                "selection_block_number",
+                "selection_block_hash",
+                "task_count",
+            ],
+            [
+                "coding_shadow_runs.run_row_id",
+                "coding_shadow_runs.agent_id",
+                "coding_shadow_runs.artifact_sha256",
+                "coding_shadow_runs.screened_image_sha256",
+                "coding_shadow_runs.bench_version",
+                "coding_shadow_runs.coding_contract_version",
+                "coding_shadow_runs.coding_run_id",
+                "coding_shadow_runs.corpus_release_id",
+                "coding_shadow_runs.selection_block_number",
+                "coding_shadow_runs.selection_block_hash",
+                "coding_shadow_runs.task_count",
+            ],
+            ondelete="RESTRICT",
+            name="coding_shadow_run_issuances_run_fkey",
+        ),
+        CheckConstraint(
+            "assignment_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND artifact_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND screened_image_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND selection_proof_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_shadow_run_issuances_hashes_check",
+        ),
+        CheckConstraint(
+            "selection_block_hash ~ '^0x[0-9a-f]{64}$'",
+            name="coding_shadow_run_issuances_block_hash_check",
+        ),
+        CheckConstraint(
+            "bench_version >= 7 AND coding_contract_version = 1 "
+            "AND selection_block_number > 0 AND task_count = 1 "
+            "AND selection_candidate_probe BETWEEN 0 AND 999999 "
+            "AND selection_catalog_index BETWEEN 0 AND 999999 "
+            "AND weight_eligible = false "
+            "AND issued_at >= selection_block_timestamp - interval '5 seconds'",
+            name="coding_shadow_run_issuances_contract_check",
+        ),
+        CheckConstraint(
+            "octet_length(coding_run_id) BETWEEN 1 AND 256 "
+            "AND octet_length(corpus_release_id) BETWEEN 1 AND 256 "
+            "AND coding_run_id !~ '[[:space:][:cntrl:]]' "
+            "AND corpus_release_id !~ '[[:space:][:cntrl:]]'",
+            name="coding_shadow_run_issuances_identifiers_check",
+        ),
+        Index(
+            "coding_shadow_run_issuances_agent_issued_idx",
+            "agent_id",
+            "issued_at",
         ),
     )
 
