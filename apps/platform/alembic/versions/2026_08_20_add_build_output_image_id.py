@@ -15,6 +15,7 @@ have no value, and bind fail-closes without one.
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 revision: str = "b7e2c91a04d6"
