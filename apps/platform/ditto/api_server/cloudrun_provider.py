@@ -182,9 +182,14 @@ class CloudRunComputeProvider:
 
     async def _job_status(self, job_id: str) -> str:
         job = await self._client.get_job(job_id)
-        execution = job.get("latestCreatedExecution")
-        if not isinstance(execution, dict):
+        execution = _job_execution_ref(job)
+        if execution is None:
             return "pending"
+        completion = str(execution.get("completionStatus", "")).upper()
+        if completion in {"EXECUTION_FAILED", "EXECUTION_CANCELLED"}:
+            return "error"
+        if completion in {"EXECUTION_RUNNING", "EXECUTION_SUCCEEDED"}:
+            return "running"
         name = str(execution.get("name", ""))
         if not name:
             return "pending"
@@ -229,6 +234,21 @@ def _execution_status(detail: dict[str, Any]) -> dict[str, Any]:
     if isinstance(nested, dict):
         return nested
     return detail
+
+
+def _job_execution_ref(job: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the latest execution reference from a v2 Job body.
+
+    Production JSON nests ``latestCreatedExecution`` under ``status``. A
+    top-level copy is only a test double.
+    """
+    nested = _execution_status(job).get("latestCreatedExecution")
+    if isinstance(nested, dict):
+        return nested
+    top = job.get("latestCreatedExecution")
+    if isinstance(top, dict):
+        return top
+    return None
 
 
 def _split(resource_id: str) -> tuple[str, str]:
