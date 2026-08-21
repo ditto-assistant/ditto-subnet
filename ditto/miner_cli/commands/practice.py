@@ -43,7 +43,10 @@ def add_subparser(
         "--run-size",
         choices=("small", "medium", "full"),
         default="small",
-        help="Dataset envelope: small smoke, medium, or full on-chain shape (default: small).",
+        help=(
+            "Dataset envelope: small smoke, medium, or full on-chain shape "
+            "(default: small)."
+        ),
     )
     parser.add_argument(
         "--bench-version",
