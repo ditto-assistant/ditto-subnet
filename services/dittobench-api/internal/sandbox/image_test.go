@@ -294,6 +294,67 @@ func gzipBytes(t *testing.T, raw []byte) []byte {
 	return buf.Bytes()
 }
 
+func makeKanikoGCRArchive(t *testing.T) ([]byte, string) {
+	t.Helper()
+	config := []byte(`{"architecture":"amd64","os":"linux"}`)
+	configDigest := sha256.Sum256(config)
+	configHex := hex.EncodeToString(configDigest[:])
+	configName := "sha256:" + configHex
+	layer := []byte("kaniko layer")
+	layerDigest := sha256.Sum256(layer)
+	layerName := hex.EncodeToString(layerDigest[:]) + ".tar.gz"
+	manifest, err := json.Marshal([]map[string]any{{
+		"Config":   configName,
+		"RepoTags": []string{testScreenedImageRef},
+		"Layers":   []string{layerName},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var archive bytes.Buffer
+	writer := tar.NewWriter(&archive)
+	for _, file := range []struct {
+		name string
+		body []byte
+	}{
+		{configName, config},
+		{layerName, layer},
+		{"manifest.json", manifest},
+	} {
+		if err := writer.WriteHeader(&tar.Header{Name: file.name, Mode: 0o600, Size: int64(len(file.body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(file.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return archive.Bytes(), "sha256:" + configHex
+}
+
+func TestValidateDockerSaveArchiveAcceptsKanikoGoContainerRegistryTar(t *testing.T) {
+	archive, imageID := makeKanikoGCRArchive(t)
+	path := writeArchive(t, archive)
+
+	tagged, err := validateDockerSaveArchive(path, testScreenedImageRef, imageID)
+	if err != nil {
+		t.Fatalf("kaniko docker-save archive rejected: %v", err)
+	}
+	if !tagged {
+		t.Fatal("tagged kaniko archive reported as untagged")
+	}
+
+	accepted := map[string]struct{}{imageID: {}}
+	if _, err := validateDockerSaveArchiveWithStoreIDs(path, testScreenedImageRef, imageID, accepted); err != nil {
+		t.Fatalf("kaniko archive store-id validation rejected: %v", err)
+	}
+	if len(accepted) < 2 {
+		t.Fatalf("expected reconstructed store digest, got %v", accepted)
+	}
+}
+
 func TestValidateDockerSaveArchiveAcceptsGzipAndUncompressed(t *testing.T) {
 	archive, imageID := makeScreenedImageArchive(t)
 

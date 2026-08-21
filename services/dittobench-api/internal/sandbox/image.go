@@ -322,6 +322,7 @@ func validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID string,
 
 	expectedHex := strings.TrimPrefix(expectedID, "sha256:")
 	expectedClassicConfig := expectedHex + ".json"
+	expectedGCRConfig := "sha256:" + expectedHex
 	expectedOCIBlob := "blobs/sha256/" + expectedHex
 	reader := tar.NewReader(source)
 	var manifestBytes []byte
@@ -383,7 +384,7 @@ func validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID string,
 			}
 			continue
 		}
-		if name == expectedClassicConfig || name == expectedOCIBlob {
+		if name == expectedClassicConfig || name == expectedGCRConfig || name == expectedOCIBlob {
 			expectedDigestCount++
 			if name == expectedOCIBlob {
 				if header.Size <= 0 || header.Size > 4<<20 {
@@ -416,7 +417,13 @@ func validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID string,
 			}
 			continue
 		}
-		if strings.HasSuffix(name, "/layer.tar") {
+		layerMediaType := dockerLayerMediaType
+		isLayer := strings.HasSuffix(name, "/layer.tar")
+		if mediaType, ok := gcrLayerName(name); ok {
+			isLayer = true
+			layerMediaType = mediaType
+		}
+		if isLayer {
 			if len(classicLayers) >= maxClassicImageLayers {
 				return false, fmt.Errorf("classic image has too many layers")
 			}
@@ -432,7 +439,7 @@ func validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID string,
 				return false, fmt.Errorf("read classic image layer %s: expected %d bytes got %d", name, header.Size, written)
 			}
 			classicLayers[name] = dockerSchema2Descriptor{
-				MediaType: dockerLayerMediaType,
+				MediaType: layerMediaType,
 				Digest:    "sha256:" + hex.EncodeToString(hasher.Sum(nil)),
 				Size:      header.Size,
 			}
@@ -484,8 +491,8 @@ func validateDockerSaveArchiveWithStoreIDs(path, expectedRef, expectedID string,
 			return false, fmt.Errorf("archive tags must be empty or exactly the expected image ref %q", expectedRef)
 		}
 	}
-	classic := strings.TrimPrefix(manifest[0].Config, "./") == expectedClassicConfig
 	manifestConfig := strings.TrimPrefix(manifest[0].Config, "./")
+	classic := manifestConfig == expectedClassicConfig || manifestConfig == expectedGCRConfig
 	if !classic && !verifiedSmallBlobs[manifestConfig] {
 		return false, fmt.Errorf("Docker manifest config bytes do not match their OCI digest")
 	}
@@ -716,6 +723,35 @@ func validatePrimaryOCIIndex(
 		}
 	}
 	return runnable, nil
+}
+
+func hexDigest64(value string) bool {
+	if len(value) != 64 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func gcrLayerName(name string) (string, bool) {
+	if strings.Contains(name, "/") {
+		return "", false
+	}
+	switch {
+	case strings.HasSuffix(name, ".tar.gz"):
+		if hexDigest64(strings.TrimSuffix(name, ".tar.gz")) {
+			return dockerLayerGzipMediaType, true
+		}
+	case strings.HasSuffix(name, ".tar.zst"):
+		if hexDigest64(strings.TrimSuffix(name, ".tar.zst")) {
+			return ociLayerZstdMediaType, true
+		}
+	case strings.HasSuffix(name, ".tar"):
+		if hexDigest64(strings.TrimSuffix(name, ".tar")) {
+			return dockerLayerMediaType, true
+		}
+	}
+	return "", false
 }
 
 func ociBlobDigest(name string) (string, bool) {
