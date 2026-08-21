@@ -1802,7 +1802,6 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		}
 	}
 	effectiveCaseConcurrency := caseConcurrencyForRun(req.BenchmarkRuntime)
-	caseScopedInference := false
 	toolRunUserID := ""
 	if harnessProjection != nil {
 		toolRunUserID = harnessProjection.WireUserID(gen.PrimaryUser)
@@ -1832,7 +1831,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	runBounded(ctx, len(toolCases), effectiveCaseConcurrency, func(i int) {
 		c := toolCases[i]
 		caseToolEndpoint := toolEndpoint.forCase(c.ID, toolRunUserID)
-		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion, CaseScopedInference: caseScopedInference})
+		resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, c.ID, c.Prompt, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: toolRunUserID, BenchVersion: req.BenchVersion})
 		observed := toolSrv.Observed(c.ID)
 		cs := scorer.ScoreToolCaseObservedForVersion(c, resp, runErr == nil, observed, scope, req.BenchVersion)
 		cs = applyV10ToolProvenance(req.BenchVersion, scope, cs, resp, observed, execution)
@@ -1985,7 +1984,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 				uid = wave.UserID
 			}
 			caseToolEndpoint := toolEndpoint.forCase(mc.ID, uid)
-			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion, CaseScopedInference: caseScopedInference})
+			resp, execution, runErr := s.runCaseWithModelAttribution(ctx, inferenceSessionID, harnessURL, mc.ID, mc.Question, tools, runner.CaseOptions{ToolEndpoint: caseToolEndpoint, UserID: uid, BenchVersion: req.BenchVersion})
 			observedCalls := toolSrv.Observed(mc.ID)
 			resp = withObservedTrajectory(resp, observedCalls)
 			gradedResp := resp
@@ -2429,19 +2428,15 @@ func (s *server) startToolServerForSession(
 	h http.Handler,
 	sandboxSourceIP string,
 	benchVersion int,
-	inferenceSessionID string,
+	_ string,
 ) (endpoint observedToolEndpoint, stop func(), err error) {
 	if sandboxSourceIP != "" {
 		requireCaseCapability := benchVersion >= protocol.BenchVersionV9
-		provenanceSessionID := ""
-		if benchVersion >= protocol.BenchVersionV10 {
-			if inferenceSessionID == "" {
-				return observedToolEndpoint{}, func() {}, fmt.Errorf("v10 tool provenance session unavailable")
-			}
-			provenanceSessionID = inferenceSessionID
-		}
+		// Concurrent /run does not open exclusive case windows, so model-emitted
+		// tool matching cannot be attributed per case. HMAC case capability plus
+		// source IP remain the authorization; the mock records observation.
 		route, unregister, registerErr := s.broker.registerToolWithProvenance(
-			h, sandboxSourceIP, s.allowPrivate, requireCaseCapability, provenanceSessionID,
+			h, sandboxSourceIP, s.allowPrivate, requireCaseCapability, "",
 		)
 		if registerErr != nil {
 			return observedToolEndpoint{}, func() {}, registerErr

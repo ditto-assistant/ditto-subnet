@@ -10854,7 +10854,7 @@ export interface components {
              * @description Version-bound benchmark semantics for this lease.
              */
             bench_version?: number | null;
-            /** @description Additive v10 case scheduler and relay-delay policy. Missing means serial cases with delay fingerprinting off for rolling compatibility. */
+            /** @description Additive v10 case scheduler and relay-delay policy. Missing means the scorer default of four overlapping /run calls with delay fingerprinting off. An explicit stamped 1 stays serial. */
             benchmark_runtime?: components["schemas"]["BenchmarkRuntimeSettings"] | null;
             /**
              * Confirmation Datasets

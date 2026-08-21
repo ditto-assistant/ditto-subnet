@@ -94,7 +94,7 @@ class TestDefaults:
         with pytest.raises(ValidationError, match="less than or equal"):
             InferenceConcurrencySettings(chat_token_budget=MAX_CHAT_TOKEN_BUDGET + 1)
 
-    def test_v10_runtime_defaults_preserve_deployed_behavior(self) -> None:
+    def test_v10_runtime_defaults_overlap_four_runs(self) -> None:
         runtime = InferenceConcurrencySettings().benchmark_runtime
         assert runtime.case_concurrency == 4
         assert runtime.relay_delay_fingerprint_mode == "off"

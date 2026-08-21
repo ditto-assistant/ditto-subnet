@@ -1777,7 +1777,7 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   // number of racers. Size it as a load-shedding backstop, not an exact valve.
   embedding_global_concurrency: z.number().int().min(1).max(MAX_EMBEDDING_CONCURRENCY),
   // Additive rolling-upgrade field. A Platform predating the v10 controls
-  // omits it, which must render as the deployed serial/off behavior.
+  // omits it, which fills the shipped default (4 overlapping /run, delay off).
   benchmark_runtime: benchmarkRuntimeSettingsSchema
     .nullish()
     .transform((value) => value ?? DEFAULT_BENCHMARK_RUNTIME_SETTINGS),

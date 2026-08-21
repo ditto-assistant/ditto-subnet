@@ -360,8 +360,9 @@ export function InferenceConcurrencyControlPanel({
             V10 benchmark runtime
           </legend>
           <p className="mb-4 max-w-[76ch] text-[11px] leading-4 text-[var(--muted)]">
-            These values are stamped onto newly issued v10 leases. V9 and running leases are
-            unchanged.
+            Stamped onto newly issued v10+ leases. In-flight leases keep their stamp. v9 has
+            no stamp and uses the scorer default (4). A stored revision of 1 stays live until
+            you write a new whole-object policy.
           </p>
           <div className="grid gap-4 lg:grid-cols-2">
             <label className="text-xs font-medium text-[var(--muted-strong)]">

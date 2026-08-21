@@ -157,8 +157,6 @@ The validator sends one `RunRequest` per case; the harness returns a
   "bench_version": 7                                         // optional, additive: sent ONLY for bench_version >= 7.
                                                              // Absent (omitted) for v2–v6, so legacy request bytes
                                                              // are unchanged and old harnesses parse identically.
-  "inference_base_url": "http://host.docker.internal:11436/v1/inference/cases/<opaque>"
-                                                             // optional v10 case-scoped relay capability
 }
 ```
 

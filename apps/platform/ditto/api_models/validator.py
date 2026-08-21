@@ -371,7 +371,8 @@ class JobResponse(BaseModel):
         default=None,
         description=(
             "Additive v10 case scheduler and relay-delay policy. Missing means "
-            "serial cases with delay fingerprinting off for rolling compatibility."
+            "the scorer default of four overlapping /run calls with delay "
+            "fingerprinting off. An explicit stamped 1 stays serial."
         ),
     )
 
