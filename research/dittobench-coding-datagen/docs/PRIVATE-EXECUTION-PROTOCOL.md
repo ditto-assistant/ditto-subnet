@@ -618,6 +618,12 @@ per-task evidence; the validator orders those tasks by the immutable manifest,
 re-derives every task root, counts terminal domains, and computes the integer
 binary repair mean before signing the run result.
 
+Failure classification uses typed post-lease stages, never exception strings or
+miner prose. Each stage fixes its allowed failure code, terminal domain, and
+whether authoring or failed-grader evidence is required, optional, or forbidden.
+A failure occurring before the authoring lease reveals the selected manifest
+remains retryable infrastructure and cannot be converted into task evidence.
+
 1. Verify the signed run manifest, chain block, corpus root, and every selected
    capsule digest.
 2. Materialize one visible base without `.git`, remotes, hooks, credentials,
