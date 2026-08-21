@@ -4075,6 +4075,13 @@ CREATE INDEX inference_provider_routes_selection_idx ON public.inference_provide
 
 
 --
+-- Name: inference_requests_inflight_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inference_requests_inflight_idx ON public.inference_requests USING btree (request_kind, started_at) WHERE (status = 'started'::text);
+
+
+--
 -- Name: inference_requests_kind_started_idx; Type: INDEX; Schema: public; Owner: -
 --
 
