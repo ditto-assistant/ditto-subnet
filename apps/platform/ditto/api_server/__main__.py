@@ -170,6 +170,9 @@ def _config_to_log_dict(config: ApiServerConfig) -> dict[str, object]:
             "access_key": _redact(config.storage.access_key),
             "secret_key": _redact(config.storage.secret_key),
         },
+        "coding_private_catalog": {
+            "configured": config.coding_private_catalog is not None,
+        },
         "embedding": {
             "enabled": config.embedding.enabled,
             "url": config.embedding.url or "<unset>",

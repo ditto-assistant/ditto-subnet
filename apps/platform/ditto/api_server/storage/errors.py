@@ -49,3 +49,7 @@ class ObjectDownloadFailedError(StorageError):
     - The S3 endpoint is unreachable or rejects the request.
     - The object body exceeds the caller's ``max_bytes`` bound.
     """
+
+
+class ObjectDownloadTooLargeError(ObjectDownloadFailedError):
+    """Raised when a downloaded object exceeds its caller-declared byte bound."""

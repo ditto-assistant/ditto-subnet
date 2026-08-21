@@ -82,10 +82,10 @@ class CodingPrivateCatalogSource(Protocol):
     async def get_task_version(
         self,
         *,
-        corpus_release_id: str,
+        commitment: CodingCatalogCommitment,
         catalog_index: int,
     ) -> tuple[CodingCatalogTaskVersion, CodingCatalogMembershipProof]:
-        """Return one digest-only private task record and its Merkle proof."""
+        """Return one commitment-addressed task record and its Merkle proof."""
 
 
 @dataclass(frozen=True)
@@ -343,7 +343,7 @@ async def select_shadow_coding_run(
         )
         try:
             task_version, membership = await catalog_source.get_task_version(
-                corpus_release_id=commitment.corpus_release_id,
+                commitment=commitment,
                 catalog_index=catalog_index,
             )
         except CodingSelectionCatalogError:

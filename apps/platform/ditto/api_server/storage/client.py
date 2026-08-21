@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
+    ObjectDownloadTooLargeError,
     ObjectNotFoundError,
     ObjectUploadFailedError,
 )
@@ -567,7 +568,7 @@ class S3StorageClient:
                         break
                     total += len(chunk)
                     if total > max_bytes:
-                        raise ObjectDownloadFailedError(
+                        raise ObjectDownloadTooLargeError(
                             f"get_object exceeded bound: "
                             f"bucket={self._config.bucket!r} "
                             f"key={key!r} max_bytes={max_bytes}"
