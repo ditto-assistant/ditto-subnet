@@ -353,6 +353,86 @@ async def test_reaps_stuck_provisioning_kaniko_before_lease(
 
 
 @pytest.mark.asyncio
+async def test_reaps_expired_leased_kaniko_without_resource_id(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="zombie", sha256="aa" * 32
+    )
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(max_inflight=1),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.status = "leased"
+        build.provider = "targon"
+        build.provider_resource_id = None
+        build.updated_at = datetime.now(UTC) - timedelta(hours=18)
+        build.lease_expires_at = datetime.now(UTC) - timedelta(hours=17)
+    await _seed_agent(
+        session_maker, status=AgentStatus.UPLOADED, name="next", sha256="bb" * 32
+    )
+    targon.created.clear()
+    targon.deployed.clear()
+    assert await loop.tick() is True
+    async with session_maker() as session:
+        builds = (await session.scalars(select(SubmissionImageBuild))).all()
+        by_name = {}
+        for build in builds:
+            agent = await session.get(Agent, build.agent_id)
+            assert agent is not None
+            by_name[agent.name] = build
+        assert by_name["zombie"].status == "fallback_required"
+        assert by_name["zombie"].error_code == "TARGON_SUBMISSION_LEASE_EXPIRED"
+        assert by_name["next"].status == "running"
+        assert by_name["next"].provider_resource_id == "wrk-1"
+    assert len(targon.created) == 1
+
+
+@pytest.mark.asyncio
+async def test_reaps_runtime_running_without_resource_after_provision_window(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.status = "succeeded"
+        build.provider = "targon"
+        build.output_sha256 = "12" * 32
+        build.output_size_bytes = 123
+        build.runtime_status = "running"
+        build.runtime_provider_resource_id = None
+        build.updated_at = datetime.now(UTC) - timedelta(minutes=11)
+        build.completed_at = datetime.now(UTC) - timedelta(minutes=11)
+    targon.created.clear()
+    assert await loop.tick() is True
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.runtime_status == "fallback_required"
+        assert build.runtime_error_code == "TARGON_PROVISION_TIMEOUT"
+        assert build.runtime_provider_resource_id is None
+    assert targon.created == []
+
+
+@pytest.mark.asyncio
 async def test_does_not_reap_compiling_kaniko_after_provision_window(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:

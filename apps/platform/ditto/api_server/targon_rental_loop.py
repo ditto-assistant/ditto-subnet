@@ -18,6 +18,7 @@ import httpx
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlalchemy.sql.elements import ColumnElement
 
 from ditto.api_server.builder_image import is_digest_pinned_image
 from ditto.api_server.config import TargonRentalConfig
@@ -206,12 +207,61 @@ class TargonRentalLoop:
                 return provider
         return self._providers[0]
 
+    def _live_build_inflight(self, now: datetime) -> ColumnElement[bool]:
+        """Kaniko rows that still occupy a Targon create/deploy slot."""
+        cutoff = self._provision_cutoff(now)
+        lease_dead = and_(
+            SubmissionImageBuild.lease_expires_at.is_not(None),
+            SubmissionImageBuild.lease_expires_at < now,
+        )
+        abandoned = and_(
+            SubmissionImageBuild.provider_resource_id.is_(None),
+            SubmissionImageBuild.updated_at < cutoff,
+        )
+        return and_(
+            SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
+            ~lease_dead,
+            ~abandoned,
+            SubmissionImageBuild.updated_at >= now - _BUILD_LEASE,
+        )
+
+    def _live_runtime_inflight(self, now: datetime) -> ColumnElement[bool]:
+        """Smoke rows that still occupy a Targon create/deploy slot."""
+        abandoned = and_(
+            SubmissionImageBuild.runtime_provider_resource_id.is_(None),
+            SubmissionImageBuild.updated_at < self._provision_cutoff(now),
+        )
+        return and_(
+            SubmissionImageBuild.runtime_status == "running",
+            ~abandoned,
+        )
+
+    def _live_review_inflight(self, now: datetime) -> ColumnElement[bool]:
+        """L1 rows that still occupy a Targon create/deploy slot."""
+        cutoff = self._provision_cutoff(now)
+        lease_dead = and_(
+            SubmissionSourceReview.lease_expires_at.is_not(None),
+            SubmissionSourceReview.lease_expires_at < now,
+        )
+        abandoned = and_(
+            SubmissionSourceReview.provider_resource_id.is_(None),
+            SubmissionSourceReview.updated_at < cutoff,
+        )
+        return and_(
+            SubmissionSourceReview.status.in_(_INFLIGHT_JOB),
+            ~lease_dead,
+            ~abandoned,
+        )
+
     async def _targon_inflight(self) -> int:
         """Count live Targon rentals we still own.
 
         Targon cannot provision an unbounded burst. Kaniko, smoke, and L1
-        share one cap so create/deploy stays inside that window.
+        share one cap so create/deploy stays inside that window. Expired
+        leases and resource-less rows past the provision window are not
+        live: they never created a rental, so they must not block the queue.
         """
+        now = datetime.now(UTC)
         async with self._session_maker() as session:
             builds = await session.scalar(
                 select(func.count())
@@ -220,8 +270,8 @@ class TargonRentalLoop:
                     SubmissionImageBuild.environment == self._config.environment,
                     SubmissionImageBuild.provider == "targon",
                     or_(
-                        SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
-                        SubmissionImageBuild.runtime_status == "running",
+                        self._live_build_inflight(now),
+                        self._live_runtime_inflight(now),
                     ),
                 )
             )
@@ -231,7 +281,7 @@ class TargonRentalLoop:
                 .where(
                     SubmissionSourceReview.environment == self._config.environment,
                     SubmissionSourceReview.provider == "targon",
-                    SubmissionSourceReview.status.in_(_INFLIGHT_JOB),
+                    self._live_review_inflight(now),
                 )
             )
         return int(builds or 0) + int(reviews or 0)
@@ -642,10 +692,104 @@ class TargonRentalLoop:
             return False
         return await self._delete_resource(None, uid)
 
+    async def _reap_abandoned_without_resource(self, now: datetime) -> bool:
+        """Fail inflight rows that never received a provider resource id.
+
+        A crash after ``leased`` / ``runtime_status=running`` and before
+        ``create_*`` returns leaves ``provider_resource_id`` null. Reap
+        queries that require a uid never see those rows, so they occupied
+        the Targon inflight cap until the 50-minute lease — or forever when
+        the lease expired without a uid.
+        """
+        cutoff = self._provision_cutoff(now)
+        handled = False
+        async with self._session_maker() as session, session.begin():
+            builds = (
+                await session.scalars(
+                    select(SubmissionImageBuild)
+                    .where(
+                        SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
+                        SubmissionImageBuild.provider_resource_id.is_(None),
+                        or_(
+                            and_(
+                                SubmissionImageBuild.lease_expires_at.is_not(None),
+                                SubmissionImageBuild.lease_expires_at < now,
+                            ),
+                            SubmissionImageBuild.updated_at < cutoff,
+                            SubmissionImageBuild.updated_at < now - _BUILD_LEASE,
+                        ),
+                    )
+                    .order_by(SubmissionImageBuild.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in builds:
+                row.status = "fallback_required"
+                row.error_code = (
+                    "TARGON_SUBMISSION_LEASE_EXPIRED"
+                    if row.lease_expires_at is not None and row.lease_expires_at < now
+                    else "TARGON_PROVISION_TIMEOUT"
+                )
+                row.completed_at = now
+                row.updated_at = now
+                row.lease_expires_at = None
+                handled = True
+            runtimes = (
+                await session.scalars(
+                    select(SubmissionImageBuild)
+                    .where(
+                        SubmissionImageBuild.environment == self._config.environment,
+                        SubmissionImageBuild.runtime_status == "running",
+                        SubmissionImageBuild.runtime_provider_resource_id.is_(None),
+                        SubmissionImageBuild.updated_at < cutoff,
+                    )
+                    .order_by(SubmissionImageBuild.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in runtimes:
+                row.runtime_status = "fallback_required"
+                row.runtime_error_code = "TARGON_PROVISION_TIMEOUT"
+                row.runtime_completed_at = now
+                row.updated_at = now
+                handled = True
+            reviews = (
+                await session.scalars(
+                    select(SubmissionSourceReview)
+                    .where(
+                        SubmissionSourceReview.environment == self._config.environment,
+                        SubmissionSourceReview.status.in_(_INFLIGHT_JOB),
+                        SubmissionSourceReview.provider_resource_id.is_(None),
+                        or_(
+                            and_(
+                                SubmissionSourceReview.lease_expires_at.is_not(None),
+                                SubmissionSourceReview.lease_expires_at < now,
+                            ),
+                            SubmissionSourceReview.updated_at < cutoff,
+                        ),
+                    )
+                    .order_by(SubmissionSourceReview.updated_at)
+                    .with_for_update(skip_locked=True)
+                    .limit(_REAP_LIMIT)
+                )
+            ).all()
+            for row in reviews:
+                row.status = "fallback_required"
+                row.error_code = "TARGON_PROVISION_TIMEOUT"
+                row.completed_at = now
+                row.updated_at = now
+                row.lease_expires_at = None
+                handled = True
+        return handled
+
     async def _reap_unprovisioned_rentals(self) -> bool:
         """Fail in-flight rentals that never reached a running workload."""
         now = datetime.now(UTC)
         cutoff = self._provision_cutoff(now)
+        handled = await self._reap_abandoned_without_resource(now)
         candidates: list[tuple[str, UUID, str, str | None]] = []
         async with self._session_maker() as session, session.begin():
             builds = (
@@ -702,7 +846,6 @@ class TargonRentalLoop:
                 uid = row.provider_resource_id
                 if uid:
                     candidates.append(("review", row.review_id, uid, row.provider))
-        handled = False
         for kind, row_id, uid, stored_provider in candidates:
             provider = self._provider_named(stored_provider)
             status = await provider.provision_status(uid)
@@ -744,7 +887,6 @@ class TargonRentalLoop:
                     .where(
                         SubmissionImageBuild.environment == self._config.environment,
                         SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
-                        SubmissionImageBuild.provider_resource_id.is_not(None),
                         or_(
                             and_(
                                 SubmissionImageBuild.lease_expires_at.is_not(None),
