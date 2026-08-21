@@ -63,6 +63,7 @@ import {
   batchRetryValidationInputSchema,
   agentScoringReadinessInputSchema,
   agentCodingCertificationInputSchema,
+  agentCodingShadowEvaluationInputSchema,
   agentCoreQualificationInputSchema,
   getCoreQualificationPolicyInputSchema,
   refreshAgentCoreQualificationInputSchema,
@@ -133,6 +134,7 @@ import {
   batchRetryValidation,
   fetchAgentScoringReadiness,
   fetchAgentCodingCertifications,
+  fetchAgentCodingShadowEvaluations,
   fetchAgentCoreQualification,
   fetchCoreQualificationPolicy,
   refreshAgentCoreQualification,
@@ -453,6 +455,8 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screener_capacity:
     'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
+  get_agent_coding_shadow_evaluations:
+    'Read separate weight-zero coding runs, leases, and repair outcomes.',
   get_core_qualification_policy:
     'Read the benchmark-scoped shadow core qualification policy.',
   set_core_qualification_policy:
@@ -1271,6 +1275,18 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async (input) => result(await fetchAgentCodingCertifications(input)),
+  )
+
+  registerTool(
+    'get_agent_coding_shadow_evaluations',
+    {
+      title: 'Inspect shadow coding evaluations',
+      description:
+        'Read one agent\'s exact-artifact shadow coding runs, validator-specific certified leases, bounded signed result summaries, and k=3 repair median. Active task identities and full evidence remain private. This ledger is separate from core scores and permanently weight-ineligible.',
+      inputSchema: agentCodingShadowEvaluationInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchAgentCodingShadowEvaluations(input)),
   )
 
   registerTool(

@@ -1,0 +1,362 @@
+"""Endpoint tests for signed shadow coding-result persistence."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from unittest.mock import AsyncMock
+from uuid import uuid4
+
+import bittensor
+import httpx
+from fastapi import FastAPI
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.coding_evaluation import (
+    CodingRunEvidence,
+    CodingShadowRunAuthority,
+    coding_run_evidence_digest,
+    coding_shadow_result_signing_message,
+)
+from ditto.api_models.core_qualification import CoreQualificationPolicy
+from ditto.api_server.dependencies import get_chain_client, get_session
+from ditto.api_server.endpoints import validator_coding_evaluation as endpoint_module
+from ditto.db.models import (
+    Agent,
+    CodingCapabilityCertification,
+    CodingShadowResult,
+    CodingShadowTicket,
+    Score,
+)
+from ditto.db.queries.coding_evaluations import (
+    insert_coding_shadow_result,
+    insert_coding_shadow_run,
+    issue_coding_shadow_ticket,
+)
+from ditto.db.queries.core_qualification import (
+    insert_core_qualification_policy,
+    observe_core_qualification,
+)
+from ditto.db.queries.scores import MIN_ELIGIBLE_CASES, upsert_score
+
+_NOW = datetime.now(UTC)
+_BENCH = 12
+_KEYPAIR = bittensor.Keypair.create_from_uri("//Alice")
+_VALIDATOR = _KEYPAIR.ss58_address
+_ADMIN_TOKEN = "test-admin-token-at-least-32-characters"
+
+
+def _evidence(ticket_id) -> CodingRunEvidence:
+    value = json.loads(
+        (
+            Path(__file__).parents[6]
+            / "packages"
+            / "dittobench-coding-contract"
+            / "testdata"
+            / "coding_contract_v1.json"
+        ).read_text(encoding="utf-8")
+    )["run_evidence"]
+    value["validator_ticket_id"] = str(ticket_id)
+    return CodingRunEvidence.model_validate_json(json.dumps(value))
+
+
+def _failed_evidence(ticket_id) -> CodingRunEvidence:
+    value = _evidence(ticket_id).model_dump(mode="json", by_alias=True)
+    value["tasks"][0]["terminal_domain"] = "repair_failure"
+    value["tasks"][0]["repair_score_micros"] = 0
+    value["resolved_count"] = 0
+    value["repair_failure_count"] = 1
+    value["repair_mean_micros"] = 0
+    return CodingRunEvidence.model_validate_json(json.dumps(value))
+
+
+def _authority(agent_id) -> CodingShadowRunAuthority:
+    return CodingShadowRunAuthority(
+        schema="dittobench-coding-shadow-run-authority-v1",
+        bench_family="coding",
+        coding_contract_version=1,
+        weight_eligible=False,
+        bench_version=_BENCH,
+        coding_run_id="coding-run-001",
+        agent_id=agent_id,
+        agent_artifact_sha256="ab" * 32,
+        screened_image_sha256="cd" * 32,
+        corpus_release_id="private-coding-corpus-v1",
+        catalog_merkle_root="11" * 32,
+        selection_derivation_id="coding-selection-v1",
+        selection_chain_genesis_hash="0x" + "22" * 32,
+        selection_block_number=123,
+        selection_block_hash="0x" + "33" * 32,
+        inference_grant_sha256="01" * 32,
+        grader_contract_sha256="99" * 32,
+        task_set_id="task-set-001",
+        task_set_manifest_sha256="dd" * 32,
+        run_manifest_sha256=(
+            "e7b431a640aca1f35a5cabe7341ee0aaba25ccee9a174ef0c8f4ab0f3ff80dc4"
+        ),
+        task_count=1,
+    )
+
+
+def _install(
+    app: FastAPI,
+    maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    app.state.config = replace(app.state.config, admin_api_token=_ADMIN_TOKEN)
+
+    async def _session() -> AsyncIterator[AsyncSession]:
+        async with maker() as session:
+            yield session
+
+    async def _chain():
+        return object()
+
+    app.dependency_overrides[get_session] = _session
+    app.dependency_overrides[get_chain_client] = _chain
+    monkeypatch.setattr(
+        endpoint_module,
+        "_assert_validator_permitted",
+        AsyncMock(return_value=None),
+    )
+
+
+async def _seed(
+    maker: async_sessionmaker[AsyncSession],
+):
+    agent_id = uuid4()
+    ticket_id = uuid4()
+    deadline = _NOW + timedelta(hours=1)
+    async with maker() as session, session.begin():
+        session.add(
+            Agent(
+                agent_id=agent_id,
+                miner_hotkey="5CodingEndpointMiner111111111111111111111111111111",
+                name="coding-endpoint-agent",
+                sha256="ab" * 32,
+                status=AgentStatus.SCORED,
+                screening_policy_version=9,
+                screened_image_sha256="cd" * 32,
+                screened_image_size_bytes=1234,
+                screened_image_id="sha256:" + "ef" * 32,
+                screened_image_ref="ditto-screen/coding-endpoint:latest",
+                screened_image_upload_id=uuid4(),
+                screened_image_verified_at=_NOW,
+                created_at=_NOW,
+            )
+        )
+        await insert_core_qualification_policy(
+            session,
+            parent_revision=0,
+            policy=CoreQualificationPolicy(
+                schema="ditto-core-qualification-policy-v1",
+                weight_eligible=False,
+                bench_version=_BENCH,
+                enter_composite=0.8,
+                enter_tool_mean=0.8,
+                enter_memory_mean=0.8,
+                exit_composite=0.7,
+                exit_tool_mean=0.7,
+                exit_memory_mean=0.7,
+                enter_observations=1,
+                exit_observations=2,
+            ),
+            reason="calibrate endpoint shadow qualification",
+            actor="test-admin",
+        )
+        for index in range(3):
+            await upsert_score(
+                session,
+                agent_id=agent_id,
+                validator_hotkey=f"core-validator-{index}",
+                bench_version=_BENCH,
+                run_id=f"core-run-{index}",
+                seed=index,
+                composite=0.9,
+                tool_mean=0.9,
+                memory_mean=0.9,
+                median_ms=100,
+                n=MIN_ELIGIBLE_CASES,
+                generated_at=_NOW,
+                signature=(f"{index + 1:02x}" * 64),
+            )
+        observed = await observe_core_qualification(
+            session,
+            agent_id=agent_id,
+            bench_version=_BENCH,
+            now=_NOW,
+        )
+        assert observed is not None and observed.row.qualified
+        session.add(
+            CodingCapabilityCertification(
+                certification_row_id=uuid4(),
+                agent_id=agent_id,
+                artifact_sha256="ab" * 32,
+                screened_image_sha256="cd" * 32,
+                validator_hotkey=_VALIDATOR,
+                bench_version=_BENCH,
+                ticket_deadline=deadline,
+                coding_contract_version=1,
+                certification_id="cert-endpoint-shadow-001",
+                status="certified",
+                failure_stage=None,
+                failure_code=None,
+                certification_sha256="44" * 32,
+                canary_manifest_sha256="55" * 32,
+                transcript_object_key="sha256/" + "66" * 32,
+                frozen_submission_object_key="sha256/" + "77" * 32,
+                issued_at=_NOW - timedelta(minutes=5),
+                expires_at=deadline + timedelta(minutes=10),
+                weight_eligible=False,
+                receipt={},
+                signature="88" * 64,
+                created_at=_NOW,
+            )
+        )
+    async with maker() as session, session.begin():
+        run = await insert_coding_shadow_run(
+            session,
+            authority=_authority(agent_id),
+        )
+        ticket = await issue_coding_shadow_ticket(
+            session,
+            run_row_id=run.row.run_row_id,
+            ticket_id=ticket_id,
+            validator_hotkey=_VALIDATOR,
+            issued_at=_NOW,
+            deadline=deadline,
+        )
+    return agent_id, run.row, ticket.row, deadline
+
+
+async def test_signed_shadow_result_is_idempotent_visible_and_score_separate(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    _install(app, session_maker, monkeypatch)
+    agent_id, run, ticket, deadline = await _seed(session_maker)
+    evidence = _evidence(ticket.ticket_id)
+    digest = coding_run_evidence_digest(evidence)
+    message = coding_shadow_result_signing_message(
+        validator_hotkey=_VALIDATOR,
+        agent_id=agent_id,
+        run_row_id=run.run_row_id,
+        ticket_id=ticket.ticket_id,
+        bench_version=_BENCH,
+        ticket_deadline=deadline,
+        agent_artifact_sha256="ab" * 32,
+        screened_image_sha256="cd" * 32,
+        run_evidence_sha256=digest,
+    )
+    payload = {
+        "validator_hotkey": _VALIDATOR,
+        "bench_version": _BENCH,
+        "run_row_id": str(run.run_row_id),
+        "ticket_id": str(ticket.ticket_id),
+        "ticket_deadline": deadline.isoformat(),
+        "agent_artifact_sha256": "ab" * 32,
+        "screened_image_sha256": "cd" * 32,
+        "run_evidence_sha256": digest,
+        "evidence": evidence.model_dump(mode="json", by_alias=True),
+        "signature": _KEYPAIR.sign(message).hex(),
+    }
+    url = f"/api/v1/validator/agent/{agent_id}/coding-shadow-result"
+    first = await client.post(url, json=payload)
+    assert first.status_code == 200, first.text
+    assert first.json()["idempotent"] is False
+    assert first.json()["weight_eligible"] is False
+    replay = await client.post(url, json=payload)
+    assert replay.status_code == 200
+    assert replay.json()["idempotent"] is True
+
+    async with session_maker() as session:
+        assert (
+            await session.scalar(select(func.count()).select_from(CodingShadowResult))
+            == 1
+        )
+        assert await session.scalar(select(func.count()).select_from(Score)) == 3
+    admin = await client.get(
+        f"/api/v1/admin/agents/{agent_id}/coding-shadow-evaluations",
+        headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
+    )
+    assert admin.status_code == 200, admin.text
+    body = admin.json()
+    assert body["shadow_only"] is True
+    assert body["runs"][0]["result_count"] == 1
+    assert body["runs"][0]["quorum_complete"] is False
+    assert body["runs"][0]["median_repair_mean_micros"] is None
+
+    forged = dict(payload)
+    forged["signature"] = "00" * 64
+    assert (await client.post(url, json=forged)).status_code == 401
+
+    validators = ("5" + "C" * 47, "5" + "D" * 47)
+    ticket_ids = (uuid4(), uuid4())
+    async with session_maker() as session, session.begin():
+        for index, validator in enumerate(validators, start=2):
+            session.add(
+                CodingCapabilityCertification(
+                    certification_row_id=uuid4(),
+                    agent_id=agent_id,
+                    artifact_sha256="ab" * 32,
+                    screened_image_sha256="cd" * 32,
+                    validator_hotkey=validator,
+                    bench_version=_BENCH,
+                    ticket_deadline=deadline,
+                    coding_contract_version=1,
+                    certification_id=f"cert-endpoint-shadow-00{index}",
+                    status="certified",
+                    failure_stage=None,
+                    failure_code=None,
+                    certification_sha256=f"{index:02x}" * 32,
+                    canary_manifest_sha256="55" * 32,
+                    transcript_object_key="sha256/" + "66" * 32,
+                    frozen_submission_object_key="sha256/" + "77" * 32,
+                    issued_at=_NOW - timedelta(minutes=5),
+                    expires_at=deadline + timedelta(minutes=10),
+                    weight_eligible=False,
+                    receipt={},
+                    signature="88" * 64,
+                    created_at=_NOW,
+                )
+            )
+        await session.flush()
+        for validator, extra_ticket_id in zip(validators, ticket_ids, strict=True):
+            issued = await issue_coding_shadow_ticket(
+                session,
+                run_row_id=run.run_row_id,
+                ticket_id=extra_ticket_id,
+                validator_hotkey=validator,
+                issued_at=_NOW,
+                deadline=deadline,
+            )
+            assert isinstance(issued.row, CodingShadowTicket)
+            evidence = (
+                _failed_evidence(extra_ticket_id)
+                if validator == validators[0]
+                else _evidence(extra_ticket_id)
+            )
+            await insert_coding_shadow_result(
+                session,
+                ticket=issued.row,
+                evidence=evidence,
+                run_evidence_sha256=coding_run_evidence_digest(evidence),
+                signature="99" * 64,
+            )
+
+    quorum = await client.get(
+        f"/api/v1/admin/agents/{agent_id}/coding-shadow-evaluations",
+        headers={"Authorization": f"Bearer {_ADMIN_TOKEN}"},
+    )
+    assert quorum.status_code == 200, quorum.text
+    run_view = quorum.json()["runs"][0]
+    assert run_view["result_count"] == 3
+    assert run_view["quorum_complete"] is True
+    assert run_view["median_repair_mean_micros"] == 1_000_000
