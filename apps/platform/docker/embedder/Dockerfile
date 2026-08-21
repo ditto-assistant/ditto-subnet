@@ -19,7 +19,7 @@
 # on any CPU, so an older tag would risk a crash-loop.
 
 # --- stage 1: fetch the weights with the HF CLI (not present in the TEI image) ---
-FROM python:3.11-slim AS fetch
+FROM python:3.13-slim AS fetch
 
 ARG MODEL_ID=jinaai/jina-embeddings-v2-base-code
 ARG MODEL_REVISION=main
