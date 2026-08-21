@@ -295,7 +295,7 @@ if [ "$built_revision" != "$checksum" ]; then
   if [ -n "$running" ]; then
     validator_container="$(compose_container ditto-subnet)"
     if [ -n "$validator_container" ]; then
-      drain_timeout="${DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-7500}"
+      drain_timeout="${DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-11100}"
       require_positive_integer \
         DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS "$drain_timeout"
       request_source_validator_drain "$validator_container" "$drain_timeout"
@@ -321,7 +321,7 @@ if [ "$built_revision" != "$checksum" ]; then
 fi
 
 if [ "$up_command" = true ]; then
-  drain_timeout="${DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-7500}"
+  drain_timeout="${DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-11100}"
   ready_timeout="${DITTO_VALIDATOR_COMPOSE_READY_TIMEOUT_SECONDS:-180}"
   require_positive_integer \
     DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS "$drain_timeout"

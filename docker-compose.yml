@@ -247,10 +247,10 @@ services:
         VALIDATOR_COMPATIBILITY_EPOCH: "2"
         VALIDATOR_HEARTBEAT_PROTOCOL: "25"
     restart: unless-stopped
-    # One full 120-minute ticket plus five minutes for a signed final report.
+    # One full 180-minute ticket plus five minutes for a signed final report.
     # This must remain above the productive-run cap and aligned with both
     # updater drain defaults.
-    stop_grace_period: 125m
+    stop_grace_period: 185m
     environment:
       NETUID: "118"
       SUBTENSOR_NETWORK: ${SUBTENSOR_NETWORK:-finney}
@@ -323,11 +323,11 @@ services:
       # DITTO_INFERENCE_PUBLIC_BASE_URL.
       VALIDATOR_PLATFORM_INFERENCE_BASE_URL: ${VALIDATOR_PLATFORM_INFERENCE_BASE_URL:-https://dittobench.ai}
       VALIDATOR_DITTOBENCH_POLL_SECONDS: "10"
-      # Productive full Bench 9 runs observed on August 15 projected to
-      # 73-100 minutes. The 15-minute unchanged-progress watchdog still kills
-      # wedges; this cap gives healthy slow agents 110 minutes instead of
-      # charging them at the former 75-minute wall.
-      VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "6600"
+      # Serial Bench 11 runs finish in 97-109 minutes when they succeed and
+      # die at the former 110-minute wall when they do not. The 15-minute
+      # unchanged-progress watchdog still kills wedges; this cap gives healthy
+      # slow agents 150 minutes. Keep the platform ticket TTL above this.
+      VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS: "9000"
       VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH: "2"
       # Source/manual installs must never inherit managed-release identity from
       # an operator shell or .env file. The immutable release renderer replaces
