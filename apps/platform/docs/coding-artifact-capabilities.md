@@ -48,6 +48,9 @@ bundles rather than separately presigned objects.
 
 ## Activation boundary
 
-This is an internal minter only. It adds no HTTP endpoint, validator claim,
-workspace capability, Luna grant, execution, scoring, deployment, or emissions
-effect. Coding contract v1 remains permanently `weight_eligible=false`.
+The authenticated authoring-lease route may project visible, memory, and
+resource capabilities for one already-issued explicit shadow ticket. Its
+authoring-only minter never checks or signs the grader object. No scheduler or
+validator worker invokes the route, and there is no workspace capability, Luna
+grant, execution, scoring, deployment, or emissions effect. Coding contract v1
+remains permanently `weight_eligible=false`.

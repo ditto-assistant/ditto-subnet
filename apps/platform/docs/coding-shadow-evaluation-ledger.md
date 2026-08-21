@@ -77,7 +77,8 @@ qualification marks historical runs stale without deleting or relabeling them.
 ## Activation boundary
 
 This ledger is calibration infrastructure, not a second emissions authority.
-Production still requires a shadow scheduler, validator task delivery and
-scorer adapter, and measured calibration.
+Production still requires a shadow scheduler, validator worker/supervisor
+orchestration, ticket-scoped inference, result submission wiring, and measured
+calibration. The authoring-lease route alone does not start a job.
 Any coding emissions allocation requires coding contract v2 and a separate
 owner-approved PR.
