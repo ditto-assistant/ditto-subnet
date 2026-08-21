@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import unicodedata
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import (
@@ -18,6 +16,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from ditto.api_models.coding_canonical import coding_canonical_sha256
 
 REPAIR_SCORE_RESOLVED_MICROS = 1_000_000
 _MAX_CANONICAL_JSON_BYTES = 4 << 20
@@ -283,30 +283,13 @@ class AgentCodingShadowEvaluationStatus(CodingEvaluationModel):
     shadow_only: Literal[True] = True
 
 
-def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
-    body = (
-        (
-            json.dumps(
-                value,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-            + "\n"
-        )
-        .replace("\u2028", "\\u2028")
-        .replace("\u2029", "\\u2029")
-        .encode()
-    )
-    if len(body) > _MAX_CANONICAL_JSON_BYTES:
-        raise ValueError("canonical coding run evidence exceeds 4 MiB")
-    return body
-
-
 def coding_run_evidence_digest(evidence: CodingRunEvidence) -> str:
     projection = evidence.model_dump(mode="json", by_alias=True)
-    return hashlib.sha256(_canonical_json_bytes(projection)).hexdigest()
+    return coding_canonical_sha256(
+        projection,
+        maximum_bytes=_MAX_CANONICAL_JSON_BYTES,
+        label="coding run evidence",
+    )
 
 
 def coding_shadow_result_signing_message(
