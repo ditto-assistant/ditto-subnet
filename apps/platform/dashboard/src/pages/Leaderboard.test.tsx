@@ -1370,9 +1370,9 @@ describe("next-emission countdown", () => {
         document.querySelector("#epoch-countdown .epoch-countdown-projected")?.textContent,
       ).toContain("projected"),
     );
-    expect(
-      document.querySelector("#epoch-countdown .epoch-countdown-clock")?.textContent,
-    ).not.toBe("0:00");
+    expect(document.querySelector("#epoch-countdown .epoch-countdown-clock")?.textContent).not.toBe(
+      "0:00",
+    );
     // Rolled forward in whole epochs, so the block it names has advanced from
     // the recorded 8,741,869 by a multiple of the 360-block tempo.
     const block = /block ([\d,]+)/.exec(countdownText())?.[1]?.replace(/,/g, "");
