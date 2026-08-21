@@ -26,10 +26,12 @@ artifact certification that remains valid through the two-hour maximum lease.
 All validators under a run therefore share one task-set manifest while retaining
 separate ticket IDs, deadlines, certifications, signatures, and result rows.
 
-This PR intentionally provides no production run or ticket issuer. Until the
-private catalog, selector, and scheduler are reviewed, the validator submission
-route has no live lease to accept. Internal insertion functions and real
-PostgreSQL tests freeze the authority contract for that later work.
+This layer intentionally provides no production run or ticket issuer. The
+signed catalog/exposure layer requires a registered active commitment and full
+irreversible exposure before any new ticket, but still provides no selector or
+scheduler. The validator submission route therefore has no live lease to
+accept. Internal insertion functions and real PostgreSQL tests freeze the
+authority contract for that later work.
 
 Persisting a selection block number/hash is not chain verification. The future
 selector must independently fetch the canonical block hash at the committed
@@ -71,7 +73,7 @@ without deleting or relabeling them.
 ## Activation boundary
 
 This ledger is calibration infrastructure, not a second emissions authority.
-Production still requires the private catalog/selector, exposure ledger, task
-transport, shadow scheduler, validator/scorer adapter, and measured calibration.
-Any coding emissions allocation requires coding contract v2 and a separate
-owner-approved PR.
+Production still requires the independently verified selector, task transport,
+shadow scheduler, validator/scorer adapter, and measured calibration. Any coding
+emissions allocation requires coding contract v2 and a separate owner-approved
+PR.

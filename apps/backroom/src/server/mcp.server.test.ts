@@ -120,6 +120,7 @@ describe('Backroom MCP tools', () => {
         'agent_scoring_readiness',
         'get_agent_coding_certifications',
         'get_agent_coding_shadow_evaluations',
+        'get_coding_catalog_releases',
         'get_agent_core_qualification',
         'get_agent_scores',
         'get_leaderboard',
@@ -157,6 +158,8 @@ describe('Backroom MCP tools', () => {
         'start_runtime_profile',
         'set_source_release_policy',
         'set_submission_cooldown',
+        'register_coding_catalog_release',
+        'retire_coding_catalog_release',
       ].sort(),
     )
     expect(response.tools.map((tool) => tool.name)).not.toContain(
@@ -180,15 +183,15 @@ describe('Backroom MCP tools', () => {
     // it. Curve v3, runtime metrics/capture, and the bounded shadow
     // qualification/coding-ledger operations added legitimate schemas and
     // concise catalog descriptions. The
-    // 91_000 whole-payload includes the L1 model/timeout fields on the
+    // 93_000 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, validator fleet/assignment reads,
     // and the bounded shadow core-qualification policy/history contracts. Keep
     // modest headroom for schema evolution; tighten the description budgets,
     // not this whole-payload backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(91_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(93_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      21_100,
+      21_300,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -5739,6 +5742,103 @@ describe('Backroom MCP tools', () => {
         headers: expect.objectContaining({ Authorization: 'Bearer platform-admin-token' }),
       }),
     )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('registers, reads, and retires signed shadow coding catalog commitments', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const commitment = {
+      schema: 'dittobench-coding-catalog-commitment-v1',
+      coding_contract_version: 1,
+      weight_eligible: false,
+      corpus_release_id: 'private-coding-corpus-v1',
+      catalog_merkle_root: 'a'.repeat(64),
+      selection_derivation_id: 'coding-selection-v1',
+      selection_chain_genesis_hash: `0x${'b'.repeat(64)}`,
+      grader_contract_sha256: 'c'.repeat(64),
+      inference_grant_sha256: 'd'.repeat(64),
+      task_version_count: 100,
+      curator_hotkey: `5${'A'.repeat(47)}`,
+      committed_at_unix: 1_787_310_000,
+      commitment_sha256: 'e'.repeat(64),
+    }
+    const control = {
+      total: 1,
+      releases: [
+        {
+          release_row_id: '11111111-1111-4111-8111-111111111111',
+          commitment,
+          signature: 'f'.repeat(128),
+          registered_reason: 'register private coding catalog commitment',
+          registered_actor: 'peyton@omniaura.ai',
+          registered_at: '2026-08-21T00:00:00Z',
+          retired: false,
+          retired_reason: null,
+          retired_actor: null,
+          retired_at: null,
+          exposure_count: 0,
+          exposed_run_count: 0,
+          shadow_only: true,
+        },
+      ],
+      shadow_only: true,
+    }
+    const fetchMock = vi.fn().mockImplementation(async () => Response.json(control))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE, BACKROOM_WRITE_SCOPE])
+
+    expect(
+      (
+        await client.callTool({
+          name: 'get_coding_catalog_releases',
+          arguments: { limit: 25 },
+        })
+      ).isError,
+    ).not.toBe(true)
+    const registered = await client.callTool({
+      name: 'register_coding_catalog_release',
+      arguments: {
+        commitment,
+        signature: 'f'.repeat(128),
+        reason: 'register private coding catalog commitment',
+        confirmation: 'REGISTER SHADOW CODING CATALOG private-coding-corpus-v1',
+      },
+    })
+    expect(registered.isError, JSON.stringify(registered.content)).not.toBe(true)
+    expect(
+      (
+        await client.callTool({
+          name: 'retire_coding_catalog_release',
+          arguments: {
+            corpusReleaseId: commitment.corpus_release_id,
+            expectedCommitmentSha256: commitment.commitment_sha256,
+            reason: 'retire exhausted private coding catalog',
+            confirmation: 'RETIRE SHADOW CODING CATALOG private-coding-corpus-v1',
+          },
+        })
+      ).isError,
+    ).not.toBe(true)
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/coding-catalog/releases?limit=25',
+      expect.anything(),
+    )
+    const registerCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith('/api/v1/admin/coding-catalog/releases'),
+    )
+    expect(JSON.parse(String(registerCall?.[1]?.body))).toMatchObject({
+      actor: 'peyton@omniaura.ai',
+      commitment: { weight_eligible: false },
+    })
+    const retireCall = fetchMock.mock.calls.find(([url]) =>
+      String(url).endsWith('/api/v1/admin/coding-catalog/retire'),
+    )
+    expect(JSON.parse(String(retireCall?.[1]?.body))).toMatchObject({
+      actor: 'peyton@omniaura.ai',
+      corpus_release_id: 'private-coding-corpus-v1',
+    })
 
     await client.close()
     await server.close()

@@ -14,6 +14,9 @@ from ditto.api_server.endpoints.admin_benchmark_rollout import (
 from ditto.api_server.endpoints.admin_burn_settings import (
     router as admin_burn_settings_router,
 )
+from ditto.api_server.endpoints.admin_coding_catalog import (
+    router as admin_coding_catalog_router,
+)
 from ditto.api_server.endpoints.admin_coding_certifications import (
     router as admin_coding_certifications_router,
 )
@@ -127,6 +130,7 @@ __all__ = [
     "admin_lease_revocations_router",
     "admin_copy_review_router",
     "admin_coding_certifications_router",
+    "admin_coding_catalog_router",
     "admin_coding_evaluations_router",
     "admin_confirmation_bundles_router",
     "admin_continual_retest_settings_router",

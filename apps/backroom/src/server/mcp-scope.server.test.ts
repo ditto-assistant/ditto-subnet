@@ -287,6 +287,37 @@ describe('MCP scope challenges', () => {
     expect(await requiredScopesForRequest(refresh)).toEqual([BACKROOM_WRITE_SCOPE])
   })
 
+  it('keeps coding catalog visibility read-only and lifecycle actions write-scoped', async () => {
+    const read = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'get_coding_catalog_releases', arguments: {} },
+      }),
+    })
+    expect(await callsWriteTool(read)).toBe(false)
+    expect(await requiredScopesForRequest(read)).toEqual([])
+
+    for (const name of [
+      'register_coding_catalog_release',
+      'retire_coding_catalog_release',
+    ]) {
+      const write = new Request('https://backroom.dittobench.ai/mcp', {
+        method: 'POST',
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 2,
+          method: 'tools/call',
+          params: { name, arguments: {} },
+        }),
+      })
+      expect(await callsWriteTool(write)).toBe(true)
+      expect(await requiredScopesForRequest(write)).toEqual([BACKROOM_WRITE_SCOPE])
+    }
+  })
+
   it('recognizes a queue policy revision as write-scoped and its read as not', async () => {
     const write = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',
@@ -420,6 +451,7 @@ describe('MCP scope challenges', () => {
       'agent_scoring_readiness',
       'get_agent_coding_certifications',
       'get_agent_coding_shadow_evaluations',
+      'get_coding_catalog_releases',
       'get_core_qualification_policy',
       'get_agent_core_qualification',
     ]) {

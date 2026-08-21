@@ -373,6 +373,13 @@ class ApiServerConfig:
     admin_api_token: str | None = None
     """Bearer token for private Backroom/operator administration endpoints."""
 
+    coding_catalog_curator_hotkeys: tuple[str, ...] = ()
+    """Offline curator keys allowed to register signed coding catalogs.
+
+    Empty by default, which disables registration without affecting catalog
+    reads or the rest of Platform.
+    """
+
     dashboard_enabled: bool = True
     """Serve the public dashboard SPA (``dashboard/index.html``) at ``/``.
 
@@ -821,6 +828,13 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         ),
         inference_proxy=inference_proxy,
         admin_api_token=os.environ.get("DITTO_ADMIN_API_TOKEN") or None,
+        coding_catalog_curator_hotkeys=tuple(
+            value
+            for item in os.environ.get(
+                "DITTO_CODING_CATALOG_CURATOR_HOTKEYS", ""
+            ).split(",")
+            if (value := item.strip())
+        ),
         dashboard_enabled=dashboard_enabled,
         dashboard_wandb_url=dashboard_wandb_url,
         top5_backoff_base=top5_backoff_base,
@@ -872,6 +886,19 @@ def check_config(config: ApiServerConfig) -> None:
     if config.admin_api_token is not None and len(config.admin_api_token) < 32:
         raise ApiServerConfigError(
             "DITTO_ADMIN_API_TOKEN must be at least 32 characters"
+        )
+    if len(set(config.coding_catalog_curator_hotkeys)) != len(
+        config.coding_catalog_curator_hotkeys
+    ):
+        raise ApiServerConfigError(
+            "DITTO_CODING_CATALOG_CURATOR_HOTKEYS must not contain duplicates"
+        )
+    if any(
+        not _SS58_RE.fullmatch(hotkey)
+        for hotkey in config.coding_catalog_curator_hotkeys
+    ):
+        raise ApiServerConfigError(
+            "DITTO_CODING_CATALOG_CURATOR_HOTKEYS contains an invalid SS58 address"
         )
     names = config.validator_names
     if (names.url is None) != (names.api_key is None):

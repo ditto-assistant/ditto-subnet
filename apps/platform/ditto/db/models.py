@@ -1258,6 +1258,211 @@ class CoreQualificationObservation(Base):
     )
 
 
+class CodingCatalogRelease(Base):
+    """One immutable curator-signed private catalog commitment."""
+
+    __tablename__ = "coding_catalog_releases"
+
+    release_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    corpus_release_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    coding_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    catalog_merkle_root: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_derivation_id: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_chain_genesis_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    grader_contract_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    inference_grant_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    task_version_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    curator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    committed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    commitment_sha256: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    commitment: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "release_row_id",
+            "corpus_release_id",
+            name="coding_catalog_releases_row_corpus_key",
+        ),
+        UniqueConstraint(
+            "release_row_id",
+            "commitment_sha256",
+            name="coding_catalog_releases_row_commitment_key",
+        ),
+        CheckConstraint(
+            "coding_contract_version = 1 AND weight_eligible = false "
+            "AND task_version_count BETWEEN 1 AND 1000000",
+            name="coding_catalog_releases_contract_check",
+        ),
+        CheckConstraint(
+            "catalog_merkle_root ~ '^[0-9a-f]{64}$' "
+            "AND grader_contract_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND inference_grant_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND commitment_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_catalog_releases_hashes_check",
+        ),
+        CheckConstraint(
+            "selection_chain_genesis_hash ~ '^0x[0-9a-f]{64}$'",
+            name="coding_catalog_releases_genesis_check",
+        ),
+        CheckConstraint(
+            "curator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$' "
+            "AND signature ~ '^[0-9a-f]{128}$'",
+            name="coding_catalog_releases_signature_check",
+        ),
+        CheckConstraint(
+            "octet_length(corpus_release_id) BETWEEN 1 AND 256 "
+            "AND octet_length(selection_derivation_id) BETWEEN 1 AND 128 "
+            "AND corpus_release_id !~ '[[:space:][:cntrl:]]' "
+            "AND selection_derivation_id !~ '[[:space:][:cntrl:]]'",
+            name="coding_catalog_releases_identifiers_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8 AND length(trim(actor)) BETWEEN 1 AND 120",
+            name="coding_catalog_releases_audit_check",
+        ),
+        Index("coding_catalog_releases_created_idx", "created_at"),
+    )
+
+
+class CodingCatalogRetirement(Base):
+    """One append-only terminal retirement for a catalog commitment."""
+
+    __tablename__ = "coding_catalog_retirements"
+
+    release_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    expected_commitment_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    retired_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["release_row_id", "expected_commitment_sha256"],
+            [
+                "coding_catalog_releases.release_row_id",
+                "coding_catalog_releases.commitment_sha256",
+            ],
+            ondelete="RESTRICT",
+            name="coding_catalog_retirements_release_fkey",
+        ),
+        CheckConstraint(
+            "expected_commitment_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_catalog_retirements_commitment_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8 AND length(trim(actor)) BETWEEN 1 AND 120",
+            name="coding_catalog_retirements_audit_check",
+        ),
+    )
+
+
+class CodingCatalogExposure(Base):
+    """Irreversible private task-version consumption before lease issuance."""
+
+    __tablename__ = "coding_catalog_exposures"
+
+    exposure_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    release_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    corpus_release_id: Mapped[str] = mapped_column(Text, nullable=False)
+    run_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    run_task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    manifest_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_version_id: Mapped[str] = mapped_column(Text, nullable=False)
+    task_commitment_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    selection_proof_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    catalog_membership_proof_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    visible_bundle_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    base_tree_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    memory_bundle_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    environment_image_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    resource_profile_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    grader_bundle_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    grader_image_digest: Mapped[str] = mapped_column(Text, nullable=False)
+    test_manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    grader_plan_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    exposed_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["release_row_id", "corpus_release_id"],
+            [
+                "coding_catalog_releases.release_row_id",
+                "coding_catalog_releases.corpus_release_id",
+            ],
+            ondelete="RESTRICT",
+            name="coding_catalog_exposures_release_fkey",
+        ),
+        ForeignKeyConstraint(
+            ["run_row_id", "corpus_release_id", "run_task_count"],
+            [
+                "coding_shadow_runs.run_row_id",
+                "coding_shadow_runs.corpus_release_id",
+                "coding_shadow_runs.task_count",
+            ],
+            ondelete="RESTRICT",
+            name="coding_catalog_exposures_run_fkey",
+        ),
+        UniqueConstraint(
+            "release_row_id",
+            "task_version_id",
+            name="coding_catalog_exposures_task_version_key",
+        ),
+        UniqueConstraint(
+            "run_row_id",
+            "manifest_index",
+            name="coding_catalog_exposures_run_index_key",
+        ),
+        CheckConstraint(
+            "run_task_count BETWEEN 1 AND 100 "
+            "AND manifest_index >= 0 AND manifest_index < run_task_count",
+            name="coding_catalog_exposures_index_check",
+        ),
+        CheckConstraint(
+            "octet_length(task_version_id) BETWEEN 1 AND 256 "
+            "AND task_version_id !~ '[[:space:][:cntrl:]]'",
+            name="coding_catalog_exposures_task_version_check",
+        ),
+        CheckConstraint(
+            "task_commitment_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND selection_proof_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND catalog_membership_proof_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND visible_bundle_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND base_tree_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND memory_bundle_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND resource_profile_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND grader_bundle_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND test_manifest_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND grader_plan_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND environment_image_digest ~ '^sha256:[0-9a-f]{64}$' "
+            "AND grader_image_digest ~ '^sha256:[0-9a-f]{64}$'",
+            name="coding_catalog_exposures_digests_check",
+        ),
+        CheckConstraint(
+            "weight_eligible = false",
+            name="coding_catalog_exposures_weight_ineligible",
+        ),
+        Index("coding_catalog_exposures_run_idx", "run_row_id", "manifest_index"),
+    )
+
+
 class CodingShadowRun(Base):
     """One immutable shared run authority for the shadow coding pipeline."""
 
@@ -1315,6 +1520,12 @@ class CodingShadowRun(Base):
             "run_row_id",
             "task_count",
             name="coding_shadow_runs_run_task_count_key",
+        ),
+        UniqueConstraint(
+            "run_row_id",
+            "corpus_release_id",
+            "task_count",
+            name="coding_shadow_runs_run_corpus_task_count_key",
         ),
         CheckConstraint(
             "artifact_sha256 ~ '^[0-9a-f]{64}$' "

@@ -265,6 +265,7 @@ class CodingShadowRunRecord(CodingEvaluationModel):
         "artifact_changed",
         "screened_image_changed",
         "policy_changed",
+        "catalog_retired",
     ]
     tickets: list[CodingShadowTicketRecord]
     created_at: datetime
