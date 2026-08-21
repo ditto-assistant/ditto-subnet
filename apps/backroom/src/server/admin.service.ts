@@ -98,6 +98,10 @@ import {
   agentScoringReadinessSchema,
   agentCodingCertificationInputSchema,
   agentCodingCertificationStatusSchema,
+  codingCatalogControlSchema,
+  getCodingCatalogInputSchema,
+  registerCodingCatalogInputSchema,
+  retireCodingCatalogInputSchema,
   agentCodingShadowEvaluationInputSchema,
   agentCodingShadowEvaluationStatusSchema,
   agentCoreQualificationInputSchema,
@@ -1955,6 +1959,46 @@ export async function fetchAgentCodingCertifications(rawInput: unknown) {
     `/api/v1/admin/agents/${encodeURIComponent(input.agentId)}/coding-certifications?limit=${input.limit}`,
   )
   return agentCodingCertificationStatusSchema.parse(payload)
+}
+
+export async function fetchCodingCatalogReleases(rawInput: unknown) {
+  const input = getCodingCatalogInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/coding-catalog/releases?limit=${input.limit}`,
+  )
+  return codingCatalogControlSchema.parse(payload)
+}
+
+export async function registerCodingCatalogRelease(rawInput: unknown, actor: string) {
+  const input = registerCodingCatalogInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/coding-catalog/releases', {
+    method: 'POST',
+    actor,
+    body: {
+      commitment: input.commitment,
+      signature: input.signature,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return codingCatalogControlSchema.parse(payload)
+}
+
+export async function retireCodingCatalogRelease(rawInput: unknown, actor: string) {
+  const input = retireCodingCatalogInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest('/api/v1/admin/coding-catalog/retire', {
+    method: 'POST',
+    actor,
+    body: {
+      corpus_release_id: input.corpusReleaseId,
+      expected_commitment_sha256: input.expectedCommitmentSha256,
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return codingCatalogControlSchema.parse(payload)
 }
 
 export async function fetchAgentCodingShadowEvaluations(rawInput: unknown) {

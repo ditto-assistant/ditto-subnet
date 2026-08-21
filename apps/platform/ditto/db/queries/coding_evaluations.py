@@ -23,6 +23,10 @@ from ditto.db.models import (
     CodingShadowTicket,
     CoreQualificationObservation,
 )
+from ditto.db.queries.coding_catalog import (
+    coding_shadow_run_ready_for_ticket,
+    require_active_catalog_for_run_authority,
+)
 from ditto.db.queries.coding_certifications import (
     active_validator_coding_certification,
 )
@@ -116,6 +120,11 @@ async def insert_coding_shadow_run(
         raise CodingShadowNotQualifiedError(
             "coding run authority does not match the current screened artifact"
         )
+    await require_active_catalog_for_run_authority(
+        session,
+        authority=authority,
+        artifact_committed_at=agent.created_at,
+    )
     policy = await latest_core_qualification_policy(
         session,
         bench_version=authority.bench_version,
@@ -243,6 +252,10 @@ async def issue_coding_shadow_ticket(
                 "coding ticket identity already names different authority"
             )
         return CodingShadowInsertResult(row=existing_ticket, idempotent=True)
+    if not await coding_shadow_run_ready_for_ticket(session, run=run):
+        raise CodingShadowNotQualifiedError(
+            "coding shadow run lacks complete active catalog exposure"
+        )
     policy = await latest_core_qualification_policy(
         session,
         bench_version=run.bench_version,

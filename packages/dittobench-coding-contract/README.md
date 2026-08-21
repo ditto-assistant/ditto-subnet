@@ -10,6 +10,11 @@ receipts. The Rust miner verifies only miner-facing seed/run and memory vectors;
 it must never receive grader plans or receipts. A contract change is incomplete
 until every affected consumer passes the same relevant vectors and boundaries.
 
+`coding_catalog_v1.json` freezes the public known-field catalog commitment,
+signing-message digest, and a synthetic private-exposure projection. The
+exposure contains only opaque IDs and content digests; it is a contract vector,
+not a usable task, repository, memory bundle, grader, or Merkle proof.
+
 The vectors contain synthetic identifiers and digests only. Private catalog
 records, repository bundles, hidden tests, policy labels, provider credentials,
 and signing keys must never enter this package.

@@ -4899,6 +4899,69 @@ export const agentCodingCertificationStatusSchema = z.object({
   certifications: z.array(codingCertificationRecordSchema),
 })
 
+export const codingCatalogCommitmentSchema = z.object({
+  schema: z.literal('dittobench-coding-catalog-commitment-v1'),
+  coding_contract_version: z.literal(1),
+  weight_eligible: z.literal(false),
+  corpus_release_id: z.string().min(1).max(256),
+  catalog_merkle_root: z.string().regex(/^[0-9a-f]{64}$/),
+  selection_derivation_id: z.string().min(1).max(128),
+  selection_chain_genesis_hash: z.string().regex(/^0x[0-9a-f]{64}$/),
+  grader_contract_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  inference_grant_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  task_version_count: z.number().int().min(1).max(1_000_000),
+  curator_hotkey: z.string().regex(/^[1-9A-HJ-NP-Za-km-z]{47,48}$/),
+  committed_at_unix: z.number().int().positive(),
+  commitment_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+})
+
+export const codingCatalogReleaseRecordSchema = z.object({
+  release_row_id: z.string().uuid(),
+  commitment: codingCatalogCommitmentSchema,
+  signature: z.string().regex(/^[0-9a-f]{128}$/),
+  registered_reason: z.string(),
+  registered_actor: z.string(),
+  registered_at: z.string(),
+  retired: z.boolean(),
+  retired_reason: z.string().nullable(),
+  retired_actor: z.string().nullable(),
+  retired_at: z.string().nullable(),
+  exposure_count: z.number().int().nonnegative(),
+  exposed_run_count: z.number().int().nonnegative(),
+  shadow_only: z.literal(true),
+})
+
+export const codingCatalogControlSchema = z.object({
+  total: z.number().int().nonnegative(),
+  releases: z.array(codingCatalogReleaseRecordSchema),
+  shadow_only: z.literal(true),
+})
+
+export const getCodingCatalogInputSchema = z.object({
+  limit: z.number().int().min(1).max(100).default(50),
+})
+
+export const registerCodingCatalogInputSchema = z.object({
+  commitment: codingCatalogCommitmentSchema,
+  signature: z.string().regex(/^[0-9a-fA-F]{128}$/),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export const registerCodingCatalogMcpInputSchema = z.object({
+  commitment: z.record(z.string(), z.unknown()),
+  signature: z.string().regex(/^[0-9a-fA-F]{128}$/),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export const retireCodingCatalogInputSchema = z.object({
+  corpusReleaseId: z.string().min(1).max(256),
+  expectedCommitmentSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
 export const codingShadowResultRecordSchema = z.object({
   result_id: z.string().uuid(),
   ticket_id: z.string().uuid(),
@@ -4948,6 +5011,7 @@ export const codingShadowRunRecordSchema = z.object({
     'artifact_changed',
     'screened_image_changed',
     'policy_changed',
+    'catalog_retired',
   ]),
   tickets: z.array(codingShadowTicketRecordSchema),
   created_at: z.string(),
