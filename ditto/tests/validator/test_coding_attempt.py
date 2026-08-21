@@ -117,15 +117,11 @@ def _grading_lease(
 
 def _grading_outcome() -> CodingGradingOutcome:
     vector = _json(_RESULT)
-    evidence = CodingRunEvidence.model_validate_json(
-        json.dumps(vector["request"]["evidence"])
-    )
     tasks = tuple(
         CodingTaskEvidence.model_validate_json(json.dumps(item))
         for item in vector["authority"]["task_evidence"]
     )
     return CodingGradingOutcome(
-        evidence=evidence,
         task_evidence=tasks,
         grading_environment_destroyed=True,
     )
@@ -193,6 +189,9 @@ class _Platform:
     ) -> SubmitCodingShadowResultResponse:
         assert agent_id == _ticket().agent_id
         assert kwargs["run_manifest"] == self.grading_lease.run_manifest
+        assert kwargs["evidence"] == CodingRunEvidence.model_validate_json(
+            json.dumps(_json(_RESULT)["request"]["evidence"])
+        )
         self.events.append("submit_result")
         return self.result_response
 
@@ -410,7 +409,6 @@ def test_outcomes_require_revocation_cleanup_and_authoritative_activity() -> Non
         )
     with pytest.raises(CodingAttemptIntegrityError, match="incomplete"):
         CodingGradingOutcome(
-            evidence=_grading_outcome().evidence,
             task_evidence=(),
             grading_environment_destroyed=True,
         )
