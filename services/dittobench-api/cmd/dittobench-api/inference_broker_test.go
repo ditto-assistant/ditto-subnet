@@ -1799,6 +1799,22 @@ func TestInferenceActivationRequiresConfiguredExactProxyAndBoundedExpiry(t *test
 	}
 }
 
+func TestInferenceActivationAcceptsPlatformTicketTTL(t *testing.T) {
+	broker := newInferenceBroker(1)
+	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath
+	broker.platformTransportURL = broker.platformProxyURL
+	prepared := prepareBrokerSession(t, broker)
+	recorder := activationResponse(
+		broker,
+		prepared,
+		broker.platformProxyURL,
+		time.Now().Add(430*time.Minute),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("430-minute platform grant status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
 func TestInferenceActivationRequiresTicketIdentityForV7Route(t *testing.T) {
 	broker := newInferenceBroker(1)
 	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath

@@ -41,8 +41,10 @@ import (
 )
 
 const (
-	brokerBodyLimit            = 4 << 20
-	brokerMaximumSessionTTL    = 2 * time.Hour
+	brokerBodyLimit = 4 << 20
+	// Must exceed Platform ticket TTL (430 minutes). Inference grant
+	// expiry is that deadline, so a shorter cap rejects every activation.
+	brokerMaximumSessionTTL    = 8 * time.Hour
 	brokerPerSourceConcurrency = 4
 	brokerReadHeaderTimeout    = 5 * time.Second
 	brokerReadTimeout          = 15 * time.Second
