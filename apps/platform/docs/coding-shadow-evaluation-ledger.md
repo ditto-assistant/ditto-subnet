@@ -28,15 +28,18 @@ separate ticket IDs, deadlines, certifications, signatures, and result rows.
 
 This layer intentionally provides no production run or ticket issuer. The
 signed catalog/exposure layer requires a registered active commitment and full
-irreversible exposure before any new ticket, but still provides no selector or
-scheduler. The validator submission route therefore has no live lease to
-accept. Internal insertion functions and real PostgreSQL tests freeze the
-authority contract for that later work.
+irreversible exposure before any new ticket. The separate selector core can
+verify one assigned block and private task proof, but it neither persists the
+future-height assignment nor schedules or inserts a run. The validator
+submission route therefore has no live lease to accept. Internal insertion
+functions and real PostgreSQL tests freeze the authority contract for that
+later work.
 
-Persisting a selection block number/hash is not chain verification. The future
-selector must independently fetch the canonical block hash at the committed
-height and validate the full manifest before calling this ledger; re-hashing a
-Platform-supplied string is explicitly insufficient.
+Persisting a selection block number/hash is not chain verification. The selector
+core independently fetches the canonical block hash and validates the selected
+manifest; re-hashing a Platform-supplied string is explicitly insufficient.
+The future issuer must additionally prove that its immutable height assignment
+predates revelation.
 
 ## Signed results
 
@@ -73,7 +76,7 @@ without deleting or relabeling them.
 ## Activation boundary
 
 This ledger is calibration infrastructure, not a second emissions authority.
-Production still requires the independently verified selector, task transport,
-shadow scheduler, validator/scorer adapter, and measured calibration. Any coding
-emissions allocation requires coding contract v2 and a separate owner-approved
-PR.
+Production still requires the persisted assignment/issuer, private catalog
+transport, shadow scheduler, validator/scorer adapter, and measured calibration.
+Any coding emissions allocation requires coding contract v2 and a separate
+owner-approved PR.

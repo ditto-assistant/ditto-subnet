@@ -15,6 +15,12 @@ signing-message digest, and a synthetic private-exposure projection. The
 exposure contains only opaque IDs and content digests; it is a contract vector,
 not a usable task, repository, memory bundle, grader, or Merkle proof.
 
+`coding_selection_v1.json` freezes the synthetic future-height assignment,
+position-bound catalog membership proof, deterministic selected probe, private
+task-set identity, shared public run manifest, Platform run authority, and
+exposure projection. It contains digest-only synthetic records and no usable
+private corpus material.
+
 The vectors contain synthetic identifiers and digests only. Private catalog
 records, repository bundles, hidden tests, policy labels, provider credentials,
 and signing keys must never enter this package.

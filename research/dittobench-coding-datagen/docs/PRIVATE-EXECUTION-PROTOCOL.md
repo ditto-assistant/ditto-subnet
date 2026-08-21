@@ -127,6 +127,23 @@ The first shadow run selects exactly one task. Later task counts are determined
 from measured runtime, cost, reliability, and score variance rather than fixed
 in this contract.
 
+The public shadow selector core implements the deterministic verification half
+of this rule. It accepts a content-addressed future-height assignment, fetches
+finalized genesis and that finalized height independently, derives an
+artifact-bound affine permutation over catalog indexes, and verifies a
+position-bound Merkle proof before producing the shared run and exposure
+projections. It does not persist the assignment. The later issuer must commit
+the assignment in an append-only ledger before block revelation and atomically
+insert the selected run plus its irreversible exposures; otherwise a caller
+could still grind heights despite a correct block lookup.
+
+The private catalog leaf also commits the repository epoch plus canonical issue,
+model-visible runtime-policy, and model/tool/wall-budget digests. These fields
+are omitted from the public run manifest but retained in the private task-set
+identity, preventing task transport from changing user constraints,
+stale-memory interpretation, or resource fairness without changing the selected
+root.
+
 Every scoring validator and every paired champion/challenger comparison receives
 the same canonical `CodingRunManifest`:
 

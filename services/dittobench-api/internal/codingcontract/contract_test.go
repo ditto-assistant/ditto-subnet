@@ -32,6 +32,23 @@ type wireBoundaryVectors struct {
 	RejectJSONDepth                   int    `json:"reject_json_depth"`
 }
 
+type selectionVectors struct {
+	Issue         Issue         `json:"issue"`
+	RuntimePolicy RuntimePolicy `json:"runtime_policy"`
+	Budgets       Budgets       `json:"budgets"`
+	TaskVersion   struct {
+		Payload struct {
+			IssueSHA256         string `json:"issue_sha256"`
+			RuntimePolicySHA256 string `json:"runtime_policy_sha256"`
+			BudgetsSHA256       string `json:"budgets_sha256"`
+		} `json:"payload"`
+	} `json:"task_version"`
+	RunManifest  json.RawMessage `json:"run_manifest"`
+	RunAuthority struct {
+		RunManifestSHA256 string `json:"run_manifest_sha256"`
+	} `json:"run_authority"`
+}
+
 func loadGoldenVectors(t *testing.T) goldenVectors {
 	t.Helper()
 	body, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "dittobench-coding-contract", "testdata", "coding_contract_v1.json"))
@@ -43,6 +60,55 @@ func loadGoldenVectors(t *testing.T) goldenVectors {
 		t.Fatal(err)
 	}
 	return vectors
+}
+
+func loadSelectionVectors(t *testing.T) selectionVectors {
+	t.Helper()
+	body, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "packages", "dittobench-coding-contract", "testdata", "coding_selection_v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors selectionVectors
+	if err := json.Unmarshal(body, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	return vectors
+}
+
+func TestPrivateSelectionVectorMatchesSharedRunManifest(t *testing.T) {
+	vectors := loadSelectionVectors(t)
+	manifest, err := ParseRunManifest(vectors.RunManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := Digest(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if digest != vectors.RunAuthority.RunManifestSHA256 {
+		t.Fatalf("selection run manifest digest = %s, want %s", digest, vectors.RunAuthority.RunManifestSHA256)
+	}
+	issueDigest, err := IssueDigest(vectors.Issue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issueDigest != vectors.TaskVersion.Payload.IssueSHA256 {
+		t.Fatalf("selection issue digest = %s, want %s", issueDigest, vectors.TaskVersion.Payload.IssueSHA256)
+	}
+	policyDigest, err := RuntimePolicyDigest(vectors.RuntimePolicy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if policyDigest != vectors.TaskVersion.Payload.RuntimePolicySHA256 {
+		t.Fatalf("selection runtime-policy digest = %s, want %s", policyDigest, vectors.TaskVersion.Payload.RuntimePolicySHA256)
+	}
+	budgetsDigest, err := BudgetsDigest(vectors.Budgets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if budgetsDigest != vectors.TaskVersion.Payload.BudgetsSHA256 {
+		t.Fatalf("selection budgets digest = %s, want %s", budgetsDigest, vectors.TaskVersion.Payload.BudgetsSHA256)
+	}
 }
 
 func TestGoldenVectorsHaveStableKnownFieldDigests(t *testing.T) {

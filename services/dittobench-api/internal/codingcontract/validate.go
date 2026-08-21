@@ -198,50 +198,69 @@ func (request SeedRequest) Validate() error {
 	return nil
 }
 
-func (request RunRequest) Validate() error {
-	if request.CodingContractVersion != ContractVersion || !validIdentifier(request.TicketID, 256) ||
-		!validIdentifier(request.CaseID, 256) || !validIdentifier(request.ProfileCapabilityID, 256) ||
-		!validIdentifier(request.RepositoryEpoch, 256) || !validSHA256(request.VisibleBundleSHA256) {
-		return errors.New("coding run request identity is invalid")
-	}
-	if !utf8.ValidString(request.Issue.Title) || !utf8.ValidString(request.Issue.Description) ||
-		len(request.Issue.Title) > 1024 || request.Issue.Description == "" ||
-		len(request.Issue.Description) > 64*1024 || len(request.Issue.Constraints) > 64 {
+func (issue Issue) Validate() error {
+	if !utf8.ValidString(issue.Title) || !utf8.ValidString(issue.Description) ||
+		len(issue.Title) > 1024 || issue.Description == "" ||
+		len(issue.Description) > 64*1024 || len(issue.Constraints) > 64 || issue.Constraints == nil {
 		return errors.New("coding issue is outside contract bounds")
 	}
-	for _, constraint := range request.Issue.Constraints {
+	for _, constraint := range issue.Constraints {
 		if constraint == "" || !utf8.ValidString(constraint) || len(constraint) > 4096 {
 			return errors.New("coding issue constraint is outside contract bounds")
 		}
 	}
-	if len(request.RuntimePolicy.EditablePaths) > 64 || len(request.RuntimePolicy.TestCommandIDs) > 64 ||
-		len(request.RuntimePolicy.BuildCommandIDs) > 64 || !uniqueStrings(request.RuntimePolicy.EditablePaths) ||
-		!uniqueStrings(request.RuntimePolicy.TestCommandIDs) || !uniqueStrings(request.RuntimePolicy.BuildCommandIDs) ||
-		request.Issue.Constraints == nil || request.RuntimePolicy.EditablePaths == nil ||
-		request.RuntimePolicy.TestCommandIDs == nil || request.RuntimePolicy.BuildCommandIDs == nil {
+	return nil
+}
+
+func (policy RuntimePolicy) Validate() error {
+	if len(policy.EditablePaths) > 64 || len(policy.TestCommandIDs) > 64 ||
+		len(policy.BuildCommandIDs) > 64 || !uniqueStrings(policy.EditablePaths) ||
+		!uniqueStrings(policy.TestCommandIDs) || !uniqueStrings(policy.BuildCommandIDs) ||
+		policy.EditablePaths == nil || policy.TestCommandIDs == nil || policy.BuildCommandIDs == nil {
 		return errors.New("runtime policy entries are invalid")
 	}
-	for _, path := range request.RuntimePolicy.EditablePaths {
+	for _, path := range policy.EditablePaths {
 		if !validRelativePath(path) {
 			return errors.New("runtime policy contains an unsafe path")
 		}
 	}
-	for _, values := range [][]string{request.RuntimePolicy.TestCommandIDs, request.RuntimePolicy.BuildCommandIDs} {
+	for _, values := range [][]string{policy.TestCommandIDs, policy.BuildCommandIDs} {
 		for _, value := range values {
 			if !validIdentifier(value, 80) {
 				return errors.New("runtime policy command identity is invalid")
 			}
 		}
 	}
-	if !validCapabilityURL(request.WorkspaceCapabilityURL) || !validCapabilityURL(request.InferenceBaseURL) {
-		return errors.New("coding run capability URL is invalid")
-	}
-	budget := request.Budgets
+	return nil
+}
+
+func (budget Budgets) Validate() error {
 	if budget.ModelInputTokens == 0 || budget.ModelInputTokens > 2_000_000 ||
 		budget.ModelOutputTokens == 0 || budget.ModelOutputTokens > 250_000 ||
 		budget.WorkspaceToolCalls == 0 || budget.WorkspaceToolCalls > 1_000 ||
 		budget.WallTimeSeconds == 0 || budget.WallTimeSeconds > 7_200 {
 		return errors.New("coding run budget is outside contract bounds")
+	}
+	return nil
+}
+
+func (request RunRequest) Validate() error {
+	if request.CodingContractVersion != ContractVersion || !validIdentifier(request.TicketID, 256) ||
+		!validIdentifier(request.CaseID, 256) || !validIdentifier(request.ProfileCapabilityID, 256) ||
+		!validIdentifier(request.RepositoryEpoch, 256) || !validSHA256(request.VisibleBundleSHA256) {
+		return errors.New("coding run request identity is invalid")
+	}
+	if err := request.Issue.Validate(); err != nil {
+		return err
+	}
+	if err := request.RuntimePolicy.Validate(); err != nil {
+		return err
+	}
+	if !validCapabilityURL(request.WorkspaceCapabilityURL) || !validCapabilityURL(request.InferenceBaseURL) {
+		return errors.New("coding run capability URL is invalid")
+	}
+	if err := request.Budgets.Validate(); err != nil {
+		return err
 	}
 	return nil
 }

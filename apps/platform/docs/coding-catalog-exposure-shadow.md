@@ -33,8 +33,13 @@ Registration proves who committed which root before candidate selection. Run
 creation additionally requires both the signed commitment time and the Platform
 registration time to predate the candidate artifact upload. It does not prove
 that a task is valid or that a later selection block is real.
-The future selector must independently fetch the canonical block hash at the
-predetermined height and verify selected Merkle proofs before inserting a run.
+
+The separate shadow selector core independently fetches genesis and the
+assigned block, verifies selected position-bound Merkle proofs, and builds the
+shared run/exposure projections. It deliberately does not persist the future
+height assignment or insert a run. The later issuer must commit that assignment
+before block revelation and atomically combine selection, run insertion, and
+this exposure ledger.
 
 ## Exposure before lease
 
@@ -81,7 +86,7 @@ digest projection while the release is active.
 
 ## Activation boundary
 
-This PR adds no catalog bytes, chain selector, Merkle-proof verifier, automatic
-scheduler, validator task transport, model route, score fold, or emissions
-reader. Coding contract v1 remains shadow-only. Any weighted activation still
-requires contract v2, calibration, and separate owner approval.
+These layers add no catalog bytes, assignment ledger, automatic scheduler,
+validator task transport, model route, score fold, or emissions reader. Coding
+contract v1 remains shadow-only. Any weighted activation still requires
+contract v2, calibration, and separate owner approval.
