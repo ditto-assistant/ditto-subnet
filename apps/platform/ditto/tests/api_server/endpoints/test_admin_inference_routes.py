@@ -13,10 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketStatus
+from ditto.api_server.config import InferenceChatProviderConfig
 from ditto.api_server.dependencies import get_session
-from ditto.api_server.inference_routing import aggregate_profile_revision
+from ditto.api_server.inference_routing import (
+    aggregate_profile_revision,
+    aggregate_provider,
+)
 from ditto.db.models import (
     Agent,
+    InferenceGatewayAttempt,
     InferenceGrant,
     InferenceProviderRoute,
     InferenceRequest,
@@ -45,6 +50,18 @@ async def _install(
             app.state.config.inference_proxy,
             routing_mode=routing_mode,
             reviewed_calibration_manifest_sha256="a" * 64,
+            chat_providers=(
+                InferenceChatProviderConfig(
+                    name="instant",
+                    upstream_url="https://api.instantsubnet.com/v1/chat/completions",
+                    api_key="instant-test-key",
+                ),
+                InferenceChatProviderConfig(
+                    name="openrouter",
+                    upstream_url="https://openrouter.ai/api/v1/chat/completions",
+                    api_key="openrouter-test-key",
+                ),
+            ),
         ),
     )
 
@@ -155,6 +172,7 @@ async def _seed_grant(session: AsyncSession) -> UUID:
 def _policy_payload() -> dict[str, object]:
     return {
         "enabled": True,
+        "gateway_provider_order": ["instant", "openrouter"],
         "expected_revision": 0,
         "speed_weight": 0.65,
         "cost_weight": 0.25,
@@ -255,13 +273,15 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
 ) -> None:
     await _install(app, session_maker, routing_mode="aggregate_throughput")
     profile = aggregate_profile_revision(_MODEL)
-    v9_profile = aggregate_profile_revision(_MODEL, bench_version=9)
+    v10_profile = aggregate_profile_revision(_MODEL, bench_version=10)
     async with session_maker() as session, session.begin():
-        for route_profile in (profile, v9_profile):
+        for route_profile in (profile, v10_profile):
             session.add(
                 InferenceProviderRoute(
                     model=_MODEL,
-                    provider="openrouter",
+                    provider=aggregate_provider(
+                        bench_version=10 if route_profile == v10_profile else 7
+                    ),
                     profile_revision=route_profile,
                     status="healthy",
                     calibration_status="shadow",
@@ -275,10 +295,11 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
                 )
             )
         grant_id = await _seed_grant(session)
+        request_nonce = uuid4()
         session.add(
             InferenceRequest(
                 grant_id=grant_id,
-                nonce=uuid4(),
+                nonce=request_nonce,
                 generation=1,
                 status="completed",
                 model=_MODEL,
@@ -294,12 +315,34 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
                 completed_at=datetime.now(UTC),
             )
         )
+        await session.flush()
+        session.add(
+            InferenceGatewayAttempt(
+                attempt_id=uuid4(),
+                grant_id=grant_id,
+                nonce=request_nonce,
+                phase=0,
+                gateway_provider="openrouter",
+                upstream_provider="WandB",
+                status="completed",
+                upstream_attempts=1,
+                openrouter_attempts=0,
+                prompt_tokens=80,
+                completion_tokens=20,
+                cost_microusd=123,
+                cost_available=True,
+                latency_ms=250,
+                timed_out=False,
+                terminal_error_code=None,
+                recorded_at=datetime.now(UTC),
+            )
+        )
     listing = await client.get("/api/v1/admin/inference-routes", headers=_HEADERS)
     assert listing.json()["routing_mode"] == "aggregate_throughput"
     assert listing.json()["aggregate_route"] == {
         "model": _MODEL,
-        "provider": "openrouter",
-        "profile_revision": profile,
+        "provider": "provider-list",
+        "profile_revision": v10_profile,
         "provider_sort": "throughput",
         "provider_order": [],
         "reliability_provider_order": ["DeepInfra", "Groq"],
@@ -308,7 +351,7 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
     }
     assert listing.json()["provider_telemetry"] == [
         {
-            "provider": "WandB",
+            "provider": "openrouter",
             "request_count": 1,
             "completed_count": 1,
             "failed_count": 0,
@@ -321,16 +364,17 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
             "prompt_tokens": 80,
             "completion_tokens": 20,
             "cost_microusd": 123,
+            "cost_available": True,
             "average_latency_ms": 250.0,
             "observed_output_tps": 80.0,
         }
     ]
-    blocked = await client.put(
+    updated = await client.put(
         f"/api/v1/admin/inference-routes/policy/{_MODEL}",
         headers=_HEADERS,
         json=_policy_payload(),
     )
-    assert blocked.status_code == 409
+    assert updated.status_code == 200, updated.text
     provider_payload = {
         "model": _MODEL,
         "provider": "Groq",
@@ -371,16 +415,17 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
 
     provider_payload.update(
         {
-            "confirmation": f"ELIGIBLE INFERENCE ROUTE {v9_profile}",
+            "provider": "provider-list",
+            "confirmation": f"ELIGIBLE INFERENCE ROUTE {v10_profile}",
             "expected_revision": 0,
         }
     )
-    admitted_v9 = await client.post(
-        f"/api/v1/admin/inference-routes/{v9_profile}/calibration",
+    admitted_v10 = await client.post(
+        f"/api/v1/admin/inference-routes/{v10_profile}/calibration",
         headers=_HEADERS,
         json=provider_payload,
     )
-    assert admitted_v9.status_code == 200, admitted_v9.text
+    assert admitted_v10.status_code == 200, admitted_v10.text
 
 
 async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(
@@ -407,7 +452,8 @@ async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(
     async with session_maker() as session, session.begin():
         grant_id = await _seed_grant(session)
         for (
-            provider,
+            gateway_provider,
+            upstream_provider,
             latency,
             status,
             timed_out,
@@ -416,15 +462,26 @@ async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(
             fallback_phase,
             terminal_error,
         ) in (
-            ("Groq", 200, "completed", False, 1, 1, 0, None),
-            ("Groq", 300, "completed", False, 1, 2, 1, None),
-            (None, 400, "failed", False, 1, 1, 1, "provider_unavailable"),
-            ("WandB", None, "failed", True, 2, 0, 1, "provider_timeout"),
+            ("openrouter", "Groq", 200, "completed", False, 1, 1, 0, None),
+            ("openrouter", "Groq", 300, "completed", False, 1, 2, 1, None),
+            (
+                "instant",
+                None,
+                400,
+                "failed",
+                True,
+                2,
+                0,
+                0,
+                "provider_timeout",
+            ),
+            ("instant", "instant", 100, "completed", False, 1, 0, 1, None),
         ):
+            request_nonce = uuid4()
             session.add(
                 InferenceRequest(
                     grant_id=grant_id,
-                    nonce=uuid4(),
+                    nonce=request_nonce,
                     generation=1,
                     status=status,
                     model=_MODEL,
@@ -432,7 +489,7 @@ async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(
                     prompt_tokens=80,
                     completion_tokens=20,
                     cost_microusd=123,
-                    upstream_provider=provider,
+                    upstream_provider=upstream_provider,
                     upstream_attempts=attempts,
                     openrouter_attempts=router_attempts,
                     fallback_phase=fallback_phase,
@@ -443,13 +500,59 @@ async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(
                     completed_at=now,
                 )
             )
+            await session.flush()
+            session.add(
+                InferenceGatewayAttempt(
+                    attempt_id=uuid4(),
+                    grant_id=grant_id,
+                    nonce=request_nonce,
+                    phase=fallback_phase,
+                    gateway_provider=gateway_provider,
+                    upstream_provider=upstream_provider,
+                    status=status,
+                    upstream_attempts=attempts,
+                    openrouter_attempts=router_attempts,
+                    prompt_tokens=80 if status == "completed" else 0,
+                    completion_tokens=20 if status == "completed" else 0,
+                    cost_microusd=(
+                        123
+                        if gateway_provider == "openrouter" and status == "completed"
+                        else 0
+                    ),
+                    cost_available=(
+                        gateway_provider == "openrouter" and status == "completed"
+                    ),
+                    latency_ms=latency,
+                    timed_out=timed_out,
+                    terminal_error_code=terminal_error,
+                    recorded_at=now,
+                )
+            )
 
     listing = await client.get("/api/v1/admin/inference-routes", headers=_HEADERS)
     assert listing.status_code == 200, listing.text
     telemetry = listing.json()["provider_telemetry"]
     assert telemetry == [
         {
-            "provider": "Groq",
+            "provider": "instant",
+            "request_count": 2,
+            "completed_count": 1,
+            "failed_count": 1,
+            "inflight_count": 0,
+            "timeout_count": 1,
+            "upstream_attempt_count": 3,
+            "openrouter_attempt_count": 0,
+            "recovered_after_fallback_count": 1,
+            "terminal_failure_count": 1,
+            "prompt_tokens": 80,
+            "completion_tokens": 20,
+            "cost_microusd": 0,
+            "cost_available": False,
+            "average_latency_ms": 250.0,
+            "observed_output_tps": 200.0,
+        },
+        {
+            "provider": "openrouter",
             "request_count": 2,
             "completed_count": 2,
             "failed_count": 0,
@@ -462,47 +565,12 @@ async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(
             "prompt_tokens": 160,
             "completion_tokens": 40,
             "cost_microusd": 246,
+            "cost_available": True,
             "average_latency_ms": 250.0,
             "observed_output_tps": 80.0,
         },
-        {
-            "provider": "Unknown upstream",
-            "request_count": 1,
-            "completed_count": 0,
-            "failed_count": 1,
-            "inflight_count": 0,
-            "timeout_count": 0,
-            "upstream_attempt_count": 1,
-            "openrouter_attempt_count": 1,
-            "recovered_after_fallback_count": 0,
-            "terminal_failure_count": 1,
-            "prompt_tokens": 80,
-            "completion_tokens": 20,
-            "cost_microusd": 123,
-            "average_latency_ms": 400.0,
-            "observed_output_tps": None,
-        },
-        {
-            "provider": "WandB",
-            "request_count": 1,
-            "completed_count": 0,
-            "failed_count": 1,
-            "inflight_count": 0,
-            "timeout_count": 1,
-            "upstream_attempt_count": 2,
-            "openrouter_attempt_count": 0,
-            "recovered_after_fallback_count": 0,
-            "terminal_failure_count": 1,
-            "prompt_tokens": 80,
-            "completion_tokens": 20,
-            "cost_microusd": 123,
-            # `latency_ms` is nullable, so avg() over an all-null group is
-            # NULL. Null, not 0: "not measured" is not "instant".
-            "average_latency_ms": None,
-            "observed_output_tps": None,
-        },
     ]
-    groq, unknown, wandb = telemetry
+    instant, openrouter = telemetry
     for field in (
         "request_count",
         "completed_count",
@@ -517,11 +585,10 @@ async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(
         "completion_tokens",
         "cost_microusd",
     ):
-        assert isinstance(groq[field], int), (field, groq[field])
-    assert isinstance(groq["average_latency_ms"], float)
-    assert isinstance(groq["observed_output_tps"], float)
-    assert unknown["provider"] == "Unknown upstream"
-    assert wandb["average_latency_ms"] is None
+        assert isinstance(openrouter[field], int), (field, openrouter[field])
+    assert isinstance(openrouter["average_latency_ms"], float)
+    assert isinstance(openrouter["observed_output_tps"], float)
+    assert instant["provider"] == "instant"
     # Nothing numeric arrives quoted, whatever the column type behind it.
     assert '"160"' not in listing.text
     assert "250.0000000000000000" not in listing.text

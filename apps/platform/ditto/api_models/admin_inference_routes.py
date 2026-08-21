@@ -40,6 +40,7 @@ class InferenceRoutingPolicyView(BaseModel):
     model: str
     revision: int = Field(ge=0)
     enabled: bool
+    gateway_provider_order: list[str]
     speed_weight: float
     cost_weight: float
     exploration_weight: float
@@ -118,8 +119,18 @@ class ProviderTelemetryView(BaseModel):
     prompt_tokens: int = Field(ge=0)
     completion_tokens: int = Field(ge=0)
     cost_microusd: int = Field(ge=0)
+    cost_available: bool
     average_latency_ms: float | None
     observed_output_tps: float | None
+
+
+class GatewayProviderView(BaseModel):
+    """A code-reviewed gateway and whether this process has its credential."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    provider: str
+    configured: bool
 
 
 class RelayRecoveryTelemetryView(BaseModel):
@@ -138,6 +149,7 @@ class AdminInferenceRoutes(BaseModel):
 
     routing_mode: str
     aggregate_route: AggregateRouteView | None
+    gateway_providers: list[GatewayProviderView]
     policies: list[InferenceRoutingPolicyView]
     routes: list[InferenceRouteView]
     audits: list[InferenceRoutingAuditView]

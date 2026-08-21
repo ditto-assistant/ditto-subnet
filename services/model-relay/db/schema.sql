@@ -1238,6 +1238,34 @@ ALTER SEQUENCE public.inference_concurrency_settings_revisions_revision_seq OWNE
 
 
 --
+-- Name: inference_gateway_attempts; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.inference_gateway_attempts (
+    attempt_id uuid NOT NULL,
+    grant_id uuid NOT NULL,
+    nonce uuid NOT NULL,
+    phase integer NOT NULL,
+    gateway_provider text NOT NULL,
+    upstream_provider text,
+    status text NOT NULL,
+    upstream_attempts integer NOT NULL,
+    openrouter_attempts integer NOT NULL,
+    prompt_tokens bigint NOT NULL,
+    completion_tokens bigint NOT NULL,
+    cost_microusd bigint NOT NULL,
+    cost_available boolean NOT NULL,
+    latency_ms integer NOT NULL,
+    timed_out boolean NOT NULL,
+    terminal_error_code text,
+    recorded_at timestamp with time zone NOT NULL,
+    CONSTRAINT ck_inference_gateway_attempts_inference_gateway_attempt_counts CHECK (((phase >= 0) AND (upstream_attempts >= 0) AND (openrouter_attempts >= 0))),
+    CONSTRAINT ck_inference_gateway_attempts_inference_gateway_attempt_status CHECK ((status = ANY (ARRAY['completed'::text, 'failed'::text]))),
+    CONSTRAINT ck_inference_gateway_attempts_inference_gateway_attempt_usage CHECK (((prompt_tokens >= 0) AND (completion_tokens >= 0) AND (cost_microusd >= 0) AND (latency_ms >= 0)))
+);
+
+
+--
 -- Name: inference_grants; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1403,6 +1431,7 @@ CREATE TABLE public.inference_routing_policies (
     cooldown_seconds integer NOT NULL,
     ewma_alpha double precision NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    gateway_provider_order jsonb DEFAULT '["openrouter"]'::jsonb NOT NULL,
     CONSTRAINT ck_inference_routing_policies_inference_routing_policy__1079 CHECK ((((speed_weight + cost_weight) + exploration_weight) > (0)::double precision)),
     CONSTRAINT ck_inference_routing_policies_inference_routing_policy__1d82 CHECK (((max_error_rate >= (0)::double precision) AND (max_error_rate <= (1)::double precision) AND (max_timeout_rate >= (0)::double precision) AND (max_timeout_rate <= (1)::double precision) AND (ewma_alpha > (0)::double precision) AND (ewma_alpha <= (1)::double precision))),
     CONSTRAINT ck_inference_routing_policies_inference_routing_policy_bounds CHECK (((exploration_ticket_budget >= 0) AND (min_calibration_samples > 0) AND (cooldown_seconds >= 1) AND (revision >= 0))),
@@ -2992,6 +3021,14 @@ ALTER TABLE ONLY public.inference_concurrency_settings_revisions
 
 
 --
+-- Name: inference_gateway_attempts inference_gateway_attempt_phase_key; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inference_gateway_attempts
+    ADD CONSTRAINT inference_gateway_attempt_phase_key UNIQUE (grant_id, nonce, phase);
+
+
+--
 -- Name: inference_grants inference_grants_ticket_lease; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -3317,6 +3354,14 @@ ALTER TABLE ONLY public.efficiency_cohort_snapshots
 
 ALTER TABLE ONLY public.inference_concurrency_settings_revisions
     ADD CONSTRAINT pk_inference_concurrency_settings_revisions PRIMARY KEY (revision);
+
+
+--
+-- Name: inference_gateway_attempts pk_inference_gateway_attempts; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inference_gateway_attempts
+    ADD CONSTRAINT pk_inference_gateway_attempts PRIMARY KEY (attempt_id);
 
 
 --
@@ -4061,6 +4106,13 @@ CREATE UNIQUE INDEX inference_concurrency_settings_scope_revision_idx ON public.
 
 
 --
+-- Name: inference_gateway_attempt_provider_recorded_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX inference_gateway_attempt_provider_recorded_idx ON public.inference_gateway_attempts USING btree (gateway_provider, recorded_at);
+
+
+--
 -- Name: inference_grants_expiry_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4761,6 +4813,14 @@ ALTER TABLE ONLY public.benchmark_rollout_members
 
 ALTER TABLE ONLY public.confirmation_inference_requests
     ADD CONSTRAINT fk_confirmation_inference_requests_grant_id_confirmatio_7cd5 FOREIGN KEY (grant_id) REFERENCES public.confirmation_inference_grants(grant_id) ON DELETE CASCADE;
+
+
+--
+-- Name: inference_gateway_attempts fk_inference_gateway_attempts_grant_id_inference_requests; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.inference_gateway_attempts
+    ADD CONSTRAINT fk_inference_gateway_attempts_grant_id_inference_requests FOREIGN KEY (grant_id, nonce) REFERENCES public.inference_requests(grant_id, nonce) ON DELETE CASCADE;
 
 
 --

@@ -11,7 +11,11 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
 )
-from ditto.api_server.config import check_config, parse_api_server_config_from_env
+from ditto.api_server.config import (
+    InferenceChatProviderConfig,
+    check_config,
+    parse_api_server_config_from_env,
+)
 from ditto.api_server.errors import ApiServerConfigError
 from ditto.api_server.validator_names import ValidatorNamesConfig
 from ditto.tests.api_server.conftest import make_api_server_config
@@ -124,6 +128,25 @@ class TestParseApiServerConfigFromEnv:
         assert config.port == 9000
         assert config.log_level == "DEBUG"
 
+    def test_instant_and_openrouter_keys_build_reviewed_chat_provider_list(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("OPENROUTER_API_KEY", "openrouter-test-key")
+        monkeypatch.setenv("INSTANT_API_KEY", "instant-test-key")
+
+        config = parse_api_server_config_from_env(commit_hash="abc")
+
+        assert [
+            provider.name for provider in config.inference_proxy.chat_providers
+        ] == [
+            "instant",
+            "openrouter",
+        ]
+        assert config.inference_proxy.chat_providers[0].upstream_url == (
+            "https://api.instantsubnet.com/v1/chat/completions"
+        )
+
     def test_composition_with_sub_configs(self, monkeypatch: pytest.MonkeyPatch):
         _set_minimum_env(monkeypatch)
         monkeypatch.setenv("POSTGRES_USER", "alice")
@@ -209,6 +232,26 @@ class TestCheckConfig:
             inference_proxy=replace(base.inference_proxy, routing_mode="unscoped"),
         )
         with pytest.raises(ApiServerConfigError, match="ROUTING_MODE"):
+            check_config(config)
+
+    def test_unreviewed_chat_gateway_fails_closed(self):
+        base = make_api_server_config()
+        config = replace(
+            base,
+            inference_proxy=replace(
+                base.inference_proxy,
+                enabled=True,
+                openrouter_api_key="openrouter-test-key",
+                chat_providers=(
+                    InferenceChatProviderConfig(
+                        name="instant",
+                        upstream_url="https://attacker.example/v1/chat/completions",
+                        api_key="instant-test-key",
+                    ),
+                ),
+            ),
+        )
+        with pytest.raises(ApiServerConfigError, match="not a reviewed endpoint"):
             check_config(config)
 
     def test_port_out_of_range_raises(self):

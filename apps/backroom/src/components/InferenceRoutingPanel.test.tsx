@@ -47,6 +47,7 @@ const policy = {
   model: route.model,
   revision: 3,
   enabled: false,
+  gateway_provider_order: ['openrouter'] as Array<'instant' | 'openrouter'>,
   speed_weight: 0.5,
   cost_weight: 0.4,
   exploration_weight: 0.1,
@@ -64,6 +65,10 @@ const policy = {
 const inventory = {
   routing_mode: 'adaptive' as const,
   aggregate_route: null,
+  gateway_providers: [
+    { provider: 'instant' as const, configured: true },
+    { provider: 'openrouter' as const, configured: true },
+  ],
   policies: [policy],
   routes: [route],
   audits: [
@@ -73,7 +78,11 @@ const inventory = {
       action: 'policy_updated' as const,
       model: route.model,
       profile_revision: null,
-      payload: { speed_weight: 0.5, prompt: 'must-not-render' },
+      payload: {
+        gateway_provider_order: ['instant', 'openrouter'],
+        speed_weight: 0.5,
+        prompt: 'must-not-render',
+      },
       recorded_at: '2026-07-22T00:05:00Z',
     },
   ],
@@ -92,6 +101,7 @@ const inventory = {
       prompt_tokens: 125_000,
       completion_tokens: 8_000,
       cost_microusd: 250_000,
+      cost_available: true,
       average_latency_ms: 210,
       observed_output_tps: 38.1,
     },
@@ -110,6 +120,7 @@ describe('InferenceRoutingPanel', () => {
     calibrateInferenceRoute.mockReset().mockResolvedValue({
       routing_mode: 'adaptive',
       aggregate_route: null,
+      gateway_providers: inventory.gateway_providers,
       policies: [policy],
       routes: [
         {
@@ -129,6 +140,7 @@ describe('InferenceRoutingPanel', () => {
     updateInferenceRoutingPolicy.mockReset().mockResolvedValue({
       routing_mode: 'adaptive',
       aggregate_route: null,
+      gateway_providers: inventory.gateway_providers,
       policies: [{ ...policy, revision: 4, enabled: true, speed_weight: 0.7, cost_weight: 0.3 }],
       routes: [route],
       audits: inventory.audits,
@@ -149,6 +161,7 @@ describe('InferenceRoutingPanel', () => {
     expect(screen.getByText('No calibration manifest')).toBeTruthy()
     expect(screen.getByText(/operator@omniaura.ai/).textContent).toContain('UTC')
     expect(screen.queryByText('must-not-render')).toBeNull()
+    expect(screen.getByText('instant → openrouter')).toBeTruthy()
     expect(screen.getByText('Actual upstream providers')).toBeTruthy()
     expect(screen.getByText('Groq')).toBeTruthy()
     expect(screen.getByText('Total input tokens')).toBeTruthy()
@@ -184,6 +197,7 @@ describe('InferenceRoutingPanel', () => {
               prompt_tokens: 25_000,
               completion_tokens: 12_000,
               cost_microusd: 75_000,
+              cost_available: true,
               average_latency_ms: 340,
               observed_output_tps: 35.3,
             },
@@ -206,6 +220,28 @@ describe('InferenceRoutingPanel', () => {
     expect(providers()).toEqual(['Fireworks', 'Groq'])
     fireEvent.click(screen.getByRole('button', { name: 'Sort by output tokens ascending' }))
     expect(providers()).toEqual(['Groq', 'Fireworks'])
+  })
+
+  it('does not present an unpriced Instant completion as free', () => {
+    render(
+      <InferenceRoutingPanel
+        initialInventory={{
+          ...inventory,
+          provider_telemetry: [
+            {
+              ...inventory.provider_telemetry[0],
+              provider: 'instant',
+              cost_microusd: 0,
+              cost_available: false,
+            },
+          ],
+        }}
+        readOnly={false}
+      />,
+    )
+
+    expect(screen.getByText('Unavailable')).toBeTruthy()
+    expect(screen.queryByText('$0.0000')).toBeNull()
   })
 
   it('requires reviewed metrics and exact profile confirmation before admission', async () => {
@@ -264,11 +300,11 @@ describe('InferenceRoutingPanel', () => {
     }
   })
 
-  it('locks adaptive controls in aggregate mode except for the logical aggregate route', () => {
+  it('keeps gateway priority editable while locking adaptive controls in aggregate mode', () => {
     const aggregateRoute: InferenceRoute = {
       ...route,
-      provider: 'openrouter',
-      profile_revision: 'openrouter-route-newly-discovered-v2',
+      provider: 'provider-list',
+      profile_revision: 'provider-list-route-newly-discovered-v1',
     }
     render(
       <InferenceRoutingPanel
@@ -299,8 +335,11 @@ describe('InferenceRoutingPanel', () => {
     ).toBeTruthy()
     expect(screen.getByText('Actual upstream providers')).toBeTruthy()
     expect(screen.getByText('Groq')).toBeTruthy()
-    const policyAction = screen.getByRole('button', { name: 'Locked in aggregate mode' })
-    expect((policyAction as HTMLButtonElement).disabled).toBe(true)
+    const policyAction = screen.getByRole('button', { name: 'Review policy' })
+    expect((policyAction as HTMLButtonElement).disabled).toBe(false)
+    fireEvent.click(policyAction)
+    expect((screen.getByLabelText('Speed weight') as HTMLInputElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Add Instant fallback' }) as HTMLButtonElement).disabled).toBe(false)
     expect(screen.getByText('Individual admission locked')).toBeTruthy()
 
     for (const action of ['eligible', 'shadow', 'disabled']) {
@@ -364,11 +403,53 @@ describe('InferenceRoutingPanel', () => {
       data: expect.objectContaining({
         model: route.model,
         expectedRevision: policy.revision,
+        gatewayProviderOrder: ['openrouter'],
         speedWeight: 0.7,
         costWeight: 0.3,
         explorationWeight: 0,
         confirmation: expected,
       }),
     })
+  })
+
+  it('reorders configured gateways and submits the exact fallback priority', async () => {
+    render(<InferenceRoutingPanel initialInventory={inventory} readOnly={false} />)
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review policy' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Add Instant fallback' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Move instant earlier' }))
+
+    const expected = 'UPDATE INFERENCE POLICY openai/gpt-oss-20b'
+    fireEvent.change(screen.getByLabelText(`Type ${expected} exactly`), {
+      target: { value: expected },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Update routing policy' }))
+
+    await waitFor(() => expect(updateInferenceRoutingPolicy).toHaveBeenCalledTimes(1))
+    expect(updateInferenceRoutingPolicy).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        gatewayProviderOrder: ['instant', 'openrouter'],
+      }),
+    })
+  })
+
+  it('explains why an unconfigured gateway cannot be added', () => {
+    render(
+      <InferenceRoutingPanel
+        initialInventory={{
+          ...inventory,
+          gateway_providers: inventory.gateway_providers.map((provider) =>
+            provider.provider === 'instant' ? { ...provider, configured: false } : provider,
+          ),
+        }}
+        readOnly={false}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Review policy' }))
+    expect(
+      screen.getByText('Unavailable until its credential is configured: Instant.'),
+    ).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Add Instant fallback' })).toBeNull()
   })
 })

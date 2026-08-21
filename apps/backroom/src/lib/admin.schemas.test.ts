@@ -319,8 +319,13 @@ describe('admin API schemas', () => {
     const inventory = inferenceRoutingInventorySchema.parse({
       routing_mode: 'adaptive',
       aggregate_route: null,
+      gateway_providers: [
+        { provider: 'instant', configured: true },
+        { provider: 'openrouter', configured: true },
+      ],
       policies: [{
         model: 'openai/gpt-oss-20b', revision: 3, enabled: false,
+        gateway_provider_order: ['instant', 'openrouter'],
         speed_weight: 0.5, cost_weight: 0.4, exploration_weight: 0.1,
         exploration_ticket_budget: 5, min_tool_accuracy: 0.8,
         min_composite: 0.7, min_calibration_samples: 60,
@@ -342,12 +347,18 @@ describe('admin API schemas', () => {
         completion_price_per_token: 0.00000013,
         updated_at: '2026-07-22T00:00:00Z',
       }],
-      audits: [],
+      audits: [{
+        audit_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        actor: 'operator', action: 'policy_updated', model: 'openai/gpt-oss-20b',
+        profile_revision: null,
+        payload: { gateway_provider_order: ['instant', 'openrouter'] },
+        recorded_at: '2026-07-22T00:00:00Z',
+      }],
       provider_telemetry: [{
         provider: 'Groq', request_count: 12, completed_count: 11, failed_count: 1,
         inflight_count: 0, timeout_count: 1, upstream_attempt_count: 14,
         prompt_tokens: 125_000, completion_tokens: 8_000,
-        cost_microusd: 250_000, average_latency_ms: 210,
+        cost_microusd: 250_000, cost_available: true, average_latency_ms: 210,
       }],
     })
     const route = inventory.routes[0]
@@ -355,6 +366,11 @@ describe('admin API schemas', () => {
     expect(route.provider).toBe('Weights & Biases')
     expect(inventory.routing_mode).toBe('adaptive')
     expect(inventory.aggregate_route).toBeNull()
+    expect(inventory.policies[0].gateway_provider_order).toEqual(['instant', 'openrouter'])
+    expect(inventory.audits[0].payload.gateway_provider_order).toEqual([
+      'instant',
+      'openrouter',
+    ])
     expect(inventory.provider_telemetry[0].provider).toBe('Groq')
     expect(() => inferenceRouteCalibrationInputSchema.parse({
       profileRevision: route.profile_revision, model: route.model,
@@ -370,6 +386,7 @@ describe('admin API schemas', () => {
     )
     expect(() => inferenceRoutingPolicyInputSchema.parse({
       model: route.model, expectedRevision: 3, enabled: true,
+      gatewayProviderOrder: ['openrouter'],
       speedWeight: 0, costWeight: 0, explorationWeight: 0,
       explorationTicketBudget: 5, minToolAccuracy: 0.8, minComposite: 0.7,
       minCalibrationSamples: 60, maxErrorRate: 0.05, maxTimeoutRate: 0.03,
@@ -385,6 +402,7 @@ describe('admin API schemas', () => {
     })
     expect(inventory.routing_mode).toBe('aggregate_throughput')
     expect(inventory.aggregate_route).toBeNull()
+    expect(inventory.gateway_providers).toEqual([{ provider: 'openrouter', configured: true }])
     expect(inventory.provider_telemetry).toEqual([])
   })
 

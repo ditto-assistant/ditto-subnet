@@ -1,4 +1,4 @@
-"""Audited admission controls for discovered OpenRouter routes."""
+"""Audited admission controls for benchmark inference routes."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ditto.api_models.admin_inference_routes import (
     AdminInferenceRoutes,
     AggregateRouteView,
+    GatewayProviderView,
     InferenceRouteView,
     InferenceRoutingAuditView,
     InferenceRoutingPolicyView,
@@ -27,11 +28,12 @@ from ditto.api_server.inference_routing import (
     AGGREGATE_PROVIDER,
     aggregate_profile_revision,
     aggregate_profile_revisions,
+    aggregate_provider,
     benchmark_model,
 )
 from ditto.db.models import (
+    InferenceGatewayAttempt,
     InferenceProviderRoute,
-    InferenceRequest,
     InferenceRoutingAudit,
     InferenceRoutingPolicy,
     ValidatorTicket,
@@ -72,6 +74,7 @@ class RoutingPolicyRequest(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     enabled: bool
+    gateway_provider_order: Annotated[list[str], Field(min_length=1, max_length=2)]
     expected_revision: Annotated[int, Field(ge=0)]
     speed_weight: Annotated[float, Field(ge=0, le=1)]
     cost_weight: Annotated[float, Field(ge=0, le=1)]
@@ -127,9 +130,7 @@ async def list_inference_routes(
             )
         ).all()
     )
-    provider_identity = func.coalesce(
-        InferenceRequest.upstream_provider, "Unknown upstream"
-    )
+    provider_identity = InferenceGatewayAttempt.gateway_provider
     provider_telemetry = list(
         (
             await session.execute(
@@ -137,28 +138,30 @@ async def list_inference_routes(
                     provider_identity.label("upstream_provider"),
                     func.count().label("request_count"),
                     func.sum(
-                        case((InferenceRequest.status == "completed", 1), else_=0)
+                        case(
+                            (InferenceGatewayAttempt.status == "completed", 1), else_=0
+                        )
                     ).label("completed_count"),
                     func.sum(
-                        case((InferenceRequest.status == "failed", 1), else_=0)
+                        case((InferenceGatewayAttempt.status == "failed", 1), else_=0)
                     ).label("failed_count"),
                     func.sum(
-                        case((InferenceRequest.status == "started", 1), else_=0)
+                        case((InferenceGatewayAttempt.status == "started", 1), else_=0)
                     ).label("inflight_count"),
                     func.sum(
-                        case((InferenceRequest.timed_out.is_(True), 1), else_=0)
+                        case((InferenceGatewayAttempt.timed_out.is_(True), 1), else_=0)
                     ).label("timeout_count"),
-                    func.sum(InferenceRequest.upstream_attempts).label(
+                    func.sum(InferenceGatewayAttempt.upstream_attempts).label(
                         "upstream_attempt_count"
                     ),
-                    func.sum(InferenceRequest.openrouter_attempts).label(
+                    func.sum(InferenceGatewayAttempt.openrouter_attempts).label(
                         "openrouter_attempt_count"
                     ),
                     func.sum(
                         case(
                             (
-                                (InferenceRequest.status == "completed")
-                                & (InferenceRequest.fallback_phase > 0),
+                                (InferenceGatewayAttempt.status == "completed")
+                                & (InferenceGatewayAttempt.phase > 0),
                                 1,
                             ),
                             else_=0,
@@ -167,25 +170,43 @@ async def list_inference_routes(
                     func.sum(
                         case(
                             (
-                                (InferenceRequest.status == "failed")
-                                & InferenceRequest.terminal_error_code.is_not(None),
+                                (InferenceGatewayAttempt.status == "failed")
+                                & InferenceGatewayAttempt.terminal_error_code.is_not(
+                                    None
+                                ),
                                 1,
                             ),
                             else_=0,
                         )
                     ).label("terminal_failure_count"),
-                    func.sum(InferenceRequest.prompt_tokens).label("prompt_tokens"),
-                    func.sum(InferenceRequest.completion_tokens).label(
+                    func.sum(InferenceGatewayAttempt.prompt_tokens).label(
+                        "prompt_tokens"
+                    ),
+                    func.sum(InferenceGatewayAttempt.completion_tokens).label(
                         "completion_tokens"
                     ),
-                    func.sum(InferenceRequest.cost_microusd).label("cost_microusd"),
-                    func.avg(InferenceRequest.latency_ms).label("average_latency_ms"),
+                    func.sum(InferenceGatewayAttempt.cost_microusd).label(
+                        "cost_microusd"
+                    ),
+                    func.sum(
+                        case(
+                            (
+                                (InferenceGatewayAttempt.status == "completed")
+                                & InferenceGatewayAttempt.cost_available.is_(False),
+                                1,
+                            ),
+                            else_=0,
+                        )
+                    ).label("missing_cost_count"),
+                    func.avg(InferenceGatewayAttempt.latency_ms).label(
+                        "average_latency_ms"
+                    ),
                     (
                         func.sum(
                             case(
                                 (
-                                    InferenceRequest.status == "completed",
-                                    InferenceRequest.completion_tokens,
+                                    InferenceGatewayAttempt.status == "completed",
+                                    InferenceGatewayAttempt.completion_tokens,
                                 ),
                                 else_=0,
                             )
@@ -195,8 +216,8 @@ async def list_inference_routes(
                             func.sum(
                                 case(
                                     (
-                                        InferenceRequest.status == "completed",
-                                        InferenceRequest.latency_ms,
+                                        InferenceGatewayAttempt.status == "completed",
+                                        InferenceGatewayAttempt.latency_ms,
                                     ),
                                     else_=0,
                                 )
@@ -204,9 +225,6 @@ async def list_inference_routes(
                             0,
                         )
                     ).label("observed_output_tps"),
-                )
-                .where(
-                    InferenceRequest.request_kind == "chat",
                 )
                 .group_by(provider_identity)
                 .order_by(provider_identity)
@@ -249,8 +267,10 @@ async def list_inference_routes(
         aggregate_route=(
             AggregateRouteView(
                 model=aggregate_model,
-                provider=AGGREGATE_PROVIDER,
-                profile_revision=aggregate_profile_revision(aggregate_model),
+                provider=aggregate_provider(bench_version=10),
+                profile_revision=aggregate_profile_revision(
+                    aggregate_model, bench_version=10
+                ),
                 provider_sort="throughput",
                 provider_order=[],
                 reliability_provider_order=["DeepInfra", "Groq"],
@@ -260,11 +280,20 @@ async def list_inference_routes(
             if routing_mode == "aggregate_throughput"
             else None
         ),
+        gateway_providers=[
+            GatewayProviderView(
+                provider=provider,
+                configured=provider
+                in {item.name for item in inference_config.chat_providers},
+            )
+            for provider in ("instant", "openrouter")
+        ],
         policies=[
             InferenceRoutingPolicyView(
                 model=policy.model,
                 revision=policy.revision,
                 enabled=policy.enabled,
+                gateway_provider_order=policy.gateway_provider_order,
                 speed_weight=policy.speed_weight,
                 cost_weight=policy.cost_weight,
                 exploration_weight=policy.exploration_weight,
@@ -334,6 +363,7 @@ async def list_inference_routes(
                 prompt_tokens=row.prompt_tokens,
                 completion_tokens=row.completion_tokens,
                 cost_microusd=row.cost_microusd,
+                cost_available=row.missing_cost_count == 0,
                 average_latency_ms=row.average_latency_ms,
                 observed_output_tps=row.observed_output_tps,
             )
@@ -359,11 +389,6 @@ async def update_routing_policy(
     request: Request,
     x_admin_actor: Annotated[str | None, Header()] = None,
 ) -> dict[str, object]:
-    if request.app.state.config.inference_proxy.routing_mode != "adaptive":
-        raise HTTPException(
-            status_code=409,
-            detail="adaptive inference routing is disabled by rollout mode",
-        )
     actor = _require_actor(x_admin_actor)
     expected = f"UPDATE INFERENCE POLICY {model}"
     if payload.confirmation != expected:
@@ -372,6 +397,17 @@ async def update_routing_policy(
         raise HTTPException(
             status_code=409, detail="routing weights cannot all be zero"
         )
+    configured = {
+        provider.name
+        for provider in request.app.state.config.inference_proxy.chat_providers
+    }
+    if len(payload.gateway_provider_order) != len(
+        set(payload.gateway_provider_order)
+    ) or not set(payload.gateway_provider_order).issubset(configured):
+        raise HTTPException(
+            status_code=409,
+            detail="gateway provider order must contain unique configured providers",
+        )
     policy = await session.get(InferenceRoutingPolicy, model, with_for_update=True)
     if policy is None:
         raise HTTPException(status_code=404, detail="unknown inference model policy")
@@ -379,6 +415,7 @@ async def update_routing_policy(
         raise HTTPException(status_code=409, detail="inference policy changed; refresh")
     for field in (
         "enabled",
+        "gateway_provider_order",
         "speed_weight",
         "cost_weight",
         "exploration_weight",
@@ -425,7 +462,8 @@ async def calibrate_inference_route(
     inference_config = request.app.state.config.inference_proxy
     routing_mode = inference_config.routing_mode
     if routing_mode == "aggregate_throughput" and (
-        payload.provider != AGGREGATE_PROVIDER
+        payload.provider
+        not in {AGGREGATE_PROVIDER, aggregate_provider(bench_version=10)}
         or profile_revision not in aggregate_profile_revisions(payload.model)
     ):
         raise HTTPException(

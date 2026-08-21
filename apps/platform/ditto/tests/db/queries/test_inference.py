@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 from prometheus_client import REGISTRY
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.inference_concurrency_settings import (
@@ -17,6 +18,7 @@ from ditto.api_server.inference_routing import benchmark_model
 from ditto.db.models import (
     Agent,
     AgentStatus,
+    InferenceGatewayAttempt,
     InferenceGrant,
     InferenceProviderRoute,
     InferenceRoutingPolicy,
@@ -25,6 +27,7 @@ from ditto.db.models import (
 from ditto.db.queries.inference import (
     USAGE_ACCOUNTING_VERSION,
     InferenceDecline,
+    InferenceGatewayObservation,
     activate_inference_grant,
     begin_inference_request,
     ensure_inference_grant,
@@ -380,10 +383,40 @@ async def test_grant_rejects_wrong_bearer_model_budget_and_replay(
             status="completed",
             prompt_tokens=3,
             completion_tokens=4,
-            cost_microusd=5,
+            cost_microusd=0,
             usage_available=True,
             now=now,
+            upstream_provider="instant",
+            upstream_attempts=1,
+            latency_ms=250,
+            gateway_attempts=(
+                InferenceGatewayObservation(
+                    phase=0,
+                    gateway_provider="instant",
+                    upstream_provider="instant",
+                    status="completed",
+                    upstream_attempts=1,
+                    openrouter_attempts=0,
+                    prompt_tokens=3,
+                    completion_tokens=4,
+                    cost_microusd=0,
+                    cost_available=False,
+                    latency_ms=250,
+                    timed_out=False,
+                    terminal_error_code=None,
+                ),
+            ),
         )
+        observation = await session.scalar(
+            select(InferenceGatewayAttempt).where(
+                InferenceGatewayAttempt.grant_id == grant.grant_id,
+                InferenceGatewayAttempt.nonce == nonce,
+            )
+        )
+        assert observation is not None
+        assert observation.gateway_provider == "instant"
+        assert observation.completion_tokens == 4
+        assert observation.cost_available is False
         assert (
             await begin_inference_request(
                 session,

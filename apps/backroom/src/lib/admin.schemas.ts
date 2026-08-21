@@ -84,6 +84,12 @@ export const inferenceRoutingPolicySchema = z.object({
   model: z.string().min(1),
   revision: z.number().int().nonnegative(),
   enabled: z.boolean(),
+  gateway_provider_order: z
+    .array(z.enum(['instant', 'openrouter']))
+    .min(1)
+    .max(2)
+    .nullish()
+    .transform((value) => value ?? ['openrouter' as const]),
   speed_weight: z.number().min(0).max(1),
   cost_weight: z.number().min(0).max(1),
   exploration_weight: z.number().min(0).max(1),
@@ -104,7 +110,10 @@ export const inferenceRoutingAuditSchema = z.object({
   action: z.string().min(1),
   model: z.string().min(1),
   profile_revision: z.string().nullable(),
-  payload: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.null()])),
+  payload: z.record(
+    z.string(),
+    z.union([z.string(), z.number(), z.boolean(), z.array(z.string()), z.null()]),
+  ),
   recorded_at: z.string(),
 })
 
@@ -123,6 +132,10 @@ export const inferenceProviderTelemetrySchema = z
     prompt_tokens: z.number().int().nonnegative(),
     completion_tokens: z.number().int().nonnegative(),
     cost_microusd: z.number().int().nonnegative(),
+    cost_available: z
+      .boolean()
+      .nullish()
+      .transform((value) => value ?? true),
     average_latency_ms: z.number().nonnegative().nullable(),
     observed_output_tps: z.number().nonnegative().nullish().transform((value) => value ?? null),
   })
@@ -155,6 +168,11 @@ export const relayRecoveryTelemetrySchema = z.object({
   broker_recovery_exhausted_ticket_count: z.number().int().nonnegative().default(0),
 })
 
+export const inferenceGatewayProviderSchema = z.object({
+  provider: z.enum(['instant', 'openrouter']),
+  configured: z.boolean(),
+})
+
 export const inferenceRoutingInventorySchema = z.object({
   routing_mode: z
     .enum(['aggregate_throughput', 'adaptive'])
@@ -163,6 +181,11 @@ export const inferenceRoutingInventorySchema = z.object({
   aggregate_route: inferenceRouteIdentitySchema
     .nullish()
     .transform((value) => value ?? null),
+  gateway_providers: z
+    .array(inferenceGatewayProviderSchema)
+    .max(2)
+    .nullish()
+    .transform((value) => value ?? [{ provider: 'openrouter' as const, configured: true }]),
   policies: z.array(inferenceRoutingPolicySchema),
   routes: z.array(inferenceRouteSchema),
   audits: z.array(inferenceRoutingAuditSchema).max(100),
@@ -195,6 +218,7 @@ export const inferenceRoutingPolicyInputSchema = z
     model: z.string().min(1),
     expectedRevision: z.number().int().nonnegative(),
     enabled: z.boolean(),
+    gatewayProviderOrder: z.array(z.enum(['instant', 'openrouter'])).min(1).max(2),
     speedWeight: z.number().min(0).max(1),
     costWeight: z.number().min(0).max(1),
     explorationWeight: z.number().min(0).max(1),

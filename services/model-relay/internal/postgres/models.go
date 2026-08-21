@@ -237,6 +237,7 @@ type InferenceRoutingPolicy struct {
 	CooldownSeconds         int32              `json:"cooldownSeconds"`
 	EwmaAlpha               float64            `json:"ewmaAlpha"`
 	UpdatedAt               pgtype.Timestamptz `json:"updatedAt"`
+	GatewayProviderOrder    []byte             `json:"gatewayProviderOrder"`
 }
 
 type ValidatorTicket struct {

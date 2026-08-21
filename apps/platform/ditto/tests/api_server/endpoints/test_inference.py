@@ -31,6 +31,7 @@ from ditto.api_server.endpoints.inference import (
     _complete_chat_with_recovery,
     _estimated_tokens,
     _exchange_message,
+    _instant_provider_payload,
     _locked_confirmation_chat_payload,
     _locked_grant_model,
     _locked_upstream_payload,
@@ -764,8 +765,35 @@ def _recovery_config() -> InferenceProxyConfig:
         InferenceProxyConfig,
         SimpleNamespace(
             routing_mode="aggregate_throughput",
-            upstream_url="https://openrouter.ai/api/v1/chat/completions",
-            openrouter_api_key="test-key",
+            chat_providers=(
+                SimpleNamespace(
+                    name="openrouter",
+                    upstream_url="https://openrouter.ai/api/v1/chat/completions",
+                    api_key="test-key",
+                ),
+            ),
+            response_body_bytes=2 << 20,
+        ),
+    )
+
+
+def _multi_gateway_config() -> InferenceProxyConfig:
+    return cast(
+        InferenceProxyConfig,
+        SimpleNamespace(
+            routing_mode="aggregate_throughput",
+            chat_providers=(
+                SimpleNamespace(
+                    name="instant",
+                    upstream_url="https://api.instantsubnet.com/v1/chat/completions",
+                    api_key="instant-test-key",
+                ),
+                SimpleNamespace(
+                    name="openrouter",
+                    upstream_url="https://openrouter.ai/api/v1/chat/completions",
+                    api_key="openrouter-test-key",
+                ),
+            ),
             response_body_bytes=2 << 20,
         ),
     )
@@ -839,6 +867,156 @@ async def test_invalid_fast_response_recovers_through_deepinfra() -> None:
     assert result.fallback_phase == 1
     assert result.upstream_attempts == 2
     assert result.openrouter_attempts == 2
+
+
+def test_instant_adapter_translates_only_the_locked_reasoning_effort() -> None:
+    payload = {
+        "model": "openai/gpt-oss-20b",
+        "messages": [{"role": "user", "content": "hello"}],
+        "reasoning": {"effort": "low", "exclude": True},
+        "max_tokens": 4096,
+    }
+
+    translated = _instant_provider_payload(payload)
+
+    assert translated["reasoning_effort"] == "low"
+    assert translated["max_completion_tokens"] == 4096
+    assert "reasoning" not in translated
+    assert "max_tokens" not in translated
+    assert payload["reasoning"] == {"effort": "low", "exclude": True}
+    assert payload["max_tokens"] == 4096
+
+
+@pytest.mark.asyncio
+async def test_instant_first_falls_back_to_openrouter_and_keeps_both_observations() -> (
+    None
+):
+    requests: list[tuple[str, dict[str, Any]]] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append((request.url.host, body))
+        if request.url.host == "api.instantsubnet.com":
+            return httpx.Response(503, request=request, json={"error": "busy"})
+        return httpx.Response(
+            200,
+            request=request,
+            json=_provider_completion(provider="Groq"),
+        )
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await _complete_chat_with_recovery(
+            client,
+            _multi_gateway_config(),
+            payload={
+                "model": "openai/gpt-oss-20b",
+                "messages": [],
+                "reasoning": {"effort": "low", "exclude": True},
+            },
+            model="openai/gpt-oss-20b",
+            expected_provider="provider-list",
+            expected_quantization=None,
+            expected_prompt_price=None,
+            expected_completion_price=None,
+            provider_order=("instant", "openrouter"),
+            sleep=no_sleep,
+        )
+
+    assert [host for host, _ in requests] == [
+        "api.instantsubnet.com",
+        "api.instantsubnet.com",
+        "api.instantsubnet.com",
+        "openrouter.ai",
+    ]
+    assert requests[0][1]["reasoning_effort"] == "low"
+    assert "reasoning" not in requests[0][1]
+    assert requests[-1][1]["provider"]["sort"] == "throughput"
+    assert result.upstream_provider == "Groq"
+    assert result.fallback_phase == 1
+    assert [(row.gateway_provider, row.status) for row in result.gateway_attempts] == [
+        ("instant", "failed"),
+        ("openrouter", "completed"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_openrouter_first_does_not_contact_instant_after_success() -> None:
+    hosts: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        return httpx.Response(
+            200,
+            request=request,
+            json=_provider_completion(provider="DeepInfra"),
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await _complete_chat_with_recovery(
+            client,
+            _multi_gateway_config(),
+            payload={"model": "openai/gpt-oss-20b", "messages": []},
+            model="openai/gpt-oss-20b",
+            expected_provider="provider-list",
+            expected_quantization=None,
+            expected_prompt_price=None,
+            expected_completion_price=None,
+            provider_order=("openrouter", "instant"),
+        )
+
+    assert hosts == ["openrouter.ai"]
+    assert result.gateway_attempts[0].gateway_provider == "openrouter"
+
+
+@pytest.mark.asyncio
+async def test_openrouter_first_falls_back_to_instant_after_bounded_phases() -> None:
+    hosts: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        hosts.append(request.url.host)
+        if request.url.host == "openrouter.ai":
+            return httpx.Response(503, request=request, json={"error": "busy"})
+        return httpx.Response(
+            200,
+            request=request,
+            json=_provider_completion(provider=None),
+        )
+
+    async def no_sleep(_: float) -> None:
+        return None
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        result = await _complete_chat_with_recovery(
+            client,
+            _multi_gateway_config(),
+            payload={
+                "model": "openai/gpt-oss-20b",
+                "messages": [],
+                "reasoning": {"effort": "low", "exclude": True},
+                "max_tokens": 4096,
+            },
+            model="openai/gpt-oss-20b",
+            expected_provider="provider-list",
+            expected_quantization=None,
+            expected_prompt_price=None,
+            expected_completion_price=None,
+            provider_order=("openrouter", "instant"),
+            sleep=no_sleep,
+        )
+
+    assert hosts == ["openrouter.ai"] * 6 + ["api.instantsubnet.com"]
+    assert result.upstream_provider == "instant"
+    assert result.fallback_phase == 1
+    assert [(row.gateway_provider, row.status) for row in result.gateway_attempts] == [
+        ("openrouter", "failed"),
+        ("openrouter", "failed"),
+        ("instant", "completed"),
+    ]
+    assert result.gateway_attempts[-1].completion_tokens == 2
+    assert result.gateway_attempts[-1].cost_microusd == 0
 
 
 def test_openrouter_headers_attribute_chat_and_embedding_traffic() -> None:

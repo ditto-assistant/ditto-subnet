@@ -75,7 +75,7 @@ func (q *Queries) GetInferenceProviderRouteForUpdate(ctx context.Context, arg Ge
 }
 
 const getInferenceRoutingPolicy = `-- name: GetInferenceRoutingPolicy :one
-SELECT model, revision, enabled, speed_weight, cost_weight, exploration_weight, exploration_ticket_budget, min_tool_accuracy, min_composite, min_calibration_samples, max_error_rate, max_timeout_rate, cooldown_seconds, ewma_alpha, updated_at FROM inference_routing_policies
+SELECT model, revision, enabled, speed_weight, cost_weight, exploration_weight, exploration_ticket_budget, min_tool_accuracy, min_composite, min_calibration_samples, max_error_rate, max_timeout_rate, cooldown_seconds, ewma_alpha, updated_at, gateway_provider_order FROM inference_routing_policies
 WHERE model = $1::text
 `
 
@@ -100,6 +100,7 @@ func (q *Queries) GetInferenceRoutingPolicy(ctx context.Context, model string) (
 		&i.CooldownSeconds,
 		&i.EwmaAlpha,
 		&i.UpdatedAt,
+		&i.GatewayProviderOrder,
 	)
 	return i, err
 }

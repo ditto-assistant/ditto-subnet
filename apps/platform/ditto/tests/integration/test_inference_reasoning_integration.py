@@ -38,7 +38,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.ticket_status import TicketStatus
-from ditto.api_server.config import InferenceProxyConfig
+from ditto.api_server.config import InferenceChatProviderConfig, InferenceProxyConfig
 from ditto.api_server.endpoints.inference import (
     _proxy_message,
     proxy_chat_completions,
@@ -46,9 +46,9 @@ from ditto.api_server.endpoints.inference import (
 )
 from ditto.api_server.inference_routing import (
     AGGREGATE_CALIBRATION_SAMPLES,
-    AGGREGATE_PROVIDER,
     V7_MODEL,
     aggregate_profile_revision,
+    aggregate_provider,
 )
 from ditto.db.models import (
     Agent,
@@ -107,6 +107,13 @@ def _config() -> InferenceProxyConfig:
         response_body_bytes=1 << 20,
         timeout_seconds=10,
         max_output_tokens=_MAX_OUTPUT_TOKENS,
+        chat_providers=(
+            InferenceChatProviderConfig(
+                name="openrouter",
+                upstream_url="https://openrouter.ai/api/v1/chat/completions",
+                api_key="test-key",
+            ),
+        ),
     )
 
 
@@ -160,7 +167,7 @@ async def _seed_grant(
         session.add(
             InferenceProviderRoute(
                 model=V7_MODEL,
-                provider=AGGREGATE_PROVIDER,
+                provider=aggregate_provider(bench_version=bench_version),
                 profile_revision=aggregate_profile_revision(
                     V7_MODEL, bench_version=bench_version
                 ),
@@ -216,7 +223,7 @@ async def _seed_grant(
         # values rather than anything this test arranged.
         assert live.bench_version == bench_version
         assert live.allowed_models == [V7_MODEL]
-        assert live.route_provider == AGGREGATE_PROVIDER
+        assert live.route_provider == aggregate_provider(bench_version=bench_version)
         return live.grant_id, activated[1], live.generation
 
 

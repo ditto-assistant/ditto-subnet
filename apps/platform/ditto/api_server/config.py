@@ -83,8 +83,22 @@ class ValidatorCompatibilityConfig:
 
 
 @dataclass(frozen=True)
+class InferenceChatProviderConfig:
+    """One trusted OpenAI-compatible chat gateway.
+
+    The provider name is the only value persisted in operator policy. Secrets
+    and URLs remain process configuration, so a Backroom write can reorder
+    already-reviewed gateways without gaining credential or egress control.
+    """
+
+    name: str
+    upstream_url: str
+    api_key: str
+
+
+@dataclass(frozen=True)
 class InferenceProxyConfig:
-    """Platform-owned OpenRouter proxy and ticket budget limits."""
+    """Platform-owned provider proxy and ticket budget limits."""
 
     enabled: bool
     required: bool
@@ -123,6 +137,7 @@ class InferenceProxyConfig:
     response_body_bytes: int
     timeout_seconds: float
     max_output_tokens: int
+    chat_providers: tuple[InferenceChatProviderConfig, ...] = ()
     discovery_url_template: str = (
         "https://openrouter.ai/api/v1/models/{model}/endpoints"
     )
@@ -366,6 +381,7 @@ class ApiServerConfig:
             response_body_bytes=2 << 20,
             timeout_seconds=90.0,
             max_output_tokens=8192,
+            chat_providers=(),
         )
     )
     """Dark-launchable, platform-owned ticket inference proxy."""
@@ -580,6 +596,27 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
         in _TRUTHY
     )
     try:
+        openrouter_api_key = os.environ.get("OPENROUTER_API_KEY") or None
+        instant_api_key = os.environ.get("INSTANT_API_KEY") or None
+        chat_providers = tuple(
+            provider
+            for provider in (
+                InferenceChatProviderConfig(
+                    name="instant",
+                    upstream_url="https://api.instantsubnet.com/v1/chat/completions",
+                    api_key=instant_api_key or "",
+                ),
+                InferenceChatProviderConfig(
+                    name="openrouter",
+                    upstream_url=os.environ.get(
+                        "DITTO_INFERENCE_UPSTREAM_URL",
+                        "https://openrouter.ai/api/v1/chat/completions",
+                    ),
+                    api_key=openrouter_api_key or "",
+                ),
+            )
+            if provider.api_key
+        )
         inference_proxy = InferenceProxyConfig(
             enabled=inference_enabled,
             required=(
@@ -591,7 +628,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             public_base_url=os.environ.get(
                 "DITTO_INFERENCE_PUBLIC_BASE_URL", "http://localhost:8000"
             ).rstrip("/"),
-            openrouter_api_key=os.environ.get("OPENROUTER_API_KEY") or None,
+            openrouter_api_key=openrouter_api_key,
             perplexity_api_key=os.environ.get("PERPLEXITY_API_KEY") or None,
             upstream_url=os.environ.get(
                 "DITTO_INFERENCE_UPSTREAM_URL",
@@ -682,6 +719,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             max_output_tokens=int(
                 os.environ.get("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", "8192")
             ),
+            chat_providers=chat_providers,
             discovery_url_template=os.environ.get(
                 "DITTO_INFERENCE_DISCOVERY_URL_TEMPLATE",
                 "https://openrouter.ai/api/v1/models/{model}/endpoints",
@@ -930,9 +968,14 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError(
             "DITTO_INFERENCE_ROUTING_MODE must be aggregate_throughput or adaptive"
         )
+    if inference.enabled and not inference.chat_providers:
+        raise ApiServerConfigError(
+            "at least one inference chat provider key is required when the "
+            "proxy is enabled"
+        )
     if inference.enabled and inference.openrouter_api_key is None:
         raise ApiServerConfigError(
-            "OPENROUTER_API_KEY is required when the inference proxy is enabled"
+            "OPENROUTER_API_KEY is required for the hosted embedding lane"
         )
     if inference.required and not inference.enabled:
         raise ApiServerConfigError(
@@ -940,15 +983,25 @@ def check_config(config: ApiServerConfig) -> None:
         )
     if not inference.allowed_models or len(inference.allowed_models) > 4:
         raise ApiServerConfigError("inference model allowlist must contain 1-4 models")
-    upstream = urlparse(inference.upstream_url)
-    if (
-        upstream.scheme != "https"
-        or upstream.hostname != "openrouter.ai"
-        or upstream.path != "/api/v1/chat/completions"
-    ):
-        raise ApiServerConfigError(
-            "inference upstream must be OpenRouter chat completions"
-        )
+    expected_chat_upstreams = {
+        "instant": ("api.instantsubnet.com", "/v1/chat/completions"),
+        "openrouter": ("openrouter.ai", "/api/v1/chat/completions"),
+    }
+    provider_names = [provider.name for provider in inference.chat_providers]
+    if len(provider_names) != len(set(provider_names)):
+        raise ApiServerConfigError("inference chat provider names must be unique")
+    for provider in inference.chat_providers:
+        expected = expected_chat_upstreams.get(provider.name)
+        upstream = urlparse(provider.upstream_url)
+        if (
+            expected is None
+            or upstream.scheme != "https"
+            or (upstream.hostname, upstream.path) != expected
+            or not provider.api_key
+        ):
+            raise ApiServerConfigError(
+                f"inference chat provider {provider.name!r} is not a reviewed endpoint"
+            )
     embedding_upstream = urlparse(inference.embedding_upstream_url)
     if (
         embedding_upstream.scheme != "https"

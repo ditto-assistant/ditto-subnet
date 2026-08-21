@@ -10,6 +10,7 @@ from ditto.api_server.inference_routing import (
     AGGREGATE_PROVIDER,
     ProviderRouteRefresher,
     aggregate_profile_revision,
+    aggregate_provider,
     rank_routes,
     select_route,
 )
@@ -211,7 +212,7 @@ async def test_aggregate_selection_uses_only_reviewed_logical_route(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("bench_version", [8, 9, 10])
+@pytest.mark.parametrize("bench_version", [8, 9, 10, 11, 12])
 async def test_post_v7_aggregate_selection_ignores_legacy_calibration(
     session_maker: async_sessionmaker[AsyncSession],
     bench_version: int,
@@ -220,12 +221,14 @@ async def test_post_v7_aggregate_selection_ignores_legacy_calibration(
     model = "openai/gpt-oss-20b"
     v7_profile = aggregate_profile_revision(model, bench_version=7)
     v9_profile = aggregate_profile_revision(model, bench_version=9)
+    v10_profile = aggregate_profile_revision(model, bench_version=10)
     target_profile = aggregate_profile_revision(model, bench_version=bench_version)
     assert v7_profile == "openrouter-route-a471cd87ae7df5b9-v1"
     assert v9_profile == "openrouter-route-6a097486af3c178d-v1"
+    assert v10_profile == "provider-list-route-bf48ee4a39ff8119-v1"
     assert v9_profile != v7_profile
-    if bench_version == 10:
-        assert target_profile == v9_profile
+    if bench_version >= 10:
+        assert target_profile == v10_profile
 
     async with session_maker() as session, session.begin():
         session.add(
@@ -249,7 +252,7 @@ async def test_post_v7_aggregate_selection_ignores_legacy_calibration(
         session.add(
             InferenceProviderRoute(
                 model=model,
-                provider=AGGREGATE_PROVIDER,
+                provider=aggregate_provider(bench_version=bench_version),
                 profile_revision=target_profile,
                 status="discovered",
                 calibration_status="shadow",
@@ -284,7 +287,12 @@ async def test_post_v7_aggregate_selection_ignores_legacy_calibration(
 
     async with session_maker() as session, session.begin():
         route = await session.get(
-            InferenceProviderRoute, (model, AGGREGATE_PROVIDER, target_profile)
+            InferenceProviderRoute,
+            (
+                model,
+                aggregate_provider(bench_version=bench_version),
+                target_profile,
+            ),
         )
         assert route is not None
         route.cooldown_until = now + timedelta(minutes=1)
@@ -412,9 +420,14 @@ async def test_aggregate_discovery_tracks_active_model_endpoints(
                     profile,
                     aggregate_profile_revision(model, bench_version=9),
                 ):
+                    bench_version = 9 if discovered_profile != profile else 7
                     route = await session.get(
                         InferenceProviderRoute,
-                        (model, AGGREGATE_PROVIDER, discovered_profile),
+                        (
+                            model,
+                            aggregate_provider(bench_version=bench_version),
+                            discovered_profile,
+                        ),
                     )
                     assert route is not None
                     assert route.status == expected

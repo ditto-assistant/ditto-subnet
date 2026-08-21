@@ -15,7 +15,12 @@ from sqlalchemy.exc import IntegrityError
 
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.api_server.inference_routing import benchmark_model, select_route
-from ditto.db.models import InferenceGrant, InferenceRequest, ValidatorTicket
+from ditto.db.models import (
+    InferenceGatewayAttempt,
+    InferenceGrant,
+    InferenceRequest,
+    ValidatorTicket,
+)
 from ditto.metrics import INFERENCE_ADMISSION_AT_CAPACITY
 
 if TYPE_CHECKING:
@@ -77,6 +82,25 @@ class LeaseModelUsage:
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+
+@dataclass(frozen=True)
+class InferenceGatewayObservation:
+    """Persistable, content-free outcome for one ordered gateway phase."""
+
+    phase: int
+    gateway_provider: str
+    upstream_provider: str | None
+    status: str
+    upstream_attempts: int
+    openrouter_attempts: int
+    prompt_tokens: int
+    completion_tokens: int
+    cost_microusd: int
+    cost_available: bool
+    latency_ms: int
+    timed_out: bool
+    terminal_error_code: str | None
 
 
 async def get_lease_model_usage(
@@ -856,6 +880,7 @@ async def finish_inference_request(
     openrouter_attempts: int = 0,
     fallback_phase: int = 0,
     terminal_error_code: str | None = None,
+    gateway_attempts: tuple[InferenceGatewayObservation, ...] = (),
 ) -> bool:
     snapshot = await session.get(InferenceGrant, grant_id)
     if snapshot is None:
@@ -935,6 +960,45 @@ async def finish_inference_request(
     request.timed_out = timed_out
     request.latency_ms = latency_ms
     request.completed_at = now
+    if request.request_kind == "chat":
+        for observation in gateway_attempts:
+            observation_completed = observation.status == "completed"
+            session.add(
+                InferenceGatewayAttempt(
+                    attempt_id=uuid4(),
+                    grant_id=grant_id,
+                    nonce=nonce,
+                    phase=observation.phase,
+                    gateway_provider=observation.gateway_provider,
+                    upstream_provider=observation.upstream_provider,
+                    status=observation.status,
+                    upstream_attempts=max(0, observation.upstream_attempts),
+                    openrouter_attempts=max(0, observation.openrouter_attempts),
+                    # The request-level accounting above has already applied
+                    # the byte-derived ceiling. A malicious provider cannot
+                    # bypass it by inflating the per-gateway telemetry copy.
+                    prompt_tokens=(
+                        prompt_tokens
+                        if observation_completed
+                        else max(0, observation.prompt_tokens)
+                    ),
+                    completion_tokens=(
+                        completion_tokens
+                        if observation_completed
+                        else max(0, observation.completion_tokens)
+                    ),
+                    cost_microusd=(
+                        cost_microusd
+                        if observation_completed
+                        else max(0, observation.cost_microusd)
+                    ),
+                    cost_available=observation.cost_available,
+                    latency_ms=max(0, observation.latency_ms),
+                    timed_out=observation.timed_out,
+                    terminal_error_code=observation.terminal_error_code,
+                    recorded_at=now,
+                )
+            )
     if request.request_kind == "chat":
         if was_started:
             grant.active_requests = max(0, grant.active_requests - 1)

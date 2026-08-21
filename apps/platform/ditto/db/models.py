@@ -3336,6 +3336,12 @@ class InferenceRoutingPolicy(Base):
         Integer, nullable=False, default=0, server_default=text("0")
     )
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    gateway_provider_order: Mapped[list[str]] = mapped_column(
+        _JSON_VARIANT,
+        nullable=False,
+        default=lambda: ["openrouter"],
+        server_default=text("'[\"openrouter\"]'"),
+    )
     speed_weight: Mapped[float] = mapped_column(Float, nullable=False)
     cost_weight: Mapped[float] = mapped_column(Float, nullable=False)
     exploration_weight: Mapped[float] = mapped_column(Float, nullable=False)
@@ -3479,6 +3485,66 @@ class InferenceRequest(Base):
             name="inference_requests_fallback_phase",
         ),
         Index("inference_requests_started_idx", "started_at"),
+    )
+
+
+class InferenceGatewayAttempt(Base):
+    """One provider-list phase attempted for one trusted chat request.
+
+    Keeping phases separate is what makes fallback telemetry honest: when
+    Instant fails and OpenRouter recovers the request, both observations remain
+    visible instead of attributing the whole request only to the winner.
+    """
+
+    __tablename__ = "inference_gateway_attempts"
+
+    attempt_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), primary_key=True)
+    grant_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    nonce: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    phase: Mapped[int] = mapped_column(Integer, nullable=False)
+    gateway_provider: Mapped[str] = mapped_column(Text, nullable=False)
+    upstream_provider: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    upstream_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    openrouter_attempts: Mapped[int] = mapped_column(Integer, nullable=False)
+    prompt_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    completion_tokens: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_microusd: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cost_available: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    timed_out: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    terminal_error_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["grant_id", "nonce"],
+            ["inference_requests.grant_id", "inference_requests.nonce"],
+            ondelete="CASCADE",
+        ),
+        UniqueConstraint(
+            "grant_id", "nonce", "phase", name="inference_gateway_attempt_phase_key"
+        ),
+        CheckConstraint(
+            "status IN ('completed', 'failed')",
+            name="inference_gateway_attempt_status",
+        ),
+        CheckConstraint(
+            "phase >= 0 AND upstream_attempts >= 0 AND openrouter_attempts >= 0",
+            name="inference_gateway_attempt_counts",
+        ),
+        CheckConstraint(
+            "prompt_tokens >= 0 AND completion_tokens >= 0 AND "
+            "cost_microusd >= 0 AND latency_ms >= 0",
+            name="inference_gateway_attempt_usage",
+        ),
+        Index(
+            "inference_gateway_attempt_provider_recorded_idx",
+            "gateway_provider",
+            "recorded_at",
+        ),
     )
 
 
