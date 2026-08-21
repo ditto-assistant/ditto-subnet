@@ -3509,6 +3509,17 @@ describe('why a validator ticket ended', () => {
       stuckSubmissionSchema.parse({ ...submission, silent_expiry_count: 9 }),
     ).toMatchObject({ silent_expiry_count: 9, score_count: 0 })
     expect(stuckSubmissionSchema.parse(submission).silent_expiry_count).toBeNull()
+    expect(stuckSubmissionSchema.parse(submission).recommended_action).toBeNull()
+    expect(
+      stuckSubmissionSchema.parse({
+        ...submission,
+        recommended_action: 'withdraw',
+        dominant_failure_code: 'inference_request_rejected',
+      }),
+    ).toMatchObject({
+      recommended_action: 'withdraw',
+      dominant_failure_code: 'inference_request_rejected',
+    })
   })
 
   it('defaults stuck-submission triage to a small server page', () => {

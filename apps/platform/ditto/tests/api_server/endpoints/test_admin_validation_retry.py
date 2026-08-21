@@ -3292,6 +3292,99 @@ async def test_partial_exhaustion_stays_queued_not_exhausted(
     assert by_name["two-exhausted-one-scored"] == "exhausted"
 
 
+async def test_agent_attributable_exhaustion_refuses_retry_and_recommends_withdraw(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_states(
+        retry_maker,
+        name="rejected-agent",
+        tickets=[
+            ("val-0", TicketStatus.EXPIRED, 2, _PAST),
+            ("val-1", TicketStatus.EXPIRED, 2, _PAST),
+            ("val-2", TicketStatus.EXPIRED, 2, _PAST),
+        ],
+    )
+    async with retry_maker() as session, session.begin():
+        tickets = list(
+            await session.scalars(
+                select(ValidatorTicket).where(ValidatorTicket.agent_id == agent_id)
+            )
+        )
+        for ticket in tickets:
+            ticket.failure_reason = "scoring_error"
+            ticket.failure_detail = "inference_request_rejected"
+            ticket.failed_at = ticket.issued_at + timedelta(minutes=5)
+    _install(app, retry_maker)
+
+    listing = await client.get("/api/v1/admin/validation-retries", headers=_HEADERS)
+    detail = await client.get(
+        f"/api/v1/admin/validation-retries/{agent_id}", headers=_HEADERS
+    )
+    assert listing.status_code == 200 and detail.status_code == 200, listing.text
+    item = listing.json()["submissions"][0]
+    assert item["retry_state"] == "exhausted"
+    assert item["recovery_allowed"] is False
+    assert item["recommended_action"] == "withdraw"
+    assert item["dominant_failure_code"] == "inference_request_rejected"
+    assert item["blocking_reason"] == (
+        "exhausted on agent-attributable failures; withdraw rather than retry"
+    )
+    assert detail.json()["recovery_allowed"] is False
+    assert detail.json()["recommended_action"] == "withdraw"
+    assert detail.json()["withdrawal_allowed"] is True
+
+    refused = await client.post(
+        f"/api/v1/admin/validation-retries/{agent_id}/retry",
+        headers=_HEADERS,
+        json={
+            "request_id": str(uuid4()),
+            "expected_snapshot": item["snapshot"],
+            "reason": "should not retry an agent-attributable 413/refused run",
+        },
+    )
+    assert refused.status_code == 409
+    assert "withdraw rather than retry" in refused.text
+
+
+async def test_timeout_exhaustion_still_recommends_retry(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    retry_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_states(
+        retry_maker,
+        name="timeout-agent",
+        tickets=[
+            ("val-0", TicketStatus.EXPIRED, 2, _PAST),
+            ("val-1", TicketStatus.EXPIRED, 2, _PAST),
+            ("val-2", TicketStatus.EXPIRED, 2, _PAST),
+        ],
+    )
+    async with retry_maker() as session, session.begin():
+        tickets = list(
+            await session.scalars(
+                select(ValidatorTicket).where(ValidatorTicket.agent_id == agent_id)
+            )
+        )
+        for ticket in tickets:
+            ticket.failure_reason = "scoring_error"
+            ticket.failure_detail = (
+                "DittobenchError: run deadbeef did not finish within 6600.0s"
+            )
+            ticket.failed_at = ticket.issued_at + timedelta(minutes=110)
+    _install(app, retry_maker)
+
+    listing = await client.get("/api/v1/admin/validation-retries", headers=_HEADERS)
+    assert listing.status_code == 200, listing.text
+    item = listing.json()["submissions"][0]
+    assert item["retry_state"] == "exhausted"
+    assert item["recovery_allowed"] is True
+    assert item["recommended_action"] == "retry"
+    assert item["dominant_failure_code"] is None
+
+
 async def test_infra_grant_lifts_a_would_be_exhausted_ticket(
     app: FastAPI,
     client: httpx.AsyncClient,

@@ -7453,9 +7453,10 @@ export interface components {
          *       re-leased on the next sweep with budget to spare.
          *     * ``cooling_down`` — an expired ticket still has budget but is waiting out
          *       its retry cooldown.
-         *     * ``exhausted`` — no ticket can advance without an operator grant (every
-         *       remaining validator burned its attempt budget). This is the only state
-         *       that needs a human.
+         *     * ``exhausted`` — no ticket can advance without an operator. Read
+         *       ``recommended_action``: ``retry`` is a verified-infrastructure grant;
+         *       ``withdraw`` is an agent-attributable dead end that should leave this
+         *       list via queue withdrawal, not another lease.
          *     * ``queued`` — below quorum with slots that have simply never been leased
          *       yet; it will advance on its own.
          */
@@ -7477,6 +7478,8 @@ export interface components {
             bench_version: number;
             /** Blocking Reason */
             blocking_reason: string | null;
+            /** Dominant Failure Code */
+            dominant_failure_code?: string | null;
             /** Earliest Retry After */
             earliest_retry_after: string | null;
             /** Exhausted Validator Count */
@@ -7485,6 +7488,8 @@ export interface components {
             miner_hotkey: string;
             /** Quorum */
             quorum: number;
+            /** Recommended Action */
+            recommended_action?: ("retry" | "withdraw") | null;
             /** Recovery Allowed */
             recovery_allowed: boolean;
             /**
@@ -7925,6 +7930,8 @@ export interface components {
             automatic_retry_available: boolean;
             /** Blocking Reason */
             blocking_reason: string | null;
+            /** Dominant Failure Code */
+            dominant_failure_code?: string | null;
             /** Eviction Allowed */
             eviction_allowed: boolean;
             /** Eviction Blocking Reason */
@@ -7935,6 +7942,8 @@ export interface components {
             miner_hotkey: string;
             /** Quorum */
             quorum: number;
+            /** Recommended Action */
+            recommended_action?: ("retry" | "withdraw") | null;
             /** Recoveries */
             recoveries: components["schemas"]["AdminValidationRecovery"][];
             /** Recovery Allowed */

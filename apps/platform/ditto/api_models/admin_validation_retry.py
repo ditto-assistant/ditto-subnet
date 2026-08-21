@@ -15,7 +15,7 @@ from pydantic import (
     model_validator,
 )
 
-from ditto.api_models.retry_state import RetryState
+from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
 
 
 class AdminValidationTicket(BaseModel):
@@ -173,6 +173,17 @@ class AdminValidationRetryDetail(BaseModel):
     automatic_retry_available: bool
     recovery_allowed: bool
     blocking_reason: str | None
+    recommended_action: RecommendedRetryAction | None = None
+    """``withdraw`` when remaining slots died of named agent failures; ``retry``
+    when an operator grant can still restore quorum; ``None`` otherwise.
+
+    Agent-attributable exhaustion (``inference_request_rejected``,
+    ``inference_allowance_exhausted``, ``model_inference_required``) cannot be
+    repaired by re-leasing the same image. The documented terminal path is
+    queue withdrawal, not a retry grant and not a platform-minted score of 0.
+    """
+    dominant_failure_code: str | None = None
+    """The remaining tickets' current ``failure_detail`` when they all agree."""
     withdrawal_allowed: bool
     withdrawal_blocking_reason: str | None
     eviction_allowed: bool
@@ -203,9 +214,10 @@ class AdminStuckSubmission(BaseModel):
       re-leased on the next sweep with budget to spare.
     * ``cooling_down`` — an expired ticket still has budget but is waiting out
       its retry cooldown.
-    * ``exhausted`` — no ticket can advance without an operator grant (every
-      remaining validator burned its attempt budget). This is the only state
-      that needs a human.
+    * ``exhausted`` — no ticket can advance without an operator. Read
+      ``recommended_action``: ``retry`` is a verified-infrastructure grant;
+      ``withdraw`` is an agent-attributable dead end that should leave this
+      list via queue withdrawal, not another lease.
     * ``queued`` — below quorum with slots that have simply never been leased
       yet; it will advance on its own.
     """
@@ -221,6 +233,12 @@ class AdminStuckSubmission(BaseModel):
     automatic_retry_available: bool
     recovery_allowed: bool
     blocking_reason: str | None
+    recommended_action: RecommendedRetryAction | None = None
+    """``withdraw`` for named agent-attributable exhaustion; ``retry`` when a
+    grant can still restore quorum. ``None`` on rows that are not exhausted.
+    """
+    dominant_failure_code: str | None = None
+    """Remaining current ``failure_detail`` when every leftover slot agrees."""
     earliest_retry_after: datetime | None
     attempts_used: int
     exhausted_validator_count: int

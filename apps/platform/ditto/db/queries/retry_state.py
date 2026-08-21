@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.retry_state import RetryState
+from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
 from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.db.models import (
@@ -37,6 +37,22 @@ from ditto.db.queries.tickets import ticket_attempt_cap
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
 _UNRESOLVED_ROLLOUT = object()
+
+# Named scorer/validator codes that are the agent's, not the fleet's. A
+# submission whose remaining quorum slots all died on these cannot be repaired
+# by a fresh lease of the same image, so an operator retry grant is the wrong
+# remedy. Fail-closed: anything else (timeout prose, Kaniko identity, silent
+# expiry, missing detail, mixed causes) stays on the retry-grant path.
+AGENT_ATTRIBUTABLE_FAILURE_DETAILS = frozenset(
+    {
+        "inference_allowance_exhausted",
+        "inference_request_rejected",
+        "model_inference_required",
+    }
+)
+AGENT_ATTRIBUTABLE_WITHDRAW_REASON = (
+    "exhausted on agent-attributable failures; withdraw rather than retry"
+)
 
 
 async def work_available_validator_hotkeys(
@@ -114,6 +130,83 @@ def is_exhausted(ticket: ValidatorTicket) -> bool:
     )
 
 
+def current_failure_detail(ticket: ValidatorTicket) -> str | None:
+    """``failure_detail`` for *this* lease, or ``None`` if it is missing/stale.
+
+    Reissue preserves the last report, so a detail whose ``failed_at`` predates
+    ``issued_at`` belongs to a superseded attempt and must not classify the
+    current one.
+    """
+    if ticket.status != TicketStatus.EXPIRED:
+        return None
+    if ticket.failure_detail is None or ticket.failed_at is None:
+        return None
+    if aware(ticket.failed_at) < aware(ticket.issued_at):
+        return None
+    return ticket.failure_detail
+
+
+def remaining_exhausted_tickets(
+    *, scores: list[Score], tickets: list[ValidatorTicket]
+) -> list[ValidatorTicket]:
+    """Expired, budget-spent tickets that still need to contribute a score."""
+    score_hotkeys = {score.validator_hotkey for score in scores}
+    return [
+        ticket
+        for ticket in tickets
+        if ticket.status != TicketStatus.SCORED
+        and ticket.validator_hotkey not in score_hotkeys
+        and is_exhausted(ticket)
+    ]
+
+
+def is_agent_attributable_exhaustion(
+    *, scores: list[Score], tickets: list[ValidatorTicket]
+) -> bool:
+    """Whether every remaining quorum slot died of a named agent failure.
+
+    Fail-closed. A timeout, Kaniko identity error, silent expiry, missing
+    detail, live lease, or mixed remaining set must not look like a withdraw
+    candidate — those still need an operator retry after a verified infra fix.
+    """
+    needed = SCORING_QUORUM - len(scores)
+    remaining = remaining_exhausted_tickets(scores=scores, tickets=tickets)
+    if needed <= 0 or len(remaining) < needed:
+        return False
+    if any(ticket.status == TicketStatus.ISSUED for ticket in tickets):
+        return False
+    details = [current_failure_detail(ticket) for ticket in remaining]
+    return bool(details) and all(
+        detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS for detail in details
+    )
+
+
+def dominant_agent_failure_detail(
+    *, scores: list[Score], tickets: list[ValidatorTicket]
+) -> str | None:
+    """The single agent-attributable code when every remaining slot agrees."""
+    remaining = remaining_exhausted_tickets(scores=scores, tickets=tickets)
+    details = {current_failure_detail(ticket) for ticket in remaining}
+    if len(details) != 1:
+        return None
+    detail = next(iter(details))
+    return detail if detail in AGENT_ATTRIBUTABLE_FAILURE_DETAILS else None
+
+
+def recommended_retry_action(
+    *,
+    scores: list[Score],
+    tickets: list[ValidatorTicket],
+    recovery_allowed: bool,
+) -> RecommendedRetryAction | None:
+    """Operator next step for a below-quorum row, or ``None`` when none applies."""
+    if is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
+        return "withdraw"
+    if recovery_allowed:
+        return "retry"
+    return None
+
+
 def recovery_gate(
     *,
     agent: Agent,
@@ -186,6 +279,8 @@ def recovery_gate(
     )
     if len(exhausted) < needed:
         return False, False, "not enough expired tickets to restore quorum", []
+    if is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
+        return False, False, AGENT_ATTRIBUTABLE_WITHDRAW_REASON, []
     return False, True, None, exhausted[:needed]
 
 

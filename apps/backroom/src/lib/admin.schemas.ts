@@ -3971,6 +3971,8 @@ export const validationRetryDetailSchema = z.object({
   automatic_retry_available: z.boolean(),
   recovery_allowed: z.boolean(),
   blocking_reason: z.string().nullable(),
+  recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
+  dominant_failure_code: z.string().nullish().default(null),
   withdrawal_allowed: z.boolean(),
   withdrawal_blocking_reason: z.string().nullable(),
   // Eviction reporting from ditto-platform #515. All three are nullish-tolerant
@@ -4127,6 +4129,8 @@ export const stuckSubmissionSchema = z.object({
   automatic_retry_available: z.boolean(),
   recovery_allowed: z.boolean(),
   blocking_reason: z.string().nullable(),
+  recommended_action: z.enum(['retry', 'withdraw']).nullish().default(null),
+  dominant_failure_code: z.string().nullish().default(null),
   earliest_retry_after: z.string().nullable(),
   attempts_used: z.number().int().nonnegative(),
   exhausted_validator_count: z.number().int().nonnegative(),

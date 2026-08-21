@@ -2,6 +2,9 @@
 
 One below-quorum submission is always in exactly one of these states. Only
 ``exhausted`` needs an operator; every other state advances on its own.
+Read ``recommended_action`` on an exhausted row: ``retry`` is a grant after
+verified infrastructure failure, and ``withdraw`` is the documented terminal
+path for named agent-attributable failures.
 """
 
 from __future__ import annotations
@@ -15,6 +18,11 @@ RetryState = Literal[
     "exhausted",
     "queued",
 ]
+
+# Next operator step on an exhausted row. ``withdraw`` is the documented
+# terminal path for named agent-attributable failures; ``retry`` is a grant
+# after verified infrastructure failure.
+RecommendedRetryAction = Literal["retry", "withdraw"]
 
 RETRY_STATES: tuple[RetryState, ...] = (
     "running",

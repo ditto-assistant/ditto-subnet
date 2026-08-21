@@ -79,7 +79,7 @@ export function StuckSubmissionFleetPanel({
             <h2 className="text-sm font-semibold">Fleet retry backlog</h2>
           </div>
           <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">
-            Exhausted validator assignments that need operator evidence. Batch recovery is snapshot-checked and preserves every score, artifact, payment, screening verdict, and prior attempt.
+            Exhausted validator assignments. Retry only when recommended_action is retry (verified infrastructure). Agent-attributable rows recommend withdraw — re-leasing the same image cannot repair them, and a retry grant is refused.
           </p>
         </div>
         <button type="button" onClick={() => void refresh()} disabled={busy} className="ml-auto flex min-h-10 items-center gap-2 rounded-lg border border-[var(--line)] px-3 text-xs disabled:opacity-40">
@@ -92,7 +92,7 @@ export function StuckSubmissionFleetPanel({
 
       <div className="overflow-x-auto">
         <table className="w-full text-left text-xs">
-          <thead className="text-[var(--muted)]"><tr><th className="p-3">Retry</th><th>Submission</th><th>Scores</th><th>Attempts</th><th>Exhausted validators</th><th>Blocker</th></tr></thead>
+          <thead className="text-[var(--muted)]"><tr><th className="p-3">Retry</th><th>Submission</th><th>Scores</th><th>Attempts</th><th>Exhausted validators</th><th>Action</th><th>Blocker</th></tr></thead>
           <tbody>
             {data.submissions.map((item) => (
               <tr key={item.agent_id} className="border-t border-[var(--line)]">
@@ -106,6 +106,7 @@ export function StuckSubmissionFleetPanel({
                 <td>{item.score_count}/{item.quorum}</td>
                 <td>{item.attempts_used}</td>
                 <td>{item.exhausted_validator_count}</td>
+                <td className="pr-3">{item.recommended_action ?? (item.recovery_allowed ? 'retry' : '—')}{item.dominant_failure_code ? ` · ${item.dominant_failure_code}` : ''}</td>
                 <td className="max-w-[24rem] pr-3 text-[var(--muted-strong)]">{item.blocking_reason ?? (item.recovery_allowed ? 'Operator evidence required' : 'Not recoverable')}</td>
               </tr>
             ))}

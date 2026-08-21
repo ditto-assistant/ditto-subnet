@@ -270,7 +270,7 @@ function RetryChip(props: { entry: PipelineEntryExt }): JSX.Element {
       <Show when={props.entry.retry_state === "exhausted"}>
         <span
           class="retry-chip exhausted"
-          title="Every validator spent its retry budget on this submission; it needs an operator retry grant to be scored."
+          title="Every remaining validator spent its retry budget. Grant a retry after verified infrastructure failure, or withdraw an agent-attributable exhaustion from the validator queue."
         >
           Stuck · needs operator
         </span>

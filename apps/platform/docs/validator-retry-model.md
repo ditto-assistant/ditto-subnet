@@ -111,12 +111,29 @@ fleet-wide, see below):
 | `running` | A validator holds a live ticket right now. | No |
 | `retry_available` | An expired ticket is off cooldown, budget to spare; re-leases next sweep. | No |
 | `cooling_down` | Expired ticket has budget but is waiting out `RETRY_COOLDOWN`. | No |
-| `exhausted` | Every remaining validator burned its attempt budget; cannot advance without a grant. | **Yes** |
+| `exhausted` | Every remaining validator burned its attempt budget; cannot advance without an operator. | **Yes** |
 | `queued` | Below quorum with slots simply never leased yet. | No |
 
-Only **`exhausted`** needs a human. The most common cause is a validator-side
-infrastructure outage (e.g. a model-relay/upstream outage) that burned attempts
-on failures that were not the agent's fault.
+Only **`exhausted`** needs a human, and the human has two different jobs. Read
+``recommended_action`` (and ``dominant_failure_code``) on the fleet list and
+the per-agent detail:
+
+| `recommended_action` | Meaning | Operator move |
+| --- | --- | --- |
+| `retry` | Remaining slots died of infrastructure, timeout, silent expiry, or an unclassified failure. A fresh lease can still produce a score. | Grant a retry after verifying the infra fix. |
+| `withdraw` | Every remaining slot died of a **named agent-attributable** code (`inference_request_rejected`, `inference_allowance_exhausted`, `model_inference_required`). Re-leasing the same image cannot repair those. | `POST .../withdraw`. This is the documented terminal path. It does **not** mint a score of 0; it removes the row from the validator queue (public `not_queued`) while preserving scores, artifact, payment, and ticket history. |
+
+The classifier is fail-closed: a mixed remaining set, a 6600s/lease-deadline
+timeout, a Kaniko identity error, a silent expiry, or a missing
+`failure_detail` stays `recommended_action = retry`. Only when *every*
+remaining exhausted ticket's **current** `failure_detail` (the one whose
+`failed_at >= issued_at`) is one of the three agent codes does a retry grant
+refuse and point at withdrawal.
+
+The platform never finalizes an evaluating agent without k=3 validator scores.
+A proven zero-inference run is a **validator-submitted** composite of 0.00, not
+a platform-minted ledger row. Agent-attributable `fail_job` is the opposite:
+no score, budget spent, withdraw.
 
 ## Visibility
 

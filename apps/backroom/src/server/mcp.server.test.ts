@@ -5202,6 +5202,8 @@ describe('Backroom MCP tools', () => {
         automatic_retry_available: false,
         recovery_allowed: true,
         blocking_reason: null,
+        recommended_action: null,
+        dominant_failure_code: null,
         earliest_retry_after: null,
         attempts_used: 3,
         exhausted_validator_count: 3,

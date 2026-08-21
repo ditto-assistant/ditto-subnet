@@ -104,10 +104,12 @@ from ditto.db.queries.retry_budget import (
 )
 from ditto.db.queries.retry_state import (
     classify_agent_retry_states,
+    dominant_agent_failure_detail,
     eviction_closes_era,
     eviction_gate,
     is_exhausted,
     is_open_rollout_qualification,
+    recommended_retry_action,
     recovery_gate,
     reinstatement_gate,
     resolve_bench_version,
@@ -609,6 +611,14 @@ async def list_validation_retries(
                 automatic_retry_available=retry.automatic_retry_available,
                 recovery_allowed=retry.recovery_allowed,
                 blocking_reason=retry.blocking_reason,
+                recommended_action=recommended_retry_action(
+                    scores=retry.scores,
+                    tickets=retry.tickets,
+                    recovery_allowed=retry.recovery_allowed,
+                ),
+                dominant_failure_code=dominant_agent_failure_detail(
+                    scores=retry.scores, tickets=retry.tickets
+                ),
                 earliest_retry_after=retry.earliest_retry_after,
                 attempts_used=max((t.attempt_count for t in retry.tickets), default=0),
                 exhausted_validator_count=sum(
@@ -729,6 +739,14 @@ async def get_validation_retry(
             "submission is removed from this benchmark queue"
             if withdrawal is not None
             else reason
+        ),
+        recommended_action=recommended_retry_action(
+            scores=scores,
+            tickets=tickets,
+            recovery_allowed=allowed and withdrawal is None,
+        ),
+        dominant_failure_code=dominant_agent_failure_detail(
+            scores=scores, tickets=tickets
         ),
         withdrawal_allowed=withdrawal_allowed,
         withdrawal_blocking_reason=withdrawal_blocking_reason,
