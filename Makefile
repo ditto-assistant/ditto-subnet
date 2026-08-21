@@ -1,5 +1,6 @@
 .PHONY: lint format typecheck test \
-        localstack-up localstack-down localstack-bench localstack-smoke localstack-relay-check
+        localstack-up localstack-down localstack-bench localstack-smoke localstack-relay-check \
+        preview-compose preview-test
 
 lint:
 	uv run ruff format --check .
@@ -33,3 +34,9 @@ localstack-smoke:       ## FREE scored-v12 plumbing smoke against refharness (no
 
 localstack-relay-check: ## bounded proof the relay reaches real OpenRouter (locked model)
 	./localstack/relay-check.sh
+
+preview-compose: ## resolve dashboard,backroom (prod API) without starting processes
+	uv run python -m ditto.preview compose dashboard,backroom
+
+preview-test: ## overlay engine, HTTP cheatcodes, fault proxy
+	uv run pytest ditto/tests/preview -q

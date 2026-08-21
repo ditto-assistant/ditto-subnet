@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+# Thin wrapper so agents and humans run the same cranks:
+#   ./scripts/preview compose dashboard,backroom
+#   ./scripts/preview up stack
+#   ./scripts/preview ctl warp_block --n 10
+set -euo pipefail
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+exec uv run python -m ditto.preview "$@"

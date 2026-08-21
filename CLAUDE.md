@@ -22,6 +22,8 @@ Load only the returned anchors and the relevant specialized skill:
   auditing a `bench_version` contract across every layer;
 - `.agents/skills/ditto-subnet-release-ops` for releases, deployments,
   screeners, Targon/GCE, GCP, Cloudflare, Terraform, and Ansible;
+- `.agents/skills/ditto-subnet-preview` for isolated preview channels,
+  cheatcodes, and `.github/workflows/preview.yml`;
 - `.agents/skills/wandb-ops` for live W&B run, metric, and table diagnosis;
 - `.agents/skills/gcloud-ditto-readonly` for production DB reads and Targon
   rental logs;
@@ -50,6 +52,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Release ownership graph | `release/components.toml` |
 | Backroom quarantine and ATH review | `.agents/skills/backroom-review/` |
 | Dependabot / dependency-PR review | `.agents/skills/ditto-subnet-dependabot-review/` |
+| Preview channels and mock engine | `ditto/preview/`, `preview/` |
 
 ## Cross-component changes
 
@@ -71,7 +74,8 @@ visibility.
 
 Conventional commits drive semantic releases for affected components. Platform
 API changes affect Backroom; dashboard-only changes do not. Application deploys
-may follow releases automatically. Infrastructure always uses protected
+may follow releases automatically. Preview channels (`ditto.preview`) never
+publish those releases or `compat-2`. Infrastructure always uses protected
 Terraform plan/apply. Verify source, CI, merge, release, deployment, migration,
 and live behavior as separate facts.
 

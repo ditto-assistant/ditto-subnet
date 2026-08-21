@@ -4,6 +4,10 @@
 # production inputs cannot silently bypass semantic release.
 ignored_paths = [
   "localstack/**",
+  "preview/**",
+  "ditto/preview/**",
+  "scripts/preview",
+  "scripts/preview-restore-snapshot.sh",
   ".env.example",
   ".agents/**",
   ".claude/**",

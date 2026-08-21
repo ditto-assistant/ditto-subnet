@@ -37,6 +37,7 @@ ditto-screening-protocol = { path = "packages/ditto-screening-protocol" }
 
 [project.scripts]
 ditto = "ditto.miner_cli.__main__:main"
+ditto-preview = "ditto.preview.cli:main"
 
 [dependency-groups]
 dev = [

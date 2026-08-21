@@ -1,0 +1,21 @@
+# Isolated preview Postgres for stack / stack-copy.
+# preview-control runs as `uv run python -m ditto.preview serve` on the host
+# so cheatcodes stay in-process with the same code the tests use.
+name: ditto-preview
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ditto
+      POSTGRES_PASSWORD: preview
+      POSTGRES_DB: ditto_platform_preview
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ditto -d ditto_platform_preview"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    labels:
+      ditto.preview: "true"

@@ -10,3 +10,7 @@ output "backroom_custom_domain_id" {
 output "backroom_oauth_kv_namespace_id" {
   value = cloudflare_workers_kv_namespace.backroom_oauth.id
 }
+
+output "preview_wildcard_hostname" {
+  value = var.preview_wildcard_origin == "" ? "" : "*.preview.dittobench.ai"
+}

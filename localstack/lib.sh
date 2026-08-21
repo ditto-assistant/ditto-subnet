@@ -22,6 +22,13 @@ REFHARNESS_PORT="${REFHARNESS_PORT:-9000}"
 export HARNESS_GATEWAY_URL="${HARNESS_GATEWAY_URL:-http://localhost:${RELAY_PORT}}"
 export HARNESS_EMBED_URL="${HARNESS_EMBED_URL:-http://localhost:${RELAY_PORT}}"
 
+# Optional preview-control (Foundry-style overlay). When FAULT_PROXY_URL is set,
+# inference goes through the cheatcode proxy so inject_provider/drop_relay work.
+if [[ -n "${FAULT_PROXY_URL:-}" ]]; then
+  export HARNESS_GATEWAY_URL="${FAULT_PROXY_URL}"
+  export HARNESS_EMBED_URL="${FAULT_PROXY_URL}"
+fi
+
 log()  { printf '\033[36m[localstack]\033[0m %s\n' "$*" >&2; }
 warn() { printf '\033[33m[localstack]\033[0m %s\n' "$*" >&2; }
 die()  { printf '\033[31m[localstack]\033[0m %s\n' "$*" >&2; exit 1; }

@@ -25,3 +25,9 @@ variable "backroom_hostname" {
   type        = string
   default     = "backroom.dittobench.ai"
 }
+
+variable "preview_wildcard_origin" {
+  description = "CNAME target for *.preview.dittobench.ai. Empty skips the record so an apply cannot point a wildcard at the wrong origin."
+  type        = string
+  default     = ""
+}

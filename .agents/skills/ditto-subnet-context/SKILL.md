@@ -47,5 +47,6 @@ Make one atomic monorepo change when a contract spans components. Keep migration
 - Semantic release, deployments, screeners, Targon/GCE, GCP, Cloudflare, Terraform, or Ansible: `$ditto-subnet-release-ops`
 - Branches, PR stacks, or current-main reconciliation: `$github`
 - Quarantine triage, high-score ATH review, or precedent search: `$backroom-review`
+- Isolated preview stacks, cheatcodes, localstack faults: `$ditto-subnet-preview`
 
 Keep conclusions live and evidence-backed. `UPSTREAM.md` records migration provenance; after cutover it is not an instruction to sync legacy repositories.

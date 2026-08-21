@@ -215,7 +215,19 @@
       "search": ["rg -n 'workload_identity|service_account|secret|cloudflare' infra/terraform", "rg -n 'deploy|systemd|pm2|worker' infra/ansible .github/workflows"],
       "validate": ["terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check", "terraform -chdir=infra/terraform/stacks/gcp-platform validate", "terraform -chdir=infra/terraform/stacks/cloudflare-dittobench validate"],
       "invariants": ["Never read, print, or persist provider secret values while testing integrations.", "Automatic app deploys and protected infrastructure apply are separate authority boundaries."],
-      "related": ["release-delivery", "screener-capacity", "backroom"]
+      "related": ["release-delivery", "screener-capacity", "backroom", "preview-channels"]
+    },
+    {
+      "id": "preview-channels",
+      "title": "Isolated preview stacks and the mock engine",
+      "keywords": ["preview", "localstack", "cheatcode", "foundry", "stack-copy", "preview-control", "fault injection", "localnet"],
+      "summary": "Multi-select preview profiles and a Foundry-style overlay engine that works locally and in GitHub Actions without publishing compat-2.",
+      "owns": ["ditto/preview", "preview", "scripts/preview", ".github/workflows/preview.yml", ".agents/skills/ditto-subnet-preview"],
+      "read": ["preview/README.md", ".agents/skills/ditto-subnet-preview/SKILL.md"],
+      "search": ["rg -n 'compose\\(|assert_isolated|inject_provider' ditto/preview", "rg -n 'profiles:' .github/workflows/preview.yml"],
+      "validate": ["uv run pytest ditto/tests/preview -q", "uv run python -m ditto.preview compose dashboard,backroom"],
+      "invariants": ["Preview Platform never attaches to production validators.", "preview-control refuses finney and OpenTensor endpoints.", "Previews never publish GitHub Releases, v* tags, or compat-2."],
+      "related": ["worktrees", "platform-api", "backroom", "infra-cloud"]
     }
   ]
 }

@@ -18,6 +18,21 @@ multi-repository temp clones or cross-repository synchronization for components
 already present in this tree. Read the nearest nested `AGENTS.md` or `CLAUDE.md`
 before editing a component.
 
+## Preview channels
+
+From a worktree, compose and prove an isolated preview with the same cranks
+GitHub Actions uses. `dashboard`/`backroom` talk to production Platform.
+`stack` / `stack-copy` always include one localnet validator. Never attach a
+preview Platform to production validators. Never publish `compat-2` from a
+preview.
+
+```bash
+./scripts/preview compose dashboard,backroom
+uv run python -m ditto.preview up stack --sha "$(git rev-parse HEAD)"
+```
+
+See `$ditto-subnet-preview` and `preview/README.md`.
+
 ## Backroom MCP debug first
 
 The public Backroom MCP at `https://backroom.dittobench.ai/mcp` is the only
