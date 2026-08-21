@@ -104,6 +104,7 @@ from ditto.api_server.endpoints import (
     validator_coding_certification_router,
     validator_coding_delivery_router,
     validator_coding_evaluation_router,
+    validator_coding_freezes_router,
     validator_confirmation_router,
     validator_router,
 )
@@ -514,6 +515,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(validator_router, prefix="/api/v1")
     app.include_router(validator_coding_certification_router, prefix="/api/v1")
     app.include_router(validator_coding_delivery_router, prefix="/api/v1")
+    app.include_router(validator_coding_freezes_router, prefix="/api/v1")
     app.include_router(validator_coding_evaluation_router, prefix="/api/v1")
     app.include_router(validator_confirmation_router, prefix="/api/v1")
     app.include_router(inference_router, prefix="/api/v1")

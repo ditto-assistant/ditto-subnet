@@ -54,6 +54,10 @@ only when:
 - the referenced capability certification is exact and unexpired;
 - the coding run ID, contract, manifest digests, task count, and ticket identity
   match the lease;
+- every scoreable resolved, repair-failure, or candidate-integrity result has
+  an immutable authoring-freeze row with nonempty authoritative activity;
+- every claimed resolution has complete locked-model evidence, at least one
+  changed path, and intact protected paths in that freeze;
 - the run evidence reproduces its terminal-domain counts and binary repair mean.
 
 Exact transport replay is idempotent. Reusing a run, ticket, or result identity
@@ -73,6 +77,9 @@ or patches. Backroom serves the same read through
 The view reports a repair median only after three validator results. A source
 artifact, screened image, core-policy change, or loss of the latest complete
 qualification marks historical runs stale without deleting or relabeling them.
+Each ticket also reports a bounded authoring-freeze summary when the validator
+has fixed its patch and transcript. Full authoring evidence and content-addressed
+object keys remain server-side.
 
 ## Activation boundary
 
@@ -80,5 +87,6 @@ This ledger is calibration infrastructure, not a second emissions authority.
 Production still requires a shadow scheduler, validator worker/supervisor
 orchestration, ticket-scoped inference, result submission wiring, and measured
 calibration. The authoring-lease route alone does not start a job.
+The authoring-freeze ledger alone does not release grader material.
 Any coding emissions allocation requires coding contract v2 and a separate
 owner-approved PR.

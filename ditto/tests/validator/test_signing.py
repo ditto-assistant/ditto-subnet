@@ -20,6 +20,8 @@ from ditto.api_models.benchmark_capacity import BenchmarkCapacity
 from ditto.api_models.benchmark_progress import BenchmarkProgress
 from ditto.api_models.coding import (
     CodingCapabilityCertificationReceipt,
+    SubmitCodingAuthoringFreezeRequest,
+    coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
 )
@@ -44,6 +46,7 @@ from ditto.validator.signing import (
     job_signing_message,
     ledger_signing_message,
     score_signing_message,
+    sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
     sign_coding_certification,
     sign_heartbeat,
@@ -67,6 +70,10 @@ _V9_VECTOR = Path(__file__).parents[1] / "contract/validator_heartbeat_v9.json"
 _CODING_CERTIFICATION_VECTOR = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_certification_v1.json"
+)
+_CODING_AUTHORING_FREEZE_VECTOR = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json"
 )
 
 
@@ -153,6 +160,53 @@ def test_coding_authoring_lease_signature_binds_request() -> None:
         ticket_id=ticket_id,
         nonce=nonce,
         requested_at=requested_at,
+    )
+    assert keypair.verify(message, bytes.fromhex(signature))
+
+
+def test_coding_authoring_freeze_signature_binds_request() -> None:
+    vector = json.loads(_CODING_AUTHORING_FREEZE_VECTOR.read_text(encoding="utf-8"))
+    request = SubmitCodingAuthoringFreezeRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    agent_id = UUID(vector["agent_id"])
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_coding_authoring_freeze(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        bench_version=request.bench_version,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        ticket_deadline=request.ticket_deadline,
+        coding_run_id=request.coding_run_id,
+        agent_artifact_sha256=request.agent_artifact_sha256,
+        screened_image_sha256=request.screened_image_sha256,
+        run_manifest_sha256=request.run_manifest_sha256,
+        task_set_manifest_sha256=request.task_set_manifest_sha256,
+        authoring_evidence_sha256=request.authoring_evidence_sha256,
+        authoring_transcript_object_key=request.authoring_transcript_object_key,
+        authoring_transcript_bytes=request.authoring_transcript_bytes,
+        authoring_event_count=request.authoring_event_count,
+        frozen_submission_object_key=request.frozen_submission_object_key,
+    )
+    message = coding_authoring_freeze_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        bench_version=request.bench_version,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        ticket_deadline=request.ticket_deadline,
+        coding_run_id=request.coding_run_id,
+        agent_artifact_sha256=request.agent_artifact_sha256,
+        screened_image_sha256=request.screened_image_sha256,
+        run_manifest_sha256=request.run_manifest_sha256,
+        task_set_manifest_sha256=request.task_set_manifest_sha256,
+        authoring_evidence_sha256=request.authoring_evidence_sha256,
+        authoring_transcript_object_key=request.authoring_transcript_object_key,
+        authoring_transcript_bytes=request.authoring_transcript_bytes,
+        authoring_event_count=request.authoring_event_count,
+        frozen_submission_object_key=request.frozen_submission_object_key,
     )
     assert keypair.verify(message, bytes.fromhex(signature))
 

@@ -4474,12 +4474,32 @@ export const codingShadowResultRecordSchema = z.object({
   weight_eligible: z.literal(false),
 })
 
+export const codingAuthoringFreezeRecordSchema = z.object({
+  freeze_id: z.string().uuid(),
+  ticket_id: z.string().uuid(),
+  validator_hotkey: z.string(),
+  authoring_evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  authoring_event_root: z.string().regex(/^[0-9a-f]{64}$/),
+  authoring_transcript_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  authoring_transcript_bytes: z.number().int().min(0).max(512 << 20),
+  authoring_event_count: z.number().int().min(0).max(1_000),
+  frozen_patch_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  changed_path_root: z.string().regex(/^[0-9a-f]{64}$/),
+  final_tree_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  changed_path_count: z.number().int().min(0).max(10_000),
+  changed_bytes: z.number().int().min(0).max(1 << 30),
+  protected_paths_intact: z.boolean(),
+  frozen_at: z.string(),
+  weight_eligible: z.literal(false),
+})
+
 export const codingShadowTicketRecordSchema = z.object({
   ticket_id: z.string().uuid(),
   validator_hotkey: z.string(),
   certification_row_id: z.string().uuid(),
   issued_at: z.string(),
   deadline: z.string(),
+  authoring_freeze: codingAuthoringFreezeRecordSchema.nullable(),
   result: codingShadowResultRecordSchema.nullable(),
 })
 

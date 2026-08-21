@@ -17,9 +17,12 @@ import pytest
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.coding import (
+    CodingAuthoringEvidence,
     CodingAuthoringLeaseRequest,
     CodingCapabilityCertificationReceipt,
+    SubmitCodingAuthoringFreezeRequest,
     SubmitCodingCertificationRequest,
+    coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
 )
@@ -51,6 +54,10 @@ _SELECTION_VECTOR_PATH = (
 _ARTIFACT_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json"
+)
+_AUTHORING_FREEZE_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json"
 )
 
 
@@ -248,6 +255,140 @@ async def test_coding_authoring_client_never_follows_redirects() -> None:
                 keypair,
             ).request_coding_authoring_lease(ticket_id)
     assert observed_paths == ["/api/v1/validator/coding-shadow/authoring-lease"]
+
+
+async def test_coding_authoring_freeze_client_posts_signed_evidence() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = json.loads(_AUTHORING_FREEZE_VECTOR_PATH.read_text(encoding="utf-8"))
+    raw = vector["request"]
+    response_body = vector["response"]
+    agent_id = UUID(vector["agent_id"])
+    evidence = CodingAuthoringEvidence.model_validate_json(json.dumps(raw["evidence"]))
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/validator/coding-shadow/authoring-freeze")
+        payload = SubmitCodingAuthoringFreezeRequest.model_validate_json(
+            request.content
+        )
+        message = coding_authoring_freeze_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            agent_id=agent_id,
+            bench_version=payload.bench_version,
+            run_row_id=payload.run_row_id,
+            ticket_id=payload.ticket_id,
+            ticket_deadline=payload.ticket_deadline,
+            coding_run_id=payload.coding_run_id,
+            agent_artifact_sha256=payload.agent_artifact_sha256,
+            screened_image_sha256=payload.screened_image_sha256,
+            run_manifest_sha256=payload.run_manifest_sha256,
+            task_set_manifest_sha256=payload.task_set_manifest_sha256,
+            authoring_evidence_sha256=payload.authoring_evidence_sha256,
+            authoring_transcript_object_key=(payload.authoring_transcript_object_key),
+            authoring_transcript_bytes=payload.authoring_transcript_bytes,
+            authoring_event_count=payload.authoring_event_count,
+            frozen_submission_object_key=payload.frozen_submission_object_key,
+        )
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        return httpx.Response(200, json=response_body)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        accepted = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).submit_coding_authoring_freeze(
+            agent_id,
+            bench_version=raw["bench_version"],
+            run_row_id=UUID(raw["run_row_id"]),
+            ticket_id=UUID(raw["ticket_id"]),
+            ticket_deadline=datetime.fromisoformat(raw["ticket_deadline"]),
+            coding_run_id=raw["coding_run_id"],
+            agent_artifact_sha256=raw["agent_artifact_sha256"],
+            screened_image_sha256=raw["screened_image_sha256"],
+            run_manifest_sha256=raw["run_manifest_sha256"],
+            task_set_manifest_sha256=raw["task_set_manifest_sha256"],
+            evidence=evidence,
+            authoring_transcript_object_key=raw["authoring_transcript_object_key"],
+            authoring_transcript_bytes=raw["authoring_transcript_bytes"],
+            authoring_event_count=raw["authoring_event_count"],
+            frozen_submission_object_key=raw["frozen_submission_object_key"],
+        )
+    assert accepted.ticket_id == UUID(raw["ticket_id"])
+    assert accepted.authoring_evidence_sha256 == raw["authoring_evidence_sha256"]
+
+
+async def test_coding_authoring_freeze_client_bounds_and_refuses_redirects() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = json.loads(_AUTHORING_FREEZE_VECTOR_PATH.read_text(encoding="utf-8"))
+    raw = vector["request"]
+    agent_id = UUID(vector["agent_id"])
+    evidence = CodingAuthoringEvidence.model_validate_json(json.dumps(raw["evidence"]))
+
+    async def submit(http: httpx.AsyncClient) -> None:
+        await PlatformClient(
+            SimpleNamespace(
+                platform_api_url="https://platform.test",
+                validator_hotkey=keypair.ss58_address,
+            ),  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).submit_coding_authoring_freeze(
+            agent_id,
+            bench_version=raw["bench_version"],
+            run_row_id=UUID(raw["run_row_id"]),
+            ticket_id=UUID(raw["ticket_id"]),
+            ticket_deadline=datetime.fromisoformat(raw["ticket_deadline"]),
+            coding_run_id=raw["coding_run_id"],
+            agent_artifact_sha256=raw["agent_artifact_sha256"],
+            screened_image_sha256=raw["screened_image_sha256"],
+            run_manifest_sha256=raw["run_manifest_sha256"],
+            task_set_manifest_sha256=raw["task_set_manifest_sha256"],
+            evidence=evidence,
+            authoring_transcript_object_key=raw["authoring_transcript_object_key"],
+            authoring_transcript_bytes=raw["authoring_transcript_bytes"],
+            authoring_event_count=raw["authoring_event_count"],
+            frozen_submission_object_key=raw["frozen_submission_object_key"],
+        )
+
+    redirected: list[str] = []
+
+    def redirect_handler(request: httpx.Request) -> httpx.Response:
+        redirected.append(str(request.url))
+        return httpx.Response(
+            307,
+            headers={"Location": "https://redirect.invalid/capture"},
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(redirect_handler),
+        follow_redirects=True,
+    ) as http:
+        with pytest.raises(PlatformError, match="307"):
+            await submit(http)
+    assert len(redirected) == 1
+
+    seen_chunks = 0
+
+    class OversizedStream(httpx.AsyncByteStream):
+        async def __aiter__(self) -> AsyncIterator[bytes]:
+            nonlocal seen_chunks
+            for _ in range(5):
+                seen_chunks += 1
+                yield b"x" * (16 << 10)
+            raise AssertionError("validator consumed data after the response bound")
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(200, stream=OversizedStream())
+        )
+    ) as http:
+        with pytest.raises(PlatformInfrastructureError, match="size"):
+            await submit(http)
+    assert seen_chunks == 5
 
 
 async def test_coding_certification_client_posts_exact_signed_envelope() -> None:
