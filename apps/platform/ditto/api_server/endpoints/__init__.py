@@ -17,6 +17,9 @@ from ditto.api_server.endpoints.admin_burn_settings import (
 from ditto.api_server.endpoints.admin_coding_certifications import (
     router as admin_coding_certifications_router,
 )
+from ditto.api_server.endpoints.admin_coding_evaluations import (
+    router as admin_coding_evaluations_router,
+)
 from ditto.api_server.endpoints.admin_confirmation_bundles import (
     router as admin_confirmation_bundles_router,
 )
@@ -101,6 +104,9 @@ from ditto.api_server.endpoints.validator import router as validator_router
 from ditto.api_server.endpoints.validator_coding_certification import (
     router as validator_coding_certification_router,
 )
+from ditto.api_server.endpoints.validator_coding_evaluation import (
+    router as validator_coding_evaluation_router,
+)
 from ditto.api_server.endpoints.validator_confirmation import (
     router as validator_confirmation_router,
 )
@@ -121,6 +127,7 @@ __all__ = [
     "admin_lease_revocations_router",
     "admin_copy_review_router",
     "admin_coding_certifications_router",
+    "admin_coding_evaluations_router",
     "admin_confirmation_bundles_router",
     "admin_continual_retest_settings_router",
     "admin_core_qualification_router",
@@ -149,5 +156,6 @@ __all__ = [
     "upload_router",
     "validator_router",
     "validator_coding_certification_router",
+    "validator_coding_evaluation_router",
     "validator_confirmation_router",
 ]

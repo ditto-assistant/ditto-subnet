@@ -4393,6 +4393,77 @@ export const agentCodingCertificationStatusSchema = z.object({
   certifications: z.array(codingCertificationRecordSchema),
 })
 
+export const codingShadowResultRecordSchema = z.object({
+  result_id: z.string().uuid(),
+  ticket_id: z.string().uuid(),
+  validator_hotkey: z.string(),
+  run_evidence_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  task_count: z.number().int().min(1).max(100),
+  resolved_count: z.number().int().min(0).max(100),
+  repair_failure_count: z.number().int().min(0).max(100),
+  infrastructure_count: z.number().int().min(0).max(100),
+  invalid_count: z.number().int().min(0).max(100),
+  candidate_integrity_count: z.number().int().min(0).max(100),
+  control_plane_integrity_count: z.number().int().min(0).max(100),
+  scoreable_task_count: z.number().int().min(0).max(100),
+  repair_mean_micros: z.number().int().min(0).max(1_000_000),
+  submitted_at: z.string(),
+  weight_eligible: z.literal(false),
+})
+
+export const codingShadowTicketRecordSchema = z.object({
+  ticket_id: z.string().uuid(),
+  validator_hotkey: z.string(),
+  certification_row_id: z.string().uuid(),
+  issued_at: z.string(),
+  deadline: z.string(),
+  result: codingShadowResultRecordSchema.nullable(),
+})
+
+export const codingShadowRunRecordSchema = z.object({
+  run_row_id: z.string().uuid(),
+  coding_run_id: z.string(),
+  bench_version: z.number().int().min(7),
+  coding_contract_version: z.literal(1),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  screened_image_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  corpus_release_id: z.string(),
+  run_manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  task_set_manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  task_count: z.number().int().min(1).max(100),
+  core_qualification_observation_id: z.string().uuid(),
+  ticket_count: z.number().int().nonnegative(),
+  result_count: z.number().int().nonnegative(),
+  quorum_complete: z.boolean(),
+  median_repair_mean_micros: z.number().int().min(0).max(1_000_000).nullable(),
+  current: z.boolean(),
+  stale_reason: z.enum([
+    'current',
+    'artifact_changed',
+    'screened_image_changed',
+    'policy_changed',
+  ]),
+  tickets: z.array(codingShadowTicketRecordSchema),
+  created_at: z.string(),
+  weight_eligible: z.literal(false),
+})
+
+export const agentCodingShadowEvaluationInputSchema = z.object({
+  agentId: z.string().uuid(),
+  limit: z.number().int().min(1).max(100).default(25),
+})
+
+export const agentCodingShadowEvaluationStatusSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  miner_hotkey: z.string(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  screened_image_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  total_runs: z.number().int().nonnegative(),
+  runs: z.array(codingShadowRunRecordSchema),
+  shadow_only: z.literal(true),
+})
+
 const coreQualificationScoreSchema = z.number().min(0).max(1)
 
 export const coreQualificationPolicySchema = z

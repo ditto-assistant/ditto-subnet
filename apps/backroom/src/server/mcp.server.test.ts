@@ -119,6 +119,7 @@ describe('Backroom MCP tools', () => {
         'batch_retry_validator_evaluation',
         'agent_scoring_readiness',
         'get_agent_coding_certifications',
+        'get_agent_coding_shadow_evaluations',
         'get_agent_core_qualification',
         'get_agent_scores',
         'get_leaderboard',
@@ -176,9 +177,9 @@ describe('Backroom MCP tools', () => {
     //
     // Prose is guarded exactly by the two description assertions below; this
     // number is the coarse whole-payload backstop, and input schemas dominate
-    // it. Curve v3, runtime metrics/capture, and the four bounded shadow
-    // qualification operations added legitimate schemas and concise catalog
-    // descriptions. The
+    // it. Curve v3, runtime metrics/capture, and the bounded shadow
+    // qualification/coding-ledger operations added legitimate schemas and
+    // concise catalog descriptions. The
     // 91_000 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, validator fleet/assignment reads,
     // and the bounded shadow core-qualification policy/history contracts. Keep
@@ -187,7 +188,7 @@ describe('Backroom MCP tools', () => {
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(91_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      21_000,
+      21_100,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -5649,6 +5650,93 @@ describe('Backroom MCP tools', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer platform-admin-token',
         }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reports the separate weight-zero shadow coding ledger', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = '90cb5697-cbc1-40f4-a27e-439a7986a054'
+    const payload = {
+      agent_id: agentId,
+      agent_name: 'coding-agent',
+      miner_hotkey: '5Miner',
+      artifact_sha256: 'a'.repeat(64),
+      screened_image_sha256: 'b'.repeat(64),
+      total_runs: 1,
+      runs: [
+        {
+          run_row_id: '11111111-1111-4111-8111-111111111111',
+          coding_run_id: 'coding-run-001',
+          bench_version: 12,
+          coding_contract_version: 1,
+          artifact_sha256: 'a'.repeat(64),
+          screened_image_sha256: 'b'.repeat(64),
+          corpus_release_id: 'private-coding-corpus-v1',
+          run_manifest_sha256: 'c'.repeat(64),
+          task_set_manifest_sha256: 'd'.repeat(64),
+          task_count: 1,
+          core_qualification_observation_id: '22222222-2222-4222-8222-222222222222',
+          ticket_count: 1,
+          result_count: 1,
+          quorum_complete: false,
+          median_repair_mean_micros: null,
+          current: true,
+          stale_reason: 'current',
+          tickets: [
+            {
+              ticket_id: '33333333-3333-4333-8333-333333333333',
+              validator_hotkey: '5Validator',
+              certification_row_id: '44444444-4444-4444-8444-444444444444',
+              issued_at: '2026-08-21T00:00:00Z',
+              deadline: '2026-08-21T01:00:00Z',
+              result: {
+                result_id: '55555555-5555-4555-8555-555555555555',
+                ticket_id: '33333333-3333-4333-8333-333333333333',
+                validator_hotkey: '5Validator',
+                run_evidence_sha256: 'e'.repeat(64),
+                task_count: 1,
+                resolved_count: 1,
+                repair_failure_count: 0,
+                infrastructure_count: 0,
+                invalid_count: 0,
+                candidate_integrity_count: 0,
+                control_plane_integrity_count: 0,
+                scoreable_task_count: 1,
+                repair_mean_micros: 1_000_000,
+                submitted_at: '2026-08-21T00:30:00Z',
+                weight_eligible: false,
+              },
+            },
+          ],
+          created_at: '2026-08-21T00:00:00Z',
+          weight_eligible: false,
+        },
+      ],
+      shadow_only: true,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(Response.json(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_agent_coding_shadow_evaluations',
+      arguments: { agentId, limit: 25 },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      agent_id: agentId,
+      total_runs: 1,
+      shadow_only: true,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/agents/${agentId}/coding-shadow-evaluations?limit=25`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer platform-admin-token' }),
       }),
     )
 

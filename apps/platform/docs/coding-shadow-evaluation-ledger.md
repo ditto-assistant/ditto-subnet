@@ -1,0 +1,77 @@
+# Separate shadow coding evaluation ledger
+
+Platform persists DittoBench Coding results in tables and endpoints that are
+separate from the ordinary tool-and-memory score pipeline. Coding contract v1
+and every stored result are permanently `weight_eligible=false`.
+
+## Authority chain
+
+One immutable shared run fixes the following for every validator:
+
+```text
+agent UUID and source artifact SHA-256
+screened image SHA-256
+benchmark and coding contract versions
+corpus release and catalog commitment
+chain-derived selection authority
+inference and grader contract digests
+task-set and canonical run-manifest digests
+task count
+exact core-qualification observation
+```
+
+A run can be created only while that exact artifact has a current complete core
+qualification. Each validator-specific ticket then binds the run to one active
+artifact certification that remains valid through the two-hour maximum lease.
+All validators under a run therefore share one task-set manifest while retaining
+separate ticket IDs, deadlines, certifications, signatures, and result rows.
+
+This PR intentionally provides no production run or ticket issuer. Until the
+private catalog, selector, and scheduler are reviewed, the validator submission
+route has no live lease to accept. Internal insertion functions and real
+PostgreSQL tests freeze the authority contract for that later work.
+
+Persisting a selection block number/hash is not chain verification. The future
+selector must independently fetch the canonical block hash at the committed
+height and validate the full manifest before calling this ledger; re-hashing a
+Platform-supplied string is explicitly insufficient.
+
+## Signed results
+
+`POST /api/v1/validator/agent/{agent_id}/coding-shadow-result` accepts a result
+only when:
+
+- the permitted validator signs the agent, run, ticket, benchmark, deadline,
+  screened image, and canonical run-evidence digest;
+- the immutable ticket belongs to that validator and shared run;
+- the agent artifact and screened image still match;
+- the referenced capability certification is exact and unexpired;
+- the coding run ID, contract, manifest digests, task count, and ticket identity
+  match the lease;
+- the run evidence reproduces its terminal-domain counts and binary repair mean.
+
+Exact transport replay is idempotent. Reusing a run, ticket, or result identity
+for different authority returns a conflict. Infrastructure, invalid-task, and
+control-plane outcomes remain non-scoreable; resolved, repair-failure, and
+candidate-integrity outcomes form the integer repair mean. The ledger never
+writes `scores` and no rank, queue, validator weight, or emissions path reads it.
+
+## Operator visibility
+
+`GET /api/v1/admin/agents/{agent_id}/coding-shadow-evaluations` returns bounded
+run, lease, and signed-result summaries. It exposes commitments and aggregates,
+not full run evidence, private task identities, hidden tests, repository bytes,
+or patches. Backroom serves the same read through
+`get_agent_coding_shadow_evaluations`.
+
+The view reports a repair median only after three validator results. A source
+artifact, screened image, or core-policy change marks historical runs stale
+without deleting or relabeling them.
+
+## Activation boundary
+
+This ledger is calibration infrastructure, not a second emissions authority.
+Production still requires the private catalog/selector, exposure ledger, task
+transport, shadow scheduler, validator/scorer adapter, and measured calibration.
+Any coding emissions allocation requires coding contract v2 and a separate
+owner-approved PR.
