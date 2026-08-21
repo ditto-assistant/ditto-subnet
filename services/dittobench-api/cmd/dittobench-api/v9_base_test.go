@@ -478,3 +478,78 @@ func TestV9DistinctModelCasesRequiresExactEligibleTranscriptPopulation(t *testin
 		})
 	}
 }
+
+// Under concurrent /run the scorer reads each case's session-scoped tool
+// provenance from the broker right after /run returns. A case whose endpoint
+// request consumed a model emission settles clean; a case whose request had no
+// backing settles with an unmatched attempt; a pre-v10 case and a run without a
+// broker session attach nothing.
+func TestRunCaseWithModelAttributionAttachesSessionScopedToolProvenance(t *testing.T) {
+	harness := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/run" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"final_text":"ok"}`))
+	}))
+	defer harness.Close()
+
+	broker := newInferenceBroker(1)
+	const sessionID = "v10-session"
+	session := &brokerSession{benchVersion: protocol.BenchVersionV10}
+	broker.mu.Lock()
+	broker.sessions[sessionID] = session
+	broker.mu.Unlock()
+	session.mu.Lock()
+	recordModelToolCallsLocked(session, 0, []byte(`{"choices":[{"message":{"tool_calls":[{
+		"id":"call-1","type":"function","function":{"name":"search_web","arguments":"{\"query\":\"veltrix\"}"}
+	}]}}]}`))
+	if !consumeSessionModelToolCallLocked(session, "clean", "search_web", mustCanonicalArgs(t, `{"query":"veltrix"}`), nil) {
+		t.Fatal("clean consumption should succeed")
+	}
+	if consumeSessionModelToolCallLocked(session, "unbacked", "send_email", mustCanonicalArgs(t, `{}`), nil) {
+		t.Fatal("unbacked consumption should fail")
+	}
+	session.mu.Unlock()
+
+	srv := &server{broker: broker}
+	ctx := runner.TrustSandbox(context.Background())
+	run := func(sessionID, caseID string, version int) runner.CaseExecution {
+		t.Helper()
+		_, execution, err := srv.runCaseWithModelAttribution(
+			ctx, sessionID, harness.URL, caseID, "question", nil,
+			runner.CaseOptions{BenchVersion: version},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return execution
+	}
+	clean := run(sessionID, "clean", protocol.BenchVersionV10).ToolProvenance
+	if clean == nil || clean.Matched != 1 || clean.Unmatched != 0 || !clean.Complete {
+		t.Fatalf("clean case evidence=%+v", clean)
+	}
+	unbacked := run(sessionID, "unbacked", protocol.BenchVersionV11).ToolProvenance
+	if unbacked == nil || unbacked.Matched != 0 || unbacked.Unmatched != 1 || !unbacked.Complete {
+		t.Fatalf("unbacked case evidence=%+v", unbacked)
+	}
+	if evidence := run(sessionID, "clean", protocol.BenchVersionV9).ToolProvenance; evidence != nil {
+		t.Fatalf("v9 must stay frozen without provenance evidence: %+v", evidence)
+	}
+	if evidence := run("", "clean", protocol.BenchVersionV10).ToolProvenance; evidence != nil {
+		t.Fatalf("no session must attach no evidence: %+v", evidence)
+	}
+	if evidence := run("missing-session", "clean", protocol.BenchVersionV10).ToolProvenance; evidence != nil {
+		t.Fatalf("unknown session must attach no evidence: %+v", evidence)
+	}
+}
+
+func mustCanonicalArgs(t *testing.T, raw string) string {
+	t.Helper()
+	digest, err := canonicalToolArguments([]byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest
+}

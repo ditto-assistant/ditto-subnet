@@ -220,18 +220,27 @@ seeded memory. The field is **additive-optional**: a harness that ignores it
 still scores, but selection-only and at a **capped ceiling (0.5)** on the
 categories the endpoint would have served.
 
-For bench v10 scored tool cases, observed execution has a second, independent
+For bench v10+ scored tool cases, observed execution has a second, independent
 authority check. The ticket-bound inference broker records the tool calls in
-the model's successful OpenAI-compatible response, and the validator forwards
+every successful OpenAI-compatible model response of the run's inference
+session (name plus canonical JSON argument digest), and the validator forwards
 a `tool_endpoint` request only when its tool name and canonical JSON arguments
-match an unconsumed model-emitted call from the active case. Calls that have no
-model backing, change the selected arguments, replay a consumed call, or cross
-a case boundary are rejected before the mock tool runs and invalidate tool
-credit for that case. A model-emitted call that is never executed also
-invalidates tool credit. The harness's returned `tool_calls` remain useful as a
-graded transcript, but cannot create model-provenance credit by themselves.
+match an **unconsumed** model-emitted call from that session. Matching is
+session-scoped because `/run` overlaps: the emission may come from any case's
+model call, but each emission can be consumed once. A request with no model
+backing, with changed arguments, or that replays an already-consumed emission
+is answered `409` before the mock tool runs, is counted as `unmatched` on the
+case named by the request's capability, and zeroes that case's scored tool
+credit. A model-emitted call that is never executed cannot be attributed to one
+case without exclusive windows; it is reported run-wide as
+`model_selected_not_executed` in the report's `tool_provenance` summary and does
+not by itself zero a case. Per-case `tool_provenance.model_emitted` therefore
+counts the emissions that case consumed. The harness's returned `tool_calls`
+remain useful as a graded transcript, but cannot create model-provenance credit
+by themselves. A scored v10+ tool case whose session ledger is unavailable
+receives zero tool credit.
 
-This provenance rule is v10-only. Bench v2 through v9 retain their frozen
+This provenance rule is v10 and newer. Bench v2 through v9 retain their frozen
 observed-execution and scoring behavior.
 
 ```jsonc

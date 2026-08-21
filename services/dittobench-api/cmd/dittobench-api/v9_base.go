@@ -13,7 +13,7 @@ import (
 
 func (s *server) runCaseWithModelAttribution(
 	ctx context.Context,
-	_ string,
+	inferenceSessionID string,
 	harnessURL string,
 	caseID string,
 	prompt string,
@@ -22,11 +22,18 @@ func (s *server) runCaseWithModelAttribution(
 ) (protocol.RunResponse, runner.CaseExecution, error) {
 	// Exclusive case windows (beginCaseSnapshot / case-scoped inference URLs)
 	// forced serial /run. Concurrent scoring uses the process-wide session URL.
-	// Ticket-scope model_use plus per-case tool_endpoint carry anti-cheat;
-	// dataset difficulty carries the rest.
+	// Ticket-scope model_use carries model-use anti-cheat; v10+ tool credit is
+	// carried by session-scoped tool provenance: the broker forwards a
+	// tool_endpoint request only after consuming a matching model-emitted tool
+	// call from this session, and the per-case outcome is read here after /run
+	// returns. Dataset difficulty carries the rest.
 	opts.InferenceBaseURL = ""
 	opts.CaseScopedInference = false
-	return runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
+	response, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
+	if opts.BenchVersion >= protocol.BenchVersionV10 && inferenceSessionID != "" && s.broker != nil {
+		execution.ToolProvenance = s.broker.sessionToolProvenance(inferenceSessionID, caseID)
+	}
+	return response, execution, runErr
 }
 
 // v9RelayDelayEvidence turns the case window's delay-fingerprint counters into

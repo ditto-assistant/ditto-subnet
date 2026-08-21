@@ -201,6 +201,18 @@ type brokerSession struct {
 	caseCapabilities     map[string]uint64
 	caseCapabilityTokens map[uint64]string
 	caseIDs              map[string]uint64
+	// Session-scoped v10+ tool provenance. Concurrent /run opens no exclusive
+	// case windows, so every ordinary chat completion is admitted at
+	// caseGeneration 0: its model-emitted tool calls are recorded here,
+	// session-wide, and a tool_endpoint request consumes one matching
+	// unconsumed emission regardless of which case's prompt produced it (the
+	// consumed flag still forbids double-spend). Per-case outcomes are keyed by
+	// the wire case id the route's HMAC capability authenticated.
+	sessionToolCalls            []brokerModelToolCall
+	sessionToolEmitted          uint64
+	sessionToolConsumed         uint64
+	sessionToolInvalidEmissions uint64
+	sessionToolCases            map[string]brokerSessionToolLedger
 	// Bench v12 answer-stuffing capture. answerIO records, per active case
 	// generation, the ordered bounded/normalized clean-pass model I/O (value
 	// tokens only -- never the answer key or raw prose). answerIOByCaseID holds
@@ -765,6 +777,26 @@ type brokerModelToolCall struct {
 	name       string
 	argsSHA256 string
 	consumed   bool
+}
+
+// brokerSessionToolLedger is one wire case's tool_endpoint outcome under
+// session-scoped provenance: attempts, matches consumed from the session-wide
+// emission ledger, and rejections with their finding bits.
+type brokerSessionToolLedger struct {
+	EndpointAttempts   uint64
+	MatchedToolCalls   uint64
+	UnmatchedToolCalls uint64
+	ToolFindings       uint64
+}
+
+// sessionToolProvenanceTotals is the run-level view of the session-wide
+// emission ledger, read once after the last case has returned. Emissions that
+// were never consumed are the run's model_selected_not_executed count: they
+// cannot be attributed to one case without exclusive windows.
+type sessionToolProvenanceTotals struct {
+	ModelEmitted     uint64
+	Consumed         uint64
+	InvalidEmissions uint64
 }
 
 const (
@@ -1705,7 +1737,9 @@ func (b *inferenceBroker) consumeModelToolCall(
 		generation = session.activeCaseGeneration
 	}
 	if generation == 0 {
-		return false
+		// No exclusive case window is open (concurrent /run): match against the
+		// session-wide emission ledger.
+		return consumeSessionModelToolCallLocked(session, caseID, call.Name, argsSHA256, argsErr)
 	}
 	snapshot := session.caseSnapshots[generation]
 	snapshot.EndpointAttempts++
@@ -1796,12 +1830,157 @@ func decodeModelToolCalls(responseBody []byte) ([]brokerModelToolCall, error) {
 	return out, nil
 }
 
+// consumeSessionModelToolCallLocked is the session-scoped half of
+// consumeModelToolCall: with no case window open it books the attempt on the
+// wire case's ledger and consumes the first unconsumed session-wide emission
+// with the same name and canonical argument digest, whichever case's prompt
+// produced it. A call with no backing emission, changed arguments, or an
+// already-consumed match is rejected and its finding bit recorded. Caller holds
+// session.mu.
+func consumeSessionModelToolCallLocked(
+	session *brokerSession,
+	caseID string,
+	name string,
+	argsSHA256 string,
+	argsErr error,
+) bool {
+	if session.benchVersion < protocol.BenchVersionV10 {
+		return false
+	}
+	if session.sessionToolCases == nil {
+		session.sessionToolCases = make(map[string]brokerSessionToolLedger)
+	}
+	ledger := session.sessionToolCases[caseID]
+	defer func() { session.sessionToolCases[caseID] = ledger }()
+	ledger.EndpointAttempts++
+	if name == "" || argsErr != nil {
+		ledger.UnmatchedToolCalls++
+		ledger.ToolFindings |= toolFindingNameArgumentMismatch
+		return false
+	}
+	sameName := false
+	consumedMatch := false
+	for index := range session.sessionToolCalls {
+		candidate := &session.sessionToolCalls[index]
+		if candidate.name != name {
+			continue
+		}
+		sameName = true
+		if candidate.argsSHA256 != argsSHA256 {
+			continue
+		}
+		if candidate.consumed {
+			consumedMatch = true
+			continue
+		}
+		candidate.consumed = true
+		session.sessionToolConsumed++
+		ledger.MatchedToolCalls++
+		return true
+	}
+	ledger.UnmatchedToolCalls++
+	switch {
+	case consumedMatch:
+		ledger.ToolFindings |= toolFindingDuplicateExecution
+	case sameName:
+		ledger.ToolFindings |= toolFindingNameArgumentMismatch
+	default:
+		ledger.ToolFindings |= toolFindingUnbacked
+	}
+	return false
+}
+
+// recordSessionModelToolCallsLocked books one successful v10+ chat completion's
+// model-emitted tool calls on the session-wide ledger. A response whose
+// tool_calls cannot be decoded records nothing -- an emission the broker cannot
+// attest can never be consumed, so a harness executing from it is rejected as
+// unbacked -- and is counted so the run's evidence carries the fact. Caller
+// holds session.mu.
+func recordSessionModelToolCallsLocked(session *brokerSession, responseBody []byte) {
+	calls, err := decodeModelToolCalls(responseBody)
+	if err != nil {
+		session.sessionToolInvalidEmissions++
+		return
+	}
+	session.sessionToolCalls = append(session.sessionToolCalls, calls...)
+	session.sessionToolEmitted += uint64(len(calls))
+}
+
+// sessionToolProvenance returns one wire case's tool provenance under
+// session-scoped matching, or nil when no v10+ session ledger exists (the
+// caller fails closed). ModelEmitted counts the emissions THIS case consumed:
+// without exclusive windows an emission cannot be attributed to a case, so the
+// unconsumed remainder is reported run-wide by sessionToolProvenanceTotals and
+// ModelSelectedNotExecuted is always 0 here. Complete is true: every emission
+// is booked under the session lock before the upstream response is released to
+// the harness, and every endpoint attempt is booked before the mock tool runs,
+// so a read taken after /run returned has seen every fact that could have
+// informed that response. A session-wide invalid emission is surfaced as an
+// informational finding on every later case; it does not affect validity.
+func (b *inferenceBroker) sessionToolProvenance(id, caseID string) *protocol.ToolProvenanceEvidence {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return nil
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.benchVersion < protocol.BenchVersionV10 {
+		return nil
+	}
+	ledger := session.sessionToolCases[caseID]
+	findings := toolFindingNames(ledger.ToolFindings)
+	if session.sessionToolInvalidEmissions > 0 {
+		findings = append(findings, "invalid_model_tool_emission")
+	}
+	if len(findings) == 0 {
+		findings = nil
+	}
+	return &protocol.ToolProvenanceEvidence{
+		ModelEmitted:     int(ledger.MatchedToolCalls),
+		EndpointAttempts: int(ledger.EndpointAttempts),
+		Matched:          int(ledger.MatchedToolCalls),
+		Unmatched:        int(ledger.UnmatchedToolCalls),
+		Complete:         true,
+		Findings:         findings,
+	}
+}
+
+// sessionToolProvenanceTotals reads the session-wide emission ledger for the
+// run summary. ok=false when no v10+ session exists.
+func (b *inferenceBroker) sessionToolProvenanceTotals(id string) (sessionToolProvenanceTotals, bool) {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return sessionToolProvenanceTotals{}, false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.benchVersion < protocol.BenchVersionV10 {
+		return sessionToolProvenanceTotals{}, false
+	}
+	return sessionToolProvenanceTotals{
+		ModelEmitted:     session.sessionToolEmitted,
+		Consumed:         session.sessionToolConsumed,
+		InvalidEmissions: session.sessionToolInvalidEmissions,
+	}, true
+}
+
+// recordModelToolCallsLocked books a successful v10+ chat completion's
+// model-emitted tool calls: on the open case window's ledger when one exists
+// (confirmation and legacy case-scoped paths), otherwise session-wide.
 func recordModelToolCallsLocked(
 	session *brokerSession,
 	caseGeneration uint64,
 	responseBody []byte,
 ) {
-	if session.benchVersion < protocol.BenchVersionV10 || caseGeneration == 0 {
+	if session.benchVersion < protocol.BenchVersionV10 {
+		return
+	}
+	if caseGeneration == 0 {
+		recordSessionModelToolCallsLocked(session, responseBody)
 		return
 	}
 	snapshot := session.caseSnapshots[caseGeneration]
@@ -4527,16 +4706,11 @@ func (b *inferenceBroker) caseModelIO(id, caseID string) (caseModelIOLog, bool) 
 	return caseModelIOLog{calls: calls, truncated: log.truncated}, true
 }
 
-func toolProvenanceEvidence(snapshot brokerCaseSnapshot) *protocol.ToolProvenanceEvidence {
-	if !snapshot.ToolEvidenceComplete && snapshot.ModelToolCalls == 0 &&
-		snapshot.EndpointAttempts == 0 && snapshot.ToolFindings == 0 {
-		return nil
-	}
-	selectedNotExecuted := uint64(0)
-	if snapshot.ModelToolCalls > snapshot.MatchedToolCalls {
-		selectedNotExecuted = snapshot.ModelToolCalls - snapshot.MatchedToolCalls
-	}
-	findings := make([]string, 0, 6)
+// toolFindingNames renders a tool-finding bitmask as the wire finding names,
+// in a fixed order, with room left for the count-derived findings appended by
+// the callers.
+func toolFindingNames(bits uint64) []string {
+	findings := make([]string, 0, 7)
 	for _, finding := range []struct {
 		bit  uint64
 		name string
@@ -4547,10 +4721,23 @@ func toolProvenanceEvidence(snapshot brokerCaseSnapshot) *protocol.ToolProvenanc
 		{toolFindingCrossCaseReplay, "cross_case_replay"},
 		{toolFindingInvalidModelEmission, "invalid_model_tool_emission"},
 	} {
-		if snapshot.ToolFindings&finding.bit != 0 {
+		if bits&finding.bit != 0 {
 			findings = append(findings, finding.name)
 		}
 	}
+	return findings
+}
+
+func toolProvenanceEvidence(snapshot brokerCaseSnapshot) *protocol.ToolProvenanceEvidence {
+	if !snapshot.ToolEvidenceComplete && snapshot.ModelToolCalls == 0 &&
+		snapshot.EndpointAttempts == 0 && snapshot.ToolFindings == 0 {
+		return nil
+	}
+	selectedNotExecuted := uint64(0)
+	if snapshot.ModelToolCalls > snapshot.MatchedToolCalls {
+		selectedNotExecuted = snapshot.ModelToolCalls - snapshot.MatchedToolCalls
+	}
+	findings := toolFindingNames(snapshot.ToolFindings)
 	if selectedNotExecuted > 0 {
 		findings = append(findings, "model_selected_not_executed")
 	}

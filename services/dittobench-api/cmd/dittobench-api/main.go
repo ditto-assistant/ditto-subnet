@@ -1766,7 +1766,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		return
 	}
 	toolEndpoint, stopToolSrv, err := s.startToolServerForSession(
-		toolSrv, toolSourceIP, req.BenchVersion, effectiveCaseConcurrency,
+		toolSrv, toolSourceIP, req.BenchVersion, inferenceSessionID, effectiveCaseConcurrency,
 	)
 	if err != nil {
 		s.store.FailWith(runID, "tool endpoint start failed: "+err.Error(), toolEndpointInfrastructureFailure())
@@ -2112,6 +2112,14 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 	report.Seed = seed
 	report.StructuralFingerprint = structuralFP
 	injections := injectionAttemptCount(perCase)
+	// Session-scoped tool provenance cannot attribute an unexecuted model
+	// emission to one case; the run summary carries the session-wide totals.
+	var toolProvenanceTotals *sessionToolProvenanceTotals
+	if req.BenchVersion >= protocol.BenchVersionV10 && inferenceSessionID != "" && s.broker != nil {
+		if totals, ok := s.broker.sessionToolProvenanceTotals(inferenceSessionID); ok {
+			toolProvenanceTotals = &totals
+		}
+	}
 	report.Details = &protocol.RunDetails{
 		BenchVersion:      req.BenchVersion,
 		RunSize:           req.RunSize,
@@ -2124,7 +2132,7 @@ func (s *server) runSizeJob(ctx context.Context, runID string, req submitRequest
 		RawPairsCases:     memSuite.TierBCases,
 		ObservedToolCases: observedTool,
 		CappedToolCases:   cappedTool,
-		ToolProvenance:    summarizeV10ToolProvenance(perCase),
+		ToolProvenance:    summarizeV10ToolProvenance(perCase, toolProvenanceTotals),
 		IsolationCases:    len(iso.Cases),
 		LifecycleCases:    memSuite.LifecycleCases,
 		ToolEfficiency:    scorer.ToolEfficiencyFactorForVersion(perCase, req.BenchVersion),
@@ -2430,23 +2438,33 @@ func (s *server) startToolServer(
 	sandboxSourceIP string,
 	benchVersion int,
 ) (endpoint observedToolEndpoint, stop func(), err error) {
-	return s.startToolServerForSession(h, sandboxSourceIP, benchVersion, caseConcurrencyForRun(nil))
+	return s.startToolServerForSession(h, sandboxSourceIP, benchVersion, "", caseConcurrencyForRun(nil))
 }
 
 func (s *server) startToolServerForSession(
 	h http.Handler,
 	sandboxSourceIP string,
 	benchVersion int,
+	inferenceSessionID string,
 	caseConcurrency int,
 ) (endpoint observedToolEndpoint, stop func(), err error) {
 	if sandboxSourceIP != "" {
 		requireCaseCapability := benchVersion >= protocol.BenchVersionV9
-		// Concurrent /run does not open exclusive case windows, so model-emitted
-		// tool matching cannot be attributed per case. HMAC case capability plus
-		// source IP remain the authorization; the mock records observation. The
-		// route's per-source slots cover the run's overlapping cases.
+		// Bench v10+ binds the route to the run's inference session: the broker
+		// forwards a tool request only after consuming a matching model-emitted
+		// tool call from that session's ledger. Matching is session-scoped, so it
+		// holds under overlapping /run with no exclusive case windows. HMAC case
+		// capability plus source IP remain the authorization; the route's
+		// per-source slots cover the run's overlapping cases.
+		provenanceSessionID := ""
+		if benchVersion >= protocol.BenchVersionV10 {
+			if inferenceSessionID == "" {
+				return observedToolEndpoint{}, func() {}, fmt.Errorf("v10 tool provenance session unavailable")
+			}
+			provenanceSessionID = inferenceSessionID
+		}
 		route, unregister, registerErr := s.broker.registerToolRoute(
-			h, sandboxSourceIP, s.allowPrivate, requireCaseCapability, "", caseConcurrency,
+			h, sandboxSourceIP, s.allowPrivate, requireCaseCapability, provenanceSessionID, caseConcurrency,
 		)
 		if registerErr != nil {
 			return observedToolEndpoint{}, func() {}, registerErr

@@ -323,3 +323,34 @@ func TestDirectPracticeEndpointRemainsCaseAgnostic(t *testing.T) {
 		t.Fatal("endpoint availability mismatch")
 	}
 }
+
+// A v10+ sandboxed tool route must be bound to the run's inference session so
+// the broker can enforce session-scoped model-emission provenance; without a
+// session the run fails before any case starts rather than serving unprovenanced
+// tool credit. Pre-v10 routes keep their frozen, session-free wire.
+func TestStartToolServerForSessionRequiresInferenceSessionForV10(t *testing.T) {
+	broker := newInferenceBroker(1)
+	server := &server{broker: broker, allowPrivate: true}
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	if _, stop, err := server.startToolServerForSession(handler, "172.30.0.2", protocol.BenchVersionV10, "", 4); err == nil {
+		stop()
+		t.Fatal("v10 sandboxed tool route without an inference session must fail")
+	}
+	if _, stop, err := server.startToolServerForSession(handler, "172.30.0.2", protocol.BenchVersionV12, "", 4); err == nil {
+		stop()
+		t.Fatal("v12 sandboxed tool route without an inference session must fail")
+	}
+	// Route registration itself (the health probe is exercised elsewhere) binds
+	// the provenance session for v10 and leaves it empty for v9.
+	route, stop, err := broker.registerToolRoute(handler, "172.30.0.2", false, true, "session-a", 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	broker.mu.RLock()
+	bound := broker.tools[route.id].provenanceSessionID
+	broker.mu.RUnlock()
+	if bound != "session-a" {
+		t.Fatalf("provenance session bound=%q want session-a", bound)
+	}
+}

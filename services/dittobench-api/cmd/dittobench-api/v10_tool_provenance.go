@@ -30,11 +30,16 @@ func applyV10ToolProvenance(
 	}
 	evidence := execution.ToolProvenance
 	if evidence == nil {
-		// Concurrent /run no longer opens exclusive case windows, so model-emitted
-		// tool calls cannot be attributed per case. Observed tool_endpoint remains
-		// the scoring authority; missing provenance is informational.
-		cs.ToolProvenance = &protocol.ToolProvenanceEvidence{
+		// No session-scoped ledger settled this case (no v10+ broker session, or
+		// it was torn down before the read). Observed tool_endpoint credit is
+		// not trusted without model provenance: scored tool credit fails closed.
+		evidence = &protocol.ToolProvenanceEvidence{
 			Findings: []string{"tool_provenance_unavailable"},
+		}
+		cs.ToolProvenance = evidence
+		if scope == scorer.ScopeScored && cs.Kind == protocol.KindTool {
+			cs.ToolScore = 0
+			cs.Notes = append(cs.Notes, "v10 tool provenance unavailable; trajectory receives zero credit")
 		}
 		return cs
 	}
@@ -64,7 +69,16 @@ func applyV10ToolProvenance(
 	return cs
 }
 
-func summarizeV10ToolProvenance(perCase []protocol.CaseScore) *protocol.ToolProvenanceSummary {
+// summarizeV10ToolProvenance aggregates per-case evidence. Under session-scoped
+// provenance a case's ModelEmitted is the emissions it consumed, so the sum
+// cannot show an emission the harness never executed; when the session-wide
+// totals are available they replace ModelEmitted and settle
+// ModelSelectedNotExecuted as the unconsumed remainder. A nil totals keeps the
+// pure per-case aggregate.
+func summarizeV10ToolProvenance(
+	perCase []protocol.CaseScore,
+	totals *sessionToolProvenanceTotals,
+) *protocol.ToolProvenanceSummary {
 	var summary protocol.ToolProvenanceSummary
 	for _, cs := range perCase {
 		evidence := cs.ToolProvenance
@@ -83,6 +97,13 @@ func summarizeV10ToolProvenance(perCase []protocol.CaseScore) *protocol.ToolProv
 	}
 	if summary.Cases == 0 {
 		return nil
+	}
+	if totals != nil {
+		summary.ModelEmitted = int(totals.ModelEmitted)
+		summary.ModelSelectedNotExecuted = 0
+		if totals.ModelEmitted > totals.Consumed {
+			summary.ModelSelectedNotExecuted = int(totals.ModelEmitted - totals.Consumed)
+		}
 	}
 	return &summary
 }

@@ -3417,3 +3417,129 @@ func TestChatCapacityWaitingIsBounded(t *testing.T) {
 		t.Fatalf("backpressure was miscounted as a lost lease: %+v", end)
 	}
 }
+
+// Session-scoped v10+ tool provenance: with no case window open, overlapping
+// tool_endpoint requests racing for the SAME model emission must consume it
+// exactly once. The consumed flag is the double-spend guard; every loser is
+// rejected before the mock tool runs and booked as a duplicate on its own case.
+func TestToolRouteSessionProvenanceConsumesOneEmissionUnderConcurrentRun(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v10-session-race"
+	session := &brokerSession{benchVersion: protocol.BenchVersionV10}
+	broker.mu.Lock()
+	broker.sessions[sessionID] = session
+	broker.mu.Unlock()
+	session.mu.Lock()
+	recordModelToolCallsLocked(session, 0, []byte(`{"choices":[{"message":{"tool_calls":[{
+		"id":"call-1","type":"function","function":{"name":"search_web","arguments":"{\"query\":\"veltrix\"}"}
+	}]}}]}`))
+	session.mu.Unlock()
+
+	var forwarded atomic.Int32
+	const racers = 16
+	route, stop, err := broker.registerToolRoute(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			forwarded.Add(1)
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		"192.0.2.20", false, true, sessionID, racers,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+
+	var wg sync.WaitGroup
+	codes := make([]int, racers)
+	for i := 0; i < racers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			caseID := "case-" + strconv.Itoa(i)
+			raw, _ := json.Marshal(protocol.ToolExecRequest{
+				CaseID: caseID, UserID: "user-a", Name: "search_web",
+				Args: json.RawMessage(`{"query":"veltrix"}`),
+			})
+			endpoint := route.endpoint("http://broker.test/v1/tools/"+route.id+"/tool", caseID, "user-a")
+			request := httptest.NewRequest(http.MethodPost, endpoint, bytes.NewReader(raw))
+			request.SetPathValue("id", route.id)
+			request.RemoteAddr = "192.0.2.20:1234"
+			recorder := httptest.NewRecorder()
+			broker.handleTool(recorder, request)
+			codes[i] = recorder.Code
+		}(i)
+	}
+	wg.Wait()
+	accepted, rejected := 0, 0
+	for _, code := range codes {
+		switch code {
+		case http.StatusNoContent:
+			accepted++
+		case http.StatusConflict:
+			rejected++
+		default:
+			t.Fatalf("unexpected status %d in %v", code, codes)
+		}
+	}
+	if accepted != 1 || rejected != racers-1 || forwarded.Load() != 1 {
+		t.Fatalf("accepted=%d rejected=%d forwarded=%d codes=%v", accepted, rejected, forwarded.Load(), codes)
+	}
+	totals, ok := broker.sessionToolProvenanceTotals(sessionID)
+	if !ok || totals != (sessionToolProvenanceTotals{ModelEmitted: 1, Consumed: 1}) {
+		t.Fatalf("totals=%+v ok=%t", totals, ok)
+	}
+	matchedCases, duplicateCases := 0, 0
+	for i := 0; i < racers; i++ {
+		evidence := broker.sessionToolProvenance(sessionID, "case-"+strconv.Itoa(i))
+		if evidence == nil || evidence.EndpointAttempts != 1 || !evidence.Complete {
+			t.Fatalf("case-%d evidence=%+v", i, evidence)
+		}
+		switch {
+		case evidence.Matched == 1 && evidence.Unmatched == 0:
+			matchedCases++
+		case evidence.Matched == 0 && evidence.Unmatched == 1:
+			duplicateCases++
+		default:
+			t.Fatalf("case-%d evidence=%+v", i, evidence)
+		}
+	}
+	if matchedCases != 1 || duplicateCases != racers-1 {
+		t.Fatalf("matched cases=%d duplicate cases=%d", matchedCases, duplicateCases)
+	}
+}
+
+// A pre-v10 route registration never binds provenance, so the frozen v9 tool
+// wire forwards without touching the session ledger even when a v10-capable
+// session id is supplied by mistake: the legacy handler must stay byte-for-byte.
+func TestToolRouteWithoutProvenanceLeavesSessionLedgerUntouched(t *testing.T) {
+	broker := newInferenceBroker(1)
+	const sessionID = "v10-session-unbound"
+	session := &brokerSession{benchVersion: protocol.BenchVersionV10}
+	broker.mu.Lock()
+	broker.sessions[sessionID] = session
+	broker.mu.Unlock()
+	route, stop, err := broker.registerToolWithProvenance(
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }),
+		"192.0.2.20", false, true, "",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stop()
+	raw, _ := json.Marshal(protocol.ToolExecRequest{
+		CaseID: "case-a", UserID: "user-a", Name: "search_web", Args: json.RawMessage(`{}`),
+	})
+	endpoint := route.endpoint("http://broker.test/v1/tools/"+route.id+"/tool", "case-a", "user-a")
+	request := httptest.NewRequest(http.MethodPost, endpoint, bytes.NewReader(raw))
+	request.SetPathValue("id", route.id)
+	request.RemoteAddr = "192.0.2.20:1234"
+	recorder := httptest.NewRecorder()
+	broker.handleTool(recorder, request)
+	if recorder.Code != http.StatusNoContent {
+		t.Fatalf("unbound route status=%d", recorder.Code)
+	}
+	evidence := broker.sessionToolProvenance(sessionID, "case-a")
+	if evidence == nil || evidence.EndpointAttempts != 0 || !evidence.Complete {
+		t.Fatalf("unbound route must not book attempts: %+v", evidence)
+	}
+}
