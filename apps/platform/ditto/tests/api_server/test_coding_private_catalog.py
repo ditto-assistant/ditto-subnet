@@ -70,6 +70,9 @@ def _record(vector: dict[str, Any]) -> dict[str, Any]:
         "catalog_commitment_sha256": vector["commitment"]["commitment_sha256"],
         "task_version": deepcopy(vector["task_version"]),
         "membership_proof": deepcopy(vector["membership_proof"]),
+        "issue": deepcopy(vector["issue"]),
+        "runtime_policy": deepcopy(vector["runtime_policy"]),
+        "budgets": deepcopy(vector["budgets"]),
     }
 
 
@@ -94,7 +97,7 @@ def _config(**overrides: object) -> CodingPrivateCatalogConfig:
         "secret_key": "catalog-secret",
         "region": "eu-west-1",
         "use_tls": True,
-        "max_record_bytes": 64 << 10,
+        "max_record_bytes": 1 << 20,
         "timeout_seconds": 1.0,
     }
     values.update(overrides)
@@ -122,6 +125,21 @@ def _commitment(vector: dict[str, Any]) -> CodingCatalogCommitment:
 
 def test_private_catalog_configuration_is_disabled_by_default() -> None:
     assert parse_coding_private_catalog_config_from_env({}) is None
+
+
+def test_private_catalog_default_record_bound_covers_contract_maximum() -> None:
+    config = parse_coding_private_catalog_config_from_env(
+        {
+            "DITTO_CODING_CATALOG_STORAGE_ENDPOINT_URL": (
+                "https://storage.example.com"
+            ),
+            "DITTO_CODING_CATALOG_STORAGE_BUCKET": "private-catalog",
+            "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY": "catalog-access",
+            "DITTO_CODING_CATALOG_STORAGE_SECRET_KEY": "catalog-secret",
+        }
+    )
+    assert config is not None
+    assert config.max_record_bytes == 1 << 20
 
 
 def test_private_catalog_configuration_is_separate_and_redacted() -> None:
@@ -230,16 +248,22 @@ async def test_source_loads_exactly_one_bounded_record() -> None:
     commitment = _commitment(vector)
     record = _record(vector)
     record["future_field"] = {"ignored": True}
+    record["issue"]["future_field"] = "ignored"
     source, reader = _source(_body(record))
 
-    task, proof = await source.get_task_version(
+    material = await source.get_task_material(
         commitment=commitment,
         catalog_index=4,
     )
+    task = material.task_version
+    proof = material.membership_proof
 
     assert (
         task.task_commitment_sha256 == vector["task_version"]["task_commitment_sha256"]
     )
+    assert material.issue.model_dump(mode="json") == vector["issue"]
+    assert material.runtime_policy.model_dump(mode="json") == vector["runtime_policy"]
+    assert material.budgets.model_dump(mode="json") == vector["budgets"]
     assert (
         proof.catalog_membership_proof_sha256
         == vector["membership_proof"]["catalog_membership_proof_sha256"]
@@ -250,9 +274,28 @@ async def test_source_loads_exactly_one_bounded_record() -> None:
                 catalog_commitment_sha256=commitment.commitment_sha256,
                 catalog_index=4,
             ),
-            64 << 10,
+            1 << 20,
         )
     ]
+
+
+async def test_task_version_adapter_preserves_selector_contract() -> None:
+    vector = _vector()
+    source, reader = _source(_body(_record(vector)))
+
+    task, proof = await source.get_task_version(
+        commitment=_commitment(vector),
+        catalog_index=4,
+    )
+
+    assert (
+        task.task_commitment_sha256 == vector["task_version"]["task_commitment_sha256"]
+    )
+    assert (
+        proof.catalog_membership_proof_sha256
+        == vector["membership_proof"]["catalog_membership_proof_sha256"]
+    )
+    assert len(reader.calls) == 1
 
 
 @pytest.mark.parametrize(
@@ -303,6 +346,9 @@ async def test_source_rejects_excessive_unknown_field_depth() -> None:
         "count",
         "task_digest",
         "proof_digest",
+        "issue",
+        "runtime_policy",
+        "budgets",
     ],
 )
 async def test_source_rejects_record_or_membership_drift(mutation: str) -> None:
@@ -326,6 +372,12 @@ async def test_source_rejects_record_or_membership_drift(mutation: str) -> None:
         record["task_version"]["task_commitment_sha256"] = "ff" * 32
     elif mutation == "proof_digest":
         record["membership_proof"]["catalog_membership_proof_sha256"] = "ff" * 32
+    elif mutation == "issue":
+        record["issue"]["description"] = "Changed after catalog commitment."
+    elif mutation == "runtime_policy":
+        record["runtime_policy"]["editable_paths"] = ["src/other.py"]
+    elif mutation == "budgets":
+        record["budgets"]["workspace_tool_calls"] += 1
     source, _reader = _source(_body(record))
     with pytest.raises(CodingSelectionCatalogIntegrityError):
         await source.get_task_version(
