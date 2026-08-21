@@ -47,13 +47,12 @@ def _agent() -> SimpleNamespace:
 
 
 def test_named_agent_failures_are_withdraw_not_retry() -> None:
-    tickets = [
-        _ticket(validator_hotkey=f"validator-{index}") for index in range(3)
-    ]
+    tickets = [_ticket(validator_hotkey=f"validator-{index}") for index in range(3)]
     assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is True
-    assert recommended_retry_action(
-        scores=[], tickets=tickets, recovery_allowed=False
-    ) == "withdraw"
+    assert (
+        recommended_retry_action(scores=[], tickets=tickets, recovery_allowed=False)
+        == "withdraw"
+    )
     automatic, allowed, reason, selected = recovery_gate(
         agent=_agent(),
         scores=[],
