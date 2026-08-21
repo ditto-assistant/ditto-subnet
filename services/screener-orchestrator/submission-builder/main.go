@@ -7,6 +7,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -158,9 +159,17 @@ func run() error {
 		return stageFailure("KANIKO", fmt.Errorf("kaniko build failed: %w", err))
 	}
 
-	outputSHA, outputSize, err := hashBounded("/workspace/image.tar", maxOutputBytes)
+	storedPath, outputSHA, outputSize, err := prepareStoredImage(
+		"/workspace/image.tar",
+		"/workspace/image.tar.gz",
+		maxOutputBytes,
+		maxOutputBytes,
+	)
 	if err != nil {
 		return stageFailure("ARCHIVE", err)
+	}
+	if storedPath != "/workspace/image.tar" {
+		_ = os.Remove("/workspace/image.tar")
 	}
 	payload := uploadRequest{OutputSHA256: outputSHA, OutputSizeBytes: outputSize}
 	var upload uploadResponse
@@ -171,7 +180,7 @@ func run() error {
 	if err != nil {
 		return stageFailure("UPLOAD", err)
 	}
-	if err := uploadFile(client, uploadURL, "/workspace/image.tar", upload.RequiredHeaders); err != nil {
+	if err := uploadFile(client, uploadURL, storedPath, upload.RequiredHeaders); err != nil {
 		return stageFailure("UPLOAD", err)
 	}
 	var complete struct {
@@ -294,12 +303,97 @@ func hashBounded(path string, maximum int64) (string, int64, error) {
 		return "", 0, err
 	}
 	defer file.Close()
+	return hashBoundedReader(file, maximum)
+}
+
+func hashBoundedReader(r io.Reader, maximum int64) (string, int64, error) {
 	hash := sha256.New()
-	size, err := io.Copy(hash, io.LimitReader(file, maximum+1))
+	size, err := io.Copy(hash, io.LimitReader(r, maximum+1))
 	if err != nil || size <= 0 || size > maximum {
 		return "", 0, errors.New("image archive exceeded its bound")
 	}
 	return hex.EncodeToString(hash.Sum(nil)), size, nil
+}
+
+// prepareStoredImage gzip-compresses an uncompressed Kaniko tar and hashes the
+// stored object. If Kaniko already emitted gzip (magic 1f 8b), the file is
+// hashed in place. The 4 GiB bound applies to uncompressed tar bytes and to
+// the stored gzip object.
+func prepareStoredImage(src, dst string, maxUncompressed, maxCompressed int64) (string, string, int64, error) {
+	file, err := os.Open(src)
+	if err != nil {
+		return "", "", 0, err
+	}
+	defer file.Close()
+
+	var magic [2]byte
+	n, readErr := io.ReadFull(file, magic[:])
+	if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
+		return "", "", 0, errors.New("image archive exceeded its bound")
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return "", "", 0, err
+	}
+	if n >= 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		if err := boundGzipUncompressed(file, maxUncompressed); err != nil {
+			return "", "", 0, err
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return "", "", 0, err
+		}
+		digest, size, err := hashBoundedReader(file, maxCompressed)
+		if err != nil {
+			return "", "", 0, err
+		}
+		return src, digest, size, nil
+	}
+
+	digest, size, err := gzipHashBounded(file, dst, maxUncompressed, maxCompressed)
+	if err != nil {
+		return "", "", 0, err
+	}
+	return dst, digest, size, nil
+}
+
+func boundGzipUncompressed(r io.Reader, maximum int64) error {
+	gz, err := gzip.NewReader(r)
+	if err != nil {
+		return errors.New("image archive exceeded its bound")
+	}
+	defer gz.Close()
+	n, err := io.Copy(io.Discard, io.LimitReader(gz, maximum+1))
+	if err != nil || n <= 0 || n > maximum {
+		return errors.New("image archive exceeded its bound")
+	}
+	return nil
+}
+
+func gzipHashBounded(src io.Reader, dst string, maxUncompressed, maxCompressed int64) (string, int64, error) {
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", 0, err
+	}
+	hasher := sha256.New()
+	gz, err := gzip.NewWriterLevel(io.MultiWriter(out, hasher), gzip.BestSpeed)
+	if err != nil {
+		out.Close()
+		os.Remove(dst)
+		return "", 0, err
+	}
+	gz.ModTime = time.Unix(0, 0)
+	written, copyErr := io.Copy(gz, io.LimitReader(src, maxUncompressed+1))
+	closeGzErr := gz.Close()
+	stat, statErr := out.Stat()
+	closeOutErr := out.Close()
+	if copyErr != nil || closeGzErr != nil || closeOutErr != nil || written <= 0 || written > maxUncompressed {
+		os.Remove(dst)
+		return "", 0, errors.New("image archive exceeded its bound")
+	}
+	if statErr != nil || stat.Size() <= 0 || stat.Size() > maxCompressed {
+		os.Remove(dst)
+		return "", 0, errors.New("gzipped image archive exceeded its bound")
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), stat.Size(), nil
 }
 
 func uploadFile(client *http.Client, url, path string, headers map[string]string) error {

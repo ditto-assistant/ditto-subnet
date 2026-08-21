@@ -1961,13 +1961,14 @@ async def mint_submission_build_upload(
         key=key,
         size_bytes=payload.output_size_bytes,
         metadata=metadata,
+        content_type="application/gzip",
         expires_in=expires_in,
     )
     return SubmissionBuildUploadResponse(
         upload_url_b64=base64.b64encode(url.encode()).decode(),
         required_headers={
             "Content-Length": str(payload.output_size_bytes),
-            "Content-Type": "application/x-tar",
+            "Content-Type": "application/gzip",
             **{f"x-amz-meta-{key}": value for key, value in metadata.items()},
         },
         expires_at=now + timedelta(seconds=expires_in),
@@ -3210,6 +3211,7 @@ async def screened_image_upload(
     storage_upload_id = await storage.create_multipart_upload(
         key=key,
         metadata=metadata,
+        content_type="application/gzip",
     )
     try:
         async with session.begin():

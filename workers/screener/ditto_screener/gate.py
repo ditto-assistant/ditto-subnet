@@ -195,7 +195,11 @@ class _StageResult:
 
 @dataclass(frozen=True)
 class BuiltImageArtifact:
-    """A locally exported, content-addressed Docker image archive."""
+    """A locally exported, content-addressed Docker image archive.
+
+    ``sha256`` and ``size_bytes`` pin the stored object, which is gzip of the
+    portable docker-save tar. Image identity remains ``image_id`` (config digest).
+    """
 
     path: str
     sha256: str
@@ -1314,8 +1318,14 @@ class BuildGate:
             info.mtime = 0
             return info
 
+        def open_source() -> tarfile.TarFile:
+            with open(source_path, "rb") as probe:
+                magic = probe.read(2)
+            mode = "r:gz" if magic == b"\x1f\x8b" else "r:"
+            return tarfile.open(source_path, mode=mode)
+
         try:
-            with tarfile.open(source_path, mode="r:") as source:
+            with open_source() as source:
                 all_members = source.getmembers()
                 if len(all_members) > 4096:
                     raise _ScreenedImageExportError(
@@ -1492,6 +1502,74 @@ class BuildGate:
             image_id=f"sha256:{config_hex}",
         )
 
+    @staticmethod
+    def _gzip_archive(
+        source_path: str,
+        destination_path: str,
+        *,
+        deadline: float | None,
+    ) -> None:
+        """Gzip a portable docker-save. The 8 GiB cap is on uncompressed bytes."""
+        uncompressed = 0
+        try:
+            with open(source_path, "rb") as raw, open(destination_path, "wb") as out:
+                os.chmod(destination_path, 0o600)
+                with gzip.GzipFile(
+                    filename="",
+                    mode="wb",
+                    fileobj=out,
+                    mtime=0,
+                    compresslevel=1,
+                ) as compressed:
+                    while chunk := raw.read(_IMAGE_HASH_CHUNK_BYTES):
+                        if deadline is not None and time.monotonic() >= deadline:
+                            raise _LeaseDeadlineError(
+                                "lease expired during screened image gzip"
+                            )
+                        uncompressed += len(chunk)
+                        if uncompressed > _MAX_SCREENED_IMAGE_BYTES:
+                            raise _ScreenedImageTooLargeError(
+                                "screened image archive exceeds "
+                                f"{_MAX_SCREENED_IMAGE_BYTES} byte cap"
+                            )
+                        compressed.write(chunk)
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(destination_path)
+            raise
+
+    async def _publish_portable_archive(
+        self,
+        portable: _PortableImageArchive,
+        *,
+        image_ref: str,
+        deadline: float | None,
+    ) -> BuiltImageArtifact:
+        """Gzip the portable tar and pin sha256/size to the stored gzip bytes."""
+        uncompressed_size = os.path.getsize(portable.path)
+        if uncompressed_size > _MAX_SCREENED_IMAGE_BYTES:
+            raise _ScreenedImageTooLargeError(
+                f"screened image archive exceeds {_MAX_SCREENED_IMAGE_BYTES} byte cap"
+            )
+        gz_path = portable.path + ".gz"
+        await asyncio.to_thread(
+            self._gzip_archive, portable.path, gz_path, deadline=deadline
+        )
+        os.unlink(portable.path)
+        try:
+            sha256 = await self._hash_image_archive(gz_path, deadline=deadline)
+            return BuiltImageArtifact(
+                path=gz_path,
+                sha256=sha256,
+                size_bytes=os.path.getsize(gz_path),
+                image_id=portable.image_id,
+                image_ref=image_ref,
+            )
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.unlink(gz_path)
+            raise
+
     async def _export_remote_archive(
         self,
         archive: RemoteImageArchive,
@@ -1517,20 +1595,14 @@ class BuildGate:
                 deadline=deadline,
             )
             portable_path = None
-            size_bytes = os.path.getsize(portable.path)
-            if size_bytes > _MAX_SCREENED_IMAGE_BYTES:
-                raise _ScreenedImageTooLargeError(
-                    "screened image archive exceeds "
-                    f"{_MAX_SCREENED_IMAGE_BYTES} byte cap"
+            try:
+                return await self._publish_portable_archive(
+                    portable, image_ref=image_ref, deadline=deadline
                 )
-            sha256 = await self._hash_image_archive(portable.path, deadline=deadline)
-            return BuiltImageArtifact(
-                path=portable.path,
-                sha256=sha256,
-                size_bytes=size_bytes,
-                image_id=portable.image_id,
-                image_ref=image_ref,
-            )
+            except BaseException:
+                with contextlib.suppress(OSError):
+                    os.unlink(portable.path)
+                raise
         except BaseException:
             if portable_path is not None:
                 with contextlib.suppress(OSError):
@@ -1601,20 +1673,11 @@ class BuildGate:
             os.unlink(path)
             path = portable.path
             portable_path = None
-            size_bytes = os.path.getsize(path)
-            if size_bytes > _MAX_SCREENED_IMAGE_BYTES:
-                raise _ScreenedImageTooLargeError(
-                    "screened image archive exceeds "
-                    f"{_MAX_SCREENED_IMAGE_BYTES} byte cap"
-                )
-            sha256 = await self._hash_image_archive(path, deadline=deadline)
-            return BuiltImageArtifact(
-                path=path,
-                sha256=sha256,
-                size_bytes=size_bytes,
-                image_id=portable.image_id,
-                image_ref=image_ref,
+            artifact = await self._publish_portable_archive(
+                portable, image_ref=image_ref, deadline=deadline
             )
+            path = None
+            return artifact
         except BaseException:
             if path is not None:
                 with contextlib.suppress(OSError):

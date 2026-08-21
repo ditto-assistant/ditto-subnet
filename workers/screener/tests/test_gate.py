@@ -251,9 +251,12 @@ async def test_export_image_hashes_exact_docker_archive(
     )
     try:
         assert exported.image_id == config_id
+        stored = Path(exported.path).read_bytes()
+        assert stored[:2] == b"\x1f\x8b"
+        assert exported.sha256 == hashlib.sha256(stored).hexdigest()
         assert exported.sha256 != hashlib.sha256(archive).hexdigest()
-        assert exported.size_bytes == Path(exported.path).stat().st_size
-        with tarfile.open(exported.path, mode="r:") as portable:
+        assert exported.size_bytes == len(stored)
+        with tarfile.open(exported.path, mode="r:gz") as portable:
             names = portable.getnames()
             assert names[0] == "manifest.json"
             manifest = json.load(portable.extractfile("manifest.json"))
@@ -264,6 +267,37 @@ async def test_export_image_hashes_exact_docker_archive(
                     "Layers": [hashlib.sha256(layer).hexdigest() + "/layer.tar"],
                 }
             ]
+            assert portable.extractfile(manifest[0]["Layers"][0]).read() == layer
+    finally:
+        os.unlink(exported.path)
+
+
+async def test_export_remote_gzip_kaniko_archive(
+    make_config: Callable[..., ScreenerConfig], tmp_path: Path
+) -> None:
+    archive, config_id, layer = _oci_image_save_archive()
+    compressed = gzip.compress(archive, mtime=0)
+    source = tmp_path / "remote.tar"
+    source.write_bytes(compressed)
+    gate = _gate_with(make_config(), _ok_run(), tarball=_valid_tar())
+    exported = await gate._export_remote_archive(
+        RemoteImageArchive(
+            build_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            path=str(source),
+            sha256=hashlib.sha256(compressed).hexdigest(),
+            size_bytes=len(compressed),
+        ),
+        image_ref=f"ditto-screen/{_AGENT}:latest",
+        deadline=None,
+    )
+    try:
+        stored = Path(exported.path).read_bytes()
+        assert stored[:2] == b"\x1f\x8b"
+        assert exported.image_id == config_id
+        assert exported.sha256 == hashlib.sha256(stored).hexdigest()
+        assert exported.size_bytes == len(stored)
+        with tarfile.open(exported.path, mode="r:gz") as portable:
+            manifest = json.load(portable.extractfile("manifest.json"))
             assert portable.extractfile(manifest[0]["Layers"][0]).read() == layer
     finally:
         os.unlink(exported.path)
