@@ -1774,7 +1774,7 @@ func TestInferenceActivationRequiresConfiguredExactProxyAndBoundedExpiry(t *test
 		broker,
 		prepared,
 		broker.platformProxyURL,
-		time.Now().Add(brokerMaximumSessionTTL+time.Minute),
+		time.Now().Add(brokerMaximumGrantTTL+time.Minute),
 	)
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("overlong expiry status = %d", recorder.Code)
@@ -3415,5 +3415,31 @@ func TestChatCapacityWaitingIsBounded(t *testing.T) {
 	}
 	if end.GrantDenials != 0 {
 		t.Fatalf("backpressure was miscounted as a lost lease: %+v", end)
+	}
+}
+
+// Platform mints the inference grant to expire at the ticket deadline, and the
+// canonical scoring lease is 430 minutes. Activation must accept that; bounding
+// it by the 2-hour prepare TTL rejected every production ticket.
+func TestInferenceBrokerActivationAcceptsPlatformLeaseExpiry(t *testing.T) {
+	broker := newInferenceBroker(1)
+	broker.platformProxyURL = "https://platform.example" + platformInferenceAPIPath
+	prepared := prepareBrokerSession(t, broker)
+	leaseExpiry := time.Now().Add(430*time.Minute - time.Second)
+	if !leaseExpiry.After(time.Now().Add(brokerMaximumSessionTTL)) {
+		t.Fatal("test premise: lease expiry must exceed the prepare TTL")
+	}
+	recorder := activationResponse(broker, prepared, broker.platformProxyURL, leaseExpiry)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("430-minute lease activation status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	broker.mu.RLock()
+	session := broker.sessions[prepared["session_id"]]
+	broker.mu.RUnlock()
+	session.mu.Lock()
+	expiresAt := session.expiresAt
+	session.mu.Unlock()
+	if !expiresAt.Equal(leaseExpiry.Truncate(0)) && expiresAt.Sub(leaseExpiry).Abs() > time.Second {
+		t.Fatalf("session expiry = %v, want lease expiry %v", expiresAt, leaseExpiry)
 	}
 }

@@ -43,6 +43,16 @@ import (
 const (
 	brokerBodyLimit            = 4 << 20
 	brokerMaximumSessionTTL    = 2 * time.Hour
+	// brokerMaximumGrantTTL bounds how far ahead an ACTIVATED session's
+	// expires_at may sit. Platform mints the inference grant to expire at the
+	// ticket deadline (apps/platform .../db/queries/inference.py), and the
+	// canonical scoring lease is _TICKET_TTL = 430 minutes
+	// (apps/platform .../endpoints/validator.py). Bounding activation by the
+	// 2-hour prepare TTL above rejected every ticket with "invalid inference
+	// activation" the moment the lease outgrew two hours. Keep this a loose
+	// sanity bound well above any lease the Platform issues; the per-ticket
+	// bound is ExpiresAt <= TicketDeadline below.
+	brokerMaximumGrantTTL = 24 * time.Hour
 	brokerPerSourceConcurrency = 4
 	brokerReadHeaderTimeout    = 5 * time.Second
 	brokerReadTimeout          = 15 * time.Second
@@ -2132,7 +2142,7 @@ func (b *inferenceBroker) activate(w http.ResponseWriter, r *http.Request) {
 	) == 1
 	if !secretMatches || activation.Bearer == "" ||
 		len(activation.Bearer) > 4096 || grantErr != nil || activation.Generation < 1 ||
-		!activation.ExpiresAt.After(now) || activation.ExpiresAt.After(now.Add(brokerMaximumSessionTTL)) ||
+		!activation.ExpiresAt.After(now) || activation.ExpiresAt.After(now.Add(brokerMaximumGrantTTL)) ||
 		b.platformProxyURL == "" || transportURL == "" || activation.ProxyURL != b.platformProxyURL ||
 		!validBudgetEvidence ||
 		(hasRouteIdentity && (!validBrokerTicketIdentity(ticketIdentity, now) ||
