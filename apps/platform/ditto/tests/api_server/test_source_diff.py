@@ -79,9 +79,7 @@ def test_renamed_identical_normalized_content_is_not_added_and_removed() -> None
 
 
 def test_reformatted_rename_is_normalized_identical() -> None:
-    reference = {
-        "src/whitycat.rs": "fn f(x: i32) -> i32 {\n    x + 1  // add one\n}\n"
-    }
+    reference = {"src/whitycat.rs": "fn f(x: i32) -> i32 {\n    x + 1  // add one\n}\n"}
     candidate = {
         "src/agent_policy.rs": (
             "fn f(x: i32) -> i32 {\n        x+1   /* incremented */\n}\n"
