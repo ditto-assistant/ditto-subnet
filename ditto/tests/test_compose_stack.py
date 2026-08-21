@@ -579,7 +579,8 @@ def test_run_cap_stop_grace_and_updater_drains_are_coherent() -> None:
 
     source_wrapper = COMPOSE_WRAPPER_PATH.read_text()
     assert (
-        source_wrapper.count("DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-11100") == 2
+        source_wrapper.count("DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-11100")
+        == 2
     )
     stack_updater = STACK_UPDATER_PATH.read_text()
     assert "setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 11100" in stack_updater
