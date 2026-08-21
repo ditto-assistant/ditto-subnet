@@ -24,6 +24,7 @@
 | Shadow finalized run issuer | `apps/platform/ditto/db/queries/coding_issuance.py` |
 | Shadow single-run reconciler | `apps/platform/ditto/db/queries/coding_reconciliation.py` |
 | Shadow k=3 ticket-set issuer | `apps/platform/ditto/db/queries/coding_ticket_sets.py` |
+| Shadow task lease core | `apps/platform/ditto/db/queries/coding_task_leases.py` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
 

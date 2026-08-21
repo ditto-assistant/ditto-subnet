@@ -24,7 +24,8 @@ member fails, so the set is never intentionally published partially.
 
 ## Activation boundary
 
-This is an internal issuer only. It does not select validators, run in the
-background, expose task or capsule bytes, grant Luna access, deliver work to a
-validator, score results, deploy anything, or affect emissions. Coding contract
-v1 remains permanently `weight_eligible=false`.
+This is an internal issuer only. The separate task-lease builder can verify and
+reconstruct one issued ticket, but neither component selects validators, runs in
+the background, exposes task or capsule bytes over HTTP, grants Luna access,
+delivers work to a validator, scores results, deploys anything, or affects
+emissions. Coding contract v1 remains permanently `weight_eligible=false`.

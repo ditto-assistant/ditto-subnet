@@ -226,6 +226,7 @@ async def active_validator_coding_certification(
     *,
     agent: Agent,
     validator_hotkey: str,
+    bench_version: int,
     coding_contract_version: int,
     active_through: datetime,
 ) -> CodingCapabilityCertification | None:
@@ -241,6 +242,7 @@ async def active_validator_coding_certification(
             CodingCapabilityCertification.screened_image_sha256
             == agent.screened_image_sha256,
             CodingCapabilityCertification.validator_hotkey == validator_hotkey,
+            CodingCapabilityCertification.bench_version == bench_version,
             CodingCapabilityCertification.coding_contract_version
             == coding_contract_version,
             CodingCapabilityCertification.status == "certified",
