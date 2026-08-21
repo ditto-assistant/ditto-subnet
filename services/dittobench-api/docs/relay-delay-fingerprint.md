@@ -90,6 +90,12 @@ environment fallback for delay fingerprinting (off by default). The
 environment variables remain fallback controls for older Platform/validator
 pairs and local operation.
 
+The broker books and injects the hold only inside an open case window
+(`caseGeneration != 0`). Ordinary scored runs no longer open case windows, so
+`shadow` injects nothing and records no evidence there; it still applies
+inside confirmation case windows (`confirmation_runtime_factory.go`), which
+keep their exclusive `beginCaseSnapshot`/`endCaseSnapshot` pairs.
+
 | Variable | Default | Meaning |
 |---|---|---|
 | `DITTOBENCH_RELAY_DELAY_FP_MODE` | `off` | `off` or `shadow`; unknown values are `off` |
@@ -110,5 +116,6 @@ case honest median → ~275ms per case against a multi-second honest p50 and a
   fingerprint prices that evasion at full honest latency, which removes its
   entire speed advantage.
 - Legacy (v2–v8) sessions are untouched. Per-case delay attribution required
-  exclusive windows and is no longer administered; the fingerprint may still
-  inject in shadow mode at session scope.
+  exclusive windows and is no longer administered for ordinary scored runs;
+  `shadow` neither injects nor records there. Only confirmation case windows
+  still carry the hold and its evidence.

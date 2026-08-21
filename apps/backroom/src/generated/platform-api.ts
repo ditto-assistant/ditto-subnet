@@ -8704,15 +8704,14 @@ export interface components {
          * BenchmarkRuntimeSettings
          * @description Per-ticket v10 execution controls delivered to capable validators.
          *
-         *     These defaults reproduce the deployed behavior exactly: scored cases are
-         *     serial and relay delay fingerprinting is disabled.  The object is additive
-         *     on both the settings JSON and validator job wire, so an older Platform,
-         *     validator, scorer, or harness keeps that behavior during a rolling upgrade.
+         *     These defaults overlap four /run calls per ticket. Relay delay fingerprinting
+         *     stays off. The object is additive on both the settings JSON and validator
+         *     job wire. Backroom can raise case_concurrency up to 64.
          */
         BenchmarkRuntimeSettings: {
             /**
              * Case Concurrency
-             * @default 1
+             * @default 4
              */
             case_concurrency: number;
             /**

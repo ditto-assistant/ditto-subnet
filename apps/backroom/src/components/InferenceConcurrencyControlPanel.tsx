@@ -398,8 +398,9 @@ export function InferenceConcurrencyControlPanel({
                 <option value="shadow">Shadow</option>
               </select>
               <span className="mt-2 block text-[11px] font-normal leading-4 text-[var(--muted)]">
-                Shadow injects a secret deterministic hold and records evidence; it does not
-                change scores.
+                Shadow injects a secret deterministic hold and records evidence only inside
+                confirmation case windows; ordinary scored runs no longer open case windows, so
+                it is a no-op there. It never changes scores.
               </span>
             </label>
 
