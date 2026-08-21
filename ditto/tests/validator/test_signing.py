@@ -22,10 +22,12 @@ from ditto.api_models.coding import (
     CodingCapabilityCertificationReceipt,
     CodingGradingLeaseRequest,
     SubmitCodingAuthoringFreezeRequest,
+    SubmitCodingShadowResultRequest,
     coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
     coding_grading_lease_signing_message,
+    coding_shadow_result_signing_message,
 )
 from ditto.api_models.confirmation_progress import ConfirmationProgress
 from ditto.api_models.stack_health import (
@@ -52,6 +54,7 @@ from ditto.validator.signing import (
     sign_coding_authoring_lease,
     sign_coding_certification,
     sign_coding_grading_lease,
+    sign_coding_shadow_result,
     sign_heartbeat,
     sign_job_fail_request,
     sign_job_request,
@@ -81,6 +84,13 @@ _CODING_AUTHORING_FREEZE_VECTOR = (
 _CODING_GRADING_LEASE_VECTOR = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json"
+)
+_CODING_SHADOW_RESULT_VECTOR = (
+    Path(__file__).parents[3]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_shadow_result_submission_v1.json"
 )
 
 
@@ -244,6 +254,39 @@ def test_coding_grading_lease_signature_matches_shared_message() -> None:
         authoring_evidence_sha256=request.authoring_evidence_sha256,
         nonce=request.nonce,
         requested_at=request.requested_at,
+    )
+    assert keypair.verify(message, bytes.fromhex(signature))
+
+
+def test_coding_shadow_result_signature_matches_shared_message() -> None:
+    vector = json.loads(_CODING_SHADOW_RESULT_VECTOR.read_text(encoding="utf-8"))
+    request = SubmitCodingShadowResultRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    agent_id = UUID(vector["agent_id"])
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    signature = sign_coding_shadow_result(
+        keypair,
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        bench_version=request.bench_version,
+        ticket_deadline=request.ticket_deadline,
+        agent_artifact_sha256=request.agent_artifact_sha256,
+        screened_image_sha256=request.screened_image_sha256,
+        run_evidence_sha256=request.run_evidence_sha256,
+    )
+    message = coding_shadow_result_signing_message(
+        validator_hotkey=keypair.ss58_address,
+        agent_id=agent_id,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        bench_version=request.bench_version,
+        ticket_deadline=request.ticket_deadline,
+        agent_artifact_sha256=request.agent_artifact_sha256,
+        screened_image_sha256=request.screened_image_sha256,
+        run_evidence_sha256=request.run_evidence_sha256,
     )
     assert keypair.verify(message, bytes.fromhex(signature))
 

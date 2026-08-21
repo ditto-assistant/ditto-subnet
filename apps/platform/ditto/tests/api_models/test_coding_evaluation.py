@@ -16,6 +16,7 @@ from ditto.api_models.coding_evaluation import (
     SubmitCodingAuthoringFreezeRequest,
     SubmitCodingAuthoringFreezeResponse,
     SubmitCodingShadowResultRequest,
+    SubmitCodingShadowResultResponse,
     coding_authoring_evidence_digest,
     coding_authoring_freeze_signing_message,
     coding_run_evidence_digest,
@@ -28,6 +29,13 @@ _FREEZE_VECTOR_PATH = (
     / "dittobench-coding-contract"
     / "testdata"
     / "coding_authoring_freeze_v1.json"
+)
+_RESULT_VECTOR_PATH = (
+    Path(__file__).parents[5]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_shadow_result_submission_v1.json"
 )
 
 
@@ -45,6 +53,10 @@ def _vectors() -> dict:
 
 def _freeze_vector() -> dict:
     return json.loads(_FREEZE_VECTOR_PATH.read_text(encoding="utf-8"))
+
+
+def _result_vector() -> dict:
+    return json.loads(_RESULT_VECTOR_PATH.read_text(encoding="utf-8"))
 
 
 def test_authoring_freeze_vector_binds_evidence_keys_and_signature() -> None:
@@ -137,13 +149,13 @@ def test_platform_run_evidence_matches_shared_contract_vector() -> None:
 
 
 def test_result_envelope_binds_digest_deadline_and_signature_message() -> None:
+    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
     evidence = CodingRunEvidence.model_validate_json(
         json.dumps(_vectors()["run_evidence"])
-    )
+    ).model_copy(update={"validator_ticket_id": str(ticket_id)})
     digest = coding_run_evidence_digest(evidence)
     agent_id = UUID("11111111-1111-4111-8111-111111111111")
     run_row_id = UUID("22222222-2222-4222-8222-222222222222")
-    ticket_id = UUID("33333333-3333-4333-8333-333333333333")
     deadline = datetime(2026, 8, 21, 12, tzinfo=UTC)
     payload = {
         "validator_hotkey": "5" + "A" * 47,
@@ -186,5 +198,51 @@ def test_result_envelope_binds_digest_deadline_and_signature_message() -> None:
     )
 
     payload["run_evidence_sha256"] = "ff" * 32
-    with pytest.raises(ValidationError, match="does not match"):
+    with pytest.raises(ValidationError, match="authority"):
         SubmitCodingShadowResultRequest.model_validate(payload)
+
+
+def test_result_submission_vector_is_shared_with_validator() -> None:
+    vector = _result_vector()
+    request = SubmitCodingShadowResultRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    response = SubmitCodingShadowResultResponse.model_validate(vector["response"])
+    assert (
+        coding_run_evidence_digest(request.evidence)
+        == request.run_evidence_sha256
+        == vector["expected"]["run_evidence_sha256"]
+    )
+    message = coding_shadow_result_signing_message(
+        validator_hotkey=request.validator_hotkey,
+        agent_id=UUID(vector["agent_id"]),
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        bench_version=request.bench_version,
+        ticket_deadline=request.ticket_deadline,
+        agent_artifact_sha256=request.agent_artifact_sha256,
+        screened_image_sha256=request.screened_image_sha256,
+        run_evidence_sha256=request.run_evidence_sha256,
+    )
+    assert (
+        hashlib.sha256(message).hexdigest()
+        == vector["expected"]["signing_message_sha256"]
+    )
+    assert response.coding_run_id == request.evidence.coding_run_id
+
+
+def test_result_submission_rejects_ticket_and_response_identity_drift() -> None:
+    vector = _result_vector()
+    drifted = json.loads(json.dumps(vector["request"]))
+    drifted["ticket_id"] = "99999999-9999-4999-8999-999999999999"
+    with pytest.raises(ValidationError, match="authority"):
+        SubmitCodingShadowResultRequest.model_validate_json(json.dumps(drifted))
+
+    numeric = json.loads(json.dumps(vector["request"]))
+    numeric["bench_version"] = 12.0
+    with pytest.raises(ValidationError, match="integer"):
+        SubmitCodingShadowResultRequest.model_validate_json(json.dumps(numeric))
+
+    response = {**vector["response"], "agent_id": str(UUID(int=0))}
+    with pytest.raises(ValidationError, match="identity"):
+        SubmitCodingShadowResultResponse.model_validate(response)

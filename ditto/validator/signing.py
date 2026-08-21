@@ -37,6 +37,7 @@ from ditto.api_models.coding import (
     coding_authoring_lease_signing_message,
     coding_certification_signing_message,
     coding_grading_lease_signing_message,
+    coding_shadow_result_signing_message,
 )
 from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
@@ -296,6 +297,36 @@ def sign_coding_grading_lease(
         authoring_evidence_sha256=authoring_evidence_sha256,
         nonce=nonce,
         requested_at=requested_at,
+    )
+    signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def sign_coding_shadow_result(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    agent_id: UUID,
+    run_row_id: UUID,
+    ticket_id: UUID,
+    bench_version: int,
+    ticket_deadline: datetime,
+    agent_artifact_sha256: str,
+    screened_image_sha256: str,
+    run_evidence_sha256: str,
+) -> str:
+    """Sign one terminal shadow coding result submission."""
+
+    message = coding_shadow_result_signing_message(
+        validator_hotkey=validator_hotkey,
+        agent_id=agent_id,
+        run_row_id=run_row_id,
+        ticket_id=ticket_id,
+        bench_version=bench_version,
+        ticket_deadline=ticket_deadline,
+        agent_artifact_sha256=agent_artifact_sha256,
+        screened_image_sha256=screened_image_sha256,
+        run_evidence_sha256=run_evidence_sha256,
     )
     signature: bytes = keypair.sign(message)
     return signature.hex()

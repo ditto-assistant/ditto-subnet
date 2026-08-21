@@ -32,6 +32,8 @@ from ditto.api_models.coding import (
     SubmitCodingAuthoringFreezeRequest,
     SubmitCodingAuthoringFreezeResponse,
     SubmitCodingCertificationRequest,
+    SubmitCodingShadowResultRequest,
+    SubmitCodingShadowResultResponse,
     canonical_digest,
     canonical_json_bytes,
     coding_authoring_evidence_digest,
@@ -42,7 +44,9 @@ from ditto.api_models.coding import (
     coding_certification_signing_message,
     coding_grading_lease_signing_message,
     coding_issue_digest,
+    coding_run_evidence_transport_digest,
     coding_runtime_policy_digest,
+    coding_shadow_result_signing_message,
     grader_execution_receipt_root,
     grader_plan_digest,
     grader_resource_profile_digest,
@@ -76,6 +80,13 @@ _AUTHORING_FREEZE_VECTOR_PATH = (
 _GRADING_LEASE_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json"
+)
+_SHADOW_RESULT_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_shadow_result_submission_v1.json"
 )
 
 
@@ -289,6 +300,57 @@ def test_grading_lease_vector_matches_platform_contract() -> None:
         "grader-bundle",
     ]
     assert "memory-bundle" not in response.model_dump_json()
+
+
+def test_shadow_result_submission_vector_matches_platform_contract() -> None:
+    vector = json.loads(_SHADOW_RESULT_VECTOR_PATH.read_text(encoding="utf-8"))
+    request = SubmitCodingShadowResultRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    response = SubmitCodingShadowResultResponse.model_validate_json(
+        json.dumps(vector["response"])
+    )
+    manifest = CodingRunManifest.model_validate_json(
+        json.dumps(vector["authority"]["run_manifest"])
+    )
+    task_evidence = [
+        CodingTaskEvidence.model_validate_json(json.dumps(item))
+        for item in vector["authority"]["task_evidence"]
+    ]
+    assert (
+        run_evidence_digest(
+            manifest,
+            str(request.ticket_id),
+            request.evidence,
+            task_evidence,
+        )
+        == coding_run_evidence_transport_digest(request.evidence)
+        == vector["expected"]["run_evidence_sha256"]
+        == request.run_evidence_sha256
+    )
+    message = coding_shadow_result_signing_message(
+        validator_hotkey=request.validator_hotkey,
+        agent_id=UUID(vector["agent_id"]),
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        bench_version=request.bench_version,
+        ticket_deadline=request.ticket_deadline,
+        agent_artifact_sha256=request.agent_artifact_sha256,
+        screened_image_sha256=request.screened_image_sha256,
+        run_evidence_sha256=request.run_evidence_sha256,
+    )
+    assert (
+        hashlib.sha256(message).hexdigest()
+        == vector["expected"]["signing_message_sha256"]
+    )
+    assert response.ticket_id == request.ticket_id
+    extended = {**vector["request"], "future_result_hint": "ignored"}
+    assert (
+        "future_result_hint"
+        not in SubmitCodingShadowResultRequest.model_validate_json(
+            json.dumps(extended)
+        ).model_fields_set
+    )
 
 
 def test_evidence_golden_vectors_require_manifest_authority() -> None:

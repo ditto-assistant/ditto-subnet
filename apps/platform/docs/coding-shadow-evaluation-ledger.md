@@ -86,7 +86,8 @@ object keys remain server-side.
 This ledger is calibration infrastructure, not a second emissions authority.
 Production still requires a shadow scheduler, validator worker/supervisor
 orchestration, ticket-scoped inference, pristine grader execution, result
-submission wiring, and measured calibration. The authoring-lease route alone
+submission invocation, and measured calibration. The validator now has an
+unused signed result-submission client, but the authoring-lease route alone
 does not start a job. The freeze-gated grading-lease route only delivers
 visible/resource/grader capabilities to a future trusted supervisor; it is not
 called by the current worker and does not execute or score anything.
