@@ -15,6 +15,10 @@ coordinator for one gradeable coding contract v1 task. It fixes the order:
 8. replay the run manifest and every per-task evidence root, then submit the
    signed shadow result.
 
+The runtime returns per-task evidence only. The validator-owned terminal
+builder derives task order, evidence roots, domain counts, scoreable count, and
+binary repair mean; runtime-reported aggregate values are not accepted.
+
 The runtime port must provide idempotent authoring and grading abort operations.
 The coordinator shields and invokes the relevant abort on any runtime exception
 or cancellation before propagating the failure. Once a runtime returns a normal
