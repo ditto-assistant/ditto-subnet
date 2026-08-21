@@ -288,8 +288,8 @@ export default function App(): JSX.Element {
   });
 
   // These app-level resources exist for the pages that consume them; the
-  // shell reads none of their payloads directly.
-  void weights;
+  // shell reads none of their payloads directly — except `weights`, whose
+  // `epoch` drives the rail's payout clock.
   void rollout;
   void health;
   void timeline;
@@ -316,6 +316,7 @@ export default function App(): JSX.Element {
             hasOlderRuns: benchHasOlderRuns(),
           }}
           displayVersion={displayVersion()}
+          epoch={() => latest(weights)?.epoch ?? null}
           onRefresh={refreshAll}
         />
         <main class="main" id="main-content">
