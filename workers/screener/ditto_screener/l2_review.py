@@ -2910,12 +2910,20 @@ class KimiSolSourceReviewAgent:
                 provider=provider,
                 deadline=deadline,
             )
+            payload: object | None = None
             try:
                 payload = response.json()
                 output, turn_usage, response_model, response_provider = (
                     _response_output_and_usage(payload)
                 )
             except ValueError as error:
+                logger.warning(
+                    "L2/L3 response contract failed: %s keys=%s",
+                    error,
+                    sorted(payload.keys())
+                    if isinstance(payload, dict)
+                    else type(payload).__name__,
+                )
                 raise failure("model-response-contract") from error
             usage = _add_usage(usage, turn_usage)
             combined = _add_usage(usage_before, usage)

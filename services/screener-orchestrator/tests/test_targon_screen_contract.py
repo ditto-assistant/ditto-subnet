@@ -53,6 +53,8 @@ def test_kaniko_destination_is_attempt_scoped_and_argv_matches_production() -> N
     assert "--no-push" in argv
     assert "--tar-path=/kaniko/image.tar" in argv
     assert "--ignore-path=/workspace" in argv
+    assert "--ignore-path=/etc/resolv.conf" in argv
+    assert "--ignore-path=/etc/hosts" in argv
     assert f"--destination={destination}" in argv
     assert "--digest-file=/kaniko/manifest-digest" in argv
 

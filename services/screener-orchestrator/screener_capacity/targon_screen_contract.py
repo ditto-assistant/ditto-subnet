@@ -69,6 +69,8 @@ def busybox_contract_rental_script(*, agent_id: str, attempt_id: str) -> str:
         "--dockerfile=/workspace/Dockerfile "
         f"--destination={destination} --no-push --no-push-cache --cache=false "
         "--ignore-path=/workspace "
+        "--ignore-path=/etc/resolv.conf "
+        "--ignore-path=/etc/hosts "
         "--tar-path=/workspace/image.tar --verbosity=info; "
         "test -s /workspace/image.tar; "
         "echo DITTO_SCREEN_DESTINATION="
@@ -86,11 +88,19 @@ def starter_kit_rental_script(
     source_sha: str,
     agent_id: str,
     attempt_id: str,
+    publish_destination: str | None = None,
+    hold_seconds: int = 600,
 ) -> str:
     """Busybox script for a live Kaniko rental of the starter-kit harness."""
     if len(source_sha) != 40 or any(c not in "0123456789abcdef" for c in source_sha):
         raise ValueError("source_sha must be a 40-character lowercase git SHA")
-    destination = kaniko_destination(agent_id, attempt_id)
+    destination = publish_destination or kaniko_destination(agent_id, attempt_id)
+    push_flags = (
+        f"--destination={destination}"
+        if publish_destination
+        else f"--destination={destination} --no-push --no-push-cache --cache=false"
+    )
+    hold = "true" if hold_seconds <= 0 else f"/bin/sleep {int(hold_seconds)}"
     # Kaniko's git:// context scheme clones over HTTPS. The standalone
     # starter-kit repo is used instead of the monorepo: cloning ditto-subnet
     # to reach miners/dittobench-starter-kit exceeded Targon startup time.
@@ -104,8 +114,10 @@ def starter_kit_rental_script(
         "cp /busybox/sh /kaniko/bb; "
         "/kaniko/executor "
         f"--context={context} --dockerfile=Dockerfile "
-        f"--destination={destination} --no-push --no-push-cache --cache=false "
+        f"{push_flags} "
         "--ignore-path=/workspace "
+        "--ignore-path=/etc/resolv.conf "
+        "--ignore-path=/etc/hosts "
         "--tar-path=/kaniko/image.tar --verbosity=info; "
         "rc=$?; "
         "echo DITTO_KANIKO_EXIT=$rc; "
@@ -117,7 +129,7 @@ def starter_kit_rental_script(
         "echo; echo DITTO_SCREEN_MANIFEST_END; "
         "echo KANIKO_STARTER_PROBE_AVAILABLE; "
         "else echo KANIKO_STARTER_PROBE_FAILED; fi; "
-        "/bin/sleep 600"
+        f"{hold}"
     )
 
 
@@ -167,6 +179,8 @@ def kaniko_argv(*, destination: str) -> list[str]:
         "--no-push-cache",
         "--cache=false",
         "--ignore-path=/workspace",
+        "--ignore-path=/etc/resolv.conf",
+        "--ignore-path=/etc/hosts",
         "--tar-path=/kaniko/image.tar",
         "--digest-file=/kaniko/manifest-digest",
         "--verbosity=info",

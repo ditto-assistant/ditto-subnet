@@ -217,15 +217,23 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
 
     starter_kit_sha = getattr(args, "starter_kit_sha", None)
     screen_contract = bool(getattr(args, "screen_contract", False))
+    publish_ttl = bool(getattr(args, "publish_ttl", False))
+    published: str | None = None
     if starter_kit_sha:
         if args.roundtrip:
             raise SystemExit("starter-kit Kaniko probe cannot use --roundtrip")
         agent_id = str(uuid4())
         attempt_id = str(uuid4())
+        published = (
+            f"ttl.sh/ditto-e2e-starter-{secrets.token_hex(6)}:2h"
+            if publish_ttl
+            else None
+        )
         script = starter_kit_rental_script(
             source_sha=starter_kit_sha,
             agent_id=agent_id,
             attempt_id=attempt_id,
+            publish_destination=published,
         )
         success_marker = "KANIKO_STARTER_PROBE_AVAILABLE"
         probe_kind = "starter-kit"
@@ -336,6 +344,8 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
                     if not contract["ok"]:
                         print(json.dumps(result))
                         return 8
+                if published:
+                    result["published_image"] = published
                 print(json.dumps(result))
                 break
             if "KANIKO_STARTER_PROBE_FAILED" in logs:
@@ -496,16 +506,29 @@ def command_runtime_probe(args: argparse.Namespace) -> int:
     if not isinstance(selected, dict) or int(selected.get("available", 0)) < 1:
         raise RuntimeError(f"{args.resource} is not currently available")
     uid: str | None = None
+    native = bool(getattr(args, "native_health", False))
     try:
         created = client.create_rental(
             name=f"ditto-runtime-probe-{secrets.token_hex(3)}",
             image=args.image,
             resource_name=args.resource,
-            commands=["/bin/sh", "-c"],
-            args=[
-                "mkdir -p /tmp/site; printf ok >/tmp/site/health; "
-                "cd /tmp/site; exec python -m http.server 8080"
-            ],
+            envs=(
+                [
+                    {"name": "OPENROUTER_API_KEY", "value": "sk-screener-smoke"},
+                    {"name": "DITTOBENCH_DB", "value": "/tmp/dittobench.db"},
+                ]
+                if native
+                else None
+            ),
+            commands=None if native else ["/bin/sh", "-c"],
+            args=(
+                None
+                if native
+                else [
+                    "mkdir -p /tmp/site; printf ok >/tmp/site/health; "
+                    "cd /tmp/site; exec python -m http.server 8080"
+                ]
+            ),
             ports=[{"port": 8080, "protocol": "TCP", "routing": "PROXIED"}],
         )
         uid = str(created["uid"])
@@ -526,7 +549,11 @@ def command_runtime_probe(args: argparse.Namespace) -> int:
             if health_url is not None:
                 try:
                     with urllib.request.urlopen(health_url, timeout=5) as response:
-                        if response.status == 200 and response.read(16) == b"ok":
+                        body = response.read(256)
+                        healthy = response.status == 200 and (
+                            native or body == b"ok"
+                        )
+                        if healthy:
                             print(
                                 json.dumps(
                                     {
@@ -534,6 +561,7 @@ def command_runtime_probe(args: argparse.Namespace) -> int:
                                         "status": state.get("status"),
                                         "ready_replicas": state.get("ready_replicas"),
                                         "capability": "AVAILABLE",
+                                        "native_health": native,
                                     },
                                     sort_keys=True,
                                 )
@@ -1117,6 +1145,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Live busybox build with production destination and tar inspect",
     )
+    kaniko.add_argument(
+        "--publish-ttl",
+        action="store_true",
+        help="Push the starter-kit image to ttl.sh so runtime-probe can boot it",
+    )
     kaniko.add_argument("--keep", action="store_true")
     kaniko.set_defaults(handler=command_kaniko_probe)
     agent = subparsers.add_parser("agent-probe")
@@ -1131,6 +1164,11 @@ def build_parser() -> argparse.ArgumentParser:
     runtime.add_argument("--resource", default="cpu-small")
     runtime.add_argument("--image", default="python:3.12-alpine")
     runtime.add_argument("--provision-timeout-seconds", type=float, default=600)
+    runtime.add_argument(
+        "--native-health",
+        action="store_true",
+        help="Boot the image entrypoint and accept any HTTP 200 from GET /health",
+    )
     runtime.add_argument("--keep", action="store_true")
     runtime.set_defaults(handler=command_runtime_probe)
     source_review = subparsers.add_parser("source-review-probe")

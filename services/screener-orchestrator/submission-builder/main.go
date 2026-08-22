@@ -152,6 +152,8 @@ func run() error {
 		"--no-push-cache",
 		"--cache=false",
 		"--ignore-path=/workspace",
+		"--ignore-path=/etc/resolv.conf",
+		"--ignore-path=/etc/hosts",
 		"--tar-path=/kaniko/image.tar",
 		"--digest-file=/kaniko/manifest-digest",
 		"--verbosity=info",
