@@ -590,3 +590,217 @@ def test_do_not_recompute_directive_is_raw_scan() -> None:
     assert "do-not-recompute-directive" in _kinds(
         find_benchmark_emulation_fingerprints([("src/a.rs", source)])
     )
+
+
+# --------------------------------------------------------------------------- #
+# Rev8 (2026-08-21) remainder / formatter / shape-compiler fingerprints.       #
+# --------------------------------------------------------------------------- #
+
+_NEW_FAMILY_COMPILER_KINDS = {
+    "required-money-formatter",
+    "ledger-event-kind-compiler",
+    "world-shape-rule-injection",
+    "story-arc-remainder-compiler",
+    "trip-day-family-retry",
+}
+
+_RUST_STORY_ARC_REMAINDER = """\
+struct StoryArc {
+    base: i64,
+    paid: i64,
+    delta: i64,
+    cost: i64,
+    credit: i64,
+}
+
+impl StoryArc {
+    fn balance(&self) -> i64 {
+        self.base + self.delta - self.paid - self.cost + self.credit
+    }
+}
+
+fn join_family(case_id: u32, po: u32) -> String {
+    format!("CASE-{:04} / PO-{}", case_id, po)
+}
+
+fn retry(draft: &str, remaining: i64) -> bool {
+    reply_restates_story_ingredient_money(draft, remaining)
+}
+"""
+
+_RUST_REQUIRED_MONEY_FORMATTER = """\
+fn format_money(required_money: i64) -> String {
+    format!("Return ANSWER: {required_money} exactly")
+}
+"""
+
+_RUST_LEDGER_EVENT_KIND = """\
+enum LedgerEventKind {
+    Opening,
+    Adjustment,
+    Payment,
+    Expense,
+    Credit,
+}
+
+fn validate(events: &[Event]) -> Vec<String> {
+    narrative_ledger_issues(events, correction_only, event_only)
+}
+"""
+
+_RUST_WORLD_SHAPE_RULE = """\
+fn hint(world: &World) -> String {
+    let shape = world_shape_of(world);
+    let rule = world_shape_rule(shape);
+    match rule {
+        WorldShape::Outstanding => outstanding(),
+        BalanceFinal => final_balance(),
+        BalanceMid => mid(),
+    }
+}
+"""
+
+_RUST_HONEST_HOGWARTS_V3 = """\
+struct CompactToolModel {
+    money: i64,
+}
+
+fn closer(money: i64, records: &[String]) -> String {
+    format!(
+        "The money calculator returned `{money}`. \
+Answer the original user request from the raw records \
+and this genuine tool result"
+    )
+}
+
+async fn answer(req: &Request) -> Answer {
+    let records = retrieve(req.user_id, &req.question).await;
+    let money = calculator(&records);
+    let prompt = closer(money, &records);
+    let reply = model::chat(&prompt, &records).await;
+    Answer { answer: reply.text }
+}
+"""
+
+_RUST_GENERIC_LEDGER = """\
+struct Ledger {
+    amount: i64,
+}
+
+impl Ledger {
+    fn balance(&self) -> i64 {
+        self.amount
+    }
+}
+"""
+
+_RUST_TRIP_DAY_RETRY = """\
+fn coach(draft: &str, changed_leg: i64) -> bool {
+    if reply_misses_days_change_application(draft, changed_leg) {
+        return days_focus_coach_line(changed_leg);
+    }
+    false
+}
+"""
+
+
+def test_story_arc_remainder_compiler_trips_on_goal_v9_shape() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/story.rs", _RUST_STORY_ARC_REMAINDER)]
+        )
+    )
+    assert "story-arc-remainder-compiler" in kinds
+
+
+def test_required_money_formatter_trips_on_hogwarts_closer() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/money.rs", _RUST_REQUIRED_MONEY_FORMATTER)]
+        )
+    )
+    assert "required-money-formatter" in kinds
+
+
+def test_ledger_event_kind_compiler_trips_on_narrative_issues() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/ledger.rs", _RUST_LEDGER_EVENT_KIND)]
+        )
+    )
+    assert "ledger-event-kind-compiler" in kinds
+
+
+def test_world_shape_rule_injection_trips_on_balance_final() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/shape.rs", _RUST_WORLD_SHAPE_RULE)]
+        )
+    )
+    assert "world-shape-rule-injection" in kinds
+
+
+def test_trip_day_family_retry_trips_on_days_coach() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints([("src/trip.rs", _RUST_TRIP_DAY_RETRY)])
+    )
+    assert "trip-day-family-retry" in kinds
+
+
+def test_honest_hogwarts_v3_closer_trips_none_of_the_new_kinds() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/agent.rs", _RUST_HONEST_HOGWARTS_V3)]
+        )
+    )
+    assert kinds.isdisjoint(_NEW_FAMILY_COMPILER_KINDS)
+
+
+def test_generic_ledger_struct_is_not_story_arc_remainder() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints([("src/ledger.rs", _RUST_GENERIC_LEDGER)])
+    )
+    assert "story-arc-remainder-compiler" not in kinds
+    assert kinds.isdisjoint(_NEW_FAMILY_COMPILER_KINDS)
+
+
+def test_honest_family_agent_still_trips_no_rev7_or_rev8_fingerprints() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [("src/agent.rs", _RUST_HONEST_FAMILY)]
+    )
+    assert findings == []
+
+
+def test_rev8_findings_never_leak_matched_source_text() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [
+            ("src/story.rs", _RUST_STORY_ARC_REMAINDER),
+            ("src/money.rs", _RUST_REQUIRED_MONEY_FORMATTER),
+            ("src/ledger.rs", _RUST_LEDGER_EVENT_KIND),
+            ("src/shape.rs", _RUST_WORLD_SHAPE_RULE),
+            ("src/trip.rs", _RUST_TRIP_DAY_RETRY),
+        ]
+    )
+    encoded = json.dumps(findings)
+    for secret in (
+        "required_money",
+        "Return ANSWER:",
+        "LedgerEventKind",
+        "narrative_ledger_issues",
+        "correction_only",
+        "event_only",
+        "world_shape_rule",
+        "world_shape_of",
+        "BalanceFinal",
+        "WorldShape::Outstanding",
+        "StoryArc",
+        "reply_restates_story_ingredient_money",
+        "CASE-",
+        "days_focus_coach_line",
+        "reply_misses_days_change_application",
+    ):
+        assert secret not in encoded
+    for finding in findings:
+        assert finding["category"] == "benchmark_emulation"
+        for location in finding["locations"]:
+            assert set(location) == {"path", "line", "role"}

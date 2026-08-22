@@ -629,7 +629,7 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "source-review-v17"
+    assert observation.finding["prompt_revision"] == "source-review-v18"
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -1877,7 +1877,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == "source-review-v17"
+    assert observation.finding["prompt_revision"] == "source-review-v18"
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
         .split("\nExact-file trusted provenance:\n", 1)[0]
@@ -2648,7 +2648,7 @@ def test_policy_v9_prompt_separates_replacement_retry_and_legitimate_controls() 
 def test_v12_prompt_teaches_two_limb_and_production_engine_bar() -> None:
     from ditto_screener.source_review import _PROMPT_REVISION, _SYSTEM_PROMPT
 
-    assert _PROMPT_REVISION == "source-review-v17"
+    assert _PROMPT_REVISION == "source-review-v18"
     required = {
         "two-limb refusal test",
         "current user's records",
@@ -2670,6 +2670,14 @@ def test_v12_prompt_teaches_two_limb_and_production_engine_bar() -> None:
         "established_for_prompt",
         "WJFAST",
         "REPLY WITH EXACTLY",
+        "asks_outstanding",
+        "StoryArc remainder",
+        "LedgerEventKind",
+        "required_money",
+        "world_shape_rule",
+        "rubber-stamping that old identifiers are gone",
+        "compile_notes",
+        "CompactToolModel closer",
     }
 
     assert all(fragment in _SYSTEM_PROMPT for fragment in required)
@@ -2714,6 +2722,12 @@ def test_v12_written_policy_makes_two_limb_and_engine_bar_implementable() -> Non
         "C13 fingerprints",
         "never automatic bans",
         "WJFAST",
+        "StoryArc remainder",
+        "LedgerEventKind",
+        "required_money",
+        "world_shape_rule",
+        "asks_outstanding",
+        "reply_restates_story_ingredient_money",
     }
 
     assert all(fragment in policy for fragment in required)
@@ -3363,6 +3377,36 @@ fn answer(req: Request) -> Response {
 
     assert "c13-bench-family-fingerprint" not in kinds
     assert "finite-family-world-compiler" not in kinds
+
+
+def test_c13_tokens_include_remainder_formatter_and_shape_leads() -> None:
+    source = """\
+fn answer(req: Request) -> Response {
+    let remaining = StoryArc::from(req).balance();
+    let _ = (required_money, world_shape_rule, LedgerEventKind::Opening);
+    let draft = call_model(req.question, retrieve(req.user_id));
+    if reply_restates_story_ingredient_money(&draft, remaining) {
+        return draft.into_response();
+    }
+    draft.into_response()
+}
+"""
+
+    leads = find_source_review_leads([("src/compiler.rs", source)])
+    kinds = {lead["kind"] for lead in leads}
+    encoded = json.dumps(leads)
+
+    assert "c13-bench-family-fingerprint" in kinds
+    assert "StoryArc" not in encoded
+    assert "required_money" not in encoded
+    assert "world_shape_rule" not in encoded
+    assert "LedgerEventKind" not in encoded
+    assert "reply_restates_story_ingredient_money" not in encoded
+    assert all(
+        set(location) == {"path", "line", "role"}
+        for lead in leads
+        for location in lead["locations"]
+    )
 
 
 def test_runtime_described_world_interpreter_spares_compiler_lead() -> None:

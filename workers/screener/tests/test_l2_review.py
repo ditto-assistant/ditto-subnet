@@ -119,7 +119,7 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v32"
+    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v33"
     assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v10"
     assert L2_CAUSE_PROMPT_REVISION == "l3-sol-violation-cause-v24"
     assert L2_CAUSE_TIEBREAKER_PROMPT_REVISION == ("l3-sol-cause-disagreement-v5")
@@ -164,6 +164,10 @@ def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() 
     assert "two-limb refusal test" in _SYSTEM_PROMPT
     assert "necessary and not sufficient" in _SYSTEM_PROMPT
     assert "production-engine fail" in _SYSTEM_PROMPT
+    assert "asks_outstanding" in _SYSTEM_PROMPT
+    assert "StoryArc remainder" in _SYSTEM_PROMPT
+    assert "rubber-stamping that old identifiers are gone" in _SYSTEM_PROMPT
+    assert "compile_notes" in _SYSTEM_PROMPT
     assert "Derive-as-prompt that" in _SYSTEM_PROMPT
     assert "Honest-and-bad or post-remediation low score" in _SYSTEM_PROMPT
     assert "live schema-driven routing" in _SYSTEM_PROMPT

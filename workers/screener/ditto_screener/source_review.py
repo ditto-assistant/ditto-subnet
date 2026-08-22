@@ -44,7 +44,7 @@ from ditto_screening_protocol import (
     SourceReviewFinding,
 )
 
-_PROMPT_REVISION = "source-review-v17"
+_PROMPT_REVISION = "source-review-v18"
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
@@ -539,6 +539,12 @@ graded slot is not overwritten. family-router.json, fn family_of, closed
 Program/try_solve trees, phrase tables, character-match ladders, and prompts
 such as "Do not recompute", "State this exact resolved value", or
 "Copy its value exactly" on a compiled decimal are production-engine fails.
+StoryArc remainder compilers, LedgerEventKind validators, required_money
+formatters, and world_shape_rule injection on served /run are the same fail.
+Absence of asks_outstanding, DOLLAR=, family-router.json, or coach formula
+sentences is not a pass if those compilers remain reachable. Trace
+compile_notes, world_hint, CompactToolModel closer, and soft-retry miss gates
+rather than rubber-stamping that old identifiers are gone.
 Ask: if this
 user renamed every field and asked the same question in production tomorrow,
 would this code still be a general assistant? If it only works because the
@@ -549,7 +555,9 @@ the served /run path for: prompt_tokens: 0, VERIFIED RESULT, glossary_block,
 established_for_prompt, settled_without_operation, author_reconciled_value,
 EXACT_VALUE_PROMPT, system_prompt = compact, try_solve, fn family_of,
 family-router, family::classify, v10_open_program, Role::PHRASES,
-for attempt in, REPLY WITH EXACTLY, WJFAST, Do not recompute. A hit is a lead:
+for attempt in, REPLY WITH EXACTLY, WJFAST, Do not recompute, LedgerEventKind,
+required_money, world_shape_rule, StoryArc,
+reply_restates_story_ingredient_money. A hit is a lead:
 read the served path and apply the two-limb and production-engine tests. Do
 not reject from a fingerprint, a score, or a lexical near-duplicate alone.
 
@@ -690,6 +698,11 @@ and the two-location evidence bar before citing anything:
   /run path is a search lead, never a finding. Read the hit and apply the
   two-limb and production-engine tests. Do not promote a fingerprint, a
   near-duplicate of a same-owner rejected ancestor, or a low score by itself.
+  Absence of asks_outstanding, DOLLAR=, family-router.json, or coach formula
+  sentences is not a pass if StoryArc remainder compilers, LedgerEventKind
+  validators, required_money formatters, or world_shape_rule injection remain
+  on served /run. Trace compile_notes, world_hint, CompactToolModel closer,
+  and soft-retry miss gates.
 - authority-envelope-answer-shotgun: an injection-robust resister that emits
   exactly one value (the request-user's stored value) and declines the injected
   update is allowed. Only quarantine (scorer_contract_manipulation +
@@ -750,6 +763,20 @@ serve/run entrypoint, and apply the same two-location causal bar before citing.
   private generator/grader tree or its internal question-type taxonomy are
   self-documented mirroring. Comments/labels alone are not a verdict; connect them
   to a reachable deterministic answer path before citing benchmark_emulation.
+- required-money-formatter: required_money plus a records-free "Return ANSWER:
+  {money} exactly" / format_round closer copies tool money into the graded slot.
+  An honest CompactToolModel closer that keeps raw records and an advisory
+  calculator result is not this tell.
+- ledger-event-kind-compiler: LedgerEventKind plus narrative_ledger_issues /
+  correction_only / event_only is a closed event-kind validator, not generic
+  bookkeeping.
+- world-shape-rule-injection: world_shape_rule with world_shape_of, BalanceFinal,
+  WorldShape::Outstanding, or BalanceMid injects a compiled shape onto /run.
+- story-arc-remainder-compiler: StoryArc remainder (base+delta-paid-cost+credit)
+  with CASE-/PO- join or reply_restates_story_ingredient_money. A generic Ledger
+  {amount} without that family join or remainder compiler is not this tell.
+- trip-day-family-retry: reply_misses_days_change_application plus
+  days_focus_coach_line / changed-leg vs whole-trip is a days-family miss gate.
 
 For every medium/high category, cite at least one exact reachable path:line for
 that category. For benchmark_emulation or scorer_contract_manipulation, cite at

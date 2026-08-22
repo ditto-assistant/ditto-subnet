@@ -654,7 +654,10 @@ _RULES = (
                     r"system prompt\s*=\s*compact|try solve|"
                     r"fn family of|family router|family::classify|"
                     r"v10 open program|role::phrases|"
-                    r"reply with exactly|wjfast|do not recompute)"
+                    r"reply with exactly|wjfast|do not recompute|"
+                    r"ledgereventkind|ledger event kind|required money|"
+                    r"world shape rule|storyarc|story arc|"
+                    r"reply restates story ingredient money)"
                 ),
             ),
         ),
@@ -1219,6 +1222,148 @@ _EMULATION_FINGERPRINTS = (
             ),
         ),
         scan="raw",
+    ),
+    # --- Rev8 (2026-08-21) FAMILY COMPILER fingerprints -----------------------
+    # ATH first-pass review rubber-stamped "old identifiers gone" and missed
+    # reachable compilers: records-free required_money formatters, LedgerEventKind
+    # validators, world_shape_rule injection, and StoryArc remainder compilers.
+    # Each stays a location-only review lead, never an auto-ban.
+    _Fingerprint(
+        # required-money-formatter: CompactToolModel closer that copies the tool
+        # money into the graded slot ("Return ANSWER: {money} exactly") instead of
+        # keeping records plus an advisory calculator result. required_money plus
+        # a copy-the-tool-money directive is the tell; an honest closer that
+        # hands the model raw records and a genuine tool result does not fire.
+        kind="required-money-formatter",
+        severity="high",
+        roles=(
+            _Role(
+                "required-money-token",
+                re.compile(r"\brequired_money\b", re.IGNORECASE),
+            ),
+            _Role(
+                "copy-tool-money-directive",
+                re.compile(
+                    r"\bReturn exactly one\b.{0,40}\bANSWER\b"
+                    r"|Return ANSWER:.{0,80}exactly"
+                    r"|\bCopy that exact money value\b"
+                    r"|\bformat_round\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=14,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # ledger-event-kind-compiler: closed LedgerEventKind (Opening /
+        # Adjustment / Payment / Expense / Credit) plus a narrative issue
+        # validator that reject-until-matches correction_only / event_only.
+        kind="ledger-event-kind-compiler",
+        severity="high",
+        roles=(
+            _Role(
+                "ledger-event-kind",
+                re.compile(r"\bLedgerEventKind\b", re.IGNORECASE),
+            ),
+            _Role(
+                "narrative-ledger-issue-gate",
+                re.compile(
+                    r"\bnarrative_ledger_issues\b"
+                    r"|\bcorrection_only\b"
+                    r"|\bevent_only\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=16,
+        scan="code",
+    ),
+    _Fingerprint(
+        # world-shape-rule-injection: world_shape_rule still injects Outstanding
+        # C-B / BalanceFinal A+/-C-B-D+E onto served /run.
+        kind="world-shape-rule-injection",
+        severity="high",
+        roles=(
+            _Role(
+                "world-shape-rule",
+                re.compile(r"\bworld_shape_rule\b", re.IGNORECASE),
+            ),
+            _Role(
+                "world-shape-injection-target",
+                re.compile(
+                    r"\bworld_shape_of\b"
+                    r"|\bBalanceFinal\b"
+                    r"|\bWorldShape::Outstanding\b"
+                    r"|\bBalanceMid\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=14,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # story-arc-remainder-compiler: StoryArc {base,paid,delta,cost,credit}
+        # compiles remainder, injects labeled notes, CASE-/PO- joins, and retries
+        # against reply_restates_story_ingredient_money. A generic Ledger {amount}
+        # without that family join or remainder compiler does not fire.
+        kind="story-arc-remainder-compiler",
+        severity="high",
+        roles=(
+            _Role(
+                "story-arc-or-ingredient-retry",
+                re.compile(
+                    r"\bStoryArc\b"
+                    r"|\breply_restates_story_ingredient_money\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "remainder-compiler-or-family-join",
+                re.compile(
+                    r"\bfn\s+balance\b"
+                    r"|\bbalance\s*\(\s*\)\s*="
+                    r"|CASE-\d{4}"
+                    r"|[\"']CASE-"
+                    r"|[\"']PO-\d"
+                    r"|\bPO-\d{2,}"
+                    r"|\breply_restates_story_ingredient_money\b"
+                    r"|\bbase\s*\+\s*(?:self\.)?delta"
+                    r"|\bdelta\s*-\s*(?:self\.)?paid",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=20,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # trip-day-family-retry: days-family coach that retries until the model
+        # applies the changed-leg (not whole-trip) day delta. Both identifiers
+        # are distinctive; the honest starter-kit has neither.
+        kind="trip-day-family-retry",
+        severity="medium",
+        roles=(
+            _Role(
+                "days-change-retry-gate",
+                re.compile(
+                    r"\breply_misses_days_change_application\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "days-focus-coach",
+                re.compile(
+                    r"\bdays_focus_coach_line\b"
+                    r"|\bchanged[_ -]?leg\b"
+                    r"|\bwhole[_ -]?trip\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=16,
+        scan="code",
     ),
 )
 

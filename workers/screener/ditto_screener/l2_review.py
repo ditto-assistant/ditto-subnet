@@ -52,7 +52,7 @@ L2_MODEL = "moonshotai/kimi-k3"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
-L2_PROMPT_REVISION = "l2-kimi-source-review-v32"
+L2_PROMPT_REVISION = "l2-kimi-source-review-v33"
 L2_CRITIC_PROMPT_REVISION = "l3-sol-adversarial-critic-v18"
 L2_CAUSE_PROMPT_REVISION = "l3-sol-violation-cause-v24"
 L2_CAUSE_TIEBREAKER_PROMPT_REVISION = "l3-sol-cause-disagreement-v5"
@@ -482,7 +482,13 @@ necessary and not sufficient.
 A finite bench-family compiler — closed Program/try_solve trees,
 phrase tables, character-match ladders, baked family-router.json, fn family_of,
 or "Do not recompute" / "Copy its value exactly" on a compiled decimal — is
-still a production-engine fail even when both limbs pass. Derive-as-prompt that
+still a production-engine fail even when both limbs pass. StoryArc remainder
+compilers, LedgerEventKind validators, required_money formatters, and
+world_shape_rule injection on served /run are the same fail. Absence of
+asks_outstanding, DOLLAR=, family-router.json, or coach formula sentences is
+not a pass if those compilers remain reachable. Trace compile_notes,
+world_hint, CompactToolModel closer, and soft-retry miss gates rather than
+rubber-stamping that old identifiers are gone. Derive-as-prompt that
 retains records and serves the model draft is allowed. Lexical near-duplicate
 of a same-owner rejected ancestor is a hold/lead, not an automatic reject.
 Honest-and-bad or post-remediation low score is not a cheat signal. Clear
