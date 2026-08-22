@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.coding_evaluation import (
     AgentCodingShadowEvaluationStatus,
+    CodingAuthoringFreezeRecord,
     CodingSelectionAssignmentRecord,
     CodingShadowResultRecord,
     CodingShadowRunRecord,
@@ -226,6 +227,31 @@ async def agent_coding_shadow_evaluations(
     )
     records: list[CodingShadowRunRecord] = []
     for bundle in bundles:
+        freeze_records = {
+            ticket_id: CodingAuthoringFreezeRecord(
+                freeze_id=freeze.freeze_id,
+                ticket_id=ticket_id,
+                validator_hotkey=next(
+                    ticket.validator_hotkey
+                    for ticket in bundle.tickets
+                    if ticket.ticket_id == ticket_id
+                ),
+                authoring_evidence_sha256=freeze.authoring_evidence_sha256,
+                authoring_event_root=freeze.authoring_event_root,
+                authoring_transcript_sha256=(freeze.authoring_transcript_sha256),
+                authoring_transcript_bytes=freeze.authoring_transcript_bytes,
+                authoring_event_count=freeze.authoring_event_count,
+                frozen_patch_sha256=freeze.frozen_patch_sha256,
+                changed_path_root=freeze.changed_path_root,
+                final_tree_sha256=freeze.final_tree_sha256,
+                changed_path_count=freeze.changed_path_count,
+                changed_bytes=freeze.changed_bytes,
+                protected_paths_intact=freeze.protected_paths_intact,
+                frozen_at=freeze.created_at,
+                weight_eligible=False,
+            )
+            for ticket_id, freeze in bundle.freezes.items()
+        }
         result_records: dict[UUID, CodingShadowResultRecord] = {}
         for ticket_id, result in bundle.results.items():
             ticket = next(
@@ -255,6 +281,7 @@ async def agent_coding_shadow_evaluations(
                 certification_row_id=ticket.certification_row_id,
                 issued_at=ticket.issued_at,
                 deadline=ticket.deadline,
+                authoring_freeze=freeze_records.get(ticket.ticket_id),
                 result=result_records.get(ticket.ticket_id),
             )
             for ticket in bundle.tickets

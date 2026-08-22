@@ -32,6 +32,10 @@ and curator metadata are structurally absent.
 The root validator client has a typed request method with a 512 KiB response
 ceiling and redacted parse errors. No worker or scheduler calls the method.
 
+After a trusted runner revokes its authoring capability and freezes the
+workspace, the separate authoring-freeze endpoint can persist the canonical
+evidence. The authoring lease itself cannot release or imply grader authority.
+
 ## Activation boundary
 
 This route can serve only an already-issued explicit shadow ticket. No

@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from ditto.api_models.coding import (
+    CodingAuthoringEvidence,
     CodingAuthoringLeaseRequest,
     CodingAuthoringLeaseResponse,
     CodingBudgets,
@@ -26,9 +27,13 @@ from ditto.api_models.coding import (
     CodingRuntimePolicy,
     CodingSeedRequest,
     CodingTaskEvidence,
+    SubmitCodingAuthoringFreezeRequest,
+    SubmitCodingAuthoringFreezeResponse,
     SubmitCodingCertificationRequest,
     canonical_digest,
     canonical_json_bytes,
+    coding_authoring_evidence_digest,
+    coding_authoring_freeze_signing_message,
     coding_authoring_lease_signing_message,
     coding_budgets_digest,
     coding_certification_receipt_digest,
@@ -60,6 +65,10 @@ _SELECTION_VECTOR_PATH = (
 _ARTIFACT_VECTOR_PATH = (
     Path(__file__).parents[3]
     / "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json"
+)
+_AUTHORING_FREEZE_VECTOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json"
 )
 
 
@@ -203,6 +212,46 @@ def test_authoring_request_and_response_match_platform_contract() -> None:
         "resource-profile",
     ]
     assert "grader-bundle" not in response.model_dump_json()
+
+
+def test_authoring_freeze_vector_matches_platform_contract() -> None:
+    vector = json.loads(_AUTHORING_FREEZE_VECTOR_PATH.read_text(encoding="utf-8"))
+    request = SubmitCodingAuthoringFreezeRequest.model_validate_json(
+        json.dumps(vector["request"])
+    )
+    response = SubmitCodingAuthoringFreezeResponse.model_validate_json(
+        json.dumps(vector["response"])
+    )
+    evidence = CodingAuthoringEvidence.model_validate_json(
+        json.dumps(vector["request"]["evidence"])
+    )
+    assert (
+        coding_authoring_evidence_digest(evidence)
+        == (vector["expected"]["authoring_evidence_sha256"])
+    )
+    message = coding_authoring_freeze_signing_message(
+        validator_hotkey=request.validator_hotkey,
+        agent_id=UUID(vector["agent_id"]),
+        bench_version=request.bench_version,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        ticket_deadline=request.ticket_deadline,
+        coding_run_id=request.coding_run_id,
+        agent_artifact_sha256=request.agent_artifact_sha256,
+        screened_image_sha256=request.screened_image_sha256,
+        run_manifest_sha256=request.run_manifest_sha256,
+        task_set_manifest_sha256=request.task_set_manifest_sha256,
+        authoring_evidence_sha256=request.authoring_evidence_sha256,
+        authoring_transcript_object_key=request.authoring_transcript_object_key,
+        authoring_transcript_bytes=request.authoring_transcript_bytes,
+        authoring_event_count=request.authoring_event_count,
+        frozen_submission_object_key=request.frozen_submission_object_key,
+    )
+    assert (
+        hashlib.sha256(message).hexdigest()
+        == (vector["expected"]["signing_message_sha256"])
+    )
+    assert response.ticket_id == request.ticket_id
 
 
 def test_evidence_golden_vectors_require_manifest_authority() -> None:

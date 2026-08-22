@@ -18,11 +18,15 @@ import httpx
 from pydantic import ValidationError
 
 from ditto.api_models.coding import (
+    CodingAuthoringEvidence,
     CodingAuthoringLeaseRequest,
     CodingAuthoringLeaseResponse,
     CodingCapabilityCertificationReceipt,
+    SubmitCodingAuthoringFreezeRequest,
+    SubmitCodingAuthoringFreezeResponse,
     SubmitCodingCertificationRequest,
     SubmitCodingCertificationResponse,
+    coding_authoring_evidence_digest,
 )
 from ditto.api_models.inference import (
     InferenceExchangeRequest,
@@ -63,6 +67,7 @@ from ditto.validator.errors import (
 )
 from ditto.validator.signing import (
     sign_artifact_request,
+    sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
     sign_inference_exchange,
     sign_job_fail_request,
@@ -101,6 +106,7 @@ _INFERENCE_BUDGET_EVIDENCE_HEADERS = {
 }
 _INFERENCE_BUDGET_EVIDENCE_FIELDS = tuple(_INFERENCE_BUDGET_EVIDENCE_HEADERS)
 _CODING_AUTHORING_LEASE_MAX_BYTES = 512 << 10
+_CODING_AUTHORING_FREEZE_MAX_BYTES = 64 << 10
 
 
 def _json_budget_evidence(exchange: InferenceExchangeResponse) -> dict[str, int] | None:
@@ -287,6 +293,112 @@ class PlatformClient:
                 "coding authoring lease response identity is invalid"
             )
         return lease
+
+    async def submit_coding_authoring_freeze(
+        self,
+        agent_id: UUID,
+        *,
+        bench_version: int,
+        run_row_id: UUID,
+        ticket_id: UUID,
+        ticket_deadline: datetime,
+        coding_run_id: str,
+        agent_artifact_sha256: str,
+        screened_image_sha256: str,
+        run_manifest_sha256: str,
+        task_set_manifest_sha256: str,
+        evidence: CodingAuthoringEvidence,
+        authoring_transcript_object_key: str,
+        authoring_transcript_bytes: int,
+        authoring_event_count: int,
+        frozen_submission_object_key: str,
+    ) -> SubmitCodingAuthoringFreezeResponse:
+        """Persist one freeze transition; no worker invokes this shadow method."""
+
+        evidence_sha256 = coding_authoring_evidence_digest(evidence)
+        signature = sign_coding_authoring_freeze(
+            self._keypair,
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=agent_id,
+            bench_version=bench_version,
+            run_row_id=run_row_id,
+            ticket_id=ticket_id,
+            ticket_deadline=ticket_deadline,
+            coding_run_id=coding_run_id,
+            agent_artifact_sha256=agent_artifact_sha256,
+            screened_image_sha256=screened_image_sha256,
+            run_manifest_sha256=run_manifest_sha256,
+            task_set_manifest_sha256=task_set_manifest_sha256,
+            authoring_evidence_sha256=evidence_sha256,
+            authoring_transcript_object_key=authoring_transcript_object_key,
+            authoring_transcript_bytes=authoring_transcript_bytes,
+            authoring_event_count=authoring_event_count,
+            frozen_submission_object_key=frozen_submission_object_key,
+        )
+        payload = SubmitCodingAuthoringFreezeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=agent_id,
+            bench_version=bench_version,
+            run_row_id=run_row_id,
+            ticket_id=ticket_id,
+            ticket_deadline=ticket_deadline,
+            coding_run_id=coding_run_id,
+            agent_artifact_sha256=agent_artifact_sha256,
+            screened_image_sha256=screened_image_sha256,
+            run_manifest_sha256=run_manifest_sha256,
+            task_set_manifest_sha256=task_set_manifest_sha256,
+            authoring_evidence_sha256=evidence_sha256,
+            evidence=evidence,
+            authoring_transcript_object_key=authoring_transcript_object_key,
+            authoring_transcript_bytes=authoring_transcript_bytes,
+            authoring_event_count=authoring_event_count,
+            frozen_submission_object_key=frozen_submission_object_key,
+            signature=signature,
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}/coding-shadow/authoring-freeze",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding authoring freeze rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_AUTHORING_FREEZE_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding authoring freeze response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding authoring freeze submission failed"
+            ) from error
+        if not body:
+            raise PlatformInfrastructureError(
+                "coding authoring freeze response size is invalid"
+            )
+        try:
+            accepted = SubmitCodingAuthoringFreezeResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding authoring freeze response is invalid"
+            ) from None
+        if (
+            accepted.agent_id != agent_id
+            or accepted.run_row_id != run_row_id
+            or accepted.ticket_id != ticket_id
+            or accepted.coding_run_id != coding_run_id
+            or accepted.authoring_evidence_sha256 != evidence_sha256
+        ):
+            raise PlatformInfrastructureError(
+                "coding authoring freeze response identity is invalid"
+            )
+        return accepted
 
     async def request_v9_confirmation_job(
         self,

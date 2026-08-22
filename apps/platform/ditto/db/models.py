@@ -1934,6 +1934,88 @@ class CodingShadowTicket(Base):
     )
 
 
+class CodingShadowAuthoringFreeze(Base):
+    """One immutable validator-signed freeze transition for a shadow ticket."""
+
+    __tablename__ = "coding_shadow_authoring_freezes"
+
+    freeze_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    ticket_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    run_row_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    task_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    authoring_evidence_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    authoring_event_root: Mapped[str] = mapped_column(Text, nullable=False)
+    authoring_transcript_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    authoring_transcript_object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    authoring_transcript_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    authoring_event_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    frozen_patch_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    frozen_submission_object_key: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_path_root: Mapped[str] = mapped_column(Text, nullable=False)
+    final_tree_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    changed_path_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    changed_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    protected_paths_intact: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    evidence: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["ticket_id", "run_row_id", "task_count"],
+            [
+                "coding_shadow_tickets.ticket_id",
+                "coding_shadow_tickets.run_row_id",
+                "coding_shadow_tickets.task_count",
+            ],
+            ondelete="CASCADE",
+            name="coding_shadow_authoring_freezes_ticket_fkey",
+        ),
+        UniqueConstraint(
+            "ticket_id",
+            name="coding_shadow_authoring_freezes_ticket_key",
+        ),
+        CheckConstraint(
+            "authoring_evidence_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND authoring_event_root ~ '^[0-9a-f]{64}$' "
+            "AND authoring_transcript_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND frozen_patch_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND changed_path_root ~ '^[0-9a-f]{64}$' "
+            "AND final_tree_sha256 ~ '^[0-9a-f]{64}$' "
+            "AND signature ~ '^[0-9a-f]{128}$'",
+            name="coding_shadow_authoring_freezes_integrity_check",
+        ),
+        CheckConstraint(
+            "authoring_transcript_object_key = "
+            "'sha256/' || authoring_transcript_sha256 "
+            "AND frozen_submission_object_key = 'sha256/' || frozen_patch_sha256",
+            name="coding_shadow_authoring_freezes_object_keys_check",
+        ),
+        CheckConstraint(
+            "task_count = 1 AND changed_path_count BETWEEN 0 AND 10000 "
+            "AND changed_bytes BETWEEN 0 AND 1073741824 "
+            "AND authoring_transcript_bytes BETWEEN 0 AND 536870912 "
+            "AND authoring_event_count BETWEEN 0 AND 1000 "
+            "AND (authoring_transcript_bytes = 0) = (authoring_event_count = 0)",
+            name="coding_shadow_authoring_freezes_bounds_check",
+        ),
+        CheckConstraint(
+            "weight_eligible = false",
+            name="coding_shadow_authoring_freezes_weight_ineligible",
+        ),
+        Index(
+            "coding_shadow_authoring_freezes_run_created_idx",
+            "run_row_id",
+            "created_at",
+        ),
+    )
+
+
 class CodingShadowResult(Base):
     """One immutable validator-signed repair result for a shadow ticket."""
 

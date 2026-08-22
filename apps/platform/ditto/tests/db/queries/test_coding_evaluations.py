@@ -20,8 +20,10 @@ from ditto.api_models.coding_catalog import (
     CodingCatalogTaskExposure,
 )
 from ditto.api_models.coding_evaluation import (
+    CodingAuthoringEvidence,
     CodingRunEvidence,
     CodingShadowRunAuthority,
+    coding_authoring_evidence_digest,
     coding_run_evidence_digest,
 )
 from ditto.api_models.core_qualification import CoreQualificationPolicy
@@ -32,6 +34,7 @@ from ditto.db.models import (
     CodingCatalogExposure,
     CodingCatalogRelease,
     CodingSelectionAssignmentRow,
+    CodingShadowAuthoringFreeze,
     CodingShadowResult,
     CodingShadowRun,
     CodingShadowRunIssuance,
@@ -54,6 +57,7 @@ from ditto.db.queries.coding_catalog import (
 from ditto.db.queries.coding_evaluations import (
     CodingShadowConflictError,
     CodingShadowNotQualifiedError,
+    insert_coding_authoring_freeze,
     insert_coding_shadow_result,
     insert_coding_shadow_run,
     issue_coding_shadow_ticket,
@@ -68,6 +72,8 @@ _NOW = datetime.now(UTC)
 _AGENT_CREATED_AT = _NOW + timedelta(minutes=5)
 _BENCH = 12
 _VALIDATOR = "5" + "B" * 47
+_TRANSCRIPT_BYTES = 4096
+_AUTHORING_EVENTS = 4
 
 
 class _FinalizedBlocks:
@@ -173,6 +179,20 @@ def _evidence(ticket_id) -> CodingRunEvidence:
     )["run_evidence"]
     vector["validator_ticket_id"] = str(ticket_id)
     return CodingRunEvidence.model_validate_json(json.dumps(vector))
+
+
+def _authoring_evidence() -> CodingAuthoringEvidence:
+    vector = json.loads(
+        (
+            Path(__file__).parents[6]
+            / "packages"
+            / "dittobench-coding-contract"
+            / "testdata"
+            / "coding_authoring_freeze_v1.json"
+        ).read_text(encoding="utf-8")
+    )["request"]["evidence"]
+    vector["model"]["inference_grant_sha256"] = "01" * 32
+    return CodingAuthoringEvidence.model_validate_json(json.dumps(vector))
 
 
 def _authority(agent_id) -> CodingShadowRunAuthority:
@@ -700,6 +720,116 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
         )
     assert stale_run_replay.idempotent is True
     evidence = _evidence(ticket_id)
+    with pytest.raises(CodingShadowConflictError, match="requires.*frozen"):
+        async with session.begin():
+            stored_ticket = await session.get(CodingShadowTicket, ticket_id)
+            assert stored_ticket is not None
+            await insert_coding_shadow_result(
+                session,
+                ticket=stored_ticket,
+                evidence=evidence,
+                run_evidence_sha256=coding_run_evidence_digest(evidence),
+                signature="99" * 64,
+            )
+    authoring = _authoring_evidence()
+    authoring_digest = coding_authoring_evidence_digest(authoring)
+    async with session.begin():
+        stored_ticket = await session.get(CodingShadowTicket, ticket_id)
+        assert stored_ticket is not None
+        freeze = await insert_coding_authoring_freeze(
+            session,
+            ticket=stored_ticket,
+            evidence=authoring,
+            authoring_evidence_sha256=authoring_digest,
+            authoring_transcript_object_key=(
+                f"sha256/{authoring.authoring_transcript_sha256}"
+            ),
+            authoring_transcript_bytes=_TRANSCRIPT_BYTES,
+            authoring_event_count=_AUTHORING_EVENTS,
+            frozen_submission_object_key=f"sha256/{authoring.frozen_patch_sha256}",
+            signature="98" * 64,
+        )
+    assert freeze.idempotent is False
+    assert isinstance(freeze.row, CodingShadowAuthoringFreeze)
+    assert freeze.row.weight_eligible is False
+    async with session.begin():
+        stored_ticket = await session.get(CodingShadowTicket, ticket_id)
+        assert stored_ticket is not None
+        replayed_freeze = await insert_coding_authoring_freeze(
+            session,
+            ticket=stored_ticket,
+            evidence=authoring,
+            authoring_evidence_sha256=authoring_digest,
+            authoring_transcript_object_key=(
+                f"sha256/{authoring.authoring_transcript_sha256}"
+            ),
+            authoring_transcript_bytes=_TRANSCRIPT_BYTES,
+            authoring_event_count=_AUTHORING_EVENTS,
+            frozen_submission_object_key=f"sha256/{authoring.frozen_patch_sha256}",
+            signature="98" * 64,
+        )
+    assert replayed_freeze.idempotent is True
+    with pytest.raises(CodingShadowConflictError):
+        async with session.begin():
+            stored_ticket = await session.get(CodingShadowTicket, ticket_id)
+            assert stored_ticket is not None
+            await insert_coding_authoring_freeze(
+                session,
+                ticket=stored_ticket,
+                evidence=authoring,
+                authoring_evidence_sha256=authoring_digest,
+                authoring_transcript_object_key=(
+                    f"sha256/{authoring.authoring_transcript_sha256}"
+                ),
+                authoring_transcript_bytes=_TRANSCRIPT_BYTES,
+                authoring_event_count=_AUTHORING_EVENTS + 1,
+                frozen_submission_object_key=(
+                    f"sha256/{authoring.frozen_patch_sha256}"
+                ),
+                signature="98" * 64,
+            )
+    with pytest.raises(SAIntegrityError, match="append-only"):
+        async with session.begin():
+            stored_freeze = await session.scalar(
+                select(CodingShadowAuthoringFreeze).where(
+                    CodingShadowAuthoringFreeze.ticket_id == ticket_id
+                )
+            )
+            assert stored_freeze is not None
+            stored_freeze.changed_bytes += 1
+            await session.flush()
+    with pytest.raises(SAIntegrityError, match="append-only"):
+        async with session.begin():
+            stored_freeze = await session.scalar(
+                select(CodingShadowAuthoringFreeze).where(
+                    CodingShadowAuthoringFreeze.ticket_id == ticket_id
+                )
+            )
+            assert stored_freeze is not None
+            await session.delete(stored_freeze)
+            await session.flush()
+    changed_authoring = authoring.model_copy(update={"final_tree_sha256": "fe" * 32})
+    with pytest.raises(CodingShadowConflictError):
+        async with session.begin():
+            stored_ticket = await session.get(CodingShadowTicket, ticket_id)
+            assert stored_ticket is not None
+            await insert_coding_authoring_freeze(
+                session,
+                ticket=stored_ticket,
+                evidence=changed_authoring,
+                authoring_evidence_sha256=coding_authoring_evidence_digest(
+                    changed_authoring
+                ),
+                authoring_transcript_object_key=(
+                    f"sha256/{changed_authoring.authoring_transcript_sha256}"
+                ),
+                authoring_transcript_bytes=_TRANSCRIPT_BYTES,
+                authoring_event_count=_AUTHORING_EVENTS,
+                frozen_submission_object_key=(
+                    f"sha256/{changed_authoring.frozen_patch_sha256}"
+                ),
+                signature="98" * 64,
+            )
     digest = coding_run_evidence_digest(evidence)
     async with session.begin():
         stored_ticket = await session.get(CodingShadowTicket, ticket_id)
@@ -748,6 +878,12 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
     async with session.begin():
         assert (
             await session.scalar(select(func.count()).select_from(CodingShadowResult))
+            == 1
+        )
+        assert (
+            await session.scalar(
+                select(func.count()).select_from(CodingShadowAuthoringFreeze)
+            )
             == 1
         )
         assert (

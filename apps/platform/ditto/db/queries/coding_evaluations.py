@@ -11,13 +11,16 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from ditto.api_models.coding_evaluation import (
+    CodingAuthoringEvidence,
     CodingRunEvidence,
     CodingShadowRunAuthority,
+    coding_authoring_evidence_digest,
     coding_run_evidence_digest,
 )
 from ditto.db.models import (
     Agent,
     CodingCapabilityCertification,
+    CodingShadowAuthoringFreeze,
     CodingShadowResult,
     CodingShadowRun,
     CodingShadowRunIssuance,
@@ -52,7 +55,12 @@ class CodingShadowNotQualifiedError(Exception):
 
 @dataclass(frozen=True)
 class CodingShadowInsertResult:
-    row: CodingShadowRun | CodingShadowTicket | CodingShadowResult
+    row: (
+        CodingShadowRun
+        | CodingShadowTicket
+        | CodingShadowAuthoringFreeze
+        | CodingShadowResult
+    )
     idempotent: bool
 
 
@@ -61,6 +69,7 @@ class CodingShadowRunBundle:
     run: CodingShadowRun
     issuance: CodingShadowRunIssuance | None
     tickets: list[CodingShadowTicket]
+    freezes: dict[UUID, CodingShadowAuthoringFreeze]
     results: dict[UUID, CodingShadowResult]
 
 
@@ -340,6 +349,111 @@ def coding_shadow_result_matches(
     )
 
 
+def coding_authoring_freeze_matches(
+    row: CodingShadowAuthoringFreeze,
+    *,
+    evidence: CodingAuthoringEvidence,
+    authoring_evidence_sha256: str,
+    authoring_transcript_object_key: str,
+    authoring_transcript_bytes: int,
+    authoring_event_count: int,
+    frozen_submission_object_key: str,
+) -> bool:
+    return (
+        row.authoring_evidence_sha256 == authoring_evidence_sha256
+        and row.evidence == evidence.model_dump(mode="json", by_alias=True)
+        and row.authoring_transcript_object_key == authoring_transcript_object_key
+        and row.authoring_transcript_bytes == authoring_transcript_bytes
+        and row.authoring_event_count == authoring_event_count
+        and row.frozen_submission_object_key == frozen_submission_object_key
+    )
+
+
+async def insert_coding_authoring_freeze(
+    session: AsyncSession,
+    *,
+    ticket: CodingShadowTicket,
+    evidence: CodingAuthoringEvidence,
+    authoring_evidence_sha256: str,
+    authoring_transcript_object_key: str,
+    authoring_transcript_bytes: int,
+    authoring_event_count: int,
+    frozen_submission_object_key: str,
+    signature: str,
+) -> CodingShadowInsertResult:
+    """Persist the one canonical authoring outcome for a contract-v1 ticket."""
+
+    run = await session.get(CodingShadowRun, ticket.run_row_id)
+    if (
+        run is None
+        or run.coding_contract_version != 1
+        or run.task_count != 1
+        or ticket.task_count != 1
+        or evidence.model.inference_grant_sha256 != run.inference_grant_sha256
+        or coding_authoring_evidence_digest(evidence) != authoring_evidence_sha256
+        or authoring_transcript_object_key
+        != f"sha256/{evidence.authoring_transcript_sha256}"
+        or frozen_submission_object_key != f"sha256/{evidence.frozen_patch_sha256}"
+        or not 0 <= authoring_transcript_bytes <= 512 << 20
+        or not 0 <= authoring_event_count <= 1_000
+        or (authoring_transcript_bytes == 0) != (authoring_event_count == 0)
+    ):
+        raise CodingShadowConflictError(
+            "coding authoring freeze does not match immutable run authority"
+        )
+    values = {
+        "freeze_id": uuid4(),
+        "ticket_id": ticket.ticket_id,
+        "run_row_id": ticket.run_row_id,
+        "task_count": ticket.task_count,
+        "authoring_evidence_sha256": authoring_evidence_sha256,
+        "authoring_event_root": evidence.authoring_event_root,
+        "authoring_transcript_sha256": evidence.authoring_transcript_sha256,
+        "authoring_transcript_object_key": authoring_transcript_object_key,
+        "authoring_transcript_bytes": authoring_transcript_bytes,
+        "authoring_event_count": authoring_event_count,
+        "frozen_patch_sha256": evidence.frozen_patch_sha256,
+        "frozen_submission_object_key": frozen_submission_object_key,
+        "changed_path_root": evidence.changed_path_root,
+        "final_tree_sha256": evidence.final_tree_sha256,
+        "changed_path_count": evidence.changed_path_count,
+        "changed_bytes": evidence.changed_bytes,
+        "protected_paths_intact": evidence.protected_paths_intact,
+        "weight_eligible": False,
+        "evidence": evidence.model_dump(mode="json", by_alias=True),
+        "signature": signature.lower(),
+    }
+    inserted_id = await session.scalar(
+        pg_insert(CodingShadowAuthoringFreeze)
+        .values(**values)
+        .on_conflict_do_nothing(constraint="coding_shadow_authoring_freezes_ticket_key")
+        .returning(CodingShadowAuthoringFreeze.freeze_id)
+    )
+    if inserted_id is not None:
+        row = await session.get(CodingShadowAuthoringFreeze, inserted_id)
+        if row is None:  # pragma: no cover
+            raise RuntimeError("inserted coding authoring freeze was not readable")
+        return CodingShadowInsertResult(row=row, idempotent=False)
+    row = await session.scalar(
+        select(CodingShadowAuthoringFreeze).where(
+            CodingShadowAuthoringFreeze.ticket_id == ticket.ticket_id
+        )
+    )
+    if row is None or not coding_authoring_freeze_matches(
+        row,
+        evidence=evidence,
+        authoring_evidence_sha256=authoring_evidence_sha256,
+        authoring_transcript_object_key=authoring_transcript_object_key,
+        authoring_transcript_bytes=authoring_transcript_bytes,
+        authoring_event_count=authoring_event_count,
+        frozen_submission_object_key=frozen_submission_object_key,
+    ):
+        raise CodingShadowConflictError(
+            "coding ticket already names different authoring evidence"
+        )
+    return CodingShadowInsertResult(row=row, idempotent=True)
+
+
 async def insert_coding_shadow_result(
     session: AsyncSession,
     *,
@@ -362,6 +476,30 @@ async def insert_coding_shadow_result(
         raise CodingShadowConflictError(
             "coding result evidence does not match immutable run authority"
         )
+    if evidence.scoreable_task_count > 0:
+        freeze = await session.scalar(
+            select(CodingShadowAuthoringFreeze).where(
+                CodingShadowAuthoringFreeze.ticket_id == ticket.ticket_id
+            )
+        )
+        if (
+            freeze is None
+            or freeze.authoring_transcript_bytes == 0
+            or freeze.authoring_event_count == 0
+        ):
+            raise CodingShadowConflictError(
+                "scoreable coding result requires authoritative frozen activity"
+            )
+        model = freeze.evidence.get("model")
+        if evidence.resolved_count > 0 and (
+            not freeze.protected_paths_intact
+            or freeze.changed_path_count == 0
+            or not isinstance(model, dict)
+            or model.get("usage_status") != "complete"
+        ):
+            raise CodingShadowConflictError(
+                "resolved coding result disagrees with frozen authoring evidence"
+            )
     values = {
         "result_id": uuid4(),
         "ticket_id": ticket.ticket_id,
@@ -458,18 +596,35 @@ async def list_agent_coding_shadow_runs(
         if ticket_ids
         else []
     )
+    freezes = (
+        list(
+            await session.scalars(
+                select(CodingShadowAuthoringFreeze).where(
+                    CodingShadowAuthoringFreeze.ticket_id.in_(ticket_ids)
+                )
+            )
+        )
+        if ticket_ids
+        else []
+    )
     tickets_by_run: dict[UUID, list[CodingShadowTicket]] = {
         run_id: [] for run_id in run_ids
     }
     for ticket in tickets:
         tickets_by_run[ticket.run_row_id].append(ticket)
     results_by_ticket = {result.ticket_id: result for result in results}
+    freezes_by_ticket = {freeze.ticket_id: freeze for freeze in freezes}
     issuance_by_run = {issuance.run_row_id: issuance for issuance in issuances}
     return [
         CodingShadowRunBundle(
             run=run,
             issuance=issuance_by_run.get(run.run_row_id),
             tickets=tickets_by_run[run.run_row_id],
+            freezes={
+                ticket.ticket_id: freezes_by_ticket[ticket.ticket_id]
+                for ticket in tickets_by_run[run.run_row_id]
+                if ticket.ticket_id in freezes_by_ticket
+            },
             results={
                 ticket.ticket_id: results_by_ticket[ticket.ticket_id]
                 for ticket in tickets_by_run[run.run_row_id]

@@ -29,6 +29,7 @@
 | Shadow verified artifact fetcher | `services/dittobench-api/internal/codingartifacts/` |
 | Shadow artifact delivery contract | `packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json`, `apps/platform/ditto/api_models/coding_artifacts.py`, `services/dittobench-api/internal/codingartifacts/delivery.go` |
 | Shadow authoring-lease delivery | `apps/platform/ditto/api_server/endpoints/validator_coding_delivery.py`, `ditto/validator/platform.py` |
+| Shadow authoring-freeze ledger | `apps/platform/ditto/api_server/endpoints/validator_coding_freezes.py`, `apps/platform/ditto/db/queries/coding_evaluations.py` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
 
