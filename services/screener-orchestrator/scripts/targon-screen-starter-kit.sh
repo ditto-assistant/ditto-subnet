@@ -98,5 +98,9 @@ PYTHONPATH="${ORCH_ROOT}" python3 -m screener_capacity.targon_screen_contract va
   --image-tar "${image_tar}" --agent-id "${agent_id}" --attempt-id "${attempt_id}"
 
 if [[ "${live}" -eq 1 ]]; then
-  "${SCRIPT_DIR}/targon-smoke.sh" kaniko-probe --resource cpu-small
+  source_sha="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  "${SCRIPT_DIR}/targon-smoke.sh" kaniko-probe \
+    --resource cpu-large \
+    --starter-kit-sha "${source_sha}" \
+    --provision-timeout-seconds 1800
 fi
