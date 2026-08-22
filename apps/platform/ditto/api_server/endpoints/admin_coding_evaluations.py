@@ -18,6 +18,7 @@ from ditto.api_models.coding_evaluation import (
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import Agent, CodingShadowRun, CoreQualificationObservation
+from ditto.db.queries.coding_catalog import active_coding_catalog_release
 from ditto.db.queries.coding_evaluations import list_agent_coding_shadow_runs
 from ditto.db.queries.core_qualification import latest_core_qualification_policy
 
@@ -37,11 +38,20 @@ async def _run_stale_reason(
     "artifact_changed",
     "screened_image_changed",
     "policy_changed",
+    "catalog_retired",
 ]:
     if run.artifact_sha256 != agent.sha256:
         return "artifact_changed"
     if run.screened_image_sha256 != agent.screened_image_sha256:
         return "screened_image_changed"
+    if (
+        await active_coding_catalog_release(
+            session,
+            corpus_release_id=run.corpus_release_id,
+        )
+        is None
+    ):
+        return "catalog_retired"
     observation = await session.get(
         CoreQualificationObservation,
         run.core_qualification_observation_id,

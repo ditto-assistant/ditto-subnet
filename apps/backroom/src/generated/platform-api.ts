@@ -358,6 +358,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/coding-catalog/releases": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Coding Catalog Releases */
+        get: operations["get_coding_catalog_releases_api_v1_admin_coding_catalog_releases_get"];
+        put?: never;
+        /** Register Coding Catalog Release */
+        post: operations["register_coding_catalog_release_api_v1_admin_coding_catalog_releases_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/coding-catalog/retire": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Retire Coding Catalog */
+        post: operations["retire_coding_catalog_api_v1_admin_coding_catalog_retire_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/confirmation-bundle-settings": {
         parameters: {
             query?: never;
@@ -5333,6 +5368,19 @@ export interface components {
             /** History */
             history: components["schemas"]["BurnSettingsRevision"][];
         };
+        /** AdminCodingCatalogResponse */
+        AdminCodingCatalogResponse: {
+            /** Releases */
+            releases: components["schemas"]["CodingCatalogReleaseRecord"][];
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Total */
+            total: number;
+        };
         /** AdminConfirmationBundleListResponse */
         AdminConfirmationBundleListResponse: {
             budget: components["schemas"]["ConfirmationDailyBudgetView"];
@@ -6669,6 +6717,21 @@ export interface components {
             /** History */
             history: components["schemas"]["QueuePolicySettingsRevision"][];
         };
+        /** AdminRegisterCodingCatalogRequest */
+        AdminRegisterCodingCatalogRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            commitment: components["schemas"]["CodingCatalogCommitment"];
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+            /** Signature */
+            signature: string;
+        };
         /**
          * AdminReinstatementRetryBudget
          * @description What the submission's attempt budget was when it came back.
@@ -6691,6 +6754,22 @@ export interface components {
             max_operator_recoveries: number | null;
             /** Operator Recoveries */
             operator_recoveries: number;
+        };
+        /** AdminRetireCodingCatalogRequest */
+        AdminRetireCodingCatalogRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Corpus Release Id */
+            corpus_release_id: string;
+            /** Expected Commitment Sha256 */
+            expected_commitment_sha256: string;
+            /** Reason */
+            reason: string;
         };
         /** AdminRetirementBatchItem */
         AdminRetirementBatchItem: {
@@ -9362,6 +9441,82 @@ export interface components {
              */
             weight_eligible: false;
         };
+        /** CodingCatalogCommitment */
+        CodingCatalogCommitment: {
+            /** Catalog Merkle Root */
+            catalog_merkle_root: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Commitment Sha256 */
+            commitment_sha256: string;
+            /** Committed At Unix */
+            committed_at_unix: number;
+            /** Corpus Release Id */
+            corpus_release_id: string;
+            /** Curator Hotkey */
+            curator_hotkey: string;
+            /** Grader Contract Sha256 */
+            grader_contract_sha256: string;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-catalog-commitment-v1";
+            /** Selection Chain Genesis Hash */
+            selection_chain_genesis_hash: string;
+            /** Selection Derivation Id */
+            selection_derivation_id: string;
+            /** Task Version Count */
+            task_version_count: number;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingCatalogReleaseRecord */
+        CodingCatalogReleaseRecord: {
+            commitment: components["schemas"]["CodingCatalogCommitment"];
+            /** Exposed Run Count */
+            exposed_run_count: number;
+            /** Exposure Count */
+            exposure_count: number;
+            /** Registered Actor */
+            registered_actor: string;
+            /**
+             * Registered At
+             * Format: date-time
+             */
+            registered_at: string;
+            /** Registered Reason */
+            registered_reason: string;
+            /**
+             * Release Row Id
+             * Format: uuid
+             */
+            release_row_id: string;
+            /** Retired */
+            retired: boolean;
+            /** Retired Actor */
+            retired_actor: string | null;
+            /** Retired At */
+            retired_at: string | null;
+            /** Retired Reason */
+            retired_reason: string | null;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Signature */
+            signature: string;
+        };
         /** CodingCertificationModelEvidence */
         CodingCertificationModelEvidence: {
             /** Completion Tokens */
@@ -9628,7 +9783,7 @@ export interface components {
              * Stale Reason
              * @enum {string}
              */
-            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "policy_changed";
+            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "policy_changed" | "catalog_retired";
             /** Task Count */
             task_count: number;
             /** Task Set Manifest Sha256 */
@@ -21210,6 +21365,109 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BurnSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_coding_catalog_releases_api_v1_admin_coding_catalog_releases_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    register_coding_catalog_release_api_v1_admin_coding_catalog_releases_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRegisterCodingCatalogRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCatalogResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    retire_coding_catalog_api_v1_admin_coding_catalog_retire_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRetireCodingCatalogRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCodingCatalogResponse"];
                 };
             };
             /** @description Validation Error */

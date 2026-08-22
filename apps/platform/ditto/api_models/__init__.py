@@ -22,6 +22,16 @@ from ditto.api_models.benchmark_capacity import (
     BenchmarkCapacity,
 )
 from ditto.api_models.benchmark_progress import BenchmarkProgress
+from ditto.api_models.coding_catalog import (
+    AdminCodingCatalogResponse,
+    AdminRegisterCodingCatalogRequest,
+    AdminRetireCodingCatalogRequest,
+    CodingCatalogCommitment,
+    CodingCatalogReleaseRecord,
+    CodingCatalogTaskExposure,
+    coding_catalog_commitment_digest,
+    coding_catalog_commitment_signing_message,
+)
 from ditto.api_models.coding_certification import (
     AgentCodingCertificationStatus,
     CodingCapabilityCertificationReceipt,
@@ -234,6 +244,9 @@ __all__ = [
     "AdminCoreQualificationPolicyRequest",
     "AdminCoreQualificationPolicyResponse",
     "AdminCoreQualificationRefreshRequest",
+    "AdminCodingCatalogResponse",
+    "AdminRegisterCodingCatalogRequest",
+    "AdminRetireCodingCatalogRequest",
     "AgentCodingCertificationStatus",
     "AgentCodingShadowEvaluationStatus",
     "AgentCoreQualificationStatus",
@@ -244,6 +257,9 @@ __all__ = [
     "BenchmarkCapacity",
     "BenchmarkProgress",
     "CodingCapabilityCertificationReceipt",
+    "CodingCatalogCommitment",
+    "CodingCatalogReleaseRecord",
+    "CodingCatalogTaskExposure",
     "CodingCertificationRecord",
     "CodingCertificationStage",
     "CodingCertificationStatus",
@@ -421,5 +437,7 @@ __all__ = [
     "UploadCheckResponse",
     "core_qualification_policy_checksum",
     "coding_run_evidence_digest",
+    "coding_catalog_commitment_digest",
+    "coding_catalog_commitment_signing_message",
     "coding_shadow_result_signing_message",
 ]
