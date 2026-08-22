@@ -138,6 +138,34 @@ issuer waits for the selected height to become finalized, proves the assignment
 row's immutable database insertion time predates its timestamp, then atomically
 inserts the selected run, irreversible exposures, and assignment-to-run link.
 
+Platform's private catalog transport resolves one selected record at a time
+from a separately credentialed, non-public S3-compatible store. Contract v1
+uses the fixed content-addressed object key:
+
+```text
+coding-catalog/v1/<catalog-commitment-sha256>/records/<six-digit-index>.json
+```
+
+The object is a bounded `dittobench-coding-private-catalog-record-v1` envelope:
+
+```json
+{
+  "schema": "dittobench-coding-private-catalog-record-v1",
+  "catalog_commitment_sha256": "lowercase-sha256",
+  "task_version": {},
+  "membership_proof": {}
+}
+```
+
+Callers cannot provide a bucket, prefix, URL, or arbitrary object key, and the
+source has no catalog-list operation. The loader rejects duplicate fields,
+non-finite JSON, excessive nesting, oversized bodies, task/proof digest drift,
+wrong release/index/count/root, and invalid position-bound membership. Unknown
+fields remain non-authoritative for rolling compatibility. Missing objects,
+store failures, and timeouts are retryable transport errors; malformed or
+non-member objects are non-retryable control-plane integrity errors. The
+separate miner-upload object store is never a fallback.
+
 The private catalog leaf also commits the repository epoch plus canonical issue,
 model-visible runtime-policy, and model/tool/wall-budget digests. These fields
 are omitted from the public run manifest but retained in the private task-set

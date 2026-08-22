@@ -26,6 +26,7 @@ from __future__ import annotations
 from ditto.api_server.storage.client import S3StorageClient
 from ditto.api_server.storage.errors import (
     ObjectDownloadFailedError,
+    ObjectDownloadTooLargeError,
     ObjectNotFoundError,
     ObjectUploadFailedError,
     StorageConfigurationError,
@@ -56,6 +57,7 @@ __all__ = [
     "MultipartUpload",
     # Errors
     "ObjectDownloadFailedError",
+    "ObjectDownloadTooLargeError",
     "ObjectNotFoundError",
     "ObjectUploadFailedError",
     "StorageConfigurationError",

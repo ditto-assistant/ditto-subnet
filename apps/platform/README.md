@@ -280,6 +280,10 @@ full annotated list. Key groups: **API** (`API_HOST/PORT/LOG_LEVEL`), **Pylon/ch
 (`STORAGE_*`). The server validates config at boot and exits non-zero on a bad value
 so a supervisor restarts cleanly.
 
+Private DittoBench Coding records use an independent, optional
+`DITTO_CODING_CATALOG_STORAGE_*` credential set. Leaving it unset disables the
+loader; it never falls back to the miner-upload bucket or credentials.
+
 ---
 
 ## Testing

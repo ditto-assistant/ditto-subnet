@@ -81,10 +81,10 @@ class FakeCatalog:
     async def get_task_version(
         self,
         *,
-        corpus_release_id: str,
+        commitment: CodingCatalogCommitment,
         catalog_index: int,
     ) -> tuple[CodingCatalogTaskVersion, CodingCatalogMembershipProof]:
-        self.calls.append((corpus_release_id, catalog_index))
+        self.calls.append((commitment.corpus_release_id, catalog_index))
         return self._records[catalog_index]
 
 
@@ -92,10 +92,10 @@ class FailingCatalog:
     async def get_task_version(
         self,
         *,
-        corpus_release_id: str,
+        commitment: CodingCatalogCommitment,
         catalog_index: int,
     ) -> tuple[CodingCatalogTaskVersion, CodingCatalogMembershipProof]:
-        del corpus_release_id, catalog_index
+        del commitment, catalog_index
         raise TimeoutError("private catalog timeout")
 
 

@@ -22,6 +22,10 @@ from ditto.api_models.inference_concurrency_settings import (
     MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
 )
+from ditto.api_server.coding_private_catalog import (
+    CodingPrivateCatalogConfig,
+    parse_coding_private_catalog_config_from_env,
+)
 from ditto.api_server.datapipeline import (
     DataPipelineConfig,
     parse_data_pipeline_config_from_env,
@@ -44,6 +48,18 @@ from ditto.db import PostgresConfig, parse_postgres_config_from_env
 # enforces on the wire; mirrored here so a bad payment address fails
 # boot instead of running with a placeholder.
 _SS58_RE = re.compile(r"^[1-9A-HJ-NP-Za-km-z]{47,48}$")
+
+
+def _http_origin(value: str) -> tuple[str, str, int] | None:
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError:
+        return None
+    if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+        return None
+    default_port = 443 if parsed.scheme == "https" else 80
+    return parsed.scheme, parsed.hostname.lower(), port or default_port
 
 
 @dataclass(frozen=True)
@@ -378,6 +394,13 @@ class ApiServerConfig:
 
     Empty by default, which disables registration without affecting catalog
     reads or the rest of Platform.
+    """
+
+    coding_private_catalog: CodingPrivateCatalogConfig | None = None
+    """Optional, separately credentialed store for private coding records.
+
+    Absence disables private record loading. A public catalog commitment never
+    grants access to private corpus bytes by itself.
     """
 
     dashboard_enabled: bool = True
@@ -835,6 +858,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             ).split(",")
             if (value := item.strip())
         ),
+        coding_private_catalog=parse_coding_private_catalog_config_from_env(),
         dashboard_enabled=dashboard_enabled,
         dashboard_wandb_url=dashboard_wandb_url,
         top5_backoff_base=top5_backoff_base,
@@ -900,6 +924,23 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError(
             "DITTO_CODING_CATALOG_CURATOR_HOTKEYS contains an invalid SS58 address"
         )
+    catalog = config.coding_private_catalog
+    if catalog is not None:
+        upload = config.storage
+        same_endpoint = _http_origin(catalog.endpoint_url) == _http_origin(
+            upload.endpoint_url
+        )
+        if same_endpoint and catalog.bucket == upload.bucket:
+            raise ApiServerConfigError(
+                "private coding catalog must not reuse the miner-upload bucket"
+            )
+        if (
+            catalog.access_key == upload.access_key
+            or catalog.secret_key == upload.secret_key
+        ):
+            raise ApiServerConfigError(
+                "private coding catalog must use distinct least-privilege credentials"
+            )
     names = config.validator_names
     if (names.url is None) != (names.api_key is None):
         raise ApiServerConfigError(

@@ -110,11 +110,11 @@ class _CatalogSource:
     async def get_task_version(
         self,
         *,
-        corpus_release_id: str,
+        commitment: CodingCatalogCommitment,
         catalog_index: int,
     ) -> tuple[CodingCatalogTaskVersion, CodingCatalogMembershipProof]:
-        self.calls.append((corpus_release_id, catalog_index))
-        assert corpus_release_id == _CORPUS
+        self.calls.append((commitment.corpus_release_id, catalog_index))
+        assert commitment.corpus_release_id == _CORPUS
         assert catalog_index == 0
         return self.task, self.proof
 
@@ -123,10 +123,10 @@ class _NeverCatalog:
     async def get_task_version(
         self,
         *,
-        corpus_release_id: str,
+        commitment: CodingCatalogCommitment,
         catalog_index: int,
     ) -> tuple[CodingCatalogTaskVersion, CodingCatalogMembershipProof]:
-        del corpus_release_id, catalog_index
+        del commitment, catalog_index
         raise AssertionError("idempotent replay contacted the private catalog")
 
 
