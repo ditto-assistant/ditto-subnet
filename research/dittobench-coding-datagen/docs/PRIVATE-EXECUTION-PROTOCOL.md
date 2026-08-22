@@ -615,8 +615,9 @@ The trusted Go attempt runtime now composes verified phase-specific artifacts,
 the runner/freezer, sandbox executor, and pristine grader in process. Authoring
 types cannot contain grader material; grading types cannot contain memory. The
 outer workspace route must be revoked before the runtime freezes the internal
-session. A later local gateway still owns the harness, Luna relay, durable
-evidence outbox, and Python coordinator connection.
+session. The validator-local evidence outbox now has an unwired durable core;
+a later local gateway still owns its reservation/sealing lifecycle, the
+harness, Luna relay, Python coordinator connection, and host sweep schedule.
 
 The runtime never supplies aggregate counts or repair mean. It returns
 per-task evidence; the validator orders those tasks by the immutable manifest,
