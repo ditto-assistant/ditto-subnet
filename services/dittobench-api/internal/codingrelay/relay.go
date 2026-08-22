@@ -177,10 +177,11 @@ func (relay *Relay) admit(
 		return DispatchRecord{}, nil, nil, ErrBudgetExhausted
 	}
 	remainingCompletion := relay.binding.CompletionTokenBudget - completion
-	if request.MaxCompletionTokens > remainingCompletion {
-		request.MaxCompletionTokens = remainingCompletion
+	effectiveRequest := cloneMinerRequest(request)
+	if effectiveRequest.MaxCompletionTokens > remainingCompletion {
+		effectiveRequest.MaxCompletionTokens = remainingCompletion
 	}
-	locked, err := codingcontract.LockInferenceRequest(relay.policy, request)
+	locked, err := codingcontract.LockInferenceRequest(relay.policy, effectiveRequest)
 	if err != nil {
 		return DispatchRecord{}, nil, nil, ErrInvalidRequest
 	}

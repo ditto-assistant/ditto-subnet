@@ -261,6 +261,18 @@
       "related": ["dittobench-scoring", "research-adapters", "release-delivery"]
     },
     {
+      "id": "coding-relay-journal",
+      "title": "Shadow durable Luna relay journal",
+      "keywords": ["coding relay journal", "durable Luna journal", "relay crash recovery", "relay response replay", "relay dispatch persistence"],
+      "summary": "Persist the ticket-bound Luna relay binding, pre-provider dispatch, terminal settlement, response replay, and revocation without wiring a live provider or score path.",
+      "owns": ["services/dittobench-api/internal/codingrelayjournal", "services/dittobench-api/docs/coding-luna-relay-journal-shadow.md"],
+      "read": ["services/dittobench-api/docs/coding-luna-relay-core-shadow.md", "services/dittobench-api/docs/coding-luna-relay-journal-shadow.md", "services/dittobench-api/docs/coding-evidence-outbox-shadow.md"],
+      "search": ["rg -n 'Journal|DispatchRecord|JournalEntry|ErrAmbiguousDispatch' services/dittobench-api/internal/codingrelay services/dittobench-api/internal/codingrelayjournal", "rg -n 'fsync|flock|O_NOFOLLOW|RENAME_NOREPLACE|MaxTotalBytes' services/dittobench-api/internal/codingrelayjournal services/dittobench-api/internal/codingoutbox"],
+      "validate": ["cd services/dittobench-api && go test -race ./internal/codingrelayjournal ./internal/codingrelay ./internal/codingcertifier", "cd services/dittobench-api && go vet ./internal/codingrelayjournal ./internal/codingrelay ./internal/codingcertifier", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Every provider dispatch is durable before upstream activity and an incomplete dispatch is never rerunnable.", "Completion and revocation are exact-binding idempotent, private, bounded, and crash recoverable.", "The journal remains unwired and weight_eligible=false until separately reviewed gateway and activation layers."],
+      "related": ["coding-repair-research", "dittobench-scoring", "release-delivery"]
+    },
+    {
       "id": "research-adapters",
       "title": "Datagen research and third-party benchmark adapters",
       "keywords": ["research", "datagen", "longmemeval", "openclaw", "hermes", "adapter", "calibration", "baseline", "provider study"],
