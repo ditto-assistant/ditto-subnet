@@ -561,6 +561,27 @@ def _build_selection_result(
     )
 
 
+def rebuild_coding_selection_result(
+    *,
+    assignment: CodingSelectionAssignment,
+    commitment: CodingCatalogCommitment,
+    selection_block_hash: str,
+    candidate_probe: int,
+    task_version: CodingCatalogTaskVersion,
+    membership: CodingCatalogMembershipProof,
+) -> CodingSelectionResult:
+    """Reconstruct one previously selected result from persisted coordinates."""
+
+    return _build_selection_result(
+        assignment=assignment,
+        commitment=commitment,
+        selection_block_hash=selection_block_hash,
+        probe=candidate_probe,
+        task_version=task_version,
+        membership=membership,
+    )
+
+
 def _sample_modulo(*, seed: bytes, label: bytes, modulus: int) -> int:
     if modulus < 1:
         raise ValueError("selection modulus must be positive")

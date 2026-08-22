@@ -284,6 +284,7 @@ async def issue_coding_shadow_ticket(
         session,
         agent=agent,
         validator_hotkey=validator_hotkey,
+        bench_version=run.bench_version,
         coding_contract_version=run.coding_contract_version,
         active_through=deadline,
     )
