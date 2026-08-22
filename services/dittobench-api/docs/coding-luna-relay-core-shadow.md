@@ -52,9 +52,11 @@ attempt, is deliberately non-rerunnable. The core returns
 `ErrAmbiguousDispatch`; it never grants a clean model retry after activity that
 may have reached the provider.
 
-The core defines this persistence port but no filesystem or database adapter.
-The next gateway PR must provide the single-owner durable implementation and
-bind its reservation/capacity and retention to the evidence outbox lifecycle.
+The core defines this persistence port. `internal/codingrelayjournal` provides
+its unwired, single-owner durable filesystem implementation, including bounded
+capacity and exact crash/replay behavior. The future gateway must allocate one
+private journal root per attempt and bind its release and retention to the
+evidence outbox lifecycle.
 `Load` must enforce the policy receipt-count and per-object byte ceilings before
 allocating decoded records; the core rejects an oversized entry count before
 making its defensive clone.
@@ -125,14 +127,14 @@ responsible for the outer source-bound route and network policy.
 
 The package has an evidence-only adapter for the existing certification port,
 but nothing constructs or mounts it in production. No current model-relay
-traffic may claim this evidence. The remaining gateway work includes durable
-journal storage, Platform coding-grant acquisition and settlement, capability
-mount/revocation, harness orchestration, and terminal publication.
+traffic may claim this evidence. The remaining gateway work includes Platform
+coding-grant acquisition and settlement, capability mount/revocation, harness
+orchestration, and terminal publication.
 
 Validation:
 
 ```bash
 cd services/dittobench-api
-go test -race ./internal/codingrelay ./internal/codingcertifier
-go vet ./internal/codingrelay ./internal/codingcertifier
+go test -race ./internal/codingrelayjournal ./internal/codingrelay ./internal/codingcertifier
+go vet ./internal/codingrelayjournal ./internal/codingrelay ./internal/codingcertifier
 ```
