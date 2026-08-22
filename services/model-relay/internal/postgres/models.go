@@ -55,19 +55,21 @@ func (ns NullTicketstatus) Value() (driver.Value, error) {
 }
 
 type ConfirmationBundleTicket struct {
-	TicketID        pgtype.UUID        `json:"ticketId"`
-	BundleID        pgtype.UUID        `json:"bundleId"`
-	ValidatorHotkey string             `json:"validatorHotkey"`
-	SlotID          string             `json:"slotId"`
-	Status          string             `json:"status"`
-	Attempt         int32              `json:"attempt"`
-	IssuedAt        pgtype.Timestamptz `json:"issuedAt"`
-	Deadline        pgtype.Timestamptz `json:"deadline"`
-	FailureReason   pgtype.Text        `json:"failureReason"`
-	FailedAt        pgtype.Timestamptz `json:"failedAt"`
-	CreatedAt       pgtype.Timestamptz `json:"createdAt"`
-	FailureClass    pgtype.Text        `json:"failureClass"`
-	FailureStage    pgtype.Text        `json:"failureStage"`
+	TicketID          pgtype.UUID        `json:"ticketId"`
+	BundleID          pgtype.UUID        `json:"bundleId"`
+	ValidatorHotkey   string             `json:"validatorHotkey"`
+	SlotID            string             `json:"slotId"`
+	Status            string             `json:"status"`
+	Attempt           int32              `json:"attempt"`
+	IssuedAt          pgtype.Timestamptz `json:"issuedAt"`
+	Deadline          pgtype.Timestamptz `json:"deadline"`
+	FailureReason     pgtype.Text        `json:"failureReason"`
+	FailedAt          pgtype.Timestamptz `json:"failedAt"`
+	CreatedAt         pgtype.Timestamptz `json:"createdAt"`
+	FailureClass      pgtype.Text        `json:"failureClass"`
+	FailureStage      pgtype.Text        `json:"failureStage"`
+	PrepareRejection  pgtype.Text        `json:"prepareRejection"`
+	PrepareRejectedAt pgtype.Timestamptz `json:"prepareRejectedAt"`
 }
 
 type ConfirmationInferenceGrant struct {
