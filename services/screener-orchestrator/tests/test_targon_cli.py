@@ -5,6 +5,7 @@ from screener_capacity.targon_cli import (
     _cleanup_probe_workload,
     _source_review_mock_script,
     _source_review_probe_archive,
+    _source_review_starter_kit_mock_script,
     command_agent_probe,
     command_kaniko_probe,
     command_logs,
@@ -248,6 +249,17 @@ def test_source_review_probe_runs_exact_job_and_cleans_up(monkeypatch, capsys) -
     output = capsys.readouterr().out
     assert '"phase": "source-review"' in output
     assert '"capability": "AVAILABLE"' in output
+
+
+def test_starter_kit_source_review_mock_script_compiles() -> None:
+    script = _source_review_starter_kit_mock_script(
+        review_id="550e8400-e29b-41d4-a716-446655440000",
+        job_token="job-" + "x" * 48,
+        archive_url="https://example.invalid/starter.tgz",
+    )
+    compile(script, "<starter-kit-source-review-mock>", "exec")
+    assert "SOURCE_REVIEW_COMPLETE=" in script
+    assert "/chat/completions" not in script
 
 
 def test_source_review_probe_fixture_and_mock_script_are_self_contained() -> None:

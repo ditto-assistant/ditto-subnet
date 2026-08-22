@@ -10,6 +10,7 @@ import json
 import os
 import re
 import secrets
+import subprocess
 import sys
 import tarfile
 import time
@@ -32,6 +33,12 @@ from screener_capacity.targon_screen_contract import (
 
 _WORKLOAD_UID = re.compile(r"^wrk-[a-z0-9]{8,64}$")
 _MAX_LOG_TAIL = 10000
+_STARTER_KIT_ARCHIVE_URL = (
+    "https://codeload.github.com/ditto-assistant/dittobench-starter-kit/"
+    "tar.gz/65f9e2cb761a4db4ae71493b9a483870bf48ed7b"
+)
+_SOURCE_REVIEW_SECRET = "validator-openrouter-key"
+_SOURCE_REVIEW_PROJECT = "ditto-app-dev"
 
 
 def _client(args: argparse.Namespace, *, authenticated: bool) -> TargonClient:
@@ -686,6 +693,126 @@ ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
 """.strip()
 
 
+def _source_review_starter_kit_mock_script(
+    *, review_id: str, job_token: str, archive_url: str
+) -> str:
+    """Platform mock that fetches a public miner tarball and records L1 complete."""
+    values = {
+        "archive_url": archive_url,
+        "job_token": job_token,
+        "review_id": review_id,
+    }
+    encoded_values = base64.b64encode(json.dumps(values).encode()).decode()
+    return f"""
+import base64, hashlib, io, json, tarfile, urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+VALUES = json.loads(base64.b64decode({encoded_values!r}))
+BASE = "/api/v1/screener/submission-source-reviews/" + VALUES["review_id"]
+raw = urllib.request.urlopen(VALUES["archive_url"], timeout=120).read()
+src = tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz")
+buf = io.BytesIO()
+with tarfile.open(fileobj=buf, mode="w:gz") as dst:
+    for member in src.getmembers():
+        if not member.isfile():
+            continue
+        parts = member.name.split("/", 1)
+        if len(parts) < 2:
+            continue
+        rel = parts[1]
+        if any(part in (".git", "target") for part in rel.split("/")):
+            continue
+        info = tarfile.TarInfo(rel)
+        info.size = member.size
+        info.mode = 0o644
+        handle = src.extractfile(member)
+        if handle is None:
+            continue
+        dst.addfile(info, handle)
+ARTIFACT = buf.getvalue()
+SHA = hashlib.sha256(ARTIFACT).hexdigest()
+print("SOURCE_REVIEW_ARTIFACT_SHA256=" + SHA, flush=True)
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, _format, *_args):
+        return
+
+    def send_json(self, status, body):
+        payload = json.dumps(body, separators=(",", ":")).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def authorized(self):
+        return self.headers.get("Authorization") == "Bearer " + VALUES["job_token"]
+
+    def do_GET(self):
+        if self.path == "/health":
+            self.send_json(200, {{"ok": True, "artifact_sha256": SHA}})
+            return
+        if self.path == "/artifact":
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Length", str(len(ARTIFACT)))
+            self.end_headers()
+            self.wfile.write(ARTIFACT)
+            return
+        if self.path == BASE + "/source" and self.authorized():
+            source_url = "https://" + self.headers["Host"] + "/artifact"
+            self.send_json(200, {{
+                "artifact_sha256": SHA,
+                "source_url_b64": base64.b64encode(source_url.encode()).decode(),
+            }})
+            return
+        self.send_json(404, {{"error": "not-found"}})
+
+    def do_POST(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        body = json.loads(self.rfile.read(length) or b"{{}}")
+        if self.path == BASE + "/complete" and self.authorized():
+            observation = body.get("observation", {{}})
+            safe = {{
+                "ok": observation.get("ok"),
+                "risk_level": observation.get("risk_level"),
+                "categories": observation.get("categories"),
+                "clearance_certified": observation.get("clearance_certified"),
+                "error_code": observation.get("error_code"),
+                "finding_digest": observation.get("finding_digest"),
+            }}
+            self.send_json(200, {{"verified": True}})
+            print(
+                "SOURCE_REVIEW_COMPLETE=" + json.dumps(safe, sort_keys=True),
+                flush=True,
+            )
+            return
+        self.send_json(404, {{"error": "not-found"}})
+
+ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
+""".strip()
+
+
+def _load_source_review_api_key() -> str:
+    """Read the OpenRouter key from Secret Manager without printing it."""
+    raw = subprocess.check_output(
+        [
+            "gcloud",
+            "secrets",
+            "versions",
+            "access",
+            "latest",
+            f"--project={_SOURCE_REVIEW_PROJECT}",
+            f"--secret={_SOURCE_REVIEW_SECRET}",
+        ],
+        stderr=subprocess.DEVNULL,
+    )
+    key = raw.decode().strip()
+    if len(key) < 16:
+        raise RuntimeError("source-review secret was empty")
+    return key
+
+
 def command_source_review_probe(args: argparse.Namespace) -> int:
     """Run the exact one-shot source-review code against deterministic mocks."""
     client = _client(args, authenticated=True)
@@ -697,8 +824,25 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
     review_id = str(uuid4())
     attempt_id = str(uuid4())
     job_token = secrets.token_urlsafe(48)
-    artifact = _source_review_probe_archive()
-    artifact_sha256 = hashlib.sha256(artifact).hexdigest()
+    starter_kit = bool(getattr(args, "starter_kit", False))
+    live_model = bool(getattr(args, "live_model", False))
+    if live_model and not starter_kit:
+        raise SystemExit("--live-model requires --starter-kit")
+    artifact = b"" if starter_kit else _source_review_probe_archive()
+    artifact_sha256 = "" if starter_kit else hashlib.sha256(artifact).hexdigest()
+    mock_script = (
+        _source_review_starter_kit_mock_script(
+            review_id=review_id,
+            job_token=job_token,
+            archive_url=_STARTER_KIT_ARCHIVE_URL,
+        )
+        if starter_kit
+        else _source_review_mock_script(
+            review_id=review_id,
+            job_token=job_token,
+            artifact=artifact,
+        )
+    )
     mock_uid: str | None = None
     review_uid: str | None = None
     try:
@@ -707,13 +851,7 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
             image="python:3.12-alpine",
             resource_name=args.resource,
             commands=["python", "-c"],
-            args=[
-                _source_review_mock_script(
-                    review_id=review_id,
-                    job_token=job_token,
-                    artifact=artifact,
-                )
-            ],
+            args=[mock_script],
             ports=[{"port": 8080, "protocol": "TCP", "routing": "PROXIED"}],
         )
         mock_uid = str(mock["uid"])
@@ -748,6 +886,32 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
             print(json.dumps({"phase": "source-review", "capability": "UNAVAILABLE"}))
             return 6
 
+        if starter_kit:
+            try:
+                with urllib.request.urlopen(
+                    f"{platform_url}/health", timeout=10
+                ) as response:
+                    health = json.loads(response.read().decode())
+            except (OSError, urllib.error.URLError, json.JSONDecodeError, UnicodeError):
+                health = {}
+            artifact_sha256 = str(health.get("artifact_sha256") or "")
+            if len(artifact_sha256) != 64:
+                print(
+                    json.dumps(
+                        {
+                            "phase": "source-review",
+                            "capability": "UNAVAILABLE",
+                            "reason": "starter-kit mock missing artifact digest",
+                        }
+                    )
+                )
+                return 6
+
+        model_key = (
+            _load_source_review_api_key()
+            if live_model
+            else "probe-openrouter-key-not-a-secret"
+        )
         review_env = [
             {"name": "DITTO_PLATFORM_URL", "value": platform_url},
             {"name": "DITTO_SOURCE_REVIEW_ID", "value": review_id},
@@ -764,11 +928,22 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
             },
             {
                 "name": "SCREENER_SOURCE_REVIEW_API_KEY",
-                "value": "probe-openrouter-key-not-a-secret",
+                "value": model_key,
             },
-            {"name": "SCREENER_SOURCE_REVIEW_BASE_URL", "value": platform_url},
-            {"name": "SCREENER_SOURCE_REVIEW_MODEL", "value": "probe-model"},
-            {"name": "SCREENER_SOURCE_REVIEW_MAX_STEPS", "value": "4"},
+            {
+                "name": "SCREENER_SOURCE_REVIEW_BASE_URL",
+                "value": (
+                    "https://openrouter.ai/api/v1" if live_model else platform_url
+                ),
+            },
+            {
+                "name": "SCREENER_SOURCE_REVIEW_MODEL",
+                "value": "openai/gpt-5.6-luna" if live_model else "probe-model",
+            },
+            {
+                "name": "SCREENER_SOURCE_REVIEW_MAX_STEPS",
+                "value": "40" if live_model else "4",
+            },
             {
                 "name": "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS",
                 "value": str(args.review_timeout_seconds),
@@ -787,7 +962,9 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
         print(json.dumps({"phase": "review-registered", "uid": review_uid}))
         client.deploy(review_uid)
 
-        deadline = time.monotonic() + args.provision_timeout_seconds
+        deadline = time.monotonic() + args.provision_timeout_seconds + (
+            float(args.review_timeout_seconds) if live_model else 0
+        )
         while time.monotonic() < deadline:
             mock_logs = _safe_logs(client, mock_uid, tail=80)
             marker = next(
@@ -928,6 +1105,16 @@ def build_parser() -> argparse.ArgumentParser:
     source_review.add_argument("--image", required=True)
     source_review.add_argument("--provision-timeout-seconds", type=float, default=600)
     source_review.add_argument("--review-timeout-seconds", type=float, default=90)
+    source_review.add_argument(
+        "--starter-kit",
+        action="store_true",
+        help="Serve dittobench-starter-kit as the extracted source archive",
+    )
+    source_review.add_argument(
+        "--live-model",
+        action="store_true",
+        help="Call real OpenRouter L1 instead of the scripted mock",
+    )
     source_review.add_argument("--keep", action="store_true")
     source_review.set_defaults(handler=command_source_review_probe)
     return parser
