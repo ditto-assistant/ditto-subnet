@@ -109,6 +109,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/agents/{agent_id}/core-qualification": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Core Qualification */
+        get: operations["get_agent_core_qualification_api_v1_admin_agents__agent_id__core_qualification_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/agents/{agent_id}/core-qualification/refresh": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Refresh Agent Core Qualification
+         * @description Idempotently backfill or recover one current score snapshot.
+         */
+        post: operations["refresh_agent_core_qualification_api_v1_admin_agents__agent_id__core_qualification_refresh_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/agents/{agent_id}/scoring-readiness": {
         parameters: {
             query?: never;
@@ -566,6 +603,24 @@ export interface paths {
         get: operations["get_copy_review_source_diff_file_api_v1_admin_copy_reviews__agent_id__source_diff_file_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/core-qualification/policy": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Core Qualification Policy */
+        get: operations["get_core_qualification_policy_api_v1_admin_core_qualification_policy_get"];
+        put?: never;
+        /** Set Core Qualification Policy */
+        post: operations["set_core_qualification_policy_api_v1_admin_core_qualification_policy_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -5690,6 +5745,53 @@ export interface components {
             /** Reference Version */
             reference_version: number | string | null;
         };
+        /** AdminCoreQualificationPolicyRequest */
+        AdminCoreQualificationPolicyRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Confirmation */
+            confirmation: string;
+            /** Expected Revision */
+            expected_revision: number;
+            policy: components["schemas"]["CoreQualificationPolicy"];
+            /** Reason */
+            reason: string;
+        };
+        /** AdminCoreQualificationPolicyResponse */
+        AdminCoreQualificationPolicyResponse: {
+            /** Bench Version */
+            bench_version: number;
+            /** Configured */
+            configured: boolean;
+            current: components["schemas"]["CoreQualificationPolicyRevision"] | null;
+            /** History */
+            history: components["schemas"]["CoreQualificationPolicyRevision"][];
+            /** Required Confirmation */
+            required_confirmation: string;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+        };
+        /** AdminCoreQualificationRefreshRequest */
+        AdminCoreQualificationRefreshRequest: {
+            /**
+             * Actor
+             * @default admin_api
+             */
+            actor: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Confirmation */
+            confirmation: string;
+            /** Reason */
+            reason: string;
+        };
         /**
          * AdminDeferredReviewEvidence
          * @description Public-safe trigger snapshot for a score-qualified source review.
@@ -8420,6 +8522,39 @@ export interface components {
             /** Total */
             total: number;
         };
+        /** AgentCoreQualificationStatus */
+        AgentCoreQualificationStatus: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Name */
+            agent_name: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Configured */
+            configured: boolean;
+            current_observation: components["schemas"]["CoreQualificationObservation"] | null;
+            /** Miner Hotkey */
+            miner_hotkey: string;
+            /** Observations */
+            observations: components["schemas"]["CoreQualificationObservation"][];
+            /** Qualified */
+            qualified: boolean;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string | null;
+            /**
+             * Shadow Only
+             * @default true
+             * @constant
+             */
+            shadow_only: true;
+            /** Total */
+            total: number;
+        };
         /**
          * AgentResponse
          * @description Returned by ``GET /retrieval/agent-by-hotkey``.
@@ -10106,6 +10241,148 @@ export interface components {
             /** Scope */
             scope: string;
             settings: components["schemas"]["ContinualRetestSettings"];
+        };
+        /** CoreQualificationObservation */
+        CoreQualificationObservation: {
+            /** Actor */
+            actor: string | null;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Artifact Sha256 */
+            artifact_sha256: string;
+            /** Bench Version */
+            bench_version: number;
+            /** Complete Wave */
+            complete_wave: boolean;
+            /**
+             * Current
+             * @default false
+             */
+            current: boolean;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "partial_wave" | "below_entry" | "pending_entry" | "entered" | "held" | "pending_exit" | "exited";
+            /** Enter Streak */
+            enter_streak: number;
+            /** Entry Passed */
+            entry_passed: boolean;
+            /** Exit Streak */
+            exit_streak: number;
+            /** Full Size */
+            full_size: boolean;
+            /** Median Composite */
+            median_composite: number;
+            /** Median Memory Mean */
+            median_memory_mean: number;
+            /** Median Tool Mean */
+            median_tool_mean: number;
+            /**
+             * Observation Id
+             * Format: uuid
+             */
+            observation_id: string;
+            /**
+             * Observed At
+             * Format: date-time
+             */
+            observed_at: string;
+            /** Policy Checksum */
+            policy_checksum: string;
+            /** Policy Revision */
+            policy_revision: number;
+            /** Qualified */
+            qualified: boolean;
+            /** Reason */
+            reason: string | null;
+            /** Retention Passed */
+            retention_passed: boolean;
+            /** Run Ids */
+            run_ids: string[];
+            /** Score Count */
+            score_count: number;
+            /** Score Evidence Sha256 */
+            score_evidence_sha256: string;
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Sequence */
+            sequence: number;
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "score_commit" | "admin_refresh";
+            /**
+             * Stale Reason
+             * @enum {string}
+             */
+            stale_reason: "current" | "artifact_changed" | "screened_image_changed" | "benchmark_changed" | "policy_changed";
+            /** Validator Hotkeys */
+            validator_hotkeys: string[];
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CoreQualificationPolicy
+         * @description One benchmark-scoped shadow qualification policy.
+         */
+        CoreQualificationPolicy: {
+            /** Bench Version */
+            bench_version: number;
+            /** Enter Composite */
+            enter_composite: number;
+            /** Enter Memory Mean */
+            enter_memory_mean: number;
+            /** Enter Observations */
+            enter_observations: number;
+            /** Enter Tool Mean */
+            enter_tool_mean: number;
+            /** Exit Composite */
+            exit_composite: number;
+            /** Exit Memory Mean */
+            exit_memory_mean: number;
+            /** Exit Observations */
+            exit_observations: number;
+            /** Exit Tool Mean */
+            exit_tool_mean: number;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "ditto-core-qualification-policy-v1";
+            /**
+             * Weight Eligible
+             * @default false
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CoreQualificationPolicyRevision */
+        CoreQualificationPolicyRevision: {
+            /** Actor */
+            actor: string;
+            /** Checksum */
+            checksum: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Parent Revision */
+            parent_revision: number;
+            policy: components["schemas"]["CoreQualificationPolicy"];
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
         };
         /**
          * CreateScreeningDisputeRequest
@@ -20121,6 +20398,79 @@ export interface operations {
             };
         };
     };
+    get_agent_core_qualification_api_v1_admin_agents__agent_id__core_qualification_get: {
+        parameters: {
+            query: {
+                bench_version: number;
+                limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentCoreQualificationStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    refresh_agent_core_qualification_api_v1_admin_agents__agent_id__core_qualification_refresh_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCoreQualificationRefreshRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentCoreQualificationStatus"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     scoring_readiness_api_v1_admin_agents__agent_id__scoring_readiness_get: {
         parameters: {
             query?: never;
@@ -21055,6 +21405,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminSourceDiffFileDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_core_qualification_policy_api_v1_admin_core_qualification_policy_get: {
+        parameters: {
+            query: {
+                bench_version: number;
+                history_limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCoreQualificationPolicyResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_core_qualification_policy_api_v1_admin_core_qualification_policy_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminCoreQualificationPolicyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminCoreQualificationPolicyResponse"];
                 };
             };
             /** @description Validation Error */

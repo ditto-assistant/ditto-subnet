@@ -49,7 +49,8 @@ Backroom exposes the same read through `get_agent_coding_certifications` under
 
 ## Activation boundary
 
-This persistence is evidence only. No scoring or lease path reads it. A later
-reviewed change may use it for coding admission, after rolling core
-qualification and a separate shadow coding ledger exist. Coding emissions still
-require a new contract version, calibration, and owner approval.
+This persistence is evidence only. No scoring or lease path reads it. Shadow
+core qualification is recorded separately and cannot admit coding work. A later
+reviewed change may use both facts only after a separate shadow coding ledger
+exists. Coding emissions still require a new contract version, calibration,
+and owner approval.
