@@ -1391,3 +1391,47 @@ describe("next-emission countdown", () => {
     expect(document.querySelector(".chain-weight-note")).toBeTruthy();
   });
 });
+
+// ── Accessibility: the shared #tip-descs host ───────────────────────────────
+// Every tooltip's screen-reader text is a separate span in one document-level
+// host, addressed by id. Ids minted per-component instead of per-document is
+// how the board shipped duplicates: `aria-describedby` resolves to whichever
+// element the document holds first, so a tip silently announced an unrelated
+// element's text. The leaderboard renders the most tips of any page, and is
+// where the collision was observed in the production bundle. Both assertions
+// share one render on purpose — whether two separately-minted ranges actually
+// overlap depends on how many tips mounted before, so a second render is a
+// second roll of the same die rather than a second check. The
+// order-independent guard is the one-minter grep in build-invariants.
+describe("tooltip description ids", () => {
+  it("renders no duplicate ids and no ambiguous descriptions", async () => {
+    document.getElementById("tip-descs")?.remove();
+    renderPage();
+    await waitForBoard();
+    // Board chips mount with the rows; the header terms and the epoch clock
+    // arrive with the chain read.
+    await waitFor(() => {
+      expect(document.querySelectorAll("#tip-descs > span").length).toBeGreaterThan(20);
+    });
+
+    const ids = Array.from(document.querySelectorAll("#tip-descs > span")).map((s) => s.id);
+    const duplicates = ids.filter((id, i) => ids.indexOf(id) !== i);
+
+    expect(duplicates).toEqual([]);
+    expect(ids.every((id) => id !== "")).toBe(true);
+
+    // The generalization of the same defect: a description id is only useful
+    // if it resolves to exactly one node.
+    const referenced = new Set(
+      Array.from(document.querySelectorAll("[aria-describedby]")).flatMap((el) =>
+        (el.getAttribute("aria-describedby") ?? "").split(/\s+/).filter(Boolean),
+      ),
+    );
+    const ambiguous = Array.from(referenced).filter(
+      (id) => document.querySelectorAll("[id='" + id + "']").length > 1,
+    );
+
+    expect(referenced.size).toBeGreaterThan(20);
+    expect(ambiguous).toEqual([]);
+  });
+});

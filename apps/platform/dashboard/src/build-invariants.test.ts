@@ -185,3 +185,27 @@ describe("no reference baseline stat (row 40)", () => {
     expect(distText).not.toContain("must beat");
   });
 });
+
+// ── One tooltip-description minter, document-wide ───────────────────────────
+// `Tip` and the board's chip trigger were near-duplicate components, each with
+// its own module-local counter starting at 0, both minting `"tipdesc-" + ++n`
+// into one shared `#tip-descs` host — so any page rendering both emitted
+// duplicate DOM ids and `aria-describedby` resolved to whichever span the
+// document happened to hold first, announcing an unrelated element's tooltip.
+// (Confirmed in the production bundle: two distinct minified counters.) The
+// page-level duplicate-id assertion in Leaderboard.test.tsx only catches a
+// reintroduction when the two id ranges happen to overlap; this catches the
+// second minter itself, before it can render anything.
+describe("one tooltip description-id minter", () => {
+  it("mints description ids and owns the #tip-descs host in exactly one module", () => {
+    const sources = walk(join(ROOT, "src"))
+      .filter((path) => /\.tsx?$/.test(path) && !/\.test\.tsx?$/.test(path))
+      .map((path) => ({ path, text: readFileSync(path, "utf-8") }));
+
+    const minters = sources.filter((f) => f.text.includes('"tipdesc-"')).map((f) => f.path);
+    const hosts = sources.filter((f) => f.text.includes('.id = "tip-descs"')).map((f) => f.path);
+
+    expect(minters.map((p) => p.replace(ROOT, ""))).toEqual(["/src/components/ui/Tooltip.tsx"]);
+    expect(hosts).toEqual(minters);
+  });
+});

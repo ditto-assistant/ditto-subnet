@@ -15,7 +15,7 @@ import {
   foldArrival,
   signedScore,
 } from "../../lib/scoring";
-import { ChipTip } from "../board/chips";
+import { TipTarget } from "../ui/Tooltip";
 import { leaderboardVersionView } from "../board/board-state";
 import { EntityButton } from "../ui/EntityButton";
 import { HandleBadge } from "../ui/HandleBadge";
@@ -111,14 +111,14 @@ export function ChampionBox(props: { store: LeaderboardStore }): JSX.Element {
               </Show>
             </div>
             <Show when={!scoreCeilingPool() && composite() != null}>
-              <ChipTip
+              <TipTarget
                 tag="div"
                 class="champion-score tip-chip"
                 text="Finalized Score-column number in [0,1] that drives rank. The crown can sit on a lower-ranked row: rank is not the crown test."
               >
                 <span class="champion-score-label">Composite</span>
                 {fx(composite() as number)}
-              </ChipTip>
+              </TipTarget>
             </Show>
           </div>
           <div class="champion-meta">

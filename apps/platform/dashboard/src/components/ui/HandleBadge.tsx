@@ -5,7 +5,7 @@ import { Show } from "solid-js";
 import type { JSX } from "solid-js";
 
 import type { NameHandle } from "../../types/leaderboard";
-import { ChipTip } from "../board/chips";
+import { TipTarget } from "./Tooltip";
 
 const COPY: Record<
   "reserved" | "disputed" | "pending",
@@ -42,12 +42,12 @@ export function HandleBadge(props: { handle?: NameHandle | null }): JSX.Element 
       {(kind) => {
         const copy = () => COPY[kind()];
         return (
-          <ChipTip
+          <TipTarget
             class={"handle-badge " + kind() + " tip-chip"}
             text={copy().tip(props.handle?.stem ?? "")}
           >
             {copy().label}
-          </ChipTip>
+          </TipTarget>
         );
       }}
     </Show>

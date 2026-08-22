@@ -1,13 +1,13 @@
 // The screen-reader half of a tip is a separate DOM node in a shared host, so
 // it can silently drift from what the tip actually says. Both drifts below were
 // live defects: the epoch countdown's tooltip gains a "projected" caveat after
-// mount, and the board renders `Tip` and `ChipTip` on the same page.
+// mount, and the board renders plain `Tip`s and board chips on the same page.
 import { cleanup, render } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { ChipTip } from "../board/chips";
-import { Tip } from "./Tooltip";
+import { QualityGateChip } from "../board/chips";
+import { Tip, TipTarget } from "./Tooltip";
 
 afterEach(() => {
   cleanup();
@@ -35,32 +35,53 @@ describe("Tip", () => {
     expect(descriptionOf(trigger)).toBe("Folds in 3:20. The tick shown is projected.");
   });
 
-  it("does not share a description-id namespace with ChipTip", () => {
-    // Both mint ids from their OWN module counter, each starting at 0. While
-    // they also shared the `tipdesc-` prefix, any page rendering both emitted
-    // duplicate DOM ids and aria-describedby resolved to whichever span came
-    // first — so a tip announced some unrelated element's text.
-    //
-    // Asserted on the prefixes, not on one render's ids: whether two given
-    // renders happen to collide depends on how many tips of each kind mounted
-    // earlier, so an id comparison passes vacuously as often as not. Distinct
-    // namespaces is the property that actually holds regardless of order.
-    const { container } = render(() => (
+  it("mints description ids from the same counter as every other tip", () => {
+    // `Tip` and the board's chip trigger used to be two components, each with
+    // its own module-local counter starting at 0 and both minting `tipdesc-N`.
+    // Any page rendering both emitted duplicate DOM ids, and aria-describedby
+    // resolves to whichever span the document holds first — so a tip announced
+    // some unrelated element's text. They are one component now; this asserts
+    // the property that made the collision impossible, rather than that two
+    // particular renders happen not to collide (which passes vacuously
+    // whenever the two counters are out of step for unrelated reasons).
+    render(() => (
       <>
-        <ChipTip text="chip description">chip</ChipTip>
+        <TipTarget text="chip description">chip</TipTarget>
         <Tip text="tip description">tip</Tip>
+        <TipTarget text="third description">third</TipTarget>
       </>
     ));
-    const [chip, tip] = Array.from(container.querySelectorAll("[data-tooltip]"));
-    const namespace = (el: Element | undefined): string =>
-      (el?.getAttribute("aria-describedby") ?? "").replace(/\d+$/, "");
+    const triggers = Array.from(document.querySelectorAll("[data-tooltip]"));
+    const ids = triggers.map((el) => el.getAttribute("aria-describedby") ?? "");
 
-    expect(namespace(chip)).not.toBe("");
-    expect(namespace(chip)).not.toBe(namespace(tip));
-    expect(descriptionOf(chip)).toBe("chip description");
-    expect(descriptionOf(tip)).toBe("tip description");
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    for (const id of ids) expect(document.querySelectorAll("[id='" + id + "']")).toHaveLength(1);
+    expect(triggers.map(descriptionOf)).toEqual([
+      "chip description",
+      "tip description",
+      "third description",
+    ]);
+  });
 
-    const ids = Array.from(document.querySelectorAll("#tip-descs > span")).map((s) => s.id);
-    expect(new Set(ids).size).toBe(ids.length);
+  it("wires a board chip's description through the same host", () => {
+    // Guards the seam the consolidation created: chips.tsx no longer owns a
+    // descHost/minter of its own, so a chip must still land a resolvable
+    // description span in #tip-descs.
+    const { container } = render(() => (
+      <QualityGateChip
+        entry={
+          {
+            composite_breakdown: { benchmark_quality_multiplier: 0.5, base_accuracy: 0.8 },
+          } as never
+        }
+      />
+    ));
+    const chip = container.querySelector("[data-tooltip]");
+    const id = chip?.getAttribute("aria-describedby") ?? "";
+
+    expect(id).toMatch(/^tipdesc-\d+$/);
+    expect(document.querySelector("#tip-descs")?.contains(document.getElementById(id))).toBe(true);
+    expect(descriptionOf(chip)).toBe(chip?.getAttribute("data-tooltip"));
   });
 });

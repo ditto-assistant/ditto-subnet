@@ -62,7 +62,6 @@ import {
 } from "./board-state";
 import type { BoardSortKey, BoardTab as BoardTabName } from "./board-state";
 import {
-  ChipTip,
   ContinualScoreChip,
   EfficiencyBonusChip,
   QualityGateChip,
@@ -75,6 +74,7 @@ import {
 import type { BoardEntry, LeaderboardStore } from "./leaderboard-data";
 import type { ChainWeightInfo } from "../../types/leaderboard";
 import { HandleBadge } from "../ui/HandleBadge";
+import { TipTarget } from "../ui/Tooltip";
 import { MinerAvatar } from "../ui/MinerAvatar";
 import { ChainWeightsPanel } from "./ChainWeightsPanel";
 
@@ -492,7 +492,7 @@ function BoardRow(props: {
               <Show
                 when={elig()}
                 fallback={
-                  <ChipTip
+                  <TipTarget
                     class="rank prov-rank tip-chip"
                     text={
                       "Not ranked (" +
@@ -501,7 +501,7 @@ function BoardRow(props: {
                     }
                   >
                     –
-                  </ChipTip>
+                  </TipTarget>
                 }
               >
                 <span class={"rank" + rankCls()}>
@@ -523,23 +523,23 @@ function BoardRow(props: {
                 <EntityButton kind="agent" id={e().agent_id} label={displayName()} />
                 <HandleBadge handle={e().name_handle} />
                 <Show when={kind() === "zero"}>
-                  <ChipTip
+                  <TipTarget
                     class="prov tip-chip"
                     text="This full run scored a composite of 0.000, so it is shown for transparency but is not ranked and not emission-eligible."
                   >
                     no score
-                  </ChipTip>
+                  </TipTarget>
                 </Show>
                 <Show when={kind() === "provisional"}>
-                  <ChipTip
+                  <TipTarget
                     class="prov tip-chip"
                     text="Provisional. It ran a smaller profile that did not administer the full benchmark, so it is shown for transparency but is not ranked and not emission-eligible."
                   >
                     provisional
-                  </ChipTip>
+                  </TipTarget>
                 </Show>
                 <Show when={!finalizedEntry() && !v9ConfirmationSuppressed()}>
-                  <ChipTip
+                  <TipTarget
                     class="quorum-badge tip-chip"
                     text={
                       "Accepted score feedback; final at " +
@@ -548,15 +548,15 @@ function BoardRow(props: {
                     }
                   >
                     {(e().score_count || 0) + " of " + (e().score_quorum || 3) + " · provisional"}
-                  </ChipTip>
+                  </TipTarget>
                 </Show>
                 <Show when={!registered() && e().registered === false}>
-                  <ChipTip
+                  <TipTarget
                     class="prov tip-chip"
                     text="This hotkey is not currently registered on SN118. Its score is retained, but it cannot hold the KOTH crown or receive active weights and emissions until the same hotkey registers again."
                   >
                     not registered
-                  </ChipTip>
+                  </TipTarget>
                 </Show>
                 <Show
                   when={
@@ -568,12 +568,12 @@ function BoardRow(props: {
                     !props.chainRegistrationUnknown
                   }
                 >
-                  <ChipTip
+                  <TipTarget
                     class="prov tip-chip"
                     text="Current SN118 registration could not be confirmed. The score is retained, but active weight and emission eligibility are unknown."
                   >
                     unconfirmed
-                  </ChipTip>
+                  </TipTarget>
                 </Show>
               </span>
               <span class="submission-version">{agentVersionLabel(e().agent_version)}</span>
@@ -633,14 +633,14 @@ function BoardRow(props: {
             )}
           </Show>
           <Show when={aboveChampion()}>
-            <ChipTip class="above-champion-note tip-chip" text={aboveChampionTip()}>
+            <TipTarget class="above-champion-note tip-chip" text={aboveChampionTip()}>
               {aboveChampionLabel()}
-            </ChipTip>
+            </TipTarget>
           </Show>
           <Show when={chainInfo()}>
             {(info) => (
               <>
-                <ChipTip
+                <TipTarget
                   class={
                     "chain-weight-note tip-chip " + (info().champion ? "top-choice" : "support")
                   }
@@ -659,7 +659,7 @@ function BoardRow(props: {
                 >
                   <span class="chain-weight-dot" aria-hidden="true" />
                   {chainWeightLabel(info())}
-                </ChipTip>
+                </TipTarget>
                 {/* The ghost overlay of the weights themselves: this miner's
                     mean share of the revealed miner-weight mass. */}
                 <div
@@ -1006,7 +1006,7 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                       : undefined
                   }
                 >
-                  <ChipTip
+                  <TipTarget
                     class="tip"
                     id={header.key ? undefined : "emissions-col-tip"}
                     tabindex={0}
@@ -1014,7 +1014,7 @@ export function BoardTable(props: { store: LeaderboardStore }): JSX.Element {
                     text={header.key ? header.tip : emissionsColTip(store)}
                   >
                     {header.label}
-                  </ChipTip>
+                  </TipTarget>
                   <Show when={header.key}>
                     <span class="sarrow" aria-hidden="true">
                       {boardSort() === header.key ? (boardDir() === -1 ? "▼" : "▲") : "↕"}

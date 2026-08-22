@@ -1,11 +1,11 @@
 // The board's chip vocabulary (monolith 5607–5786): continual seed-rounds,
 // quality-gate, token-penalty, mid-rollout settlement, and rank-movement
-// chips, plus ChipTip — the generic [data-tooltip] element with its hidden
-// screen-reader description (the per-element equivalent of wireTips
-// 5244–5263, reused for header sort tips and score chips alike).
-import { Show, createEffect, onCleanup, onMount } from "solid-js";
+// chips. The tooltip trigger itself is the shared `TipTarget` — this module
+// used to carry its own near-identical copy (same descHost, same counter,
+// same `tipdesc-` prefix), which is exactly how the two of them minted
+// colliding aria-describedby ids.
+import { Show } from "solid-js";
 import type { JSX } from "solid-js";
-import { Dynamic } from "solid-js/web";
 
 import { esc, fx } from "../../lib/format";
 import {
@@ -18,75 +18,9 @@ import {
   continualSampleCount,
   tokenPenaltyChipLabel,
 } from "../../lib/scoring";
+import { TipTarget } from "../ui/Tooltip";
 import type { BoardEntry } from "./leaderboard-data";
 import { rankMoveState } from "./board-state";
-
-let tipDescSeq = 0;
-
-function descHost(): HTMLElement {
-  let host = document.getElementById("tip-descs");
-  if (!host) {
-    host = document.createElement("div");
-    host.id = "tip-descs";
-    host.hidden = true;
-    document.body.appendChild(host);
-  }
-  return host;
-}
-
-export interface ChipTipProps {
-  /** The tooltip text (drawn by the shared #tip-bubble, announced via the
-   * aria-describedby description node). */
-  text: string;
-  class?: string;
-  id?: string;
-  tag?: "span" | "div";
-  role?: JSX.HTMLAttributes<HTMLElement>["role"];
-  tabindex?: number;
-  children: JSX.Element;
-}
-
-/** A [data-tooltip] element with its SR description span. Unlike the shared
- * `Tip`, the class is the caller's own (tip-chip chips stay out of the tab
- * order; header .tip terms add tabindex + role="button" as the keyboard sort
- * control). */
-export function ChipTip(props: ChipTipProps): JSX.Element {
-  // Its OWN id prefix, not the shared `Tip`'s. Both components mint ids from a
-  // module-local counter that starts at 0, so sharing the `tipdesc-` namespace
-  // put duplicate ids in the same document the moment a page rendered both —
-  // and `aria-describedby` resolves to whichever the document happens to hold
-  // first, so a screen reader read out some other element's tooltip.
-  const descId = "chiptipdesc-" + ++tipDescSeq;
-  let span: HTMLSpanElement | null = null;
-  onMount(() => {
-    span = document.createElement("span");
-    span.id = descId;
-    descHost().appendChild(span);
-    onCleanup(() => {
-      span?.remove();
-      span = null;
-    });
-  });
-  createEffect(() => {
-    // The description follows the tooltip (the emissions column tip is
-    // rewritten from the fold once it arrives).
-    const text = props.text;
-    if (span) span.textContent = text;
-  });
-  return (
-    <Dynamic
-      component={props.tag ?? "span"}
-      class={props.class}
-      id={props.id}
-      role={props.role}
-      tabindex={props.tabindex}
-      data-tooltip={props.text}
-      aria-describedby={descId}
-    >
-      {props.children}
-    </Dynamic>
-  );
-}
 
 /**
  * The seed-round / retained-sample chip (continualScoreChip, 5607–5628). The
@@ -100,7 +34,7 @@ export function RetestSeedChip(props: { count: number }): JSX.Element {
   return (
     <Show when={count()}>
       {(value) => (
-        <ChipTip
+        <TipTarget
           class="rollout-chip settled retest-seed-chip tip"
           tabindex={0}
           text={
@@ -112,7 +46,7 @@ export function RetestSeedChip(props: { count: number }): JSX.Element {
           }
         >
           {value() + (value() === 1 ? " retest seed" : " retest seeds")}
-        </ChipTip>
+        </TipTarget>
       )}
     </Show>
   );
@@ -142,9 +76,9 @@ export function ContinualScoreChip(props: { entry: BoardEntry }): JSX.Element {
           ". Scheduling cohort changes never remove an accepted sample; KOTH comparisons pair " +
           "agents only on seed identities they share.";
         return (
-          <ChipTip class="rollout-chip settled seed-rounds-chip tip" tabindex={0} text={title()}>
+          <TipTarget class="rollout-chip settled seed-rounds-chip tip" tabindex={0} text={title()}>
             {seeds() + (seeds() === 1 ? " seed" : " seeds")}
-          </ChipTip>
+          </TipTarget>
         );
       })()}
     </Show>
@@ -178,9 +112,9 @@ export function QualityGateChip(props: { entry: BoardEntry }): JSX.Element {
   return (
     <Show when={label()}>
       {(text) => (
-        <ChipTip class="gate-chip tip-chip" text={tip()}>
+        <TipTarget class="gate-chip tip-chip" text={tip()}>
           {text()}
-        </ChipTip>
+        </TipTarget>
       )}
     </Show>
   );
@@ -203,9 +137,9 @@ export function TokenPenaltyChip(props: { entry: BoardEntry }): JSX.Element {
   return (
     <Show when={state()}>
       {(s) => (
-        <ChipTip class={"token-chip tip-chip" + (s().penalized ? " penalized" : "")} text={tip()}>
+        <TipTarget class={"token-chip tip-chip" + (s().penalized ? " penalized" : "")} text={tip()}>
           {s().label}
-        </ChipTip>
+        </TipTarget>
       )}
     </Show>
   );
@@ -319,7 +253,7 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
   };
   return (
     <Show when={active()}>
-      <ChipTip
+      <TipTarget
         class={
           "rollout-chip " +
           (applied() ? "settled" : "partial") +
@@ -330,7 +264,7 @@ export function EfficiencyBonusChip(props: { entry: BoardEntry }): JSX.Element {
         text={tip()}
       >
         {tieBreak()?.label ?? "efficiency " + (applied() ? "" : "projection ") + signedDelta()}
-      </ChipTip>
+      </TipTarget>
     </Show>
   );
 }
@@ -393,12 +327,12 @@ export function V9ConfirmationChip(props: {
   return (
     <Show when={state()}>
       {(value) => (
-        <ChipTip
+        <TipTarget
           class={"rollout-chip v9-confirmation-chip tip-chip " + value().class}
           text={value().tip}
         >
           {value().label}
-        </ChipTip>
+        </TipTarget>
       )}
     </Show>
   );
@@ -423,7 +357,7 @@ export function RolloutChip(props: {
       <Show
         when={count() && props.entry.rollout_composite != null}
         fallback={
-          <ChipTip
+          <TipTarget
             class="rollout-chip pending tip-chip"
             text={
               "No accepted " +
@@ -432,7 +366,7 @@ export function RolloutChip(props: {
             }
           >
             {vlabel() + " pending · 0/" + quorum()}
-          </ChipTip>
+          </TipTarget>
         }
       >
         {(() => {
@@ -451,7 +385,7 @@ export function RolloutChip(props: {
                 quorum() +
                 " scores. It can change until quorum and does not affect rank or weights yet.";
           return (
-            <ChipTip
+            <TipTarget
               class={"rollout-chip tip-chip" + (settled() ? " settled" : " partial")}
               text={tip()}
             >
@@ -463,7 +397,7 @@ export function RolloutChip(props: {
                 "/" +
                 quorum() +
                 (settled() ? " settled" : "")}
-            </ChipTip>
+            </TipTarget>
           );
         })()}
       </Show>
@@ -480,19 +414,19 @@ export function RankMove(props: { hotkey: string; rank: number }): JSX.Element {
         <Show
           when={move().kind !== "new"}
           fallback={
-            <ChipTip class="rankmove new tip-chip" text="New since your last visit">
+            <TipTarget class="rankmove new tip-chip" text="New since your last visit">
               NEW
-            </ChipTip>
+            </TipTarget>
           }
         >
-          <ChipTip
+          <TipTarget
             class={"rankmove " + move().kind + " tip-chip"}
             text={
               (move().kind === "up" ? "Up " : "Down ") + move().delta + " since your last visit"
             }
           >
             {(move().kind === "up" ? "▲" : "▼") + move().delta}
-          </ChipTip>
+          </TipTarget>
         </Show>
       )}
     </Show>
