@@ -294,8 +294,11 @@ func gzipBytes(t *testing.T, raw []byte) []byte {
 	return buf.Bytes()
 }
 
-func makeKanikoGCRArchive(t *testing.T) ([]byte, string) {
+func makeKanikoGCRArchive(t *testing.T, repoTags ...string) ([]byte, string) {
 	t.Helper()
+	if len(repoTags) == 0 {
+		repoTags = []string{testScreenedImageRef}
+	}
 	config := []byte(`{"architecture":"amd64","os":"linux"}`)
 	configDigest := sha256.Sum256(config)
 	configHex := hex.EncodeToString(configDigest[:])
@@ -305,7 +308,7 @@ func makeKanikoGCRArchive(t *testing.T) ([]byte, string) {
 	layerName := hex.EncodeToString(layerDigest[:]) + ".tar.gz"
 	manifest, err := json.Marshal([]map[string]any{{
 		"Config":   configName,
-		"RepoTags": []string{testScreenedImageRef},
+		"RepoTags": repoTags,
 		"Layers":   []string{layerName},
 	}})
 	if err != nil {
@@ -510,6 +513,18 @@ func TestValidateDockerSaveArchiveAcceptsKanikoAttemptTag(t *testing.T) {
 	}
 	if tagged {
 		t.Fatal("attempt-scoped tag must be retagged to the agent ref")
+	}
+}
+
+func TestValidateDockerSaveArchiveAcceptsKanikoGCRConfigWithAttemptTag(t *testing.T) {
+	attemptRef := "ditto-screen/550e8400-e29b-41d4-a716-446655440000-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:latest"
+	archive, imageID := makeKanikoGCRArchive(t, attemptRef)
+	tagged, err := validateDockerSaveArchive(writeArchive(t, archive), testScreenedImageRef, imageID)
+	if err != nil {
+		t.Fatalf("Kaniko gcr config + attempt tag rejected: %v", err)
+	}
+	if tagged {
+		t.Fatal("attempt-scoped Kaniko tar must be retagged to the agent ref")
 	}
 }
 

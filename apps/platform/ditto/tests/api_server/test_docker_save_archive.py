@@ -78,6 +78,22 @@ def test_config_digest_from_gzip_tar(tmp_path: Path) -> None:
     assert config_digest_from_docker_save(tar) == "sha256:" + digest
 
 
+def test_config_digest_from_kaniko_gcr_config_name(tmp_path: Path) -> None:
+    config = b'{"architecture":"amd64","os":"linux"}'
+    digest = hashlib.sha256(config).hexdigest()
+    tar = tmp_path / "image.tar"
+    _write_docker_save(
+        tar,
+        config=config,
+        name=f"sha256:{digest}",
+        repo_tags=[
+            "ditto-screen/11111111-1111-4111-8111-111111111111-"
+            "22222222-2222-4222-8222-222222222222:latest"
+        ],
+    )
+    assert config_digest_from_docker_save(tar) == "sha256:" + digest
+
+
 def test_config_digest_rejects_garbage(tmp_path: Path) -> None:
     tar = tmp_path / "image.tar"
     tar.write_bytes(b"not a tar")

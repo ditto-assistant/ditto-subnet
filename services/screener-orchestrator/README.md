@@ -40,7 +40,11 @@ scripts/targon-smoke.sh sweep-oneshots --apply --workers 8
 scripts/targon-smoke.sh kaniko-probe --resource cpu-small --roundtrip
 scripts/targon-smoke.sh runtime-probe
 scripts/targon-smoke.sh source-review-probe --image registry.example/screener@sha256:DIGEST
+scripts/targon-screen-starter-kit.sh --tiny
+scripts/targon-screen-starter-kit.sh
 ```
+
+Miner screening on Targon is Kaniko `--destination=ditto-screen/{agent}-{attempt}:latest --no-push --tar-path=...`. Pin `screened_image_id` to the docker-save **config** digest from that tar, never Kaniko `--digest-file` or an Artifact Registry manifest digest. `targon-screen-starter-kit.sh` docker-builds the starter-kit harness (or `--tiny`) with that destination and fails closed if DittoBench would reject the archive.
 
 Authenticated workload operations use Targon's organization-scoped v3 API.
 Production is pinned to the non-secret `ditto` organization slug; operators may

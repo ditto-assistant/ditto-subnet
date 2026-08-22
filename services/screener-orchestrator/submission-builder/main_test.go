@@ -63,6 +63,71 @@ func TestFailureStageNameIsBoundedAndPublicSafe(t *testing.T) {
 	}
 }
 
+func writeDockerSave(t *testing.T, config []byte, configName string) string {
+	t.Helper()
+	digest := sha256.Sum256(config)
+	if configName == "" {
+		configName = hex.EncodeToString(digest[:]) + ".json"
+	}
+	manifest, err := json.Marshal([]map[string]any{{
+		"Config":   configName,
+		"RepoTags": []string{"ditto-screen/11111111-1111-4111-8111-111111111111-22222222-2222-4222-8222-222222222222:latest"},
+		"Layers":   []string{},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "image.tar")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := tar.NewWriter(file)
+	for _, entry := range []struct {
+		name string
+		body []byte
+	}{
+		{"manifest.json", manifest},
+		{configName, config},
+	} {
+		if err := writer.WriteHeader(&tar.Header{Name: entry.name, Mode: 0o600, Size: int64(len(entry.body))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := writer.Write(entry.body); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestConfigDigestFromClassicAndKanikoGCRTars(t *testing.T) {
+	config := []byte(`{"architecture":"amd64","os":"linux"}`)
+	digest := sha256.Sum256(config)
+	want := "sha256:" + hex.EncodeToString(digest[:])
+
+	classic, err := configDigestFromDockerSave(writeDockerSave(t, config, hex.EncodeToString(digest[:])+".json"))
+	if err != nil {
+		t.Fatalf("classic docker-save: %v", err)
+	}
+	if classic != want {
+		t.Fatalf("classic digest %s, want %s", classic, want)
+	}
+
+	kaniko, err := configDigestFromDockerSave(writeDockerSave(t, config, "sha256:"+hex.EncodeToString(digest[:])))
+	if err != nil {
+		t.Fatalf("kaniko gcr docker-save: %v", err)
+	}
+	if kaniko != want {
+		t.Fatalf("kaniko digest %s, want %s", kaniko, want)
+	}
+}
+
 func TestDownloadVerifiedRejectsDigestMismatchAndRemovesFile(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte("miner source"))
