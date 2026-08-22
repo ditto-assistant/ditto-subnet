@@ -451,7 +451,7 @@ func kindPolicy(kind Kind) (int64, Audience, bool) {
 	case KindVisibleBundle:
 		return 2 << 30, AudienceWorkspaceMaterializer, true
 	case KindMemoryBundle:
-		return 64 << 20, AudienceMemorySeedProjector, true
+		return 4 << 20, AudienceMemorySeedProjector, true
 	case KindResourceProfile:
 		return 4 << 20, AudienceResourceSupervisor, true
 	case KindGraderBundle:

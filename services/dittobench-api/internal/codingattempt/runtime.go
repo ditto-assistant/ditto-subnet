@@ -15,6 +15,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingartifacts"
 	"github.com/ditto-assistant/dittobench-api/internal/codinggrader"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
+	"github.com/ditto-assistant/dittobench-api/internal/codingseed"
 	"github.com/google/uuid"
 )
 
@@ -31,13 +32,16 @@ const outerRevocationTimeout = 30 * time.Second
 
 // NewRuntime returns an unwired, fail-closed attempt runtime.
 func NewRuntime(config RuntimeConfig) (*Runtime, error) {
-	if nilLike(config.Artifacts) || nilLike(config.Executor) {
+	if nilLike(config.Artifacts) || nilLike(config.Executor) || nilLike(config.SeedProjector) {
 		return nil, errors.New("coding attempt runtime dependencies are incomplete")
 	}
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	return &Runtime{artifacts: config.Artifacts, executor: config.Executor, now: config.Now}, nil
+	return &Runtime{
+		artifacts: config.Artifacts, executor: config.Executor,
+		seedProjector: config.SeedProjector, now: config.Now,
+	}, nil
 }
 
 // BeginAuthoring verifies authoring-only artifacts, enforces the signed
@@ -75,12 +79,28 @@ func (runtime *Runtime) BeginAuthoring(ctx context.Context, spec AuthoringSpec) 
 	if err != nil {
 		return nil, errors.Join(fmt.Errorf("open coding authoring memory bundle: %w", err), runner.Close())
 	}
-	return &AuthoringSession{runner: runner, memory: memory}, nil
+	seedBinding := codingseed.Binding{
+		TicketID: spec.Binding.TicketID, CaseID: spec.Binding.CaseID,
+		ProfileCapabilityID: spec.Binding.ProfileCapabilityID,
+		MemoryBundleSHA256:  spec.MemoryBundleSHA256, Deadline: spec.Binding.Deadline,
+	}
+	projection, projectionErr := runtime.seedProjector.Project(memory, seedBinding)
+	if projectionErr == nil {
+		projectionErr = projection.ValidateBinding(seedBinding)
+	}
+	memoryCloseErr := memory.Close()
+	if projectionErr != nil || memoryCloseErr != nil {
+		return nil, errors.Join(
+			errors.New("project coding authoring memory bundle"), projectionErr, memoryCloseErr, runner.Close(),
+		)
+	}
+	return &AuthoringSession{runner: runner, seed: projection}, nil
 }
 
-// Freeze revokes the outer route first, then freezes the internal runner and
-// closes private memory bytes. Calls after completion return the same cached
-// outcome; concurrent lifecycle calls fail without disturbing the owner.
+// Freeze revokes the outer route first, then freezes the internal runner. Raw
+// memory bytes were already projected and closed during BeginAuthoring. Calls
+// after completion return the same cached outcome; concurrent lifecycle calls
+// fail without disturbing the owner.
 func (session *AuthoringSession) Freeze(
 	ctx context.Context,
 	revoker CapabilityRevoker,
@@ -109,14 +129,12 @@ func (session *AuthoringSession) Freeze(
 	revokeErr := revoker.Revoke(revokeContext)
 	cancelRevoke()
 	result := session.runner.Freeze()
-	memoryErr := session.memory.Close()
-
 	session.mu.Lock()
 	session.freezing = false
-	session.memoryClosed = true
+	session.seed = codingseed.Projection{}
 	session.frozen = true
 	session.freezeResult = cloneFreezeResult(result)
-	session.freezeErr = errors.Join(revokeErr, memoryErr)
+	session.freezeErr = revokeErr
 	cached, freezeErr := cloneFreezeResult(session.freezeResult), session.freezeErr
 	session.mu.Unlock()
 	return cached, freezeErr
@@ -147,13 +165,9 @@ func (session *AuthoringSession) Close() error {
 		return ErrFreezeInProgress
 	}
 	session.closed = true
+	session.seed = codingseed.Projection{}
 	premature := !session.frozen
-	var memoryErr error
-	if !session.memoryClosed {
-		memoryErr = session.memory.Close()
-		session.memoryClosed = true
-	}
-	err := errors.Join(memoryErr, session.runner.Close())
+	err := session.runner.Close()
 	if premature {
 		err = errors.Join(ErrClosedBeforeFreeze, err)
 	}
