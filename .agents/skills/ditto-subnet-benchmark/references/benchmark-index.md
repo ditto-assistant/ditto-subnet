@@ -32,6 +32,7 @@
 | Shadow authoring-freeze ledger | `apps/platform/ditto/api_server/endpoints/validator_coding_freezes.py`, `apps/platform/ditto/db/queries/coding_evaluations.py` |
 | Shadow grading-lease delivery | `apps/platform/ditto/api_server/endpoints/validator_coding_grading.py`, `ditto/validator/platform.py` |
 | Shadow result submission | `apps/platform/ditto/api_server/endpoints/validator_coding_evaluation.py`, `ditto/validator/platform.py` |
+| Shadow attempt coordinator | `ditto/validator/coding_attempt.py`, `docs/coding-shadow-attempt-coordinator.md` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
 

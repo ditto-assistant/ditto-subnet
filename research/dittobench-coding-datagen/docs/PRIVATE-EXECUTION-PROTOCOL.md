@@ -604,6 +604,13 @@ sequence.
 
 ## Authoring and grading lifecycle
 
+The validator's shadow attempt coordinator encodes this order through injected
+Platform and runtime ports. Runtime exceptions trigger shielded phase cleanup;
+normal authoring and grading outcomes are accepted only after capability
+revocation and environment destruction are attested. The coordinator remains
+unwired and covers the complete gradeable path only; terminal failure
+classification remains a later worker layer.
+
 1. Verify the signed run manifest, chain block, corpus root, and every selected
    capsule digest.
 2. Materialize one visible base without `.git`, remotes, hooks, credentials,
