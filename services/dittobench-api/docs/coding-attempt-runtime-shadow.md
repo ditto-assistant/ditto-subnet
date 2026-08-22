@@ -18,12 +18,13 @@ resource-profile / resource-supervisor
 It verifies ticket, deadline, case, profile, runner manifest, candidate limits,
 resource-profile digest, delivery phase, artifact kind, audience, and object
 digest before opening bytes. The visible bundle constructs a private
-`codingrunner.Session`; verified memory bytes are exposed only as an opaque
-reader to the future trusted seed/harness adapter. Grader material is absent
-from the authoring type.
+`codingrunner.Session`; the runtime asks the scoped-memory projector to verify
+canonical bytes and build a deep-owned seed request, then the runtime closes the
+raw reader before returning the session. Grader material is absent from the
+authoring type.
 
 `AuthoringSession.Freeze` requires an outer capability revoker. It attempts that
-revocation before freezing the internal runner, closes memory bytes, caches one
+revocation before freezing the internal runner, caches one
 presence-preserving deep copy of the freeze result, and permits transcript
 streaming only after freeze. Repeated freeze and close calls return stable
 results. The runtime never calls the injected revoker while holding its
@@ -64,7 +65,7 @@ retryable infrastructure without parsing error prose.
 ## Activation
 
 This package is unwired. A later local gateway must connect it to the Python
-validator coordinator, a source-bound capability publisher, memory decoding,
+validator coordinator, a source-bound capability publisher,
 the harness lifecycle, ticket-scoped Luna relay, the now-available but unwired
 durable evidence outbox, and a host sweeper. No production composition root imports it. It cannot
 claim jobs, start miners, submit scores, rank agents, set weights, or make coding
@@ -74,10 +75,10 @@ contract v1 weight eligible.
 
 ```bash
 cd services/dittobench-api
-go test -race ./internal/codingattempt ./internal/codingartifacts \
+go test -race ./internal/codingattempt ./internal/codingseed ./internal/codingartifacts \
   ./internal/codingrunner ./internal/codinggrader ./internal/codingexecutor \
   ./internal/codingcontract
-go vet ./internal/codingattempt ./internal/codingartifacts \
+go vet ./internal/codingattempt ./internal/codingseed ./internal/codingartifacts \
   ./internal/codingrunner ./internal/codinggrader ./internal/codingexecutor \
   ./internal/codingcontract
 ```

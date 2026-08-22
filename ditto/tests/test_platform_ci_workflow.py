@@ -52,6 +52,20 @@ def test_backend_and_dashboard_workflows_own_disjoint_platform_paths() -> None:
         assert "push" not in triggers
 
 
+def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
+    backend_paths = set(_triggers(_load(BACKEND_WORKFLOW))["pull_request"]["paths"])
+    assert {
+        "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_selection_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_certification_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
+    } <= backend_paths
+
+
 def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
     backend = _load(BACKEND_WORKFLOW)["jobs"]["verify"]
     dashboard = _load(DASHBOARD_WORKFLOW)["jobs"]["verify"]

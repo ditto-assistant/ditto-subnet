@@ -471,7 +471,7 @@ func TestKindPoliciesAreExhaustive(t *testing.T) {
 		audience Audience
 	}{
 		KindVisibleBundle:   {maximum: 2 << 30, audience: AudienceWorkspaceMaterializer},
-		KindMemoryBundle:    {maximum: 64 << 20, audience: AudienceMemorySeedProjector},
+		KindMemoryBundle:    {maximum: 4 << 20, audience: AudienceMemorySeedProjector},
 		KindResourceProfile: {maximum: 4 << 20, audience: AudienceResourceSupervisor},
 		KindGraderBundle:    {maximum: 512 << 20, audience: AudienceProtectedGrader},
 	}

@@ -216,7 +216,13 @@ def test_shadow_coding_execution_selects_only_scorer_stack(
     "path",
     [
         "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_selection_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_certification_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
     ],
 )
 def test_shared_coding_contract_vectors_select_every_consumer(
