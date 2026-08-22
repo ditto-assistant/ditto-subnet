@@ -41,6 +41,7 @@ SCORE_SCALE = 1_000_000
 FACTOR_SCALE = 10_000
 LONGMEM_SELECTOR_REVISION_V1 = "longmemeval-s-stratified-sha256-v1"
 ABLATION_PROFILE_CONTRACT_VERSION = "dittobench-v9-ablation-profile-v1"
+ABLATION_EVIDENCE_CONTRACT_VERSION = "dittobench-v9-ablation-v1"
 
 
 class ConfirmationEvidenceError(ValueError):
@@ -838,7 +839,7 @@ def _validate_ablation(
     if evidence.mode != mode.value:
         raise ConfirmationEvidenceError("ablation mode does not match frozen settings")
     expected = (
-        evidence.contract_version == policy.contract_version
+        evidence.contract_version == ABLATION_EVIDENCE_CONTRACT_VERSION
         and evidence.intervention == policy.intervention
         and evidence.profile_revision == profile.ablation_profile_revision
         and evidence.profile_checksum == profile.ablation_profile_checksum

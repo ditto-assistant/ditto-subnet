@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,6 +13,9 @@ import pytest
 from ditto.api_models.confirmation_bundles import ConfirmationBundleMode
 from ditto.api_models.validator_confirmation import ConfirmationExecutionProfile
 from ditto.api_server.confirmation_evidence import (
+    ABLATION_EVIDENCE_CONTRACT_VERSION,
+    ABLATION_PROFILE_CONTRACT_VERSION,
+    ConfirmationEvidenceError,
     ConfirmationVerificationProfile,
     canonical_json,
     evidence_digest,
@@ -131,6 +135,79 @@ def test_real_go_evidence_converts_and_rebuilds_confirmation_root() -> None:
     assert verified.evidence_sha256 == (
         "1d99e2aafd3b1effd4179d966674087883496065514bdfb14b15551f8a68a824"
     )
+
+
+def test_live_v4_profile_contract_accepts_go_evidence_contract() -> None:
+    """Live v4 canaries 409ed here: policy is ablation-profile-v1, evidence is v1.
+
+    Attempts 3 and 4 on bundle a98db16f persisted ``ablation_profile_drift``
+    after execute. The frozen execution profile names the *profile* contract;
+    Go evidence names the *evidence* contract. Those strings are not equal.
+    """
+    report = completion_report_from_go_fixture(
+        _fixture(),
+        ablation_coordinator_latency_ms=ABLATION_COORDINATOR_LATENCY_MS,
+    )
+    assert report.inference_ablation.evidence.contract_version == (
+        ABLATION_EVIDENCE_CONTRACT_VERSION
+    )
+    profile = _verification_profile()
+    live = replace(
+        profile,
+        inference_ablation=replace(
+            profile.inference_ablation,
+            contract_version=ABLATION_PROFILE_CONTRACT_VERSION,
+        ),
+        embedding_ablation=replace(
+            profile.embedding_ablation,
+            contract_version=ABLATION_PROFILE_CONTRACT_VERSION,
+        ),
+    )
+
+    verified = rebuild_confirmation_evidence(
+        report,
+        artifact_sha256=ARTIFACT_SHA256,
+        profile_revision=live.revision,
+        profile_checksum=live.checksum(),
+        settings_revision=7,
+        settings_checksum=SETTINGS_SHA256,
+        retest_generation=3,
+        mode=ConfirmationBundleMode.SHADOW,
+        profile=live,
+    )
+    assert verified.ablations_complete is True
+
+
+def test_unknown_ablation_evidence_contract_still_fails_closed() -> None:
+    report = completion_report_from_go_fixture(
+        _fixture(),
+        ablation_coordinator_latency_ms=ABLATION_COORDINATOR_LATENCY_MS,
+    )
+    inference = report.inference_ablation.evidence.model_copy(
+        update={"contract_version": "dittobench-v9-ablation-profile-v1"}
+    )
+    broken = report.model_copy(
+        update={
+            "inference_ablation": report.inference_ablation.model_copy(
+                update={
+                    "evidence": inference,
+                    "evidence_sha256": evidence_digest(inference),
+                }
+            )
+        }
+    )
+    with pytest.raises(ConfirmationEvidenceError, match="ablation profile drift"):
+        rebuild_confirmation_evidence(
+            broken,
+            artifact_sha256=ARTIFACT_SHA256,
+            profile_revision=_verification_profile().revision,
+            profile_checksum=_verification_profile().checksum(),
+            settings_revision=7,
+            settings_checksum=SETTINGS_SHA256,
+            retest_generation=3,
+            mode=ConfirmationBundleMode.SHADOW,
+            profile=_verification_profile(),
+        )
 
 
 def test_adapter_drops_only_verified_private_go_fields() -> None:
