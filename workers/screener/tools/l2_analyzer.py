@@ -21,8 +21,8 @@ from typing import cast
 import tree_sitter_rust
 from tree_sitter import Language, Node, Parser
 
-ROOT = Path("/workspace")
-MANIFESTS = Path("/opt/starter-manifests")
+ROOT = Path(os.environ.get("L2_ANALYZER_ROOT", "/workspace"))
+MANIFESTS = Path(os.environ.get("L2_ANALYZER_MANIFESTS", "/opt/starter-manifests"))
 RUST_LANGUAGE = Language(tree_sitter_rust.language())
 MAX_FILES = 512
 MAX_WALK_ENTRIES = 1_024

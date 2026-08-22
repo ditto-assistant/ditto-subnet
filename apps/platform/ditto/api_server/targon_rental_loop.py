@@ -20,6 +20,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.sql.elements import ColumnElement
 
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.builder_image import is_digest_pinned_image
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
@@ -33,6 +34,7 @@ from ditto.api_server.screening_provider import (
 from ditto.api_server.targon_provider import TargonComputeProvider, TargonRentals
 from ditto.api_server.targon_screening import admit_targon_screening_work
 from ditto.db.models import (
+    ScreenerReviewSettingsRevision,
     ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -64,6 +66,47 @@ async def _default_health_probe(url: str) -> bool:
 
 PromoteArchive = Callable[[str, str, str], Awaitable[str]]
 MintToken = Callable[[str], Awaitable[str]]
+
+
+def _source_review_layer_env(
+    settings: ScreenerReviewSettings,
+) -> tuple[tuple[str, str], ...]:
+    """Pin L1/L2/L3 knobs on the one-shot rental so GCE is not required."""
+    return (
+        (
+            "SCREENER_L2_REVIEW_MODE",
+            settings.mode if settings.mode != "inherit" else "off",
+        ),
+        ("SCREENER_L2_REVIEW_MODEL", settings.l2_model),
+        ("SCREENER_L2_FALLBACK_MODELS", ",".join(settings.l2_fallback_models)),
+        ("SCREENER_L3_REVIEW_ENABLED", "true" if settings.l3_enabled else "false"),
+        ("SCREENER_L3_REVIEW_MODEL", settings.l3_model),
+        ("SCREENER_L2_TIMEOUT_SECONDS", str(int(settings.timeout_seconds))),
+        ("SCREENER_L2_MAX_STEPS", str(int(settings.max_steps))),
+        (
+            "SCREENER_SOURCE_REVIEW_MAX_STEPS",
+            str(int(settings.source_review_max_steps)),
+        ),
+        (
+            "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES",
+            str(int(settings.source_review_max_read_bytes)),
+        ),
+        (
+            "SCREENER_SOURCE_REVIEW_REASONING_EFFORT",
+            settings.source_review_reasoning_effort,
+        ),
+        ("SCREENER_SOURCE_REVIEW_MODEL", settings.source_review_model),
+        ("SCREENER_L2_MAX_INPUT_TOKENS", str(int(settings.max_input_tokens))),
+        ("SCREENER_L2_MAX_OUTPUT_TOKENS", str(int(settings.max_output_tokens))),
+        (
+            "SCREENER_L2_MAX_COMPLETION_TOKENS",
+            str(int(settings.max_completion_tokens)),
+        ),
+        ("SCREENER_L2_MAX_COST_USD", str(settings.max_cost_usd)),
+        ("SCREENER_L2_CRITIC_REASONING_EFFORT", settings.critic_reasoning_effort),
+        ("SCREENER_L2_CACHE_TTL_SECONDS", str(int(settings.cache_ttl_seconds))),
+        ("SCREENER_L2_AUDIT_RETENTION_DAYS", str(int(settings.audit_retention_days))),
+    )
 
 
 class TargonRentalLoop:
@@ -585,6 +628,17 @@ class TargonRentalLoop:
             review_id = row.review_id
             attempt_id = row.attempt_id
             artifact_sha256 = row.artifact_sha256
+            settings_row = await session.scalar(
+                select(ScreenerReviewSettingsRevision)
+                .where(ScreenerReviewSettingsRevision.scope == "*")
+                .order_by(ScreenerReviewSettingsRevision.revision.desc())
+                .limit(1)
+            )
+            review_settings = (
+                ScreenerReviewSettings.model_validate(settings_row.settings)
+                if settings_row is not None
+                else ScreenerReviewSettings()
+            )
         bootstrap = await mint_token(self._config.bootstrap_sa)
         spec = ReviewSpec(
             name=f"ditto-source-{str(review_id).replace('-', '')[:16]}"[:32],
@@ -609,6 +663,7 @@ class TargonRentalLoop:
                     "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS",
                     str(int(self._config.source_review_timeout_seconds)),
                 ),
+                *_source_review_layer_env(review_settings),
             ),
             commands=("/app/workers/screener/.venv/bin/python", "-m"),
             args=("ditto_screener.source_review_job",),

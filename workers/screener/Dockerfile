@@ -10,6 +10,7 @@ WORKDIR /app/workers/screener
 COPY workers/screener/pyproject.toml workers/screener/uv.lock workers/screener/README.md workers/screener/LICENSE ./
 COPY packages/ditto-screening-protocol /app/packages/ditto-screening-protocol
 COPY workers/screener/ditto_screener ./ditto_screener
+COPY workers/screener/tools/l2_analyzer.py ./tools/l2_analyzer.py
 RUN uv sync --frozen --no-dev
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \

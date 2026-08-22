@@ -10,13 +10,14 @@ import json
 import logging
 import os
 import shutil
+import sys
 import tarfile
 import tempfile
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import Protocol, cast
 from uuid import UUID
 
 import httpx
@@ -1268,6 +1269,19 @@ def _finalize_without_l3(
     )
 
 
+class AnalyzerHarness(Protocol):
+    """Allowlisted source-navigation tools used by L2/L3."""
+
+    async def run(
+        self,
+        workspace: Path,
+        command: str,
+        arguments: Mapping[str, object],
+        *,
+        deadline: float | None = None,
+    ) -> str: ...
+
+
 class IsolatedCodingHarness:
     """Run only repository-owned analyzers inside a disposable Docker sandbox."""
 
@@ -1380,6 +1394,109 @@ class IsolatedCodingHarness:
         return stdout.decode("utf-8")
 
 
+def _analyzer_script() -> Path:
+    bundled = Path(__file__).resolve().parent.parent / "tools" / "l2_analyzer.py"
+    if bundled.is_file():
+        return bundled
+    opt = Path("/opt/l2_analyzer.py")
+    if opt.is_file():
+        return opt
+    raise FileNotFoundError("L2 analyzer script is missing")
+
+
+class InProcessAnalyzerHarness:
+    """Run the allowlisted analyzer inside this already-isolated rental.
+
+    Targon and Cloud Run source-review jobs have no Docker socket. The rental
+    itself is the sandbox, so GCE nested-Docker is not required.
+    """
+
+    _COMMANDS = frozenset(
+        {
+            "workspace_index",
+            "read_file",
+            "search",
+            "rust_structure",
+            "call_graph",
+            "starter_diff",
+            "starter_function_diff",
+            "build_structure",
+            "integrity_surfaces",
+            "scorer_field_flow",
+        }
+    )
+
+    def __init__(
+        self,
+        *,
+        python_bin: str | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> None:
+        self._python_bin = python_bin or sys.executable
+        self._timeout_seconds = timeout_seconds
+        self._script = _analyzer_script()
+        self._manifests = Path(__file__).resolve().parent / "data"
+
+    async def run(
+        self,
+        workspace: Path,
+        command: str,
+        arguments: Mapping[str, object],
+        *,
+        deadline: float | None = None,
+    ) -> str:
+        if command not in self._COMMANDS:
+            raise ValueError("L2 requested a non-allowlisted analyzer")
+        timeout = self._timeout_seconds
+        if deadline is not None:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                raise ValueError("L2 analyzer exceeded lease budget")
+            timeout = min(timeout, remaining)
+        proc = await asyncio.create_subprocess_exec(
+            self._python_bin,
+            str(self._script),
+            command,
+            stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env={
+                "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+                "PYTHONPATH": os.environ.get("PYTHONPATH", ""),
+                "L2_ANALYZER_ROOT": str(workspace.resolve()),
+                "L2_ANALYZER_MANIFESTS": str(self._manifests),
+            },
+        )
+        encoded = json.dumps(arguments, sort_keys=True, separators=(",", ":")).encode()
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(encoded), timeout=timeout
+            )
+        except asyncio.CancelledError:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            raise
+        except TimeoutError:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                await proc.wait()
+            raise ValueError("L2 analyzer timed out") from None
+        if len(stdout) > _MAX_TOOL_BYTES or len(stderr) > 4_096:
+            raise ValueError("L2 analyzer exceeded output budget")
+        if proc.returncode == 2:
+            decoded = stdout.decode("utf-8")
+            try:
+                failure = json.loads(decoded)
+            except json.JSONDecodeError:
+                failure = None
+            if isinstance(failure, dict) and isinstance(failure.get("error"), str):
+                return decoded
+        if proc.returncode != 0:
+            raise ValueError(f"L2 analyzer exited with code {proc.returncode}")
+        return stdout.decode("utf-8")
+
+
 class L2AuditJournal:
     """Private, mode-0600, retention-bounded provenance without transcripts."""
 
@@ -1433,7 +1550,7 @@ class KimiSolSourceReviewAgent:
         *,
         api_key_file: str | None,
         base_url: str,
-        harness: IsolatedCodingHarness,
+        harness: AnalyzerHarness,
         cache_dir: str,
         audit_journal: L2AuditJournal,
         timeout_seconds: float,
@@ -4798,6 +4915,8 @@ SolL2SourceReviewAgent = KimiSolSourceReviewAgent
 
 
 __all__ = [
+    "AnalyzerHarness",
+    "InProcessAnalyzerHarness",
     "IsolatedCodingHarness",
     "L2AuditJournal",
     "KimiSolSourceReviewAgent",
