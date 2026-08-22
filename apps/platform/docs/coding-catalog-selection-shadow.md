@@ -26,10 +26,10 @@ catalog commitment. It then fetches the finalized assigned block itself; a
 caller-provided or merely best-head block hash is never accepted as chain
 authority.
 
-The assignment digest makes later persistence auditable, but this layer does
-not persist the assignment. Production anti-grind operation still requires an
-append-only assignment row committed before the future block is revealed. That
-ledger and its scheduler belong to the later shadow issuer PR.
+The separate assignment ledger commits the anchor, delay, and selected height
+before block revelation. This selector consumes that content-addressed
+assignment only after the assigned height is finalized. It still does not
+schedule work or insert a shared run.
 
 ## Deterministic selection
 
@@ -104,8 +104,8 @@ selection under the same assignment.
 
 ## Activation boundary
 
-This core is not a production selector service. It adds no private catalog
-transport, assignment table, scheduler, run/ticket endpoint, validator task
-transport, score fold, or emissions reader. A later PR must persist future
-height assignments before revelation and atomically combine selection, shared
-run insertion, and exposure. Coding contract v1 remains permanently shadow-only.
+This core is not a production selector service. These layers add no private
+catalog transport, scheduler, run/ticket endpoint, validator task transport,
+score fold, or emissions reader. A later issuer must wait for finality and
+atomically combine selection, shared-run insertion, and exposure. Coding
+contract v1 remains permanently shadow-only.

@@ -265,9 +265,42 @@ class CodingShadowRunRecord(CodingEvaluationModel):
         "artifact_changed",
         "screened_image_changed",
         "policy_changed",
+        "qualification_stale",
         "catalog_retired",
     ]
     tickets: list[CodingShadowTicketRecord]
+    created_at: datetime
+    weight_eligible: Literal[False] = False
+
+
+class CodingSelectionAssignmentRecord(CodingEvaluationModel):
+    assignment_row_id: UUID
+    assignment_sha256: Sha256
+    coding_run_id: OpaqueId
+    bench_version: Annotated[int, Field(ge=7)]
+    coding_contract_version: Literal[1]
+    artifact_sha256: Sha256
+    screened_image_sha256: Sha256
+    corpus_release_id: OpaqueId
+    catalog_commitment_sha256: Sha256
+    anchor_block_number: Annotated[int, Field(ge=1)]
+    anchor_block_hash: BlockHash
+    selection_delay_blocks: Annotated[int, Field(ge=1, le=10_000)]
+    selection_block_number: Annotated[int, Field(ge=1)]
+    assigned_at: datetime
+    task_count: Literal[1]
+    core_qualification_observation_id: UUID
+    certification_row_id: UUID
+    current: bool
+    stale_reason: Literal[
+        "current",
+        "artifact_changed",
+        "screened_image_changed",
+        "catalog_retired",
+        "policy_changed",
+        "qualification_stale",
+        "certification_stale",
+    ]
     created_at: datetime
     weight_eligible: Literal[False] = False
 
@@ -278,6 +311,8 @@ class AgentCodingShadowEvaluationStatus(CodingEvaluationModel):
     miner_hotkey: str
     artifact_sha256: Sha256
     screened_image_sha256: Sha256 | None
+    total_assignments: Annotated[int, Field(ge=0)]
+    assignments: list[CodingSelectionAssignmentRecord]
     total_runs: Annotated[int, Field(ge=0)]
     runs: list[CodingShadowRunRecord]
     shadow_only: Literal[True] = True

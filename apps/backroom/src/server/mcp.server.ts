@@ -430,7 +430,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   retire_coding_catalog_release:
     'Irreversibly retire a shadow catalog commitment after review.',
   get_agent_coding_shadow_evaluations:
-    'Read separate weight-zero coding runs, leases, and repair outcomes.',
+    'Read future-height assignments plus separate weight-zero coding runs, leases, and repair outcomes.',
   get_core_qualification_policy:
     'Read the benchmark-scoped shadow core qualification policy.',
   set_core_qualification_policy:
@@ -1269,7 +1269,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Inspect shadow coding evaluations',
       description:
-        'Read one agent\'s exact-artifact shadow coding runs, validator-specific certified leases, bounded signed result summaries, and k=3 repair median. Active task identities and full evidence remain private. This ledger is separate from core scores and permanently weight-ineligible.',
+        'Read one agent\'s exact-artifact future-height assignments, shadow coding runs, validator-specific certified leases, bounded signed result summaries, and k=3 repair median. Active task identities and full evidence remain private. These ledgers are separate from core scores and permanently weight-ineligible.',
       inputSchema: agentCodingShadowEvaluationInputSchema,
       annotations: toolAnnotations('read'),
     },
