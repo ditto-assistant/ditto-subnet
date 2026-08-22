@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
     BuildSpec,
@@ -18,12 +19,26 @@ from ditto.api_server.screening_provider import (
     inflight_failure_code,
 )
 from ditto.api_server.targon_provider import TargonComputeProvider
-from ditto.api_server.targon_rental_loop import TargonRentalLoop
+from ditto.api_server.targon_rental_loop import (
+    TargonRentalLoop,
+    _source_review_layer_env,
+)
 from ditto.db.models import Agent, SubmissionImageBuild, SubmissionSourceReview
 from ditto.tests.api_server.endpoints.test_screener import (
     _SCREENER_HOTKEY,
     _seed_agent,
 )
+
+
+def test_source_review_layer_env_pins_l2_and_l3() -> None:
+    env = dict(
+        _source_review_layer_env(
+            ScreenerReviewSettings(mode="enforce", l3_enabled=True)
+        )
+    )
+    assert env["SCREENER_L2_REVIEW_MODE"] == "enforce"
+    assert env["SCREENER_L3_REVIEW_ENABLED"] == "true"
+    assert env["SCREENER_L2_REVIEW_MODEL"] == "moonshotai/kimi-k3"
 
 
 class _FakeTargon:

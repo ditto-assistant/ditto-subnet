@@ -5,11 +5,30 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 
 from ditto_screener import source_review_job
+from ditto_screener.l2_review import InProcessAnalyzerHarness, LayeredSourceReviewAgent
 from ditto_screener.policy import SourceReviewObservation
+
+
+def test_build_reviewer_runs_l1_l2_l3_in_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    key_path = tmp_path / "source-review-key"
+    key_path.write_text("provider-key\n")
+    monkeypatch.setenv("SCREENER_NODE_CREDENTIAL_FILE", str(tmp_path / "node.json"))
+    monkeypatch.setenv("SCREENER_L2_REVIEW_MODE", "enforce")
+    monkeypatch.setenv("SCREENER_L3_REVIEW_ENABLED", "true")
+    reviewer = source_review_job._build_reviewer(
+        key_file=str(key_path), timeout_seconds=60
+    )
+    assert isinstance(reviewer, LayeredSourceReviewAgent)
+    assert reviewer._mode == "enforce"
+    assert reviewer._l2._l3_enabled is True
+    assert isinstance(reviewer._l2._harness, InProcessAnalyzerHarness)
 
 
 @pytest.mark.asyncio
@@ -76,11 +95,12 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
 
     class Reviewer:
         def __init__(self, **values: object) -> None:
-            assert values["api_key_file"] == str(key_path)
+            assert values["key_file"] == str(key_path)
 
         async def review(self, path: str, **values: object) -> SourceReviewObservation:
             assert path == str(archive_path)
             assert values["artifact_sha256"] == artifact_sha256
+            assert values["attempt_id"] == UUID(attempt_id)
             return SourceReviewObservation(
                 ok=True,
                 risk_level="low",
@@ -99,7 +119,9 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
     monkeypatch.setattr(
         source_review_job.httpx, "AsyncClient", lambda **_kwargs: Client()
     )
-    monkeypatch.setattr(source_review_job, "OpenRouterSourceReviewAgent", Reviewer)
+    monkeypatch.setattr(
+        source_review_job, "_build_reviewer", lambda **kwargs: Reviewer(**kwargs)
+    )
     monkeypatch.setattr(source_review_job.asyncio, "sleep", no_sleep)
 
     assert await source_review_job._amain() == 0

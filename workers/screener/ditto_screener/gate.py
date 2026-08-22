@@ -830,12 +830,13 @@ class BuildGate:
                                 )
                             else:
                                 if remote is not None:
-                                    certified = (
-                                        remote.ok
-                                        and remote.risk_level == "low"
-                                        and remote.clearance_certified
+                                    # Targon/Cloud Run now run L1 then L2/L3 in
+                                    # the same rental. A completed observation
+                                    # is authoritative so GCE does not re-review.
+                                    remote_failed = (
+                                        not remote.ok and remote.risk_level is None
                                     )
-                                    if certified or remote_only:
+                                    if not remote_failed or remote_only:
                                         return remote
                         if remote_only:
                             return SourceReviewObservation(

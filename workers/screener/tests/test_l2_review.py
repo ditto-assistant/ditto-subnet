@@ -36,6 +36,7 @@ from ditto_screener.l2_review import (
     L2_SAFETY_PROMPT_REVISION,
     L2_STARTER_MANIFESTS,
     L2_STATIC_HOLD_REVISION,
+    InProcessAnalyzerHarness,
     IsolatedCodingHarness,
     L2AuditJournal,
     L2InconclusiveError,
@@ -1090,6 +1091,24 @@ class _FakeProcess:
 
     async def wait(self) -> int:
         return 0
+
+
+async def test_inprocess_harness_indexes_workspace_without_docker(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "agent.py").write_text(
+        "def answer(message: str) -> str:\n    return message\n"
+    )
+    output = await InProcessAnalyzerHarness().run(tmp_path, "workspace_index", {})
+    payload = json.loads(output)
+    assert "error" not in payload
+    paths = [str(item["path"]) for item in payload["files"]]
+    assert "agent.py" in paths
+
+
+async def test_inprocess_harness_rejects_unknown_command(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="non-allowlisted"):
+        await InProcessAnalyzerHarness().run(tmp_path, "rm_rf", {})
 
 
 async def test_harness_command_has_no_egress_secrets_or_host_mounts(
