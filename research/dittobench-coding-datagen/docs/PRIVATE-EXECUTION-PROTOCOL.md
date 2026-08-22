@@ -223,6 +223,30 @@ the same canonical `CodingRunManifest`:
 URLs are short-lived transport details and do not enter identity. Digests are
 the authority.
 
+Platform derives artifact transport capabilities only after reconstructing the
+ticket-bound task lease. Contract v1 permits exactly four digest-selected GET
+capabilities: visible bundle, scoped memory bundle, resource profile, and
+private grader bundle. Their storage keys are fixed as
+`coding-artifacts/v1/<artifact-kind>/sha256/<digest>`; callers never supply a
+key, prefix, bucket, URL, or kind. Before signing, Platform verifies positive
+bounded object size plus matching `sha256` and `artifact-kind` metadata. Each
+URL expires at the smaller of the configured short ceiling and the remaining
+ticket lifetime; Platform validates that bound against the signer's encoded S3
+expiry. A capability is never persisted or logged and is not part of signed
+identity. OCI environment and grader images remain digest-pinned image
+identities rather than presigned objects.
+
+Object metadata is only a signing preflight. The consuming validator service
+must stream within the declared bound and verify the full downloaded SHA-256
+before extracting or using bytes; the artifact namespace also requires
+immutable-write storage policy.
+
+The complete capability set stays server-internal. Delivery projects each URL
+only to its trusted consumer: visible materializer, memory seed projector,
+resource-enforcing supervisor, or protected grader. The grader capability is
+not released until authoring is frozen, and no artifact bearer URL enters the
+miner harness or model context.
+
 `coding_run_id` and the manifest are shared across k=3. Validator-specific
 ticket IDs, deadlines, hotkeys, and transport capabilities remain in each lease
 envelope and signed validator evidence; they cannot make the selected task-set
