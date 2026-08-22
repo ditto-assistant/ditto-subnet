@@ -94,8 +94,10 @@ capability publisher, immutable bundle store, and one trusted executor that
 implements both visible authoring commands and pristine grading. It also
 requires validator-local durable outboxes for the transcript and frozen
 submission plus a trusted inference-evidence source; test fixtures cannot be
-used by production adapters. This PR
-intentionally does not add the Platform persistence/screening adapter. That
+used by production adapters. A later integration must reserve only after
+health and seed succeed, then bind terminal sealing to the certifier's exact
+freeze result. This package intentionally does not add that adapter or the
+Platform persistence/screening adapter. That
 later layer must tie the receipt to the screened image digest,
 expire it when the artifact changes, and keep core qualification separate from
 coding qualification.
