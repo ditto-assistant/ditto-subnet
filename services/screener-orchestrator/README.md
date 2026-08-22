@@ -11,8 +11,9 @@ never created.
 
 Targon Rentals have three independently controlled one-shot jobs owned by
 Platform: credential-minimal Kaniko builds, direct-image runtime health checks,
-and bounded read-only L1 source review. GCE remains the safety path for a
-GCE-only revision and for elevated L2/L3 source review.
+and L1/L2/L3 source review in the same screener rental (in-process analyzer,
+no nested Docker). Cloud Run is the capacity fallback. GCE remains only the
+GCE-only revision cutover, not the L2/L3 path.
 
 Provider credentials are accepted only through mode-0600 files. The operator
 smoke wrapper streams `TARGON_API_KEY` directly from GCP Secret Manager to the
@@ -40,6 +41,7 @@ scripts/targon-smoke.sh sweep-oneshots --apply --workers 8
 scripts/targon-smoke.sh kaniko-probe --resource cpu-small --roundtrip
 scripts/targon-smoke.sh runtime-probe
 scripts/targon-smoke.sh source-review-probe --image registry.example/screener@sha256:DIGEST
+scripts/targon-smoke.sh source-review-probe --image DIGEST --starter-kit --live-model --review-timeout-seconds 1800
 scripts/targon-screen-starter-kit.sh --tiny
 scripts/targon-screen-starter-kit.sh
 ```
@@ -89,9 +91,9 @@ use `ditto-image-builder`, which can write only `ditto-public-runtime`.
 
 A source-review Rental uses the pinned reviewed screener image, one
 attempt-bound Platform capability, and a short-lived bootstrap token for the
-single model-key Secret Manager resource. Only a certified low-risk L1 result
-may be reused. Suspicious, elevated, inconclusive, invalid, or unavailable
-results always run through the existing local L2/L3 reviewer.
+single model-key Secret Manager resource. L1 then L2/L3 run in that rental
+with an in-process analyzer. The completed observation is authoritative;
+GCE does not re-review.
 
 The repeatable `source-review-probe` launches a deterministic HTTPS-proxied
 Platform/model mock and the exact reviewed screener digest as two disposable

@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,7 @@ from ditto_screener.l2_review import (
     L2_SAFETY_PROMPT_REVISION,
     L2_STARTER_MANIFESTS,
     L2_STATIC_HOLD_REVISION,
+    InProcessAnalyzerHarness,
     IsolatedCodingHarness,
     L2AuditJournal,
     L2InconclusiveError,
@@ -388,6 +390,23 @@ async def test_clean_l1_skips_sol() -> None:
     assert result is l1.result
     assert l1.calls == 1
     assert l2.calls == 0
+
+
+async def test_certified_l1_low_escalates_when_always_escalate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SCREENER_L2_ALWAYS_ESCALATE", "true")
+    l1 = _FakeL1(_l1("low", clearance_certified=True))
+    l2 = _FakeL2(_model_result(_safe()))
+    layered = LayeredSourceReviewAgent(l1=l1, l2=l2, mode="enforce")  # type: ignore[arg-type]
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.risk_level == "low"
+    assert l1.calls == 1
+    assert l2.calls == 1
 
 
 async def test_uncertified_l1_low_escalates_to_l2() -> None:
@@ -1090,6 +1109,37 @@ class _FakeProcess:
 
     async def wait(self) -> int:
         return 0
+
+
+async def test_inprocess_harness_indexes_workspace_without_docker(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "agent.py").write_text(
+        "def answer(message: str) -> str:\n    return message\n"
+    )
+    output = await InProcessAnalyzerHarness().run(tmp_path, "workspace_index", {})
+    payload = json.loads(output)
+    assert "error" not in payload
+    paths = [str(item["path"]) for item in payload["files"]]
+    assert "agent.py" in paths
+
+
+async def test_inprocess_starter_diff_ignores_non_provenance_json(
+    tmp_path: Path,
+) -> None:
+    """Package data/ also holds bench-categories-v1.json; that is not a starter."""
+    (tmp_path / "Cargo.toml").write_text("[package]\nname = \"probe\"\nversion = \"0.0.0\"\n")
+    output = await InProcessAnalyzerHarness().run(tmp_path, "starter_diff", {})
+    payload = json.loads(output)
+    assert "error" not in payload, payload
+    assert re.fullmatch(r"[0-9a-f]{40}", str(payload["revision"]))
+    assert isinstance(payload["added"], list)
+    assert isinstance(payload["removed"], list)
+
+
+async def test_inprocess_harness_rejects_unknown_command(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="non-allowlisted"):
+        await InProcessAnalyzerHarness().run(tmp_path, "rm_rf", {})
 
 
 async def test_harness_command_has_no_egress_secrets_or_host_mounts(

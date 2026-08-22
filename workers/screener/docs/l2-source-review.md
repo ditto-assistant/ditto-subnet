@@ -1,6 +1,8 @@
 # Kimi/GLM/SOL level-2 review with SOL critic and adjudicators
 
-Level 2 is an optional escalation behind the bounded Luna source review. It is
+Level 2 is an optional escalation behind the bounded Luna source review. On
+Targon and Cloud Run it runs in the same source-review rental as L1, using an
+in-process analyzer (no nested Docker). It is
 disabled by default. A clean or advisory-only L1 result never pays its cost;
 medium/high Luna findings and elevated static preflight matches become
 artifact-bound L2 routing leads. Static leads are resolved before untrusted

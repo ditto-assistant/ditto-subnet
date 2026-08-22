@@ -44,11 +44,12 @@ confirmation string covering all three lists. In-progress one-shot jobs finish;
 new and queued jobs follow the new revision.
 
 Screening on Targon is Kaniko compile, direct-image `/health` smoke of that
-exact archive, and read-only L1 review of the source tarball in a separate
-screener rental. Platform admits the screening attempt and attests the verdict.
-Elevated L1 findings quarantine rather than running GCE L2/L3. A
-screener-to-smoke-rental prompt tool is a later issue; isolated fake-gateway
-oracle is skipped until then.
+exact archive, and L1 then L2/L3 review of the extracted source tarball in one
+screener rental (Cloud Run Job is the capacity fallback). The rental is already
+isolated, so L2 analyzers run in-process instead of nested Docker. Platform
+admits the screening attempt and attests the verdict. GCE screener VMs are not
+required for L2/L3. A screener-to-smoke-rental prompt tool is a later issue;
+isolated fake-gateway oracle is skipped until then.
 
 The GCE screener fleet and the capacity-controller VM are leftover from the
 nested-Docker path except for trusted-image builds and GCE-only cutover. Platform

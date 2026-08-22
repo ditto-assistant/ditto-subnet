@@ -82,7 +82,8 @@ class CloudRunComputeProvider:
                 image=spec.image,
                 env=spec.env,
                 service_account=self._config.untrusted_sa_email,
-                timeout_seconds=int(self._targon_config.source_review_timeout_seconds),
+                timeout_seconds=int(self._targon_config.source_review_timeout_seconds)
+                + 900,
                 cpu="2",
                 memory="4Gi",
                 commands=spec.commands,

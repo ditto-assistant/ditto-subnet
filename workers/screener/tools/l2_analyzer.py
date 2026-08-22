@@ -21,8 +21,8 @@ from typing import cast
 import tree_sitter_rust
 from tree_sitter import Language, Node, Parser
 
-ROOT = Path("/workspace")
-MANIFESTS = Path("/opt/starter-manifests")
+ROOT = Path(os.environ.get("L2_ANALYZER_ROOT", "/workspace"))
+MANIFESTS = Path(os.environ.get("L2_ANALYZER_MANIFESTS", "/opt/starter-manifests"))
 RUST_LANGUAGE = Language(tree_sitter_rust.language())
 MAX_FILES = 512
 MAX_WALK_ENTRIES = 1_024
@@ -504,9 +504,15 @@ def call_graph(request: dict[str, object]) -> object:
 
 
 def _starter_manifests() -> list[dict[str, object]]:
-    manifests = [
-        json.loads(path.read_text()) for path in sorted(MANIFESTS.glob("*.json"))
-    ]
+    manifests: list[dict[str, object]] = []
+    for path in sorted(MANIFESTS.glob("starter-kit-provenance-*.json")):
+        payload = json.loads(path.read_text())
+        if not isinstance(payload, dict):
+            continue
+        revision = str(payload.get("revision", ""))
+        if re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+            continue
+        manifests.append(payload)
     if not manifests:
         raise ValueError("no starter manifests are installed")
     return manifests
