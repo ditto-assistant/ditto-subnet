@@ -54,6 +54,7 @@ def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> 
     assert "miners/dittobench-coding-starter-kit/**" in paths
     assert "research/dittobench-coding-datagen/**" in paths
     assert "services/dittobench-api/internal/codingcontract/**" in paths
+    assert "services/dittobench-api/internal/codingrelay/**" in paths
     assert "scripts/test-coding-starter-practice-e2e.sh" in paths
     verify = workflow["jobs"]["verify"]
     gate = _step(verify["steps"], "Verify format, lint, and tests")

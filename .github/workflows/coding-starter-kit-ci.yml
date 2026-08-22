@@ -9,6 +9,7 @@ on:
       - packages/dittobench-coding-contract/**
       - services/dittobench-api/internal/codingcertifier/**
       - services/dittobench-api/internal/codingcontract/**
+      - services/dittobench-api/internal/codingrelay/**
       - services/dittobench-api/internal/codingrunner/**
       - .github/workflows/coding-starter-kit-ci.yml
       - scripts/test-coding-starter-practice-e2e.sh

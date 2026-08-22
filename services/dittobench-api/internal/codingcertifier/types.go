@@ -293,8 +293,8 @@ type FrozenSubmissionSink interface {
 	) (FrozenSubmissionArtifact, error)
 }
 
-// InferenceBinding scopes trusted relay evidence to the same artifact and
-// task as the workspace capability.
+// InferenceBinding scopes trusted relay evidence to the same artifact, task,
+// deadline, and effective budgets as the workspace capability.
 type InferenceBinding struct {
 	CertificationID      string
 	AgentArtifactSHA256  string
@@ -303,6 +303,7 @@ type InferenceBinding struct {
 	CaseID               string
 	ProfileCapabilityID  string
 	InferenceGrantSHA256 string
+	Deadline             time.Time
 	Budgets              codingcontract.Budgets
 	RequestBudget        uint32
 }
