@@ -40,6 +40,7 @@ jobs:
 
       - name: Verify source, types, tests, and committed public pack
         run: |
+          uv run python ../../packages/dittobench-coding-contract/generate_inference_vectors.py --check
           uv run ruff format --check .
           uv run ruff check .
           uv run mypy src

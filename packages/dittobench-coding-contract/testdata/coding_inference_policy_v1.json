@@ -1,0 +1,1487 @@
+{
+  "schema": "dittobench-coding-inference-policy-vector-v1",
+  "coding_contract_version": 1,
+  "weight_eligible": false,
+  "policy": {
+    "schema": "dittobench-coding-inference-policy-v1",
+    "coding_contract_version": 1,
+    "bench_family": "coding",
+    "weight_eligible": false,
+    "api": "openai-compatible-chat-completions",
+    "model": "openai/gpt-5.6-luna",
+    "provider_api": "openrouter",
+    "provider_route": "azure/eu",
+    "receipt_provider": "Azure",
+    "provider_receipt_source": "platform_settlement_v1",
+    "provider_account_guardrail": "openrouter_private_account_v1",
+    "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+    "provider_cache_policy": "disabled_v1",
+    "router_metadata_required": true,
+    "provider_route_profile": "luna-azure-eu-zdr-v1",
+    "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+    "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+    "reasoning_effort": "medium",
+    "reasoning_excluded": true,
+    "stream": false,
+    "store": false,
+    "n": 1,
+    "parallel_tool_calls": false,
+    "max_tool_calls_per_response": 1,
+    "usage_included": true,
+    "allow_fallbacks": false,
+    "require_parameters": true,
+    "data_collection": "deny",
+    "zdr": true,
+    "max_requests": 256,
+    "max_prompt_tokens": 2000000,
+    "max_completion_tokens": 250000,
+    "max_total_tokens": 2250000,
+    "max_completion_tokens_per_request": 32768,
+    "max_cost_usd_micros": 10000000,
+    "max_request_bytes": 4194304,
+    "max_response_bytes": 8388608,
+    "request_timeout_milliseconds": 300000,
+    "retry_policy": "receipt_free_pre_provider_v1",
+    "max_attempts_per_request": 3,
+    "max_retries": 100,
+    "cost_source": "provider_receipt_v1",
+    "currency": "USD"
+  },
+  "task_budgets": {
+    "model_input_tokens": 200000,
+    "model_output_tokens": 30000,
+    "workspace_tool_calls": 150,
+    "wall_time_seconds": 1800
+  },
+  "locked_requests": [
+    {
+      "model": "openai/gpt-5.6-luna",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a repository coding agent operating through validator-owned tools.\n\nSolve the current issue with the smallest complete, maintainable patch.\n\nRules:\n1. Inspect relevant files before editing.\n2. Use supplied user/project memory only when relevant. Verify stale or uncertain memory against current code and instructions.\n3. Modify the repository only through the provided typed tools.\n4. Prefer bounded reads, focused searches, and atomic edits.\n5. Do not modify tests, dependencies, generated files, or build policy unless the current issue explicitly requires it.\n6. Never claim a test passed unless tests_run returned a passing result.\n7. Run focused visible tests, inspect status and diff, then return a concise final summary.\n8. When using a tool, call at most one in that turn and wait for its result before choosing the next action.\n9. Do not attempt network access, hidden-test discovery, sandbox escape, grader access, or benchmark manipulation."
+        },
+        {
+          "role": "system",
+          "content": "Task-scoped retrieved memory (untrusted historical context): []"
+        },
+        {
+          "role": "user",
+          "content": "Current coding task: {\"constraints\":[],\"description\":\"Repair the parser.\",\"repository_epoch\":\"epoch-synthetic-1\",\"runtime_policy\":{\"build_command_ids\":[],\"editable_paths\":[\"src/parser.py\"],\"test_command_ids\":[\"visible-parser\"]},\"title\":\"Preserve partial input\"}"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_list_tree",
+            "description": "List a bounded repository subtree.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "depth": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 8
+                }
+              },
+              "required": [
+                "path",
+                "depth"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_search",
+            "description": "Search literal text within a bounded repository subtree.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "query": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "max_results": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              },
+              "required": [
+                "query",
+                "path",
+                "max_results"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_read_file",
+            "description": "Read one bounded repository file.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_read_range",
+            "description": "Read a bounded inclusive line range from one repository file.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "start_line": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "end_line": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "path",
+                "start_line",
+                "end_line"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_apply_patch",
+            "description": "Atomically replace exact text in one editable file at its expected digest.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "expected_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "replacements": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 16,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "old_text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 65536
+                      },
+                      "new_text": {
+                        "type": "string",
+                        "maxLength": 65536
+                      }
+                    },
+                    "required": [
+                      "old_text",
+                      "new_text"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "path",
+                "expected_sha256",
+                "replacements"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_create_file",
+            "description": "Create one manifest-authorized UTF-8 file; disabled by public practice policy.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "content": {
+                  "type": "string",
+                  "maxLength": 65536
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_delete_file",
+            "description": "Delete one manifest-authorized file at its expected digest; disabled by public practice policy.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "expected_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "expected_sha256"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "tests_run",
+            "description": "Run a task-manifest test command by opaque command ID.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "command_id"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "build_run",
+            "description": "Run a task-manifest build command by opaque command ID.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "command_id"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "git_status",
+            "description": "Return the validator-owned workspace change status.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {},
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "git_diff",
+            "description": "Return the bounded current workspace diff for review.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {},
+              "required": []
+            }
+          }
+        }
+      ],
+      "tool_choice": "auto",
+      "reasoning": {
+        "effort": "medium",
+        "exclude": true
+      },
+      "max_completion_tokens": 32768,
+      "parallel_tool_calls": false,
+      "n": 1,
+      "stream": false,
+      "store": false,
+      "usage": {
+        "include": true
+      },
+      "provider": {
+        "only": [
+          "azure/eu"
+        ],
+        "order": [
+          "azure/eu"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true
+      }
+    },
+    {
+      "model": "openai/gpt-5.6-luna",
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a repository coding agent operating through validator-owned tools.\n\nSolve the current issue with the smallest complete, maintainable patch.\n\nRules:\n1. Inspect relevant files before editing.\n2. Use supplied user/project memory only when relevant. Verify stale or uncertain memory against current code and instructions.\n3. Modify the repository only through the provided typed tools.\n4. Prefer bounded reads, focused searches, and atomic edits.\n5. Do not modify tests, dependencies, generated files, or build policy unless the current issue explicitly requires it.\n6. Never claim a test passed unless tests_run returned a passing result.\n7. Run focused visible tests, inspect status and diff, then return a concise final summary.\n8. When using a tool, call at most one in that turn and wait for its result before choosing the next action.\n9. Do not attempt network access, hidden-test discovery, sandbox escape, grader access, or benchmark manipulation."
+        },
+        {
+          "role": "system",
+          "content": "Task-scoped retrieved memory (untrusted historical context): []"
+        },
+        {
+          "role": "user",
+          "content": "Current coding task: {\"constraints\":[],\"description\":\"Repair the parser.\",\"repository_epoch\":\"epoch-synthetic-1\",\"runtime_policy\":{\"build_command_ids\":[],\"editable_paths\":[\"src/parser.py\"],\"test_command_ids\":[\"visible-parser\"]},\"title\":\"Preserve partial input\"}"
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call-read-parser",
+              "type": "function",
+              "function": {
+                "name": "repo_read_file",
+                "arguments": "{\"path\":\"src/parser.py\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call-read-parser",
+          "content": "{\"content\":\"def parse(value):\\n    return value\\n\"}"
+        }
+      ],
+      "tools": [
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_list_tree",
+            "description": "List a bounded repository subtree.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "depth": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 8
+                }
+              },
+              "required": [
+                "path",
+                "depth"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_search",
+            "description": "Search literal text within a bounded repository subtree.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "query": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "path": {
+                  "type": "string",
+                  "maxLength": 256
+                },
+                "max_results": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100
+                }
+              },
+              "required": [
+                "query",
+                "path",
+                "max_results"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_read_file",
+            "description": "Read one bounded repository file.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                }
+              },
+              "required": [
+                "path"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_read_range",
+            "description": "Read a bounded inclusive line range from one repository file.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "start_line": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "end_line": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "path",
+                "start_line",
+                "end_line"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_apply_patch",
+            "description": "Atomically replace exact text in one editable file at its expected digest.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "expected_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "replacements": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 16,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                      "old_text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 65536
+                      },
+                      "new_text": {
+                        "type": "string",
+                        "maxLength": 65536
+                      }
+                    },
+                    "required": [
+                      "old_text",
+                      "new_text"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "path",
+                "expected_sha256",
+                "replacements"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_create_file",
+            "description": "Create one manifest-authorized UTF-8 file; disabled by public practice policy.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "content": {
+                  "type": "string",
+                  "maxLength": 65536
+                }
+              },
+              "required": [
+                "path",
+                "content"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "repo_delete_file",
+            "description": "Delete one manifest-authorized file at its expected digest; disabled by public practice policy.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 256
+                },
+                "expected_sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                }
+              },
+              "required": [
+                "path",
+                "expected_sha256"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "tests_run",
+            "description": "Run a task-manifest test command by opaque command ID.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "command_id"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "build_run",
+            "description": "Run a task-manifest build command by opaque command ID.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "command_id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "required": [
+                "command_id"
+              ]
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "git_status",
+            "description": "Return the validator-owned workspace change status.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {},
+              "required": []
+            }
+          }
+        },
+        {
+          "type": "function",
+          "function": {
+            "name": "git_diff",
+            "description": "Return the bounded current workspace diff for review.",
+            "parameters": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {},
+              "required": []
+            }
+          }
+        }
+      ],
+      "tool_choice": "auto",
+      "reasoning": {
+        "effort": "medium",
+        "exclude": true
+      },
+      "max_completion_tokens": 32768,
+      "parallel_tool_calls": false,
+      "n": 1,
+      "stream": false,
+      "store": false,
+      "usage": {
+        "include": true
+      },
+      "provider": {
+        "only": [
+          "azure/eu"
+        ],
+        "order": [
+          "azure/eu"
+        ],
+        "allow_fallbacks": false,
+        "require_parameters": true,
+        "data_collection": "deny",
+        "zdr": true
+      }
+    }
+  ],
+  "provider_responses": [
+    {
+      "id": "generation-synthetic-001",
+      "model": "openai/gpt-5.6-luna",
+      "choices": [
+        {
+          "message": {
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call-read-parser",
+                "type": "function",
+                "function": {
+                  "name": "repo_read_file",
+                  "arguments": "{\"path\":\"src/parser.py\"}"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+        "cost": 0.001234
+      },
+      "provider": "Azure"
+    },
+    {
+      "id": "generation-synthetic-002",
+      "model": "openai/gpt-5.6-luna",
+      "choices": [
+        {
+          "message": {
+            "content": "Applied the parser repair.",
+            "tool_calls": []
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 1500,
+        "completion_tokens": 120,
+        "total_tokens": 1620,
+        "cost": 0.000456
+      },
+      "provider": "Azure"
+    }
+  ],
+  "invalid_provider_response_projections": {
+    "response_invalid": {
+      "id": "generation-synthetic-invalid",
+      "model": "openai/other-model",
+      "provider": "Azure",
+      "choices": [],
+      "usage": null
+    }
+  },
+  "normalized_provider_responses": [
+    {
+      "schema": "dittobench-coding-inference-response-v1",
+      "id": "generation-synthetic-001",
+      "model": "openai/gpt-5.6-luna",
+      "provider": "Azure",
+      "choices": [
+        {
+          "message": {
+            "content": null,
+            "tool_calls": [
+              {
+                "id": "call-read-parser",
+                "type": "function",
+                "function": {
+                  "name": "repo_read_file",
+                  "arguments": "{\"path\":\"src/parser.py\"}"
+                }
+              }
+            ]
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+        "cost_usd_micros": 1234
+      }
+    },
+    {
+      "schema": "dittobench-coding-inference-response-v1",
+      "id": "generation-synthetic-002",
+      "model": "openai/gpt-5.6-luna",
+      "provider": "Azure",
+      "choices": [
+        {
+          "message": {
+            "content": "Applied the parser repair.",
+            "tool_calls": []
+          }
+        }
+      ],
+      "usage": {
+        "prompt_tokens": 1500,
+        "completion_tokens": 120,
+        "total_tokens": 1620,
+        "cost_usd_micros": 456
+      }
+    }
+  ],
+  "provider_settlements": {
+    "complete": [
+      {
+        "schema": "dittobench-coding-provider-settlement-v1",
+        "coding_contract_version": 1,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "case_id": "case-inference-001",
+        "profile_capability_id": "profile-inference-001",
+        "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+        "grant_id": "44444444-4444-4444-8444-444444444444",
+        "generation": 1,
+        "request_id": "55555555-5555-4555-8555-555555555555",
+        "request_sequence": 1,
+        "attempt": 1,
+        "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+        "outcome": "complete",
+        "terminal_error_code": null,
+        "http_status": 200,
+        "response_sha256": "9a4e40ed3226a9ebbfed1c00d0036cb9e8c4b3594540b4530781a75d1203ea2b",
+        "response_digest_kind": "normalized_v1",
+        "provider_generation_id": "generation-synthetic-001",
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": "Azure",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "router_metadata_verified": true,
+        "router_attempts": [
+          {
+            "provider": "Azure",
+            "selected": true
+          }
+        ],
+        "pipeline_stages": [],
+        "fallback_used": false,
+        "usage_available": true,
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+        "cost_available": true,
+        "cost_usd_micros": 1234,
+        "timed_out": false
+      },
+      {
+        "schema": "dittobench-coding-provider-settlement-v1",
+        "coding_contract_version": 1,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "case_id": "case-inference-001",
+        "profile_capability_id": "profile-inference-001",
+        "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+        "grant_id": "44444444-4444-4444-8444-444444444444",
+        "generation": 1,
+        "request_id": "66666666-6666-4666-8666-666666666666",
+        "request_sequence": 2,
+        "attempt": 1,
+        "locked_request_sha256": "3331a32e063b05ed2416f04d60d320140fa88b329c61ef23af697b0a2b3ef663",
+        "outcome": "complete",
+        "terminal_error_code": null,
+        "http_status": 200,
+        "response_sha256": "e58bbfcb362b1174c518442001ef6f59a01bc20914ef84096246d69887f2ab93",
+        "response_digest_kind": "normalized_v1",
+        "provider_generation_id": "generation-synthetic-002",
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": "Azure",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "router_metadata_verified": true,
+        "router_attempts": [
+          {
+            "provider": "Azure",
+            "selected": true
+          }
+        ],
+        "pipeline_stages": [],
+        "fallback_used": false,
+        "usage_available": true,
+        "prompt_tokens": 1500,
+        "completion_tokens": 120,
+        "total_tokens": 1620,
+        "cost_available": true,
+        "cost_usd_micros": 456,
+        "timed_out": false
+      }
+    ],
+    "retry_complete": [
+      {
+        "schema": "dittobench-coding-provider-settlement-v1",
+        "coding_contract_version": 1,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "case_id": "case-inference-001",
+        "profile_capability_id": "profile-inference-001",
+        "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+        "grant_id": "44444444-4444-4444-8444-444444444444",
+        "generation": 1,
+        "request_id": "55555555-5555-4555-8555-555555555555",
+        "request_sequence": 1,
+        "attempt": 1,
+        "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+        "outcome": "receipt_free_retry",
+        "terminal_error_code": "pre_provider_unavailable",
+        "http_status": 503,
+        "response_sha256": null,
+        "response_digest_kind": "none",
+        "provider_generation_id": null,
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": null,
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "router_metadata_verified": true,
+        "router_attempts": [
+          {
+            "provider": "Azure",
+            "selected": false
+          }
+        ],
+        "pipeline_stages": [],
+        "fallback_used": false,
+        "usage_available": false,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cost_available": false,
+        "cost_usd_micros": 0,
+        "timed_out": false
+      },
+      {
+        "schema": "dittobench-coding-provider-settlement-v1",
+        "coding_contract_version": 1,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "case_id": "case-inference-001",
+        "profile_capability_id": "profile-inference-001",
+        "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+        "grant_id": "44444444-4444-4444-8444-444444444444",
+        "generation": 1,
+        "request_id": "55555555-5555-4555-8555-555555555555",
+        "request_sequence": 1,
+        "attempt": 2,
+        "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+        "outcome": "complete",
+        "terminal_error_code": null,
+        "http_status": 200,
+        "response_sha256": "9a4e40ed3226a9ebbfed1c00d0036cb9e8c4b3594540b4530781a75d1203ea2b",
+        "response_digest_kind": "normalized_v1",
+        "provider_generation_id": "generation-synthetic-001",
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": "Azure",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "router_metadata_verified": true,
+        "router_attempts": [
+          {
+            "provider": "Azure",
+            "selected": true
+          }
+        ],
+        "pipeline_stages": [],
+        "fallback_used": false,
+        "usage_available": true,
+        "prompt_tokens": 1000,
+        "completion_tokens": 200,
+        "total_tokens": 1200,
+        "cost_available": true,
+        "cost_usd_micros": 1234,
+        "timed_out": false
+      }
+    ],
+    "provider_failure": [
+      {
+        "schema": "dittobench-coding-provider-settlement-v1",
+        "coding_contract_version": 1,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "case_id": "case-inference-001",
+        "profile_capability_id": "profile-inference-001",
+        "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+        "grant_id": "44444444-4444-4444-8444-444444444444",
+        "generation": 1,
+        "request_id": "55555555-5555-4555-8555-555555555555",
+        "request_sequence": 1,
+        "attempt": 1,
+        "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+        "outcome": "provider_failure",
+        "terminal_error_code": "provider_timeout",
+        "http_status": 504,
+        "response_sha256": null,
+        "response_digest_kind": "none",
+        "provider_generation_id": null,
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": "Azure",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "router_metadata_verified": true,
+        "router_attempts": [
+          {
+            "provider": "Azure",
+            "selected": true
+          }
+        ],
+        "pipeline_stages": [],
+        "fallback_used": false,
+        "usage_available": true,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cost_available": true,
+        "cost_usd_micros": 0,
+        "timed_out": true
+      }
+    ],
+    "response_invalid": [
+      {
+        "schema": "dittobench-coding-provider-settlement-v1",
+        "coding_contract_version": 1,
+        "ticket_id": "33333333-3333-4333-8333-333333333333",
+        "case_id": "case-inference-001",
+        "profile_capability_id": "profile-inference-001",
+        "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+        "grant_id": "44444444-4444-4444-8444-444444444444",
+        "generation": 1,
+        "request_id": "55555555-5555-4555-8555-555555555555",
+        "request_sequence": 1,
+        "attempt": 1,
+        "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+        "outcome": "provider_failure",
+        "terminal_error_code": "provider_response_invalid",
+        "http_status": 200,
+        "response_sha256": "b5bc77f9d3093b9594d702b5a81b6ded82720f942a5802cde277036a25de8c1d",
+        "response_digest_kind": "canonical_json_v1",
+        "provider_generation_id": "generation-synthetic-invalid",
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": "Azure",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "router_metadata_verified": true,
+        "router_attempts": [
+          {
+            "provider": "Azure",
+            "selected": true
+          }
+        ],
+        "pipeline_stages": [],
+        "fallback_used": false,
+        "usage_available": true,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "cost_available": true,
+        "cost_usd_micros": 0,
+        "timed_out": false
+      }
+    ]
+  },
+  "receipt_sets": {
+    "complete": {
+      "schema": "dittobench-coding-inference-receipt-set-v1",
+      "coding_contract_version": 1,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "case_id": "case-inference-001",
+      "profile_capability_id": "profile-inference-001",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "grant_id": "44444444-4444-4444-8444-444444444444",
+      "generation": 1,
+      "request_budget": 166,
+      "prompt_token_budget": 200000,
+      "completion_token_budget": 30000,
+      "receipts": [
+        {
+          "schema": "dittobench-coding-inference-receipt-v1",
+          "sequence": 1,
+          "request_sequence": 1,
+          "attempt": 1,
+          "request_id": "55555555-5555-4555-8555-555555555555",
+          "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+          "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+          "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+          "outcome": "complete",
+          "failure_code": null,
+          "http_status": 200,
+          "response_sha256": "9a4e40ed3226a9ebbfed1c00d0036cb9e8c4b3594540b4530781a75d1203ea2b",
+          "response_digest_kind": "normalized_v1",
+          "provider_generation_id": "generation-synthetic-001",
+          "model": "openai/gpt-5.6-luna",
+          "provider_route": "azure/eu",
+          "provider_route_profile": "luna-azure-eu-zdr-v1",
+          "provider_selected": true,
+          "receipt_provider": "Azure",
+          "fallback_used": false,
+          "prompt_tokens": 1000,
+          "completion_tokens": 200,
+          "total_tokens": 1200,
+          "cost_usd_micros": 1234,
+          "timed_out": false,
+          "provider_settlement_sha256": "538aed33c09519334626e1f786af9f597bccd576a18b349a65a5d0be47f77d50"
+        },
+        {
+          "schema": "dittobench-coding-inference-receipt-v1",
+          "sequence": 2,
+          "request_sequence": 2,
+          "attempt": 1,
+          "request_id": "66666666-6666-4666-8666-666666666666",
+          "locked_request_sha256": "3331a32e063b05ed2416f04d60d320140fa88b329c61ef23af697b0a2b3ef663",
+          "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+          "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+          "outcome": "complete",
+          "failure_code": null,
+          "http_status": 200,
+          "response_sha256": "e58bbfcb362b1174c518442001ef6f59a01bc20914ef84096246d69887f2ab93",
+          "response_digest_kind": "normalized_v1",
+          "provider_generation_id": "generation-synthetic-002",
+          "model": "openai/gpt-5.6-luna",
+          "provider_route": "azure/eu",
+          "provider_route_profile": "luna-azure-eu-zdr-v1",
+          "provider_selected": true,
+          "receipt_provider": "Azure",
+          "fallback_used": false,
+          "prompt_tokens": 1500,
+          "completion_tokens": 120,
+          "total_tokens": 1620,
+          "cost_usd_micros": 456,
+          "timed_out": false,
+          "provider_settlement_sha256": "761933df7d6ca39bb41512deb1897aa056607c98cbd8188dbf3a1f6e4b586270"
+        }
+      ]
+    },
+    "retry_complete": {
+      "schema": "dittobench-coding-inference-receipt-set-v1",
+      "coding_contract_version": 1,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "case_id": "case-inference-001",
+      "profile_capability_id": "profile-inference-001",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "grant_id": "44444444-4444-4444-8444-444444444444",
+      "generation": 1,
+      "request_budget": 166,
+      "prompt_token_budget": 200000,
+      "completion_token_budget": 30000,
+      "receipts": [
+        {
+          "schema": "dittobench-coding-inference-receipt-v1",
+          "sequence": 1,
+          "request_sequence": 1,
+          "attempt": 1,
+          "request_id": "55555555-5555-4555-8555-555555555555",
+          "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+          "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+          "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+          "outcome": "receipt_free_retry",
+          "failure_code": "pre_provider_unavailable",
+          "http_status": 503,
+          "response_sha256": null,
+          "response_digest_kind": "none",
+          "provider_generation_id": null,
+          "model": "openai/gpt-5.6-luna",
+          "provider_route": "azure/eu",
+          "provider_route_profile": "luna-azure-eu-zdr-v1",
+          "provider_selected": false,
+          "receipt_provider": null,
+          "fallback_used": false,
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "cost_usd_micros": 0,
+          "timed_out": false,
+          "provider_settlement_sha256": "6970774f5efc19b113383a2dfc01124bc253872bf8af648ed18c5f330287a29a"
+        },
+        {
+          "schema": "dittobench-coding-inference-receipt-v1",
+          "sequence": 2,
+          "request_sequence": 1,
+          "attempt": 2,
+          "request_id": "55555555-5555-4555-8555-555555555555",
+          "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+          "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+          "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+          "outcome": "complete",
+          "failure_code": null,
+          "http_status": 200,
+          "response_sha256": "9a4e40ed3226a9ebbfed1c00d0036cb9e8c4b3594540b4530781a75d1203ea2b",
+          "response_digest_kind": "normalized_v1",
+          "provider_generation_id": "generation-synthetic-001",
+          "model": "openai/gpt-5.6-luna",
+          "provider_route": "azure/eu",
+          "provider_route_profile": "luna-azure-eu-zdr-v1",
+          "provider_selected": true,
+          "receipt_provider": "Azure",
+          "fallback_used": false,
+          "prompt_tokens": 1000,
+          "completion_tokens": 200,
+          "total_tokens": 1200,
+          "cost_usd_micros": 1234,
+          "timed_out": false,
+          "provider_settlement_sha256": "dc99ce32c812ff346774e896bec58bd28ddc7b5fd76a9ec8f4c62a979d581517"
+        }
+      ]
+    },
+    "provider_failure": {
+      "schema": "dittobench-coding-inference-receipt-set-v1",
+      "coding_contract_version": 1,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "case_id": "case-inference-001",
+      "profile_capability_id": "profile-inference-001",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "grant_id": "44444444-4444-4444-8444-444444444444",
+      "generation": 1,
+      "request_budget": 166,
+      "prompt_token_budget": 200000,
+      "completion_token_budget": 30000,
+      "receipts": [
+        {
+          "schema": "dittobench-coding-inference-receipt-v1",
+          "sequence": 1,
+          "request_sequence": 1,
+          "attempt": 1,
+          "request_id": "55555555-5555-4555-8555-555555555555",
+          "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+          "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+          "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+          "outcome": "provider_failure",
+          "failure_code": "provider_timeout",
+          "http_status": 504,
+          "response_sha256": null,
+          "response_digest_kind": "none",
+          "provider_generation_id": null,
+          "model": "openai/gpt-5.6-luna",
+          "provider_route": "azure/eu",
+          "provider_route_profile": "luna-azure-eu-zdr-v1",
+          "provider_selected": true,
+          "receipt_provider": "Azure",
+          "fallback_used": false,
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "cost_usd_micros": 0,
+          "timed_out": true,
+          "provider_settlement_sha256": "b5b1c8f21de1e3d22b18d82903edfb1a07aaf0f0728ae3d6aaf2b7722c9a49f8"
+        }
+      ]
+    },
+    "response_invalid": {
+      "schema": "dittobench-coding-inference-receipt-set-v1",
+      "coding_contract_version": 1,
+      "ticket_id": "33333333-3333-4333-8333-333333333333",
+      "case_id": "case-inference-001",
+      "profile_capability_id": "profile-inference-001",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "grant_id": "44444444-4444-4444-8444-444444444444",
+      "generation": 1,
+      "request_budget": 166,
+      "prompt_token_budget": 200000,
+      "completion_token_budget": 30000,
+      "receipts": [
+        {
+          "schema": "dittobench-coding-inference-receipt-v1",
+          "sequence": 1,
+          "request_sequence": 1,
+          "attempt": 1,
+          "request_id": "55555555-5555-4555-8555-555555555555",
+          "locked_request_sha256": "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+          "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+          "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+          "outcome": "provider_failure",
+          "failure_code": "provider_response_invalid",
+          "http_status": 200,
+          "response_sha256": "b5bc77f9d3093b9594d702b5a81b6ded82720f942a5802cde277036a25de8c1d",
+          "response_digest_kind": "canonical_json_v1",
+          "provider_generation_id": "generation-synthetic-invalid",
+          "model": "openai/gpt-5.6-luna",
+          "provider_route": "azure/eu",
+          "provider_route_profile": "luna-azure-eu-zdr-v1",
+          "provider_selected": true,
+          "receipt_provider": "Azure",
+          "fallback_used": false,
+          "prompt_tokens": 0,
+          "completion_tokens": 0,
+          "total_tokens": 0,
+          "cost_usd_micros": 0,
+          "timed_out": false,
+          "provider_settlement_sha256": "317774f013c95197bead31ec1939a801d8d79b7fd3acee8f022cfdd433b258e6"
+        }
+      ]
+    }
+  },
+  "model_evidence": {
+    "not_invoked": {
+      "model": "openai/gpt-5.6-luna",
+      "provider": "azure/eu",
+      "provider_route_profile": "luna-azure-eu-zdr-v1",
+      "reasoning_effort": "medium",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+      "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+      "usage_status": "not_invoked",
+      "fallback_used": false,
+      "cost_source": "provider_receipt_v1",
+      "currency": "USD",
+      "provider_receipt_set_sha256": null,
+      "requests": 0,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0,
+      "cost_usd_micros": 0,
+      "retry_count": 0
+    },
+    "complete": {
+      "model": "openai/gpt-5.6-luna",
+      "provider": "azure/eu",
+      "provider_route_profile": "luna-azure-eu-zdr-v1",
+      "reasoning_effort": "medium",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+      "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+      "usage_status": "complete",
+      "fallback_used": false,
+      "cost_source": "provider_receipt_v1",
+      "currency": "USD",
+      "provider_receipt_set_sha256": "72e02a54effad7dc32246baa00e9a7be9539f255ebcbf97edac3910e5b4ca476",
+      "requests": 2,
+      "prompt_tokens": 2500,
+      "completion_tokens": 320,
+      "total_tokens": 2820,
+      "cost_usd_micros": 1690,
+      "retry_count": 0
+    },
+    "retry_complete": {
+      "model": "openai/gpt-5.6-luna",
+      "provider": "azure/eu",
+      "provider_route_profile": "luna-azure-eu-zdr-v1",
+      "reasoning_effort": "medium",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+      "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+      "usage_status": "complete",
+      "fallback_used": false,
+      "cost_source": "provider_receipt_v1",
+      "currency": "USD",
+      "provider_receipt_set_sha256": "97abce5cb807855d8555f44bbaa2b7ff22b2233523c2374acdf8b8963e17c31a",
+      "requests": 1,
+      "prompt_tokens": 1000,
+      "completion_tokens": 200,
+      "total_tokens": 1200,
+      "cost_usd_micros": 1234,
+      "retry_count": 1
+    },
+    "provider_failure": {
+      "model": "openai/gpt-5.6-luna",
+      "provider": "azure/eu",
+      "provider_route_profile": "luna-azure-eu-zdr-v1",
+      "reasoning_effort": "medium",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+      "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+      "usage_status": "provider_failure",
+      "fallback_used": false,
+      "cost_source": "provider_receipt_v1",
+      "currency": "USD",
+      "provider_receipt_set_sha256": "8fc9716c9f8dc7d697539eb4a24f7a80e803d6e7d2d228ee66e0a71d94398afb",
+      "requests": 1,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0,
+      "cost_usd_micros": 0,
+      "retry_count": 0
+    },
+    "response_invalid": {
+      "model": "openai/gpt-5.6-luna",
+      "provider": "azure/eu",
+      "provider_route_profile": "luna-azure-eu-zdr-v1",
+      "reasoning_effort": "medium",
+      "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+      "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+      "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+      "usage_status": "provider_failure",
+      "fallback_used": false,
+      "cost_source": "provider_receipt_v1",
+      "currency": "USD",
+      "provider_receipt_set_sha256": "50adc5b71948d2f5d00d22b15ebbd4486080f0d84e9cf77ccc25e420617bebc8",
+      "requests": 1,
+      "prompt_tokens": 0,
+      "completion_tokens": 0,
+      "total_tokens": 0,
+      "cost_usd_micros": 0,
+      "retry_count": 0
+    }
+  },
+  "expected": {
+    "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+    "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+    "inference_grant_sha256": "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6",
+    "locked_request_sha256": [
+      "91fa4c99b91777437b95900f2a20402afdfe798155755fbeae5d579d6e4e6b8d",
+      "3331a32e063b05ed2416f04d60d320140fa88b329c61ef23af697b0a2b3ef663"
+    ],
+    "normalized_response_sha256": [
+      "9a4e40ed3226a9ebbfed1c00d0036cb9e8c4b3594540b4530781a75d1203ea2b",
+      "e58bbfcb362b1174c518442001ef6f59a01bc20914ef84096246d69887f2ab93"
+    ],
+    "invalid_provider_response_sha256": {
+      "response_invalid": "b5bc77f9d3093b9594d702b5a81b6ded82720f942a5802cde277036a25de8c1d"
+    },
+    "provider_settlement_sha256": {
+      "complete": [
+        "538aed33c09519334626e1f786af9f597bccd576a18b349a65a5d0be47f77d50",
+        "761933df7d6ca39bb41512deb1897aa056607c98cbd8188dbf3a1f6e4b586270"
+      ],
+      "retry_complete": [
+        "6970774f5efc19b113383a2dfc01124bc253872bf8af648ed18c5f330287a29a",
+        "dc99ce32c812ff346774e896bec58bd28ddc7b5fd76a9ec8f4c62a979d581517"
+      ],
+      "provider_failure": [
+        "b5b1c8f21de1e3d22b18d82903edfb1a07aaf0f0728ae3d6aaf2b7722c9a49f8"
+      ],
+      "response_invalid": [
+        "317774f013c95197bead31ec1939a801d8d79b7fd3acee8f022cfdd433b258e6"
+      ]
+    },
+    "provider_receipt_set_sha256": {
+      "complete": "72e02a54effad7dc32246baa00e9a7be9539f255ebcbf97edac3910e5b4ca476",
+      "retry_complete": "97abce5cb807855d8555f44bbaa2b7ff22b2233523c2374acdf8b8963e17c31a",
+      "provider_failure": "8fc9716c9f8dc7d697539eb4a24f7a80e803d6e7d2d228ee66e0a71d94398afb",
+      "response_invalid": "50adc5b71948d2f5d00d22b15ebbd4486080f0d84e9cf77ccc25e420617bebc8"
+    },
+    "model_evidence_sha256": {
+      "not_invoked": "3494068c36e23d87598c553ad0d27e80d164a4065410ec83cc636786132b8c97",
+      "complete": "5fe7c0f465bfee6ec98e78628ba5ddb469860232358ecb4c1e0318186997238c",
+      "retry_complete": "f295eb3f4c51456e279a4762a700e3c5b7b5fe28013b7528aede4a47f3edbddb",
+      "provider_failure": "a9b42916fffc1086940102f4eba4f18fbd8189ca1e6f9797644c1a27b3e54fb7",
+      "response_invalid": "67d086342b6d22c54c146a6127166190eb4c86d7dfcf2a75d274aba8f4643b1d"
+    }
+  }
+}

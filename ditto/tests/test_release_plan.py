@@ -183,6 +183,20 @@ def test_shared_coding_memory_vector_selects_public_consumers(
     } <= selected_components
 
 
+def test_coding_inference_miner_vector_excludes_platform_authority(
+    components, ignored_paths
+) -> None:
+    path = "packages/dittobench-coding-contract/testdata/coding_inference_miner_v1.json"
+    assert selected(components, ignored_paths, path) == {
+        "dittobench_api",
+        "dittobench_coding_datagen",
+        "dittobench_coding_starter_kit",
+        "validator",
+        "validator_stack",
+    }
+    assert root_verification(components, ignored_paths, path) == "full"
+
+
 def test_coding_contract_models_select_scorer_and_validator_stack(
     components, ignored_paths
 ) -> None:
@@ -192,6 +206,17 @@ def test_coding_contract_models_select_scorer_and_validator_stack(
         "ditto/api_models/coding.py",
         "services/dittobench-api/internal/codingcontract/types.go",
     ) == {"dittobench_api", "validator", "validator_stack"}
+
+
+def test_validator_coding_inference_model_is_release_owned(
+    components, ignored_paths
+) -> None:
+    path = "ditto/api_models/coding_inference.py"
+    assert selected(components, ignored_paths, path) == {
+        "validator",
+        "validator_stack",
+    }
+    assert root_verification(components, ignored_paths, path) == "full"
 
 
 @pytest.mark.parametrize(
@@ -223,6 +248,7 @@ def test_shadow_coding_execution_selects_only_scorer_stack(
         "packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
     ],
 )
 def test_shared_coding_contract_vectors_select_every_consumer(

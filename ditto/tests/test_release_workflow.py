@@ -53,6 +53,7 @@ def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> 
     paths = workflow["on"]["pull_request"]["paths"]
     assert "miners/dittobench-coding-starter-kit/**" in paths
     assert "research/dittobench-coding-datagen/**" in paths
+    assert "services/dittobench-api/internal/codingcontract/**" in paths
     assert "scripts/test-coding-starter-practice-e2e.sh" in paths
     verify = workflow["jobs"]["verify"]
     gate = _step(verify["steps"], "Verify format, lint, and tests")
@@ -134,6 +135,13 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
     assert "needs.plan.outputs.dittobench_coding_datagen == 'true'" in coding_gate["if"]
     assert coding_gate["defaults"]["run"]["working-directory"] == (
         "research/dittobench-coding-datagen"
+    )
+    coding_release_run = _step(
+        coding_gate["steps"], "Gate coding datagen release on exact merge source"
+    )["run"]
+    assert (
+        "../../packages/dittobench-coding-contract/"
+        "generate_inference_vectors.py --check" in coding_release_run
     )
     coding_starter_gate = jobs["verify-dittobench-coding-starter-kit"]
     assert (
