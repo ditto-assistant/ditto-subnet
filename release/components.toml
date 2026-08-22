@@ -177,6 +177,11 @@ paths = [
   "apps/platform/pyproject.toml",
   "apps/platform/skills-lock.json",
   "apps/platform/uv.lock",
+  ".github/workflows/platform-ci.yml",
+  # Platform consumes these shared coding manifest and selection vectors.
+  "packages/dittobench-coding-contract/testdata/coding_contract_v1.json",
+  "packages/dittobench-coding-contract/testdata/coding_catalog_v1.json",
+  "packages/dittobench-coding-contract/testdata/coding_selection_v1.json",
   # The Go inference relay is Platform relay runtime: its releases are rolled
   # by the platform deploy workflow's relay-release job, so its changes must
   # select the platform aggregate rather than a standalone component.

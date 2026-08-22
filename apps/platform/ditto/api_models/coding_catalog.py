@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from ditto.api_models.coding_canonical import coding_canonical_sha256
 from ditto.api_models.coding_evaluation import (
     BlockHash,
     CodingEvaluationModel,
@@ -152,31 +151,14 @@ class AdminCodingCatalogResponse(CodingEvaluationModel):
     shadow_only: Literal[True] = True
 
 
-def _canonical_json_bytes(value: dict[str, Any]) -> bytes:
-    body = (
-        (
-            json.dumps(
-                value,
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-                allow_nan=False,
-            )
-            + "\n"
-        )
-        .replace("\u2028", "\\u2028")
-        .replace("\u2029", "\\u2029")
-        .encode()
-    )
-    if len(body) > _MAX_CANONICAL_JSON_BYTES:
-        raise ValueError("canonical catalog commitment exceeds 1 MiB")
-    return body
-
-
 def coding_catalog_commitment_digest(commitment: CodingCatalogCommitment) -> str:
     projection = commitment.model_dump(mode="json", by_alias=True)
     projection.pop("commitment_sha256")
-    return hashlib.sha256(_canonical_json_bytes(projection)).hexdigest()
+    return coding_canonical_sha256(
+        projection,
+        maximum_bytes=_MAX_CANONICAL_JSON_BYTES,
+        label="catalog commitment",
+    )
 
 
 def coding_catalog_commitment_signing_message(

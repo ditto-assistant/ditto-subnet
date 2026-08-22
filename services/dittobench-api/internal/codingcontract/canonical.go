@@ -37,6 +37,30 @@ func Digest[T canonicalModel](value T) (string, error) {
 	return digestBytes(body), nil
 }
 
+// IssueDigest binds the exact model-visible issue projection used by coding selection.
+func IssueDigest(issue Issue) (string, error) {
+	if err := issue.Validate(); err != nil {
+		return "", err
+	}
+	return digestUnchecked(issue)
+}
+
+// RuntimePolicyDigest binds the exact model-visible path and command projection.
+func RuntimePolicyDigest(policy RuntimePolicy) (string, error) {
+	if err := policy.Validate(); err != nil {
+		return "", err
+	}
+	return digestUnchecked(policy)
+}
+
+// BudgetsDigest binds the exact model, workspace-tool, and wall-time budgets.
+func BudgetsDigest(budgets Budgets) (string, error) {
+	if err := budgets.Validate(); err != nil {
+		return "", err
+	}
+	return digestUnchecked(budgets)
+}
+
 // TaskEvidenceDigest is the only signing-capable task-evidence digest path.
 func TaskEvidenceDigest(
 	manifest RunManifest,

@@ -1021,6 +1021,27 @@ def canonical_digest(
     return sha256_hex(canonical_json_bytes(value))
 
 
+def coding_issue_digest(issue: CodingIssue) -> str:
+    """Hash the canonical model-visible issue projection."""
+
+    normalized = CodingIssue.model_validate_json(issue.model_dump_json())
+    return sha256_hex(_canonical_json_bytes(normalized))
+
+
+def coding_runtime_policy_digest(policy: CodingRuntimePolicy) -> str:
+    """Hash the canonical model-visible runtime-policy projection."""
+
+    normalized = CodingRuntimePolicy.model_validate_json(policy.model_dump_json())
+    return sha256_hex(_canonical_json_bytes(normalized))
+
+
+def coding_budgets_digest(budgets: CodingBudgets) -> str:
+    """Hash the canonical model and workspace budget projection."""
+
+    normalized = CodingBudgets.model_validate_json(budgets.model_dump_json())
+    return sha256_hex(_canonical_json_bytes(normalized))
+
+
 def grader_plan_digest(plan: CodingGraderPlan) -> str:
     """Hash one validated, known-field grader plan projection."""
 
@@ -1311,6 +1332,9 @@ __all__ = [
     "canonical_json_bytes",
     "coding_certification_receipt_digest",
     "coding_certification_signing_message",
+    "coding_budgets_digest",
+    "coding_issue_digest",
+    "coding_runtime_policy_digest",
     "grader_execution_receipt_root",
     "grader_plan_digest",
     "grader_resource_profile_digest",

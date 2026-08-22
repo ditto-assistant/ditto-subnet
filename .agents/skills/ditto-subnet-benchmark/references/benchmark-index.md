@@ -17,6 +17,7 @@
 | Shadow coding runner/freezer core | `services/dittobench-api/internal/codingrunner/` |
 | Shadow pristine coding grader | `services/dittobench-api/internal/codinggrader/` |
 | Shadow coding sandbox executor | `services/dittobench-api/internal/codingexecutor/` |
+| Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
 
