@@ -773,6 +773,12 @@ class Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length) or b"{{}}")
         if self.path == BASE + "/complete" and self.authorized():
             observation = body.get("observation", {{}})
+            finding = observation.get("finding") or {{}}
+            audit = observation.get("review_audit") or {{}}
+            if not isinstance(finding, dict):
+                finding = {{}}
+            if not isinstance(audit, dict):
+                audit = {{}}
             safe = {{
                 "ok": observation.get("ok"),
                 "risk_level": observation.get("risk_level"),
@@ -780,6 +786,10 @@ class Handler(BaseHTTPRequestHandler):
                 "clearance_certified": observation.get("clearance_certified"),
                 "error_code": observation.get("error_code"),
                 "finding_digest": observation.get("finding_digest"),
+                "failure_disposition": observation.get("failure_disposition"),
+                "prompt_revision": finding.get("prompt_revision"),
+                "review_audit_stage": audit.get("stage"),
+                "review_audit_prompt_revision": audit.get("prompt_revision"),
             }}
             self.send_json(200, {{"verified": True}})
             print(
@@ -794,7 +804,15 @@ ThreadingHTTPServer(("0.0.0.0", 8080), Handler).serve_forever()
 
 
 def _load_source_review_api_key() -> str:
-    """Read the OpenRouter key from Secret Manager without printing it."""
+    """Read the OpenRouter key without printing it.
+
+    Prefer an already-materialized operator env (probe-only) so a Secret
+    Manager reauth failure cannot block a live rental. Fall back to GCP.
+    """
+    for name in ("SCREENER_SOURCE_REVIEW_API_KEY", "OPENROUTER_API_KEY"):
+        value = os.environ.get(name, "").strip()
+        if len(value) >= 16:
+            return value
     raw = subprocess.check_output(
         [
             "gcloud",
@@ -950,6 +968,18 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
             },
             {"name": "SCREENER_STATIC_PREFLIGHT_V2_MODE", "value": "off"},
         ]
+        if live_model:
+            review_env.extend(
+                [
+                    {"name": "SCREENER_L2_REVIEW_MODE", "value": "enforce"},
+                    {"name": "SCREENER_L2_REVIEW_MODEL", "value": "moonshotai/kimi-k3"},
+                    {"name": "SCREENER_L3_REVIEW_ENABLED", "value": "true"},
+                    {"name": "SCREENER_L3_REVIEW_MODEL", "value": "openai/gpt-5.6-sol"},
+                    {"name": "SCREENER_L2_ALWAYS_ESCALATE", "value": "true"},
+                    {"name": "SCREENER_L2_TIMEOUT_SECONDS", "value": "900"},
+                    {"name": "SCREENER_L2_MAX_STEPS", "value": "18"},
+                ]
+            )
         review = client.create_rental(
             name=f"ditto-source-probe-{secrets.token_hex(3)}",
             image=args.image,
@@ -980,16 +1010,19 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
                 # receives the HTTP response and reaches its persistent hold
                 # before the DELETE-first cleanup.
                 time.sleep(5)
-                print(
-                    json.dumps(
-                        {
-                            "phase": "source-review",
-                            "capability": "AVAILABLE",
-                            "observation": json.loads(marker),
-                        },
-                        sort_keys=True,
+                payload = {
+                    "phase": "source-review",
+                    "capability": "AVAILABLE",
+                    "observation": json.loads(marker),
+                }
+                if live_model and review_uid is not None:
+                    payload["review_logs"] = _redact_provider_text(
+                        _safe_probe_output(
+                            _safe_logs(client, review_uid, tail=200),
+                            limit=4000,
+                        )
                     )
-                )
+                print(json.dumps(payload, sort_keys=True))
                 return 0
             review_state = _safe_state(client, review_uid)
             if review_state.get("status") == "error":

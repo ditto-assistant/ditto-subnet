@@ -33,11 +33,17 @@ case "${command}" in
       inventory "$@"
     ;;
   list|logs|state|sweep-oneshots|kaniko-probe|agent-probe|runtime-probe|source-review-probe)
-    gcloud secrets versions access latest \
-      --project="${PROJECT}" \
-      --secret="${SECRET}" \
-      | PYTHONPATH="${REPO_ROOT}" python3 -m screener_capacity.targon_cli \
-          --api-key-stdin --org-slug="${ORG_SLUG}" "${command}" "$@"
+    if [[ -n "${TARGON_API_KEY:-}" ]]; then
+      printf '%s\n' "${TARGON_API_KEY}" \
+        | PYTHONPATH="${REPO_ROOT}" python3 -m screener_capacity.targon_cli \
+            --api-key-stdin --org-slug="${ORG_SLUG}" "${command}" "$@"
+    else
+      gcloud secrets versions access latest \
+        --project="${PROJECT}" \
+        --secret="${SECRET}" \
+        | PYTHONPATH="${REPO_ROOT}" python3 -m screener_capacity.targon_cli \
+            --api-key-stdin --org-slug="${ORG_SLUG}" "${command}" "$@"
+    fi
     ;;
   *)
     usage
