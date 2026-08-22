@@ -11051,7 +11051,7 @@ export interface components {
             /**
              * First Seen
              * Format: date-time
-             * @description The KOTH first-seen tie-break (UTC): when this miner's lineage first reached the score this entry defends, which is the entry's own upload time unless an earlier generation of the same owner already held a band-equivalent score. Anchoring on the entry alone made a miner forfeit its crown by resubmitting.
+             * @description The KOTH first-seen tie-break (UTC): when this miner's lineage first reached the score this entry defends, which is the entry's own upload time unless an earlier generation of the same owner already held a score within the dethrone margin. Anchoring on the entry alone made a miner forfeit its crown by uploading a slightly better agent.
              */
             first_seen: string;
             /**
@@ -14195,7 +14195,7 @@ export interface components {
             confirmation_seed_depth: number;
             /**
              * Crown First Seen
-             * @description The arrival time the KOTH champion fold actually orders on (UTC), and the single most misread number on this board. It is the *lineage's* earliest band-equivalent arrival, not this tarball's upload time, so a miner keeps its reign across a resubmission instead of forfeiting it by improving. When it is earlier than ``first_seen`` the difference comes from a sibling in ``submission_family`` -- match it against that member's ``submitted_at`` to see which generation supplies it, and note the sibling may sit on a different ``miner_hotkey``, because owner families are resolved across attested payment roots. Null on rows built outside the owner-family read, where the fold falls back to ``first_seen``.
+             * @description The arrival time the KOTH champion fold actually orders on (UTC), and the single most misread number on this board. It is the *lineage's* earliest arrival at a score within the dethrone margin of this entry, not this tarball's upload time, so a miner keeps its reign across a resubmission instead of forfeiting it by improving. When it is earlier than ``first_seen`` the difference comes from a sibling in ``submission_family`` -- match it against that member's ``submitted_at`` to see which generation supplies it, and note the sibling may sit on a different ``miner_hotkey``, because owner families are resolved across attested payment roots. Null on rows built outside the owner-family read, where the fold falls back to ``first_seen``.
              */
             crown_first_seen?: string | null;
             /**
@@ -14330,7 +14330,7 @@ export interface components {
             pre_efficiency_composite?: number | null;
             /**
              * Rank
-             * @description 1-based rank by ``official_composite`` -- NOT by ``composite``. Sorting this board by ``composite`` reproduces ``rank`` only while every entry is still on the canonical median (``aggregate_method == 'canonical_median'``); once any agent has completed continual cohort waves the two orderings differ, and ``official_composite`` is the authoritative quality that ranks the board and drives the weight fold. Bench-v9 curve-v3 efficiency breaks only exact official-quality ties; lower quality never crosses higher quality. Remaining ties break on ``crown_first_seen`` (the lineage arrival; falling back to ``first_seen``) then ``agent_id``. A later tarball that only matches or marginally improves the owner's best score keeps that earlier clock; a jump outside the crown-anchor band resets it. Provisional rows are ranked among themselves and always trail the finalized board. Bench v9 base/provisional rows in confirmation enforce mode are null: only full-confirmed rows rank.
+             * @description 1-based rank by ``official_composite`` -- NOT by ``composite``. Sorting this board by ``composite`` reproduces ``rank`` only while every entry is still on the canonical median (``aggregate_method == 'canonical_median'``); once any agent has completed continual cohort waves the two orderings differ, and ``official_composite`` is the authoritative quality that ranks the board and drives the weight fold. Bench-v9 curve-v3 efficiency breaks only exact official-quality ties; lower quality never crosses higher quality. Remaining ties break on ``crown_first_seen`` (the lineage arrival; falling back to ``first_seen``) then ``agent_id``. A later tarball that only matches or improves the owner's best score by less than the dethrone margin keeps that earlier clock; a jump larger than that margin resets it. Provisional rows are ranked among themselves and always trail the finalized board. Bench v9 base/provisional rows in confirmation enforce mode are null: only full-confirmed rows rank.
              */
             rank?: number | null;
             /**
@@ -14445,7 +14445,7 @@ export interface components {
             miner_hotkey?: string | null;
             /**
              * Submitted At
-             * @description When this generation arrived (UTC). The family's earliest band-equivalent value is what the KOTH fold orders on, so this is what lets a reader locate the generation supplying the winner's ``crown_first_seen`` rather than infer it.
+             * @description When this generation arrived (UTC). The family's earliest arrival within the dethrone margin of the winner is what the KOTH fold orders on, so this is what lets a reader locate the generation supplying the winner's ``crown_first_seen`` rather than infer it.
              */
             submitted_at?: string | null;
         };

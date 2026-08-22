@@ -1356,9 +1356,9 @@ class LedgerEntry(BaseModel):
                 "The KOTH first-seen tie-break (UTC): when this miner's lineage "
                 "first reached the score this entry defends, which is the "
                 "entry's own upload time unless an earlier generation of the "
-                "same owner already held a band-equivalent score. The platform "
-                "resolves this across the owner family; the validator folds it "
-                "as served."
+                "same owner already held a score within the dethrone margin. "
+                "The platform resolves this across the owner family; the "
+                "validator folds it as served."
             )
         ),
     ]

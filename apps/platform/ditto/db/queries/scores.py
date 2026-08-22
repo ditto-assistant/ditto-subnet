@@ -101,47 +101,35 @@ def _is_ranked() -> ColumnElement[bool]:
 
 
 # How far an ancestor's score may sit from the score a generation now defends
-# and still hand it the lineage's arrival time. Deliberately far tighter than
-# the dethrone band, and applied in *both* directions.
+# and still hand it the lineage's arrival time. The two directions are different
+# questions and use different numbers.
 #
-# Seniority and indifference are different questions and used to share one
-# number. The dethrone band asks "is this challenger distinguishable from the
-# incumbent" and is correctly generous, because crowning on noise churns the
-# board. This asks "did this owner already *hold* the score it now defends",
-# and being generous there grants a reign the ancestor never earned: on
-# 2026-08-13 an ancestor scoring 0.996348 — measurably behind a rival sitting
-# at 0.997012 since two days earlier — was inside the decayed 0.003164 band, so
-# it conferred its own earlier arrival onto a later generation that had merely
-# *matched* that rival. The owner took the crown without ever leading.
+# The ceiling (this constant, decayed) asks "did the owner fall out of a reign?"
+# Tight, because a regression should lose seniority at once. Sharing the
+# dethrone band here is what let an ancestor that never led confer a later
+# match: on 2026-08-13 an ancestor scoring 0.996348 — measurably behind a rival
+# sitting at 0.997012 since two days earlier — was inside the decayed 0.003164
+# band and backdated a generation that had merely *matched* that rival.
+#
+# The floor (:func:`_crown_anchor_floor`) asks the opposite: "did iterating
+# cost a sitting miner its incumbency?" That floor is the undecayed dethrone
+# margin, not one benchmark step. A one-step floor still forfeited a legitimate
+# reign: on 2026-08-22 goal v10 at official 0.889 shipped v11 at 0.893 — a
+# 0.004 gain, inside ``KOTH_MARGIN`` — and the reset clock handed champion to
+# a rival that arrived in between with a *lower* official score. A challenger
+# needs 0.007 to take the crown; charging seniority for a smaller improvement
+# is a pure penalty for uploading a better agent.
 #
 # The band cannot be zero: an owner that resubmits at a plateau must keep its
 # reign, which is the entire reason the anchor is a lineage value and not the
-# winning tarball's upload time. Saturated agents re-measure to the *same*
-# composite, so only genuine re-measurement jitter needs absorbing, and this is
-# roughly a third of a typical per-row standard error. Widen it only with a
-# concrete case where a legitimate reign was forfeited.
+# winning tarball's upload time. A jump larger than the dethrone margin still
+# resets, so a planted low score cannot backdate a massive improvement.
 CROWN_ANCHOR_MARGIN = 0.0005
-# ...but it cannot be narrower than the benchmark's own resolution *below* the
-# defended score, which is why the band is asymmetric.
-#
 # Bench v9 scores 251 memory cases in half-point steps and averages against a
 # tool mean, so the smallest composite change a miner can possibly produce is
-# 0.25/251 = 0.000996. ``CROWN_ANCHOR_MARGIN`` decays to ~0.000226 at the top of
-# a saturated board -- a quarter of one step. A floor beneath one step does not
-# mean "only re-measurement jitter"; it means "improve by the smallest amount
-# the benchmark can express and forfeit your seniority", which is the outcome
-# the lineage anchor exists to prevent. Six live rows on 2026-08-14 sat in that
-# hole, five of them for having got *better*.
-#
-# The ceiling stays tight: an ancestor scoring *above* what an owner now
-# defends is a reign the owner has regressed out of, and no amount of
-# quantization makes that one the same score.
-#
-# Not decayed, unlike the margin. Quantization does not shrink as scores bunch;
-# it is the same 0.000996 at 0.99 as at 0.60. Revisit when a benchmark ships a
-# different case count -- a coarser one needs a larger value here, and this
-# constant is a floor for every version rather than a per-version table only
-# because every scoreable version to date resolves at least this finely.
+# 0.25/251 = 0.000996. Kept as a floor under the improvement test so a future
+# tighter ``KOTH_MARGIN`` cannot shrink below one real move of the benchmark.
+# Not decayed: quantization does not shrink as scores bunch.
 MIN_RESOLVABLE_COMPOSITE_STEP = 0.001
 
 
@@ -201,20 +189,26 @@ def _crown_anchor_floor(
 ) -> ColumnElement[Any]:
     """How far *below* the defended score an ancestor may sit, in SQL.
 
-    The ceiling (:func:`_crown_band`) with
-    :data:`MIN_RESOLVABLE_COMPOSITE_STEP` as a floor beneath it, so the test can
-    never come out narrower than one move of the benchmark it is reading.
+    The ceiling (:func:`_crown_band`) with the undecayed dethrone margin
+    (:data:`~ditto.api_server.koth.KOTH_MARGIN`) as a floor beneath it, so
+    iterating inside the hysteresis gate cannot forfeit seniority.
 
     The two directions answer different questions, which is why they are
     different numbers. Above the defended score: "is this a reign the owner has
     fallen out of?" — tight, because regressing out of a score should cost the
-    seniority for it at once. Below it: "did the owner already hold this score?"
-    — and a generation one benchmark step back is not distinguishable from the
-    current one by anything the benchmark can measure, so treating it as a
-    different score charges the owner for improving.
+    seniority for it at once. Below it: "did uploading a better agent cost the
+    owner its incumbency?" — and a gain smaller than the amount a challenger
+    needs to take the crown cannot earn a new one, so treating it as a
+    different score is a pure penalty for improving.
+    :data:`MIN_RESOLVABLE_COMPOSITE_STEP` stays in the ``greatest`` so a
+    future tighter margin cannot shrink below one real move of the benchmark.
     """
+    from ditto.api_server.koth import KOTH_MARGIN
+
     return func.greatest(
-        _crown_band(defended_score, bench_version), MIN_RESOLVABLE_COMPOSITE_STEP
+        _crown_band(defended_score, bench_version),
+        KOTH_MARGIN,
+        MIN_RESOLVABLE_COMPOSITE_STEP,
     )
 
 
@@ -378,12 +372,15 @@ class LedgerRow:
 
     So the anchor is the lineage's, not the submission's: the earliest
     :attr:`first_seen` among this owner's ``scored`` agents that are at *this
-    row's* ``bench_version`` and within :func:`_crown_band` of *this row's* own
-    official score. Only band-equivalent ancestors count, so an early low-scoring
-    submission confers nothing; the version match keeps the comparison on one
-    scale; ``scored`` excludes banned and rejected generations. This row always
-    satisfies its own filter, so the anchor can only ever move *earlier* — never
-    later than :attr:`first_seen`.
+    row's* ``bench_version`` and within the asymmetric crown-anchor window of
+    *this row's* own official score. Below the defended score the window is the
+    dethrone margin, so a sub-hysteresis improvement keeps the earlier clock;
+    above it the window is the tight :data:`CROWN_ANCHOR_MARGIN`, so a
+    regression loses seniority at once. An early low-scoring submission
+    confers nothing; the version match keeps the comparison on one scale;
+    ``scored`` excludes banned and rejected generations. This row always
+    satisfies its own filter, so the anchor can only ever move *earlier* —
+    never later than :attr:`first_seen`.
 
     The comparison is against this row and not the family's best, and that is
     load-bearing. A family-relative band lets the best row admit itself, so an
@@ -391,10 +388,6 @@ class LedgerRow:
     *worse* siblings — the owner defended a score its own lineage had already
     beaten and lost. Tightening the band cannot fix that, because the ancestor
     doing the damage is the reference the band is measured from.
-
-    That band is :data:`CROWN_ANCHOR_MARGIN`, not the dethrone margin. Inheriting
-    seniority and surviving a challenge are different questions, and sharing one
-    number let an ancestor that never led confer a reign it had not earned.
 
     ``None`` on rows built outside the owner-family query (provisional
     ``evaluating`` rows, moderation fixtures); :attr:`fold_first_seen` falls back
@@ -2205,8 +2198,8 @@ async def list_eligible_ledger(
     # Two-sided, and asymmetric. Above the defended score is a reign the owner
     # has regressed out of, and it should stop counting at once. Below it is an
     # ancestor the owner improved past, which must keep counting out to the
-    # benchmark's own resolution -- charging an owner for a one-step improvement
-    # is the failure this anchor exists to prevent.
+    # dethrone margin -- charging an owner for a sub-hysteresis improvement is
+    # the failure this anchor exists to prevent.
     ancestors = rooted.alias("crown_ancestors")
     crown_first_seen = (
         select(func.min(ancestors.c.first_seen))

@@ -183,10 +183,10 @@ def _with_resolved_crown(
     PostgreSQL computes ``crown_first_seen`` before Platform efficiency is
     available. Efficiency is a within-quality tiebreak, not a new reign: a
     later leaner sibling at the same quality keeps the earlier clock, and a
-    marginal quality improvement does too. A jump outside the crown-anchor
-    band resets the clock so a planted low score cannot backdate a massive
-    improvement. Ledger rows are frozen dataclasses, so replace only that
-    derived field; lightweight test or moderation rows without it retain
+    sub-dethrone quality improvement does too. A jump larger than
+    ``KOTH_MARGIN`` resets the clock so a planted low score cannot backdate a
+    massive improvement. Ledger rows are frozen dataclasses, so replace only
+    that derived field; lightweight test or moderation rows without it retain
     their ordinary upload timestamp.
     """
     del secondary_scores
@@ -197,6 +197,7 @@ def _with_resolved_crown(
         KOTH_BAND_DECAY_MIN_BENCH_VERSION,
         KOTH_BAND_DECAY_RATE,
         KOTH_BAND_DECAY_START_COMPOSITE,
+        KOTH_MARGIN,
     )
     from ditto.db.queries.scores import (
         CROWN_ANCHOR_MARGIN,
@@ -209,7 +210,7 @@ def _with_resolved_crown(
         bounded = min(max(winner_score, KOTH_BAND_DECAY_START_COMPOSITE), 1.0)
         scale = exp(-KOTH_BAND_DECAY_RATE * (bounded - KOTH_BAND_DECAY_START_COMPOSITE))
     ceiling = CROWN_ANCHOR_MARGIN * scale
-    floor = max(ceiling, MIN_RESOLVABLE_COMPOSITE_STEP)
+    floor = max(ceiling, KOTH_MARGIN, MIN_RESOLVABLE_COMPOSITE_STEP)
     ancestors = [
         row.first_seen
         for row in group

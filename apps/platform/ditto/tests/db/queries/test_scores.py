@@ -828,23 +828,20 @@ class TestListEligibleLedger:
 
 # Band arithmetic for the era these tests run in (_BENCH_VERSION >= 6, so the
 # high-score decay applies): at a 0.90 winner the fold's flat indifference band
-# is 0.007 * exp(-2 * (0.90 - 0.60)) ~= 0.00384 composite points. The two
-# ancestor scores below sit either side of that by a wide margin, so nothing here
-# turns on the third decimal place of the decay.
+# is 0.007 * exp(-2 * (0.90 - 0.60)) ~= 0.00384 composite points. The crown
+# *improvement* floor is the undecayed dethrone margin (0.007), so a 0.004
+# gain keeps seniority and a 0.010 gain does not.
 _WINNER_COMPOSITE = 0.90
 _WITHIN_BAND = 0.8999
-# Two benchmark steps behind the winner: inside the *dethrone* band and outside
-# the crown-anchor band. This is the shape that crowned white-bolt on
-# 2026-08-13 while it had never once led the rival it outranked, and it is the
-# whole reason the two bands are separate numbers.
-#
-# Was 0.8993 -- 0.0007 back -- until the anchor floor was held to
-# MIN_RESOLVABLE_COMPOSITE_STEP. That original gap is *below* what bench v9 can
-# express (0.25/251 = 0.000996 per step), so no real ancestor can sit there:
-# the case it described was untestable in production and the distinction it
-# asserted was one the benchmark cannot make. At two steps the ancestor is
-# measurably behind, which is what "never led" has to mean to be enforceable.
-_BEHIND_A_RIVAL = 0.898
+# 0.010 behind the winner: outside the 0.007 improvement floor, so this
+# ancestor never held the score now being defended. Used for "never led" and
+# regression cases that must not inherit the earlier clock.
+_BEHIND_A_RIVAL = 0.89
+# 2026-08-22 goal v10 -> v11: official 0.889 -> 0.893, a 0.004 gain inside
+# KOTH_MARGIN. Resetting the clock on this handed champion to a rival that
+# arrived in between with a lower official score.
+_SUB_MARGIN_PREV = 0.889
+_SUB_MARGIN_NEW = 0.893
 # One real bench-v9 step behind the winner: 251 memory cases in half-point
 # steps, halved by the tool mean, is 0.25/251 = 0.000996 of composite. Spelled
 # as a literal rather than derived from MIN_RESOLVABLE_COMPOSITE_STEP so the
@@ -899,15 +896,12 @@ class TestCrownFirstSeen:
     async def test_an_ancestor_that_never_led_confers_no_seniority(
         self, session: AsyncSession
     ) -> None:
-        """The 2026-08-13 crown, in miniature.
+        """A jump larger than the dethrone margin stands on its own arrival.
 
-        An owner arrives early but *behind*, a rival passes it and holds the top
-        score for days, then the owner matches that score with a new generation
-        and takes the crown on the early arrival. Sharing one band between
-        seniority and indifference made that inheritance legal: the ancestor was
-        inside the dethrone band, so it read as "already at this score" despite
-        never having led anyone. The crown-anchor band is tighter precisely so
-        this ancestor confers nothing and the winner stands on its own arrival.
+        An owner arrives early but 0.010 behind the score it later defends.
+        That gap is outside ``KOTH_MARGIN``, so the ancestor never held this
+        score: conferring its timestamp would backdate a real improvement over
+        anyone who arrived in between. The winner stands on its own upload.
         """
         early_but_behind = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
         matched_it_later = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
@@ -1010,6 +1004,86 @@ class TestCrownFirstSeen:
         assert row.composite == pytest.approx(_WINNER_COMPOSITE)
         assert row.crown_first_seen == improved_from
         assert row.fold_first_seen == improved_from
+
+    async def test_a_sub_dethrone_improvement_keeps_the_anchor(
+        self, session: AsyncSession
+    ) -> None:
+        """Uploading a slightly better agent must not forfeit incumbency.
+
+        0.889 -> 0.893 is inside ``KOTH_MARGIN`` (0.007) and outside one
+        benchmark step. The 2026-08-22 board reset the lineage clock on that
+        gap, so a rival that arrived between the two generations became the
+        incumbent even though its official score was *lower*. The improvement
+        floor is the dethrone margin so this gain keeps the earlier clock.
+        """
+        improved_from = datetime(2026, 6, 8, 9, 0, tzinfo=UTC)
+        improved_at = datetime(2026, 6, 8, 18, 0, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_SUB_MARGIN_PREV,
+            created_at=improved_from,
+            n=MIN_ELIGIBLE_CASES,
+            name="v10",
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_SUB_MARGIN_NEW,
+            created_at=improved_at,
+            n=MIN_ELIGIBLE_CASES,
+            name="v11",
+        )
+
+        (row,) = await list_eligible_ledger(session)
+
+        assert row.composite == pytest.approx(_SUB_MARGIN_NEW)
+        assert row.crown_first_seen == improved_from
+        assert row.fold_first_seen == improved_from
+
+    async def test_sub_dethrone_gain_keeps_crown_against_intervening_rival(
+        self, session: AsyncSession
+    ) -> None:
+        """The live 2026-08-22 shape: iterate, do not hand the rival incumbency."""
+        t0 = datetime(2026, 8, 22, 3, 7, tzinfo=UTC)
+        t_rival = datetime(2026, 8, 22, 13, 1, tzinfo=UTC)
+        t_new = datetime(2026, 8, 22, 13, 50, tzinfo=UTC)
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_SUB_MARGIN_PREV,
+            created_at=t0,
+            n=MIN_ELIGIBLE_CASES,
+            name="goal-v10",
+            coldkey="cold-a",
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER_B,
+            composite=0.892,
+            created_at=t_rival,
+            n=MIN_ELIGIBLE_CASES,
+            name="aceron",
+            coldkey="cold-b",
+        )
+        await _seed_scored(
+            session,
+            miner=_MINER,
+            composite=_SUB_MARGIN_NEW,
+            created_at=t_new,
+            n=MIN_ELIGIBLE_CASES,
+            name="goal-v11",
+            coldkey="cold-a",
+        )
+
+        rows = await list_eligible_ledger(session)
+        by_miner = {row.miner_hotkey: row for row in rows}
+
+        assert by_miner[_MINER].composite == pytest.approx(_SUB_MARGIN_NEW)
+        assert by_miner[_MINER].crown_first_seen == t0
+        assert by_miner[_MINER].fold_first_seen == t0
+        assert rows[0].miner_hotkey == _MINER
+        assert rows[0].fold_first_seen == t0
 
     async def test_a_tied_resubmission_represents_the_owner_and_keeps_its_anchor(
         self, session: AsyncSession

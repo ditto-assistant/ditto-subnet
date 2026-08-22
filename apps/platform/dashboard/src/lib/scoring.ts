@@ -76,9 +76,9 @@ export interface ArrivalCarrier {
 
 /**
  * The timestamp the fold orders on. ``crown_first_seen`` is the lineage's
- * earliest same-score upload; ``first_seen`` is this tarball. Serving the
- * tarball as "First seen" made Omar look earlier than Hogwarts when Hogwarts
- * still held the 05:31 v2 clock.
+ * earliest upload within the dethrone margin; ``first_seen`` is this tarball.
+ * Serving the tarball as "First seen" made Omar look earlier than Hogwarts
+ * when Hogwarts still held the 05:31 v2 clock.
  */
 export function foldArrival(e: ArrivalCarrier): string | null {
   const crown = e.crown_first_seen;

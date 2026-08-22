@@ -261,9 +261,9 @@ class TestScoringLedger:
         incumbency by shipping an improvement. The owner-family resolution behind
         it is covered in ``tests/db/queries/test_scores.py``.
 
-        0.8999 sits inside the crown-anchor floor of one resolvable composite
-        step. Two steps back (0.898) is a different score and must not keep
-        this clock -- that is the 2026-08-13 "never led" case.
+        0.8999 sits inside the crown-anchor improvement floor (the dethrone
+        margin). A 0.010 jump is outside that floor and must not keep this
+        clock -- that is the planted-low-score case.
         """
         from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
 
@@ -293,6 +293,46 @@ class TestScoringLedger:
         assert entry["composite"] == pytest.approx(0.900)
         assert datetime.fromisoformat(entry["first_seen"]) == arrived
 
+    async def test_a_sub_dethrone_improvement_keeps_the_lineage_anchor_on_the_wire(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Validators must see the earlier clock for a 0.004 official gain.
+
+        0.889 -> 0.893 is inside KOTH_MARGIN. The fold reads ``first_seen``
+        byte for byte, so this is the payload that would otherwise hand a
+        lower-scoring intervening rival the incumbency.
+        """
+        from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
+
+        arrived = datetime(2026, 8, 22, 3, 7, tzinfo=UTC)
+        resubmitted = datetime(2026, 8, 22, 13, 50, tzinfo=UTC)
+        await _seed_scored(
+            session_maker,
+            miner=_MINER,
+            composite=0.889,
+            created_at=arrived,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        await _seed_scored(
+            session_maker,
+            miner=_MINER,
+            composite=0.893,
+            created_at=resubmitted,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+
+        assert resp.status_code == 200
+        (entry,) = resp.json()["entries"]
+        assert entry["composite"] == pytest.approx(0.893)
+        assert datetime.fromisoformat(entry["first_seen"]) == arrived
+
     async def test_a_two_step_jump_resets_the_lineage_anchor_on_the_wire(
         self,
         app: FastAPI,
@@ -301,10 +341,9 @@ class TestScoringLedger:
     ) -> None:
         """A generation that never held this score cannot plant its timestamp.
 
-        0.898 is two resolvable steps behind 0.900 -- inside the old dethrone
-        band and outside the crown-anchor floor. The later winner keeps its
-        own arrival, so an early-but-behind ancestor cannot steal a rival's
-        incumbency.
+        0.890 is 0.010 behind 0.900 -- outside the 0.007 dethrone-margin
+        improvement floor. The later winner keeps its own arrival, so an
+        early-but-behind ancestor cannot steal a rival's incumbency.
         """
         from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
 
@@ -313,7 +352,7 @@ class TestScoringLedger:
         await _seed_scored(
             session_maker,
             miner=_MINER,
-            composite=0.898,
+            composite=0.890,
             created_at=arrived,
             n=MIN_ELIGIBLE_CASES,
         )

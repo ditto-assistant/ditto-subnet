@@ -191,7 +191,7 @@ export interface LeaderboardEntry {
   n?: number | null;
   first_seen?: string;
   /** The arrival the KOTH fold orders on: the lineage's earliest
-   * band-equivalent submission, not this tarball's upload. Earlier than
+   * submission within the dethrone margin, not this tarball's upload. Earlier than
    * first_seen means a sibling generation supplies it. */
   crown_first_seen?: string | null;
   bench_version?: number | null;

@@ -1452,8 +1452,9 @@ class LedgerEntry(BaseModel):
                 "The KOTH first-seen tie-break (UTC): when this miner's lineage "
                 "first reached the score this entry defends, which is the "
                 "entry's own upload time unless an earlier generation of the "
-                "same owner already held a band-equivalent score. Anchoring on "
-                "the entry alone made a miner forfeit its crown by resubmitting."
+                "same owner already held a score within the dethrone margin. "
+                "Anchoring on the entry alone made a miner forfeit its crown "
+                "by uploading a slightly better agent."
             )
         ),
     ]

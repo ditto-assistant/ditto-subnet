@@ -302,6 +302,36 @@ class TestComparator:
         assert winner.agent_id == later.agent_id
         assert winner.fold_first_seen == _BASE
 
+    def test_a_sub_dethrone_improvement_keeps_the_crown(self) -> None:
+        """0.889 -> 0.893 is inside KOTH_MARGIN; iterating must not reset the clock."""
+        early = _CrownRow(
+            agent_id=_uuid("1"),
+            miner_hotkey="5" + "A" * 47,
+            first_seen=_BASE,
+            composite=0.889,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE,
+        )
+        later = _CrownRow(
+            agent_id=_uuid("2"),
+            miner_hotkey="5" + "B" * 47,
+            first_seen=_BASE + timedelta(days=2),
+            composite=0.893,
+            bench_version=9,
+            emission_owner_root="coldkey:owner-a",
+            crown_first_seen=_BASE + timedelta(days=2),
+        )
+
+        [winner] = dedupe_owner_rows(
+            [early, later],
+            scores={early.agent_id: 0.889, later.agent_id: 0.893},
+            secondary_scores={early.agent_id: 0.889, later.agent_id: 0.893},
+        )
+
+        assert winner.agent_id == later.agent_id
+        assert winner.fold_first_seen == _BASE
+
     def test_a_massive_quality_jump_resets_the_crown(self) -> None:
         early = _CrownRow(
             agent_id=_uuid("1"),

@@ -522,9 +522,10 @@ class PublicLeaderboardFamilyMember(BaseModel):
             default=None,
             description=(
                 "When this generation arrived (UTC). The family's earliest "
-                "band-equivalent value is what the KOTH fold orders on, so this "
-                "is what lets a reader locate the generation supplying the "
-                "winner's ``crown_first_seen`` rather than infer it."
+                "arrival within the dethrone margin of the winner is what the "
+                "KOTH fold orders on, so this is what lets a reader locate the "
+                "generation supplying the winner's ``crown_first_seen`` rather "
+                "than infer it."
             ),
         ),
     ] = None
@@ -590,9 +591,9 @@ class PublicLeaderboardEntry(BaseModel):
                 "quality never crosses higher quality. Remaining ties break on "
                 "``crown_first_seen`` (the lineage arrival; falling back to "
                 "``first_seen``) then ``agent_id``. A later tarball that only "
-                "matches or marginally improves the owner's best score keeps "
-                "that earlier clock; a jump outside the crown-anchor band "
-                "resets it. Provisional rows are ranked among "
+                "matches or improves the owner's best score by less than the "
+                "dethrone margin keeps that earlier clock; a jump larger than "
+                "that margin resets it. Provisional rows are ranked among "
                 "themselves and always trail the finalized board. Bench v9 "
                 "base/provisional rows in confirmation enforce mode are null: "
                 "only full-confirmed rows rank."
@@ -1076,9 +1077,10 @@ class PublicLeaderboardEntry(BaseModel):
             description=(
                 "The arrival time the KOTH champion fold actually orders on "
                 "(UTC), and the single most misread number on this board. It is "
-                "the *lineage's* earliest band-equivalent arrival, not this "
-                "tarball's upload time, so a miner keeps its reign across a "
-                "resubmission instead of forfeiting it by improving. When it is "
+                "the *lineage's* earliest arrival at a score within the "
+                "dethrone margin of this entry, not this tarball's upload "
+                "time, so a miner keeps its reign across a resubmission "
+                "instead of forfeiting it by improving. When it is "
                 "earlier than ``first_seen`` the difference comes from a sibling "
                 "in ``submission_family`` -- match it against that member's "
                 "``submitted_at`` to see which generation supplies it, and note "

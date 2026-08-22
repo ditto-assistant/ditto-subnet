@@ -13,8 +13,8 @@ deliberate variation, and they are not a third copy of the rule: they order
 one owner's own generations against each other, and they differ from the
 canonical comparator in exactly one term (newest upload, not earliest lineage
 arrival). The between-owner order still uses the lineage clock so a later
-tarball that only matches or marginally improves the owner's best score does
-not lose standing.
+tarball that only matches or improves the owner's best score by less than the
+dethrone margin does not lose standing.
 
 It carries no ditto imports on purpose. :mod:`ditto.api_server.koth` mirrors the
 subnet's frozen consensus fold and must be able to read the comparator without
@@ -102,9 +102,9 @@ def score_order_key(
 
     Remaining ties break on the lineage arrival (:func:`ranking_first_seen`),
     not the winning tarball's upload time, then ``agent_id``. A miner who
-    iterates at a plateau or a one-step improvement keeps the earlier clock;
-    a massive jump resets that clock and stands behind anyone who already
-    held the new score.
+    iterates at a plateau or improves by less than the dethrone margin keeps
+    the earlier clock; a jump larger than that margin resets the clock and
+    stands behind anyone who already held the new score.
 
     A row with no ``eligible`` attribute is treated as ranked: pools that carry
     the flag use it to sink smoke runs and zero-scoring full runs below every

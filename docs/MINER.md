@@ -313,10 +313,14 @@ result.
   checks can reduce it.
 - Each miner competes with its highest eligible score. A challenger dethrones
   the incumbent only after clearing the greater of a fixed 0.007 composite-point
-  hysteresis and the statistical error band. From Bench v6 onward, that whole
-  band shrinks smoothly once the incumbent exceeds 0.60, keeping the crown
-  contestable as scores approach the benchmark ceiling. That smooth decay is
-  measured against a perfect score rather than against what is actually left,
+  hysteresis and the statistical error band. Uploading a new version that
+  improves on your current best by less than that 0.007 gate keeps the
+  incumbency clock you already earned; a later rival with a lower score cannot
+  take the crown just because your newer tarball arrived after theirs. From
+  Bench v6 onward, that whole band shrinks smoothly once the incumbent exceeds
+  0.60, keeping the crown contestable as scores approach the benchmark ceiling.
+  That smooth decay is measured against a perfect score rather than against
+  what is actually left,
   so on a saturated benchmark it could still ask for more than the maximum: a
   0.997012 incumbent required 1.000176. The band is therefore also capped at
   half of the score you still have left to gain, which keeps the requirement

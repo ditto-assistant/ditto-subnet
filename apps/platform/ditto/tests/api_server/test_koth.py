@@ -375,6 +375,32 @@ def test_older_incumbent_survives_a_sub_margin_raw_leader() -> None:
     assert projection.raw_leader_decision.dethrones is False
 
 
+def test_resetting_the_clock_on_a_sub_margin_gain_hands_the_rival_the_crown() -> None:
+    """2026-08-22 goal v11 vs aceron, as fold arithmetic.
+
+    The miner already on the board ships a slightly better agent. A rival that
+    arrived in between has a *lower* score. If the lineage clock resets to the
+    new tarball, the rival becomes the incumbent and a 0.001 lead cannot
+    dethrone. If the lineage clock is kept, the miner stays champion. Platform
+    must serve the kept clock; this pins why.
+    """
+    lineage = _entry(1, 0.893, minutes=0, bench_version=11)
+    rival = _entry(2, 0.892, minutes=60, bench_version=11)
+    resubmitted_as_new = _entry(1, 0.893, minutes=120, bench_version=11)
+
+    kept = project_koth([lineage, rival])
+    assert kept is not None
+    assert kept.champion == lineage
+    assert kept.raw_leader == lineage
+
+    flipped = project_koth([resubmitted_as_new, rival])
+    assert flipped is not None
+    assert flipped.champion == rival
+    assert flipped.raw_leader == resubmitted_as_new
+    assert flipped.raw_leader_decision is not None
+    assert flipped.raw_leader_decision.dethrones is False
+
+
 def test_a_tied_incumbent_does_not_lose_the_crown_by_resubmitting() -> None:
     """The 2026-08-06 report, as arithmetic.
 
