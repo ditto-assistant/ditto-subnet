@@ -103,11 +103,14 @@ usage. Retry count is receipt count minus logical request count.
 
 ## Activation boundary
 
-This layer defines replayable bytes only. It adds no listener, OpenRouter client,
-API key, Platform grant row, exchange endpoint, source-bound capability,
-harness lifecycle, worker, score, or weight path. The next layer may implement
-an unwired `codingrelay` core against this contract. Dedicated Platform/model-
-relay persistence and ticket exchange remain separate reviews.
+The contract layer defines replayable bytes only. The next stacked layer adds
+an unwired `codingrelay` request/journal/settlement/evidence core against those
+bytes, documented in
+[`coding-luna-relay-core-shadow.md`](coding-luna-relay-core-shadow.md); it still
+adds no listener, OpenRouter client, API key, Platform grant row, exchange
+endpoint, source-bound capability, harness lifecycle, worker, score, or weight path.
+Dedicated Platform/model-relay persistence and ticket exchange remain separate
+reviews.
 
 The existing ordinary `model-relay` is only a transport reference. Its current
 grant table is tied to core validator tickets, its reasoning lock is not Luna's,

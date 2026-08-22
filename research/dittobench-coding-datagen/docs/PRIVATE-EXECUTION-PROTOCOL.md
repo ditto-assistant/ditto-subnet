@@ -648,9 +648,11 @@ attempt runtime invokes the scoped-memory projector and closes raw memory bytes
 during authoring construction, retaining only an immutable miner-visible seed
 projection. The outer workspace route must be revoked before the runtime
 freezes the internal session. The validator-local evidence outbox now has an
-unwired durable core;
-a later local gateway still owns its reservation/sealing lifecycle, the
-harness, Luna relay, Python coordinator connection, and host sweep schedule.
+unwired durable core. The ticket-bound Luna relay now has an unwired request,
+pre-dispatch journal, trusted-settlement, retry, revocation, and evidence core.
+A later local gateway still owns concrete durable relay-journal and Platform
+upstream adapters, capability mounting, outbox reservation/sealing, the
+harness, Python coordinator connection, and host sweep schedule.
 
 The runtime never supplies aggregate counts or repair mean. It returns
 per-task evidence; the validator orders those tasks by the immutable manifest,
@@ -668,7 +670,9 @@ remains retryable infrastructure and cannot be converted into task evidence.
 2. Materialize one visible base without `.git`, remotes, hooks, credentials,
    hidden tests, or network-dependent installation.
 3. Start a fresh miner harness and seed only the assigned memory bundle.
-4. Start the bounded coding-runner workspace and ticket-scoped Luna relay.
+4. Start the bounded coding-runner workspace and construct the ticket-scoped
+   Luna relay with a durable pre-dispatch journal and trusted Platform
+   settlement upstream; publish both only through source-bound capabilities.
 5. Execute `/coding/run`; record authoritative runner and relay events.
 6. Stop authoring and revoke every task capability.
 7. Freeze canonical UTF-8 added, modified, and deleted file transitions. New

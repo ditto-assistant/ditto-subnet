@@ -66,8 +66,9 @@ retryable infrastructure without parsing error prose.
 
 This package is unwired. A later local gateway must connect it to the Python
 validator coordinator, a source-bound capability publisher,
-the harness lifecycle, ticket-scoped Luna relay, the now-available but unwired
-durable evidence outbox, and a host sweeper. No production composition root imports it. It cannot
+the harness lifecycle, the now-available but unwired ticket-scoped Luna relay
+core and durable evidence outbox, concrete relay journal/upstream adapters, and
+a host sweeper. No production composition root imports it. It cannot
 claim jobs, start miners, submit scores, rank agents, set weights, or make coding
 contract v1 weight eligible.
 
@@ -76,9 +77,11 @@ contract v1 weight eligible.
 ```bash
 cd services/dittobench-api
 go test -race ./internal/codingattempt ./internal/codingseed ./internal/codingartifacts \
-  ./internal/codingrunner ./internal/codinggrader ./internal/codingexecutor \
+  ./internal/codingrelay ./internal/codingrunner ./internal/codinggrader \
+  ./internal/codingexecutor \
   ./internal/codingcontract
 go vet ./internal/codingattempt ./internal/codingseed ./internal/codingartifacts \
-  ./internal/codingrunner ./internal/codinggrader ./internal/codingexecutor \
+  ./internal/codingrelay ./internal/codingrunner ./internal/codinggrader \
+  ./internal/codingexecutor \
   ./internal/codingcontract
 ```
