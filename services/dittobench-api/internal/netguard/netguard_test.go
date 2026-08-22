@@ -1,6 +1,8 @@
 package netguard
 
 import (
+	"context"
+	"errors"
 	"net"
 	"testing"
 )
@@ -31,6 +33,20 @@ func TestIsDisallowedIP(t *testing.T) {
 	}
 	if !isDisallowedIP(nil) {
 		t.Error("nil IP must be disallowed")
+	}
+}
+
+func TestValidateURLContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := ValidateURLContext(ctx, "https://example.com/artifact", false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v", err)
+	}
+	if err := ValidateURLContext(ctx, "http://127.0.0.1/artifact", true); !errors.Is(err, context.Canceled) {
+		t.Fatalf("allow-private cancellation error = %v", err)
+	}
+	if err := ValidateURLContext(nil, "https://example.com/artifact", false); err == nil {
+		t.Fatal("nil context was accepted")
 	}
 }
 

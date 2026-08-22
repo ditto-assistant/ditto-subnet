@@ -247,6 +247,17 @@ resource-enforcing supervisor, or protected grader. The grader capability is
 not released until authoring is frozen, and no artifact bearer URL enters the
 miner harness or model context.
 
+The trusted DittoBench artifact fetcher independently revalidates the ticket
+deadline, audience/kind mapping, fixed content-addressed path, signed expiry,
+size, and full downloaded SHA-256. It disables redirects, ambient proxies, and
+transparent decoding, applies dial-time SSRF protection, stages mode-`0600`
+bytes, deletes partial or closed files, and never includes the signed URL in an
+error. It returns opaque readers only: archive extraction and interpretation
+remain with the runner, seed projector, resource supervisor, or grader.
+DNS validation is request-bounded, capability logging is redacted, and the
+server-internal consumer type fails closed rather than JSON-serializing a
+bearer URL.
+
 `coding_run_id` and the manifest are shared across k=3. Validator-specific
 ticket IDs, deadlines, hotkeys, and transport capabilities remain in each lease
 envelope and signed validator evidence; they cannot make the selected task-set
