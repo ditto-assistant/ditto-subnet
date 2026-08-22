@@ -63,8 +63,11 @@ export function SnapshotLedger(props: {
       <h2 class="visually-hidden" id="snapshot-title">
         Subnet snapshot
       </h2>
+      {/* Nine readings in three ruled rows: who is here (population), where
+          the scores stand, and whether the machine is turning. Reading order
+          is left-to-right, top-to-bottom; the ids are the public contract. */}
       <dl class="stat-ledger">
-        <div class="ledger-line featured">
+        <div class="ledger-line" data-ledger="population">
           <dt class="ledger-label">
             <Tip text="Distinct miners who have submitted to Subnet 118.">Miners total</Tip>
           </dt>
@@ -72,7 +75,7 @@ export function SnapshotLedger(props: {
             {h()?.miners ?? "–"}
           </dd>
         </div>
-        <div class="ledger-line">
+        <div class="ledger-line" data-ledger="population">
           <dt class="ledger-label">
             <Tip text="Distinct miners with at least one scored run on the board (provisional runs included).">
               Miners scored
@@ -82,7 +85,13 @@ export function SnapshotLedger(props: {
             {boardStats() ? boardStats()?.count : "–"}
           </dd>
         </div>
-        <div class="ledger-line">
+        <div class="ledger-line" data-ledger="population">
+          <dt class="ledger-label">Scored agents</dt>
+          <dd class="ledger-value" id="h-agents">
+            {h()?.scored_agents ?? "–"}
+          </dd>
+        </div>
+        <div class="ledger-line" data-ledger="scores">
           <dt class="ledger-label">
             <Tip text="The highest composite among ranked full-benchmark runs. Start with 0.5 × tool mean + 0.5 × memory mean, apply the benchmark quality gates, then apply the v5 token-efficiency multiplier. Token efficiency can remove at most 10%. Provisional runs are excluded.">
               Top composite
@@ -96,7 +105,7 @@ export function SnapshotLedger(props: {
             </Show>
           </dd>
         </div>
-        <div class="ledger-line">
+        <div class="ledger-line" data-ledger="scores">
           <dt class="ledger-label">
             <Tip text="Median composite across ranked (full-benchmark) runs. The middle of the field, robust to one outlier.">
               Median composite
@@ -110,17 +119,21 @@ export function SnapshotLedger(props: {
             </Show>
           </dd>
         </div>
-        <div class="ledger-line">
+        <div class="ledger-line" data-ledger="scores">
           <dt class="ledger-label">
-            <Tip text="All validator score records stored by the platform, including the independent scores that make up each finalized result.">
-              Total scores
+            <Tip text="How contested #1 is: the #1 composite minus the #2 composite among ranked runs. A small gap means a near-tie at the top.">
+              Top gap · #1 → #2
             </Tip>
           </dt>
-          <dd class="ledger-value" id="h-scores">
-            {h()?.total_scores ?? "–"}
+          <dd class="ledger-value" id="c-spread">
+            <Show when={(boardStats()?.comps.length ?? 0) >= 2} fallback={"–"}>
+              {fx((boardStats()?.comps[0] as number) - (boardStats()?.comps[1] as number))}
+              {provisionalSmall() ? " " : ""}
+              {provisionalSmall()}
+            </Show>
           </dd>
         </div>
-        <div class="ledger-line">
+        <div class="ledger-line" data-ledger="machine">
           <dt class="ledger-label">
             <Tip text="Validators currently reporting heartbeat-capable software to the platform.">
               Validators
@@ -130,28 +143,17 @@ export function SnapshotLedger(props: {
             {latest(operations)?.validators?.reported_count ?? "–"}
           </dd>
         </div>
-        <div class="ledger-line">
-          <dt class="ledger-label">Scored agents</dt>
-          <dd class="ledger-value" id="h-agents">
-            {h()?.scored_agents ?? "–"}
-          </dd>
-        </div>
-        <div class="ledger-line">
+        <div class="ledger-line" data-ledger="machine">
           <dt class="ledger-label">
-            <Tip text="How contested #1 is: the #1 composite minus the #2 composite among ranked runs. A small gap means a near-tie at the top.">
-              Top gap
+            <Tip text="All validator score records stored by the platform, including the independent scores that make up each finalized result.">
+              Total scores
             </Tip>
           </dt>
-          <dd class="ledger-value" id="c-spread">
-            <Show when={(boardStats()?.comps.length ?? 0) >= 2} fallback={"–"}>
-              {fx((boardStats()?.comps[0] as number) - (boardStats()?.comps[1] as number))}{" "}
-              <small>
-                {(boardStats()?.provisionalHeadline ? "provisional · " : "") + "#1 → #2"}
-              </small>
-            </Show>
+          <dd class="ledger-value" id="h-scores">
+            {h()?.total_scores ?? "–"}
           </dd>
         </div>
-        <div class="ledger-line">
+        <div class="ledger-line" data-ledger="machine">
           <dt class="ledger-label">Last scored</dt>
           <dd class="ledger-value" id="h-last">
             {h()?.last_scored_at ? relTime(h()?.last_scored_at) : "–"}

@@ -914,11 +914,20 @@ export function memoryTimelineHtml(
     // little into the neighbouring band costs nothing, losing it costs the
     // whole explanation. Monospace, so the width is countable.
     const gapHalf = Math.max(...gapLines.map((line) => line.length)) * 3 + 4;
+    // One label per run of adjacent unmeasured contracts, centred on the run,
+    // not one per band: two neighbouring bands each narrower than the label
+    // (the desktop rail at six eras) put the same words on top of themselves
+    // and nothing was readable. The tooltip target spans the run, so the
+    // explanation is still reachable from anywhere the lines are missing.
+    const gapRuns: Array<{ first: number; last: number }> = [];
     unmeasuredEras.forEach((era) => {
-      const gapX = Math.min(
-        Math.max(bandCenter(era.index), left + gapHalf),
-        width - right - gapHalf,
-      );
+      const run = gapRuns[gapRuns.length - 1];
+      if (run && era.index === run.last + 1) run.last = era.index;
+      else gapRuns.push({ first: era.index, last: era.index });
+    });
+    gapRuns.forEach((run) => {
+      const runCenter = (bandCenter(run.first) + bandCenter(run.last)) / 2;
+      const gapX = Math.min(Math.max(runCenter, left + gapHalf), width - right - gapHalf);
       svg.push(
         '<g class="timeline-unmeasured" tabindex="0" role="img" aria-label="' +
           esc(gapNote) +

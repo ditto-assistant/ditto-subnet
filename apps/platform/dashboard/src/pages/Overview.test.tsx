@@ -107,6 +107,76 @@ async function waitForBoard(): Promise<void> {
   });
 }
 
+// ── Masthead: the homepage's first reading line ──
+// Who reigns, what state the subnet is in, when the next payout lands — one
+// ruled band above the split, so none of it sits below the fold or behind
+// the chart, and the clock appears once per screen.
+describe("overview masthead", () => {
+  it("leads the page with one band — champion, vitals ledger, payout clock — above the split", async () => {
+    renderOverview();
+    await waitForBoard();
+    const section = document.querySelector('section.page[data-page="overview"]') as HTMLElement;
+    const masthead = section.querySelector(".overview-masthead") as HTMLElement;
+    expect(masthead).toBeTruthy();
+    // The band is the page's first reading line; the two-pane split follows.
+    expect(section.firstElementChild).toBe(masthead);
+    expect(masthead.nextElementSibling?.classList.contains("overview-split")).toBe(true);
+    // Three instruments, in reading order, inside the one frame.
+    const cells = Array.from(masthead.children).map((el) => el.className.split(" ")[0]);
+    expect(cells).toEqual(["champion-box", "snapshot", "overview-clock"]);
+    // The clock is a second mount of the rail's instrument under its own id,
+    // so the page never carries two #epoch-clock.
+    expect(masthead.querySelector("#overview-epoch-clock.epoch-clock")).toBeTruthy();
+    expect(document.querySelectorAll("#epoch-clock")).toHaveLength(0);
+    expect(masthead.querySelector("#overview-epoch-clock")?.textContent).toContain(
+      "Next payout in",
+    );
+    // The rail's copy folds away while this page is on at rail widths, so
+    // the reading appears once per screen; the phone top bar keeps its own.
+    const shellCss = readFileSync(join(HERE, "..", "styles", "shell.css"), "utf-8").replace(
+      /\s+/g,
+      " ",
+    );
+    expect(shellCss).toContain(
+      '@media (min-width: 961px) { .layout:has(.page.active[data-page="overview"]) .sidebar > .epoch-clock { display: none; } }',
+    );
+    expect(cssNorm).toContain(
+      "@media (max-width: 960px) { .overview-masthead > .overview-clock { display: none; } }",
+    );
+  });
+
+  it("lays the vitals ledger out as three ruled rows: population, scores, machine", async () => {
+    renderOverview();
+    await waitForBoard();
+    const lines = Array.from(document.querySelectorAll(".stat-ledger .ledger-line"));
+    expect(lines.map((line) => line.getAttribute("data-ledger"))).toEqual([
+      "population",
+      "population",
+      "population",
+      "scores",
+      "scores",
+      "scores",
+      "machine",
+      "machine",
+      "machine",
+    ]);
+    expect(lines.map((line) => line.querySelector("dd")?.id)).toEqual([
+      "h-miners",
+      "c-miners",
+      "h-agents",
+      "c-top",
+      "c-median",
+      "c-spread",
+      "h-validators",
+      "h-scores",
+      "h-last",
+    ]);
+    expect(cssNorm).toContain(
+      ".stat-ledger { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));",
+    );
+  });
+});
+
 // ── Row 3: test_overview_shows_the_full_board_without_a_disclosure ──
 // "Standings are never hidden behind a click" — ditto-platform#383 collapsed
 // the leaderboard table behind a <details>; that stays banned. The overview
@@ -615,6 +685,35 @@ describe("memory timeline gaps (row 6)", () => {
     expect(html).toContain("· not on v9");
     expect(html).toContain("not yet measured");
     expect(html).toContain("No reference harness has been run on v9");
+  });
+
+  it("labels a run of adjacent unmeasured contracts once, centred on the run", () => {
+    // Two neighbouring gap bands each narrower than the label used to draw
+    // the same words on top of themselves; one label per run instead.
+    const out = memoryTimelineHtml(
+      {
+        releases: releases.concat([
+          {
+            bench_version: 10,
+            released_at: "2026-07-10T00:00:00Z",
+            activated_at: null,
+            title: "Contract v10",
+          },
+        ]),
+        points: timeline.points,
+      },
+      {
+        width: 620,
+        phoneViewport: false,
+        rollout: { active_version: 9, desired_version: 10, status: "collecting" },
+        championHotkey: null,
+        fieldByVersion: {},
+        pendingByVersion: {},
+      },
+    );
+    if (out.kind !== "chart") throw new Error("expected a chart");
+    expect(out.html.match(/class="timeline-unmeasured"/g)).toHaveLength(1);
+    expect(out.html).toContain("no run on v9, v10");
   });
 
   it("marks the collecting rollout's band open with the rollout strip's vocabulary", () => {

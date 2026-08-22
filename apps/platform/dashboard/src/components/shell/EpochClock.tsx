@@ -36,7 +36,12 @@ function spokenLabel(countdown: EpochCountdown): string {
   return "Next payout in about " + minutes + " minute" + (minutes === 1 ? "" : "s") + ".";
 }
 
-export function EpochClock(props: { epoch: () => ChainEpoch | null | undefined }): JSX.Element {
+export function EpochClock(props: {
+  epoch: () => ChainEpoch | null | undefined;
+  /** DOM id; the rail owns the default, a second mount (the overview
+   * masthead) names its own so the page never carries two `#epoch-clock`. */
+  id?: string;
+}): JSX.Element {
   const [now, setNow] = createSignal(Date.now());
   onMount(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
@@ -58,7 +63,7 @@ export function EpochClock(props: { epoch: () => ChainEpoch | null | undefined }
   return (
     <section
       class="epoch-clock"
-      id="epoch-clock"
+      id={props.id ?? "epoch-clock"}
       classList={{ imminent: imminent(), projected: countdown()?.projected }}
       aria-label={countdown() ? spokenLabel(countdown() as EpochCountdown) : undefined}
       // Never announced per tick; `spokenLabel` carries it coarsely instead.

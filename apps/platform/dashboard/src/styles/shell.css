@@ -231,6 +231,15 @@ footer a:hover {
   box-shadow: 0 0 8px color-mix(in oklch, var(--warn) 60%, transparent);
   animation-duration: 1.2s;
 }
+/* The overview masthead carries this same instrument at full size — one
+   reading per screen — so the rail's copy steps aside while that page is on
+   and the rail is a rail. The phone top bar keeps its compact clock (it is
+   sticky; the masthead scrolls away) and the masthead's clock hides instead. */
+@media (min-width: 961px) {
+  .layout:has(.page.active[data-page="overview"]) .sidebar > .epoch-clock {
+    display: none;
+  }
+}
 @keyframes epoch-clock-breathe {
   0%,
   100% {
