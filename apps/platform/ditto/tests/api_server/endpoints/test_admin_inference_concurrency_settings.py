@@ -11,6 +11,9 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
 )
 
+from ditto.api_models.inference_concurrency_settings import (
+    DEFAULT_CHAT_REQUEST_BUDGET,
+)
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.inference_concurrency_settings import (
     InferenceConcurrencySettingsResolver,
@@ -120,7 +123,7 @@ class TestRead:
         # since this board grew a chat field, the raised request budget rather
         # than the 1024 that was exhausting legitimate agents.
         assert body["effective"]["settings"] == {
-            "chat_request_budget": 8192,
+            "chat_request_budget": DEFAULT_CHAT_REQUEST_BUDGET,
             "chat_token_budget": 25_000_000,
             "chat_per_ticket_concurrency": 16,
             "chat_per_validator_concurrency": 48,

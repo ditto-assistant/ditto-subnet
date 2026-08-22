@@ -47,7 +47,9 @@ class TestDefaults:
         assert MAX_CHAT_REQUEST_BUDGET == 32768
         InferenceConcurrencySettings(chat_request_budget=MAX_CHAT_REQUEST_BUDGET)
         with pytest.raises(ValidationError):
-            InferenceConcurrencySettings(chat_request_budget=MAX_CHAT_REQUEST_BUDGET + 1)
+            InferenceConcurrencySettings(
+                chat_request_budget=MAX_CHAT_REQUEST_BUDGET + 1
+            )
 
     def test_defaults_are_a_raise_not_the_old_serialised_values(self) -> None:
         settings = InferenceConcurrencySettings()
