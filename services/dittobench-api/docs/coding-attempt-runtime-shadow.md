@@ -65,8 +65,8 @@ retryable infrastructure without parsing error prose.
 
 This package is unwired. A later local gateway must connect it to the Python
 validator coordinator, a source-bound capability publisher, memory decoding,
-the harness lifecycle, ticket-scoped Luna relay, durable transcript/frozen
-outbox, and host sweeper. No production composition root imports it. It cannot
+the harness lifecycle, ticket-scoped Luna relay, the now-available but unwired
+durable evidence outbox, and a host sweeper. No production composition root imports it. It cannot
 claim jobs, start miners, submit scores, rank agents, set weights, or make coding
 contract v1 weight eligible.
 
