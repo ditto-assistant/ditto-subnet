@@ -313,7 +313,9 @@ result.
   checks can reduce it.
 - Each miner competes with its highest eligible score. A challenger dethrones
   the incumbent only after clearing the greater of a fixed 0.007 composite-point
-  hysteresis and the statistical error band. Uploading a new version that
+  hysteresis and the statistical error band. Token-efficiency is a same-quality
+  ranking tiebreak; it does not skip that gate, so a 0.001 official lead does
+  not take the crown. Uploading a new version that
   improves on your current best by less than that 0.007 gate keeps the
   incumbency clock you already earned; a later rival with a lower score cannot
   take the crown just because your newer tarball arrived after theirs. From

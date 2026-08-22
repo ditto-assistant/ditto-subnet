@@ -147,7 +147,9 @@ def _ceiling_capped_band(
     comparison_version = min(challenger.bench_version, champion.bench_version)
     if comparison_version < KOTH_BAND_DECAY_MIN_BENCH_VERSION:
         return band
-    headroom = _effective_score_ceiling(challenger) - champion_score
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
+    ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
+    headroom = ceiling - champion_score
     if headroom <= 0.0:
         return 0.0
     return min(band, KOTH_CEILING_HEADROOM_SHARE * headroom)
@@ -488,6 +490,16 @@ def _quality_primary_efficiency_active(entries: Iterable[KothEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
+def _dethrone_composite(entry: KothEntry, *, quality_primary: bool) -> float:
+    """Score the hysteresis comparison uses for one entry.
+
+    Quality-primary ledgers dethrone on authoritative quality so efficiency
+    remains an exact-quality ranking tiebreak. Legacy ledgers keep the
+    efficiency-adjusted composite as their continuous score.
+    """
+    return continual_composite(entry) if quality_primary else effective_composite(entry)
+
+
 def _ranked_entries(entries: Iterable[KothEntry]) -> list[KothEntry]:
     """Rank quality first and efficiency only inside an exact quality tier."""
     materialized = list(entries)
@@ -519,26 +531,23 @@ def project_koth(
     (``LedgerRow.crown_first_seen``). Feeding raw upload times in here instead
     reinstates the defect that motivated the distinction: a tied miner that
     resubmits re-anchors itself behind its rival and hands over the crown.
+
+    Protocol-21 efficiency ranks the tail quality-first and breaks exact
+    quality ties by efficiency. It does not skip this hysteresis loop. A
+    later 0.001 official lead is the raw leader, not the champion.
     """
     scored = [entry for entry in entries if entry.composite > 0.0]
     if not scored:
         return None
 
     ranked = _ranked_entries(scored)
-    if _quality_primary_efficiency_active(scored):
-        # Protocol 21 intentionally removes the continuous-score KOTH hold: an
-        # incumbent outside the highest authoritative-quality tier cannot keep
-        # the crown because it is cheaper. Efficiency chooses only inside the
-        # exact top-quality tier.
-        champion = ranked[0]
-    else:
-        ordered = sorted(scored, key=lambda entry: (entry.first_seen, entry.agent_id))
-        champion = ordered[0]
-        for challenger in ordered[1:]:
-            if _dethrone_decision(
-                challenger, champion, ceiling_band_clamp=ceiling_band_clamp
-            ).dethrones:
-                champion = challenger
+    ordered = sorted(scored, key=lambda entry: (entry.first_seen, entry.agent_id))
+    champion = ordered[0]
+    for challenger in ordered[1:]:
+        if _dethrone_decision(
+            challenger, champion, ceiling_band_clamp=ceiling_band_clamp
+        ).dethrones:
+            champion = challenger
 
     ranked_tail = [
         entry for entry in ranked if entry.miner_hotkey != champion.miner_hotkey
@@ -796,14 +805,20 @@ def _paired_statistic(
     shared = sorted(challenger_by_seed.keys() & champion_by_seed.keys())
     if len(shared) < 2:
         return None
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
+
+    def _seed_score(entry: KothEntry, quality: float) -> float:
+        if quality_primary:
+            return quality
+        return _efficiency_adjusted_composite(entry, quality)
+
     differences = [
-        _efficiency_adjusted_composite(challenger, challenger_by_seed[seed])
-        - _efficiency_adjusted_composite(champion, champion_by_seed[seed])
+        _seed_score(challenger, challenger_by_seed[seed])
+        - _seed_score(champion, champion_by_seed[seed])
         for seed in shared
     ]
     champion_reference = sum(
-        _efficiency_adjusted_composite(champion, champion_by_seed[seed])
-        for seed in shared
+        _seed_score(champion, champion_by_seed[seed]) for seed in shared
     ) / len(shared)
     mean_difference = sum(differences) / len(differences)
     variance = sum(
@@ -837,7 +852,8 @@ def _dethrone_decision(
     *,
     ceiling_band_clamp: bool = False,
 ) -> DethroneDecision:
-    score_ceiling = _effective_score_ceiling(challenger)
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
+    score_ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
     paired = _paired_statistic(challenger, champion)
     if paired is not None:
         margin_lead = KOTH_MARGIN
@@ -870,8 +886,10 @@ def _dethrone_decision(
             seed_differences=paired.differences,
         )
 
-    challenger_composite = _effective_composite(challenger)
-    champion_composite = _effective_composite(champion)
+    challenger_composite = _dethrone_composite(
+        challenger, quality_primary=quality_primary
+    )
+    champion_composite = _dethrone_composite(champion, quality_primary=quality_primary)
     lead = challenger_composite - champion_composite
     margin_lead = KOTH_MARGIN
     challenger_stderr = _stderr(challenger)
@@ -879,8 +897,9 @@ def _dethrone_decision(
     statistical_lead: float | None = None
     method: Literal["flat", "unpaired", "paired"] = "flat"
     if challenger_stderr is not None and champion_stderr is not None:
-        challenger_stderr *= _efficiency_stderr_scale(challenger)
-        champion_stderr *= _efficiency_stderr_scale(champion)
+        if not quality_primary:
+            challenger_stderr *= _efficiency_stderr_scale(challenger)
+            champion_stderr *= _efficiency_stderr_scale(champion)
         statistical_lead = KOTH_DETHRONE_Z * math.sqrt(
             challenger_stderr**2 + champion_stderr**2
         )

@@ -207,7 +207,9 @@ def _ceiling_capped_band(
     comparison_version = min(_entry_version(challenger), _entry_version(champion))
     if comparison_version < KOTH_BAND_DECAY_MIN_BENCH_VERSION:
         return band
-    headroom = _effective_score_ceiling(challenger) - champion_score
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
+    ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
+    headroom = ceiling - champion_score
     if headroom <= 0.0:
         return 0.0
     return min(band, KOTH_CEILING_HEADROOM_SHARE * headroom)
@@ -780,6 +782,16 @@ def _quality_primary_efficiency_active(entries: Sequence[LedgerEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
+def _dethrone_composite(entry: LedgerEntry, *, quality_primary: bool) -> float:
+    """Score the hysteresis comparison uses for one entry.
+
+    Quality-primary ledgers dethrone on authoritative quality so efficiency
+    remains an exact-quality ranking tiebreak. Legacy ledgers keep the
+    efficiency-adjusted composite as their continuous score.
+    """
+    return _quality_composite(entry) if quality_primary else _effective_composite(entry)
+
+
 def _ranking_key(
     entry: LedgerEntry, *, quality_primary: bool
 ) -> tuple[float, float, object, object]:
@@ -1048,16 +1060,20 @@ def _paired_dethrone(
     common = sorted(set(chall_map) & set(champ_map))
     if len(common) < 2:
         return None
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
+
+    def _seed_score(entry: LedgerEntry, quality: float) -> float:
+        if quality_primary:
+            return quality
+        return _efficiency_adjusted_composite(entry, quality)
+
     diffs = [
-        _efficiency_adjusted_composite(challenger, chall_map[s])
-        - _efficiency_adjusted_composite(champion, champ_map[s])
+        _seed_score(challenger, chall_map[s]) - _seed_score(champion, champ_map[s])
         for s in common
     ]
     n = len(diffs)
     mean_diff = sum(diffs) / n
-    champ_ref = (
-        sum(_efficiency_adjusted_composite(champion, champ_map[s]) for s in common) / n
-    )
+    champ_ref = sum(_seed_score(champion, champ_map[s]) for s in common) / n
     var = sum((d - mean_diff) ** 2 for d in diffs) / (n - 1)
     se_diff = math.sqrt(var / n)
     return mean_diff, champ_ref, se_diff
@@ -1094,7 +1110,11 @@ def _beats(
 
     Either band is finally capped by :func:`_ceiling_capped_band` when the
     platform has activated ``ceiling_band_clamp`` for the whole fleet, so a
-    near-perfect incumbent cannot demand more than the challenger can win."""
+    near-perfect incumbent cannot demand more than the challenger can win.
+
+    Protocol-21 quality-primary compares authoritative quality, not the
+    efficiency-adjusted projection, so a 0.001 official lead cannot skip
+    hysteresis merely because a factor is present."""
     observed_score, required_score = _dethrone_scores(
         challenger,
         champion,
@@ -1114,6 +1134,7 @@ def _dethrone_scores(
     ceiling_band_clamp: bool = False,
 ) -> tuple[float, float]:
     """Return the observed and strictly-exceeded required challenger scores."""
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
     paired = _paired_dethrone(challenger, champion, dethrone_z)
     if paired is not None:
         mean_diff, champ_ref, se_diff = paired
@@ -1124,15 +1145,16 @@ def _dethrone_scores(
         )
         return champ_ref + mean_diff, champ_ref + band
 
-    chall = _effective_composite(challenger)
-    champ = _effective_composite(champion)
+    chall = _dethrone_composite(challenger, quality_primary=quality_primary)
+    champ = _dethrone_composite(champion, quality_primary=quality_primary)
     band = margin
     if dethrone_z > 0.0:
         se_c = _entry_stderr(challenger)
         se_champ = _entry_stderr(champion)
         if se_c is not None and se_champ is not None:
-            se_c *= _efficiency_stderr_scale(challenger)
-            se_champ *= _efficiency_stderr_scale(champion)
+            if not quality_primary:
+                se_c *= _efficiency_stderr_scale(challenger)
+                se_champ *= _efficiency_stderr_scale(champion)
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
@@ -1162,10 +1184,9 @@ def _score_ceiling_deadlocked(
         dethrone_z,
         ceiling_band_clamp=ceiling_band_clamp,
     )
-    return (
-        observed_score <= required_score
-        and required_score >= _effective_score_ceiling(challenger)
-    )
+    quality_primary = _quality_primary_efficiency_active((challenger, champion))
+    ceiling = 1.0 if quality_primary else _effective_score_ceiling(challenger)
+    return observed_score <= required_score and required_score >= ceiling
 
 
 def _champion(
@@ -1185,12 +1206,12 @@ def _champion(
     folds the ledger exactly as served, and resolving an owner's family is the
     platform's job. It matters only in that a tied miner keeps its crown across
     a resubmission, which is the whole reason the anchor is served that way.
+
+    Protocol-21 efficiency does not skip this loop. Ranking stays quality-first
+    with efficiency as an exact-quality tiebreak; the crown still requires the
+    challenger to clear the indifference band on authoritative quality. A
+    0.001 official lead is not a dethrone.
     """
-    if _quality_primary_efficiency_active(entries):
-        # Protocol 21 makes authoritative quality the hard outer order.
-        # Efficiency can choose only among entries with exactly equal quality,
-        # so a cheaper lower-quality incumbent cannot retain the crown.
-        return min(entries, key=lambda e: _ranking_key(e, quality_primary=True))
     ordered = sorted(entries, key=lambda e: (e.first_seen, e.agent_id))
     champ = ordered[0]
     for e in ordered[1:]:
@@ -1284,13 +1305,18 @@ def _unpaired_band(
             # scale as the entry's quality.  The contested-set predicate must
             # compare the same transformed distributions as ``_beats``;
             # otherwise a curve-v3 penalty/bonus can make scheduling disagree
-            # with the actual dethrone decision.
-            se_c *= _efficiency_stderr_scale(challenger)
-            se_champ *= _efficiency_stderr_scale(champion)
+            # with the actual dethrone decision. Quality-primary dethrones on
+            # quality, so leave stderr unscaled there.
+            if not _quality_primary_efficiency_active((challenger, champion)):
+                se_c *= _efficiency_stderr_scale(challenger)
+                se_champ *= _efficiency_stderr_scale(champion)
             stat_band = dethrone_z * math.sqrt(se_c * se_c + se_champ * se_champ)
             if stat_band > band:
                 band = stat_band
-    champ = _effective_composite(champion)
+    champ = _dethrone_composite(
+        champion,
+        quality_primary=_quality_primary_efficiency_active((challenger, champion)),
+    )
     return _ceiling_capped_band(
         band * _dethrone_band_scale(challenger, champion, champ),
         challenger,
@@ -1377,7 +1403,16 @@ def contested_confirmation_set(
         for e in sorted(scored, key=lambda e: (e.first_seen, e.agent_id))
         if e.agent_id != champion.agent_id
         and _entry_version(e) == current_version
-        and abs(_effective_composite(e) - _effective_composite(champion))
+        and abs(
+            _dethrone_composite(
+                e,
+                quality_primary=_quality_primary_efficiency_active((e, champion)),
+            )
+            - _dethrone_composite(
+                champion,
+                quality_primary=_quality_primary_efficiency_active((e, champion)),
+            )
+        )
         <= _unpaired_band(
             e, champion, margin, dethrone_z, ceiling_band_clamp=ceiling_band_clamp
         )

@@ -141,7 +141,7 @@ def test_bounded_efficiency_factor_reaches_ceiling_only_for_perfect_quality() ->
 
 
 def test_live_v9_regression_keeps_quality_primary_then_uses_efficiency() -> None:
-    """A cheaper lower-quality incumbent cannot hold the curve-v3 crown."""
+    """Efficiency ranks the tail; hysteresis still holds a sub-margin crown."""
     white_bolt = _entry(
         4,
         0.996348,
@@ -183,7 +183,9 @@ def test_live_v9_regression_keeps_quality_primary_then_uses_efficiency() -> None
     assert effective_composite(banblackycat_v7) < 1.0
     assert projection is not None
     assert projection.raw_leader == banblackycat_v7
-    assert projection.champion == banblackycat_v7
+    assert projection.champion == white_bolt
+    assert projection.raw_leader_decision is not None
+    assert projection.raw_leader_decision.dethrones is False
 
 
 def test_bounded_factor_supersedes_legacy_bonus() -> None:
@@ -252,8 +254,11 @@ def test_curve_v4_does_not_retie_at_the_old_cap() -> None:
     projection = project_koth([dear, cheap])
 
     assert projection is not None
-    assert projection.champion == cheap
+    assert projection.champion == dear
+    assert projection.raw_leader == cheap
     assert effective_composite(cheap) > effective_composite(dear)
+    assert projection.raw_leader_decision is not None
+    assert projection.raw_leader_decision.dethrones is False
 
 
 def test_curve_v4_cannot_cross_a_higher_quality_tier() -> None:
@@ -373,6 +378,38 @@ def test_older_incumbent_survives_a_sub_margin_raw_leader() -> None:
     assert projection.raw_leader_decision.required_lead == pytest.approx(0.007)
     assert projection.raw_leader_decision.method == "flat"
     assert projection.raw_leader_decision.dethrones is False
+
+
+def test_efficiency_does_not_skip_hysteresis_on_a_0_001_quality_lead() -> None:
+    """2026-08-22 unione vs aceron: 0.0008 is not a dethrone.
+
+    Efficiency factors on the ledger used to skip the first-seen loop entirely,
+    so a later 0.001 official lead took 65%. Factors are a same-quality
+    ranking tiebreak; they do not replace the 0.007 gate.
+    """
+    aceron = _entry(
+        2,
+        0.903484,
+        minutes=0,
+        bench_version=11,
+        efficiency_factor=1.0,
+    )
+    unione = _entry(
+        1,
+        0.904288,
+        minutes=180,
+        bench_version=11,
+        efficiency_factor=1.0,
+    )
+
+    projection = project_koth([unione, aceron])
+
+    assert projection is not None
+    assert projection.champion == aceron
+    assert projection.raw_leader == unione
+    assert projection.raw_leader_decision is not None
+    assert projection.raw_leader_decision.dethrones is False
+    assert projection.raw_leader_decision.challenger_lead == pytest.approx(0.000804)
 
 
 def test_resetting_the_clock_on_a_sub_margin_gain_hands_the_rival_the_crown() -> None:
@@ -556,13 +593,11 @@ def test_unpaired_dethrone_uses_headroom_slope_for_upside_stderr() -> None:
     )
 
     decision = _dethrone_decision(challenger, incumbent)
-    expected_statistical_lead = 1.64 * math.sqrt(2 * (0.04 * 0.9) ** 2)
-    incorrectly_factor_scaled_lead = 1.64 * math.sqrt(2 * (0.04 * 1.1) ** 2)
+    expected_statistical_lead = 1.64 * math.sqrt(2 * (0.04) ** 2)
 
     assert decision.method == "unpaired"
     assert decision.statistical_lead == pytest.approx(expected_statistical_lead)
-    assert expected_statistical_lead < decision.challenger_lead
-    assert decision.challenger_lead < incorrectly_factor_scaled_lead
+    assert decision.challenger_lead == pytest.approx(0.1)
     assert decision.dethrones
 
 
@@ -670,7 +705,7 @@ def test_bounded_factor_scales_each_paired_seeds_headroom_before_comparison() ->
     statistic = _paired_statistic(challenger, incumbent)
 
     assert statistic is not None
-    assert statistic.champion_reference == pytest.approx((0.991 + 0.955 + 0.91) / 3)
+    assert statistic.champion_reference == pytest.approx((0.99 + 0.95 + 0.90) / 3)
     assert statistic.mean_difference == pytest.approx(
         1.0 - statistic.champion_reference
     )
