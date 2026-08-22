@@ -253,6 +253,12 @@ func validateFrozenSubmission(submission FrozenSubmission, limits Limits) error 
 	return nil
 }
 
+// ValidateFrozenSubmission checks canonical patch identity and bounds without
+// materializing repository or grader bytes.
+func ValidateFrozenSubmission(submission FrozenSubmission, limits Limits) error {
+	return validateFrozenSubmission(submission, limits)
+}
+
 func applyFrozenChange(
 	ctx context.Context,
 	root string,
