@@ -185,6 +185,8 @@ def dominant_agent_failure_detail(
     *, scores: list[Score], tickets: list[ValidatorTicket]
 ) -> str | None:
     """The single agent-attributable code when every remaining slot agrees."""
+    if not is_agent_attributable_exhaustion(scores=scores, tickets=tickets):
+        return None
     remaining = remaining_exhausted_tickets(scores=scores, tickets=tickets)
     details = {current_failure_detail(ticket) for ticket in remaining}
     if len(details) != 1:

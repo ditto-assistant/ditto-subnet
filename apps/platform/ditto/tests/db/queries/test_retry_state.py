@@ -1,11 +1,15 @@
 """Fail-closed agent-attributable exhaustion classification."""
 
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
+from uuid import UUID
 
+from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketStatus
+from ditto.db.models import Agent, ValidatorTicket
 from ditto.db.queries.retry_state import (
     AGENT_ATTRIBUTABLE_WITHDRAW_REASON,
+    dominant_agent_failure_detail,
     is_agent_attributable_exhaustion,
     recommended_retry_action,
     recovery_gate,
@@ -15,10 +19,12 @@ from ditto.db.queries.tickets import MAX_ATTEMPTS_PER_VERSION
 _NOW = datetime(2026, 8, 21, 15, tzinfo=UTC)
 _ISSUED = _NOW - timedelta(hours=2)
 _FAILED = _NOW - timedelta(hours=1)
+_AGENT_ID = UUID("90cb5697-cbc1-40f4-a27e-439a7986a054")
 
 
-def _ticket(**overrides: object) -> SimpleNamespace:
+def _ticket(**overrides: object) -> ValidatorTicket:
     values: dict[str, object] = {
+        "agent_id": _AGENT_ID,
         "status": TicketStatus.EXPIRED,
         "validator_hotkey": "validator-0",
         "attempt_count": MAX_ATTEMPTS_PER_VERSION,
@@ -33,14 +39,11 @@ def _ticket(**overrides: object) -> SimpleNamespace:
         "bench_version": 11,
     }
     values.update(overrides)
-    return SimpleNamespace(**values)
+    return ValidatorTicket(**values)
 
 
-def _agent() -> SimpleNamespace:
-    from ditto.api_models.agent_status import AgentStatus
-    from ditto.api_models.screener import SCREENING_POLICY_VERSION
-
-    return SimpleNamespace(
+def _agent() -> Agent:
+    return Agent(
         status=AgentStatus.EVALUATING,
         screening_policy_version=SCREENING_POLICY_VERSION,
     )
@@ -115,6 +118,20 @@ def test_stale_failure_detail_does_not_classify_the_current_lease() -> None:
         for index in range(3)
     ]
     assert is_agent_attributable_exhaustion(scores=[], tickets=tickets) is False
+
+
+def test_dominant_code_requires_complete_attributable_exhaustion() -> None:
+    tickets = [
+        _ticket(validator_hotkey="validator-0"),
+        _ticket(validator_hotkey="validator-1"),
+        _ticket(
+            validator_hotkey="validator-2",
+            status=TicketStatus.ISSUED,
+            failure_detail=None,
+            failed_at=None,
+        ),
+    ]
+    assert dominant_agent_failure_detail(scores=[], tickets=tickets) is None
 
 
 def test_mixed_remaining_set_stays_retryable() -> None:

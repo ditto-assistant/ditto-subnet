@@ -25,6 +25,8 @@ const first = {
   automatic_retry_available: false,
   recovery_allowed: true,
   blocking_reason: 'manual retry evidence required',
+  recommended_action: 'retry' as const,
+  dominant_failure_code: null,
   earliest_retry_after: null,
   attempts_used: 12,
   exhausted_validator_count: 2,
@@ -50,7 +52,9 @@ const blocked = {
   agent_id: 'c4cfa54b-98ec-49cf-bff4-47ea7154ab03',
   agent_name: 'blocked-agent',
   recovery_allowed: false,
-  blocking_reason: 'submission left the scoreable queue',
+  blocking_reason: 'exhausted on agent-attributable failures; withdraw rather than retry',
+  recommended_action: 'withdraw' as const,
+  dominant_failure_code: 'inference_request_rejected',
   snapshot: 'ef'.repeat(32),
 }
 
@@ -90,6 +94,7 @@ describe('StuckSubmissionFleetPanel', () => {
     expect(screen.getByText('blocked-agent v2')).toBeTruthy()
     expect(screen.getAllByText('12')).toHaveLength(2)
     expect(screen.getByText('18')).toBeTruthy()
+    expect(screen.getByText('withdraw · inference_request_rejected')).toBeTruthy()
     expect((screen.getByLabelText('Select blocked-agent') as HTMLInputElement).disabled).toBe(true)
   })
 
