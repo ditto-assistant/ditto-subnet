@@ -44,7 +44,7 @@ from ditto_screening_protocol import (
     SourceReviewFinding,
 )
 
-_PROMPT_REVISION = "source-review-v18"
+_PROMPT_REVISION = "source-review-v19"
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
@@ -764,8 +764,9 @@ serve/run entrypoint, and apply the same two-location causal bar before citing.
   self-documented mirroring. Comments/labels alone are not a verdict; connect them
   to a reachable deterministic answer path before citing benchmark_emulation.
 - required-money-formatter: required_money plus a records-free "Return ANSWER:
-  {money} exactly" / format_round closer copies tool money into the graded slot.
-  An honest CompactToolModel closer that keeps raw records and an advisory
+  {money} exactly" / "Copy that exact money value" closer copies tool money into
+  the graded slot. A helper named format_round is not this tell by itself. An
+  honest CompactToolModel closer that keeps raw records and an advisory
   calculator result is not this tell.
 - ledger-event-kind-compiler: LedgerEventKind plus narrative_ledger_issues /
   correction_only / event_only is a closed event-kind validator, not generic

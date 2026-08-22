@@ -1246,8 +1246,7 @@ _EMULATION_FINGERPRINTS = (
                 re.compile(
                     r"\bReturn exactly one\b.{0,40}\bANSWER\b"
                     r"|Return ANSWER:.{0,80}exactly"
-                    r"|\bCopy that exact money value\b"
-                    r"|\bformat_round\b",
+                    r"|\bCopy that exact money value\b",
                     re.IGNORECASE,
                 ),
             ),

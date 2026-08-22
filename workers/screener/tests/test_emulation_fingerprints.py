@@ -634,6 +634,12 @@ fn format_money(required_money: i64) -> String {
 }
 """
 
+_RUST_HONEST_FORMAT_ROUND_HELPER = """\
+fn format_money(required_money: i64) -> String {
+    format_round(required_money)
+}
+"""
+
 _RUST_LEDGER_EVENT_KIND = """\
 enum LedgerEventKind {
     Opening,
@@ -720,6 +726,16 @@ def test_required_money_formatter_trips_on_hogwarts_closer() -> None:
         )
     )
     assert "required-money-formatter" in kinds
+
+
+def test_required_money_plus_format_round_is_not_the_formatter_tell() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/money.rs", _RUST_HONEST_FORMAT_ROUND_HELPER)]
+        )
+    )
+    assert "required-money-formatter" not in kinds
+    assert kinds.isdisjoint(_NEW_FAMILY_COMPILER_KINDS)
 
 
 def test_ledger_event_kind_compiler_trips_on_narrative_issues() -> None:
