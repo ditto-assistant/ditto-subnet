@@ -352,7 +352,10 @@ func (certifier *Certifier) collectInferenceEvidence(request Request) (*codingco
 		CertificationID: request.CertificationID, AgentArtifactSHA256: request.AgentArtifactSHA256,
 		HarnessInstanceID: request.HarnessAttestation.HarnessInstanceID,
 		TicketID:          request.Seed.TicketID, CaseID: request.Seed.CaseID,
+		ProfileCapabilityID:  request.Seed.ProfileCapabilityID,
 		InferenceGrantSHA256: request.InferenceGrantSHA256,
+		Budgets:              request.Budgets,
+		RequestBudget:        codingcontract.EffectiveInferenceRequestBudget(request.Budgets.WorkspaceToolCalls),
 	}
 	evidence, err := certifier.inferenceEvidence.Evidence(ctx, binding)
 	if err != nil {
@@ -363,7 +366,10 @@ func (certifier *Certifier) collectInferenceEvidence(request Request) (*codingco
 	}
 	if err := evidence.Validate(); err != nil || evidence.InferenceGrantSHA256 != request.InferenceGrantSHA256 ||
 		evidence.Model != request.SolverModel || evidence.Provider != request.SolverProvider ||
-		evidence.ProviderRouteProfile != request.ProviderRouteProfile {
+		evidence.ProviderRouteProfile != request.ProviderRouteProfile ||
+		evidence.PromptTokens > request.Budgets.ModelInputTokens ||
+		evidence.CompletionTokens > request.Budgets.ModelOutputTokens ||
+		evidence.Requests > uint64(codingcontract.EffectiveInferenceRequestBudget(request.Budgets.WorkspaceToolCalls)) {
 		return nil, errors.New("coding inference evidence violates the canary authority")
 	}
 	switch evidence.UsageStatus {

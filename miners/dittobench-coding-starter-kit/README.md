@@ -78,6 +78,14 @@ The request's `inference_base_url` is used with a placeholder compatibility
 bearer. The Platform relay remains responsible for the real provider key and
 route enforcement.
 
+Coding contract v1 also pins the first public system prompt and the complete
+ordered model-facing workspace-tool schemas. The miner-safe
+`coding_inference_miner_v1.json` vector proves this reference harness emits the
+same two-turn Chat Completions shape. Miners may improve memory retrieval,
+planning, context management, and loop behavior, but a changed first prompt or
+tool contract requires a separately versioned benchmark policy rather than a
+silent per-miner provider surface.
+
 Offline scripted practice requires an explicit gate:
 
 ```bash
@@ -117,11 +125,10 @@ direct-OpenRouter servers bind only to loopback; only the credential-free
 ticket-broker mode binds the container interface. Inference and workspace HTTP
 clients refuse redirects.
 
-If a provider nevertheless returns multiple tool calls, the adapter preserves
-their order in a bounded 16-call queue and releases exactly one call per agent
-turn. It does not make another provider request until the queue is empty, and
-usage/cost metadata is attached only to the first returned call. Workspace
-operations therefore remain serial and validator-observed.
+If a provider nevertheless returns multiple tool calls, the adapter fails the
+response closed. It never rewrites one batched provider decision into several
+apparent model turns, so every workspace mutation follows a fresh, observed
+model decision and workspace operations remain serial.
 
 Live workspace observations may use the runner's full 32 KiB read bound.
 Context compaction separately evicts older complete tool-call/result pairs.

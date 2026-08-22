@@ -18,6 +18,7 @@ on:
       - packages/dittobench-coding-contract/testdata/coding_authoring_freeze_v1.json
       - packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json
       - packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json
+      - packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json
       # The static job checks the generated confirmation release assets
       # against this generator's constants, so a generator-only change must
       # reach that job.

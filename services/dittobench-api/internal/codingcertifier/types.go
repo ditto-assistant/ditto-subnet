@@ -23,7 +23,7 @@ import (
 
 const (
 	CertificationSchema      = "dittobench-coding-capability-certification-v1"
-	CertificationSolverModel = "openai/gpt-5.6-luna"
+	CertificationSolverModel = codingcontract.InferenceSolverModel
 	minimumTTL               = time.Minute
 	maximumTTL               = 24 * time.Hour
 )
@@ -301,7 +301,10 @@ type InferenceBinding struct {
 	HarnessInstanceID    string
 	TicketID             string
 	CaseID               string
+	ProfileCapabilityID  string
 	InferenceGrantSHA256 string
+	Budgets              codingcontract.Budgets
+	RequestBudget        uint32
 }
 
 // InferenceEvidenceSource finalizes validator-observed model evidence after

@@ -18,7 +18,7 @@ use crate::protocol::{LUNA_MODEL, LUNA_REASONING_EFFORT};
 const OPENROUTER_BASE_URL: &str = "https://openrouter.ai/api/v1";
 const OPENROUTER_PROVIDER_ROUTE: &str = "azure/eu";
 const MAX_MODEL_RESPONSE_BYTES: usize = 8 * 1024 * 1024;
-const MAX_TOOL_CALLS_PER_RESPONSE: usize = 16;
+const MAX_TOOL_CALLS_PER_RESPONSE: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EndpointKind {
@@ -34,7 +34,6 @@ pub struct LunaChatModel {
     bearer: String,
     kind: EndpointKind,
     max_completion_tokens: u64,
-    pending_tool_calls: Mutex<VecDeque<ToolCall>>,
 }
 
 impl fmt::Debug for LunaChatModel {
@@ -127,7 +126,6 @@ impl LunaChatModel {
             bearer,
             kind,
             max_completion_tokens: max_completion_tokens.clamp(1, 32_768),
-            pending_tool_calls: Mutex::new(VecDeque::new()),
         })
     }
 
@@ -250,12 +248,6 @@ impl Model for LunaChatModel {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
     ) -> ditto_harness::Result<ChatChunk> {
-        if let Some(tool_call) = self.pop_pending_tool_call()? {
-            return Ok(ChatChunk {
-                tool_call: Some(tool_call),
-                ..ChatChunk::default()
-            });
-        }
         let body = self.request_body(messages, tools)?;
         let response = self
             .client
@@ -312,39 +304,12 @@ impl Model for LunaChatModel {
         }
         let mut tool_calls = parse_tool_calls(choice.message.tool_calls)?;
         let tool_call = tool_calls.pop_front();
-        self.enqueue_pending_tool_calls(tool_calls)?;
         Ok(ChatChunk {
             text: choice.message.content.unwrap_or_default(),
             tool_call,
             cost: Some(cost),
             metadata: Some(metadata),
         })
-    }
-}
-
-impl LunaChatModel {
-    fn pop_pending_tool_call(&self) -> Result<Option<ToolCall>, Error> {
-        self.pending_tool_calls
-            .lock()
-            .map_err(|_| Error::Model("pending tool-call queue lock poisoned".to_string()))
-            .map(|mut calls| calls.pop_front())
-    }
-
-    fn enqueue_pending_tool_calls(&self, calls: VecDeque<ToolCall>) -> Result<(), Error> {
-        if calls.is_empty() {
-            return Ok(());
-        }
-        let mut pending = self
-            .pending_tool_calls
-            .lock()
-            .map_err(|_| Error::Model("pending tool-call queue lock poisoned".to_string()))?;
-        if !pending.is_empty() || calls.len() >= MAX_TOOL_CALLS_PER_RESPONSE {
-            return Err(Error::Model(
-                "pending tool-call queue violated its serial bound".to_string(),
-            ));
-        }
-        pending.extend(calls);
-        Ok(())
     }
 }
 
@@ -613,6 +578,9 @@ pub fn shared_script(chunks: Vec<ChatChunk>) -> Arc<dyn Model> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, HashMap};
+    use std::fs;
+    use std::path::Path;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use super::*;
@@ -620,7 +588,178 @@ mod tests {
     use axum::http::{header, StatusCode};
     use axum::routing::post;
     use axum::{Json, Router};
-    use ditto_harness::Content;
+    use ditto_harness::{Content, ContentType, ToolCallResponse};
+    use serde::Deserialize;
+    use sha2::{Digest, Sha256};
+
+    use crate::agent::CODING_SYSTEM_PROMPT;
+    use crate::workspace_client::tool_definitions;
+
+    const MINER_INFERENCE_VECTOR: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../packages/dittobench-coding-contract/testdata/coding_inference_miner_v1.json"
+    ));
+
+    #[derive(Debug, Deserialize)]
+    struct MinerInferenceVector {
+        schema: String,
+        coding_contract_version: u32,
+        weight_eligible: bool,
+        system_prompt: Value,
+        tool_schema: Value,
+        turns: Vec<MinerInferenceTurn>,
+        expected: MinerInferenceExpected,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct MinerInferenceTurn {
+        sequence: u32,
+        messages: Vec<Value>,
+        max_completion_tokens: u64,
+        response: Value,
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct MinerInferenceExpected {
+        #[serde(rename = "prompt_sha256")]
+        prompt_digest: String,
+        #[serde(rename = "tool_schema_sha256")]
+        tool_schema_digest: String,
+        #[serde(rename = "request_sha256")]
+        request_digests: Vec<String>,
+        #[serde(rename = "response_sha256")]
+        response_digests: Vec<String>,
+    }
+
+    fn miner_inference_vector() -> MinerInferenceVector {
+        serde_json::from_str(MINER_INFERENCE_VECTOR).expect("miner inference vector is valid")
+    }
+
+    fn canonicalize_vector(value: Value) -> Value {
+        match value {
+            Value::Object(object) => Value::Object(
+                object
+                    .into_iter()
+                    .map(|(key, value)| (key, canonicalize_vector(value)))
+                    .collect::<BTreeMap<_, _>>()
+                    .into_iter()
+                    .collect(),
+            ),
+            Value::Array(values) => {
+                Value::Array(values.into_iter().map(canonicalize_vector).collect())
+            }
+            other => other,
+        }
+    }
+
+    fn vector_digest(value: &Value) -> String {
+        let serialized = serde_json::to_string(&canonicalize_vector(value.clone()))
+            .expect("vector projection serializes");
+        let mut bytes = serialized
+            .replace('\u{2028}', "\\u2028")
+            .replace('\u{2029}', "\\u2029")
+            .into_bytes();
+        bytes.push(b'\n');
+        let digest = Sha256::digest(bytes);
+        let mut output = String::with_capacity(64);
+        for byte in digest {
+            use std::fmt::Write as _;
+            let _ = write!(output, "{byte:02x}");
+        }
+        output
+    }
+
+    fn vector_messages(values: &[Value]) -> Vec<ChatMessage> {
+        let mut call_names = HashMap::new();
+        for value in values {
+            let Some(calls) = value.get("tool_calls").and_then(Value::as_array) else {
+                continue;
+            };
+            for call in calls {
+                let id = call["id"].as_str().expect("tool call id");
+                let name = call["function"]["name"].as_str().expect("tool call name");
+                call_names.insert(id.to_string(), name.to_string());
+            }
+        }
+
+        values
+            .iter()
+            .map(|value| {
+                let role = value["role"].as_str().expect("message role").to_string();
+                let content = value
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(|text| vec![Content::text(text)])
+                    .unwrap_or_default();
+                let tool_calls = value
+                    .get("tool_calls")
+                    .and_then(Value::as_array)
+                    .map(|calls| {
+                        calls
+                            .iter()
+                            .map(|call| ToolCall {
+                                id: call["id"].as_str().expect("tool call id").to_string(),
+                                name: call["function"]["name"]
+                                    .as_str()
+                                    .expect("tool call name")
+                                    .to_string(),
+                                args: serde_json::from_str(
+                                    call["function"]["arguments"]
+                                        .as_str()
+                                        .expect("tool call arguments"),
+                                )
+                                .expect("tool call arguments are JSON"),
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let tool_call_id = value
+                    .get("tool_call_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string();
+                let content = if role == "tool" {
+                    let output: Value = serde_json::from_str(
+                        value["content"].as_str().expect("tool result content"),
+                    )
+                    .expect("tool result content is JSON");
+                    vec![Content {
+                        content_type: Some(ContentType::ToolResult),
+                        tool_call_response: Some(ToolCallResponse {
+                            id: tool_call_id.clone(),
+                            name: call_names
+                                .get(&tool_call_id)
+                                .expect("tool result references a prior call")
+                                .clone(),
+                            output,
+                            error: String::new(),
+                        }),
+                        ..Content::default()
+                    }]
+                } else {
+                    content
+                };
+                ChatMessage {
+                    role,
+                    content,
+                    tool_calls,
+                    tool_call_id,
+                }
+            })
+            .collect()
+    }
+
+    fn expected_ticket_request(vector: &MinerInferenceVector, turn: &MinerInferenceTurn) -> Value {
+        json!({
+            "model": LUNA_MODEL,
+            "messages": turn.messages,
+            "tools": vector.tool_schema["tools"],
+            "tool_choice": "auto",
+            "reasoning": {"effort": LUNA_REASONING_EFFORT},
+            "max_completion_tokens": turn.max_completion_tokens,
+            "parallel_tool_calls": false
+        })
+    }
 
     #[derive(Clone)]
     struct CompletionState {
@@ -661,6 +800,200 @@ mod tests {
         let model = LunaChatModel::direct_openrouter_for_test(&format!("http://{address}/v1"), 100)
             .unwrap();
         (model, request, requests, server)
+    }
+
+    #[derive(Clone)]
+    struct VectorCompletionState {
+        responses: Arc<Mutex<VecDeque<Value>>>,
+        requests: Arc<Mutex<Vec<Value>>>,
+    }
+
+    async fn vector_completion(
+        State(state): State<VectorCompletionState>,
+        Json(request): Json<Value>,
+    ) -> Json<Value> {
+        state.requests.lock().unwrap().push(request);
+        Json(
+            state
+                .responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("vector response is available"),
+        )
+    }
+
+    async fn ticket_vector_mock(
+        responses: Vec<Value>,
+        max_completion_tokens: u64,
+    ) -> (
+        LunaChatModel,
+        Arc<Mutex<Vec<Value>>>,
+        tokio::task::JoinHandle<()>,
+    ) {
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let app = Router::new()
+            .route("/v1/chat/completions", post(vector_completion))
+            .with_state(VectorCompletionState {
+                responses: Arc::new(Mutex::new(responses.into())),
+                requests: Arc::clone(&requests),
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let model =
+            LunaChatModel::ticket_broker(&format!("http://{address}/v1"), max_completion_tokens)
+                .unwrap();
+        (model, requests, server)
+    }
+
+    #[test]
+    fn shared_miner_vector_matches_system_tools_and_ticket_requests() {
+        let vector = miner_inference_vector();
+        assert_eq!(vector.schema, "dittobench-coding-inference-miner-vector-v1");
+        assert_eq!(vector.coding_contract_version, 1);
+        assert!(!vector.weight_eligible);
+        assert_eq!(
+            vector.system_prompt,
+            json!({
+                "schema": "dittobench-coding-system-prompt-v1",
+                "content": CODING_SYSTEM_PROMPT
+            })
+        );
+        assert_eq!(
+            vector_digest(&vector.system_prompt),
+            vector.expected.prompt_digest
+        );
+
+        let tools = tool_definitions();
+        let max_completion_tokens = vector.turns[0].max_completion_tokens;
+        let model =
+            LunaChatModel::ticket_broker("http://127.0.0.1:1/v1", max_completion_tokens).unwrap();
+        let mut rebuilt = Vec::new();
+        for (index, turn) in vector.turns.iter().enumerate() {
+            assert_eq!(turn.sequence as usize, index + 1);
+            assert_eq!(turn.max_completion_tokens, max_completion_tokens);
+            let request = model
+                .request_body(&vector_messages(&turn.messages), &tools)
+                .unwrap();
+            assert_eq!(request, expected_ticket_request(&vector, turn));
+            assert_eq!(
+                vector_digest(&request),
+                vector.expected.request_digests[index]
+            );
+            assert_eq!(
+                vector_digest(&turn.response),
+                vector.expected.response_digests[index]
+            );
+            rebuilt.push(request);
+        }
+
+        let actual_tool_schema = json!({
+            "schema": "dittobench-coding-model-tools-v1",
+            "tools": rebuilt[0]["tools"]
+        });
+        assert_eq!(actual_tool_schema, vector.tool_schema);
+        assert_eq!(
+            vector_digest(&actual_tool_schema),
+            vector.expected.tool_schema_digest
+        );
+    }
+
+    #[tokio::test]
+    async fn shared_miner_vector_responses_yield_tool_call_then_final_text() {
+        let vector = miner_inference_vector();
+        let responses = vector
+            .turns
+            .iter()
+            .map(|turn| turn.response.clone())
+            .collect();
+        let max_completion_tokens = vector.turns[0].max_completion_tokens;
+        let (model, captured, server) = ticket_vector_mock(responses, max_completion_tokens).await;
+        let tools = tool_definitions();
+        let first = model
+            .next(&vector_messages(&vector.turns[0].messages), &tools)
+            .await
+            .unwrap();
+        let first_call = first
+            .tool_call
+            .expect("first response contains a tool call");
+        assert_eq!(first.text, "");
+        assert_eq!(first_call.id, "call-read-parser");
+        assert_eq!(first_call.name, "repo_read_file");
+        assert_eq!(first_call.args, json!({"path": "src/parser.py"}));
+
+        let second = model
+            .next(&vector_messages(&vector.turns[1].messages), &tools)
+            .await
+            .unwrap();
+        assert!(second.tool_call.is_none());
+        assert_eq!(second.text, "Applied the parser repair.");
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), vector.turns.len());
+        for (index, request) in captured.iter().enumerate() {
+            assert_eq!(
+                request,
+                &expected_ticket_request(&vector, &vector.turns[index])
+            );
+            assert_eq!(
+                vector_digest(request),
+                vector.expected.request_digests[index]
+            );
+        }
+        server.abort();
+    }
+
+    fn visit_rust_sources(path: &Path, inspect: &mut impl FnMut(&Path, &str)) {
+        for entry in fs::read_dir(path).expect("Rust source directory is readable") {
+            let entry = entry.expect("Rust source entry is readable");
+            let path = entry.path();
+            if path.is_dir() {
+                visit_rust_sources(&path, inspect);
+            } else if path.extension().and_then(|value| value.to_str()) == Some("rs") {
+                let body = fs::read_to_string(&path).expect("Rust source is UTF-8");
+                inspect(&path, &body);
+            }
+        }
+    }
+
+    #[test]
+    fn rust_source_never_includes_validator_only_inference_policy_vector() {
+        let validator_filename = ["coding_inference_", "policy_v1.json"].concat();
+        let validator_schema = ["dittobench-coding-inference-", "policy-vector-v1"].concat();
+        let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        visit_rust_sources(&source, &mut |path, body| {
+            assert!(
+                !body.contains(&validator_filename),
+                "{} references the validator-only policy filename",
+                path.display()
+            );
+            assert!(
+                !body.contains(&validator_schema),
+                "{} references the validator-only policy schema",
+                path.display()
+            );
+        });
+
+        let vector: Value = serde_json::from_str(MINER_INFERENCE_VECTOR).unwrap();
+        let keys: Vec<&str> = vector
+            .as_object()
+            .expect("miner vector root is an object")
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "coding_contract_version",
+                "expected",
+                "schema",
+                "system_prompt",
+                "tool_schema",
+                "turns",
+                "weight_eligible"
+            ]
+        );
     }
 
     fn response(model: &str, usage: Option<Value>) -> Value {
@@ -811,7 +1144,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn multiple_tool_calls_drain_in_order_without_parallel_execution() {
+    async fn multiple_tool_calls_fail_closed_without_execution() {
         let mut payload = response(
             LUNA_MODEL,
             Some(json!({
@@ -822,7 +1155,7 @@ mod tests {
             })),
         );
         payload["choices"][0]["message"]["tool_calls"] =
-            Value::Array((0..3).map(tool_call).collect());
+            Value::Array((0..2).map(tool_call).collect());
         let (model, _request, requests, server) = direct_mock(payload).await;
         let messages = [ChatMessage {
             role: "user".to_string(),
@@ -830,49 +1163,9 @@ mod tests {
             ..ChatMessage::default()
         }];
 
-        let first = model.next(&messages, &[]).await.unwrap();
-        let second = model.next(&messages, &[]).await.unwrap();
-        let third = model.next(&messages, &[]).await.unwrap();
-        assert_eq!(first.tool_call.unwrap().id, "call-0");
-        assert_eq!(second.tool_call.unwrap().id, "call-1");
-        assert_eq!(third.tool_call.unwrap().id, "call-2");
-        assert!(first.cost.is_some());
-        assert!(first.metadata.is_some());
-        assert!(second.cost.is_none());
-        assert!(second.metadata.is_none());
-        assert!(third.cost.is_none());
-        assert!(third.metadata.is_none());
+        let result = model.next(&messages, &[]).await;
+        assert!(matches!(result, Err(Error::Model(message)) if message.contains("maximum is 1")));
         assert_eq!(requests.load(Ordering::SeqCst), 1);
-        server.abort();
-    }
-
-    #[tokio::test]
-    async fn excessive_tool_call_batch_fails_closed_without_queueing() {
-        let mut payload = response(
-            LUNA_MODEL,
-            Some(json!({
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15,
-                "cost": 0.000_03
-            })),
-        );
-        payload["choices"][0]["message"]["tool_calls"] =
-            Value::Array((0..=MAX_TOOL_CALLS_PER_RESPONSE).map(tool_call).collect());
-        let (model, _request, requests, server) = direct_mock(payload).await;
-        let result = model
-            .next(
-                &[ChatMessage {
-                    role: "user".to_string(),
-                    content: vec![Content::text("fix")],
-                    ..ChatMessage::default()
-                }],
-                &[],
-            )
-            .await;
-        assert!(matches!(result, Err(Error::Model(message)) if message.contains("maximum is 16")));
-        assert_eq!(requests.load(Ordering::SeqCst), 1);
-        assert!(model.pop_pending_tool_call().unwrap().is_none());
         server.abort();
     }
 
