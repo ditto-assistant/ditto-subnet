@@ -29,6 +29,12 @@ func (s *server) runCaseWithModelAttribution(
 	tools []protocol.ToolDefinition,
 	opts runner.CaseOptions,
 ) (protocol.RunResponse, runner.CaseExecution, error) {
+	// Trace attribution only: tell the broker which case this /run serves so
+	// the relay's trace capture can file the calls (exactly when serial,
+	// as a candidate set when concurrent). Never an admission input.
+	if inferenceSessionID != "" && s.broker != nil && s.broker.beginRunCase(inferenceSessionID, caseID) {
+		defer s.broker.endRunCase(inferenceSessionID, caseID)
+	}
 	response, execution, runErr := runner.RunCaseWithTelemetry(ctx, harnessURL, caseID, prompt, tools, opts)
 	if opts.BenchVersion >= protocol.BenchVersionV10 && inferenceSessionID != "" && s.broker != nil {
 		execution.ToolProvenance = s.broker.sessionToolProvenance(inferenceSessionID, caseID)

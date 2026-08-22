@@ -1,6 +1,7 @@
 package inference
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -134,9 +135,18 @@ type proxyHeaders struct {
 	requestedAt   time.Time
 	proof         string
 	authorization string
+	// traceContext is the broker's X-Ditto-Trace-Context (run/agent/case
+	// attribution for the trace capture). Advisory: not covered by the proof,
+	// never read by admission or settlement, bounded and validated as a JSON
+	// object or dropped.
+	traceContext []byte
 
 	hasGrant, hasGeneration, hasNonce, hasRequestedAt, hasProof, hasAuthorization bool
 }
+
+// traceContextMaxBytes bounds the advisory context header; anything larger
+// or non-object is ignored rather than failing the call.
+const traceContextMaxBytes = 8192
 
 func (h *proxyHeaders) anyMissing() bool {
 	return !h.hasGrant || !h.hasGeneration || !h.hasNonce || !h.hasRequestedAt || !h.hasProof || !h.hasAuthorization
@@ -187,6 +197,12 @@ func parseProxyHeaders(r *http.Request) (*proxyHeaders, bool) {
 	if values, ok := r.Header["Authorization"]; ok && len(values) > 0 {
 		h.authorization = values[0]
 		h.hasAuthorization = true
+	}
+	if values, ok := r.Header["X-Ditto-Trace-Context"]; ok && len(values) > 0 {
+		raw := strings.TrimSpace(values[0])
+		if len(raw) <= traceContextMaxBytes && len(raw) > 1 && raw[0] == '{' && json.Valid([]byte(raw)) {
+			h.traceContext = []byte(raw)
+		}
 	}
 	return h, true
 }

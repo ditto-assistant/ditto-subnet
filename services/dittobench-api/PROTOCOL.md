@@ -161,7 +161,18 @@ The validator sends one `RunRequest` per case; the harness returns a
 ```
 
 `inference_base_url` is additive-optional and ignored. Harnesses keep the
-process-wide inference URL. The scorer may overlap `/run` up to the operator
+process-wide inference URL.
+
+A harness MAY send `X-Ditto-Case-Id: <case_id>` on the inference calls it makes
+while serving a `/run`. The header is advisory and additive: the broker never
+reads it for admission, scoring or accounting. It stamps the calls it forwards
+to the platform relay with an `X-Ditto-Trace-Context` that names the run,
+agent, slot, the cases the scorer currently has in flight, and -- when the
+claim names one of those cases -- the verified case id, so the relay's trace
+capture can file the call under its benchmark case under concurrent `/run`.
+Without the header a serial run is still attributed exactly; a concurrent run
+records the candidate set. Harnesses built on `ditto-harness`'s
+`ChatModelConfig::OpenAiCompat` cannot set it today (no per-request headers). The scorer may overlap `/run` up to the operator
 `benchmark_runtime.case_concurrency` (default 4, max 64). The broker admits
 `max(4, case_concurrency)` in-flight chat calls and tool calls per harness
 source; above that it answers `429` with `Retry-After: 1`, so a harness that
