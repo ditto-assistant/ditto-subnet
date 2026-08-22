@@ -611,6 +611,13 @@ revocation and environment destruction are attested. The coordinator remains
 unwired and covers the complete gradeable path only; terminal failure
 classification remains a later worker layer.
 
+The trusted Go attempt runtime now composes verified phase-specific artifacts,
+the runner/freezer, sandbox executor, and pristine grader in process. Authoring
+types cannot contain grader material; grading types cannot contain memory. The
+outer workspace route must be revoked before the runtime freezes the internal
+session. A later local gateway still owns the harness, Luna relay, durable
+evidence outbox, and Python coordinator connection.
+
 The runtime never supplies aggregate counts or repair mean. It returns
 per-task evidence; the validator orders those tasks by the immutable manifest,
 re-derives every task root, counts terminal domains, and computes the integer
