@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Role values accepted by the relay binary. The Python api_server accepts
@@ -76,6 +77,52 @@ type Config struct {
 	Chain     ChainConfig
 	Inference InferenceProxyConfig
 	Upload    UploadConfig
+	Traces    TraceConfig
+}
+
+// TraceConfig is the inference trace capture: every brokered call's bodies,
+// usage and timing spooled to local disk and shipped to one or more
+// S3-compatible buckets. Off by default; when on, the spool dir and at least
+// one sink are required and validated at boot.
+//
+//	INFERENCE_TRACE_ENABLED=true
+//	INFERENCE_TRACE_SPOOL_DIR=/opt/ditto-platform-relay/traces
+//	INFERENCE_TRACE_SINKS=hippius,backblaze           # ordered, names are free-form labels
+//	INFERENCE_TRACE_SINK_HIPPIUS_ENDPOINT=...         # defaults to HIPPIUS_ENDPOINT for the sink named "hippius"
+//	INFERENCE_TRACE_SINK_HIPPIUS_REGION=...           # defaults to HIPPIUS_REGION
+//	INFERENCE_TRACE_SINK_HIPPIUS_BUCKET=ditto-subnet-traces
+//	INFERENCE_TRACE_SINK_HIPPIUS_ACCESS_KEY_ID=...    # defaults to HIPPIUS_ACCESS_KEY_ID
+//	INFERENCE_TRACE_SINK_HIPPIUS_SECRET_ACCESS_KEY=.. # defaults to HIPPIUS_SECRET_ACCESS_KEY
+//	INFERENCE_TRACE_SINK_HIPPIUS_REQUIRED=true        # default true: files stay on disk until this sink has them
+//	INFERENCE_TRACE_SINK_HIPPIUS_PREFIX=              # optional key prefix inside the bucket
+//	INFERENCE_TRACE_SINK_BACKBLAZE_ENDPOINT=https://s3.us-west-004.backblazeb2.com
+//	INFERENCE_TRACE_SINK_BACKBLAZE_REGION=us-west-004
+//	... (same keys per sink name, upper-cased, '-' and '.' become '_')
+//	INFERENCE_TRACE_ROTATE_BYTES=67108864, INFERENCE_TRACE_ROTATE_SECONDS=300,
+//	INFERENCE_TRACE_MAX_SPOOL_BYTES=8589934592, INFERENCE_TRACE_QUEUE_SIZE=4096,
+//	INFERENCE_TRACE_EMBEDDING_VECTORS=true            # false strips data[].embedding from captured embedding bodies
+type TraceConfig struct {
+	Enabled          bool
+	SpoolDir         string
+	RotateBytes      int64
+	RotateInterval   time.Duration
+	MaxSpoolBytes    int64
+	QueueSize        int
+	EmbeddingVectors bool
+	Sinks            []TraceSinkConfig
+}
+
+// TraceSinkConfig is one S3-compatible destination.
+type TraceSinkConfig struct {
+	Name            string
+	Endpoint        string
+	Region          string
+	Bucket          string
+	AccessKeyID     string
+	SecretAccessKey string
+	Required        bool
+	PathStyle       bool
+	Prefix          string
 }
 
 // UploadConfig is the narrow upload-admission surface served by the relay.
@@ -355,6 +402,7 @@ func Load(lookup Lookup) (*Config, error) {
 	}
 
 	cfg.Inference = loadInferenceProxy(r)
+	cfg.Traces = loadTraces(r)
 
 	if len(r.errs) > 0 {
 		return nil, fmt.Errorf("config: %s", strings.Join(r.errs, "; "))
@@ -504,4 +552,103 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 	if ip.EmbeddingDimensions != PinnedEmbeddingDimensions {
 		r.fail("DITTO_EMBEDDING_DIMENSIONS is pinned to %d, got %d", PinnedEmbeddingDimensions, ip.EmbeddingDimensions)
 	}
+}
+
+// loadTraces parses INFERENCE_TRACE_*. A disabled capture ignores every
+// other key; an enabled one fails boot on anything it cannot ship with.
+func loadTraces(r *envReader) TraceConfig {
+	tc := TraceConfig{
+		Enabled:          r.boolval("INFERENCE_TRACE_ENABLED", false),
+		SpoolDir:         r.str("INFERENCE_TRACE_SPOOL_DIR", ""),
+		RotateBytes:      r.int64val("INFERENCE_TRACE_ROTATE_BYTES", 64<<20),
+		RotateInterval:   time.Duration(r.intval("INFERENCE_TRACE_ROTATE_SECONDS", 300)) * time.Second,
+		MaxSpoolBytes:    r.int64val("INFERENCE_TRACE_MAX_SPOOL_BYTES", 8<<30),
+		QueueSize:        r.intval("INFERENCE_TRACE_QUEUE_SIZE", 4096),
+		EmbeddingVectors: r.boolval("INFERENCE_TRACE_EMBEDDING_VECTORS", true),
+	}
+	if !tc.Enabled {
+		return tc
+	}
+	if tc.SpoolDir == "" {
+		r.fail("INFERENCE_TRACE_SPOOL_DIR is required when INFERENCE_TRACE_ENABLED is set")
+	}
+	if tc.RotateBytes < 1<<20 || tc.RotateBytes > 1<<31 {
+		r.fail("INFERENCE_TRACE_ROTATE_BYTES must be between 1 MiB and 2 GiB, got %d", tc.RotateBytes)
+	}
+	if tc.RotateInterval < 10*time.Second || tc.RotateInterval > 24*time.Hour {
+		r.fail("INFERENCE_TRACE_ROTATE_SECONDS must be between 10 and 86400")
+	}
+	if tc.MaxSpoolBytes < 64<<20 {
+		r.fail("INFERENCE_TRACE_MAX_SPOOL_BYTES must be at least 64 MiB, got %d", tc.MaxSpoolBytes)
+	}
+	if tc.QueueSize < 16 || tc.QueueSize > 1<<20 {
+		r.fail("INFERENCE_TRACE_QUEUE_SIZE must be between 16 and 1048576, got %d", tc.QueueSize)
+	}
+	names := strings.Split(r.str("INFERENCE_TRACE_SINKS", ""), ",")
+	seen := map[string]bool{}
+	for _, raw := range names {
+		name := strings.ToLower(strings.TrimSpace(raw))
+		if name == "" {
+			continue
+		}
+		if seen[name] {
+			r.fail("INFERENCE_TRACE_SINKS lists %q twice", name)
+			continue
+		}
+		seen[name] = true
+		tc.Sinks = append(tc.Sinks, loadTraceSink(r, name))
+	}
+	if len(tc.Sinks) == 0 {
+		r.fail("INFERENCE_TRACE_SINKS must name at least one sink when INFERENCE_TRACE_ENABLED is set")
+	}
+	return tc
+}
+
+// loadTraceSink reads INFERENCE_TRACE_SINK_<NAME>_*; the sink named
+// "hippius" inherits the Platform's HIPPIUS_* credentials so the live relay
+// needs only a bucket name to start shipping.
+func loadTraceSink(r *envReader, name string) TraceSinkConfig {
+	upper := strings.ToUpper(strings.NewReplacer("-", "_", ".", "_").Replace(name))
+	key := func(suffix string) string { return "INFERENCE_TRACE_SINK_" + upper + "_" + suffix }
+	inherit := func(suffix, fallbackKey, def string) string {
+		if v := r.str(key(suffix), ""); v != "" {
+			return v
+		}
+		if name == "hippius" {
+			return r.str(fallbackKey, def)
+		}
+		return def
+	}
+	sc := TraceSinkConfig{
+		Name:            name,
+		Endpoint:        inherit("ENDPOINT", "HIPPIUS_ENDPOINT", ""),
+		Region:          inherit("REGION", "HIPPIUS_REGION", ""),
+		Bucket:          r.str(key("BUCKET"), ""),
+		AccessKeyID:     inherit("ACCESS_KEY_ID", "HIPPIUS_ACCESS_KEY_ID", ""),
+		SecretAccessKey: inherit("SECRET_ACCESS_KEY", "HIPPIUS_SECRET_ACCESS_KEY", ""),
+		Required:        r.boolval(key("REQUIRED"), true),
+		PathStyle:       r.boolval(key("PATH_STYLE"), true),
+		Prefix:          strings.Trim(r.str(key("PREFIX"), ""), "/"),
+	}
+	if name == "hippius" && sc.Bucket == "" {
+		sc.Bucket = "ditto-subnet-traces"
+	}
+	if name == "hippius" && sc.Region == "" {
+		sc.Region = "decentralized"
+	}
+	if sc.Endpoint == "" {
+		r.fail("%s is required", key("ENDPOINT"))
+	} else if u, err := url.Parse(sc.Endpoint); err != nil || !u.IsAbs() || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		r.fail("%s must be an absolute http/https URL, got %q", key("ENDPOINT"), sc.Endpoint)
+	}
+	if sc.Bucket == "" {
+		r.fail("%s is required", key("BUCKET"))
+	}
+	if sc.AccessKeyID == "" || sc.SecretAccessKey == "" {
+		r.fail("%s and %s are required", key("ACCESS_KEY_ID"), key("SECRET_ACCESS_KEY"))
+	}
+	if name == "hippius" && sc.AccessKeyID != "" && !strings.HasPrefix(sc.AccessKeyID, "hip_") {
+		r.fail("%s must be a Hippius access key (hip_...)", key("ACCESS_KEY_ID"))
+	}
+	return sc
 }

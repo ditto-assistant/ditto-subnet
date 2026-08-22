@@ -57,9 +57,69 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
   reservation checks. Paid recovery remains a transparent Python fallback.
 - `internal/postgres` — sqlc layer: hand-written `*_queries.sql`, generated
   `*.sql.go`/`models.go`/`db.go`, hand-written `connection.go`.
+- `internal/traces` — inference trace capture: record schema, disk spool,
+  zstd upload to N S3-compatible sinks (presigned SigV4). `internal/tracebackfill`
+  exports the historical ledger through the same pipeline
+  (`model-relay trace-backfill`).
 - `internal/testutil` — real-Postgres test harness (fresh database per test
   on the monorepo test container at `localhost:15433`; skips when
   unavailable).
+
+## Inference trace capture (`internal/traces`)
+
+Every call the relay brokers is the training data DittoBench produces, and
+until this package existed none of it was persisted: `inference_requests` is
+metadata only (and load-bearing for admission, replay protection and
+accounting, so it stays short-retention). With `INFERENCE_TRACE_ENABLED=true`
+each settled call — and each authenticated call the gate declines — becomes one
+JSONL record (`ditto.inference.trace.v1`): the miner's request body as
+received, the locked payload sent upstream, every provider phase's raw answer
+and headers, the sanitized response returned, usage, timing, and the grant
+context (agent, bench version, validator, slot, route). Records are appended to
+per-stream spool files on local disk (`INFERENCE_TRACE_SPOOL_DIR`), rotated by
+size/age, zstd-compressed and PUT to every configured sink under
+
+```
+traces/v1/lane=<inference|confirmation>/kind=<chat|embedding>/dt=YYYY-MM-DD/hour=HH/<relay>-<first>-<last>-<id>.jsonl.zst
+```
+
+Sinks are S3-compatible buckets addressed by presigned SigV4 URLs (Hippius
+rejects header-signed PUTs; Backblaze B2 and AWS accept both).
+`INFERENCE_TRACE_SINKS=hippius,backblaze` names them; the `hippius` sink
+inherits the Platform's `HIPPIUS_*` credentials and defaults its bucket to
+`ditto-subnet-traces`; every other sink is configured with
+`INFERENCE_TRACE_SINK_<NAME>_{ENDPOINT,REGION,BUCKET,ACCESS_KEY_ID,SECRET_ACCESS_KEY,REQUIRED,PREFIX}`.
+A file leaves the disk only when every *required* sink holds it; per-sink
+completion lives in a sidecar so a sink outage never re-sends to the others
+and a restart resumes where it stopped. Capture never blocks an inference
+call: a full queue or a spool over `INFERENCE_TRACE_MAX_SPOOL_BYTES` drops and
+counts (`ditto_inference_trace_dropped_total{reason}`); the other families are
+`ditto_inference_trace_{records,rotations,uploads,upload_failures,files_released}_total`
+and `ditto_inference_trace_spool_bytes`. The bucket MUST stay private: traces
+carry benchmark case text and miners' agent prompts.
+
+### Backfilling the historical ledger
+
+`model-relay trace-backfill` walks `inference_requests` and
+`confirmation_inference_requests` (joined to their grants) in
+`(started_at, grant_id, nonce)` order and ships them through the same sinks
+under `ledger/v1/lane=/kind=/dt=/hour=` (one UTC day per object). The records
+are `ledger.backfill` events with no bodies (none were ever stored). It reads
+the relay's environment for Postgres and the sinks, keeps a cursor file, and is
+safe to re-run or interrupt:
+
+```sh
+set -a; . /opt/ditto-subnet/apps/platform/.env; set +a
+/opt/ditto-platform-relay/releases/<sha>/model-relay trace-backfill \
+  --spool-dir /opt/ditto-platform-relay/trace-backfill \
+  --until 2026-08-21T00:00:00Z --batch-rows 5000
+```
+
+`--delete` removes the exported rows afterwards — only inside the key ranges
+this run shipped, only after every required sink confirmed them, and never a
+row younger than `--retain-hours` (floor 24), still `started`, or under an
+unexpired grant. Deletion is deliberately opt-in; the live ledger's retention
+policy is a separate decision.
 
 ## Developing
 

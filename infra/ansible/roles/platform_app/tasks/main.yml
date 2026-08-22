@@ -286,6 +286,35 @@
   no_log: true
   when: platform_hippius_bucket | default('') | length > 0
 
+- name: Read Backblaze key id when the trace mirror is configured
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backblaze_key_id }} --project={{ gcp_project }}"
+  register: platform_backblaze_key_id_read
+  changed_when: false
+  no_log: true
+  when: platform_trace_enabled | bool and platform_trace_backblaze_bucket | default('') | length > 0
+
+- name: Read Backblaze application key when the trace mirror is configured
+  ansible.builtin.command: "gcloud secrets versions access latest --secret={{ secret_backblaze_application_key }} --project={{ gcp_project }}"
+  register: platform_backblaze_application_key_read
+  changed_when: false
+  no_log: true
+  when: platform_trace_enabled | bool and platform_trace_backblaze_bucket | default('') | length > 0
+
+- name: Fold Backblaze credentials into the secrets map
+  ansible.builtin.set_fact:
+    platform_secrets: "{{ platform_secrets | combine({'backblaze_key_id': platform_backblaze_key_id_read.stdout, 'backblaze_application_key': platform_backblaze_application_key_read.stdout}) }}"
+  no_log: true
+  when: platform_trace_enabled | bool and platform_trace_backblaze_bucket | default('') | length > 0
+
+- name: Ensure the relay trace spool directory
+  ansible.builtin.file:
+    path: "{{ platform_trace_spool_dir }}"
+    state: directory
+    owner: "{{ platform_owner }}"
+    group: "{{ platform_group }}"
+    mode: "0750"
+  when: platform_trace_enabled | bool
+
 - name: Render .env
   ansible.builtin.template:
     src: platform.env.j2

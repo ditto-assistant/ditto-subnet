@@ -20,6 +20,7 @@ import (
 
 	"github.com/ditto-assistant/model-relay/internal/postgres"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
+	"github.com/ditto-assistant/model-relay/internal/traces"
 )
 
 // confirmationDecline mirrors ConfirmationInferenceDecline (a StrEnum whose
@@ -666,6 +667,8 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 	if decline != nil {
 		// The decline rolls the admission transaction back (deferred
 		// rollback), exactly like the Python raise inside session.begin().
+		d.traceDeclined(r, headers, traces.LaneConfirmation, traces.KindChat, body, now,
+			traceConfirmationGrant(&grantSnapshot), string(*decline))
 		relayhttp.WriteHTTPError(w, r, http.StatusTooManyRequests,
 			"confirmation inference declined: "+string(*decline), nil)
 		return
@@ -709,6 +712,9 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 	defer settle()
 
 	var raw []byte
+	var upstreamRes *providerHTTPResult
+	var upstreamErr *providerCallError
+	upstreamStarted := time.Now()
 	providerFailure := func() *httpError {
 		// Retry explicit provider backpressure in place. Every attempt keeps the
 		// same frozen provider route and request payload, so this does not widen
@@ -733,6 +739,7 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 				receiptFreeExpectedProvider:    result.grant.RouteProvider,
 				maxElapsed:                     maxElapsed,
 			}, d.sleep())
+		upstreamRes, upstreamErr = result, callErr
 		if callErr != nil {
 			d.Logger.Warn("confirmation provider transport failed",
 				slog.String("lane", grantSnapshot.Lane),
@@ -814,6 +821,13 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		return nil
 	}()
 	settle()
+	d.traceConfirmationSettled(confirmationTrace{
+		r: r, headers: headers, kind: traces.KindChat, body: body, receivedAt: now, grant: &result.grant,
+		payload: upstreamPayload, outcome: outcome, result: upstreamRes, route: "openrouter", callErr: upstreamErr,
+		raw: raw, started: upstreamStarted, finished: time.Now(), deliverable: deliverable,
+		failure: providerFailure, settleErr: settleErr,
+		reserved: result.request.ReservedTokens, chargeable: result.request.MaxChargeableTokens, admittedAt: now,
+	})
 	if settleErr != nil {
 		relayhttp.WriteInternalError(w, r)
 		return
@@ -924,6 +938,8 @@ func (d *Deps) handleConfirmationEmbeddings(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	if decline != nil {
+		d.traceDeclined(r, headers, traces.LaneConfirmation, traces.KindEmbedding, body, now,
+			traceConfirmationGrant(&grantSnapshot), string(*decline))
 		relayhttp.WriteHTTPError(w, r, http.StatusTooManyRequests,
 			"confirmation embedding declined: "+string(*decline), nil)
 		return
@@ -970,8 +986,12 @@ func (d *Deps) handleConfirmationEmbeddings(w http.ResponseWriter, r *http.Reque
 	defer settle()
 
 	var raw []byte
+	var embRes *embeddingProviderResult
+	var embErr *providerCallError
+	upstreamStarted := time.Now()
 	providerFailure := func() *httpError {
 		providerResult, callErr := postEmbeddingProvider(ctx, d.Upstream, cfg, inputs, d.sleep())
+		embRes, embErr = providerResult, callErr
 		if callErr != nil {
 			// Uncaught _ProviderCallError in the Python endpoint (only
 			// ValueError is handled): internal server error after the settle.
@@ -1010,6 +1030,23 @@ func (d *Deps) handleConfirmationEmbeddings(w http.ResponseWriter, r *http.Reque
 		return nil
 	}()
 	settle()
+	{
+		var upstream *providerHTTPResult
+		route := "openrouter"
+		if embRes != nil {
+			upstream = embRes.result
+			if embRes.direct {
+				route = "direct"
+			}
+		}
+		d.traceConfirmationSettled(confirmationTrace{
+			r: r, headers: headers, kind: traces.KindEmbedding, body: body, receivedAt: now, grant: &result.grant,
+			payload: map[string]any{"model": cfg.EmbeddingModel, "input": inputs}, outcome: outcome,
+			result: upstream, route: route, callErr: embErr, raw: raw, started: upstreamStarted, finished: time.Now(),
+			deliverable: deliverable, failure: providerFailure, settleErr: settleErr,
+			reserved: result.request.ReservedTokens, chargeable: result.request.MaxChargeableTokens, admittedAt: now,
+		})
+	}
 	if settleErr != nil {
 		relayhttp.WriteInternalError(w, r)
 		return
