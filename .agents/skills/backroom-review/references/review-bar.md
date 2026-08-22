@@ -50,6 +50,8 @@ avoid citing the limbs.
 - Prompt grounding that still sends records and serves the model reply
   (Hogwarts v17 glossary-as-context; JJJ derive-as-prompt).
 - Schema-derived tool arguments and live endpoint execution.
+- Overlapping scored `/run` on the process-wide inference URL; missing
+  `inference_base_url` or unused `case_scoped_inference_v1`.
 - Honest-and-bad agents that score poorly without a bypass.
 - Same-owner revisions that removed the prior bypass.
 - Starter-kit inheritance and formatting-only similarity.

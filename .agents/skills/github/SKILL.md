@@ -68,6 +68,16 @@ gh stack view --json
 
 New PRs remain drafts unless the user requests review-ready publication. Use `gh stack add <dependent-branch>` only when the new concern is independently reviewable.
 
+`$ditto-subnet-worktree` creates `agent/<slug>` already tracking `origin/main`.
+Run `gh stack init agent/<slug>` from that branch. If `gh stack submit` then
+reports no commits, `@{upstream}` is still `origin/main` — `git status -sb`
+showing `ahead N` is a real diff. Push the named branch and open a normal PR:
+
+```bash
+git push -u origin HEAD:<branch>
+gh pr create --base main --head <branch> --title "..." --body-file /tmp/pr-body.md
+```
+
 ## Existing stack
 
 ```bash

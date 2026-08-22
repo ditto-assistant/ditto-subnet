@@ -160,10 +160,10 @@
     {
       "id": "dittobench-scoring",
       "title": "DittoBench execution, v8 scoring, and inference relay",
-      "keywords": ["dittobench", "scorer", "scoring", "v8", "benchmark", "relay", "sandbox", "run size", "efficiency", "seed"],
+      "keywords": ["dittobench", "scorer", "scoring", "v8", "benchmark", "relay", "sandbox", "run size", "efficiency", "seed", "case concurrency", "overlapping run", "slow bench", "inference concurrency", "6600"],
       "summary": "DittoBench executes untrusted harnesses, enforces protocol contracts, and computes the versioned score consumed by validators.",
       "owns": ["services/dittobench-api/cmd", "services/dittobench-api/internal", "services/dittobench-api/PROTOCOL.md"],
-      "read": ["services/dittobench-api/README.md", "services/dittobench-api/docs/seed-and-scoring.md", "services/dittobench-api/docs/relative-efficiency-bonus-spec.md"],
+      "read": ["services/dittobench-api/README.md", "services/dittobench-api/docs/seed-and-scoring.md", "services/dittobench-api/docs/relative-efficiency-bonus-spec.md", ".agents/skills/ditto-subnet-benchmark/references/bench-runtime.md"],
       "search": ["rg -n 'BenchVersion|v8|Composite|Score' services/dittobench-api/internal services/dittobench-api/cmd", "rg -n 'relay|inference|embedding' services/dittobench-api/cmd services/dittobench-api/internal"],
       "validate": ["cd services/dittobench-api && go test ./...", "uv run pytest ditto/tests/test_validator_compose.py ditto/tests/test_compose_stack.py -q"],
       "invariants": ["Research adapters do not create alternate production scoring paths.", "Any scoring change must preserve explicit version negotiation and frozen calibration inputs."],

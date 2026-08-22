@@ -17,7 +17,7 @@ Load only the returned anchors and the relevant specialized skill:
 - `.agents/skills/ditto-subnet-platform` for Platform, migrations, dashboard,
   and Backroom;
 - `.agents/skills/ditto-subnet-benchmark` for validator, scoring, DittoBench,
-  datagen, and adapters;
+  live case concurrency, datagen, and adapters;
 - `.agents/skills/ditto-subnet-bench-version-bump` for shipping, activating, or
   auditing a `bench_version` contract across every layer;
 - `.agents/skills/ditto-subnet-release-ops` for releases, deployments,

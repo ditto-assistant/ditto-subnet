@@ -1,6 +1,6 @@
 ---
 name: ditto-subnet-benchmark
-description: Implement, audit, or diagnose validator evaluation, DittoBench execution and v8 scoring, inference relays, benchmark datagen, miner starter-kit compatibility, screener protocols, calibration, and LongMemEval, Hermes, or OpenClaw adapters in the ditto-subnet monorepo. Use whenever scoring integrity, version negotiation, seeds, baselines, untrusted execution, adapters, or research-to-production boundaries matter.
+description: Implement, audit, or diagnose validator evaluation, DittoBench execution and v8 scoring, inference relays, live case concurrency, overlapping /run, benchmark datagen, miner starter-kit compatibility, screener protocols, calibration, and LongMemEval, Hermes, or OpenClaw adapters in the ditto-subnet monorepo. Use whenever scoring integrity, version negotiation, seeds, baselines, untrusted execution, adapters, research-to-production boundaries, slow benches, case_concurrency, 6600s timeouts, or concurrent scored cases matter.
 ---
 
 # Ditto Subnet Benchmark
@@ -17,7 +17,7 @@ python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py \
 Pass the user's task text verbatim. If it is empty, omit the query and begin
 from the monorepo overview rather than injecting every benchmark owner.
 
-Read [`references/benchmark-index.md`](references/benchmark-index.md), then the returned protocol and test anchors.
+Read [`references/benchmark-index.md`](references/benchmark-index.md), then the returned protocol and test anchors. For live overlapping `/run`, `case_concurrency`, ticket wall-clock, or 6600s timeouts, read [`references/bench-runtime.md`](references/bench-runtime.md).
 
 ## Evidence workflow
 

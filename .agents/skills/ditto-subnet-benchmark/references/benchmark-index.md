@@ -22,6 +22,7 @@
 - `services/dittobench-api/docs/calibration-trust.md`
 - `docs/UNTRUSTED-EXECUTION-RUNBOOK.md`
 - `docs/VALIDATOR.md`
+- Live overlapping `/run` and `case_concurrency`: [`bench-runtime.md`](bench-runtime.md)
 
 ## High-value lookups
 

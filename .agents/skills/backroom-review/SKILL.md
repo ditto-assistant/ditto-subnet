@@ -75,7 +75,11 @@ execution is authorized.
 
 Agent-returned tool-call traces are not proof that tools ran: submitted code
 can construct them. Prefer validator/inference-broker observations and
-trace whether the selected endpoint actually executed.
+trace whether the selected endpoint actually executed. Scored `/run` may
+overlap on the process-wide inference URL; missing `inference_base_url` or
+unused `case_scoped_inference_v1` is not a violation. `tool_endpoint` remains
+the observed-tool path. Runtime/concurrency diagnosis is
+`$ditto-subnet-benchmark`.
 
 ## Quarantine
 
