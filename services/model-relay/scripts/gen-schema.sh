@@ -38,6 +38,7 @@ HOST_PORT="${DITTO_TEST_POSTGRES_PORT:-15433}"
 ADMIN_USER="ditto_test"
 ADMIN_PASSWORD="ditto_test"
 ADMIN_DB="postgres"
+ADMIN_HOST="127.0.0.1"
 
 SCRATCH_DB="model_relay_schema_$$"
 
@@ -45,7 +46,7 @@ log() { echo "[gen-schema] $*" >&2; }
 
 psql_admin() {
   docker exec -i "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
-    -U "${ADMIN_USER}" -d "${ADMIN_DB}" -qAt -c "$1"
+    -h "${ADMIN_HOST}" -U "${ADMIN_USER}" -d "${ADMIN_DB}" -qAt -c "$1"
 }
 
 # ── 1. Ensure the ambient test Postgres is running ──────────────────────────
@@ -61,16 +62,20 @@ if [[ "${running}" != "true" ]]; then
     "${CONTAINER_IMAGE}" >/dev/null
 fi
 # A cold postgres:16-alpine on a busy CI runner can take well over 30s to
-# finish initdb; 30 one-second probes flaked there. pg_isready is the cheap
-# in-container probe; the psql check stays as the authoritative gate.
+# finish initdb; 30 one-second probes flaked there. The official image starts
+# a temporary socket-only postmaster during initialization, then stops it
+# before launching the final TCP listener. Every readiness/admin command must
+# therefore use 127.0.0.1: a socket probe can succeed against the temporary
+# server and race its shutdown before CREATE DATABASE.
+# pg_isready is the cheap in-container probe; the psql check stays authoritative.
 # Do not call psql_admin from `&&` under `set -e`: a function's failing
 # docker exec can abort the script before the 120s loop finishes (release
 # then reports "after 120s" on a ~few-second cold start).
 postgres_ready=0
 for i in $(seq 1 120); do
-  if docker exec "${CONTAINER_NAME}" pg_isready -U "${ADMIN_USER}" -d "${ADMIN_DB}" >/dev/null 2>&1; then
+  if docker exec "${CONTAINER_NAME}" pg_isready -h "${ADMIN_HOST}" -U "${ADMIN_USER}" -d "${ADMIN_DB}" >/dev/null 2>&1; then
     if docker exec -i "${CONTAINER_NAME}" psql -v ON_ERROR_STOP=1 \
-      -U "${ADMIN_USER}" -d "${ADMIN_DB}" -qAt -c "SELECT 1" >/dev/null 2>&1; then
+      -h "${ADMIN_HOST}" -U "${ADMIN_USER}" -d "${ADMIN_DB}" -qAt -c "SELECT 1" >/dev/null 2>&1; then
       postgres_ready=1
       break
     fi
