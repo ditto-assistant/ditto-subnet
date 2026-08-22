@@ -614,6 +614,65 @@ async def test_rejected_review_reopens_and_clear_restores_previous_status(
         assert len(scores) == 3
 
 
+async def test_rejected_score_finalization_copy_hold_reopens_without_previous_status(
+    app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
+) -> None:
+    """Auto-copy holds at quorum never stored previous_status.
+
+    A later owner-link or operator voucher must still be able to reopen the
+    rejected row and restore scored, rather than 409 and force a resubmit.
+    """
+    agent_id, original_id = await _seed(maker)
+    _install(app, maker)
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        sha256 = agent.sha256
+    await _add_finalized_scores(maker, agent_ids=(agent_id, original_id))
+
+    rejected = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={"resolution": "reject", "reason": "Third-party clone pending owner-link"},
+        headers=_HEADERS,
+    )
+    assert rejected.status_code == 200
+    assert rejected.json()["agent_status"] == AgentStatus.BANNED
+
+    reopen_payload = {
+        "expected_sha256": sha256,
+        "expected_score_count": 3,
+        "reason": "Signed owner-link proves same operator; reopen for engine review",
+    }
+    reopened = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/open",
+        json=reopen_payload,
+        headers=_HEADERS,
+    )
+    assert reopened.status_code == 200
+    assert reopened.json()["reopened"] is True
+    assert reopened.json()["agent_status"] == AgentStatus.ATH_PENDING_REVIEW
+
+    audit = await client.get(
+        f"/api/v1/admin/copy-reviews/{agent_id}/audit", headers=_HEADERS
+    )
+    assert audit.status_code == 200
+    assert audit.json()["action_history"][-1]["previous_status"] == AgentStatus.SCORED
+
+    cleared = await client.post(
+        f"/api/v1/admin/copy-reviews/{agent_id}/resolve",
+        json={
+            "resolution": "clear",
+            "reason": "Same-owner after owner-link; no current-policy violation",
+        },
+        headers=_HEADERS,
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["agent_status"] == AgentStatus.SCORED
+    async with maker() as session:
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None and agent.status == AgentStatus.SCORED
+
+
 async def test_reject_expires_live_retest_leases(
     app: FastAPI, client: httpx.AsyncClient, maker: async_sessionmaker[AsyncSession]
 ) -> None:

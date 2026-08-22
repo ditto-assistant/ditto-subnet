@@ -8755,6 +8755,9 @@ class TestAntiCopyGate:
             assert held.status == AgentStatus.ATH_PENDING_REVIEW
             assert held.duplicate_of == incumbent
             assert "sha256" in (held.review_reason or "")
+            assert review.original_evidence["sha256"] == "cc" * 32
+            assert review.original_evidence["score_count"] == 3
+            assert review.original_evidence["previous_status"] == AgentStatus.SCORED
             provenance = reference_corpus_provenance()
             assert review.algorithm_provenance == {
                 "snapshot": "score-finalization",

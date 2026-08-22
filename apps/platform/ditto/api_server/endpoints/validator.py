@@ -6340,6 +6340,11 @@ async def submit_score(
                             original_reason=decision.reason,
                             original_policy_version=agent.screening_policy_version,
                             original_evidence={
+                                "sha256": agent.sha256,
+                                "score_count": len(agent_scores),
+                                # This hold replaces evaluating→scored, so a
+                                # later clear restores scored.
+                                "previous_status": AgentStatus.SCORED.value,
                                 "content_fingerprint_version": (
                                     agent.content_fingerprint or {}
                                 ).get("v"),

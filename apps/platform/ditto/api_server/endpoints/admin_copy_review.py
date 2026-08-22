@@ -878,10 +878,11 @@ async def open_copy_review(
                     AgentStatus.SCORED.value,
                     AgentStatus.LIVE.value,
                 }:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="review has no restorable previous status",
-                    )
+                    # Score-finalization copy holds never recorded
+                    # previous_status: they fire instead of evaluating→scored.
+                    # Default conservatively to scored so a rejected auto-copy
+                    # hold can be reopened and cleared. Never invent live.
+                    previous_status = AgentStatus.SCORED.value
             existing.status = "pending"
             existing.reopened_at = reopened_at
             existing.resolved_at = None
