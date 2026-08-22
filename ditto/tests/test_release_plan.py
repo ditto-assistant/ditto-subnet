@@ -82,6 +82,13 @@ def test_dittobench_change_propagates_to_stack(components, ignored_paths) -> Non
     }
 
 
+def test_dittobench_workflow_is_release_owned(components, ignored_paths) -> None:
+    assert selected(components, ignored_paths, ".github/workflows/dittobench.yml") == {
+        "dittobench_api",
+        "validator_stack",
+    }
+
+
 @pytest.mark.parametrize(
     "path",
     [
@@ -192,6 +199,7 @@ def test_coding_contract_models_select_scorer_and_validator_stack(
     [
         "services/dittobench-api/internal/codingrunner/session.go",
         "services/dittobench-api/internal/codinggrader/grader.go",
+        "services/dittobench-api/internal/codingexecutor/executor.go",
     ],
 )
 def test_shadow_coding_execution_selects_only_scorer_stack(

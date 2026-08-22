@@ -1,0 +1,25 @@
+FROM golang:1.26.6-alpine@sha256:af8d6740070b8906d12eae1c3e3ea0957fb63f492051ea05e354c38ef9fe88df AS build
+WORKDIR /src/services/dittobench-api
+
+COPY services/dittobench-api/go.mod services/dittobench-api/go.sum* ./
+COPY research/dittobench-datagen/go.mod /src/research/dittobench-datagen/go.mod
+RUN go mod download
+
+COPY services/dittobench-api/ /src/services/dittobench-api/
+COPY research/dittobench-datagen/ /src/research/dittobench-datagen/
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+      -o /out/dittobench-coding-supervisor ./cmd/dittobench-coding-supervisor && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+      -o /out/fixture-command ./cmd/dittobench-coding-fixture-command && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" \
+      -o /out/dittobench-test-driver ./cmd/dittobench-coding-fixture-test-driver
+
+FROM scratch
+LABEL io.heyditto.dittobench.coding-supervisor-contract="1"
+LABEL io.heyditto.dittobench.coding-supervisor-fixture="true"
+ENV PATH=/
+COPY --from=build --chmod=0555 /out/dittobench-coding-supervisor /usr/local/bin/dittobench-coding-supervisor
+COPY --from=build --chmod=0555 /out/fixture-command /fixture-command
+COPY --from=build --chmod=0555 /out/dittobench-test-driver /dittobench-test-driver
+ENTRYPOINT ["/usr/local/bin/dittobench-coding-supervisor"]

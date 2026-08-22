@@ -16,6 +16,7 @@
 | Shadow coding-agent harness | `miners/dittobench-coding-starter-kit/` |
 | Shadow coding runner/freezer core | `services/dittobench-api/internal/codingrunner/` |
 | Shadow pristine coding grader | `services/dittobench-api/internal/codinggrader/` |
+| Shadow coding sandbox executor | `services/dittobench-api/internal/codingexecutor/` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
 
@@ -27,6 +28,7 @@
 - `docs/UNTRUSTED-EXECUTION-RUNBOOK.md`
 - `docs/VALIDATOR.md`
 - `research/dittobench-coding-datagen/docs/PRIVATE-EXECUTION-PROTOCOL.md`
+- `services/dittobench-api/docs/coding-sandbox-shadow.md`
 
 ## High-value lookups
 
