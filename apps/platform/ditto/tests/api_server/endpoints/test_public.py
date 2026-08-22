@@ -7964,6 +7964,7 @@ class TestPublicActivity:
             "total_checks",
             "percent",
             "stalled",
+            "purpose",
         }
         fleet = responses[0].json()
         shown = [
@@ -11001,6 +11002,7 @@ class TestPublicProgressResolution:
             "total_checks",
             "percent",
             "stalled",
+            "purpose",
         }
         forbidden = {
             "case_id",

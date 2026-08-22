@@ -2912,6 +2912,7 @@ class TestHeartbeat:
             "total_checks": None,
             "percent": None,
             "stalled": False,
+            "purpose": "canonical_quorum",
         }
 
     async def test_operations_snapshot_is_atomic_and_synchronized(
@@ -3168,6 +3169,7 @@ class TestHeartbeat:
                     # since -- invisible because it is ``e2e``-marked and
                     # pytest addopts deselected ``e2e``.
                     "slot_id": "slot-0",
+                    "purpose": "canonical_quorum",
                 }
             if progress["stage"] in {"finalizing", "submitting_result"}:
                 # Only a terminal stage may report a full bar.
@@ -3273,6 +3275,7 @@ class TestHeartbeat:
             "total_checks": None,
             "percent": None,
             "stalled": False,
+            "purpose": "canonical_quorum",
         }
 
         downgraded = await client.post(

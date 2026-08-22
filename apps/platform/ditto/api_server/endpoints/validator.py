@@ -4613,6 +4613,17 @@ async def request_top5_confirmation_job(
                     payload.member_agent_id,
                 )
                 return Response(status_code=204, headers={"Cache-Control": "no-store"})
+            if not auto_routed:
+                # Legacy champion/member claims are not a slot poll. Returning
+                # the live ticket here would bind a second local task to the
+                # same lease and rotate its inference grant.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "validator has another live assignment or this retest "
+                        "is deferred"
+                    ),
+                )
         heartbeat = await session.get(ValidatorHeartbeat, payload.validator_hotkey)
         if heartbeat is None or heartbeat.protocol_version < 13:
             raise HTTPException(
