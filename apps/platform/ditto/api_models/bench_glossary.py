@@ -845,6 +845,24 @@ BENCH_VERSIONS: list[dict] = [
             "V9-compatible public harness wire and reasoning route",
         ],
     },
+    {
+        "version": 11,
+        "epoch": "2026-08-16",
+        "title": "Anti-template-fitting contract",
+        "summary": (
+            "Keeps the v9/v10 evidence stack, LongMemEval, and trusted "
+            "token-efficiency path while rotating the generated surface so a "
+            "harness cannot hardcode one query program or a stable field prefix. "
+            "Runtime capability and Platform activation remain separate."
+        ),
+        "highlights": [
+            "Sampled query programs instead of one hardcoded formula",
+            "Compositional surface grammar with no stable literal prefixes",
+            "Descriptive entity binding from evidence instead of alias echo",
+            "Per-seed injection markers and routing-cue rotation",
+            "V10-compatible public harness wire, LongMemEval, and curve-v3 efficiency",
+        ],
+    },
 ]
 
 

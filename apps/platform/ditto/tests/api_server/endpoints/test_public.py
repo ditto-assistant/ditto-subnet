@@ -1821,8 +1821,8 @@ class TestPublicBenchmarkTimeline:
         activated it and falls back to the changelog epoch. Historical score rows
         may predate the bench-version floor and are grandfathered by it. Reproducing
         that state is the only way to assert the fallback and the rollout-dated
-        release in the same read, even after a new contract pushes v2 out of the
-        release window.
+        release in the same read, even after a new contract pushes an older era
+        out of the release window.
         """
         async with (
             session_maker() as floor_session,
@@ -1832,22 +1832,22 @@ class TestPublicBenchmarkTimeline:
                 session_maker,
                 miner=_MINER_A,
                 composites=[0.41, 0.42, 0.43],
-                details={"bench_version": 3},
+                details={"bench_version": 4},
                 base_time=datetime(2026, 7, 18, 17, 0, tzinfo=UTC),
             )
             second_id = await _seed_k3(
                 session_maker,
                 miner=_MINER_B,
                 composites=[0.71, 0.72, 0.73],
-                details={"bench_version": 3},
+                details={"bench_version": 4},
                 base_time=datetime(2026, 7, 19, tzinfo=UTC),
             )
             async with session_maker() as session, session.begin():
                 session.add(
                     BenchmarkRollout(
                         rollout_id=uuid4(),
-                        from_version=2,
-                        desired_version=3,
+                        from_version=3,
+                        desired_version=4,
                         status="activated",
                         cohort_size=5,
                         created_at=datetime(2026, 7, 18, 14, 30, tzinfo=UTC),
@@ -1881,7 +1881,7 @@ class TestPublicBenchmarkTimeline:
                 session_maker,
                 miner="5" + "A" * 47,
                 composites=[0.51, 0.52],
-                details={"bench_version": 4},
+                details={"bench_version": 5},
                 base_time=datetime(2026, 7, 19, tzinfo=UTC),
             )
         _install_db(app, session_maker)
@@ -1918,15 +1918,17 @@ class TestPublicBenchmarkTimeline:
         release_by_version = {
             release["bench_version"]: release for release in body["releases"]
         }
-        assert {3, 4, 8, 9, 10}.issubset(release_by_version)
-        assert release_by_version[3]["released_at"] == "2026-07-18T14:30:00Z"
-        assert release_by_version[3]["activated_at"] == "2026-07-18T16:00:00Z"
-        assert release_by_version[4]["released_at"] == "2026-07-19T00:00:00Z"
-        assert release_by_version[4]["activated_at"] is None
+        assert {4, 5, 8, 9, 10, 11}.issubset(release_by_version)
+        assert release_by_version[4]["released_at"] == "2026-07-18T14:30:00Z"
+        assert release_by_version[4]["activated_at"] == "2026-07-18T16:00:00Z"
+        assert release_by_version[5]["released_at"] == "2026-07-21T00:00:00Z"
+        assert release_by_version[5]["activated_at"] is None
         assert release_by_version[9]["released_at"] == "2026-08-11T15:30:00Z"
         assert release_by_version[9]["activated_at"] is None
         assert release_by_version[10]["released_at"] == "2027-02-01T00:00:00Z"
         assert release_by_version[10]["activated_at"] is None
+        assert release_by_version[11]["released_at"] == "2026-08-16T00:00:00Z"
+        assert release_by_version[11]["activated_at"] is None
         assert [point["agent_id"] for point in body["points"]] == [
             first_id,
             second_id,
@@ -10766,7 +10768,7 @@ def test_bench_glossary_explains_every_v5_category_and_metric() -> None:
     metrics = {m["key"] for m in bg.metric_entries()}
     # bench_version changelog is present, newest first, complete per version.
     versions = bg.version_entries()
-    assert [v["version"] for v in versions] == [10, 9, 8, 7, 6, 5, 4, 3, 2]
+    assert [v["version"] for v in versions] == [11, 10, 9, 8, 7, 6, 5, 4, 3, 2]
     for v in versions:
         assert v["title"] and v["summary"] and v["epoch"]
 
@@ -10775,6 +10777,11 @@ def test_bench_glossary_explains_every_v5_category_and_metric() -> None:
     assert "openai/gpt-oss-20b" in v7["summary"]
     assert "medium" in v7["summary"]
     assert any("Same generated questions" in item for item in v7["highlights"])
+
+    v11 = next(version for version in versions if version["version"] == 11)
+    assert v11["title"] == "Anti-template-fitting contract"
+    assert "v9/v10 evidence stack" in v11["summary"]
+    assert any("Sampled query programs" in item for item in v11["highlights"])
 
     for key in (
         "composite",

@@ -375,9 +375,9 @@ _TIMELINE_CACHE_CONTROL = "public, max-age=300, stale-while-revalidate=3600"
 _TIMELINE_MIN_BENCH_VERSION = 2
 # Keep the complete scored memory era available to consumers without letting the
 # per-version ledger scan grow without bound. The dashboard may apply a tighter
-# presentation window to preserve legibility, but the public response retains v2
-# through the current v9 rollout so a consumer never has to invent missing release
-# metadata.
+# presentation window to preserve legibility, but the public response retains the
+# newest contracts in this window so a consumer never has to invent missing
+# release metadata.
 _TIMELINE_MAX_RELEASES = 8
 # A leaderboard pinned to a *settled* benchmark version is finished work: the
 # rollout has moved past it, so nothing routine writes to it again. It is still
