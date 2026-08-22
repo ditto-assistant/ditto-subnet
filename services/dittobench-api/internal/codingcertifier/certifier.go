@@ -354,6 +354,7 @@ func (certifier *Certifier) collectInferenceEvidence(request Request) (*codingco
 		TicketID:          request.Seed.TicketID, CaseID: request.Seed.CaseID,
 		ProfileCapabilityID:  request.Seed.ProfileCapabilityID,
 		InferenceGrantSHA256: request.InferenceGrantSHA256,
+		Deadline:             request.RunnerManifest.Deadline,
 		Budgets:              request.Budgets,
 		RequestBudget:        codingcontract.EffectiveInferenceRequestBudget(request.Budgets.WorkspaceToolCalls),
 	}

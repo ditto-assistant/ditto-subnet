@@ -21,6 +21,7 @@
 | Shadow durable coding evidence outbox | `services/dittobench-api/internal/codingoutbox/` |
 | Shadow scoped coding-memory seed projector | `services/dittobench-api/internal/codingseed/` |
 | Shadow locked Luna relay contract | `packages/dittobench-coding-contract/testdata/coding_inference_*_v1.json`, `services/dittobench-api/docs/coding-luna-relay-contract-shadow.md` |
+| Shadow ticket-bound Luna relay core | `services/dittobench-api/internal/codingrelay/`, `services/dittobench-api/docs/coding-luna-relay-core-shadow.md` |
 | Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |
 | Shadow private catalog loader | `apps/platform/ditto/api_server/coding_private_catalog.py` |
 | Shadow private task inputs | `CodingPrivateCatalogRecord` in `apps/platform/ditto/api_models/coding_selection.py` |

@@ -151,6 +151,9 @@ and the artifact-bound active canary are separated by
 The locked Luna policy, miner-safe request fixture, and validator-only receipt
 authority are frozen separately in
 [`docs/coding-luna-relay-contract-shadow.md`](docs/coding-luna-relay-contract-shadow.md).
+The unwired ticket-bound request, journal, settlement, revocation, and evidence
+core is documented in
+[`docs/coding-luna-relay-core-shadow.md`](docs/coding-luna-relay-core-shadow.md).
 Green core tests do not imply a production supervisor/test-driver image,
 private catalog, Platform lease, deployment, or score activation.
 

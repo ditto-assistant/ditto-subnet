@@ -245,6 +245,36 @@ func InferenceNormalizedResponseSHA256(policy InferencePolicy, response Inferenc
 	return inferenceDigest(response, maximum)
 }
 
+// InferenceCanonicalResponseProjectionSHA256 hashes a bounded generic JSON
+// response projection for provider-response-invalid and provider HTTP failure
+// settlements. It is not a normalized miner response and may not be forwarded
+// to the harness.
+func InferenceCanonicalResponseProjectionSHA256(
+	policy InferencePolicy,
+	body []byte,
+) (string, error) {
+	maximum, err := inferenceResponseMaximum(policy)
+	if err != nil {
+		return "", err
+	}
+	if err := ValidateJSONDocument(body, maximum); err != nil {
+		return "", err
+	}
+	if err := validateInferenceNumberLexemes(body); err != nil {
+		return "", err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var projection any
+	if err := decoder.Decode(&projection); err != nil {
+		return "", err
+	}
+	if err := requireEOF(decoder); err != nil {
+		return "", err
+	}
+	return inferenceDigest(projection, maximum)
+}
+
 // InferenceModelEvidenceSHA256 freezes the standalone relay vector projection.
 // Task evidence remains signable only through TaskEvidenceDigest.
 func InferenceModelEvidenceSHA256(policy InferencePolicy, evidence ModelEvidence) (string, error) {

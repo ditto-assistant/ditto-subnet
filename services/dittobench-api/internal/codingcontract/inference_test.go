@@ -198,13 +198,9 @@ func TestInferenceVectorsMatchCanonicalGoContract(t *testing.T) {
 	if err := providerWithMultipleCalls.ValidateAgainst(policy); err == nil {
 		t.Fatal("provider response with multiple tool calls was accepted")
 	}
-	var invalidProjection any
-	decoder := json.NewDecoder(bytes.NewReader(vectors.InvalidProviderResponses["response_invalid"]))
-	decoder.UseNumber()
-	if err := decoder.Decode(&invalidProjection); err != nil {
-		t.Fatal(err)
-	}
-	invalidDigest, err := inferenceDigest(invalidProjection, MaxInferenceResponseBytes)
+	invalidDigest, err := InferenceCanonicalResponseProjectionSHA256(
+		policy, vectors.InvalidProviderResponses["response_invalid"],
+	)
 	if err != nil || invalidDigest != vectors.Expected.InvalidProviderResponseSHA256["response_invalid"] {
 		t.Fatalf("invalid response digest=%s err=%v", invalidDigest, err)
 	}
