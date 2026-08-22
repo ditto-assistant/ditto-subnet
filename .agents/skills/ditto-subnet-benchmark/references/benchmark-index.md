@@ -17,6 +17,7 @@
 | Shadow coding runner/freezer core | `services/dittobench-api/internal/codingrunner/` |
 | Shadow pristine coding grader | `services/dittobench-api/internal/codinggrader/` |
 | Shadow coding sandbox executor | `services/dittobench-api/internal/codingexecutor/` |
+| Shadow trusted attempt runtime | `services/dittobench-api/internal/codingattempt/` |
 | Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |
 | Shadow private catalog loader | `apps/platform/ditto/api_server/coding_private_catalog.py` |
 | Shadow private task inputs | `CodingPrivateCatalogRecord` in `apps/platform/ditto/api_models/coding_selection.py` |

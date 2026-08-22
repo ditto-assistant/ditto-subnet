@@ -239,3 +239,9 @@ func (policy ResourcePolicy) validate() error {
 	}
 	return nil
 }
+
+// Validate checks the complete signed sandbox resource profile. It is exported
+// for the separately reviewed attempt-runtime adapter.
+func (policy ResourcePolicy) Validate() error {
+	return policy.validate()
+}

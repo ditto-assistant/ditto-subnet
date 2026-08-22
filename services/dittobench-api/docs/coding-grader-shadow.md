@@ -29,6 +29,12 @@ tree read-only, keep the protected tree inaccessible to candidate processes,
 deny network, kill complete process groups, and derive completion/counts from a
 trusted parent-owned channel rather than candidate stdout.
 
+The trusted attempt runtime uses `GradeWithProtectedOpener`, so protected bytes
+are not fetched until frozen replay and final-tree verification succeed. The
+opener receives the signed grader lease context and any reader returned with an
+open error is closed. The reader-based `Grade` entry point remains a
+compatibility wrapper for the existing certification path.
+
 The package deliberately provides no default executor. An incomplete
 integration therefore cannot run candidate code on the scorer host or expose
 hidden tests in the candidate mount.
