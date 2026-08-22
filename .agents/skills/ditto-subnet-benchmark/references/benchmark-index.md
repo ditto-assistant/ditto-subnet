@@ -23,6 +23,7 @@
 | Shadow locked Luna relay contract | `packages/dittobench-coding-contract/testdata/coding_inference_*_v1.json`, `services/dittobench-api/docs/coding-luna-relay-contract-shadow.md` |
 | Shadow ticket-bound Luna relay core | `services/dittobench-api/internal/codingrelay/`, `services/dittobench-api/docs/coding-luna-relay-core-shadow.md` |
 | Shadow durable Luna relay journal | `services/dittobench-api/internal/codingrelayjournal/`, `services/dittobench-api/docs/coding-luna-relay-journal-shadow.md` |
+| Shadow coding inference grant authority | `apps/platform/ditto/db/queries/coding_inference_grants.py`, `apps/platform/ditto/api_server/endpoints/validator_coding_inference.py`, `apps/platform/docs/coding-inference-grant-authority.md` |
 | Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |
 | Shadow private catalog loader | `apps/platform/ditto/api_server/coding_private_catalog.py` |
 | Shadow private task inputs | `CodingPrivateCatalogRecord` in `apps/platform/ditto/api_models/coding_selection.py` |

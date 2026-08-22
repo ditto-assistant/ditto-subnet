@@ -34,6 +34,7 @@ from ditto.db.queries.coding_catalog import (
 from ditto.db.queries.coding_certifications import (
     active_validator_coding_certification,
 )
+from ditto.db.queries.coding_inference_grants import revoke_ticket_coding_inference
 from ditto.db.queries.core_qualification import (
     latest_core_qualification_observation,
     latest_core_qualification_policy,
@@ -401,6 +402,7 @@ async def insert_coding_authoring_freeze(
         raise CodingShadowConflictError(
             "coding authoring freeze does not match immutable run authority"
         )
+    await revoke_ticket_coding_inference(session, ticket_id=ticket.ticket_id)
     values = {
         "freeze_id": uuid4(),
         "ticket_id": ticket.ticket_id,
@@ -500,6 +502,7 @@ async def insert_coding_shadow_result(
             raise CodingShadowConflictError(
                 "resolved coding result disagrees with frozen authoring evidence"
             )
+    await revoke_ticket_coding_inference(session, ticket_id=ticket.ticket_id)
     values = {
         "result_id": uuid4(),
         "ticket_id": ticket.ticket_id,
