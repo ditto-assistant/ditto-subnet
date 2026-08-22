@@ -29,6 +29,7 @@ from ditto.validator.config import (
     KOTH_BAND_DECAY_RATE,
     KOTH_BAND_DECAY_START_COMPOSITE,
     KOTH_CEILING_HEADROOM_SHARE,
+    KOTH_STATISTICAL_BAND_CAP_MULTIPLE,
     TOP5_MIN_CONFIRMATION_SEEDS,
 )
 from ditto.validator.crn import confirmation_seeds
@@ -782,6 +783,18 @@ def _quality_primary_efficiency_active(entries: Sequence[LedgerEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
+def _indifference_band(margin: float, statistical: float | None) -> float:
+    """``max(margin, statistical)``, with the statistical term capped.
+
+    A 3-shared-seed paired SE can explode from one outlier and ask for a
+    0.03 lead on a 0.92-vs-0.88 board. The cap keeps uncertainty able to
+    raise the flat 0.007 gate without letting a thin sample set the bar.
+    """
+    if statistical is None:
+        return margin
+    return max(margin, min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
+
+
 def _dethrone_composite(entry: LedgerEntry, *, quality_primary: bool) -> float:
     """Score the hysteresis comparison uses for one entry.
 
@@ -1138,7 +1151,7 @@ def _dethrone_scores(
     paired = _paired_dethrone(challenger, champion, dethrone_z)
     if paired is not None:
         mean_diff, champ_ref, se_diff = paired
-        base_band = max(margin, dethrone_z * se_diff)
+        base_band = _indifference_band(margin, dethrone_z * se_diff)
         band = base_band * _dethrone_band_scale(challenger, champion, champ_ref)
         band = _ceiling_capped_band(
             band, challenger, champion, champ_ref, active=ceiling_band_clamp

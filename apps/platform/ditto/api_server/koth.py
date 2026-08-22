@@ -39,6 +39,8 @@ KOTH_TAIL_SIZE = 4
 KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_CHAMPION_SHARE = KOTH_RANK_SHARES[0]
 KOTH_DETHRONE_Z = 1.64
+# Mirror ditto.validator.config.KOTH_STATISTICAL_BAND_CAP_MULTIPLE.
+KOTH_STATISTICAL_BAND_CAP_MULTIPLE = 2.0
 
 # One tempo = 360 blocks (~72 min at 12 s/block); mirrors the subnet worker's
 # rescore cadence.  The top-5 continual shared-seed rescore lane opens rounds on
@@ -490,6 +492,13 @@ def _quality_primary_efficiency_active(entries: Iterable[KothEntry]) -> bool:
     return any(_bounded_efficiency_factor(entry) is not None for entry in entries)
 
 
+def _indifference_band(margin: float, statistical: float | None) -> float:
+    """``max(margin, statistical)``, with the statistical term capped."""
+    if statistical is None:
+        return margin
+    return max(margin, min(statistical, KOTH_STATISTICAL_BAND_CAP_MULTIPLE * margin))
+
+
 def _dethrone_composite(entry: KothEntry, *, quality_primary: bool) -> float:
     """Score the hysteresis comparison uses for one entry.
 
@@ -857,8 +866,10 @@ def _dethrone_decision(
     paired = _paired_statistic(challenger, champion)
     if paired is not None:
         margin_lead = KOTH_MARGIN
-        paired_statistical_lead = KOTH_DETHRONE_Z * paired.standard_error
-        required = max(margin_lead, paired_statistical_lead) * _dethrone_band_scale(
+        paired_statistical_lead = _indifference_band(
+            margin_lead, KOTH_DETHRONE_Z * paired.standard_error
+        )
+        required = paired_statistical_lead * _dethrone_band_scale(
             challenger, champion, paired.champion_reference
         )
         required = _ceiling_capped_band(

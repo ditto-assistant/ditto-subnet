@@ -52,6 +52,10 @@ KOTH_CEILING_HEADROOM_SHARE = 0.5
 KOTH_TAIL_SIZE = 4  # ranked runners-up after the champion
 KOTH_RANK_SHARES = (0.65, 0.14, 0.10, 0.07, 0.04)
 KOTH_DETHRONE_Z = 1.64  # statistical dethrone-band z-multiplier (~95% one-sided)
+# Uncertainty may raise the bar above ``KOTH_MARGIN``, but a 3-seed paired
+# outlier must not demand a 0.03 lead on a 0.92-vs-0.88 board. Cap the
+# statistical term at this multiple of the flat margin before high-score decay.
+KOTH_STATISTICAL_BAND_CAP_MULTIPLE = 2.0
 KOTH_CONFIRMATION_SEEDS = 3  # CRN seeds a version-bump re-score dethrones on (median)
 # Continual evidence targets a one-sided 95% uncertainty half-width no wider
 # than KOTH_MARGIN. Eight is the minimum credible variance sample; 32 is the

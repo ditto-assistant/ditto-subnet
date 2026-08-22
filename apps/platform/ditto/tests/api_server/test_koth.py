@@ -412,6 +412,33 @@ def test_efficiency_does_not_skip_hysteresis_on_a_0_001_quality_lead() -> None:
     assert projection.raw_leader_decision.challenger_lead == pytest.approx(0.000804)
 
 
+def test_a_three_seed_paired_outlier_cannot_demand_a_0_03_lead() -> None:
+    """2026-08-22 aceron 0.92 vs goal 0.89: n=3 paired SE exploded to 0.035."""
+    goal = _entry(
+        3,
+        0.889233,
+        minutes=0,
+        bench_version=11,
+        confirmations=(0.882, 0.82, 0.90),
+        seeds=(1, 2, 3),
+    )
+    aceron = _entry(
+        1,
+        0.921833,
+        minutes=60,
+        bench_version=11,
+        confirmations=(0.882 - 0.015292, 0.82 + 0.094218, 0.90 - 0.003975),
+        seeds=(1, 2, 3),
+    )
+
+    projection = project_koth([aceron, goal])
+
+    assert projection is not None
+    assert projection.champion == aceron
+    assert projection.raw_leader == aceron
+    assert projection.raw_leader_decision is None
+
+
 def test_resetting_the_clock_on_a_sub_margin_gain_hands_the_rival_the_crown() -> None:
     """2026-08-22 goal v11 vs aceron, as fold arithmetic.
 

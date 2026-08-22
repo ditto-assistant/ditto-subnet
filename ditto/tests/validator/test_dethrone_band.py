@@ -839,10 +839,9 @@ class TestComputeWeightsWithBand:
             minutes=180,
         )
 
-        assert (
-            select_champion([unione, aceron], margin=0.007, dethrone_z=0.0).miner_hotkey
-            == "aceron"
-        )
+        champ = select_champion([unione, aceron], margin=0.007, dethrone_z=0.0)
+        assert champ is not None
+        assert champ.miner_hotkey == "aceron"
         weights = compute_weights(
             [unione, aceron],
             margin=0.007,
@@ -871,6 +870,34 @@ class TestComputeWeightsWithBand:
         champ = select_champion(
             [later, earlier, bystander], margin=0.007, dethrone_z=0.0
         )
+        assert champ is not None
+        assert champ.miner_hotkey == "aceron"
+
+    def test_a_three_seed_paired_outlier_cannot_demand_a_0_03_lead(self) -> None:
+        """2026-08-22 aceron 0.92 vs goal 0.89: n=3 paired SE exploded.
+
+        Shared-seed diffs (-0.015, +0.094, -0.004) mean +0.025 with SE 0.035,
+        so z*se = 0.057. Uncapped, decay asks for +0.032 and holds the 0.88
+        champion. Cap the statistical term at 2*margin so a thin sample cannot
+        set the bar.
+        """
+        goal = _e(
+            "goal",
+            0.889233,
+            confirmations=[0.882, 0.82, 0.90],
+            seeds=[1, 2, 3],
+            bench_version=11,
+            minutes=0,
+        )
+        aceron = _e(
+            "aceron",
+            0.921833,
+            confirmations=[0.882 - 0.015292, 0.82 + 0.094218, 0.90 - 0.003975],
+            seeds=[1, 2, 3],
+            bench_version=11,
+            minutes=60,
+        )
+        champ = select_champion([aceron, goal], margin=0.007, dethrone_z=1.64)
         assert champ is not None
         assert champ.miner_hotkey == "aceron"
 
@@ -1017,16 +1044,17 @@ class TestBeatsPaired:
         )
         assert _beats(chal_unpaired, champ, margin=0.02, dethrone_z=1.64) is False
 
-    def test_noisy_paired_lead_is_held_by_the_band(self) -> None:
-        # Same ~0.05 mean lead but the per-seed differences swing (se_diff large),
-        # so the paired z-band holds the incumbent.
+    def test_noisy_paired_lead_is_capped_so_a_0_05_mean_still_dethrones(self) -> None:
+        # Same ~0.05 mean lead but the per-seed differences swing (se_diff large).
+        # Uncapped, z*se ≈ 0.12 would hold the incumbent. The statistical cap at
+        # 2*margin keeps a thin sample from setting a 0.03+ bar.
         champ = _e(
             "champ", 0.80, confirmations=[0.80, 0.79, 0.81], seeds=[1, 2, 3], minutes=0
         )
         chal = _e(
             "chal", 0.85, confirmations=[0.95, 0.70, 0.90], seeds=[1, 2, 3], minutes=1
         )
-        assert _beats(chal, champ, margin=0.02, dethrone_z=1.64) is False
+        assert _beats(chal, champ, margin=0.02, dethrone_z=1.64) is True
 
     def test_falls_back_to_unpaired_without_seeds(self) -> None:
         # No seeds on either side -> unpaired median/independent-sum path, unchanged.
