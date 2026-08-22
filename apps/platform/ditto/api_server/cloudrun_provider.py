@@ -11,6 +11,7 @@ from ditto.api_server.cloudrun_client import AsyncCloudRunClient, CloudRunAPIErr
 from ditto.api_server.config import CloudRunScreeningConfig, TargonRentalConfig
 from ditto.api_server.screening_provider import (
     BuildSpec,
+    ProvisionObservation,
     ReviewSpec,
     ScreeningProviderError,
     SmokeSpec,
@@ -110,13 +111,18 @@ class CloudRunComputeProvider:
             ) from error
 
     async def provision_status(self, resource_id: str) -> str:
+        return (await self.observe_provision(resource_id)).status
+
+    async def observe_provision(self, resource_id: str) -> ProvisionObservation:
         kind, name = _split(resource_id)
         try:
             if kind == "job":
-                return await self._job_status(name)
-            return await self._service_status(name)
+                status = await self._job_status(name)
+            else:
+                status = await self._service_status(name)
         except CloudRunAPIError:
-            return ""
+            return ProvisionObservation(status="")
+        return ProvisionObservation(status=status)
 
     async def wait_until_running(self, resource_id: str, timeout_seconds: float) -> str:
         loop = asyncio.get_running_loop()

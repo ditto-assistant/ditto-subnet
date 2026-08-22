@@ -11,6 +11,7 @@ import httpx
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
     BuildSpec,
+    ProvisionObservation,
     ReviewSpec,
     ScreeningProviderError,
     SmokeSpec,
@@ -107,11 +108,17 @@ class TargonComputeProvider:
             ) from error
 
     async def provision_status(self, resource_id: str) -> str:
+        return (await self.observe_provision(resource_id)).status
+
+    async def observe_provision(self, resource_id: str) -> ProvisionObservation:
         try:
             state = await self._targon.state(resource_id)
         except TargonAPIError:
-            return ""
-        return str(state.get("status", "")).casefold()
+            return ProvisionObservation(status="")
+        return ProvisionObservation(
+            status=str(state.get("status", "")).casefold(),
+            message=str(state.get("message", "") or ""),
+        )
 
     async def wait_until_running(self, resource_id: str, timeout_seconds: float) -> str:
         loop = asyncio.get_running_loop()

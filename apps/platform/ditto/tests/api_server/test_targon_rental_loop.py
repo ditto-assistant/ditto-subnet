@@ -10,7 +10,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.config import TargonRentalConfig
-from ditto.api_server.screening_provider import BuildSpec, ReviewSpec, SmokeSpec
+from ditto.api_server.screening_provider import (
+    BuildSpec,
+    ProvisionObservation,
+    ReviewSpec,
+    SmokeSpec,
+    inflight_failure_code,
+)
 from ditto.api_server.targon_provider import TargonComputeProvider
 from ditto.api_server.targon_rental_loop import TargonRentalLoop
 from ditto.db.models import Agent, SubmissionImageBuild, SubmissionSourceReview
@@ -21,8 +27,9 @@ from ditto.tests.api_server.endpoints.test_screener import (
 
 
 class _FakeTargon:
-    def __init__(self, *, status: str = "running") -> None:
+    def __init__(self, *, status: str = "running", message: str = "") -> None:
         self.status = status
+        self.message = message
         self.status_by_uid: dict[str, str] = {}
         self.created: list[dict[str, Any]] = []
         self.deployed: list[str] = []
@@ -41,11 +48,25 @@ class _FakeTargon:
     async def state(self, uid: str) -> dict[str, Any]:
         return {
             "status": self.status_by_uid.get(uid, self.status),
+            "message": getattr(self, "message", ""),
             "urls": [{"port": 8080, "url": "https://runtime.example"}],
         }
 
     async def delete(self, uid: str) -> None:
         self.deleted.append(uid)
+
+
+def test_inflight_failure_code_maps_kaniko_exit() -> None:
+    assert (
+        inflight_failure_code(
+            "targon",
+            "error",
+            "Container failed (Error) — exit code 72",
+        )
+        == "TARGON_SUBMISSION_KANIKO_FAILED"
+    )
+    assert inflight_failure_code("targon", "error", "") == "TARGON_PROVISION_ERROR"
+    assert inflight_failure_code("targon", "timeout") == "TARGON_PROVISION_TIMEOUT"
 
 
 def _config(**overrides: Any) -> TargonRentalConfig:
@@ -433,6 +454,58 @@ async def test_reaps_runtime_running_without_resource_after_provision_window(
 
 
 @pytest.mark.asyncio
+async def test_reaps_errored_running_kaniko_before_provision_window(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    targon.status = "error"
+    targon.message = "Container failed (Error) — exit code 72"
+    targon.deleted.clear()
+    assert await loop.tick() is True
+    assert "wrk-1" in targon.deleted
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "fallback_required"
+        assert build.error_code == "TARGON_SUBMISSION_KANIKO_FAILED"
+        assert build.provider_resource_id is None
+
+
+@pytest.mark.asyncio
+async def test_does_not_timeout_provisioning_kaniko_inside_window(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    targon.status = "provisioning"
+    targon.deleted.clear()
+    await loop.tick()
+    assert targon.deleted == []
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "running"
+        assert build.provider_resource_id == "wrk-1"
+
+
+@pytest.mark.asyncio
 async def test_does_not_reap_compiling_kaniko_after_provision_window(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
@@ -540,8 +613,11 @@ class _FakeCloudRun:
         self.started.append(resource_id)
 
     async def provision_status(self, resource_id: str) -> str:
+        return (await self.observe_provision(resource_id)).status
+
+    async def observe_provision(self, resource_id: str) -> ProvisionObservation:
         del resource_id
-        return self.status
+        return ProvisionObservation(status=self.status)
 
     async def wait_until_running(self, resource_id: str, timeout_seconds: float) -> str:
         del resource_id, timeout_seconds

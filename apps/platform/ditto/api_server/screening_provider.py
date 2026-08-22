@@ -7,8 +7,20 @@ internal Service for the miner ``/health`` probe.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Protocol
+
+_SUBMISSION_EXIT_CODE = re.compile(r"(?:^|\D)exit code (71|72|73|74|75|76)(?:\D|$)")
+_SUBMISSION_STAGE_BY_EXIT_CODE = {
+    "71": "SOURCE",
+    "72": "KANIKO",
+    "73": "ARCHIVE",
+    "74": "UPLOAD",
+    "75": "COMPLETE",
+    "76": "CONTRACT",
+}
+_PROVIDER_TERMINAL = frozenset({"error", "deleted", "suspended"})
 
 
 class ScreeningProviderError(RuntimeError):
@@ -43,6 +55,14 @@ class ReviewSpec:
     args: tuple[str, ...]
 
 
+@dataclass(frozen=True)
+class ProvisionObservation:
+    """Latest provider replica status, plus any public Targon state message."""
+
+    status: str
+    message: str = ""
+
+
 class ScreeningComputeProvider(Protocol):
     """One execution backend for the three one-shot screening lanes."""
 
@@ -60,6 +80,9 @@ class ScreeningComputeProvider(Protocol):
     async def start(self, resource_id: str) -> None: ...
 
     async def provision_status(self, resource_id: str) -> str: ...
+
+    async def observe_provision(self, resource_id: str) -> ProvisionObservation:
+        """Return status plus any public replica message (exit code, etc.)."""
 
     async def wait_until_running(self, resource_id: str, timeout_seconds: float) -> str:
         """Return ``running``, ``error``, or ``timeout``."""
@@ -79,3 +102,20 @@ def provision_error_code(stored_provider: str, result: str) -> str:
     if result == "timeout":
         return f"{prefix}_PROVISION_TIMEOUT"
     return f"{prefix}_PROVISION_ERROR"
+
+
+def inflight_failure_code(stored_provider: str, status: str, message: str = "") -> str:
+    """Classify a dead or never-running replica.
+
+    Submission-builder exit codes 71-76 are the same public contract the
+    dedicated orchestrator builder maps. A generic Targon ``error`` without
+    those codes stays ``TARGON_PROVISION_ERROR``.
+    """
+    if status in _PROVIDER_TERMINAL:
+        if stored_provider == "targon":
+            match = _SUBMISSION_EXIT_CODE.search(message)
+            if match is not None:
+                stage = _SUBMISSION_STAGE_BY_EXIT_CODE[match.group(1)]
+                return f"TARGON_SUBMISSION_{stage}_FAILED"
+        return provision_error_code(stored_provider, "error")
+    return provision_error_code(stored_provider, "timeout")

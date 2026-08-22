@@ -24,11 +24,12 @@ from ditto.api_server.builder_image import is_digest_pinned_image
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
     BuildSpec,
+    ProvisionObservation,
     ReviewSpec,
     ScreeningComputeProvider,
     ScreeningProviderError,
     SmokeSpec,
-    provision_error_code,
+    inflight_failure_code,
 )
 from ditto.api_server.targon_provider import TargonComputeProvider, TargonRentals
 from ditto.api_server.targon_screening import admit_targon_screening_work
@@ -48,6 +49,7 @@ _REAP_LIMIT = 16
 _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
 _INFLIGHT_JOB = ("leased", "running")
+_PROVIDER_TERMINAL = frozenset({"error", "deleted", "suspended"})
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
@@ -206,6 +208,25 @@ class TargonRentalLoop:
             if provider.stored_provider == wanted or provider.name == wanted:
                 return provider
         return self._providers[0]
+
+    async def _observe_provision(
+        self, provider: ScreeningComputeProvider, uid: str
+    ) -> ProvisionObservation:
+        return await provider.observe_provision(uid)
+
+    async def _dead_replica_code(
+        self,
+        provider: ScreeningComputeProvider,
+        uid: str,
+        provisioned: str,
+    ) -> str:
+        if provisioned == "timeout":
+            return inflight_failure_code(provider.stored_provider, "timeout")
+        observation = await self._observe_provision(provider, uid)
+        status = observation.status or provisioned
+        return inflight_failure_code(
+            provider.stored_provider, status, observation.message
+        )
 
     def _live_build_inflight(self, now: datetime) -> ColumnElement[bool]:
         """Kaniko rows that still occupy a Targon create/deploy slot."""
@@ -370,7 +391,7 @@ class TargonRentalLoop:
                 )
                 if provisioned == "running":
                     return True
-                error_code = provision_error_code(provider.stored_provider, provisioned)
+                error_code = await self._dead_replica_code(provider, uid, provisioned)
             except ScreeningProviderError:
                 logger.exception(
                     "%s kaniko launch failed build_id=%s", provider.name, build_id
@@ -473,8 +494,8 @@ class TargonRentalLoop:
                         break
                     error_code = "TARGON_RUNTIME_HEALTH_FAILED"
                 else:
-                    error_code = provision_error_code(
-                        provider.stored_provider, provisioned
+                    error_code = await self._dead_replica_code(
+                        provider, uid, provisioned
                     )
             except ScreeningProviderError:
                 logger.exception(
@@ -633,7 +654,7 @@ class TargonRentalLoop:
                 )
                 if provisioned == "running":
                     return True
-                error_code = provision_error_code(provider.stored_provider, provisioned)
+                error_code = await self._dead_replica_code(provider, uid, provisioned)
             except ScreeningProviderError:
                 logger.exception(
                     "%s source-review launch failed review_id=%s",
@@ -786,11 +807,18 @@ class TargonRentalLoop:
         return handled
 
     async def _reap_unprovisioned_rentals(self) -> bool:
-        """Fail in-flight rentals that never reached a running workload."""
+        """Fail inflight rentals that died or never became running.
+
+        Targon ``error`` / ``deleted`` / ``suspended`` is failed on the next
+        tick so a Kaniko crash (exit 72) cannot sit in ``running`` until
+        ``provision_timeout_seconds``. Still-provisioning replicas wait for
+        that cutoff, then timeout. Jobs that remain ``running`` are left
+        until they POST complete or the 50-minute lease expires.
+        """
         now = datetime.now(UTC)
         cutoff = self._provision_cutoff(now)
         handled = await self._reap_abandoned_without_resource(now)
-        candidates: list[tuple[str, UUID, str, str | None]] = []
+        candidates: list[tuple[str, UUID, str, str | None, datetime]] = []
         async with self._session_maker() as session, session.begin():
             builds = (
                 await session.scalars(
@@ -799,7 +827,6 @@ class TargonRentalLoop:
                         SubmissionImageBuild.environment == self._config.environment,
                         SubmissionImageBuild.status.in_(_INFLIGHT_JOB),
                         SubmissionImageBuild.provider_resource_id.is_not(None),
-                        SubmissionImageBuild.updated_at < cutoff,
                     )
                     .order_by(SubmissionImageBuild.updated_at)
                     .with_for_update(skip_locked=True)
@@ -809,7 +836,9 @@ class TargonRentalLoop:
             for row in builds:
                 uid = row.provider_resource_id
                 if uid:
-                    candidates.append(("build", row.build_id, uid, row.provider))
+                    candidates.append(
+                        ("build", row.build_id, uid, row.provider, row.updated_at)
+                    )
             runtimes = (
                 await session.scalars(
                     select(SubmissionImageBuild)
@@ -817,7 +846,6 @@ class TargonRentalLoop:
                         SubmissionImageBuild.environment == self._config.environment,
                         SubmissionImageBuild.runtime_status == "running",
                         SubmissionImageBuild.runtime_provider_resource_id.is_not(None),
-                        SubmissionImageBuild.updated_at < cutoff,
                     )
                     .order_by(SubmissionImageBuild.updated_at)
                     .with_for_update(skip_locked=True)
@@ -827,7 +855,9 @@ class TargonRentalLoop:
             for row in runtimes:
                 uid = row.runtime_provider_resource_id
                 if uid:
-                    candidates.append(("runtime", row.build_id, uid, row.provider))
+                    candidates.append(
+                        ("runtime", row.build_id, uid, row.provider, row.updated_at)
+                    )
             reviews = (
                 await session.scalars(
                     select(SubmissionSourceReview)
@@ -835,7 +865,6 @@ class TargonRentalLoop:
                         SubmissionSourceReview.environment == self._config.environment,
                         SubmissionSourceReview.status.in_(_INFLIGHT_JOB),
                         SubmissionSourceReview.provider_resource_id.is_not(None),
-                        SubmissionSourceReview.updated_at < cutoff,
                     )
                     .order_by(SubmissionSourceReview.updated_at)
                     .with_for_update(skip_locked=True)
@@ -845,16 +874,26 @@ class TargonRentalLoop:
             for row in reviews:
                 uid = row.provider_resource_id
                 if uid:
-                    candidates.append(("review", row.review_id, uid, row.provider))
-        for kind, row_id, uid, stored_provider in candidates:
+                    candidates.append(
+                        ("review", row.review_id, uid, row.provider, row.updated_at)
+                    )
+        for kind, row_id, uid, stored_provider, updated_at in candidates:
             provider = self._provider_named(stored_provider)
-            status = await provider.provision_status(uid)
+            observation = await self._observe_provision(provider, uid)
+            status = observation.status
             if status == "running":
                 continue
-            result = (
-                "error" if status in {"error", "deleted", "suspended"} else "timeout"
-            )
-            error_code = provision_error_code(provider.stored_provider, result)
+            seen = updated_at
+            if seen.tzinfo is None:
+                seen = seen.replace(tzinfo=UTC)
+            if status in _PROVIDER_TERMINAL:
+                error_code = inflight_failure_code(
+                    provider.stored_provider, status, observation.message
+                )
+            elif seen < cutoff:
+                error_code = inflight_failure_code(provider.stored_provider, "timeout")
+            else:
+                continue
             if kind == "build":
                 await self._fail_build_provision(row_id, error_code)
             elif kind == "runtime":

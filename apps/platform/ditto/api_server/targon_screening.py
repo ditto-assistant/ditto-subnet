@@ -52,6 +52,7 @@ logger = logging.getLogger(__name__)
 _LEASE_TTL = timedelta(minutes=70)
 _SCREENED_IMAGE_TTL = timedelta(days=1)
 _PLATFORM_COPY_PREFIX = "platform-targon-copy:"
+_KANIKO_FAILED = "TARGON_SUBMISSION_KANIKO_FAILED"
 
 
 def _targon_first(providers: tuple[str, ...]) -> bool:
@@ -171,13 +172,22 @@ async def maybe_finalize_targon_screen(
     )
     if build is None or build.status not in {"succeeded", "consumed"}:
         if build is not None and build.status == "fallback_required":
-            await _fail_retryable(
-                session,
-                attempt,
-                reason="Targon submission build was unavailable",
-                code="targon-build-unavailable",
-                now=now,
-            )
+            if build.error_code == _KANIKO_FAILED:
+                await _reject_build(
+                    session,
+                    attempt,
+                    reason="artifact Docker image did not build",
+                    code="docker-build",
+                    now=now,
+                )
+            else:
+                await _fail_retryable(
+                    session,
+                    attempt,
+                    reason="Targon submission build was unavailable",
+                    code="targon-build-unavailable",
+                    now=now,
+                )
             return True
         return False
     if build.runtime_status == "fallback_required":
@@ -376,6 +386,26 @@ async def _dataset_seed(
         )
         return secrets.randbits(63), None, None
     return derive_seed(block.hash, agent_id), block.number, block.hash
+
+
+async def _reject_build(
+    session: AsyncSession,
+    attempt: ScreeningAttempt,
+    *,
+    reason: str,
+    code: str,
+    now: datetime,
+) -> None:
+    agent = await session.get(Agent, attempt.agent_id, with_for_update=True)
+    attempt.status = "rejected"
+    attempt.finished_at = now
+    attempt.public_reason = reason
+    attempt.reason_code = code
+    if agent is not None:
+        agent.status = AgentStatus.REJECTED
+        agent.screening_reason = reason
+        agent.screening_reason_code = code
+        agent.screening_policy_version = SCREENING_POLICY_VERSION
 
 
 async def _fail_retryable(

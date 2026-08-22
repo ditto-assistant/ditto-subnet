@@ -268,3 +268,65 @@ async def test_bind_fails_closed_without_tar_config_digest(
         assert agent is not None
         assert agent.status == AgentStatus.SCREENING_FAILED
         assert agent.screened_image_id is None
+
+
+@pytest.mark.asyncio
+async def test_finalize_rejects_kaniko_exit_as_docker_build(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                build_only=True,
+                started_at=now - timedelta(minutes=3),
+                deadline=now + timedelta(minutes=60),
+            )
+        )
+        await session.flush()
+        session.add(
+            SubmissionImageBuild(
+                build_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                output_key=f"{agent_id}/builds/{attempt_id}.tar",
+                status="fallback_required",
+                provider="targon",
+                error_code="TARGON_SUBMISSION_KANIKO_FAILED",
+                runtime_status="pending",
+                attempt_count=1,
+                created_at=now - timedelta(minutes=3),
+                completed_at=now - timedelta(seconds=5),
+                updated_at=now - timedelta(seconds=5),
+            )
+        )
+    storage = _FakeStorage()
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, storage),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "rejected"
+        assert attempt.reason_code == "docker-build"
+        assert attempt.public_reason == "artifact Docker image did not build"
+        agent = await session.get(Agent, attempt.agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.REJECTED
+        assert agent.screening_reason_code == "docker-build"
