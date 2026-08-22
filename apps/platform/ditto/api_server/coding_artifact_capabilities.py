@@ -8,11 +8,19 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
 from typing import Literal, Protocol
 from urllib.parse import parse_qs, urlparse
 from uuid import UUID
 
+from pydantic import ValidationError
+
+from ditto.api_models.coding_artifacts import (
+    CODING_ARTIFACT_AUDIENCE,
+    CODING_ARTIFACT_MAX_BYTES,
+    CodingArtifactCapabilityEnvelope,
+    CodingArtifactDeliveryPhase,
+    CodingArtifactKind,
+)
 from ditto.api_models.coding_selection import coding_task_set_manifest_digest
 from ditto.api_server.coding_private_catalog import CodingPrivateCatalogConfig
 from ditto.api_server.storage.client import S3StorageClient
@@ -31,21 +39,6 @@ class CodingArtifactCapabilityUnavailableError(Exception):
 
 class CodingArtifactCapabilityIntegrityError(Exception):
     """Lease, object metadata, size, key, or signed URL authority is invalid."""
-
-
-class CodingArtifactKind(StrEnum):
-    VISIBLE_BUNDLE = "visible-bundle"
-    MEMORY_BUNDLE = "memory-bundle"
-    RESOURCE_PROFILE = "resource-profile"
-    GRADER_BUNDLE = "grader-bundle"
-
-
-_MAX_BYTES = {
-    CodingArtifactKind.VISIBLE_BUNDLE: 2 << 30,
-    CodingArtifactKind.MEMORY_BUNDLE: 64 << 20,
-    CodingArtifactKind.RESOURCE_PROFILE: 4 << 20,
-    CodingArtifactKind.GRADER_BUNDLE: 512 << 20,
-}
 
 
 class CodingArtifactObjectStore(Protocol):
@@ -93,6 +86,7 @@ class CodingArtifactCapabilitySet:
     ticket_id: UUID
     run_row_id: UUID
     validator_hotkey: str
+    ticket_deadline: datetime
     expires_at: datetime
     capabilities: tuple[
         CodingArtifactCapability,
@@ -199,7 +193,7 @@ class CodingArtifactCapabilityMinter:
                 isinstance(metadata.size_bytes, bool)
                 or not isinstance(metadata.size_bytes, int)
                 or metadata.size_bytes < 1
-                or metadata.size_bytes > _MAX_BYTES[kind]
+                or metadata.size_bytes > CODING_ARTIFACT_MAX_BYTES[kind]
                 or metadata.metadata.get("sha256") != digest
                 or metadata.metadata.get("artifact-kind") != kind.value
             ):
@@ -267,6 +261,7 @@ class CodingArtifactCapabilityMinter:
             ticket_id=lease.ticket_id,
             run_row_id=lease.run_row_id,
             validator_hotkey=lease.validator_hotkey,
+            ticket_deadline=deadline,
             expires_at=capability_set_expires_at,
             capabilities=(
                 capabilities[0],
@@ -275,6 +270,45 @@ class CodingArtifactCapabilityMinter:
                 capabilities[3],
             ),
         )
+
+
+def project_coding_artifact_capability(
+    capability_set: CodingArtifactCapabilitySet,
+    *,
+    kind: CodingArtifactKind,
+    phase: CodingArtifactDeliveryPhase,
+) -> CodingArtifactCapabilityEnvelope:
+    """Project one bearer URL without serializing the complete capability set."""
+
+    selected = [
+        capability
+        for capability in capability_set.capabilities
+        if capability.kind is kind
+    ]
+    if len(selected) != 1:
+        raise CodingArtifactCapabilityIntegrityError(
+            "coding artifact capability set lacks one exact kind"
+        )
+    capability = selected[0]
+    try:
+        return CodingArtifactCapabilityEnvelope(
+            schema="dittobench-coding-artifact-capability-v1",
+            coding_contract_version=1,
+            weight_eligible=False,
+            ticket_id=capability_set.ticket_id,
+            ticket_deadline=capability_set.ticket_deadline,
+            delivery_phase=phase,
+            artifact_kind=kind,
+            audience=CODING_ARTIFACT_AUDIENCE[kind],
+            sha256=capability.sha256,
+            size_bytes=capability.size_bytes,
+            url=capability.url,
+            expires_at=capability.expires_at,
+        )
+    except ValidationError:
+        raise CodingArtifactCapabilityIntegrityError(
+            "coding artifact delivery projection is invalid"
+        ) from None
 
 
 def _aware(value: datetime) -> datetime:

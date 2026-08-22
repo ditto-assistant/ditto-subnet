@@ -32,6 +32,14 @@ supervisor. It releases the grader capability only to the protected grader and
 only after authoring is frozen; none of these bearer URLs enters the miner
 harness or model context.
 
+The validator-only `dittobench-coding-artifact-capability-v1` wire is frozen by
+`packages/dittobench-coding-contract/testdata/coding_artifact_capability_v1.json`.
+Authoring permits visible, memory, and resource artifacts. Grading permits
+visible, resource, and grader artifacts. The shared Python/Go models reject
+grader delivery during authoring and memory delivery during grading. The
+synthetic vector URL is not part of canonical identity and is not consumed by
+Rust or miner code.
+
 Environment and grader images remain immutable OCI digests. Base-tree,
 test-manifest, and grader-plan hashes remain identities within their parent
 bundles rather than separately presigned objects.

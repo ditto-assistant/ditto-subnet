@@ -160,6 +160,27 @@ func ParseRunEvidence(body []byte) (RunEvidence, error) {
 	return parseCanonical[RunEvidence](body, validateRunEvidenceShape)
 }
 
+// ValidateJSONDocument applies the shared bounded Unicode, duplicate-field,
+// nesting, and trailing-content rules to a non-canonical transport document.
+func ValidateJSONDocument(body []byte, maximumBytes int) error {
+	if maximumBytes <= 0 || len(body) == 0 || len(body) > maximumBytes {
+		return errors.New("coding JSON size is outside its transport bound")
+	}
+	if err := ValidateRawJSONUnicode(body); err != nil {
+		return err
+	}
+	if err := rejectDuplicateJSONFields(body); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return err
+	}
+	return requireEOF(decoder)
+}
+
 func parseCanonical[T parsedModel](
 	body []byte,
 	validateShape func(map[string]any) error,

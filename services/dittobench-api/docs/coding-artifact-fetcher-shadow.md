@@ -30,6 +30,18 @@ resource-profile -> resource-supervisor
 grader-bundle    -> protected-grader
 ```
 
+The shared delivery contract additionally permits:
+
+```text
+authoring -> visible-bundle, memory-bundle, resource-profile
+grading   -> visible-bundle, resource-profile, grader-bundle
+```
+
+The Go wire DTO validates the shared vector and converts into the fetcher's
+non-serializable internal capability. Unknown wire fields are ignored for
+rolling compatibility, while duplicate or missing known fields, invalid UTF-8,
+unpaired surrogates, excessive nesting, and trailing content fail closed.
+
 The future orchestrator remains responsible for phase authority. In
 particular, it must not project the grader capability until authoring is frozen
 and must never place any bearer URL in the miner harness or model context.
