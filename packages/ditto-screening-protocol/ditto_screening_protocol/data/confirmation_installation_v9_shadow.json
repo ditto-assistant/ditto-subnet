@@ -6,15 +6,15 @@
       "max_requests": 12,
       "request_timeout_milliseconds": 90000,
       "sample_size": 4,
-      "total_timeout_milliseconds": 1200000
+      "total_timeout_milliseconds": 1800000
     },
     "ablation_dataset_sha256": "8f6d94e18e25ceb6cd65d38ab62bd7815b234b0d0a442cca4f42a87a21904f8e",
-    "ablation_profile_checksum": "c90417ffa09658fdf38275134beffaefef39a4ee620bd04234b50bb378a82448",
-    "ablation_profile_revision": "dittobench-v9-ablation-shadow-4-v1",
+    "ablation_profile_checksum": "8ec324b3ee1b14febc4816d3df2c488e1f573467fb71a15aa7270c9b551cbba0",
+    "ablation_profile_revision": "dittobench-v9-ablation-shadow-5-v1",
     "ablation_projection_key_sha256": "8a00a865d6d36f3e92f39a138ac6eabc627d4d9915440e589805a3d2677b668f",
     "ablation_selection_key_sha256": "2744541342deb53d3504556838313ba27d3bfca625db939054043f5e495b3831",
     "ablation_threshold_manifest_sha256": "6ec695b93cd953909fd583158cf9577425aa1830e3b93a79162ce9fb9fa0e9d5",
-    "checksum": "cfb3a4aaaef68ed509d17407629790731e8b074ffe9d91a705dabad04fd1d9c6",
+    "checksum": "89ce79659f28d1e5d4fa87b8fe741ce6d7dd37dd06720d343ed0b05fea7f8420",
     "composite": {
       "base_weight_bps": 7000,
       "checksum": "1ce77c31a1b6f146c4eb79c2422f066441c0eaff6cf3ca67fa13989a87c8101f",
@@ -28,8 +28,8 @@
         "max_chat_input_bytes": 0,
         "max_chat_requests": 0,
         "max_embedding_input_bytes": 33554432,
-        "max_embedding_inputs": 512,
-        "max_embedding_requests": 128
+        "max_embedding_inputs": 4096,
+        "max_embedding_requests": 2048
       },
       "contract_version": "dittobench-v9-ablation-profile-v1",
       "intervention": "embedding",
@@ -94,11 +94,11 @@
         "route_provider": "throughput"
       }
     ],
-    "revision": "v9-confirmation-shadow-bounded-2026-08-19-zdr-v4",
+    "revision": "v9-confirmation-shadow-bounded-2026-08-19-zdr-v5",
     "schema_version": 1
   },
   "launch_manifest_path": "/opt/ditto/confirmation/confirmation_launch_manifest_v9_shadow.json",
-  "launch_manifest_sha256": "1de2dc1d621d9c64fedf7a73737bf414ea46e2bd443dd3451d461401e4229f51",
+  "launch_manifest_sha256": "4f2707f8e3b51e22dd39471f881e2470b691a9fb92d2d3aad73f3b81e3555aa9",
   "longmem_dataset_path": "/opt/ditto/confirmation/longmemeval_s_cleaned.json",
   "sandbox_health_timeout_ms": 180000,
   "schema_version": 1

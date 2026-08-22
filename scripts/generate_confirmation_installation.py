@@ -73,9 +73,9 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-19-zdr-v4"
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-19-zdr-v5"
 LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-12-zdr-v3"
-ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-4-v1"
+ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-5-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
 STARTER_MAX_AGENT_TURNS = 24
 
@@ -240,7 +240,9 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             max_attempts=2,
             max_requests=12,
             request_timeout_milliseconds=90_000,
-            total_timeout_milliseconds=1_200_000,
+            # Go hard-max is 30 minutes. v4's 20-minute total was enough for
+            # inference (19 synthetic chats) but not a v11-shaped embedding run.
+            total_timeout_milliseconds=1_800_000,
         ),
         inference_ablation=AblationVerificationPolicy(
             intervention="inference",
@@ -261,8 +263,12 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             budget=SyntheticBudgetPolicy(
                 max_chat_requests=0,
                 max_chat_input_bytes=0,
-                max_embedding_requests=128,
-                max_embedding_inputs=512,
+                # Live v4 canary 2591346f exhausted 128 applied / 6 rejected
+                # with sample_count=0 on a v11-subject / v9-instrument run.
+                # Synthetic embeddings have no provider cost; this is a
+                # coordinator-time rail. 2048 stays under Go's 4096 hard max.
+                max_embedding_requests=2_048,
+                max_embedding_inputs=4_096,
                 max_embedding_input_bytes=32 * 1024 * 1024,
             ),
         ),
@@ -300,11 +306,11 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
 
     launch = {
         "schema_version": 1,
-        "revision": "v9-confirmation-shadow-launch-2026-08-19-zdr-v4".replace(
+        "revision": "v9-confirmation-shadow-launch-2026-08-19-zdr-v5".replace(
             "v9-", f"{tag}-", 1
         )
         if bench_version != BENCH_VERSION_V9
-        else "v9-confirmation-shadow-launch-2026-08-19-zdr-v4",
+        else "v9-confirmation-shadow-launch-2026-08-19-zdr-v5",
         "mode": "shadow",
         "execution_profile_revision": profile.revision,
         "execution_profile_checksum": profile.checksum(),
