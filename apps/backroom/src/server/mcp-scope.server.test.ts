@@ -372,7 +372,11 @@ describe('MCP scope challenges', () => {
   })
 
   it('keeps the stuck-submission list and scoring readiness read-only', async () => {
-    for (const name of ['list_stuck_submissions', 'agent_scoring_readiness']) {
+    for (const name of [
+      'list_stuck_submissions',
+      'agent_scoring_readiness',
+      'get_agent_coding_certifications',
+    ]) {
       const request = new Request('https://backroom.dittobench.ai/mcp', {
         method: 'POST',
         body: JSON.stringify({

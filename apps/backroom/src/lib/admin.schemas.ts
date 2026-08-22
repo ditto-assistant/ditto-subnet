@@ -4344,6 +4344,55 @@ export const agentScoringReadinessSchema = z.object({
   blocking_reasons: z.array(z.string()),
 })
 
+export const agentCodingCertificationInputSchema = z.object({
+  agentId: z.string().uuid(),
+  limit: z.number().int().min(1).max(100).default(50),
+})
+
+export const codingCertificationRecordSchema = z.object({
+  certification_row_id: z.string().uuid(),
+  validator_hotkey: z.string(),
+  bench_version: z.number().int().positive(),
+  ticket_deadline: z.string(),
+  coding_contract_version: z.number().int().positive(),
+  certification_id: z.string(),
+  status: z.enum(['unsupported', 'failed', 'certified']),
+  failure_stage: z.enum(['health', 'seed', 'run', 'freeze', 'grade']).nullable(),
+  failure_code: z.string().nullable(),
+  certification_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  canary_manifest_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  screened_image_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  transcript_object_key: z.string().regex(/^sha256\/[0-9a-f]{64}$/).nullable(),
+  frozen_submission_object_key: z
+    .string()
+    .regex(/^sha256\/[0-9a-f]{64}$/)
+    .nullable(),
+  issued_at: z.string(),
+  expires_at: z.string(),
+  created_at: z.string(),
+  active: z.boolean(),
+  stale_reason: z.enum([
+    'active',
+    'expired',
+    'not_certified',
+    'artifact_changed',
+    'screened_image_changed',
+  ]),
+})
+
+export const agentCodingCertificationStatusSchema = z.object({
+  agent_id: z.string().uuid(),
+  agent_name: z.string(),
+  miner_hotkey: z.string(),
+  artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
+  screened_image_sha256: z.string().regex(/^[0-9a-f]{64}$/).nullable(),
+  coding_supported: z.boolean(),
+  coding_certified: z.boolean(),
+  active_certification_count: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+  certifications: z.array(codingCertificationRecordSchema),
+})
+
 export const validatorScoreReplacementLookupInputSchema = z.object({
   agentId: z.string().uuid(),
   validatorHotkey: z.string().min(1),
@@ -5437,6 +5486,9 @@ export type BatchRetryValidationResponse = z.infer<
   typeof batchRetryValidationResponseSchema
 >
 export type AgentScoringReadiness = z.infer<typeof agentScoringReadinessSchema>
+export type AgentCodingCertificationStatus = z.infer<
+  typeof agentCodingCertificationStatusSchema
+>
 export type BenchmarkContractRefreshDetail = z.infer<
   typeof benchmarkContractRefreshDetailSchema
 >

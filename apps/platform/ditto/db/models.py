@@ -915,6 +915,138 @@ class EvaluationPayment(Base):
     )
 
 
+class CodingCapabilityCertification(Base):
+    """One immutable validator-signed shadow coding capability receipt.
+
+    Rows are append-only and never participate in score aggregation or weights.
+    Active certification is derived at read time from the exact agent/source
+    artifact, screened-image digest, ``certified`` status, and expiry.
+    """
+
+    __tablename__ = "coding_capability_certifications"
+
+    certification_row_id: Mapped[UUID] = mapped_column(
+        SaUUID(as_uuid=True), primary_key=True, default=uuid4
+    )
+    agent_id: Mapped[UUID] = mapped_column(SaUUID(as_uuid=True), nullable=False)
+    artifact_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    screened_image_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    validator_hotkey: Mapped[str] = mapped_column(Text, nullable=False)
+    bench_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    ticket_deadline: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    coding_contract_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    certification_id: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(Text, nullable=False)
+    failure_stage: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_code: Mapped[str | None] = mapped_column(Text, nullable=True)
+    certification_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    canary_manifest_sha256: Mapped[str] = mapped_column(Text, nullable=False)
+    transcript_object_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    frozen_submission_object_key: Mapped[str | None] = mapped_column(
+        Text, nullable=True
+    )
+    issued_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    weight_eligible: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    receipt: Mapped[dict] = mapped_column(_JSON_VARIANT, nullable=False)
+    signature: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["agent_id"],
+            ["agents.agent_id"],
+            ondelete="CASCADE",
+            name="coding_certifications_agent_id_fkey",
+        ),
+        UniqueConstraint(
+            "agent_id",
+            "validator_hotkey",
+            "coding_contract_version",
+            "certification_id",
+            name="coding_certifications_identity_key",
+        ),
+        CheckConstraint(
+            "artifact_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_certifications_artifact_sha_check",
+        ),
+        CheckConstraint(
+            "screened_image_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_certifications_image_sha_check",
+        ),
+        CheckConstraint(
+            "certification_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_certifications_receipt_sha_check",
+        ),
+        CheckConstraint(
+            "canary_manifest_sha256 ~ '^[0-9a-f]{64}$'",
+            name="coding_certifications_canary_sha_check",
+        ),
+        CheckConstraint(
+            "signature ~ '^[0-9a-f]{128}$'",
+            name="coding_certifications_signature_check",
+        ),
+        CheckConstraint(
+            "coding_contract_version > 0 AND bench_version > 0",
+            name="coding_certifications_versions_positive",
+        ),
+        CheckConstraint(
+            "status IN ('unsupported', 'failed', 'certified')",
+            name="coding_certifications_status_check",
+        ),
+        CheckConstraint(
+            "weight_eligible = false",
+            name="coding_certifications_weight_ineligible",
+        ),
+        CheckConstraint(
+            "expires_at > issued_at AND expires_at <= issued_at + interval '24 hours'",
+            name="coding_certifications_expiry_check",
+        ),
+        CheckConstraint(
+            "((status = 'certified' AND failure_stage IS NULL "
+            "AND failure_code IS NULL) "
+            "OR (status <> 'certified' AND failure_stage IS NOT NULL "
+            "AND failure_code IS NOT NULL))",
+            name="coding_certifications_failure_shape",
+        ),
+        CheckConstraint(
+            "transcript_object_key IS NULL "
+            "OR transcript_object_key ~ '^sha256/[0-9a-f]{64}$'",
+            name="coding_certifications_transcript_key_check",
+        ),
+        CheckConstraint(
+            "frozen_submission_object_key IS NULL "
+            "OR frozen_submission_object_key ~ '^sha256/[0-9a-f]{64}$'",
+            name="coding_certifications_frozen_key_check",
+        ),
+        CheckConstraint(
+            "status <> 'certified' OR (transcript_object_key IS NOT NULL "
+            "AND frozen_submission_object_key IS NOT NULL)",
+            name="coding_certifications_certified_artifacts",
+        ),
+        Index(
+            "coding_certifications_agent_created_idx",
+            "agent_id",
+            "created_at",
+        ),
+        Index(
+            "coding_certifications_active_idx",
+            "agent_id",
+            "expires_at",
+            "validator_hotkey",
+            postgresql_where=text("status = 'certified'"),
+        ),
+    )
+
+
 class Score(Base):
     """One validator's DittoBench score for one agent.
 
