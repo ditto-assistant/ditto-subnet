@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from copy import deepcopy
 from datetime import UTC, datetime
@@ -20,7 +21,10 @@ from ditto.api_models.coding_artifacts import (
     CodingArtifactKind,
     CodingAuthoringLeaseRequest,
     CodingAuthoringLeaseResponse,
+    CodingGradingLeaseRequest,
+    CodingGradingLeaseResponse,
     coding_authoring_lease_signing_message,
+    coding_grading_lease_signing_message,
     parse_coding_artifact_capability_json,
 )
 
@@ -37,6 +41,13 @@ _SELECTION_PATH = (
     / "dittobench-coding-contract"
     / "testdata"
     / "coding_selection_v1.json"
+)
+_GRADING_PATH = (
+    Path(__file__).parents[5]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_grading_lease_v1.json"
 )
 
 
@@ -72,6 +83,12 @@ def _authoring_response() -> dict:
         "run_manifest": selection["run_manifest"],
         "capabilities": _vectors()["capabilities"][:3],
     }
+
+
+def _grading_vectors() -> dict:
+    vectors = json.loads(_GRADING_PATH.read_text(encoding="utf-8"))
+    assert vectors["schema"] == "dittobench-coding-grading-lease-vector-v1"
+    return vectors
 
 
 def test_python_accepts_every_shared_capability_vector() -> None:
@@ -289,3 +306,69 @@ def test_authoring_response_binds_material_and_exact_three_capabilities() -> Non
     )
     with pytest.raises(ValidationError, match="capabilities"):
         CodingAuthoringLeaseResponse.model_validate(drifted)
+
+
+def test_grading_vector_binds_request_signature_and_exact_three_capabilities() -> None:
+    vectors = _grading_vectors()
+    request = CodingGradingLeaseRequest.model_validate(vectors["request"])
+    response = CodingGradingLeaseResponse.model_validate(vectors["response"])
+    message = coding_grading_lease_signing_message(
+        validator_hotkey=request.validator_hotkey,
+        agent_id=request.agent_id,
+        run_row_id=request.run_row_id,
+        ticket_id=request.ticket_id,
+        freeze_id=request.freeze_id,
+        authoring_evidence_sha256=request.authoring_evidence_sha256,
+        nonce=request.nonce,
+        requested_at=request.requested_at,
+    )
+    assert (
+        hashlib.sha256(message).hexdigest()
+        == vectors["expected"]["signing_message_sha256"]
+    )
+    assert [item.artifact_kind.value for item in response.capabilities] == [
+        "visible-bundle",
+        "resource-profile",
+        "grader-bundle",
+    ]
+    assert "memory-bundle" not in response.model_dump_json()
+    extended = {**vectors["response"], "future_grading_hint": {"ignored": True}}
+    assert (
+        "future_grading_hint"
+        not in CodingGradingLeaseResponse.model_validate(extended).model_fields_set
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        (
+            "agent",
+            lambda value: value.update(agent_id="00000000-0000-4000-8000-000000000002"),
+        ),
+        (
+            "frozen key",
+            lambda value: value.update(
+                frozen_submission_object_key="sha256/" + "aa" * 32
+            ),
+        ),
+        (
+            "capability order",
+            lambda value: value["capabilities"].reverse(),
+        ),
+        (
+            "capability phase",
+            lambda value: value["capabilities"][0].update(delivery_phase="authoring"),
+        ),
+        (
+            "capability digest",
+            lambda value: value["capabilities"][0].update(sha256="ff" * 32),
+        ),
+    ],
+)
+def test_grading_response_rejects_authority_drift(label: str, mutate) -> None:
+    del label
+    raw = deepcopy(_grading_vectors()["response"])
+    mutate(raw)
+    with pytest.raises(ValidationError, match="grading|artifact URL"):
+        CodingGradingLeaseResponse.model_validate(raw)
