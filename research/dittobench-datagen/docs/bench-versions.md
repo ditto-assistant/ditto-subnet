@@ -23,7 +23,7 @@ applied to an existing version. It ships as a new one.
 | 9 (pre-activation) | `2027-01-01` | A qualification contract for the Bench v9 family mix and launch gates. Explicit generation, offline audit, and ordinary runtime execution are available; Platform activation remains separate and v8 stays current until rollout. |
 | 10 (pre-activation) | `2027-02-01` | A generator-as-spec contract: seed-scoped ontologies, recursive query programs, independent renderers, and linked metamorphic/counterfactual cases. Runtime execution is available; Platform activation remains separate. |
 | 11 (pre-activation) | `2027-03-01` | Anti-template-fitting: sampled program shapes, compositional surface grammar, descriptive entity binding, a multi-edit surface-noise projector, and per-seed composed injection markers. Runtime execution is available; Platform activation remains separate. |
-| 12 (pre-activation) | `2027-04-01` | Anti-KV-substrate: prose-only amounts with per-seed shuffled record order, no `%+d`/`->` format tells, universal relational subject binding, larger-minus-settled rebalanced, and compositional injection markers and routing cues. Runtime execution is available; Platform activation remains separate. |
+| 12 (pre-activation) | `2027-04-01` | Business-event programs on the anti-KV substrate: current owner, status, last event, client vs vendor, next action; remaining-cents as a coverage floor. Prose-only amounts, shuffled records, relational subject binding. Runtime execution is available; Platform activation remains separate. |
 
 ## V10 generator-as-spec contract
 
@@ -418,44 +418,39 @@ Run sizes, the deterministic grader, the inference boundary, LongMemEval
 deep-history floors, and the v9 signed-evidence/score-gate/curve-v3 efficiency
 stack all carry forward unchanged.
 
-## Bench v12 (private, anti-KV-substrate)
+## Bench v12 (private, business events)
 
-v12 keeps every v11 program semantic — the same four sampled query shapes, the
-same metamorphic groups, the same per-seed schema, the same renderers, and the
-same validator-side provenance — and hardens the one surface a template-fitting
-harness still gripped: the byte-stable `key=value` ledger. A harness that scored
-0.997 on v11 never read the randomized prose; it parsed the fixed-order KV rows,
-fired a model call only to satisfy the attribution gate, and computed a balance
-positionally. Every v12 lever is gated on `bench_version >= 12`, so v11 and
-earlier regenerate byte-identically (the v2–v11 known-vector tests are
-unchanged). The levers:
+v12 is not live and is still allowed to change. It keeps the anti-KV substrate
+from the first scaffold (prose-only amounts, shuffled records, no `%+d`/`->`
+tells, relational subject binding) and **replaces the four v11 money query
+programs** with business-event programs: current owner after a correction,
+current status, most recent event, client vs vendor, and next action.
+Remaining-cents arithmetic is a coverage floor, not the catalog. A cents
+accumulator that won v11 is not a complete v12 solution.
 
+Every v12 lever is gated on `bench_version >= 12`, so v11 and earlier regenerate
+byte-identically (the v2–v11 known-vector tests are unchanged). The levers:
+
+- **Business-event query programs.** Sampled programs ask who currently owns
+  the work after a correction, what status stands, what happened last, who is
+  the client vs vendor, and what is next. Remaining-cents arithmetic is a
+  coverage floor. The world mix at v12 likewise drops `project-outstanding` and
+  story remainder oracles in favor of contact, ownership, and lesson questions.
 - **Prose-only amounts with shuffled record order (Gap 1).** No record carries a
   `label=amount` pair — the only `=` in a scenario binds an entity to its alias
-  and carries no value. Every monetary figure (draft, approved, settled payment,
-  adjustment, superseding correction) lives inside a composed prose sentence, and
-  the record order is a per-seed Fisher-Yates permutation. Binding a role to a
-  value now requires reading randomized prose, not counting rows. The `V12`
-  known-vector test asserts no record exposes a `=`-adjacent number and that the
-  binding record lands in more than one slot across a run.
-- **No format tells (Gap 2).** v11 leaked the shape through a `%+d` sign on the
-  adjustment row and a second `->` on the latest-correction row. v12 never emits
-  either: a signed adjustment is stated as "raises/lowers that figure by N" over
-  the absolute magnitude, and supersession is stated in prose ("a later revision
-  supersedes it at N"). The operative value is interleaved into randomized prose,
-  so the shape is not detectable from row structure.
-- **Larger-minus-settled rebalanced (Gap 2b).** v11 made the approved figure
-  exceed the draft on ~60% of cases, so `max==approved==plain subtract` was free.
-  v12 draws the approved figure below the draft for most cases and forces
-  `approved < draft` whenever the sampled shape is larger-minus-settled, so `max`
-  genuinely differs from the plain subtract and the plain-subtract result is a
-  planted distractor.
-- **Universal relational subject binding (Gap 3).** v11 bound the subject
-  descriptively only for even groups, and even then by a unique draft number that
-  also appeared verbatim in the rows. v12 binds the subject descriptively for
-  every group by a relational role — the workstream that carries a settled
-  payment — which resolves through the glossary and against the unrelated decoy
-  (which carries only an approved figure). The question never names the subject
+  and carries no value. Monetary figures that still appear as context live
+  inside composed prose, and the record order is a per-seed Fisher-Yates
+  permutation. Binding a role to a value requires reading randomized prose, not
+  counting rows.
+- **No format tells (Gap 2).** v11 leaked money-program shape through a `%+d`
+  sign and a `->` correction token. v12 never emits either.
+- **Universal relational subject binding (Gap 3).** v12 binds the subject
+  descriptively for every group by a relational role — the workstream that
+  carries a settled payment — never by echoing an alias and never by looking up
+  a value printed in the records. The `V12` known-vector test asserts no record
+  exposes a `=`-adjacent number and that the binding record lands in more than
+  one slot across a run. The leftover "settled payment" sentence is context for
+  unique binding, not the scored ask. The question never names the subject
   alias, so an alias-echo resolver cannot even locate the records.
 - **Compositional injection markers and routing cues (Gaps 4/7).** v11 rewrote
   each fixed stored-directive marker into one of a frozen ≤5-variant bank, and

@@ -207,7 +207,7 @@ func TestStoryQuestionQuotaIsStableAcrossSeeds(t *testing.T) {
 
 func TestStoryProgramsAreInterpersonalComposedAndAnswerSafe(t *testing.T) {
 	w := Generate(8128, 3)
-	for _, plan := range w.storyQuestionCandidates() {
+	for _, plan := range w.storyQuestionCandidates(false) {
 		arc := w.StoryArcs[plan.oracleIndex]
 		person := w.People[arc.PersonIndex]
 		for _, anchor := range plan.Constraints {
@@ -233,7 +233,7 @@ func TestStoryBalanceIsComputedAndLessonAcceptsEquivalentPhrasing(t *testing.T) 
 	w := Generate(44332211, 3)
 	pairs := storyPairMap(w)
 	seen := map[string]bool{}
-	for _, plan := range w.storyQuestionCandidates() {
+	for _, plan := range w.storyQuestionCandidates(false) {
 		seen[plan.oracleKind] = true
 		arc := w.StoryArcs[plan.oracleIndex]
 		switch plan.oracleKind {
@@ -300,7 +300,7 @@ func TestStoryTransportDoesNotExposeRawSeed(t *testing.T) {
 			t.Fatalf("pair %s exposes raw seed %s", pair.PairID, needle)
 		}
 	}
-	for _, plan := range w.storyQuestionCandidates() {
+	for _, plan := range w.storyQuestionCandidates(false) {
 		if strings.Contains(plan.Case.Question, needle) {
 			t.Fatalf("question %s exposes raw seed %s", plan.Case.ID, needle)
 		}

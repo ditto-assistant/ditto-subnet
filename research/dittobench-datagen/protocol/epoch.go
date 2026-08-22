@@ -99,22 +99,13 @@ import (
 //   - per-seed composed stored-instruction injection markers instead of the
 //     fixed marker list.
 //
-// v12 is the ANTI-KV-SUBSTRATE release. It keeps every v11 program semantic and
-// hardens the one surface a template-fitting harness still parsed instead of
-// reading: the byte-stable key=value ledger. All levers are gated on
-// bench_version >= 12 so v11 and earlier regenerate byte-identically:
-//   - amounts move entirely into composed prose (no label=amount ledger row),
-//     and the record order is a per-seed permutation, so role binding requires
-//     reading randomized prose rather than counting rows;
-//   - uniform value formatting removes the v11 shape tells (no %+d sign, no
-//     second -> correction token);
-//   - the larger-minus-settled shape is rebalanced so max genuinely differs
-//     from the plain subtract on every such case;
-//   - descriptive subject binding is universal and relational (the workstream
-//     carrying a settled payment), never an alias echo or a printed value;
-//   - injection markers and tool-routing cues are assembled compositionally per
-//     seed instead of drawn from finite variant banks, and labels sample a
-//     widened superset with opaque, role-free session identifiers.
+// v12 is the BUSINESS-EVENT release. It keeps the anti-KV substrate (prose-only
+// amounts, shuffled records, no %+d / -> tells, relational subject binding,
+// compositional markers) and changes the query programs. v10–v11 scored
+// convert_minor_units of four closed money shapes; v12 asks about current
+// owner, status, last event, client vs vendor, and next action. Remaining-cents
+// arithmetic is a coverage floor, not the catalog. All levers are gated on
+// bench_version >= 12 so v11 and earlier regenerate byte-identically.
 //
 // The deterministic grader, run sizes, inference boundary, LongMemEval
 // deep-history floors, and the v9 signed-evidence/score-gate/curve-v3

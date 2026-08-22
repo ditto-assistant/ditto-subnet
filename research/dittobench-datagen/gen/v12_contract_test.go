@@ -46,28 +46,45 @@ func TestV12ProgramsSampleShapesAndRegenerateExactly(t *testing.T) {
 			t.Fatalf("case %s carries revision %q", generated.Plan.Case.ID, generated.Provenance.Revision)
 		}
 	}
-	if !ops["subtract"] || (!ops["add"] && !ops["max"]) {
-		t.Fatalf("v12 groups did not sample varied program shapes: %v", ops)
+	if !ops["latest"] {
+		t.Fatalf("v12 groups did not sample event programs: %v", ops)
 	}
 }
 
 func TestV12AnswersPositiveAndDistractorFree(t *testing.T) {
+	money := 0
+	event := 0
 	for seed := int64(1); seed <= 25; seed++ {
 		generated, err := universe.GenerateV12Programs(seed, 40)
 		if err != nil {
 			t.Fatalf("seed %d: %v", seed, err)
 		}
 		for _, g := range generated {
-			answer, err := strconv.Atoi(g.Plan.Case.ExpectedAnswer)
-			if err != nil || answer <= 0 {
-				t.Fatalf("seed %d case %s expected answer %q", seed, g.Plan.Case.ID, g.Plan.Case.ExpectedAnswer)
+			answer := g.Plan.Case.ExpectedAnswer
+			if answer == "" {
+				t.Fatalf("seed %d case %s expected empty answer", seed, g.Plan.Case.ID)
+			}
+			if g.Plan.Case.AnswerKind == protocol.AnswerMoney {
+				n, err := strconv.Atoi(answer)
+				if err != nil || n <= 0 {
+					t.Fatalf("seed %d case %s money answer %q", seed, g.Plan.Case.ID, answer)
+				}
+				money++
+			} else {
+				event++
 			}
 			for _, d := range g.Plan.Case.DistractorAnswers {
-				if d == g.Plan.Case.ExpectedAnswer {
+				if d == answer {
 					t.Fatalf("seed %d case %s distractor collides with answer %q", seed, g.Plan.Case.ID, d)
 				}
 			}
 		}
+	}
+	if event == 0 {
+		t.Fatal("v12 sampled no business-event programs")
+	}
+	if event <= money {
+		t.Fatalf("v12 event programs must outnumber money-remainder programs: event=%d money=%d", event, money)
 	}
 }
 

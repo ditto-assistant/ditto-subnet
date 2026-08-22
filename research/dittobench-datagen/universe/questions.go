@@ -60,10 +60,17 @@ var errLexicalShortcut = errors.New("lexical shortcut")
 // excluded; every structural ambiguity, missing needle, or oracle mismatch
 // fails generation instead of entering a scored dataset.
 func (w World) QuestionPlans(count int) ([]QuestionPlan, error) {
+	return w.QuestionPlansForVersion(count, 0)
+}
+
+// QuestionPlansForVersion is the v12-aware selector. bench_version >= 12 drops
+// cents-remainder oracles from the world mix and asks about client, vendor,
+// owner, and lesson instead. Earlier versions keep the frozen candidate set.
+func (w World) QuestionPlansForVersion(count, benchVersion int) ([]QuestionPlan, error) {
 	if count <= 0 {
 		return nil, nil
 	}
-	candidates := w.questionCandidates()
+	candidates := w.questionCandidates(benchVersion)
 	if count > len(candidates) {
 		return nil, fmt.Errorf("world has %d validated question candidates, need %d", len(candidates), count)
 	}
@@ -123,8 +130,9 @@ func storyQuestionQuota(count, available int) int {
 
 func isStoryOracle(kind string) bool { return strings.HasPrefix(kind, "story-") }
 
-func (w World) questionCandidates() []QuestionPlan {
-	out := make([]QuestionPlan, 0, 2*len(w.People)+3*len(w.Projects)+4*len(w.Trips))
+func (w World) questionCandidates(benchVersion int) []QuestionPlan {
+	v12 := benchVersion >= protocol.BenchVersionV12
+	out := make([]QuestionPlan, 0, 2*len(w.People)+4*len(w.Projects)+4*len(w.Trips))
 	for i, p := range w.People {
 		current := contactCurrentQuestion(p, i)
 		out = append(out, w.personPlan(oracleContactCurrent, i, current, p.Email, p.PreviousEmail))
@@ -140,19 +148,21 @@ func (w World) questionCandidates() []QuestionPlan {
 
 	for i, p := range w.Projects {
 		lead := w.People[p.Lead]
-		outstanding := []string{
-			fmt.Sprintf("For %q, the %s work for %s, what is still owed to %s once the approved correction and the payment already sent are reconciled?", p.Alias, p.Purpose, p.Client, p.Vendor),
-			fmt.Sprintf("AP needs the remaining balance for %s's invoice on %q for %s. Use the corrected total, not the draft, and account for our payment.", p.Vendor, p.Alias, p.Client),
-			fmt.Sprintf("What remains on the corrected %s bill tied to %q, the %s project for %s, after what we already paid?", p.Vendor, p.Alias, p.Purpose, p.Client),
-			fmt.Sprintf("Reconcile %q for %s: after replacing the original %s invoice figure with the approved one and subtracting the partial payment, what balance remains?", p.Alias, p.Client, p.Vendor),
-		}[i%4]
-		out = append(out, QuestionPlan{
-			Case:            memoryCase(w.Seed, oracleProjectOutstanding, i, outstanding, fmt.Sprintf("%d", p.OutstandingCents), protocol.AnswerMoney, w.moneyDistractors(i, p.OutstandingCents)),
-			RequiredPairIDs: []string{p.ContextPairID, p.LedgerPairID, p.CorrectionPairID},
-			Facts:           []string{"project alias", "client and purpose", "draft invoice and payment", "approved correction", "vendor identity"},
-			Constraints:     []string{p.Alias, p.Client, p.Vendor, p.Purpose}, Operations: []string{"resolve project alias", "replace draft with correction", "subtract payment"},
-			oracleKind: oracleProjectOutstanding, oracleIndex: i,
-		})
+		if !v12 {
+			outstanding := []string{
+				fmt.Sprintf("For %q, the %s work for %s, what is still owed to %s once the approved correction and the payment already sent are reconciled?", p.Alias, p.Purpose, p.Client, p.Vendor),
+				fmt.Sprintf("AP needs the remaining balance for %s's invoice on %q for %s. Use the corrected total, not the draft, and account for our payment.", p.Vendor, p.Alias, p.Client),
+				fmt.Sprintf("What remains on the corrected %s bill tied to %q, the %s project for %s, after what we already paid?", p.Vendor, p.Alias, p.Purpose, p.Client),
+				fmt.Sprintf("Reconcile %q for %s: after replacing the original %s invoice figure with the approved one and subtracting the partial payment, what balance remains?", p.Alias, p.Client, p.Vendor),
+			}[i%4]
+			out = append(out, QuestionPlan{
+				Case:            memoryCase(w.Seed, oracleProjectOutstanding, i, outstanding, fmt.Sprintf("%d", p.OutstandingCents), protocol.AnswerMoney, w.moneyDistractors(i, p.OutstandingCents)),
+				RequiredPairIDs: []string{p.ContextPairID, p.LedgerPairID, p.CorrectionPairID},
+				Facts:           []string{"project alias", "client and purpose", "draft invoice and payment", "approved correction", "vendor identity"},
+				Constraints:     []string{p.Alias, p.Client, p.Vendor, p.Purpose}, Operations: []string{"resolve project alias", "replace draft with correction", "subtract payment"},
+				oracleKind: oracleProjectOutstanding, oracleIndex: i,
+			})
+		}
 
 		current := []string{
 			fmt.Sprintf("Who should get the %q handoff internally, and what current email should I use? I mean the %s work for %s, not an outside recipient.", p.Alias, p.Purpose, p.Client),
@@ -215,7 +225,7 @@ func (w World) questionCandidates() []QuestionPlan {
 		}[i%4]
 		out = append(out, tripPlan(w, oracleTripLongestCurrent, i, change, longest, commonEvidence, constraints))
 	}
-	out = append(out, w.storyQuestionCandidates()...)
+	out = append(out, w.storyQuestionCandidates(v12)...)
 	return out
 }
 
@@ -295,7 +305,7 @@ func tripPlan(w World, kind string, index int, question string, answer int, evid
 	}
 }
 
-func (w World) storyQuestionCandidates() []QuestionPlan {
+func (w World) storyQuestionCandidates(v12 bool) []QuestionPlan {
 	out := make([]QuestionPlan, 0, len(w.StoryArcs)*7)
 	for i, arc := range w.StoryArcs {
 		person := w.People[arc.PersonIndex]
@@ -357,10 +367,12 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 		netPlan.Case.AnswerItems = netItems
 		netPlan.Case.AnswerItemKinds = []string{protocol.AnswerDirection, protocol.AnswerMoney}
 
-		financialPlans := []QuestionPlan{balancePlan, deltaPlan, postPlan, netPlan}
-		financialOrder := r.Perm(len(financialPlans))
-		for _, index := range financialOrder {
-			out = append(out, financialPlans[index])
+		if !v12 {
+			financialPlans := []QuestionPlan{balancePlan, deltaPlan, postPlan, netPlan}
+			financialOrder := r.Perm(len(financialPlans))
+			for _, index := range financialOrder {
+				out = append(out, financialPlans[index])
+			}
 		}
 
 		contactTask := []string{
@@ -385,22 +397,24 @@ func (w World) storyQuestionCandidates() []QuestionPlan {
 			[]string{"personal relationship and event", "support case", "purchase order", "corrected outcome", "explicit lesson"},
 			[]string{"resolve the interpersonal anchor", "follow the support case into the work story", "follow the purchase order into the outcome", "select the outcome lesson"}))
 
-		summaryTask := []string{
-			"Can you give me the current reviewer email, final available balance, and the advice I wrote down?",
-			"Remind me of the final reviewer email, the balance we landed on, and the lesson from it.",
-			"Where did this leave us: which email, how much money, and what rule for next time?",
-			"Pull together the current contact, the final amount, and what I learned from the experience.",
-		}[r.Intn(4)]
-		summaryItems := []string{arc.CurrentContact, fmt.Sprintf("%d", arc.CurrentBalanceCents), arc.Lesson}
-		summaryAnswer := strings.Join(summaryItems, "; ")
-		summary := w.storyPlan(oracleStoryOutcomeSummary, i, composeStoryQuestion(r, anchor, summaryTask), constraints,
-			summaryAnswer, protocol.AnswerList, w.storyOutcomeDistractors(i), nil,
-			[]string{"personal relationship and event", "support case", "purchase order", "original budget and payment", "budget correction", "later cost and credit", "contact correction", "explicit lesson"},
-			[]string{"resolve the interpersonal anchor", "follow the support case into the work story", "follow the purchase order into the outcome", "reconcile the current balance", "replace the stale work-only contact", "select the outcome lesson"})
-		summary.Case.AnswerItems = summaryItems
-		summary.Case.AnswerItemKinds = []string{protocol.AnswerValue, protocol.AnswerMoney, protocol.AnswerValue}
-		summary.Case.AnswerItemAcceptAny = [][]string{nil, nil, append([]string(nil), arc.LessonAcceptAny...)}
-		out = append(out, summary)
+		if !v12 {
+			summaryTask := []string{
+				"Can you give me the current reviewer email, final available balance, and the advice I wrote down?",
+				"Remind me of the final reviewer email, the balance we landed on, and the lesson from it.",
+				"Where did this leave us: which email, how much money, and what rule for next time?",
+				"Pull together the current contact, the final amount, and what I learned from the experience.",
+			}[r.Intn(4)]
+			summaryItems := []string{arc.CurrentContact, fmt.Sprintf("%d", arc.CurrentBalanceCents), arc.Lesson}
+			summaryAnswer := strings.Join(summaryItems, "; ")
+			summary := w.storyPlan(oracleStoryOutcomeSummary, i, composeStoryQuestion(r, anchor, summaryTask), constraints,
+				summaryAnswer, protocol.AnswerList, w.storyOutcomeDistractors(i), nil,
+				[]string{"personal relationship and event", "support case", "purchase order", "original budget and payment", "budget correction", "later cost and credit", "contact correction", "explicit lesson"},
+				[]string{"resolve the interpersonal anchor", "follow the support case into the work story", "follow the purchase order into the outcome", "reconcile the current balance", "replace the stale work-only contact", "select the outcome lesson"})
+			summary.Case.AnswerItems = summaryItems
+			summary.Case.AnswerItemKinds = []string{protocol.AnswerValue, protocol.AnswerMoney, protocol.AnswerValue}
+			summary.Case.AnswerItemAcceptAny = [][]string{nil, nil, append([]string(nil), arc.LessonAcceptAny...)}
+			out = append(out, summary)
+		}
 	}
 	return out
 }

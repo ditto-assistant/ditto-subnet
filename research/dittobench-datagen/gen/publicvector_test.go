@@ -422,7 +422,13 @@ func TestV12KnownVector(t *testing.T) {
 		// world-question budget, so the total memory envelope is unchanged; the
 		// dataset bytes move. v2..v11 vectors above are untouched — the family is
 		// gated on bench_version >= 12.
-		want = "775e0eaf2d41c0cf4647c51f19c56ecc3bb6db37a780538bb7db745811ab91bb"
+		//
+		// Re-pinned again when v12 query programs became business events
+		// (universe/v12_contract.go, ditto-subnet#1108/#1109): owner/status/event/
+		// client/next-action programs plus a cents coverage floor, and the world
+		// mix drops remainder oracles. v2..v11 vectors stay frozen. v12 is not
+		// live; this is a pre-activation contract change.
+		want = "6774a6c4d2c89f7fe6ec0cf4d91359f381c83cba3903d171d6ad5023ab4173a5"
 	)
 	prof, _ := ProfileForVersion("full", protocol.BenchVersionV12)
 	artifact, err := GenerateDataset(seed, prof, protocol.BenchVersionV12)

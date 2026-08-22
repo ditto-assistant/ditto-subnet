@@ -681,18 +681,17 @@ func generateV8WorldMemorySuite(seed int64, n, nWaves, benchVersion int) (Memory
 		// count is unchanged from v10/v11.
 		familyCompilerCount = v12FamilyCompilerCaseCount(n)
 	}
-	plans, err := world.QuestionPlans(budget - v10Count - divergenceCount - familyCompilerCount)
+	plans, err := world.QuestionPlansForVersion(budget-v10Count-divergenceCount-familyCompilerCount, benchVersion)
 	if err != nil {
 		return MemorySuite{}, fmt.Errorf("v8 world questions: %w", err)
 	}
 	var v10Programs []universe.V10GeneratedCase
 	if v10Count > 0 {
 		if benchVersion >= protocol.BenchVersionV12 {
-			// The v12 contract keeps the v11 program semantics but carries every
-			// amount in shuffled prose (no positionally-bindable KV ledger),
-			// binds the subject relationally for every group, and removes the
-			// v11 format tells. The case budget and metamorphic-group structure
-			// are unchanged.
+			// The v12 contract keeps anti-KV substrate (shuffled prose, no
+			// positionally-bindable ledger, relational subject binding) but
+			// replaces the four v11 money programs with business-event
+			// programs. Remaining-cents arithmetic is a coverage floor.
 			v10Programs, err = universe.GenerateV12Programs(seed, v10Count)
 			if err != nil {
 				return MemorySuite{}, fmt.Errorf("v12 open programs: %w", err)
