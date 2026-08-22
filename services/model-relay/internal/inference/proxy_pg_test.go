@@ -277,7 +277,7 @@ func TestChatOversizedBodyForwardsPlatformMiddleOut(t *testing.T) {
 		t.Fatalf("fixture must exceed the historical 256 KiB cap, got %d", len(body))
 	}
 	if int64(len(body)) > f.deps.Cfg.Inference.RequestBodyBytes {
-		t.Fatalf("fixture must fit the 1 MiB default, got %d", len(body))
+		t.Fatalf("fixture must fit the 4 MiB default, got %d", len(body))
 	}
 
 	nonce := uuid.New()

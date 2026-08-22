@@ -1726,7 +1726,7 @@ export const runtimeProfileDownloadSchema = z.object({
   data_base64: z.string(),
 })
 
-export const MAX_CHAT_REQUEST_BUDGET = 16384
+export const MAX_CHAT_REQUEST_BUDGET = 32768
 export const MAX_CHAT_TOKEN_BUDGET = 100_000_000
 export const MAX_CHAT_CONCURRENCY = 512
 export const MAX_EMBEDDING_CONCURRENCY = 512
@@ -1757,7 +1757,7 @@ export const DEFAULT_BENCHMARK_RUNTIME_SETTINGS = {
 
 const inferenceConcurrencySettingsBaseSchema = z.object({
   // Chat completions one scoring ticket's grant may spend in total. Ships at
-  // 8192, ~7.5x the heaviest observed run.
+  // 16384, ~15x the heaviest observed run.
   chat_request_budget: z.number().int().min(1).max(MAX_CHAT_REQUEST_BUDGET),
   // Chat tokens (prompt + completion) one grant may spend. Ships at 25,000,000,
   // ~7x the heaviest observed run. This is the number to move when a legitimate

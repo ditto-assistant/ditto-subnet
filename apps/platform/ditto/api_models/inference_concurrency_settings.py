@@ -77,11 +77,10 @@ MAX_EMBEDDING_GLOBAL_CONCURRENCY = 512
 #
 # 1024 sat *below* the heaviest observed strategy, so those agents exhausted
 # around check 266 and had every remaining call refused -- a resource limit
-# behaving as a run failure. 8192 is ~23x the median run, ~7.5x the heaviest
-# run observed, and ~29 requests per check at 283 checks. It is a real raise
-# (8x) rather than a nudge, which is the point: a ceiling that a legitimate
-# strategy can reach by being thorough is a ceiling in the wrong place.
-DEFAULT_CHAT_REQUEST_BUDGET = 8192
+# behaving as a run failure. 16384 is ~46x the median run, ~15x the heaviest
+# run observed, and ~58 requests per check at 283 checks. It doubles the 8192
+# operating cap after 4-wide case concurrency made per-ticket chat volume grow.
+DEFAULT_CHAT_REQUEST_BUDGET = 16384
 
 # The ceiling is 2x the default, not unbounded. The request budget is not the
 # only thing bounding a grant's spend -- ``chat_token_budget`` is the other, and
@@ -89,7 +88,7 @@ DEFAULT_CHAT_REQUEST_BUDGET = 8192
 # Keeping a finite request ceiling matters regardless: it is the bound that
 # survives a pathological loop of tiny requests, which the token budget would
 # absorb slowly and the concurrency board would not catch at all.
-MAX_CHAT_REQUEST_BUDGET = 16384
+MAX_CHAT_REQUEST_BUDGET = 32768
 
 # The chat *token* budget, which is what actually ended the runs #473 set out to
 # save. #473 raised the request budget to 8192 and the same agents kept failing,

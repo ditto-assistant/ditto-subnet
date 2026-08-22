@@ -148,7 +148,7 @@ type InferenceProxyConfig struct {
 	Provider      string   // DITTO_INFERENCE_PROVIDER, default nebius
 	RoutingMode   string   // DITTO_INFERENCE_ROUTING_MODE
 
-	RequestBudget int   // DB-policy fallback default 8192, max 16384
+	RequestBudget int   // DB-policy fallback default 16384, max 32768
 	TokenBudget   int64 // DB-policy fallback default 25_000_000, max 100_000_000
 
 	TicketConcurrency    int // DB-policy fallback default 16
@@ -158,10 +158,10 @@ type InferenceProxyConfig struct {
 	ValidatorRPM         int // DITTO_INFERENCE_VALIDATOR_RPM, default 960
 	GlobalRPM            int // DITTO_INFERENCE_GLOBAL_RPM, default 2880, cap 100000
 
-	RequestBodyBytes  int64 // DITTO_INFERENCE_REQUEST_BODY_BYTES, default 1 MiB, max 1 MiB
+	RequestBodyBytes  int64 // DITTO_INFERENCE_REQUEST_BODY_BYTES, default 4 MiB, max 8 MiB
 	ResponseBodyBytes int64 // DITTO_INFERENCE_RESPONSE_BODY_BYTES, default 2 MiB, max 8 MiB
 	TimeoutSeconds    int   // DITTO_INFERENCE_TIMEOUT_SECONDS, default 90, range [1,120]
-	MaxOutputTokens   int   // DITTO_INFERENCE_MAX_OUTPUT_TOKENS, default 8192, max 32768
+	MaxOutputTokens   int   // DITTO_INFERENCE_MAX_OUTPUT_TOKENS, default 32768, max 65536
 
 	EmbeddingModel      string // pinned, see PinnedEmbedding*
 	EmbeddingProfile    string
@@ -378,7 +378,7 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		Provider:    r.str("DITTO_INFERENCE_PROVIDER", "nebius"),
 		RoutingMode: r.str("DITTO_INFERENCE_ROUTING_MODE", RoutingModeAggregateThroughput),
 
-		RequestBudget: 8192,
+		RequestBudget: 16384,
 		TokenBudget:   25_000_000,
 
 		TicketConcurrency:    16,
@@ -388,10 +388,10 @@ func loadInferenceProxy(r *envReader) InferenceProxyConfig {
 		ValidatorRPM:         r.intval("DITTO_INFERENCE_VALIDATOR_RPM", 960),
 		GlobalRPM:            r.intval("DITTO_INFERENCE_GLOBAL_RPM", 2880),
 
-		RequestBodyBytes:  r.int64val("DITTO_INFERENCE_REQUEST_BODY_BYTES", 1*1024*1024),
+		RequestBodyBytes:  r.int64val("DITTO_INFERENCE_REQUEST_BODY_BYTES", 4*1024*1024),
 		ResponseBodyBytes: r.int64val("DITTO_INFERENCE_RESPONSE_BODY_BYTES", 2*1024*1024),
 		TimeoutSeconds:    r.intval("DITTO_INFERENCE_TIMEOUT_SECONDS", 90),
-		MaxOutputTokens:   r.intval("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", 8192),
+		MaxOutputTokens:   r.intval("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", 32768),
 
 		EmbeddingModel:      r.str("DITTO_EMBEDDING_MODEL", PinnedEmbeddingModel),
 		EmbeddingProfile:    r.str("DITTO_EMBEDDING_PROFILE", PinnedEmbeddingProfile),
@@ -462,11 +462,11 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 			r.fail("%s out of range: %d (must be 1..%d)", name, v, maxv)
 		}
 	}
-	pos("chat_request_budget", int64(ip.RequestBudget), 16384)
+	pos("chat_request_budget", int64(ip.RequestBudget), 32768)
 	pos("chat_token_budget", ip.TokenBudget, 100_000_000)
-	pos("DITTO_INFERENCE_REQUEST_BODY_BYTES", ip.RequestBodyBytes, 1*1024*1024)
+	pos("DITTO_INFERENCE_REQUEST_BODY_BYTES", ip.RequestBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_RESPONSE_BODY_BYTES", ip.ResponseBodyBytes, 8*1024*1024)
-	pos("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", int64(ip.MaxOutputTokens), 32768)
+	pos("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", int64(ip.MaxOutputTokens), 65536)
 	if ip.TimeoutSeconds < 1 || ip.TimeoutSeconds > 120 {
 		r.fail("DITTO_INFERENCE_TIMEOUT_SECONDS out of range: %d (must be 1..120)", ip.TimeoutSeconds)
 	}

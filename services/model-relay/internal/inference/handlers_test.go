@@ -268,14 +268,22 @@ func TestChatGates(t *testing.T) {
 	})
 
 	t.Run("body too large", func(t *testing.T) {
-		w := serve(deps, proxyRequest(path, strings.Repeat("x", 1024*1024+1), validProxyHeaders()))
+		w := serve(deps, proxyRequest(path, strings.Repeat("x", 4*1024*1024+1), validProxyHeaders()))
 		expectEnvelope(t, w, 413, relayhttp.CodeHTTPException, "inference request is too large")
+	})
+
+	t.Run("historical 1MiB body is no longer 413", func(t *testing.T) {
+		w := serve(deps, proxyRequest(path, strings.Repeat("x", 1024*1024+1), validProxyHeaders()))
+		if w.Code == http.StatusRequestEntityTooLarge {
+			t.Fatalf("1MiB+1 must pass the size gate after the 4 MiB default, got %s", w.Body.String())
+		}
+		expectEnvelope(t, w, 400, relayhttp.CodeHTTPException, "invalid JSON request")
 	})
 
 	t.Run("historical 256KiB body is no longer 413", func(t *testing.T) {
 		w := serve(deps, proxyRequest(path, strings.Repeat("x", 256*1024+1), validProxyHeaders()))
 		if w.Code == http.StatusRequestEntityTooLarge {
-			t.Fatalf("256KiB+1 must pass the size gate after the 1 MiB default, got %s", w.Body.String())
+			t.Fatalf("256KiB+1 must pass the size gate after the 4 MiB default, got %s", w.Body.String())
 		}
 		expectEnvelope(t, w, 400, relayhttp.CodeHTTPException, "invalid JSON request")
 	})
@@ -409,7 +417,7 @@ func TestConfirmationGates(t *testing.T) {
 	})
 
 	t.Run("body too large", func(t *testing.T) {
-		w := serve(deps, proxyRequest(path, strings.Repeat("x", 1024*1024+1), validProxyHeaders()))
+		w := serve(deps, proxyRequest(path, strings.Repeat("x", 4*1024*1024+1), validProxyHeaders()))
 		expectEnvelope(t, w, 413, relayhttp.CodeHTTPException, "confirmation request is too large")
 	})
 

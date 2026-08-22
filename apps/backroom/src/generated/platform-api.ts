@@ -10522,7 +10522,7 @@ export interface components {
             chat_per_validator_concurrency: number;
             /**
              * Chat Request Budget
-             * @default 8192
+             * @default 16384
              */
             chat_request_budget: number;
             /**

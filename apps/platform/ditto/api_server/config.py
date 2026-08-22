@@ -362,10 +362,10 @@ class ApiServerConfig:
             per_ticket_requests_per_minute=240,
             per_validator_requests_per_minute=960,
             global_requests_per_minute=2880,
-            request_body_bytes=1 << 20,
+            request_body_bytes=4 << 20,
             response_body_bytes=2 << 20,
             timeout_seconds=90.0,
-            max_output_tokens=8192,
+            max_output_tokens=32_768,
         )
     )
     """Dark-launchable, platform-owned ticket inference proxy."""
@@ -671,7 +671,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
                 os.environ.get("DITTO_INFERENCE_GLOBAL_RPM", "2880")
             ),
             request_body_bytes=int(
-                os.environ.get("DITTO_INFERENCE_REQUEST_BODY_BYTES", str(1 << 20))
+                os.environ.get("DITTO_INFERENCE_REQUEST_BODY_BYTES", str(4 << 20))
             ),
             response_body_bytes=int(
                 os.environ.get("DITTO_INFERENCE_RESPONSE_BODY_BYTES", str(2 << 20))
@@ -680,7 +680,7 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
                 os.environ.get("DITTO_INFERENCE_TIMEOUT_SECONDS", "90")
             ),
             max_output_tokens=int(
-                os.environ.get("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", "8192")
+                os.environ.get("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", "32768")
             ),
             discovery_url_template=os.environ.get(
                 "DITTO_INFERENCE_DISCOVERY_URL_TEMPLATE",
@@ -1089,9 +1089,9 @@ def check_config(config: ApiServerConfig) -> None:
     if (
         inference.request_budget > MAX_CHAT_REQUEST_BUDGET
         or inference.token_budget > MAX_CHAT_TOKEN_BUDGET
-        or inference.request_body_bytes > 1 << 20
+        or inference.request_body_bytes > 8 << 20
         or inference.response_body_bytes > 8 << 20
-        or inference.max_output_tokens > 32_768
+        or inference.max_output_tokens > 65_536
     ):
         raise ApiServerConfigError("inference proxy limit exceeds its safety bound")
     if (

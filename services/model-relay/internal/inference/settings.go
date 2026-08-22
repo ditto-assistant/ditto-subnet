@@ -22,8 +22,8 @@ import (
 // identical to the config fallbacks, so an empty settings board and an absent
 // resolver behave the same.
 const (
-	defaultChatRequestBudget                = 8192
-	maxChatRequestBudget                    = 16384
+	defaultChatRequestBudget                = 16384
+	maxChatRequestBudget                    = 32768
 	defaultChatTokenBudget                  = 25_000_000
 	maxChatTokenBudget                      = 100_000_000
 	defaultChatPerTicketConcurrency         = 16

@@ -23,6 +23,34 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+func TestParseConcurrencySettingsChatRequestCeiling(t *testing.T) {
+	payload := []byte(`{
+		"chat_request_budget": 32768,
+		"chat_token_budget": 25000000,
+		"embedding_per_ticket_concurrency": 8,
+		"embedding_per_validator_concurrency": 24,
+		"embedding_global_concurrency": 32
+	}`)
+	settings, err := parseConcurrencySettings(payload)
+	if err != nil {
+		t.Fatalf("32768 hard ceiling must parse: %v", err)
+	}
+	if settings.ChatRequestBudget != 32768 {
+		t.Fatalf("chat request budget = %d, want 32768", settings.ChatRequestBudget)
+	}
+
+	payload = []byte(`{
+		"chat_request_budget": 32769,
+		"chat_token_budget": 25000000,
+		"embedding_per_ticket_concurrency": 8,
+		"embedding_per_validator_concurrency": 24,
+		"embedding_global_concurrency": 32
+	}`)
+	if _, err := parseConcurrencySettings(payload); err == nil {
+		t.Fatal("over-ceiling chat request budget must be rejected")
+	}
+}
+
 func TestParseConcurrencySettingsChatTokenCeiling(t *testing.T) {
 	payload := []byte(`{
 		"chat_request_budget": 8192,

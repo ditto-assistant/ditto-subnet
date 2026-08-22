@@ -39,6 +39,7 @@ import {
   inferenceConcurrencySettingsSchema,
   INFERENCE_CONCURRENCY_CONFIRMATION,
   MAX_CHAT_CONCURRENCY,
+  MAX_CHAT_REQUEST_BUDGET,
   MAX_CHAT_TOKEN_BUDGET,
   MAX_EMBEDDING_CONCURRENCY,
   setInferenceConcurrencySettingsInputSchema,
@@ -96,6 +97,31 @@ type GeneratedConfirmationBundleList =
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 
 describe('admin API schemas', () => {
+  it('mirrors the Platform 32768 hosted chat-request hard ceiling', () => {
+    const settings = {
+      chat_request_budget: MAX_CHAT_REQUEST_BUDGET,
+      chat_token_budget: 25_000_000,
+      chat_per_ticket_concurrency: 16,
+      chat_per_validator_concurrency: 48,
+      chat_global_concurrency: 96,
+      embedding_per_ticket_concurrency: 8,
+      embedding_per_validator_concurrency: 24,
+      embedding_global_concurrency: 32,
+      benchmark_runtime: {
+        case_concurrency: 4,
+        relay_delay_fingerprint_mode: 'off' as const,
+        relay_delay_fingerprint_min_ms: 25,
+        relay_delay_fingerprint_max_ms: 250,
+      },
+    }
+    expect(MAX_CHAT_REQUEST_BUDGET).toBe(32768)
+    expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
+    expect(() => inferenceConcurrencySettingsSchema.parse({
+      ...settings,
+      chat_request_budget: MAX_CHAT_REQUEST_BUDGET + 1,
+    })).toThrow(/32768/)
+  })
+
   it('mirrors the Platform 100M hosted chat-token hard ceiling', () => {
     const settings = {
       chat_request_budget: 8192,

@@ -103,7 +103,7 @@ class TestParseApiServerConfigFromEnv:
 
         config = parse_api_server_config_from_env(commit_hash="abc")
 
-        assert config.inference_proxy.request_budget == 8192
+        assert config.inference_proxy.request_budget == 16384
         assert config.inference_proxy.token_budget == 25_000_000
         assert config.inference_proxy.per_ticket_concurrency == 16
         assert config.inference_proxy.per_validator_concurrency == 48

@@ -41,7 +41,7 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	if ip.Enabled {
 		t.Error("proxy must default disabled")
 	}
-	if ip.RequestBudget != 8192 || ip.TokenBudget != 25_000_000 {
+	if ip.RequestBudget != 16384 || ip.TokenBudget != 25_000_000 {
 		t.Errorf("budget defaults wrong: %d/%d", ip.RequestBudget, ip.TokenBudget)
 	}
 	if ip.TicketConcurrency != 16 || ip.ValidatorConcurrency != 48 || ip.GlobalConcurrency != 96 {
@@ -53,13 +53,13 @@ func TestLoadMinimalEnvGetsDefaults(t *testing.T) {
 	if ip.EmbeddingTicketConcurrency != 12 || ip.EmbeddingValidatorConcurrency != 48 || ip.EmbeddingGlobalConcurrency != 96 {
 		t.Errorf("embedding concurrency defaults wrong: %+v", ip)
 	}
-	if ip.RequestBodyBytes != 1024*1024 || ip.ResponseBodyBytes != 2*1024*1024 {
+	if ip.RequestBodyBytes != 4*1024*1024 || ip.ResponseBodyBytes != 2*1024*1024 {
 		t.Errorf("chat body caps wrong: %d/%d", ip.RequestBodyBytes, ip.ResponseBodyBytes)
 	}
 	if ip.EmbeddingRequestBodyBytes != 1024*1024 || ip.EmbeddingResponseBodyBytes != 16*1024*1024 {
 		t.Errorf("embedding body caps wrong: %d/%d", ip.EmbeddingRequestBodyBytes, ip.EmbeddingResponseBodyBytes)
 	}
-	if ip.TimeoutSeconds != 90 || ip.MaxOutputTokens != 8192 {
+	if ip.TimeoutSeconds != 90 || ip.MaxOutputTokens != 32768 {
 		t.Errorf("timeout/max tokens wrong: %d/%d", ip.TimeoutSeconds, ip.MaxOutputTokens)
 	}
 	if len(ip.AllowedModels) != 2 || ip.AllowedModels[0] != "qwen/qwen3-32b" || ip.AllowedModels[1] != "openai/gpt-oss-20b" {
@@ -224,7 +224,7 @@ func TestBackroomPolicyIsNotEnvironmentDriven(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	ip := cfg.Inference
-	if ip.RequestBudget != 8192 || ip.TokenBudget != 25_000_000 ||
+	if ip.RequestBudget != 16384 || ip.TokenBudget != 25_000_000 ||
 		ip.TicketConcurrency != 16 || ip.ValidatorConcurrency != 48 || ip.GlobalConcurrency != 96 ||
 		ip.EmbeddingTicketConcurrency != 12 || ip.EmbeddingValidatorConcurrency != 48 || ip.EmbeddingGlobalConcurrency != 96 {
 		t.Fatalf("Backroom policy must use DB-policy fallbacks, got %+v", ip)

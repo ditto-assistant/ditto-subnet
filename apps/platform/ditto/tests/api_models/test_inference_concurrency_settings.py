@@ -25,6 +25,7 @@ from ditto.api_models.inference_concurrency_settings import (
     DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY,
     DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
     MAX_CHAT_CONCURRENCY,
+    MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
     MAX_EMBEDDING_PER_TICKET_CONCURRENCY,
@@ -40,6 +41,14 @@ VESTIGIAL_OLLAMA_ERA_LIMITS = (1, 8, 32)
 
 
 class TestDefaults:
+    def test_chat_request_budget_ships_at_double_the_prior_8192_cap(self) -> None:
+        settings = InferenceConcurrencySettings()
+        assert settings.chat_request_budget == 16384
+        assert MAX_CHAT_REQUEST_BUDGET == 32768
+        InferenceConcurrencySettings(chat_request_budget=MAX_CHAT_REQUEST_BUDGET)
+        with pytest.raises(ValidationError):
+            InferenceConcurrencySettings(chat_request_budget=MAX_CHAT_REQUEST_BUDGET + 1)
+
     def test_defaults_are_a_raise_not_the_old_serialised_values(self) -> None:
         settings = InferenceConcurrencySettings()
         assert (
@@ -310,7 +319,7 @@ class TestChatBudgetsSurviveAnEmbeddingOnlyEdit:
 
     A revision replaces the entire object, so an operator who reads the board,
     changes only an embedding limit, and writes it back must carry both chat
-    budgets through untouched. They are currently 8192 / 25,000,000 and are
+    budgets through untouched. They are currently 16384 / 25,000,000 and are
     explicitly off-limits: legitimate agents run near them and the token
     accounting has known gaps, so a silent reset to a default would be
     indistinguishable from a deliberate cut.
