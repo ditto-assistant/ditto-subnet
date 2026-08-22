@@ -1,0 +1,592 @@
+name: Publish dashboard preview
+
+# The source workflow builds without secrets. This default-branch workflow
+# validates and sanitizes its artifact on an unprivileged runner before either
+# privileged job is allowed to enter the preview environment.
+on:
+  # zizmor: ignore[dangerous-triggers]
+  # Intentional privilege boundary: inspect checks out only the default branch,
+  # resolves PR identity from a bounded artifact plus live GitHub state, rejects
+  # Pages control files/symlinks, and republishes a sanitized bounded artifact.
+  workflow_run:
+    workflows: [Preview controls]
+    types: [completed]
+  # zizmor: ignore[dangerous-triggers]
+  # Trusted retirement path: this workflow never checks out or executes PR
+  # code for pull_request_target. It only carries event identity into the
+  # default-branch retirement policy and a scoped Pages API call.
+  pull_request_target:
+    types: [opened, reopened, synchronize, closed]
+
+permissions: {}
+
+jobs:
+  inspect:
+    if: >-
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.event == 'pull_request' &&
+        github.event.workflow_run.head_repository.full_name == github.repository
+      ) || (
+        github.event_name == 'pull_request_target' &&
+        github.event.pull_request.head.repo.full_name == github.repository
+      )
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+    env:
+      RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+      SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+    outputs:
+      mode: ${{ steps.validate.outputs.mode || steps.target.outputs.mode }}
+      pr: ${{ steps.validate.outputs.pr || steps.target.outputs.pr }}
+      sha: ${{ steps.validate.outputs.sha || steps.target.outputs.sha }}
+      branch: ${{ steps.validate.outputs.branch || steps.target.outputs.branch }}
+      reason: ${{ steps.validate.outputs.reason || steps.target.outputs.reason }}
+    steps:
+      - name: Check out trusted publisher policy
+        if: github.event_name == 'workflow_run'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Discover the attempt-scoped dashboard artifact
+        id: discover
+        if: github.event_name == 'workflow_run'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifacts="$(gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.expired == false) | .name')"
+          dashboard_name="dashboard-preview-${SOURCE_RUN_ATTEMPT}"
+          dashboard_count="$(grep -Fcx "$dashboard_name" <<<"$artifacts" || true)"
+          test "$dashboard_count" -le 1
+          if [ "$dashboard_count" = 1 ]; then
+            echo "name=$dashboard_name" >> "$GITHUB_OUTPUT"
+            echo "expected_mode=publish" >> "$GITHUB_OUTPUT"
+          else
+            echo "expected_mode=none" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Download the untrusted source artifact
+        if: >-
+          github.event_name == 'workflow_run' &&
+          steps.discover.outputs.expected_mode != 'none'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ steps.discover.outputs.name }}
+          path: ${{ runner.temp }}/source-artifact
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+
+      - name: Validate identity and sanitize the artifact
+        id: validate
+        if: github.event_name == 'workflow_run'
+        env:
+          EXPECTED_MODE: ${{ steps.discover.outputs.expected_mode }}
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_DIR: ${{ runner.temp }}/source-artifact
+        run: |
+          set -euo pipefail
+          if [ "$EXPECTED_MODE" = none ]; then
+            echo "mode=none" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if find "$SOURCE_DIR" -type l -print -quit | grep -q .; then
+            echo "preview artifact contains a symbolic link" >&2
+            exit 2
+          fi
+          test -f "$SOURCE_DIR/manifest.json"
+          test "$(find "$SOURCE_DIR" -type f | wc -l | tr -d ' ')" -le 20000
+          test "$(du -sk "$SOURCE_DIR" | cut -f1)" -le 102400
+          jq -e 'keys == ["mode", "pr", "repo", "schema", "sha"]' \
+            "$SOURCE_DIR/manifest.json" >/dev/null
+          test "$(jq -r .schema "$SOURCE_DIR/manifest.json")" = 1
+          mode="$(jq -r .mode "$SOURCE_DIR/manifest.json")"
+          reason="$mode"
+          pr="$(jq -r .pr "$SOURCE_DIR/manifest.json")"
+          repo="$(jq -r .repo "$SOURCE_DIR/manifest.json")"
+          sha="$(jq -r .sha "$SOURCE_DIR/manifest.json")"
+          test "$EXPECTED_MODE" = publish
+          test "$mode" = publish
+          [[ "$pr" =~ ^[1-9][0-9]*$ ]]
+          [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$repo" = "$GITHUB_REPOSITORY"
+          test "$sha" = "$RUN_HEAD_SHA"
+
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}")"
+          test "$(jq -r .head.repo.full_name <<<"$pr_json")" = "$repo"
+          if [ "$mode" = publish ]; then
+            if [ "$(jq -r .state <<<"$pr_json")" != open ] || \
+              [ "$(jq -r .head.sha <<<"$pr_json")" != "$sha" ]; then
+              echo "mode=none" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [ "$SOURCE_CONCLUSION" != success ]; then
+              mode=retire
+              reason=retire-ineligible
+            else
+              test -f "$SOURCE_DIR/dist/index.html"
+              for reserved in _worker.js _routes.json _redirects _headers; do
+                if [ -e "$SOURCE_DIR/dist/$reserved" ]; then
+                  echo "untrusted artifact supplied reserved Pages control file: $reserved" >&2
+                  exit 2
+                fi
+              done
+              test ! -e "$SOURCE_DIR/dist/functions"
+              cp apps/platform/dashboard/preview/cloudflare-pages-worker.mjs \
+                "$SOURCE_DIR/dist/_worker.js"
+            fi
+          fi
+          echo "mode=$mode" >> "$GITHUB_OUTPUT"
+          echo "pr=$pr" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "branch=pr-$pr" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve trusted PR-event retirement
+        id: target
+        if: github.event_name == 'pull_request_target'
+        env:
+          PR_ACTION: ${{ github.event.action }}
+          PREVIEW_PR: ${{ github.event.pull_request.number }}
+          PREVIEW_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$PREVIEW_PR" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PREVIEW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          reason=retire-prepublish
+          [ "$PR_ACTION" != closed ] || reason=retire-closed
+          echo "mode=retire" >> "$GITHUB_OUTPUT"
+          echo "pr=$PREVIEW_PR" >> "$GITHUB_OUTPUT"
+          echo "sha=$PREVIEW_SHA" >> "$GITHUB_OUTPUT"
+          echo "branch=pr-$PREVIEW_PR" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+
+      - name: Repackage the bounded dashboard artifact
+        if: steps.validate.outputs.mode == 'publish'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: validated-dashboard-preview-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/source-artifact
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 1
+
+  publish:
+    needs: inspect
+    if: needs.inspect.outputs.mode == 'publish'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: preview
+    concurrency:
+      group: dashboard-preview-${{ needs.inspect.outputs.pr }}
+      queue: max
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    env:
+      PAGES_PROJECT: ditto-subnet-dashboard-preview
+      PREVIEW_BRANCH: ${{ needs.inspect.outputs.branch }}
+      PREVIEW_PR: ${{ needs.inspect.outputs.pr }}
+      PREVIEW_SHA: ${{ needs.inspect.outputs.sha }}
+      PUBLISH_MESSAGE: dashboard-preview-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - name: Check out trusted publisher code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Download the sanitized artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: validated-dashboard-preview-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/validated-dashboard
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        with:
+          version: 10.34.5
+          run_install: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe502e # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/backroom/pnpm-lock.yaml
+
+      - name: Install the trusted Wrangler version
+        working-directory: apps/backroom
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Re-read the PR immediately before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PREVIEW_PR}")"
+          test "$(jq -r .state <<<"$pr_json")" = open
+          test "$(jq -r .head.sha <<<"$pr_json")" = "$PREVIEW_SHA"
+
+      - name: Publish the exact-SHA Pages deployment
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          : "${CLOUDFLARE_ACCOUNT_ID:?preview environment is missing CLOUDFLARE_ACCOUNT_ID}"
+          : "${CLOUDFLARE_API_TOKEN:?preview environment is missing CLOUDFLARE_API_TOKEN}"
+          ./apps/backroom/node_modules/.bin/wrangler pages deploy \
+            "${RUNNER_TEMP}/validated-dashboard/dist" \
+            --project-name "$PAGES_PROJECT" \
+            --branch "$PREVIEW_BRANCH" \
+            --commit-hash "$PREVIEW_SHA" \
+            --commit-message "$PUBLISH_MESSAGE" \
+            --commit-dirty=false
+
+      - name: Resolve the API-reported deployment URL and remove superseded builds
+        id: deployment
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments"
+          current=''
+          for _ in {1..12}; do
+            response="$(curl --fail-with-body --silent --show-error \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "${endpoint}?env=preview&per_page=100&page=1")"
+            jq -e '.success == true' <<<"$response" >/dev/null
+            current="$(jq -c --arg branch "$PREVIEW_BRANCH" --arg sha "$PREVIEW_SHA" --arg message "$PUBLISH_MESSAGE" \
+              '[.result[] | select(.deployment_trigger.metadata.branch == $branch and .deployment_trigger.metadata.commit_hash == $sha and .deployment_trigger.metadata.commit_message == $message)] | sort_by(.created_on) | last // empty' \
+              <<<"$response")"
+            [ -n "$current" ] && break
+            sleep 5
+          done
+          [ -n "$current" ]
+          current_id="$(jq -r .id <<<"$current")"
+          url="$(jq -r .url <<<"$current")"
+          [[ "$url" == https://*.pages.dev ]]
+          echo "url=$url" >> "$GITHUB_OUTPUT"
+
+          stale_ids=()
+          page=1
+          while :; do
+            if [ "$page" -gt 1 ]; then
+              response="$(curl --fail-with-body --silent --show-error \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                "${endpoint}?env=preview&per_page=100&page=${page}")"
+              jq -e '.success == true' <<<"$response" >/dev/null
+            fi
+            mapfile -t page_ids < <(jq -r --arg branch "$PREVIEW_BRANCH" --arg current "$current_id" \
+              '.result[] | select(.deployment_trigger.metadata.branch == $branch and .id != $current) | .id' \
+              <<<"$response")
+            stale_ids+=("${page_ids[@]}")
+            total_pages="$(jq -r '.result_info.total_pages // 1' <<<"$response")"
+            [ "$page" -lt "$total_pages" ] || break
+            page=$((page + 1))
+          done
+          for deployment_id in "${stale_ids[@]}"; do
+            deleted="$(curl --fail-with-body --silent --show-error -X DELETE \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "${endpoint}/${deployment_id}?force=true")"
+            jq -e '.success == true' <<<"$deleted" >/dev/null
+          done
+
+      - name: Smoke-test the app, SPA, asset, and proxy boundaries
+        env:
+          PREVIEW_URL: ${{ steps.deployment.outputs.url }}
+        run: |
+          set -euo pipefail
+          ready=false
+          for _ in {1..18}; do
+            if curl --fail --silent --show-error \
+              "$PREVIEW_URL/__preview/health" | jq -e \
+              '.status == "ok" and .mode == "untrusted-read-only-dashboard-preview"' >/dev/null; then
+              ready=true
+              break
+            fi
+            sleep 5
+          done
+          [ "$ready" = true ]
+          root="$(curl --fail --silent --show-error "$PREVIEW_URL/")"
+          grep -q '<div id="root"' <<<"$root"
+          asset="$(grep -Eo 'src="/assets/[^"]+\.js"' <<<"$root" | head -n 1 | cut -d'"' -f2)"
+          test -n "$asset"
+          curl --fail --silent --show-error "$PREVIEW_URL$asset" >/dev/null
+          curl --fail --silent --show-error "$PREVIEW_URL/leaderboard" | grep -q '<div id="root"'
+          headers="$(mktemp)"
+          curl --fail --silent --show-error -D "$headers" \
+            "$PREVIEW_URL/api/v1/public/health" | jq -e \
+            'has("generated_at") and has("miners")' >/dev/null
+          grep -qi '^x-ditto-preview-api: production-public-read-only' "$headers"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' \
+            "$PREVIEW_URL/api/v1/admin/submissions")" = 404
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST \
+            "$PREVIEW_URL/api/v1/public/agent/00000000-0000-0000-0000-000000000000/dispute")" = 405
+
+      - name: Publish the untrusted preview URL
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREVIEW_URL: ${{ steps.deployment.outputs.url }}
+        run: |
+          set -euo pipefail
+          marker='<!-- ditto-dashboard-preview -->'
+          printf -v body '%s\nDashboard preview: %s\n\nExact SHA: `%s`\n\nThis page contains untrusted PR code. Do not enter credentials. Its trusted proxy permits only production public API reads.' \
+            "$marker" "$PREVIEW_URL" "$PREVIEW_SHA"
+          comment_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- ditto-dashboard-preview -->")) | .id' \
+            | tail -n 1)"
+          if [ -n "$comment_id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -f body="$body" >/dev/null
+          else
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" -f body="$body" >/dev/null
+          fi
+
+  retire:
+    needs: inspect
+    if: needs.inspect.outputs.mode == 'retire'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: preview
+    concurrency:
+      group: dashboard-preview-${{ needs.inspect.outputs.pr }}
+      queue: max
+    permissions:
+      contents: read
+      pull-requests: write
+    env:
+      PAGES_PROJECT: ditto-subnet-dashboard-preview
+      PREVIEW_BRANCH: ${{ needs.inspect.outputs.branch }}
+      PREVIEW_PR: ${{ needs.inspect.outputs.pr }}
+      PREVIEW_SHA: ${{ needs.inspect.outputs.sha }}
+      RETIRE_REASON: ${{ needs.inspect.outputs.reason }}
+    steps:
+      - name: Check whether this PR ever had a dashboard preview
+        id: existing
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments"
+          found=false
+          latest=''
+          page=1
+          while :; do
+            response="$(curl --fail-with-body --silent --show-error \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "${endpoint}?env=preview&per_page=100&page=${page}")"
+            jq -e '.success == true' <<<"$response" >/dev/null
+            candidate="$(jq -c --arg branch "$PREVIEW_BRANCH" \
+              '[.result[] | select(.deployment_trigger.metadata.branch == $branch)] | sort_by(.created_on) | last // empty' \
+              <<<"$response")"
+            if [ -n "$candidate" ]; then
+              found=true
+              if [ -z "$latest" ] || \
+                [[ "$(jq -r .created_on <<<"$candidate")" > "$(jq -r .created_on <<<"$latest")" ]]; then
+                latest="$candidate"
+              fi
+            fi
+            total_pages="$(jq -r '.result_info.total_pages // 1' <<<"$response")"
+            [ "$page" -lt "$total_pages" ] || break
+            page=$((page + 1))
+          done
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+          deployment_current=false
+          current_url=''
+          if [ -n "$latest" ] && \
+            [ "$(jq -r '.deployment_trigger.metadata.commit_hash' <<<"$latest")" = "$PREVIEW_SHA" ] && \
+            [[ "$(jq -r '.deployment_trigger.metadata.commit_message' <<<"$latest")" == dashboard-preview-* ]]; then
+            deployment_current=true
+            current_url="$(jq -r .url <<<"$latest")"
+          fi
+          echo "deployment_current=$deployment_current" >> "$GITHUB_OUTPUT"
+          echo "current_url=$current_url" >> "$GITHUB_OUTPUT"
+
+      - name: Re-read the PR state immediately before retirement
+        id: current
+        if: steps.existing.outputs.found == 'true'
+        env:
+          CURRENT_DEPLOYMENT_URL: ${{ steps.existing.outputs.current_url }}
+          DEPLOYMENT_CURRENT: ${{ steps.existing.outputs.deployment_current }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PREVIEW_PR}")"
+          published_current=false
+          if [ "$DEPLOYMENT_CURRENT" = true ]; then
+            marker='<!-- ditto-dashboard-preview -->'
+            comments="$(gh api --paginate --slurp \
+              "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments")"
+            comment_id="$(jq -r \
+              --arg marker "$marker" \
+              --arg url "$CURRENT_DEPLOYMENT_URL" \
+              --arg sha "$PREVIEW_SHA" \
+              '.[][] | select(.user.login == "github-actions[bot]") | select(.body | contains($marker)) | select(.body | contains($url)) | select(.body | contains($sha)) | .id' \
+              <<<"$comments" | tail -n 1)"
+            [ -z "$comment_id" ] || published_current=true
+          fi
+          current=false
+          if [ "$(jq -r .head.sha <<<"$pr_json")" = "$PREVIEW_SHA" ]; then
+            if [ "$RETIRE_REASON" = retire-closed ] && \
+              [ "$(jq -r .state <<<"$pr_json")" = closed ]; then
+              current=true
+            elif [ "$RETIRE_REASON" = retire-ineligible ] && \
+              [ "$(jq -r .state <<<"$pr_json")" = open ]; then
+              current=true
+            elif [ "$RETIRE_REASON" = retire-prepublish ] && \
+              [ "$(jq -r .state <<<"$pr_json")" = open ] && \
+              [ "$published_current" != true ]; then
+              current=true
+            fi
+          fi
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+
+      - name: Check out trusted retirement code
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.repository.default_branch }}
+
+      - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v6.0.10
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true'
+        with:
+          version: 10.34.5
+          run_install: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe502e # v7.0.0
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/backroom/pnpm-lock.yaml
+
+      - name: Install the trusted Wrangler version
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true'
+        working-directory: apps/backroom
+        run: pnpm install --frozen-lockfile --ignore-scripts
+
+      - name: Build a trusted tombstone
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/retired-dashboard"
+          cp apps/platform/dashboard/preview/cloudflare-pages-tombstone.mjs \
+            "${RUNNER_TEMP}/retired-dashboard/_worker.js"
+          printf '<!doctype html><title>Preview retired</title>\n' \
+            > "${RUNNER_TEMP}/retired-dashboard/index.html"
+
+      - name: Retire the stable branch alias
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RETIRE_MESSAGE: retire-dashboard-preview-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          ./apps/backroom/node_modules/.bin/wrangler pages deploy \
+            "${RUNNER_TEMP}/retired-dashboard" \
+            --project-name "$PAGES_PROJECT" \
+            --branch "$PREVIEW_BRANCH" \
+            --commit-hash "$PREVIEW_SHA" \
+            --commit-message "$RETIRE_MESSAGE" \
+            --commit-dirty=false
+
+      - name: Delete older deployments and verify the tombstone
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true'
+        env:
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          RETIRE_MESSAGE: retire-dashboard-preview-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          endpoint="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/pages/projects/${PAGES_PROJECT}/deployments"
+          tombstone=''
+          for _ in {1..12}; do
+            response="$(curl --fail-with-body --silent --show-error \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "${endpoint}?env=preview&per_page=100&page=1")"
+            jq -e '.success == true' <<<"$response" >/dev/null
+            tombstone="$(jq -c --arg branch "$PREVIEW_BRANCH" --arg message "$RETIRE_MESSAGE" \
+              '[.result[] | select(.deployment_trigger.metadata.branch == $branch and .deployment_trigger.metadata.commit_message == $message)] | sort_by(.created_on) | last // empty' \
+              <<<"$response")"
+            [ -n "$tombstone" ] && break
+            sleep 5
+          done
+          [ -n "$tombstone" ]
+
+          deployment_ids=()
+          page=1
+          while :; do
+            if [ "$page" -gt 1 ]; then
+              response="$(curl --fail-with-body --silent --show-error \
+                -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+                "${endpoint}?env=preview&per_page=100&page=${page}")"
+              jq -e '.success == true' <<<"$response" >/dev/null
+            fi
+            mapfile -t page_ids < <(jq -r --arg branch "$PREVIEW_BRANCH" \
+              '.result[] | select(.deployment_trigger.metadata.branch == $branch) | .id' \
+              <<<"$response")
+            deployment_ids+=("${page_ids[@]}")
+            total_pages="$(jq -r '.result_info.total_pages // 1' <<<"$response")"
+            [ "$page" -lt "$total_pages" ] || break
+            page=$((page + 1))
+          done
+          tombstone_id="$(jq -r .id <<<"$tombstone")"
+          tombstone_url="$(jq -r .url <<<"$tombstone")"
+          tombstone_alias="$(jq -r --arg branch "$PREVIEW_BRANCH" \
+            '[.aliases[]? | select(contains("://" + $branch + "."))] | first // empty' \
+            <<<"$tombstone")"
+          [ -n "$tombstone_alias" ]
+          for deployment_id in "${deployment_ids[@]}"; do
+            [ "$deployment_id" = "$tombstone_id" ] && continue
+            deleted="$(curl --fail-with-body --silent --show-error -X DELETE \
+              -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "${endpoint}/${deployment_id}?force=true")"
+            jq -e '.success == true' <<<"$deleted" >/dev/null
+          done
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$tombstone_url")" = 410
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' "$tombstone_alias")" = 410
+
+      - name: Mark the preview retired
+        if: >-
+          steps.existing.outputs.found == 'true' &&
+          steps.current.outputs.current == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          marker='<!-- ditto-dashboard-preview -->'
+          printf -v body '%s\nDashboard preview retired after PR close.' "$marker"
+          comment_id="$(gh api --paginate "repos/${GITHUB_REPOSITORY}/issues/${PREVIEW_PR}/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | select(.body | contains("<!-- ditto-dashboard-preview -->")) | .id' \
+            | tail -n 1)"
+          if [ -n "$comment_id" ]; then
+            gh api -X PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" -f body="$body" >/dev/null
+          fi
