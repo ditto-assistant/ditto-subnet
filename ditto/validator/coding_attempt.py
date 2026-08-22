@@ -22,7 +22,10 @@ from ditto.api_models.coding import (
     SubmitCodingShadowResultResponse,
     canonical_digest,
     coding_authoring_evidence_digest,
-    run_evidence_digest,
+)
+from ditto.validator.coding_terminal import (
+    CodingTerminalEvidenceError,
+    build_coding_run_evidence,
 )
 
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -103,7 +106,6 @@ class CodingAuthoringOutcome:
 
 @dataclass(frozen=True)
 class CodingGradingOutcome:
-    evidence: CodingRunEvidence
     task_evidence: tuple[CodingTaskEvidence, ...]
     grading_environment_destroyed: Literal[True]
 
@@ -276,13 +278,12 @@ class CodingAttemptCoordinator:
             await self._abort_grading(grading_lease)
             raise
         try:
-            run_evidence_digest(
+            evidence = build_coding_run_evidence(
                 grading_lease.run_manifest,
                 str(ticket.ticket_id),
-                grading.evidence,
-                list(grading.task_evidence),
+                grading.task_evidence,
             )
-        except ValueError as error:
+        except CodingTerminalEvidenceError as error:
             raise CodingAttemptIntegrityError(
                 "coding grading evidence disagrees with run authority"
             ) from error
@@ -296,7 +297,7 @@ class CodingAttemptCoordinator:
             agent_artifact_sha256=ticket.agent_artifact_sha256,
             screened_image_sha256=ticket.screened_image_sha256,
             run_manifest=grading_lease.run_manifest,
-            evidence=grading.evidence,
+            evidence=evidence,
             task_evidence=list(grading.task_evidence),
         )
 

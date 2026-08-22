@@ -611,6 +611,11 @@ revocation and environment destruction are attested. The coordinator remains
 unwired and covers the complete gradeable path only; terminal failure
 classification remains a later worker layer.
 
+The runtime never supplies aggregate counts or repair mean. It returns
+per-task evidence; the validator orders those tasks by the immutable manifest,
+re-derives every task root, counts terminal domains, and computes the integer
+binary repair mean before signing the run result.
+
 1. Verify the signed run manifest, chain block, corpus root, and every selected
    capsule digest.
 2. Materialize one visible base without `.git`, remotes, hooks, credentials,
