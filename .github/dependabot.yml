@@ -72,3 +72,8 @@ updates:
     directory: /research/dittobench-coding-datagen
     schedule:
       interval: weekly
+
+  - package-ecosystem: cargo
+    directory: /miners/dittobench-coding-starter-kit
+    schedule:
+      interval: weekly

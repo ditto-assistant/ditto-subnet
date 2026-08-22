@@ -1,0 +1,20 @@
+{
+  "schema": "dittobench-coding-memory-vector-v1",
+  "memory": {
+    "memory_id": "memory-001",
+    "repository_capability_id": "repository-001",
+    "fact_group_id": "fact-001",
+    "scope": "module",
+    "type": "previous_bug_fix",
+    "content": "Preserve incomplete input between streaming parser calls.",
+    "valid_from_epoch": "repository-epoch-2",
+    "valid_until_epoch": null,
+    "supersedes": [],
+    "confidence_micros": 960000
+  },
+  "unicode_content": "Preserve café <tag> & separators   and  .",
+  "digests": {
+    "ascii": "b943e6586a202b2ede36cee985e1ebb76d2dc0ab2734e30c174763f81bf51f53",
+    "unicode": "f66978af383f36680b8f3eabac472859ea11a5351685db968a186bd60afbb185"
+  }
+}

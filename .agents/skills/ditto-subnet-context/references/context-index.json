@@ -171,14 +171,14 @@
     },
     {
       "id": "coding-repair-research",
-      "title": "Shadow coding-repair corpus compiler and public practice",
-      "keywords": ["coding repair", "coding datagen", "swe-bench", "task capsule", "patch grader", "public practice", "memory policy", "coding contract"],
-      "summary": "Compile and validate disjoint public coding practice packs without changing production scoring or importing private corpus bytes.",
-      "owns": ["research/dittobench-coding-datagen"],
-      "read": ["research/dittobench-coding-datagen/AGENTS.md", "research/dittobench-coding-datagen/README.md", "research/dittobench-coding-datagen/docs/PRIVATE-EXECUTION-PROTOCOL.md"],
-      "search": ["rg -n 'coding_contract_version|weight_eligible|corpus_scope' research/dittobench-coding-datagen", "find research/dittobench-coding-datagen/practice/v1 -type f | sort"],
-      "validate": ["cd research/dittobench-coding-datagen && uv sync --locked --group dev && uv run pytest -q", "cd research/dittobench-coding-datagen && uv run dittobench-coding-datagen validate-pack practice/v1"],
-      "invariants": ["Public practice identities, tasks, memories, and fixtures are disjoint from evaluation data.", "The coding contract remains shadow-only and weight_eligible=false until a separately reviewed activation."],
+      "title": "Shadow coding-repair corpus, runtime, and agent harness",
+      "keywords": ["coding repair", "coding datagen", "swe-bench", "task capsule", "patch grader", "public practice", "coding starter kit", "swe agent", "memory policy", "coding contract"],
+      "summary": "Compile and validate disjoint public coding practice packs and exercise the reference SWE agent without changing production scoring or importing private corpus bytes.",
+      "owns": ["research/dittobench-coding-datagen", "miners/dittobench-coding-starter-kit", "scripts/test-coding-starter-practice-e2e.sh"],
+      "read": ["research/dittobench-coding-datagen/AGENTS.md", "research/dittobench-coding-datagen/README.md", "research/dittobench-coding-datagen/docs/PRIVATE-EXECUTION-PROTOCOL.md", "miners/dittobench-coding-starter-kit/README.md"],
+      "search": ["rg -n 'coding_contract_version|weight_eligible|corpus_scope' research/dittobench-coding-datagen", "rg -n 'coding_contract_version|workspace_capability|allow-practice-model' miners/dittobench-coding-starter-kit", "find research/dittobench-coding-datagen/practice/v1 -type f | sort"],
+      "validate": ["cd research/dittobench-coding-datagen && uv sync --locked --group dev && uv run pytest -q", "cd research/dittobench-coding-datagen && uv run dittobench-coding-datagen validate-pack practice/v1", "cd miners/dittobench-coding-starter-kit && cargo fmt --check && cargo clippy --locked --all-targets --all-features -- -D warnings && cargo test --locked --all-targets --all-features", "bash scripts/test-coding-starter-practice-e2e.sh", "cd miners/dittobench-coding-starter-kit && docker build --tag dittobench-coding-starter-kit:validation ."],
+      "invariants": ["Public practice identities, tasks, memories, and fixtures are disjoint from evaluation data.", "The coding starter never owns the repository path, frozen patch, grader material, or score evidence.", "The coding contract remains shadow-only and weight_eligible=false until a separately reviewed activation."],
       "related": ["dittobench-scoring", "research-adapters", "release-delivery"]
     },
     {
