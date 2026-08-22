@@ -430,7 +430,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   retire_coding_catalog_release:
     'Irreversibly retire a shadow catalog commitment after review.',
   get_agent_coding_shadow_evaluations:
-    'Read future-height assignments plus separate weight-zero coding runs, leases, and repair outcomes.',
+    'Read future-height assignments, finalized issuances, and separate weight-zero coding runs, leases, and repair outcomes.',
   get_core_qualification_policy:
     'Read the benchmark-scoped shadow core qualification policy.',
   set_core_qualification_policy:

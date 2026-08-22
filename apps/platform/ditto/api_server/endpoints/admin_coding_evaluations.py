@@ -24,6 +24,7 @@ from ditto.db.models import (
     CodingCapabilityCertification,
     CodingSelectionAssignmentRow,
     CodingShadowRun,
+    CodingShadowRunIssuance,
     CoreQualificationObservation,
 )
 from ditto.db.queries.coding_assignments import (
@@ -128,6 +129,7 @@ async def _run_stale_reason(
     *,
     agent: Agent,
     run: CodingShadowRun,
+    issuance: CodingShadowRunIssuance | None,
 ) -> Literal[
     "current",
     "artifact_changed",
@@ -135,11 +137,14 @@ async def _run_stale_reason(
     "policy_changed",
     "qualification_stale",
     "catalog_retired",
+    "issuance_missing",
 ]:
     if run.artifact_sha256 != agent.sha256:
         return "artifact_changed"
     if run.screened_image_sha256 != agent.screened_image_sha256:
         return "screened_image_changed"
+    if issuance is None:
+        return "issuance_missing"
     if (
         await active_coding_catalog_release(
             session,
@@ -181,7 +186,7 @@ async def agent_coding_shadow_evaluations(
     )
     assignments: list[CodingSelectionAssignmentRecord] = []
     for assignment in assignment_rows:
-        stale_reason = await _assignment_stale_reason(
+        assignment_stale_reason = await _assignment_stale_reason(
             session,
             agent=agent,
             assignment=assignment,
@@ -208,8 +213,8 @@ async def agent_coding_shadow_evaluations(
                     assignment.core_qualification_observation_id
                 ),
                 certification_row_id=assignment.certification_row_id,
-                current=stale_reason == "current",
-                stale_reason=stale_reason,
+                current=assignment_stale_reason == "current",
+                stale_reason=assignment_stale_reason,
                 created_at=assignment.created_at,
                 weight_eligible=False,
             )
@@ -254,10 +259,11 @@ async def agent_coding_shadow_evaluations(
             )
             for ticket in bundle.tickets
         ]
-        stale_reason = await _run_stale_reason(
+        run_stale_reason = await _run_stale_reason(
             session,
             agent=agent,
             run=bundle.run,
+            issuance=bundle.issuance,
         )
         repair_means = sorted(
             result.repair_mean_micros for result in bundle.results.values()
@@ -266,6 +272,16 @@ async def agent_coding_shadow_evaluations(
         records.append(
             CodingShadowRunRecord(
                 run_row_id=bundle.run.run_row_id,
+                assignment_row_id=(
+                    bundle.issuance.assignment_row_id
+                    if bundle.issuance is not None
+                    else None
+                ),
+                assignment_sha256=(
+                    bundle.issuance.assignment_sha256
+                    if bundle.issuance is not None
+                    else None
+                ),
                 coding_run_id=bundle.run.coding_run_id,
                 bench_version=bundle.run.bench_version,
                 coding_contract_version=1,
@@ -275,6 +291,14 @@ async def agent_coding_shadow_evaluations(
                 run_manifest_sha256=bundle.run.run_manifest_sha256,
                 task_set_manifest_sha256=bundle.run.task_set_manifest_sha256,
                 task_count=bundle.run.task_count,
+                selection_block_number=bundle.run.selection_block_number,
+                selection_block_hash=bundle.run.selection_block_hash,
+                selection_block_timestamp=(
+                    bundle.issuance.selection_block_timestamp
+                    if bundle.issuance is not None
+                    else None
+                ),
+                issued=bundle.issuance is not None,
                 core_qualification_observation_id=(
                     bundle.run.core_qualification_observation_id
                 ),
@@ -284,8 +308,8 @@ async def agent_coding_shadow_evaluations(
                 median_repair_mean_micros=(
                     int(median_low(repair_means)) if quorum_complete else None
                 ),
-                current=stale_reason == "current",
-                stale_reason=stale_reason,
+                current=run_stale_reason == "current",
+                stale_reason=run_stale_reason,
                 tickets=tickets,
                 created_at=bundle.run.created_at,
                 weight_eligible=False,

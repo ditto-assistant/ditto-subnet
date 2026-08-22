@@ -56,9 +56,9 @@ they cannot choose multiple heights for the same coding run.
 
 The assignment timestamp comes from PostgreSQL `clock_timestamp()` and must
 equal the row's immutable `created_at`; callers cannot supply or backdate it.
-The later issuer must additionally wait for the assigned height to become
-finalized and prove the database insertion time predates that block's timestamp
-before calling the private selector.
+The separate shadow issuer waits for the assigned height to become finalized,
+proves the database insertion time predates that block's timestamp, and then
+atomically selects and persists the run plus irreversible exposure.
 
 ## Operator visibility
 
@@ -69,7 +69,6 @@ IDs, Merkle proofs, repository bytes, memories, grader material, or patches.
 
 ## Activation boundary
 
-This layer adds no automatic scheduler, private catalog transport, selector
-invocation, shared-run insertion, exposure, ticket, validator task delivery,
-score fold, or emissions reader. Coding contract v1 remains permanently
-`weight_eligible=false`.
+This layer adds no automatic scheduler, private catalog transport, ticket,
+validator task delivery, score fold, or emissions reader. Coding contract v1
+remains permanently `weight_eligible=false`.
