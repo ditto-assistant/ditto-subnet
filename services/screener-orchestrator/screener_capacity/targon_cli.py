@@ -25,6 +25,7 @@ from screener_capacity.oneshot import (
 )
 from screener_capacity.targon import TargonAPIError, TargonClient, workload_summary
 from screener_capacity.targon_screen_contract import (
+    busybox_contract_rental_script,
     parse_starter_kit_probe_logs,
     starter_kit_rental_script,
 )
@@ -191,7 +192,13 @@ def command_list(args: argparse.Namespace) -> int:
 
 def _safe_probe_output(value: str, *, limit: int = 8000) -> str:
     """Bound benign probe output without ever inspecting workload env state."""
-    return value.strip()[-limit:]
+    text = value.strip()
+    if len(text) <= limit:
+        return text
+    head = max(1024, limit // 4)
+    marker = "\n...[truncated]...\n"
+    tail = max(1024, limit - head - len(marker))
+    return text[:head] + marker + text[-tail:]
 
 
 def command_kaniko_probe(args: argparse.Namespace) -> int:
@@ -202,6 +209,7 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
         raise RuntimeError(f"{args.resource} is not currently available")
 
     starter_kit_sha = getattr(args, "starter_kit_sha", None)
+    screen_contract = bool(getattr(args, "screen_contract", False))
     if starter_kit_sha:
         if args.roundtrip:
             raise SystemExit("starter-kit Kaniko probe cannot use --roundtrip")
@@ -214,6 +222,16 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
         )
         success_marker = "KANIKO_STARTER_PROBE_AVAILABLE"
         probe_kind = "starter-kit"
+    elif screen_contract:
+        if args.roundtrip:
+            raise SystemExit("screen-contract Kaniko probe cannot use --roundtrip")
+        agent_id = str(uuid4())
+        attempt_id = str(uuid4())
+        script = busybox_contract_rental_script(
+            agent_id=agent_id, attempt_id=attempt_id
+        )
+        success_marker = "KANIKO_PROBE_AVAILABLE"
+        probe_kind = "screen-contract"
     else:
         success_marker = "KANIKO_PROBE_AVAILABLE"
         probe_kind = "busybox"
@@ -240,7 +258,7 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
         if destination is not None
         else '\'CMD ["cat","/probe.txt"]\''
     )
-    if not starter_kit_sha:
+    if not starter_kit_sha and not screen_contract:
         script = (
             "set -eu; "
             "mkdir -p /workspace; "
@@ -282,7 +300,7 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
         deadline = time.monotonic() + args.provision_timeout_seconds
         last_state: dict[str, object] = {}
         logs = ""
-        log_tail = 2000 if starter_kit_sha else 200
+        log_tail = 2000 if (starter_kit_sha or screen_contract) else 200
         while time.monotonic() < deadline:
             last_state = _safe_state(client, uid)
             try:
@@ -295,19 +313,44 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
                     "builder": "kaniko",
                     "probe": probe_kind,
                     "capability": "AVAILABLE",
-                    "probe_logs": _safe_probe_output(logs, limit=12000),
+                    "probe_logs": _safe_probe_output(logs, limit=24000),
                 }
-                if starter_kit_sha:
-                    contract = parse_starter_kit_probe_logs(logs)
+                if starter_kit_sha or screen_contract:
+                    try:
+                        contract = parse_starter_kit_probe_logs(logs)
+                    except (ValueError, json.JSONDecodeError) as error:
+                        result["screen_contract"] = {
+                            "ok": False,
+                            "error": str(error),
+                        }
+                        print(json.dumps(result))
+                        return 8
                     result["screen_contract"] = contract
                     if not contract["ok"]:
                         print(json.dumps(result))
                         return 8
                 print(json.dumps(result))
                 break
+            if "KANIKO_STARTER_PROBE_FAILED" in logs:
+                print(json.dumps({"phase": "deployed", **last_state}, sort_keys=True))
+                print(
+                    json.dumps(
+                        {
+                            "builder": "kaniko",
+                            "probe": probe_kind,
+                            "capability": "UNAVAILABLE",
+                            "probe_logs": _safe_probe_output(logs, limit=24000),
+                        }
+                    )
+                )
+                return 6
             if last_state.get("status") == "error":
-                break
-            time.sleep(5)
+                # Targon restarts PID 1 on crash; keep polling so a late
+                # success/failure marker in the previous instance's logs can
+                # still be observed before the restart wipes them.
+                time.sleep(2)
+                continue
+            time.sleep(2)
 
         if success_marker not in logs:
             print(json.dumps({"phase": "deployed", **last_state}, sort_keys=True))
@@ -317,13 +360,13 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
                         "builder": "kaniko",
                         "probe": probe_kind,
                         "capability": "UNAVAILABLE",
-                        "probe_logs": _safe_probe_output(logs, limit=12000),
+                        "probe_logs": _safe_probe_output(logs, limit=24000),
                     }
                 )
             )
             return 6
 
-        if destination is None or starter_kit_sha:
+        if destination is None or starter_kit_sha or screen_contract:
             return 0
 
         runtime_name = f"ditto-kaniko-runtime-{secrets.token_hex(3)}"
@@ -857,7 +900,12 @@ def build_parser() -> argparse.ArgumentParser:
     kaniko.add_argument(
         "--starter-kit-sha",
         default=None,
-        help="40-char git SHA; live-builds miners/dittobench-starter-kit",
+        help="40-char SHA of ditto-assistant/dittobench-starter-kit",
+    )
+    kaniko.add_argument(
+        "--screen-contract",
+        action="store_true",
+        help="Live busybox build with production destination and tar inspect",
     )
     kaniko.add_argument("--keep", action="store_true")
     kaniko.set_defaults(handler=command_kaniko_probe)
