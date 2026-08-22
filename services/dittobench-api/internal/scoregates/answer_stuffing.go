@@ -116,11 +116,12 @@ const ResultReviewRequired Result = "review_required"
 const answerStuffingReviewMinCases = 2
 
 // AnswerStuffingInput carries the trusted per-case answer-provenance aggregate
-// the v12 answer-stuffing gate consumes. It is produced by the scorer path that,
-// for every COMPUTED-answer, model-reached, non-excluded scored case, checks the
-// broker's recorded clean-pass model I/O for the value-in-input-before-completion
-// signature (see cmd/dittobench-api/v9_base.go v12AnswerStuffingTelemetry --the
-// single integration point). EligibleCases is the number of computed cases whose
+// the v12 answer-stuffing gate consumes. Its producer checked, for every
+// COMPUTED-answer, model-reached, non-excluded scored case, the broker's recorded
+// clean-pass model I/O for the value-in-input-before-completion signature. That
+// scorer-side pass required exclusive per-case inference windows and was removed
+// when /run became concurrent, so no caller builds this input today; the gate is
+// kept for a restored per-case pass. EligibleCases is the number of computed cases whose
 // provenance settled; StuffedCases is how many of those were flagged.
 // AttributionComplete is the single trust bit: it is true only when every
 // eligible case carried a settled provenance verdict. The gate fails OPEN on

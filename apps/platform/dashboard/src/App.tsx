@@ -29,6 +29,7 @@ import {
   useEndpoint,
 } from "./data/useEndpoint";
 import { operationsResource } from "./data/operations";
+import { weightsResource } from "./data/weights";
 import { invalidateSharedOperations } from "./data/operations-cache";
 import type { ResourceState } from "./data/useEndpoint";
 import { OPS_REFRESH_MS, REFRESH_MS } from "./lib/config";
@@ -39,12 +40,7 @@ import { isFinalized, isOlderRun, rankEntries, rolloutSettledView } from "./lib/
 import { currentPage, initRouteListeners, syncFromLocation } from "./stores/routeStore";
 import type { BenchConfigPayload, GlossaryPayload, TimelinePayload } from "./types/bench";
 import type { FleetReport, HealthPayload, ValidatorNamesPayload } from "./types/fleet";
-import type {
-  ChainWeightsSnapshot,
-  LeaderboardEntry,
-  LeaderboardPayload,
-  RolloutState,
-} from "./types/leaderboard";
+import type { LeaderboardEntry, LeaderboardPayload, RolloutState } from "./types/leaderboard";
 import type { PipelineEntry } from "./types/pipeline";
 
 import { BenchmarkPage } from "./pages/BenchmarkPage";
@@ -76,7 +72,7 @@ export default function App(): JSX.Element {
 
   // ── App-level endpoint resources ──────────────────────────────────────────
   const leaderboard = useEndpoint<LeaderboardPayload>("/public/leaderboard");
-  const weights = useEndpoint<ChainWeightsSnapshot>("/public/weights");
+  const weights = weightsResource();
   const rollout = useEndpoint<RolloutState>("/public/bench/rollout");
   const health = useEndpoint<HealthPayload>("/public/health");
   const operations = operationsResource();
@@ -288,8 +284,8 @@ export default function App(): JSX.Element {
   });
 
   // These app-level resources exist for the pages that consume them; the
-  // shell reads none of their payloads directly.
-  void weights;
+  // shell reads none of their payloads directly — except `weights`, whose
+  // `epoch` drives the rail's payout clock.
   void rollout;
   void health;
   void timeline;
@@ -316,6 +312,7 @@ export default function App(): JSX.Element {
             hasOlderRuns: benchHasOlderRuns(),
           }}
           displayVersion={displayVersion()}
+          epoch={() => latest(weights)?.epoch ?? null}
           onRefresh={refreshAll}
         />
         <main class="main" id="main-content">

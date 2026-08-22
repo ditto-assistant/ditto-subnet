@@ -47,6 +47,9 @@ from ditto.api_server.confirmation_evidence import (
     rebuild_confirmation_evidence,
     validate_confirmation_inference_caps,
 )
+from ditto.api_server.confirmation_prepare_rejection import (
+    classify_prepare_rejection,
+)
 from ditto.api_server.confirmation_wire import (
     ConfirmationWireError,
     completion_report_from_go_dimensions,
@@ -928,6 +931,7 @@ async def prepare_v9_confirmation_report(
         payload.validator_hotkey,
         network=config.subtensor_network,
     )
+    prepare_rejection: str | None = None
     try:
         async with session.begin():
             try:
@@ -1002,20 +1006,33 @@ async def prepare_v9_confirmation_report(
                     profile=profile,
                 )
             except (ConfirmationEvidenceError, ConfirmationWireError) as error:
-                raise ConfirmationBundlePersistenceError(str(error)) from error
-            return V9ConfirmationPreparedReport(
-                bundle_id=bundle_id,
-                ticket_id=payload.ticket_id,
-                ablation_coordinator_latency_ms=(
-                    payload.ablation_coordinator_latency_ms
-                ),
-                longmemeval=normalized.longmemeval,
-                inference_ablation=normalized.inference_ablation,
-                embedding_ablation=normalized.embedding_ablation,
-                evidence_sha256=verified.evidence_sha256,
-            )
+                # Persist the allowlisted code, then 409 *after* this
+                # transaction commits. Raising here would roll the diagnostic
+                # back with the 409. The HTTP detail is the same closed code,
+                # never the interpolated exception string.
+                code = classify_prepare_rejection(error)
+                attempt.ticket.prepare_rejection = code
+                attempt.ticket.prepare_rejected_at = now
+                prepare_rejection = code
+            else:
+                attempt.ticket.prepare_rejection = None
+                attempt.ticket.prepare_rejected_at = None
+                return V9ConfirmationPreparedReport(
+                    bundle_id=bundle_id,
+                    ticket_id=payload.ticket_id,
+                    ablation_coordinator_latency_ms=(
+                        payload.ablation_coordinator_latency_ms
+                    ),
+                    longmemeval=normalized.longmemeval,
+                    inference_ablation=normalized.inference_ablation,
+                    embedding_ablation=normalized.embedding_ablation,
+                    evidence_sha256=verified.evidence_sha256,
+                )
     except ConfirmationBundlePersistenceError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+    if prepare_rejection is not None:
+        raise HTTPException(status_code=409, detail=prepare_rejection)
+    raise RuntimeError("confirmation prepare exited without a report")
 
 
 @router.post(

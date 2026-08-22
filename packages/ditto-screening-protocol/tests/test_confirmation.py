@@ -21,6 +21,7 @@ from ditto_screening_protocol.confirmation import (
 )
 from ditto_screening_protocol.confirmation_wire import (
     ConfirmationWireError,
+    ablation_envelope_from_go,
     completion_report_from_go_fixture,
     longmem_envelope_from_go,
 )
@@ -46,6 +47,7 @@ _ZERO_LONGMEM_FIXTURE_PATH = (
 
 
 _V12_FIXTURE_PATH = _FIXTURE_PATH.with_name("go_confirmation_evidence_v12.json")
+_UNAVAILABLE_ABLATION_PATH = _FIXTURE_PATH.with_name("go_ablation_unavailable_v9.json")
 
 
 def _fixture() -> dict[str, object]:
@@ -404,3 +406,32 @@ def test_v9_and_v12_evidence_digests_are_distinct() -> None:
         v9.inference_ablation.evidence_sha256
         != v12.inference_ablation.evidence_sha256
     )
+
+
+def test_production_unavailable_ablation_converts_without_score_commitments() -> None:
+    """The live shadow high-drop path, not a hand-mutated failed fixture.
+
+    Go omitempty drops the paired score SHAs on unavailable evidence. The
+    converter must accept that exact marshal — sample_count and affected
+    calls stay, numeric gates do not — or prepare-report 409s after execute.
+    """
+    raw = json.loads(_UNAVAILABLE_ABLATION_PATH.read_text())
+    for intervention in ("inference", "embedding"):
+        dimension = raw[intervention]
+        assert isinstance(dimension, dict)
+        envelope = ablation_envelope_from_go(
+            dimension, expected_intervention=intervention
+        )
+        evidence_raw = dimension["evidence"]
+        assert isinstance(evidence_raw, dict)
+        assert "baseline_scores_sha256" not in evidence_raw
+        assert "ablated_scores_sha256" not in evidence_raw
+        assert envelope.status == "unavailable"
+        assert envelope.evidence.status == "unavailable"
+        assert envelope.evidence.reason == "counterfactual_proof_unavailable"
+        assert envelope.evidence.baseline_scores_sha256 is None
+        assert envelope.evidence.ablated_scores_sha256 is None
+        assert envelope.evidence.delta_micros is None
+        assert envelope.evidence.semantic_factor_bps is None
+        assert envelope.evidence.sample_count == 2
+        assert envelope.evidence.affected_call_count == 4

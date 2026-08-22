@@ -27,7 +27,8 @@ import type {
   SlotPolicy,
 } from "../components/operations/fleet";
 import { EmptyRow } from "../components/ui/States";
-import type { WeightsSnapshot } from "../components/board/leaderboard-data";
+import { weightsResource } from "../data/weights";
+import type { WeightsSnapshot } from "../types/leaderboard";
 import { operationsResource } from "../data/operations";
 import { useEndpoint } from "../data/useEndpoint";
 import type { ResourceState } from "../data/useEndpoint";
@@ -73,7 +74,7 @@ export function OperationsPage(
     pollMs: REFRESH_MS,
   });
   const screeners = useEndpoint<FleetReport>("/public/screeners", { pollMs: REFRESH_MS });
-  const weights = useEndpoint<WeightsSnapshot>("/public/weights", { pollMs: REFRESH_MS });
+  const weights = weightsResource();
 
   // Revealed on-chain weight vectors, keyed by validator hotkey. A failed
   // weights tick keeps the previous matrix (the leaderboard store's

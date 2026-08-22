@@ -19,6 +19,8 @@ export type ConfirmationLaneTicket = {
   failure_reason: string | null
   failure_class: string | null
   failure_stage: string | null
+  prepare_rejection: string | null
+  prepare_rejected_at: string | null
 }
 
 export type ConfirmationLaneBundle = {
@@ -77,6 +79,7 @@ export type ConfirmationLaneLikelyCauseCode =
   | 'claim_identity_rejection'
   | 'claim_without_progress'
   | 'execution_after_preparing'
+  | 'prepare_report_rejected'
   | 'healthy'
   | 'unknown_execution_outage'
 
@@ -152,6 +155,7 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
       row.ticket.failure_class ?? 'null',
       row.ticket.failure_stage ?? 'null',
       row.ticket.failure_reason ?? 'null',
+      row.ticket.prepare_rejection ?? 'null',
     ].join('|')
     const bucket = failureKeys[key] ?? { count: 0, durations: [] }
     bucket.count += 1
@@ -161,11 +165,12 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
 
   const failureHistogram = Object.entries(failureKeys)
     .map(([key, bucket]) => {
-      const [failure_class, failure_stage, failure_reason] = key.split('|')
+      const [failure_class, failure_stage, failure_reason, prepare_rejection] = key.split('|')
       return {
         failure_class,
         failure_stage,
         failure_reason,
+        prepare_rejection,
         count: bucket.count,
         median_duration_ms: median(bucket.durations),
       }
@@ -242,6 +247,9 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
       stage === 'dimension_execution'
     )
   })
+  const prepareRejected = failedTickets.filter(
+    (row) => row.ticket.prepare_rejection != null && row.ticket.prepare_rejection !== '',
+  )
   const staleLeases = leasedTickets.filter(
     (row) => row.age_ms !== null && row.age_ms >= STALE_LEASE_MS,
   )
@@ -257,6 +265,7 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
     immediateFails: immediateFails.length,
     nonV9Share: share(nonV9Sample.length, sampledBundles.length),
     laterExecutionFails: laterExecutionFails.length,
+    prepareRejected: prepareRejected.length,
     staleLeases: staleLeases.length,
     leased: counts.leased,
     issuedAttempts: budget?.issued_attempts ?? 0,
@@ -298,6 +307,8 @@ export function diagnoseConfirmationLane(input: ConfirmationLaneDiagnosisInput) 
       failure_class: row.ticket.failure_class,
       failure_stage: row.ticket.failure_stage,
       failure_reason: row.ticket.failure_reason,
+      prepare_rejection: row.ticket.prepare_rejection,
+      prepare_rejected_at: row.ticket.prepare_rejected_at,
       issued_at: row.ticket.issued_at,
       failed_at: row.ticket.failed_at,
       duration_ms: row.duration_ms,
@@ -318,6 +329,7 @@ function deriveLikelyCause(input: {
   immediateFails: number
   nonV9Share: number
   laterExecutionFails: number
+  prepareRejected: number
   staleLeases: number
   leased: number
   issuedAttempts: number
@@ -402,6 +414,18 @@ function deriveLikelyCause(input: {
       summary:
         'Tickets are leased but have sat without a completed bundle. Check the holding validator slot and heartbeat stage.',
       evidence: [`leased=${input.leased}`, `stale_leases=${input.staleLeases}`],
+    }
+  }
+  if (input.prepareRejected > 0 && input.prepareRejected >= input.platformUnknown) {
+    return {
+      code: 'prepare_report_rejected',
+      summary:
+        'Execute finished and prepare-report rejected the Go evidence. Read prepare_rejection on the ticket; it is the allowlisted convert/rebuild diagnostic, not the later fail-job class.',
+      evidence: [
+        `prepare_rejected=${input.prepareRejected}`,
+        `later_execution_fails=${input.laterExecutionFails}`,
+        `completed=${input.completed}`,
+      ],
     }
   }
   if (input.laterExecutionFails > 0 && input.laterExecutionFails >= input.platformUnknown) {

@@ -2455,6 +2455,29 @@ const confirmationBundleTicketSchema = z.strictObject({
   failure_class: z.string().min(1).nullable().default(null),
   failure_stage: z.string().min(1).nullable().default(null),
   failed_at: confirmationTimestampSchema.nullable(),
+  // Allowlisted Go→Python prepare-report 409. Null when prepare never ran or
+  // succeeded; a consumer must not require it of historical tickets.
+  prepare_rejection: z
+    .enum([
+      'go_evidence_digest_mismatch',
+      'go_evidence_fields_drifted',
+      'unsupported_ablation_status',
+      'unsupported_ablation_contract',
+      'ablation_profile_drift',
+      'ablation_accounting',
+      'ablation_digest_mismatch',
+      'longmem_profile_drift',
+      'longmem_accounting',
+      'longmem_digest_mismatch',
+      'longmem_latency_drift',
+      'unsupported_bench_version',
+      'confirmation_wire',
+      'confirmation_evidence',
+      'unclassified',
+    ])
+    .nullable()
+    .default(null),
+  prepare_rejected_at: confirmationTimestampSchema.nullable().default(null),
 })
 
 export const confirmationBundleViewSchema = z

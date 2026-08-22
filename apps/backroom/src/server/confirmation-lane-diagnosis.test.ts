@@ -35,6 +35,8 @@ function ticket(overrides: Partial<ConfirmationLaneDiagnosisInput['pages']['fail
     failure_reason: 'confirmation_execution_failed',
     failure_class: 'platform',
     failure_stage: 'unknown',
+    prepare_rejection: null,
+    prepare_rejected_at: null,
     ...overrides,
   }
 }
@@ -159,6 +161,43 @@ function itStates() {
     )
 
     expect(diagnosis.likely_cause.code).toBe('execution_after_preparing')
+  })
+
+  it('names prepare-report rejection when execute finished and convert/rebuild 409d', () => {
+    const diagnosis = diagnoseConfirmationLane(
+      baseInput({
+        pages: pages({
+          failed: {
+            count: 4,
+            items: [1, 2, 3, 4].map((index) => ({
+              ...failedBundle(index, 11),
+              tickets: [
+                ticket({
+                  ticket_id: `20000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+                  failure_class: 'platform',
+                  failure_stage: 'finalizing',
+                  prepare_rejection: 'ablation_profile_drift',
+                  prepare_rejected_at: '2026-08-18T18:20:00.000Z',
+                  issued_at: '2026-08-18T18:00:00.000Z',
+                  failed_at: '2026-08-18T18:20:00.000Z',
+                }),
+              ],
+            })),
+          },
+        }),
+      }),
+    )
+
+    expect(diagnosis.likely_cause.code).toBe('prepare_report_rejected')
+    expect(diagnosis.failure_histogram[0]).toMatchObject({
+      failure_class: 'platform',
+      failure_stage: 'finalizing',
+      prepare_rejection: 'ablation_profile_drift',
+      count: 4,
+    })
+    expect(diagnosis.recent_failures[0]).toMatchObject({
+      prepare_rejection: 'ablation_profile_drift',
+    })
   })
 
   it('reports issuance_disabled when mode is off', () => {

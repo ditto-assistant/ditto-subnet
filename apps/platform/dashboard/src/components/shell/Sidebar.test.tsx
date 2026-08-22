@@ -24,7 +24,9 @@ afterEach(cleanup);
 const BENCH = { active: 7, desired: 7, status: "activated", hasOlderRuns: false };
 
 function renderSidebar(onRefresh: () => void = () => undefined): void {
-  render(() => <Sidebar bench={BENCH} displayVersion={7} onRefresh={onRefresh} />);
+  render(() => (
+    <Sidebar bench={BENCH} displayVersion={7} epoch={() => null} onRefresh={onRefresh} />
+  ));
 }
 
 describe("Sidebar routes every section (row 28)", () => {
@@ -87,7 +89,9 @@ describe("Sidebar routes every section (row 28)", () => {
   });
 
   it("names no version in the benchmark description before live data arrives", () => {
-    render(() => <Sidebar bench={BENCH} displayVersion={null} onRefresh={() => undefined} />);
+    render(() => (
+      <Sidebar bench={BENCH} displayVersion={null} epoch={() => null} onRefresh={() => undefined} />
+    ));
     const benchmarkDesc = document.querySelector('.nav-item[data-page="benchmark"] .ni-desc');
     expect(benchmarkDesc).toHaveTextContent("Scoring benchmark");
   });
@@ -115,7 +119,7 @@ describe("Public source repositories (row 29)", () => {
   it("advertises the open-source stack with accessible labels", () => {
     render(() => (
       <>
-        <Sidebar bench={BENCH} displayVersion={7} onRefresh={() => undefined} />
+        <Sidebar bench={BENCH} displayVersion={7} epoch={() => null} onRefresh={() => undefined} />
         <SiteFooter />
       </>
     ));

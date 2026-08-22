@@ -85,12 +85,14 @@ var DefaultAnswerStuffingPosture = scoregates.AnswerStuffingPenalize
 var DefaultLatencyPosture = scoregates.LatencyReview
 
 // InferenceLatencyTelemetry carries the trusted per-case wall-time aggregate the
-// v12 inference-latency gate consumes. It is produced by the relay/scorer path
-// that reads runner.CaseExecution.TotalDurationMs for every inference-required,
-// model-reached case (see cmd/dittobench-api/v12_latency.go
-// v12InferenceLatencyTelemetry -- the single integration point). EligibleCases is
-// the number of such cases that carried a trusted wall time; FlaggedCases is how
-// many of those returned below the floor.
+// v12 inference-latency gate consumes. Its producer read
+// runner.CaseExecution.TotalDurationMs for every inference-required,
+// model-reached case; that scorer-side pass required exclusive per-case inference
+// windows and was removed when /run became concurrent, so no caller builds this
+// aggregate today. The type and the scoregates gate behind it are kept for a
+// restored per-case pass. EligibleCases is the number of such cases that carried
+// a trusted wall time; FlaggedCases is how many of those returned below the
+// floor.
 type InferenceLatencyTelemetry struct {
 	AdministeredCases   int
 	EligibleCases       int
@@ -116,33 +118,15 @@ func DefaultLatencyGateConfig() LatencyGateConfig {
 	}
 }
 
-// AttachInferenceLatencyGate layers the v12 inference-latency review gate onto
-// already-built gate evidence. It is a no-op for bench_version<12 (v9..v11
-// evidence stays byte-identical), and for bench_version>=12 it binds the signed
-// latency evidence into the gate digest.
-func AttachInferenceLatencyGate(benchVersion int, gates scoregates.Evidence, telemetry InferenceLatencyTelemetry, cfg LatencyGateConfig) (scoregates.Evidence, error) {
-	if benchVersion < scoregates.BenchVersionV12 {
-		return gates, nil
-	}
-	return scoregates.AttachInferenceLatency(gates, scoregates.InferenceLatencyInput{
-		AdministeredCases:   telemetry.AdministeredCases,
-		EligibleCases:       telemetry.EligibleCases,
-		FlaggedCases:        telemetry.FlaggedCases,
-		FloorMS:             cfg.FloorMS,
-		ShareThresholdBPS:   cfg.ShareBPS,
-		Posture:             cfg.Posture,
-		TelemetryComplete:   telemetry.TelemetryComplete,
-		AttributionComplete: telemetry.AttributionComplete,
-	})
-}
-
 // AnswerStuffingTelemetry carries the trusted per-case answer-provenance
-// aggregate the v12 answer-stuffing gate consumes. It is produced by the scorer
-// path that, for every COMPUTED-answer, model-reached case, checks the broker's
-// recorded clean-pass model I/O for the value-in-input-before-completion
-// signature (see cmd/dittobench-api/v9_base.go v12AnswerStuffingTelemetry -- the
-// single integration point). EligibleCases is the number of computed cases whose
-// provenance settled; StuffedCases is how many of those were flagged.
+// aggregate the v12 answer-stuffing gate consumes. Its producer checked the
+// broker's recorded clean-pass model I/O for the value-in-input-before-completion
+// signature on every COMPUTED-answer, model-reached case; that scorer-side pass
+// required exclusive per-case inference windows and was removed when /run became
+// concurrent, so no caller builds this aggregate today. The type and the
+// scoregates gate behind it are kept for a restored per-case pass. EligibleCases
+// is the number of computed cases whose provenance settled; StuffedCases is how
+// many of those were flagged.
 type AnswerStuffingTelemetry struct {
 	AdministeredCases int
 	EligibleCases     int
@@ -186,30 +170,6 @@ func DefaultAnswerStuffingGateConfig() AnswerStuffingGateConfig {
 	}
 }
 
-// AttachAnswerStuffingGate layers the v12 answer-stuffing gate onto already-built
-// gate evidence. It is a no-op for bench_version<12 (v9..v11 evidence stays
-// byte-identical), and for bench_version>=12 it binds the signed answer-stuffing
-// evidence into the gate digest.
-func AttachAnswerStuffingGate(benchVersion int, gates scoregates.Evidence, telemetry AnswerStuffingTelemetry, cfg AnswerStuffingGateConfig) (scoregates.Evidence, error) {
-	if benchVersion < scoregates.BenchVersionV12 {
-		return gates, nil
-	}
-	return scoregates.AttachAnswerStuffing(gates, scoregates.AnswerStuffingInput{
-		AdministeredCases:       telemetry.AdministeredCases,
-		EligibleCases:           telemetry.EligibleCases,
-		StuffedCases:            telemetry.StuffedCases,
-		MinCases:                cfg.MinCases,
-		ShareThresholdBPS:       cfg.ShareBPS,
-		LooseEligibleCases:      telemetry.LooseEligibleCases,
-		LooseStuffedCases:       telemetry.LooseStuffedCases,
-		ReviewShareThresholdBPS: cfg.ReviewShareBPS,
-		Posture:                 cfg.Posture,
-		TelemetryComplete:       telemetry.TelemetryComplete,
-		AttributionComplete:     telemetry.AttributionComplete,
-		ReviewRequired:          telemetry.ReviewRequired,
-	})
-}
-
 // AggregateModelTelemetry combines trusted run-level broker accounting with
 // scorer-observed non-overlapping ordinary-case windows. Aggregate request
 // counts alone still cannot prove how many different cases reached inference.
@@ -231,8 +191,10 @@ type AggregateModelTelemetry struct {
 // ModelDependenceTelemetry carries the trusted counterfactual-slice aggregate
 // the v12 causal model-dependence gate consumes. It is produced by the relay
 // path that re-scores each model-reached case under a deterministically
-// perturbed completion (see cmd/dittobench-api/v9_base.go
-// v9DependenceTelemetryForVersion — the single integration point). EligibleCases
+// perturbed completion. That per-case relay pass was removed when /run became
+// concurrent; cmd/dittobench-api/v9_base.go applyV9BaseEvidence now emits the
+// contract's fail-open aggregate (SliceAttributionComplete=false) for v12 so the
+// signed digest stays valid. EligibleCases
 // is the number of counterfactual-slice cases that settled a verdict;
 // DependentCases is how many of those had their scored answer CHANGE.
 type ModelDependenceTelemetry struct {

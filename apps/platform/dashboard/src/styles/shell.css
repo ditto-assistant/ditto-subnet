@@ -137,6 +137,118 @@ footer a:hover {
 .sidebar .brand .sub {
   color: var(--text-dim);
 }
+/* ── Epoch clock (rail) ──────────────────────────────────────
+   The payout countdown, sitting between the brand and the nav so it is on
+   screen on every page without scrolling. The gauge is the epoch and the
+   digits are one reading of it: with the words removed the shape still says
+   a fixed cycle is this far along. */
+.epoch-clock {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 13px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.epoch-clock-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-dim);
+  font: 700 10px/1 var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.epoch-clock-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  /* The system's own live-meter glow, kept to the two parts that are actually
+     live (this dot and the gauge head) so it reads as state, not as trim. */
+  box-shadow: 0 0 7px color-mix(in oklch, var(--accent) 55%, transparent);
+  animation: epoch-clock-breathe 3.4s ease-in-out infinite;
+}
+.epoch-clock-time {
+  /* Tabular so a per-second tick never reflows the rail, and -0.02em because
+     mono digits at display size sit too loose without it. */
+  color: var(--text);
+  font: 600 38px/1 var(--mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.epoch-clock-time.unread {
+  color: var(--text-faint);
+}
+.epoch-clock-gauge {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  height: 10px;
+}
+.epoch-clock-gauge i {
+  flex: 1 1 0;
+  min-width: 0;
+  border-radius: 1px;
+  /* Opaque, mixed against the card rather than laid over it with alpha. The
+     row meters this borrows from are per-row decoration and can afford to sit
+     faint; here filled-vs-empty IS the reading, so it carries full strength. */
+  background: color-mix(in oklch, var(--text) 16%, var(--bg));
+  transition: background-color 240ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+.epoch-clock-gauge i.on {
+  background: var(--accent);
+}
+.epoch-clock-gauge i.head {
+  background: var(--accent);
+  box-shadow: 0 0 7px color-mix(in oklch, var(--accent) 50%, transparent);
+}
+.epoch-clock-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 7px;
+  color: var(--text-dim);
+  font-size: 10.5px;
+  line-height: 1.4;
+}
+.epoch-clock-block {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+.epoch-clock-flag {
+  color: var(--warn);
+  font-weight: 700;
+}
+/* The one authored moment: inside the last minute the payout stops being a
+   number to read later and becomes one to watch, so the digits take the warn
+   hue and the pulse doubles. Nothing else on the rail moves. */
+.epoch-clock.imminent .epoch-clock-time {
+  color: var(--warn);
+}
+.epoch-clock.imminent .epoch-clock-dot {
+  background: var(--warn);
+  box-shadow: 0 0 8px color-mix(in oklch, var(--warn) 60%, transparent);
+  animation-duration: 1.2s;
+}
+@keyframes epoch-clock-breathe {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .epoch-clock-dot {
+    animation: none;
+  }
+  .epoch-clock-gauge i {
+    transition: none;
+  }
+}
+
 .nav {
   display: flex;
   flex-direction: column;
@@ -484,6 +596,48 @@ footer a {
     width: 34px;
     height: 34px;
   }
+  /* Row 1, right of the brand: the rail's tall block collapses to a single
+     readout so the clock survives the top-bar layout instead of eating a row
+     of it. Same instrument, one density down. */
+  .epoch-clock {
+    order: 0;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 9px;
+    padding: 6px 10px;
+  }
+  .epoch-clock-label {
+    /* The digits beside a live dot in the subnet's own top bar do not need
+       naming at this size; the rail states it in full. */
+    gap: 0;
+  }
+  .epoch-clock-label-text {
+    display: none;
+  }
+  .epoch-clock-time {
+    font-size: 20px;
+  }
+  .epoch-clock-gauge {
+    /* Wider, and the segment gaps go: 24 hairlines inside 54px read as a
+       barcode texture rather than as a gauge with a position. */
+    width: 76px;
+    height: 6px;
+    gap: 0;
+  }
+  .epoch-clock-gauge i {
+    border-radius: 0;
+  }
+  .epoch-clock-gauge i:first-child {
+    border-radius: 2px 0 0 2px;
+  }
+  .epoch-clock-gauge i:last-child {
+    border-radius: 0 2px 2px 0;
+  }
+  .epoch-clock-foot {
+    display: none;
+  }
+
   /* Footer moves onto row 1, right of the brand: Refresh plus compact
      telemetry and GitHub source links. */
   .side-foot {
@@ -538,6 +692,20 @@ footer a {
   }
 }
 @media (max-width: 720px) {
+  /* The gauge is illegible at this width, and dropping it is what lets the
+     clock sit beside the brand on row 1 rather than claim a row of its own —
+     one less band of chrome above the content on the smallest screens. */
+  .epoch-clock-gauge {
+    display: none;
+  }
+  .epoch-clock {
+    gap: 7px;
+    padding: 5px 9px;
+  }
+  .epoch-clock-time {
+    font-size: 18px;
+  }
+
   /* Keep the four theme options in one compact row (36px targets) rather than
      a tall full-width 2x2 grid, and drop the long brand subtitle. */
   .side-theme .theme-option {

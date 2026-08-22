@@ -81,60 +81,6 @@ func newBrokerTestReaderSession(t *testing.T, upstreamStatus int) (*longmemeval.
 	return session, readerModel
 }
 
-func TestV10CaseCapabilitiesKeepConcurrentLedgersDistinct(t *testing.T) {
-	broker := newInferenceBroker(1)
-	broker.sleep = func(context.Context, time.Duration) error { return nil }
-	id := "v10-case-capabilities"
-	model := llm.HarnessModelForVersion(protocol.BenchVersionV10)
-	broker.sessions[id] = &brokerSession{
-		id: id, boundRunID: uuid.NewString(), expectedSourceIP: "127.0.0.1",
-		expiresAt: time.Now().Add(time.Hour), benchVersion: protocol.BenchVersionV10,
-		requestModel: model, model: model,
-		delayFingerprintKey: bytes.Repeat([]byte{7}, delayFingerprintKeySize),
-		delayFP: delayFingerprintConfig{
-			mode: delayFingerprintShadow, minMS: 5, maxMS: 5,
-		},
-		trustedChatHandler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1}}`)
-		}),
-		cancels: make(map[string]context.CancelFunc),
-	}
-
-	first, _, firstToken, err := broker.beginCaseCapability(id, "case-a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	second, _, secondToken, err := broker.beginCaseCapability(id, "case-b")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, token := range []string{firstToken, secondToken} {
-		request := httptest.NewRequest(http.MethodPost, "/v1/inference/cases/"+token+"/chat/completions", bytes.NewBufferString(`{"model":"ignored","messages":[{"role":"user","content":"query"}]}`))
-		request.RemoteAddr = "127.0.0.1:4321"
-		request.SetPathValue("rest", "cases/"+token+"/chat/completions")
-		response := httptest.NewRecorder()
-		broker.handle(response, request)
-		if response.Code != http.StatusOK {
-			t.Fatalf("capability response=%d %s", response.Code, response.Body.String())
-		}
-	}
-	firstSnapshot, err := broker.endCaseCapability(id, first)
-	if err != nil {
-		t.Fatal(err)
-	}
-	secondSnapshot, err := broker.endCaseCapability(id, second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name, snapshot := range map[string]brokerCaseSnapshot{"first": firstSnapshot, "second": secondSnapshot} {
-		if snapshot.Requests != 1 || snapshot.Successes != 1 || snapshot.InFlight != 0 ||
-			snapshot.DelayedRequests != 1 || snapshot.InjectedDelayMS != 5 {
-			t.Fatalf("%s snapshot=%+v", name, snapshot)
-		}
-	}
-}
-
 type brokerRemoteConn struct {
 	net.Conn
 	remote net.Addr

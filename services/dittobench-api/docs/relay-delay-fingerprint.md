@@ -48,13 +48,17 @@ Properties:
 
 ## Verification
 
-Per case (`v9RelayDelayEvidence`): concurrent calls overlap their holds, so
-the wall clock is only guaranteed to cover the largest single injected delay.
-The counters carry the sum and the count; the per-call mean is a floor on the
-maximum, so `wall_time >= injected_total / delayed_count` can never flag an
-honest case. The verdict is published per case in the transcript
-(`relay_injected_delay_ms`, `relay_delay_consistent`) and summarized in the
-operator log.
+Per case: concurrent calls overlap their holds, so the wall clock is only
+guaranteed to cover the largest single injected delay. The counters carry the
+sum and the count; the per-call mean is a floor on the maximum, so
+`wall_time >= injected_total / delayed_count` can never flag an honest case.
+
+The per-case comparison is **not computed today.** Reading a case's injected
+total needs an exclusive begin/end window around one `/run`, and scoring now
+overlaps `/run` on the process-wide inference URL. The injection and its
+case-window counters still run; the transcript fields
+(`relay_injected_delay_ms`, `relay_delay_consistent`) remain in the published
+contract, unset, for a restored per-case window.
 
 Beyond the hard floor, the recorded schedule enables residual analysis the
 screeners can consume (submission-contract: "private timing … signals can only

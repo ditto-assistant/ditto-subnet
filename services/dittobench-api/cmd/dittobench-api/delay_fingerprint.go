@@ -35,8 +35,10 @@ package main
 //     minted per run.
 //   - A harness that fires a call and returns before the broker releases the
 //     response is directly visible: its case wall time is smaller than the
-//     delay the broker verifiably imposed inside that case's window
-//     (v9RelayDelayEvidence).
+//     delay the broker verifiably imposed inside that case's window. Reading
+//     that residual needs an exclusive per-case window, which concurrent /run
+//     no longer opens, so the per-case comparison is not computed today; the
+//     injection and its case-window counters below still run.
 //
 // What it deliberately does not do yet: change any score. The mode ladder is
 // the shadow-before-enforce precedent that ditto-platform#506 invariant 5

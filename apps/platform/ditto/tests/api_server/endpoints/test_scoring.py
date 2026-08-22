@@ -260,6 +260,51 @@ class TestScoringLedger:
         keeps the arrival time it earned, and does not hand its rival the
         incumbency by shipping an improvement. The owner-family resolution behind
         it is covered in ``tests/db/queries/test_scores.py``.
+
+        0.8999 sits inside the crown-anchor floor of one resolvable composite
+        step. Two steps back (0.898) is a different score and must not keep
+        this clock -- that is the 2026-08-13 "never led" case.
+        """
+        from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
+
+        arrived = datetime(2026, 6, 8, 15, 52, tzinfo=UTC)
+        resubmitted = datetime(2026, 6, 8, 21, 20, tzinfo=UTC)
+        await _seed_scored(
+            session_maker,
+            miner=_MINER,
+            composite=0.8999,
+            created_at=arrived,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        await _seed_scored(
+            session_maker,
+            miner=_MINER,
+            composite=0.900,
+            created_at=resubmitted,
+            n=MIN_ELIGIBLE_CASES,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        resp = await client.get("/api/v1/scoring/scores", headers=_ledger_headers())
+
+        assert resp.status_code == 200
+        (entry,) = resp.json()["entries"]
+        assert entry["composite"] == pytest.approx(0.900)
+        assert datetime.fromisoformat(entry["first_seen"]) == arrived
+
+    async def test_a_two_step_jump_resets_the_lineage_anchor_on_the_wire(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A generation that never held this score cannot plant its timestamp.
+
+        0.898 is two resolvable steps behind 0.900 -- inside the old dethrone
+        band and outside the crown-anchor floor. The later winner keeps its
+        own arrival, so an early-but-behind ancestor cannot steal a rival's
+        incumbency.
         """
         from ditto.db.queries.scores import MIN_ELIGIBLE_CASES
 
@@ -287,7 +332,7 @@ class TestScoringLedger:
         assert resp.status_code == 200
         (entry,) = resp.json()["entries"]
         assert entry["composite"] == pytest.approx(0.900)
-        assert datetime.fromisoformat(entry["first_seen"]) == arrived
+        assert datetime.fromisoformat(entry["first_seen"]) == resubmitted
 
     async def test_returns_best_per_miner_highest_first(
         self,

@@ -269,6 +269,42 @@ class ConfirmationDimensionEvidenceView(BaseModel):
     created_at: datetime
 
 
+PrepareRejectionCode = Literal[
+    "go_evidence_digest_mismatch",
+    "go_evidence_fields_drifted",
+    "unsupported_ablation_status",
+    "unsupported_ablation_contract",
+    "ablation_profile_drift",
+    "ablation_accounting",
+    "ablation_digest_mismatch",
+    "longmem_profile_drift",
+    "longmem_accounting",
+    "longmem_digest_mismatch",
+    "longmem_latency_drift",
+    "unsupported_bench_version",
+    "confirmation_wire",
+    "confirmation_evidence",
+    "unclassified",
+]
+PREPARE_REJECTION_CODES: tuple[PrepareRejectionCode, ...] = (
+    "go_evidence_digest_mismatch",
+    "go_evidence_fields_drifted",
+    "unsupported_ablation_status",
+    "unsupported_ablation_contract",
+    "ablation_profile_drift",
+    "ablation_accounting",
+    "ablation_digest_mismatch",
+    "longmem_profile_drift",
+    "longmem_accounting",
+    "longmem_digest_mismatch",
+    "longmem_latency_drift",
+    "unsupported_bench_version",
+    "confirmation_wire",
+    "confirmation_evidence",
+    "unclassified",
+)
+
+
 class ConfirmationBundleTicketView(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -285,6 +321,11 @@ class ConfirmationBundleTicketView(BaseModel):
     failure_class: str | None = None
     failure_stage: str | None = None
     failed_at: datetime | None
+    # Allowlisted Go→Python prepare-report rejection. Written when convert or
+    # rebuild 409s; null when prepare never ran or succeeded. Not an error
+    # string, and it does not change retry ownership or settlement.
+    prepare_rejection: PrepareRejectionCode | None = None
+    prepare_rejected_at: datetime | None = None
 
 
 class ConfirmationBundleSubjectView(BaseModel):
@@ -491,6 +532,8 @@ __all__ = [
     "ConfirmationDimension",
     "ConfirmationDimensionEvidenceView",
     "ConfirmationEvidenceRoot",
+    "PREPARE_REJECTION_CODES",
+    "PrepareRejectionCode",
     "ConfirmationReservationState",
     "ConfirmationResultStatus",
     "ConfirmationShadowCalibrationView",

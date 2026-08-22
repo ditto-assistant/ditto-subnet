@@ -849,6 +849,8 @@ CREATE TABLE public.confirmation_bundle_tickets (
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     failure_class text,
     failure_stage text,
+    prepare_rejection text,
+    prepare_rejected_at timestamp with time zone,
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_att_89d2 CHECK ((attempt > 0)),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_dea_5293 CHECK ((deadline > issued_at)),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_2246 CHECK (((failure_class IS NULL) OR (failure_class = ANY (ARRAY['sandbox_oom'::text, 'lease_revoked'::text, 'validator_infrastructure'::text, 'platform_infrastructure'::text, 'dittobench'::text, 'platform'::text, 'validator'::text, 'evidence_schema'::text, 'timeout'::text, 'transport'::text, 'unclassified'::text])))),
@@ -857,6 +859,8 @@ CREATE TABLE public.confirmation_bundle_tickets (
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_a665 CHECK (((failure_stage IS NULL) OR (failure_stage = ANY (ARRAY['preparing'::text, 'running_confirmation'::text, 'finalizing'::text, 'submitting_result'::text, 'failed_retrying'::text, 'unknown'::text])))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_aa75 CHECK (((status = 'expired'::text) OR ((failure_reason IS NULL) AND (failed_at IS NULL)))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_fai_d595 CHECK (((failure_class IS NULL) = (failure_stage IS NULL))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_pre_6a4a CHECK (((prepare_rejection IS NULL) OR (prepare_rejection = ANY (ARRAY['go_evidence_digest_mismatch'::text, 'go_evidence_fields_drifted'::text, 'unsupported_ablation_status'::text, 'unsupported_ablation_contract'::text, 'ablation_profile_drift'::text, 'ablation_accounting'::text, 'ablation_digest_mismatch'::text, 'longmem_profile_drift'::text, 'longmem_accounting'::text, 'longmem_digest_mismatch'::text, 'longmem_latency_drift'::text, 'unsupported_bench_version'::text, 'confirmation_wire'::text, 'confirmation_evidence'::text, 'unclassified'::text])))),
+    CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_pre_8bfd CHECK (((prepare_rejection IS NULL) = (prepare_rejected_at IS NULL))),
     CONSTRAINT ck_confirmation_bundle_tickets_confirmation_tickets_sta_eb22 CHECK ((status = ANY (ARRAY['issued'::text, 'scored'::text, 'expired'::text])))
 );
 
