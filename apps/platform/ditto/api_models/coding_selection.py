@@ -192,6 +192,9 @@ class CodingPrivateCatalogRecord(CodingEvaluationModel):
     catalog_commitment_sha256: Sha256
     task_version: CodingCatalogTaskVersion
     membership_proof: CodingCatalogMembershipProof
+    issue: CodingCatalogIssue
+    runtime_policy: CodingCatalogRuntimePolicy
+    budgets: CodingCatalogBudgets
 
     @model_validator(mode="after")
     def task_and_membership_are_coherent(self) -> CodingPrivateCatalogRecord:
@@ -202,8 +205,13 @@ class CodingPrivateCatalogRecord(CodingEvaluationModel):
             or task.payload.corpus_release_id != proof.corpus_release_id
             or task.payload.catalog_index != proof.catalog_index
             or task.task_commitment_sha256 != proof.task_commitment_sha256
+            or coding_catalog_issue_digest(self.issue) != task.payload.issue_sha256
+            or coding_catalog_runtime_policy_digest(self.runtime_policy)
+            != task.payload.runtime_policy_sha256
+            or coding_catalog_budgets_digest(self.budgets)
+            != task.payload.budgets_sha256
         ):
-            raise ValueError("private catalog task and membership proof disagree")
+            raise ValueError("private catalog task material disagrees with its digests")
         return self
 
 

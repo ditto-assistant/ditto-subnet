@@ -153,18 +153,22 @@ The object is a bounded `dittobench-coding-private-catalog-record-v1` envelope:
   "schema": "dittobench-coding-private-catalog-record-v1",
   "catalog_commitment_sha256": "lowercase-sha256",
   "task_version": {},
-  "membership_proof": {}
+  "membership_proof": {},
+  "issue": {},
+  "runtime_policy": {},
+  "budgets": {}
 }
 ```
 
 Callers cannot provide a bucket, prefix, URL, or arbitrary object key, and the
 source has no catalog-list operation. The loader rejects duplicate fields,
 non-finite JSON, excessive nesting, oversized bodies, task/proof digest drift,
-wrong release/index/count/root, and invalid position-bound membership. Unknown
-fields remain non-authoritative for rolling compatibility. Missing objects,
-store failures, and timeouts are retryable transport errors; malformed or
-non-member objects are non-retryable control-plane integrity errors. The
-separate miner-upload object store is never a fallback.
+wrong release/index/count/root, issue/runtime-policy/budget digest drift, and
+invalid position-bound membership. Unknown fields remain non-authoritative for
+rolling compatibility. Missing objects, store failures, and timeouts are
+retryable transport errors; malformed or non-member objects are non-retryable
+control-plane integrity errors. The separate miner-upload object store is never
+a fallback.
 
 The private catalog leaf also commits the repository epoch plus canonical issue,
 model-visible runtime-policy, and model/tool/wall-budget digests. These fields
