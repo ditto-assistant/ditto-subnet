@@ -53,6 +53,73 @@ def kaniko_destination(agent_id: str, attempt_id: str) -> str:
     return f"ditto-screen/{agent_id}-{attempt_id}:latest"
 
 
+def starter_kit_rental_script(
+    *,
+    source_sha: str,
+    agent_id: str,
+    attempt_id: str,
+) -> str:
+    """Busybox script for a live Kaniko rental of the starter-kit harness."""
+    if len(source_sha) != 40 or any(c not in "0123456789abcdef" for c in source_sha):
+        raise ValueError("source_sha must be a 40-character lowercase git SHA")
+    destination = kaniko_destination(agent_id, attempt_id)
+    archive = (
+        "https://github.com/ditto-assistant/ditto-subnet/archive/"
+        f"{source_sha}.tar.gz"
+    )
+    context = f"/workspace/src/ditto-subnet-{source_sha}/miners/dittobench-starter-kit"
+    return (
+        "set -eu; "
+        "mkdir -p /workspace/src; "
+        f"/busybox/wget -qO /workspace/source.tar.gz {archive}; "
+        "/busybox/tar -xzf /workspace/source.tar.gz -C /workspace/src; "
+        "/kaniko/executor "
+        f"--context=dir://{context} --dockerfile=Dockerfile "
+        f"--destination={destination} --no-push --no-push-cache --cache=false "
+        "--tar-path=/workspace/image.tar --verbosity=info; "
+        "test -s /workspace/image.tar; "
+        "echo DITTO_SCREEN_DESTINATION="
+        f"{destination}; "
+        "echo DITTO_SCREEN_MANIFEST_BEGIN; "
+        "/busybox/tar -xOf /workspace/image.tar manifest.json; "
+        "echo; echo DITTO_SCREEN_MANIFEST_END; "
+        "echo KANIKO_STARTER_PROBE_AVAILABLE; "
+        "sleep 600"
+    )
+
+
+def parse_starter_kit_probe_logs(logs: str) -> dict[str, Any]:
+    destination = ""
+    for line in logs.splitlines():
+        if line.startswith("DITTO_SCREEN_DESTINATION="):
+            destination = line.split("=", 1)[1].strip()
+    begin = "DITTO_SCREEN_MANIFEST_BEGIN"
+    end = "DITTO_SCREEN_MANIFEST_END"
+    if begin not in logs or end not in logs:
+        raise ValueError("starter-kit probe logs are missing the docker-save manifest")
+    raw = logs.split(begin, 1)[1].split(end, 1)[0].strip()
+    manifest = json.loads(raw)
+    if not isinstance(manifest, list) or len(manifest) != 1:
+        raise ValueError("archive must contain exactly one image")
+    entry = manifest[0]
+    if not isinstance(entry, dict):
+        raise ValueError("manifest.json is invalid")
+    tags = entry.get("RepoTags") or []
+    config = entry.get("Config")
+    return {
+        "destination": destination,
+        "repo_tags": tags,
+        "config": config,
+        "ok": (
+            isinstance(tags, list)
+            and tags == [destination]
+            and isinstance(config, str)
+            and bool(config)
+            and "KANIKO_STARTER_PROBE_AVAILABLE" in logs
+        ),
+    }
+
+
 def kaniko_argv(*, destination: str) -> list[str]:
     """Exact miner-build flags production Targon Rentals pass to Kaniko."""
     return [

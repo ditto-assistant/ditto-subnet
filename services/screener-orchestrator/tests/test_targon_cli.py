@@ -156,6 +156,7 @@ def test_kaniko_roundtrip_uses_runtime_marker_when_ready_replicas_are_zero(
         image="kaniko:test",
         provision_timeout_seconds=1,
         roundtrip=True,
+        starter_kit_sha=None,
         keep=False,
     )
 

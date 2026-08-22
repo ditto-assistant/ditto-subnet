@@ -17,7 +17,9 @@ from screener_capacity.targon_screen_contract import (
     kaniko_destination,
     named_config_digest,
     pack_source_tar,
+    parse_starter_kit_probe_logs,
     scoring_ref,
+    starter_kit_rental_script,
     validate_screened_archive,
 )
 
@@ -139,3 +141,30 @@ def test_tiny_miner_docker_save_matches_kaniko_contract(tmp_path: Path) -> None:
         assert result["repo_tags"] == [destination]
     finally:
         subprocess.run(["docker", "image", "rm", "-f", destination], check=False)
+
+
+def test_starter_kit_rental_script_uses_production_kaniko_flags() -> None:
+    agent_id = str(uuid4())
+    attempt_id = str(uuid4())
+    sha = "a" * 40
+    script = starter_kit_rental_script(
+        source_sha=sha, agent_id=agent_id, attempt_id=attempt_id
+    )
+    destination = kaniko_destination(agent_id, attempt_id)
+    assert "--no-push" in script
+    assert "--tar-path=/workspace/image.tar" in script
+    assert f"--destination={destination}" in script
+    assert "miners/dittobench-starter-kit" in script
+    assert "KANIKO_STARTER_PROBE_AVAILABLE" in script
+    logs = (
+        "DITTO_SCREEN_DESTINATION=" + destination + "\n"
+        "DITTO_SCREEN_MANIFEST_BEGIN\n"
+        + json.dumps(
+            [{"Config": "deadbeef.json", "RepoTags": [destination], "Layers": []}]
+        )
+        + "\nDITTO_SCREEN_MANIFEST_END\n"
+        "KANIKO_STARTER_PROBE_AVAILABLE\n"
+    )
+    parsed = parse_starter_kit_probe_logs(logs)
+    assert parsed["ok"] is True
+    assert parsed["repo_tags"] == [destination]
