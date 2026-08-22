@@ -1,7 +1,8 @@
 name: Preview controls
 
 # Resolve and test the source-checkout preview control harness. This workflow
-# does not deploy a Platform, validator, Backroom, DNS record, or cloud resource.
+# never receives cloud credentials; for dashboard-only plans it emits a static
+# artifact that the trusted default-branch publisher may deploy.
 
 on:
   workflow_dispatch:
@@ -24,7 +25,7 @@ on:
         type: string
         required: false
   pull_request:
-    types: [opened, synchronize]
+    types: [opened, reopened, synchronize]
 
 permissions:
   contents: read
@@ -32,7 +33,7 @@ permissions:
 
 concurrency:
   group: preview-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: false
+  queue: max
 
 jobs:
   plan:
@@ -115,3 +116,63 @@ jobs:
 
       - name: Prove overlay cheatcodes
         run: uv run pytest ditto/tests/preview -q
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe502e # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Prove the trusted dashboard preview boundary
+        run: node --test apps/platform/dashboard/preview/cloudflare-pages-worker.test.mjs
+
+  dashboard-bundle:
+    if: >-
+      github.event_name == 'pull_request' &&
+      needs.plan.result == 'success' &&
+      needs.plan.outputs.profiles == 'dashboard' &&
+      needs.plan.outputs.attach == 'true'
+    needs: plan
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.plan.outputs.sha }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe502e # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/platform/dashboard/package-lock.json
+
+      - name: Build the exact-SHA public dashboard
+        working-directory: apps/platform/dashboard
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run build
+
+      - name: Package an unprivileged preview artifact
+        env:
+          PREVIEW_PR: ${{ github.event.pull_request.number }}
+          PREVIEW_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PREVIEW_SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p preview-artifact
+          mv apps/platform/dashboard/dist preview-artifact/dist
+          jq -n \
+            --argjson pr "$PREVIEW_PR" \
+            --arg repo "$PREVIEW_REPO" \
+            --arg sha "$PREVIEW_SHA" \
+            '{schema: 1, mode: "publish", pr: $pr, repo: $repo, sha: $sha}' \
+            > preview-artifact/manifest.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dashboard-preview-${{ github.run_attempt }}
+          path: preview-artifact
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 3

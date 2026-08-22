@@ -10,3 +10,7 @@ output "backroom_custom_domain_id" {
 output "backroom_oauth_kv_namespace_id" {
   value = cloudflare_workers_kv_namespace.backroom_oauth.id
 }
+
+output "dashboard_preview_pages_project" {
+  value = cloudflare_pages_project.dashboard_preview.name
+}
