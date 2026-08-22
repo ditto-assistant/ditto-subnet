@@ -1894,6 +1894,9 @@ export const confirmationBundleStateSchema = z.enum([
 ])
 
 const confirmationSha256Schema = z.string().regex(/^[0-9a-f]{64}$/)
+// Empty string is the canonical unused/zero-lane receipt digest from Go, shared
+// Python, and Platform. A 64-hex digest is required on any positive lane.
+const confirmationReceiptSetDigestSchema = z.string().regex(/^(?:|[0-9a-f]{64})$/)
 const confirmationUsageCountSchema = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER)
 const confirmationPositiveUsageCountSchema = confirmationUsageCountSchema.min(1)
 const confirmationScoreMicrosSchema = z.number().int().min(0).max(1_000_000)
@@ -2072,16 +2075,46 @@ const longMemProviderLaneSchema = z
     profile_revision: z.string().min(1).max(128),
     model: z.string().min(1).max(256),
     fallback_used: z.literal(false),
-    requests: confirmationPositiveUsageCountSchema,
-    successes: confirmationPositiveUsageCountSchema,
-    receipted_requests: confirmationPositiveUsageCountSchema,
+    requests: confirmationUsageCountSchema,
+    successes: confirmationUsageCountSchema,
+    receipted_requests: confirmationUsageCountSchema,
     prompt_tokens: confirmationUsageCountSchema,
     completion_tokens: confirmationUsageCountSchema,
     total_tokens: confirmationUsageCountSchema,
     cost_usd_micros: confirmationUsageCountSchema,
-    receipt_set_sha256: confirmationSha256Schema,
+    receipt_set_sha256: confirmationReceiptSetDigestSchema,
   })
   .superRefine((lane, context) => {
+    if (lane.requests === 0) {
+      if (
+        lane.successes !== 0 ||
+        lane.receipted_requests !== 0 ||
+        lane.prompt_tokens !== 0 ||
+        lane.completion_tokens !== 0 ||
+        lane.total_tokens !== 0 ||
+        lane.cost_usd_micros !== 0 ||
+        lane.receipt_set_sha256 !== ''
+      ) {
+        context.addIssue({
+          code: 'custom',
+          message: 'zero provider lane must have exact zero accounting',
+        })
+      }
+      return
+    }
+    if (lane.successes === 0 || lane.receipted_requests === 0) {
+      context.addIssue({
+        code: 'custom',
+        message: 'positive provider lane must have successful receipted requests',
+      })
+    }
+    if (lane.receipt_set_sha256.length !== 64) {
+      context.addIssue({
+        code: 'custom',
+        message: 'positive provider lane must have a receipt digest',
+        path: ['receipt_set_sha256'],
+      })
+    }
     if (lane.successes > lane.requests) {
       context.addIssue({ code: 'custom', message: 'successes cannot exceed requests' })
     }
@@ -2132,11 +2165,42 @@ const longMemEvidenceSchema = z
         path: ['score', 'case_count'],
       })
     }
-    const lanes = evidence.provider_evidence.map((lane) => lane.lane)
-    if (lanes[0] !== 'judge' || lanes[1] !== 'reader') {
+    const lanes = evidence.provider_evidence
+    if (lanes[0]?.lane !== 'judge' || lanes[1]?.lane !== 'reader') {
       context.addIssue({
         code: 'custom',
         message: 'provider_evidence must contain judge then reader in canonical order',
+        path: ['provider_evidence'],
+      })
+    }
+    const zeroLanes = lanes.filter((lane) => lane.requests === 0)
+    if (zeroLanes.length === 0) return
+    const exactZeroScore =
+      evidence.score.longmem_mean_micros === 0 &&
+      evidence.score.longmem_stderr_micros === 0 &&
+      evidence.score.per_capability.every((row) => row.correct === 0 && row.mean_micros === 0)
+    if (!exactZeroScore) {
+      context.addIssue({
+        code: 'custom',
+        message: 'zero-provider LongMem evidence requires an exact zero score',
+        path: ['score'],
+      })
+      return
+    }
+    if (zeroLanes.length === lanes.length) return
+    const judge = lanes.find((lane) => lane.lane === 'judge')
+    const reader = lanes.find((lane) => lane.lane === 'reader')
+    if (
+      reader?.requests !== 0 ||
+      judge === undefined ||
+      judge.requests !== evidence.score.case_count ||
+      judge.successes !== evidence.score.case_count ||
+      judge.receipted_requests !== evidence.score.case_count
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message:
+          'mixed LongMem provider evidence requires an unused reader, one receipted judge request per case, and an exact zero score',
         path: ['provider_evidence'],
       })
     }
@@ -2189,7 +2253,7 @@ const ablationSyntheticUsageSchema = z
         usage.embedding_inputs !== 0 ||
         usage.embedding_input_bytes !== 0 ||
         usage.chat_attempts !== usage.chat_applied + usage.rejected_requests ||
-        usage.chat_attempts > usage.budget.max_chat_requests ||
+        usage.chat_applied > usage.budget.max_chat_requests ||
         usage.chat_input_bytes > usage.budget.max_chat_input_bytes
       ) {
         context.addIssue({ code: 'custom', message: 'invalid inference synthetic accounting' })
@@ -2199,7 +2263,7 @@ const ablationSyntheticUsageSchema = z
       usage.chat_applied !== 0 ||
       usage.chat_input_bytes !== 0 ||
       usage.embedding_attempts !== usage.embedding_applied + usage.rejected_requests ||
-      usage.embedding_attempts > usage.budget.max_embedding_requests ||
+      usage.embedding_applied > usage.budget.max_embedding_requests ||
       usage.embedding_inputs > usage.budget.max_embedding_inputs ||
       usage.embedding_input_bytes > usage.budget.max_embedding_input_bytes
     ) {

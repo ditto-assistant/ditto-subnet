@@ -1024,6 +1024,136 @@ describe('Bench v9 confirmation bundle schemas', () => {
     expect(longmem?.score.longmem_mean_micros).toBe(500_000)
   })
 
+  it('accepts the unused-reader judged-zero form Platform already verifies', () => {
+    // Live v4 canary 2591346f completed this exact shape; Backroom Zod previously
+    // required positive usage on both lanes and a 64-hex receipt hash, so MCP
+    // and /confirmation-bundles could not read accepted evidence.
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle())) as MutableConfirmationBundle
+    const longmem = bundle.evidence_root!.longmemeval
+    longmem.request_count = 12
+    longmem.input_tokens = 120
+    longmem.output_tokens = 12
+    longmem.provider_cost_microusd = 1_200
+    longmem.evidence.score = {
+      longmem_mean_micros: 0,
+      longmem_stderr_micros: 0,
+      case_count: 12,
+      per_capability: longmem.evidence.score.per_capability.map((row) => ({
+        ...row,
+        correct: 0,
+        mean_micros: 0,
+      })),
+    }
+    const [judge, reader] = longmem.evidence.provider_evidence
+    Object.assign(judge, {
+      requests: 12,
+      successes: 12,
+      receipted_requests: 12,
+      prompt_tokens: 120,
+      completion_tokens: 12,
+      total_tokens: 132,
+      cost_usd_micros: 1_200,
+      receipt_set_sha256: 'e'.repeat(64),
+    })
+    Object.assign(reader, {
+      requests: 0,
+      successes: 0,
+      receipted_requests: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+      cost_usd_micros: 0,
+      receipt_set_sha256: '',
+    })
+    const dimension = bundle.dimensions.find((row) => row.dimension === 'longmemeval')
+    if (dimension) Object.assign(dimension, longmem)
+    bundle.evidence_root!.totals = {
+      ...bundle.evidence_root!.totals,
+      request_count: 12,
+      input_tokens: 120,
+      output_tokens: 12,
+      provider_cost_microusd: 1_200,
+    }
+
+    const parsed = confirmationBundleViewSchema.parse(bundle)
+    const lanes = parsed.evidence_root?.longmemeval.evidence.provider_evidence ?? []
+    expect(lanes.map((lane) => [lane.lane, lane.requests, lane.receipt_set_sha256])).toEqual([
+      ['judge', 12, 'e'.repeat(64)],
+      ['reader', 0, ''],
+    ])
+    expect(parsed.evidence_root?.longmemeval.evidence.score.longmem_mean_micros).toBe(0)
+  })
+
+  it('rejects unused-reader evidence that is not an exact official zero', () => {
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle())) as MutableConfirmationBundle
+    const longmem = bundle.evidence_root!.longmemeval
+    longmem.request_count = 12
+    longmem.input_tokens = 120
+    longmem.output_tokens = 12
+    longmem.provider_cost_microusd = 1_200
+    Object.assign(longmem.evidence.provider_evidence[0], {
+      requests: 12,
+      successes: 12,
+      receipted_requests: 12,
+      prompt_tokens: 120,
+      completion_tokens: 12,
+      total_tokens: 132,
+      cost_usd_micros: 1_200,
+    })
+    Object.assign(longmem.evidence.provider_evidence[1], {
+      requests: 0,
+      successes: 0,
+      receipted_requests: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      total_tokens: 0,
+      cost_usd_micros: 0,
+      receipt_set_sha256: '',
+    })
+    const dimension = bundle.dimensions.find((row) => row.dimension === 'longmemeval')
+    if (dimension) Object.assign(dimension, longmem)
+    bundle.evidence_root!.totals = {
+      ...bundle.evidence_root!.totals,
+      request_count: 12,
+      input_tokens: 120,
+      output_tokens: 12,
+      provider_cost_microusd: 1_200,
+    }
+    expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow(/exact zero score/)
+  })
+
+  it('accepts budget-exhausted embedding usage that counts the rejected attempt past the cap', () => {
+    // Go and shared Python cap *applied* calls, not attempts. A rejected overflow
+    // makes attempts = applied + 1, which can exceed max_embedding_requests.
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle())) as MutableConfirmationBundle
+    const usage = bundle.evidence_root!.embedding_ablation.evidence.synthetic_usage
+    usage.embedding_attempts = 11
+    usage.embedding_applied = 10
+    usage.embedding_inputs = 10
+    usage.embedding_input_bytes = 1_000
+    usage.rejected_requests = 1
+    usage.budget_exhausted = true
+    const dimension = bundle.dimensions.find((row) => row.dimension === 'embedding_ablation')
+    if (dimension) Object.assign(dimension, bundle.evidence_root!.embedding_ablation)
+    expect(
+      confirmationBundleViewSchema.parse(bundle).evidence_root?.embedding_ablation.evidence
+        .synthetic_usage.embedding_attempts,
+    ).toBe(11)
+  })
+
+  it('still rejects embedding applications that exceed the signed budget', () => {
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle())) as MutableConfirmationBundle
+    const usage = bundle.evidence_root!.embedding_ablation.evidence.synthetic_usage
+    usage.embedding_attempts = 11
+    usage.embedding_applied = 11
+    usage.embedding_inputs = 11
+    usage.rejected_requests = 0
+    usage.budget_exhausted = false
+    expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow(
+      /invalid embedding synthetic accounting/,
+    )
+  })
+
   it('accepts both legal superseded audit shapes and rejects partial completion', () => {
     const completed = structuredClone(confirmationBundle()) as GeneratedConfirmationBundleView
     completed.state = 'superseded'
