@@ -19,6 +19,10 @@ logs. Platform parses the signer's S3 expiry and rejects a URL that exceeds its
 requested TTL or ticket deadline. Storage keys stay inside the minter and are
 not part of the returned capability projection.
 
+The scoped memory bundle is capped at 4 MiB, matching the canonical seed
+contract and starter-kit request-body limit. It contains visible records only;
+miners build their own embeddings after seeding.
+
 `HEAD` is only a bounded signing preflight, not proof of downloaded bytes.
 Every future consumer must stream within the declared size bound, recompute the
 SHA-256 before extraction or use, and reject any mismatch with the capability

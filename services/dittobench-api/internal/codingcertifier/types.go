@@ -153,6 +153,16 @@ func (response SeedResponse) validate(request codingcontract.SeedRequest, replay
 	return nil
 }
 
+// ValidateIdentity checks the invariant acknowledgement fields while allowing
+// either fresh installation or exact idempotent replay.
+func (response SeedResponse) ValidateIdentity(request codingcontract.SeedRequest) error {
+	if response.CaseID != request.CaseID || response.ProfileCapabilityID != request.ProfileCapabilityID ||
+		response.MemoryBundleSHA256 != request.MemoryBundleSHA256 || response.MemoryCount != len(request.Memories) {
+		return errors.New("coding seed response does not match the request")
+	}
+	return nil
+}
+
 // RunResponse is the advisory known-field /coding/run response. Workspace and
 // grader evidence remain authoritative.
 type RunResponse struct {

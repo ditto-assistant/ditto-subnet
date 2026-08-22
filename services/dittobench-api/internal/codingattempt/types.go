@@ -15,6 +15,7 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingartifacts"
 	"github.com/ditto-assistant/dittobench-api/internal/codinggrader"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
+	"github.com/ditto-assistant/dittobench-api/internal/codingseed"
 )
 
 // ArtifactSource opens one already audience-projected and verified capability.
@@ -33,6 +34,10 @@ type Executor interface {
 // internal runner freezes its immutable submission.
 type CapabilityRevoker interface {
 	Revoke(context.Context) error
+}
+
+type SeedProjector interface {
+	Project(io.Reader, codingseed.Binding) (codingseed.Projection, error)
 }
 
 // Binding is the common immutable identity for both attempt phases.
@@ -72,29 +77,30 @@ type GradingSpec struct {
 
 // RuntimeConfig supplies the concrete artifact source and sandbox executor.
 type RuntimeConfig struct {
-	Artifacts ArtifactSource
-	Executor  Executor
-	Now       func() time.Time
+	Artifacts     ArtifactSource
+	Executor      Executor
+	SeedProjector SeedProjector
+	Now           func() time.Time
 }
 
 // Runtime composes the existing reviewed coding primitives. It owns no
 // Platform, miner-harness, inference-relay, scheduler, or score client.
 type Runtime struct {
-	artifacts ArtifactSource
-	executor  Executor
-	now       func() time.Time
+	artifacts     ArtifactSource
+	executor      Executor
+	seedProjector SeedProjector
+	now           func() time.Time
 }
 
-// AuthoringSession holds private verified memory bytes and one runner session.
-// It is deliberately not serializable.
+// AuthoringSession holds one deep-owned scoped seed projection and one runner
+// session. Raw memory artifact readers are closed before it is returned.
 type AuthoringSession struct {
 	runner *codingrunner.Session
-	memory io.ReadCloser
+	seed   codingseed.Projection
 
 	frozen       bool
 	freezing     bool
 	closed       bool
-	memoryClosed bool
 	freezeResult codingrunner.FreezeResult
 	freezeErr    error
 	closeErr     error
@@ -107,13 +113,14 @@ func (session *AuthoringSession) Handler() http.Handler {
 	return session.runner.Handler()
 }
 
-// MemoryBundle exposes verified memory bytes only to the trusted seed adapter.
-// It never returns the bearer capability or storage URL.
-func (session *AuthoringSession) MemoryBundle() io.Reader {
-	return session.memory
+// SeedProjection returns an immutable, deep-owned task-scoped seed projection.
+func (session *AuthoringSession) SeedProjection() codingseed.Projection {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.seed
 }
 
-// MarshalJSON fails closed because a session owns private readers and a
+// MarshalJSON fails closed because a session owns a private seed projection and
 // validator-local workspace.
 func (*AuthoringSession) MarshalJSON() ([]byte, error) {
 	return nil, errors.New("coding authoring sessions cannot be serialized")

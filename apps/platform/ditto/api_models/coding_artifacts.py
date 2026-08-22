@@ -71,7 +71,7 @@ class CodingArtifactDeliveryPhase(StrEnum):
 CODING_ARTIFACT_MAX_BYTES = MappingProxyType(
     {
         CodingArtifactKind.VISIBLE_BUNDLE: 2 << 30,
-        CodingArtifactKind.MEMORY_BUNDLE: 64 << 20,
+        CodingArtifactKind.MEMORY_BUNDLE: 4 << 20,
         CodingArtifactKind.RESOURCE_PROFILE: 4 << 20,
         CodingArtifactKind.GRADER_BUNDLE: 512 << 20,
     }
