@@ -151,8 +151,9 @@ func run() error {
 		"--no-push",
 		"--no-push-cache",
 		"--cache=false",
-		"--tar-path=/workspace/image.tar",
-		"--digest-file=/workspace/manifest-digest",
+		"--ignore-path=/workspace",
+		"--tar-path=/kaniko/image.tar",
+		"--digest-file=/kaniko/manifest-digest",
 		"--verbosity=info",
 	)
 	cmd.Env = sanitizedEnvironment()
@@ -162,11 +163,11 @@ func run() error {
 		return stageFailure("KANIKO", fmt.Errorf("kaniko build failed: %w", err))
 	}
 
-	imageID, err := configDigestFromDockerSave("/workspace/image.tar")
+	imageID, err := configDigestFromDockerSave("/kaniko/image.tar")
 	if err != nil {
 		return stageFailure("ARCHIVE", err)
 	}
-	outputSHA, outputSize, err := hashBounded("/workspace/image.tar", maxOutputBytes)
+	outputSHA, outputSize, err := hashBounded("/kaniko/image.tar", maxOutputBytes)
 	if err != nil {
 		return stageFailure("ARCHIVE", err)
 	}
@@ -183,7 +184,7 @@ func run() error {
 	if err != nil {
 		return stageFailure("UPLOAD", err)
 	}
-	if err := uploadFile(client, uploadURL, "/workspace/image.tar", upload.RequiredHeaders); err != nil {
+	if err := uploadFile(client, uploadURL, "/kaniko/image.tar", upload.RequiredHeaders); err != nil {
 		return stageFailure("UPLOAD", err)
 	}
 	var complete struct {

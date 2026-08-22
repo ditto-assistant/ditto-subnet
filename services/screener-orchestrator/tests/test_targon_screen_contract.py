@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from screener_capacity.targon_screen_contract import (
+    busybox_contract_rental_script,
     inspect_docker_save,
     kaniko_argv,
     kaniko_destination,
@@ -50,9 +51,10 @@ def test_kaniko_destination_is_attempt_scoped_and_argv_matches_production() -> N
     argv = kaniko_argv(destination=destination)
     assert argv[0] == "/kaniko/executor"
     assert "--no-push" in argv
-    assert "--tar-path=/workspace/image.tar" in argv
+    assert "--tar-path=/kaniko/image.tar" in argv
+    assert "--ignore-path=/workspace" in argv
     assert f"--destination={destination}" in argv
-    assert "--digest-file=/workspace/manifest-digest" in argv
+    assert "--digest-file=/kaniko/manifest-digest" in argv
 
 
 def test_pack_source_tar_puts_dockerfile_at_root(tmp_path: Path) -> None:
@@ -143,6 +145,31 @@ def test_tiny_miner_docker_save_matches_kaniko_contract(tmp_path: Path) -> None:
         subprocess.run(["docker", "image", "rm", "-f", destination], check=False)
 
 
+def test_busybox_contract_rental_script_uses_production_kaniko_flags() -> None:
+    agent_id = str(uuid4())
+    attempt_id = str(uuid4())
+    script = busybox_contract_rental_script(agent_id=agent_id, attempt_id=attempt_id)
+    destination = kaniko_destination(agent_id, attempt_id)
+    assert "--no-push" in script
+    assert "--tar-path=/workspace/image.tar" in script
+    assert "--ignore-path=/workspace" in script
+    assert f"--destination={destination}" in script
+    assert "FROM busybox:1.37.0" in script
+    assert "wget" not in script
+    logs = (
+        "DITTO_SCREEN_DESTINATION=" + destination + "\n"
+        "DITTO_SCREEN_MANIFEST_BEGIN\n"
+        + json.dumps(
+            [{"Config": "deadbeef.json", "RepoTags": [destination], "Layers": []}]
+        )
+        + "\nDITTO_SCREEN_MANIFEST_END\n"
+        "KANIKO_PROBE_AVAILABLE\n"
+    )
+    parsed = parse_starter_kit_probe_logs(logs)
+    assert parsed["ok"] is True
+    assert parsed["repo_tags"] == [destination]
+
+
 def test_starter_kit_rental_script_uses_production_kaniko_flags() -> None:
     agent_id = str(uuid4())
     attempt_id = str(uuid4())
@@ -152,10 +179,15 @@ def test_starter_kit_rental_script_uses_production_kaniko_flags() -> None:
     )
     destination = kaniko_destination(agent_id, attempt_id)
     assert "--no-push" in script
-    assert "--tar-path=/workspace/image.tar" in script
+    assert "--tar-path=/kaniko/image.tar" in script
+    assert "--ignore-path=/workspace" in script
     assert f"--destination={destination}" in script
-    assert "miners/dittobench-starter-kit" in script
+    assert "git://github.com/ditto-assistant/dittobench-starter-kit.git#" in script
+    assert "ditto-subnet.git" not in script
+    assert "wget" not in script
     assert "KANIKO_STARTER_PROBE_AVAILABLE" in script
+    assert "KANIKO_STARTER_PROBE_FAILED" in script
+    assert "/bin/sleep 600" in script
     logs = (
         "DITTO_SCREEN_DESTINATION=" + destination + "\n"
         "DITTO_SCREEN_MANIFEST_BEGIN\n"

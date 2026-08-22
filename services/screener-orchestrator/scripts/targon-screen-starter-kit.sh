@@ -98,9 +98,16 @@ PYTHONPATH="${ORCH_ROOT}" python3 -m screener_capacity.targon_screen_contract va
   --image-tar "${image_tar}" --agent-id "${agent_id}" --attempt-id "${attempt_id}"
 
 if [[ "${live}" -eq 1 ]]; then
-  source_sha="$(git -C "${REPO_ROOT}" rev-parse HEAD)"
+  source_sha="$(
+    git ls-remote https://github.com/ditto-assistant/dittobench-starter-kit.git HEAD \
+      | awk '{print $1}'
+  )"
+  if [[ "${#source_sha}" -ne 40 ]]; then
+    echo "could not resolve dittobench-starter-kit HEAD" >&2
+    exit 1
+  fi
   "${SCRIPT_DIR}/targon-smoke.sh" kaniko-probe \
     --resource cpu-large \
     --starter-kit-sha "${source_sha}" \
-    --provision-timeout-seconds 1800
+    --provision-timeout-seconds 2400
 fi

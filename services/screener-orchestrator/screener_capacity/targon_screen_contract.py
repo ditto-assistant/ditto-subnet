@@ -4,7 +4,7 @@ Production Kaniko (``ditto-submission-builder``) builds a miner Dockerfile
 with:
 
     --destination=ditto-screen/{agent}-{attempt}:latest
-    --no-push --tar-path=/workspace/image.tar
+    --no-push --ignore-path=/workspace --tar-path=/kaniko/image.tar
 
 Platform binds ``screened_image_id`` to the docker-save **config** digest
 (not Kaniko ``--digest-file`` / Artifact Registry manifest digest) and
@@ -53,6 +53,34 @@ def kaniko_destination(agent_id: str, attempt_id: str) -> str:
     return f"ditto-screen/{agent_id}-{attempt_id}:latest"
 
 
+STARTER_KIT_GIT_REPO = "git://github.com/ditto-assistant/dittobench-starter-kit.git"
+
+
+def busybox_contract_rental_script(*, agent_id: str, attempt_id: str) -> str:
+    """Live Kaniko busybox build with production destination and tar inspect."""
+    destination = kaniko_destination(agent_id, attempt_id)
+    return (
+        "set -eu; "
+        "mkdir -p /workspace; "
+        "printf '%s\\n' 'FROM busybox:1.37.0' "
+        "\"RUN printf 'targon-kaniko-ok\\n' >/probe.txt\" "
+        '\'CMD ["cat","/probe.txt"]\' >/workspace/Dockerfile; '
+        "/kaniko/executor --context=dir:///workspace "
+        "--dockerfile=/workspace/Dockerfile "
+        f"--destination={destination} --no-push --no-push-cache --cache=false "
+        "--ignore-path=/workspace "
+        "--tar-path=/workspace/image.tar --verbosity=info; "
+        "test -s /workspace/image.tar; "
+        "echo DITTO_SCREEN_DESTINATION="
+        f"{destination}; "
+        "echo DITTO_SCREEN_MANIFEST_BEGIN; "
+        "/busybox/tar -xOf /workspace/image.tar manifest.json; "
+        "echo; echo DITTO_SCREEN_MANIFEST_END; "
+        "echo KANIKO_PROBE_AVAILABLE; "
+        "/busybox/sleep 600"
+    )
+
+
 def starter_kit_rental_script(
     *,
     source_sha: str,
@@ -63,28 +91,33 @@ def starter_kit_rental_script(
     if len(source_sha) != 40 or any(c not in "0123456789abcdef" for c in source_sha):
         raise ValueError("source_sha must be a 40-character lowercase git SHA")
     destination = kaniko_destination(agent_id, attempt_id)
-    archive = (
-        "https://github.com/ditto-assistant/ditto-subnet/archive/"
-        f"{source_sha}.tar.gz"
-    )
-    context = f"/workspace/src/ditto-subnet-{source_sha}/miners/dittobench-starter-kit"
+    # Kaniko's git:// context scheme clones over HTTPS. The standalone
+    # starter-kit repo is used instead of the monorepo: cloning ditto-subnet
+    # to reach miners/dittobench-starter-kit exceeded Targon startup time.
+    context = f"{STARTER_KIT_GIT_REPO}#{source_sha}"
+    # PID 1 must not exit: Targon restarts the rental and the logs reset.
+    # Multi-stage Kaniko unpacks the final stage over the executor root, so
+    # the docker-save tar is written under /kaniko (always ignored) and
+    # busybox is copied there before the build.
     return (
-        "set -eu; "
-        "mkdir -p /workspace/src; "
-        f"/busybox/wget -qO /workspace/source.tar.gz {archive}; "
-        "/busybox/tar -xzf /workspace/source.tar.gz -C /workspace/src; "
+        "mkdir -p /workspace; "
+        "cp /busybox/sh /kaniko/bb; "
         "/kaniko/executor "
-        f"--context=dir://{context} --dockerfile=Dockerfile "
+        f"--context={context} --dockerfile=Dockerfile "
         f"--destination={destination} --no-push --no-push-cache --cache=false "
-        "--tar-path=/workspace/image.tar --verbosity=info; "
-        "test -s /workspace/image.tar; "
+        "--ignore-path=/workspace "
+        "--tar-path=/kaniko/image.tar --verbosity=info; "
+        "rc=$?; "
+        "echo DITTO_KANIKO_EXIT=$rc; "
+        "if [ -s /kaniko/image.tar ]; then "
         "echo DITTO_SCREEN_DESTINATION="
         f"{destination}; "
         "echo DITTO_SCREEN_MANIFEST_BEGIN; "
-        "/busybox/tar -xOf /workspace/image.tar manifest.json; "
+        "/bin/tar -xOf /kaniko/image.tar manifest.json; "
         "echo; echo DITTO_SCREEN_MANIFEST_END; "
         "echo KANIKO_STARTER_PROBE_AVAILABLE; "
-        "sleep 600"
+        "else echo KANIKO_STARTER_PROBE_FAILED; fi; "
+        "/bin/sleep 600"
     )
 
 
@@ -115,7 +148,10 @@ def parse_starter_kit_probe_logs(logs: str) -> dict[str, Any]:
             and tags == [destination]
             and isinstance(config, str)
             and bool(config)
-            and "KANIKO_STARTER_PROBE_AVAILABLE" in logs
+            and (
+                "KANIKO_STARTER_PROBE_AVAILABLE" in logs
+                or "KANIKO_PROBE_AVAILABLE" in logs
+            )
         ),
     }
 
@@ -130,8 +166,9 @@ def kaniko_argv(*, destination: str) -> list[str]:
         "--no-push",
         "--no-push-cache",
         "--cache=false",
-        "--tar-path=/workspace/image.tar",
-        "--digest-file=/workspace/manifest-digest",
+        "--ignore-path=/workspace",
+        "--tar-path=/kaniko/image.tar",
+        "--digest-file=/kaniko/manifest-digest",
         "--verbosity=info",
     ]
 
