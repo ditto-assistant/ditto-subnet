@@ -1478,7 +1478,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List LongMem confirmation bundles',
       description:
-        'List newest-first LongMem bundles for the live benchmark with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. Filter by state and page bounds. Requires backroom:read. Each ticket carries failure_reason -- the coarse four-value protocol class that drives reissue -- plus failure_class and failure_stage, the allowlisted diagnostic and the last stage the slot published, both bound into the reporter signature. They are null only for a reporter predating that contract, so repeated nulls across fresh attempts mean the fleet has not adopted it yet. shadow_calibration counts completed_bundle_count (bundles that actually produced verified evidence) separately from superseded_bundle_count and failed_bundle_count: a lane with zero completions is an execution outage, not a cohort that completed and never promoted, and promotion_rate_bps is null rather than zero in that case.',
+        'List newest-first LongMem bundles for the live benchmark with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. Filter by state and page bounds. Requires backroom:read. Each ticket carries failure_reason -- the coarse four-value protocol class that drives reissue -- plus failure_class and failure_stage, the allowlisted diagnostic and the last stage the slot published, both bound into the reporter signature. They are null only for a reporter predating that contract, so repeated nulls across fresh attempts mean the fleet has not adopted it yet. prepare_rejection is the allowlisted Go-to-Python prepare-report 409, distinct from the later fail-job class. Null means prepare never ran or succeeded. shadow_calibration counts completed_bundle_count (bundles that actually produced verified evidence) separately from superseded_bundle_count and failed_bundle_count: a lane with zero completions is an execution outage, not a cohort that completed and never promoted, and promotion_rate_bps is null rather than zero in that case.',
       inputSchema: {
         state: confirmationBundleStateSchema.optional(),
         limit: z.number().int().min(1).max(200).default(20),
@@ -1494,7 +1494,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Diagnose LongMem confirmation lane',
       description:
-        'Aggregate LongMem confirmation settings, every lifecycle count, sampled failure_class/failure_stage histograms, leased-ticket age, and validator fleet versions into one read-only diagnosis. likely_cause is derived only from those allowlisted fields: leftover_validator_v9_identity_pin is the issuing-but-immediate-platform-unknown signature, execution_after_preparing means the validator accepted the lease, and unknown_execution_outage means issuance is on with zero completions but no known histogram. This does not change settings, authorize a retest, or activate rewards. Requires backroom:read.',
+        'Aggregate LongMem confirmation settings, every lifecycle count, sampled failure_class/failure_stage/prepare_rejection histograms, leased-ticket age, and validator fleet versions into one read-only diagnosis. likely_cause is derived only from those allowlisted fields: leftover_validator_v9_identity_pin is the issuing-but-immediate-platform-unknown signature, prepare_report_rejected means execute finished and prepare-report stored a convert/rebuild code, execution_after_preparing means the validator accepted the lease, and unknown_execution_outage means issuance is on with zero completions but no known histogram. This does not change settings, authorize a retest, or activate rewards. Requires backroom:read.',
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchConfirmationLaneDiagnosis()),
@@ -1505,7 +1505,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Get LongMem confirmation bundle',
       description:
-        'Read one complete LongMem confirmation bundle by UUID. Use this before authorizing a retest or diagnosing qualification: it preserves the root digest and signature, settings/profile/generation binding, completion mode, qualification status, typed provider receipts and synthetic ablations, ticket history (including the signed failure_class/failure_stage diagnostics for every attempt), and every subject projection. Requires backroom:read and changes nothing.',
+        'Read one complete LongMem confirmation bundle by UUID. Use this before authorizing a retest or diagnosing qualification: it preserves the root digest and signature, settings/profile/generation binding, completion mode, qualification status, typed provider receipts and synthetic ablations, ticket history (including the signed failure_class/failure_stage diagnostics and the allowlisted prepare_rejection convert/rebuild code for every attempt), and every subject projection. Requires backroom:read and changes nothing.',
       inputSchema: confirmationBundleDetailInputSchema,
       annotations: toolAnnotations('read'),
     },

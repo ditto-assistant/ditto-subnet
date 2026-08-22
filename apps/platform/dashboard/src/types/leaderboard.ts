@@ -392,6 +392,13 @@ export interface ChainWeightsSnapshot {
   epoch?: ChainEpoch | null;
 }
 
+/** /public/weights with the staleness markers the API adds when a chain
+ * re-read is failing. */
+export type WeightsSnapshot = ChainWeightsSnapshot & {
+  stale?: boolean;
+  age_seconds?: number | null;
+};
+
 // ── Consensus scores (/public/agent/{id}/scores) ─────────────
 
 export interface ConsensusScore {

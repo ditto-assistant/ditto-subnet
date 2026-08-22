@@ -339,7 +339,6 @@ func TestTranscriptCanonicalOrderIndependent(t *testing.T) {
 }
 
 func TestTranscriptCanonicalBytesDoesNotReorderV9AttributionEvidence(t *testing.T) {
-	perCase := []protocol.CaseScore{{CaseID: "z-case"}, {CaseID: "a-case"}}
 	transcripts := []transcriptCase{
 		{
 			CaseID: "z-case",
@@ -372,9 +371,6 @@ func TestTranscriptCanonicalBytesDoesNotReorderV9AttributionEvidence(t *testing.
 	}
 	if got := []string{transcripts[0].CaseID, transcripts[1].CaseID}; !reflect.DeepEqual(got, []string{"z-case", "a-case"}) {
 		t.Fatalf("canonicalization reordered live attribution evidence: %v", got)
-	}
-	if complete, successful := v9DistinctModelCases(perCase, transcripts); !complete || successful != 1 {
-		t.Fatalf("post-hash v9 attribution = complete %t, successful %d", complete, successful)
 	}
 }
 

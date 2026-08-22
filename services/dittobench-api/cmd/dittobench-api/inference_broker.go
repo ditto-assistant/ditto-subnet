@@ -4458,72 +4458,6 @@ type brokerCaseSnapshot struct {
 	ToolFindings         uint64
 }
 
-// beginCaseCapability opens one independently-addressable v10 attribution
-// ledger. The opaque token is placed only in that case's RunRequest inference
-// URL; the harness cannot mint another token or make one successful request
-// count for two ledgers.
-func (b *inferenceBroker) beginCaseCapability(id, caseID string) (uint64, brokerCaseSnapshot, string, error) {
-	capability, err := randomToken(24)
-	if err != nil {
-		return 0, brokerCaseSnapshot{}, "", fmt.Errorf("mint inference case capability: %w", err)
-	}
-	b.mu.RLock()
-	session := b.sessions[id]
-	b.mu.RUnlock()
-	if session == nil {
-		return 0, brokerCaseSnapshot{}, "", fmt.Errorf("inference session unavailable")
-	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	if session.benchVersion < protocol.BenchVersionV10 || caseID == "" {
-		return 0, brokerCaseSnapshot{}, "", fmt.Errorf("v10 inference case unavailable")
-	}
-	if session.caseIDs[caseID] != 0 {
-		return 0, brokerCaseSnapshot{}, "", fmt.Errorf("inference case already active")
-	}
-	session.caseGeneration++
-	generation := session.caseGeneration
-	if session.caseSnapshots == nil {
-		session.caseSnapshots = make(map[uint64]brokerCaseSnapshot)
-	}
-	if session.caseCapabilities == nil {
-		session.caseCapabilities = make(map[string]uint64)
-		session.caseCapabilityTokens = make(map[uint64]string)
-		session.caseIDs = make(map[string]uint64)
-	}
-	snapshot := brokerCaseSnapshot{ToolEvidenceComplete: true}
-	session.caseSnapshots[generation] = snapshot
-	session.caseCapabilities[capability] = generation
-	session.caseCapabilityTokens[generation] = capability
-	session.caseIDs[caseID] = generation
-	registerAnswerIOLocked(session, generation, caseID)
-	return generation, snapshot, capability, nil
-}
-
-func (b *inferenceBroker) endCaseCapability(id string, generation uint64) (brokerCaseSnapshot, error) {
-	b.mu.RLock()
-	session := b.sessions[id]
-	b.mu.RUnlock()
-	if session == nil {
-		return brokerCaseSnapshot{}, fmt.Errorf("inference session unavailable")
-	}
-	session.mu.Lock()
-	defer session.mu.Unlock()
-	token := session.caseCapabilityTokens[generation]
-	if generation == 0 || token == "" {
-		return brokerCaseSnapshot{}, fmt.Errorf("inference case capability unavailable")
-	}
-	delete(session.caseCapabilities, token)
-	delete(session.caseCapabilityTokens, generation)
-	for caseID, activeGeneration := range session.caseIDs {
-		if activeGeneration == generation {
-			delete(session.caseIDs, caseID)
-			break
-		}
-	}
-	return session.caseSnapshots[generation], nil
-}
-
 // beginCaseSnapshot advances the source-bound generation before one ordinary
 // v9 case starts. Requests admitted before this point remain attached to the
 // preceding generation even if their provider recovery finishes later.
@@ -4688,8 +4622,12 @@ func registerAnswerIOLocked(session *brokerSession, generation uint64, caseID st
 
 // caseModelIO returns the trusted clean-pass model I/O the broker recorded for
 // one case. ok=false when no capture log exists (pre-v12, unknown case, or a case
-// that never reached the model), which the scorer treats as unsettled (fail
+// that never reached the model), which a consumer treats as unsettled (fail
 // open). The returned log is a shallow snapshot; the caller only reads it.
+//
+// The v12 answer-stuffing scorer pass that consumed this was removed when /run
+// became concurrent (it needed exclusive per-case windows). The read seam is kept
+// beside the still-live capture so a restored per-case pass can consume it.
 func (b *inferenceBroker) caseModelIO(id, caseID string) (caseModelIOLog, bool) {
 	b.mu.RLock()
 	session := b.sessions[id]
@@ -4728,34 +4666,6 @@ func toolFindingNames(bits uint64) []string {
 		}
 	}
 	return findings
-}
-
-func toolProvenanceEvidence(snapshot brokerCaseSnapshot) *protocol.ToolProvenanceEvidence {
-	if !snapshot.ToolEvidenceComplete && snapshot.ModelToolCalls == 0 &&
-		snapshot.EndpointAttempts == 0 && snapshot.ToolFindings == 0 {
-		return nil
-	}
-	selectedNotExecuted := uint64(0)
-	if snapshot.ModelToolCalls > snapshot.MatchedToolCalls {
-		selectedNotExecuted = snapshot.ModelToolCalls - snapshot.MatchedToolCalls
-	}
-	findings := toolFindingNames(snapshot.ToolFindings)
-	if selectedNotExecuted > 0 {
-		findings = append(findings, "model_selected_not_executed")
-	}
-	complete := snapshot.ToolEvidenceComplete && snapshot.InFlight == 0
-	if !complete {
-		findings = append(findings, "tool_provenance_incomplete")
-	}
-	return &protocol.ToolProvenanceEvidence{
-		ModelEmitted:             int(snapshot.ModelToolCalls),
-		EndpointAttempts:         int(snapshot.EndpointAttempts),
-		Matched:                  int(snapshot.MatchedToolCalls),
-		Unmatched:                int(snapshot.UnmatchedToolCalls),
-		ModelSelectedNotExecuted: int(selectedNotExecuted),
-		Complete:                 complete,
-		Findings:                 findings,
-	}
 }
 
 // generationCaseSnapshot returns only calls admitted during one ordinary case

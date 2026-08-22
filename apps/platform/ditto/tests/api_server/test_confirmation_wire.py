@@ -19,6 +19,8 @@ from ditto.api_server.confirmation_evidence import (
 )
 from ditto.api_server.confirmation_wire import (
     ConfirmationWireError,
+    ablation_envelope_from_go,
+    completion_report_from_go_dimensions,
     completion_report_from_go_fixture,
 )
 from ditto.tests.confirmation_evidence_fixtures import (
@@ -35,6 +37,7 @@ FIXTURE_PATH = (
     / "testdata"
     / "go_confirmation_evidence_v9.json"
 )
+UNAVAILABLE_ABLATION_PATH = FIXTURE_PATH.with_name("go_ablation_unavailable_v9.json")
 EXECUTION_PROFILE_FIXTURE_PATH = (
     Path(__file__).parents[5]
     / "services"
@@ -232,6 +235,49 @@ def test_real_go_shape_unavailable_evidence_is_preserved_fail_closed(
     )
     assert verified.ablations_complete is False
     assert verified.ablation_semantic_factor_bps is None
+
+
+def test_production_unavailable_ablation_rebuilds_with_fixture_longmem() -> None:
+    fixture = _fixture()
+    unavailable = json.loads(UNAVAILABLE_ABLATION_PATH.read_text())
+    longmemeval = fixture["longmemeval"]
+    inference = unavailable["inference"]
+    embedding = unavailable["embedding"]
+    assert isinstance(longmemeval, dict)
+    assert isinstance(inference, dict)
+    assert isinstance(embedding, dict)
+    report = completion_report_from_go_dimensions(
+        ablation_coordinator_latency_ms=ABLATION_COORDINATOR_LATENCY_MS,
+        longmemeval=longmemeval,
+        inference_ablation=inference,
+        embedding_ablation=embedding,
+    )
+    assert report.inference_ablation.status == "unavailable"
+    assert report.embedding_ablation.status == "unavailable"
+    assert report.inference_ablation.evidence.sample_count == 2
+    assert report.embedding_ablation.evidence.affected_call_count == 4
+    assert (
+        ablation_envelope_from_go(
+            inference, expected_intervention="inference"
+        ).evidence_sha256
+        == report.inference_ablation.evidence_sha256
+    )
+
+    profile = _verification_profile()
+    verified = rebuild_confirmation_evidence(
+        report,
+        artifact_sha256=ARTIFACT_SHA256,
+        profile_revision=profile.revision,
+        profile_checksum=profile.checksum(),
+        settings_revision=7,
+        settings_checksum=SETTINGS_SHA256,
+        retest_generation=3,
+        mode=ConfirmationBundleMode.SHADOW,
+        profile=profile,
+    )
+    assert verified.ablations_complete is False
+    assert verified.ablation_semantic_factor_bps is None
+    assert verified.longmem_mean_micros == 500_000
 
 
 def test_self_consistent_v1_passed_wire_evidence_is_rejected() -> None:

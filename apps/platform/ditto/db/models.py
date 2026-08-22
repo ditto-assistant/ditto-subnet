@@ -5466,6 +5466,18 @@ class ConfirmationBundleTicket(Base):
     failed_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+    prepare_rejection: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """Allowlisted Go→Python ``/prepare-report`` rejection.
+
+    Distinct from :attr:`failure_class`, which is bound into the reporter
+    fail-job signature after the validator already treated the 409 as
+    ``platform`` / ``finalizing``. Null for historical rows and for tickets
+    whose prepare convert/rebuild never ran or succeeded.
+    """
+
+    prepare_rejected_at: Mapped[datetime | None] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
     )
@@ -5512,6 +5524,21 @@ class ConfirmationBundleTicket(Base):
             "'preparing', 'running_confirmation', 'finalizing', "
             "'submitting_result', 'failed_retrying', 'unknown')",
             name="confirmation_tickets_failure_stage_check",
+        ),
+        CheckConstraint(
+            "(prepare_rejection IS NULL) = (prepare_rejected_at IS NULL)",
+            name="confirmation_tickets_prepare_rejection_pair_check",
+        ),
+        CheckConstraint(
+            "prepare_rejection IS NULL OR prepare_rejection IN ("
+            "'go_evidence_digest_mismatch', 'go_evidence_fields_drifted', "
+            "'unsupported_ablation_status', 'unsupported_ablation_contract', "
+            "'ablation_profile_drift', 'ablation_accounting', "
+            "'ablation_digest_mismatch', 'longmem_profile_drift', "
+            "'longmem_accounting', 'longmem_digest_mismatch', "
+            "'longmem_latency_drift', 'unsupported_bench_version', "
+            "'confirmation_wire', 'confirmation_evidence', 'unclassified')",
+            name="confirmation_tickets_prepare_rejection_check",
         ),
         UniqueConstraint(
             "bundle_id", "attempt", name="confirmation_tickets_attempt_key"

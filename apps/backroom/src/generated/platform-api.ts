@@ -9163,6 +9163,10 @@ export interface components {
              * Format: date-time
              */
             issued_at: string;
+            /** Prepare Rejected At */
+            prepare_rejected_at?: string | null;
+            /** Prepare Rejection */
+            prepare_rejection?: ("go_evidence_digest_mismatch" | "go_evidence_fields_drifted" | "unsupported_ablation_status" | "unsupported_ablation_contract" | "ablation_profile_drift" | "ablation_accounting" | "ablation_digest_mismatch" | "longmem_profile_drift" | "longmem_accounting" | "longmem_digest_mismatch" | "longmem_latency_drift" | "unsupported_bench_version" | "confirmation_wire" | "confirmation_evidence" | "unclassified") | null;
             /** Slot Id */
             slot_id: string;
             /**
@@ -14274,7 +14278,7 @@ export interface components {
             pre_efficiency_composite?: number | null;
             /**
              * Rank
-             * @description 1-based rank by ``official_composite`` -- NOT by ``composite``. Sorting this board by ``composite`` reproduces ``rank`` only while every entry is still on the canonical median (``aggregate_method == 'canonical_median'``); once any agent has completed continual cohort waves the two orderings differ, and ``official_composite`` is the authoritative quality that ranks the board and drives the weight fold. Bench-v9 curve-v3 efficiency breaks only exact official-quality ties; lower quality never crosses higher quality. Remaining ties break on ``first_seen`` then ``agent_id``. Provisional rows are ranked among themselves and always trail the finalized board. Bench v9 base/provisional rows in confirmation enforce mode are null: only full-confirmed rows rank.
+             * @description 1-based rank by ``official_composite`` -- NOT by ``composite``. Sorting this board by ``composite`` reproduces ``rank`` only while every entry is still on the canonical median (``aggregate_method == 'canonical_median'``); once any agent has completed continual cohort waves the two orderings differ, and ``official_composite`` is the authoritative quality that ranks the board and drives the weight fold. Bench-v9 curve-v3 efficiency breaks only exact official-quality ties; lower quality never crosses higher quality. Remaining ties break on ``crown_first_seen`` (the lineage arrival; falling back to ``first_seen``) then ``agent_id``. A later tarball that only matches or marginally improves the owner's best score keeps that earlier clock; a jump outside the crown-anchor band resets it. Provisional rows are ranked among themselves and always trail the finalized board. Bench v9 base/provisional rows in confirmation enforce mode are null: only full-confirmed rows rank.
              */
             rank?: number | null;
             /**

@@ -10,10 +10,12 @@ import type { JSX } from "solid-js";
 
 import { WANDB_URL } from "../../lib/config";
 import type { PageName } from "../../lib/router";
+import type { ChainEpoch } from "../../types/leaderboard";
 import { dashboardHref } from "../../lib/router";
 import { minerSession } from "../../stores/sessionStore";
 import { currentPage, navigateToPage } from "../../stores/routeStore";
 import { BenchBadge } from "./BenchBadge";
+import { EpochClock } from "./EpochClock";
 import type { BenchBadgeProps } from "./BenchBadge";
 import { ThemeSwitcher } from "./ThemeSwitcher";
 
@@ -132,6 +134,9 @@ export interface SidebarProps {
   bench: BenchBadgeProps;
   /** benchmarkDisplayVersion(): fills the benchmark nav description. */
   displayVersion: number | null;
+  /** /public/weights `epoch`, for the rail's payout clock. An accessor so the
+   * clock re-reads it on every poll without re-rendering the whole rail. */
+  epoch: () => ChainEpoch | null | undefined;
   onRefresh: () => void;
 }
 
@@ -174,6 +179,7 @@ export function Sidebar(props: SidebarProps): JSX.Element {
           </div>
         </div>
       </div>
+      <EpochClock epoch={props.epoch} />
       <nav class="nav" id="site-nav" aria-label="Sections">
         <For each={NAV_ITEMS}>
           {(item) => (

@@ -531,6 +531,8 @@ describe('Backroom MCP tools', () => {
           failure_class: 'platform',
           failure_stage: 'unknown',
           failed_at: '2026-08-18T19:54:02.000Z',
+          prepare_rejection: null,
+          prepare_rejected_at: null,
         },
       ],
     }

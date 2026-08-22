@@ -736,9 +736,10 @@ So a run of zeros followed by a sudden jump is the system working normally, not
 a stuck payout. If you are still at zero more than four hours after your first
 score, that is worth reporting.
 
-**When is the next payout?** The leaderboard carries a live countdown to the
-next epoch tick, under the emissions strip: *"Weights fold into emissions in
-m:ss"*, with the block it lands on and the tempo it runs on. That tick is the
+**When is the next payout?** The dashboard rail carries a live countdown to the
+next epoch tick, above the navigation on every page: *"Next payout in m:ss"*,
+with a gauge of how far the current epoch has run, the block it lands on, and
+the tempo it runs on. That tick is the
 only synchronised moment in the whole pipeline — the individual validator
 submissions above it are staggered and unpredictable, but the fold and the
 payout happen at the same instant for every miner on the subnet. The same

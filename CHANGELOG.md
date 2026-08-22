@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v0.103.2 (2026-08-22)
+
+### Bug Fixes
+
+- **platform**: Persist allowlisted confirmation prepare-report 409s
+  ([#1077](https://github.com/ditto-assistant/ditto-subnet/pull/1077),
+  [`d8388c9`](https://github.com/ditto-assistant/ditto-subnet/commit/d8388c9e79d153a6f4802a77ccea78d750dd5f85))
+
+
+## v0.103.1 (2026-08-22)
+
+### Bug Fixes
+
+- **platform**: Rank by lineage time and keep the best score
+  ([#1064](https://github.com/ditto-assistant/ditto-subnet/pull/1064),
+  [`0bfe31c`](https://github.com/ditto-assistant/ditto-subnet/commit/0bfe31c7f95ed4f5c71614c7a3b524265f8d1754))
+
+### Chores
+
+- **bench**: Remove dead per-case inference gate code
+  ([#1059](https://github.com/ditto-assistant/ditto-subnet/pull/1059),
+  [`6d983a3`](https://github.com/ditto-assistant/ditto-subnet/commit/6d983a3e539ffc4173c4fe1b64c786bb32ae2874))
+
+### Refactoring
+
+- **platform**: One shared /public/weights resource for the dashboard
+  ([#1072](https://github.com/ditto-assistant/ditto-subnet/pull/1072),
+  [`95702f2`](https://github.com/ditto-assistant/ditto-subnet/commit/95702f223094ade12969e8743fdfe62fdf776060))
+
+
+## v0.103.0 (2026-08-21)
+
+### Features
+
+- **platform**: Put the payout countdown in the rail as a live clock
+  ([#1068](https://github.com/ditto-assistant/ditto-subnet/pull/1068),
+  [`8924bdc`](https://github.com/ditto-assistant/ditto-subnet/commit/8924bdcb57991deada4295b09fac77caacea4e49))
+
+
 ## v0.102.0 (2026-08-21)
 
 ### Features

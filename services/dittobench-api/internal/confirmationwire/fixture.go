@@ -229,12 +229,18 @@ func buildLongMemEvidence(benchVersion int) (longmemeval.Evidence, string, error
 	return evidence, digest, nil
 }
 
-type fixtureRunner struct{}
+type fixtureRunner struct {
+	ablatedScore float64
+}
 
-func (fixtureRunner) RunCase(
+func (r fixtureRunner) RunCase(
 	_ context.Context,
 	request ablation.RunRequest,
 ) (ablation.CaseRunResult, error) {
+	ablated := r.ablatedScore
+	if ablated == 0 {
+		ablated = 0.8
+	}
 	switch request.Lane {
 	case ablation.LaneOrdinary:
 		if request.Responder != nil {
@@ -251,7 +257,7 @@ func (fixtureRunner) RunCase(
 		if _, err := request.Responder.Chat("openai/gpt-oss-20b", 24); err != nil {
 			return ablation.CaseRunResult{}, err
 		}
-		return ablation.CaseRunResult{Score: 0.8}, nil
+		return ablation.CaseRunResult{Score: ablated}, nil
 	case ablation.LaneEmbedding:
 		if request.Responder == nil {
 			return ablation.CaseRunResult{}, fmt.Errorf("embedding fixture lane lacks responder")
@@ -262,7 +268,7 @@ func (fixtureRunner) RunCase(
 		if _, err := request.Responder.Embeddings([]string{"independent bounded text"}); err != nil {
 			return ablation.CaseRunResult{}, err
 		}
-		return ablation.CaseRunResult{Score: 0.8}, nil
+		return ablation.CaseRunResult{Score: ablated}, nil
 	default:
 		return ablation.CaseRunResult{}, fmt.Errorf("unexpected fixture lane %q", request.Lane)
 	}
@@ -292,7 +298,18 @@ func deepHistoryCases(casesPerCapability int) []longmemeval.Case {
 	return cases
 }
 
+func buildHighDropAblationEvidence(benchVersion int) (ablation.Evaluation, ablation.Evaluation, error) {
+	return buildAblationEvidenceWithRunner(benchVersion, fixtureRunner{ablatedScore: 0.1})
+}
+
 func buildAblationEvidence(benchVersion int) (ablation.Evaluation, ablation.Evaluation, error) {
+	return buildAblationEvidenceWithRunner(benchVersion, fixtureRunner{})
+}
+
+func buildAblationEvidenceWithRunner(
+	benchVersion int,
+	runner ablation.CaseRunner,
+) (ablation.Evaluation, ablation.Evaluation, error) {
 	selectionKey := []byte("selection-key-32-bytes-long-fixed!")
 	projectionKey := []byte("projection-key-32-bytes-long-fixed")
 	policy := ablation.CoordinatorPolicy{
@@ -359,7 +376,7 @@ func buildAblationEvidence(benchVersion int) (ablation.Evaluation, ablation.Eval
 				{CaseID: "case-b", UserID: "private-user-b"},
 			},
 		},
-		fixtureRunner{},
+		runner,
 		inferenceResponder,
 		embeddingResponder,
 	)

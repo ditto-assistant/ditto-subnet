@@ -14,13 +14,14 @@ import { createMemo, createRoot } from "solid-js";
 import type { Accessor } from "solid-js";
 
 import { useEndpoint } from "../../data/useEndpoint";
+import { weightsResource } from "../../data/weights";
 import { REFRESH_MS } from "../../lib/config";
 import type { ResourceState } from "../../data/useEndpoint";
 import { leaderboardBenchState } from "../../lib/bench-state";
 import { foldChainWeights, rankEntries, rolloutSettledView } from "../../lib/scoring";
 import type { ChainWeightFold, ContinualAggregate } from "../../lib/scoring";
 import type {
-  ChainWeightsSnapshot,
+  WeightsSnapshot,
   EfficiencyBoardState,
   EmissionRecipient,
   EmissionsFold,
@@ -37,13 +38,6 @@ export type BoardEntry = LeaderboardEntry &
   ContinualAggregate & {
     rank: number | null;
   };
-
-/** /public/weights with the staleness markers the API adds when a chain
- * re-read is failing. */
-export type WeightsSnapshot = ChainWeightsSnapshot & {
-  stale?: boolean;
-  age_seconds?: number | null;
-};
 
 export interface BenchContext {
   active: number | null;
@@ -96,7 +90,7 @@ function buildStore(): LeaderboardStore {
       ? ""
       : "?bench_version=" + encodeURIComponent(leaderboardVersionView()));
   const board = useEndpoint<LeaderboardPayload>(path, { pollMs: REFRESH_MS });
-  const weights = useEndpoint<WeightsSnapshot>("/public/weights", { pollMs: REFRESH_MS });
+  const weights = weightsResource();
   const rollout = useEndpoint<RolloutState>("/public/bench/rollout", { pollMs: REFRESH_MS });
 
   const payload = createMemo<LeaderboardPayload | null>(() => safeData(board) ?? null);
