@@ -1,5 +1,5 @@
 variable "cloudflare_api_token" {
-  description = "Scoped token with Workers Scripts Write on the Ditto account."
+  description = "Scoped token with Workers Scripts Write, Workers KV Storage Write, and Pages Write on the Ditto account."
   type        = string
   sensitive   = true
 }

@@ -69,5 +69,38 @@ connect the in-memory overlay to Platform/validator behavior.
 ## GitHub Actions
 
 `.github/workflows/preview.yml` checks out one exact SHA, resolves a plan, and
-runs the mock-control tests with read-only repository permissions. It does not
-create URLs or cloud resources, and therefore has no teardown job.
+runs the mock-control tests with read-only repository permissions. For a
+dashboard-only PR it also builds an unprivileged exact-SHA static artifact.
+
+After that workflow completes, the default-branch
+`.github/workflows/preview-dashboard-publish.yml` downloads the artifact and
+publishes it to the Terraform-owned `ditto-subnet-dashboard-preview` Cloudflare
+Pages project. The privileged job never checks out PR code, replaces any
+artifact-supplied Worker with the trusted
+`apps/platform/dashboard/preview/cloudflare-pages-worker.mjs`, and comments the
+API-reported immutable `pages.dev` deployment URL on the PR. The stable Pages
+branch is `pr-<number>`; each update replaces its branch alias while preserving
+exact-SHA deployment metadata.
+
+The preview proxy permits only `GET`/`HEAD` under `/api/v1/public/` and strips
+cookies and authorization. Trusted response headers restrict connections,
+forms, frames, referrers, and browser capabilities, but the page still contains
+untrusted PR JavaScript and must never receive credentials. Miner
+authentication, disputes, Backroom, and all other writes are deliberately
+unavailable against production. Closing the PR publishes a trusted 410
+tombstone to an existing stable branch alias, deletes the older deployments,
+and leaves only that non-interactive tombstone because Cloudflare does not
+permit deleting the latest deployment for a branch. Closing a PR that never
+had a dashboard preview is a no-op. A trusted `pull_request_target` path from
+the default branch retires the previous URL on every PR update before a new
+artifact can publish. It never checks out or executes PR code, so changing,
+breaking, or deleting the PR-owned source workflow cannot strand an old
+preview. If publication wins the queue first, the reconciler recognizes the
+already-current exact SHA and leaves it live.
+
+Activation requires a protected `preview` GitHub environment with
+`CLOUDFLARE_ACCOUNT_ID` as a variable and a Pages-only
+`CLOUDFLARE_API_TOKEN` secret. Apply the `cloudflare-dittobench` Terraform stack
+first. This slice uses Cloudflare's native `pages.dev` preview URLs; the custom
+`*.preview.dittobench.ai` router is a separate layer and must not be created
+until it has this live origin to route to.

@@ -54,3 +54,21 @@ The first post-cutover `gcp-platform` plan must show removal of the legacy
 `platform_deploy_repos` contains only `ditto-subnet`; do not restore archived
 repository principals except for a time-bounded rollback, with the removal in
 the same change plan.
+
+## `preview`
+
+- deployment branches: protected `main` only
+- optional required reviewer(s) for the first activation
+- variable `CLOUDFLARE_ACCOUNT_ID`
+- secret `CLOUDFLARE_API_TOKEN`
+
+This environment belongs only to the trusted default-branch dashboard
+publisher. Its token needs Cloudflare Pages Write for the Ditto account and no
+Workers Scripts, KV, DNS, or zone permissions. Do not add it to the untrusted
+PR workflow.
+
+Activate dashboard URLs in this order: merge the publisher, review and apply
+the `cloudflare-dittobench` Terraform plan that creates the Pages project,
+create this environment, then open or synchronize a fresh dashboard-only PR.
+The publisher cannot prove itself from its own PR because `workflow_run` uses
+the workflow definition already present on the default branch.
