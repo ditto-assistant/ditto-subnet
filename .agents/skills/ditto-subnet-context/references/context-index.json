@@ -52,14 +52,14 @@
     {
       "id": "mine",
       "title": "Mine on SN118: practice, score, and submit a harness",
-      "keywords": ["mine", "miner", "starter kit", "practice", "evaluate", "ditto practice", "run-size", "run size full", "upload", "submit agent", "local score", "onchain score", "tool_mean", "openrouter", "rehearsal"],
-      "summary": "Route miners and coding agents to the correct local scoring loop. cargo evaluate is name-only; ditto practice --run-size small/medium/full is live-bench rehearsal; full is the on-chain envelope and is required before upload.",
+      "keywords": ["mine", "miner", "starter kit", "practice", "evaluate", "ditto practice", "run-size", "run size full", "upload", "submit agent", "local score", "onchain score", "tool_mean", "openrouter", "rehearsal", "served path", "pre-submit review"],
+      "summary": "Route miners and coding agents to the correct local scoring loop. cargo evaluate is name-only; ditto practice --run-size small/medium/full is live-bench rehearsal; walk the local served path against the Backroom operator review bar before full or upload; full is the on-chain envelope.",
       "owns": [".agents/skills/mine", "miners/dittobench-starter-kit", "ditto/miner_cli/commands/practice.py"],
-      "read": [".agents/skills/mine/SKILL.md", "miners/dittobench-starter-kit/SETUP.md", "docs/MINER.md"],
-      "search": ["rg -n 'LIVE_SCORING_BENCH_VERSION|run-size|tool_endpoint' miners/dittobench-starter-kit/scripts ditto/miner_cli/commands/practice.py", "rg -n 'evaluate|practice' miners/dittobench-starter-kit/README.md docs/MINER.md"],
-      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/mine", "python3 miners/dittobench-starter-kit/scripts/test_local_rehearsal.py", "uv run pytest ditto/tests/miner_cli/commands/test_practice.py -q"],
-      "invariants": ["Do not treat cargo evaluate or hosted rehearsal as on-chain certification.", "Local ditto practice --run-size full matches the on-chain dataset envelope and observed-tool scorer, not the locked model or screened image."],
-      "related": ["validator-miner", "dittobench-scoring"]
+      "read": [".agents/skills/mine/SKILL.md", "miners/dittobench-starter-kit/SETUP.md", "docs/MINER.md", ".agents/skills/backroom-review/references/review-bar.md", ".agents/skills/backroom-review/references/review-rules.md", ".agents/skills/backroom-review/references/techniques.md"],
+      "search": ["rg -n 'LIVE_SCORING_BENCH_VERSION|run-size|tool_endpoint' miners/dittobench-starter-kit/scripts ditto/miner_cli/commands/practice.py", "rg -n 'evaluate|practice' miners/dittobench-starter-kit/README.md docs/MINER.md", "python3 .agents/skills/backroom-review/scripts/search-precedents.py --list"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/mine", "python3 miners/dittobench-starter-kit/scripts/test_local_rehearsal.py", "uv run pytest ditto/tests/miner_cli/commands/test_practice.py -q", "python3 .agents/skills/backroom-review/scripts/search-precedents.py family-compiler"],
+      "invariants": ["Do not treat cargo evaluate or hosted rehearsal as on-chain certification.", "Local ditto practice --run-size full matches the on-chain dataset envelope and observed-tool scorer, not the locked model or screened image.", "Do not package or upload a harness that fails the operator two-limb or production-engine bar."],
+      "related": ["validator-miner", "dittobench-scoring", "backroom-review"]
     },
     {
       "id": "wandb-operations",
@@ -143,7 +143,7 @@
       "search": ["rg -n 'search_ath_precedents|copy-reviews/precedents' apps/backroom apps/platform", "python3 .agents/skills/backroom-review/scripts/search-precedents.py --list"],
       "validate": ["python3 .agents/skills/backroom-review/scripts/search-precedents.py family-compiler", "cd apps/platform && uv run pytest ditto/tests/api_server/endpoints/test_admin_copy_review.py -q -k precedents", "cd apps/backroom && pnpm exec vitest run src/server/mcp.server.test.ts src/server/admin.service.test.ts"],
       "invariants": ["Cite a live or local precedent before resolving an ATH hold.", "Ban is per agent UUID; same SHA or hotkey is a different row.", "Do not open ATH on evaluating agents."],
-      "related": ["backroom", "platform-api"]
+      "related": ["backroom", "platform-api", "mine"]
     },
     {
       "id": "screener-capacity",

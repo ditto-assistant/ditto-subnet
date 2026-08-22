@@ -14,4 +14,5 @@ uv run ditto practice --run-size full     # on-chain envelope; required before u
 
 Those default to live bench 11 with a validator-visible `tool_endpoint`.
 Hosted rehearsal and `evaluate` 1.0 scores do not predict leaderboard
-`tool_mean`. Do not skip `full`.
+`tool_mean`. Do not skip `full`. Before `full`, packaging, or upload, `/mine`
+walks the served path against the operator review bar.

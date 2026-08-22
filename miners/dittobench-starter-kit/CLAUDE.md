@@ -1,6 +1,6 @@
 # Miner starter kit
 
-Load `/mine` before editing or scoring this harness.
+Load `/mine` before editing, scoring, or uploading this harness.
 
 `cargo run -- evaluate` is not on-chain scoring. From the repository root,
 `uv run ditto practice --run-size small|medium|full` is the real rehearsal

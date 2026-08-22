@@ -292,3 +292,37 @@ def test_quarantine_and_ath_queries_route_to_backroom_review() -> None:
     ):
         topic_ids = [str(topic["id"]) for topic in lookup(query)]
         assert topic_ids[0] == "backroom-review", query
+
+
+def test_mine_skill_applies_operator_review_bar_locally() -> None:
+    skill = ROOT / ".agents" / "skills" / "mine"
+    body = (skill / "SKILL.md").read_text()
+    metadata = (skill / "agents" / "openai.yaml").read_text()
+    review_root = ROOT / ".agents" / "skills" / "backroom-review"
+
+    assert "review-bar.md" in body
+    assert "review-rules.md" in body
+    assert "techniques.md" in body
+    assert "search-precedents.py" in body
+    assert "two-limb" in body
+    assert "production-engine" in body
+    assert "Would reject" in body
+    assert "Do not run `full` as certification, package, or upload" in body
+    assert "execute_screening_quarantine_batch" not in body
+    assert "open_ath_review" not in body
+    assert "https://backroom.dittobench.ai/mcp" not in body
+    assert "https://backroom.dittobench.ai/mcp" not in metadata
+    assert (review_root / "references" / "review-bar.md").is_file()
+    assert (review_root / "references" / "review-rules.md").is_file()
+    assert (review_root / "references" / "techniques.md").is_file()
+    assert (review_root / "scripts" / "search-precedents.py").is_file()
+
+
+def test_miner_pre_submit_review_query_stays_on_mine() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup(
+            "practice the starter kit and upload after reviewing the served path"
+        )
+    ]
+    assert topic_ids[0] == "mine"

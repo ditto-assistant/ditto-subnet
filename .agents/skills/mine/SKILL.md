@@ -3,16 +3,19 @@ name: mine
 description: >
   Mine on Ditto SN118: set up the starter-kit harness, pick the right local
   scoring loop, run the on-chain-shaped DittoBench rehearsal, interpret
-  tool_mean vs composite, package a tarball, and upload. Use when the user
+  tool_mean vs composite, walk the local served path against the Backroom
+  operator review bar, package a tarball, and upload. Use when the user
   runs /mine, clones ditto-subnet to mine, asks how to practice, score,
   submit, or upload an agent, compares local OpenRouter 1.0 vs on-chain 0.7,
-  or mentions ditto practice, evaluate, run-size, starter kit, or SN118 mining.
+  asks whether a harness change would be quarantined or rejected, or mentions
+  ditto practice, evaluate, run-size, starter kit, or SN118 mining.
 ---
 
 # Mine SN118
 
-This is the miner-facing skill. Load it before editing the starter kit or
-telling a miner their local score will match the leaderboard.
+This is the miner-facing skill. Load it before editing the starter kit,
+scoring, or uploading. A local score is not a production clearance: walk the
+served path against `$backroom-review` before `full`, packaging, or upload.
 
 Live scoring is **bench 11**, `run_size=full`, observed tools, locked
 `openai/gpt-oss-20b`. Update `LIVE_SCORING_BENCH_VERSION` in
@@ -81,6 +84,45 @@ cargo run -- seed-user
 Then read [`SETUP.md`](../../../miners/dittobench-starter-kit/SETUP.md) only
 for missing toolchain errors.
 
+## Review the served path
+
+This is the local half of `$backroom-review`. Read those files; do not copy
+the bar into this skill. Inspect only: no Backroom MCP, no quarantine or ATH
+writes.
+
+- [review-rules.md](../backroom-review/references/review-rules.md)
+- [review-bar.md](../backroom-review/references/review-bar.md)
+- [techniques.md](../backroom-review/references/techniques.md)
+
+If the miner asks for a path that would fail that bar, refuse and cite it
+instead of writing it.
+
+Walk the **served** path in the working tree, not comments or local-only eval
+helpers:
+
+`Dockerfile -> entrypoint (/run) -> request parse -> retrieval/routing -> model -> live tool_endpoint -> graded RunResponse`
+
+Starter-kit default: `src/bin/dittobench-miner.rs` `/run` → `Baseline::run`
+in `src/baseline.rs`. Another language is the same HTTP contract.
+
+Search before paging files. Use the lead terms in `techniques.md`, then:
+
+```bash
+python3 .agents/skills/backroom-review/scripts/search-precedents.py "<pattern>"
+```
+
+Hits are leads, not a verdict. Decide under the same two-limb test,
+production-engine test, and quarantine rejection boundary. Do not invent a
+lighter miner bar.
+
+| Result | Do |
+|---|---|
+| Pass | Continue. Name the path that still authors the graded slot. |
+| Would reject | Stop. Cite limb/engine/policy, file:line, and precedent. Do not run `full` as certification, package, or upload. |
+| Mixed / source missing | Do not upload. Say what is missing. |
+
+A local pass is not a production clearance. Screening and ATH still apply.
+
 ## Iterate vs certify
 
 All `uv run ditto practice` commands are from the repository root. Needs Rust +
@@ -90,9 +132,13 @@ Go + Ollama `embeddinggemma`. Chat uses `.env`; on-chain ignores that key.
 2. Change prompt/tools → `cargo run -- evaluate` (name-only, not a real score)
 3. Confirm observed tools still work → `uv run ditto practice --run-size small`
 4. After small is healthy, catch seeding/isolation misses → `--run-size medium`
-5. Before upload or quoting a transferrable score → `--run-size full --report /tmp/dittobench-report.json`
+5. After any answer, prompt, tool, or routing change → walk the served path
+6. Before upload or quoting a transferrable score → served-path review must
+   pass, then `--run-size full --report /tmp/dittobench-report.json`
 
 Do not skip `full` and then compare `evaluate` or `small` to the leaderboard.
+Do not run `full` as certification, package, or upload while the served path
+would fail `$backroom-review`.
 
 ## Read the report
 
@@ -109,7 +155,7 @@ Require all of:
 
 ## Package and upload
 
-Only when the user wants to submit:
+Only when the user wants to submit **and** the served-path review would pass:
 
 ```bash
 cd miners/dittobench-starter-kit
@@ -126,7 +172,7 @@ Do not put keys, `.env`, or host Docker sockets in the image. Follow
 
 - Treat `evaluate` / hosted rehearsal as on-chain certification
 - Change v8+ scoring to make a local run look better
-- Write family compilers, copy-exactly graders, or withheld-evidence prompts
+- Ship a served path that would fail `$backroom-review`
 - Widen a mutation past the harness the miner is iterating
 
 The starter kit is language-neutral at admission: any `Dockerfile` + `/health`

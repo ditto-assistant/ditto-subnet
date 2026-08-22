@@ -13,7 +13,7 @@ python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py "<task>"
 Load only the returned anchors and the relevant specialized skill:
 
 - `.agents/skills/mine` for miner setup, local rehearsal vs on-chain scoring,
-  packaging, and upload;
+  packaging, upload, and local pre-submit review against the operator bar;
 - `.agents/skills/ditto-subnet-platform` for Platform, migrations, dashboard,
   and Backroom;
 - `.agents/skills/ditto-subnet-benchmark` for validator, scoring, DittoBench,

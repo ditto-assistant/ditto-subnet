@@ -371,7 +371,9 @@ allowed; copying another miner's work is not. Lexical and structural
 fingerprints detect renamed, reformatted, or padded near-duplicates across
 miners, and suspicious or matching submissions are quarantined for human review
 rather than automatically banned. Confirmed plagiarism can result in a
-hotkey-level ban.
+hotkey-level ban. Coding agents using `/mine` apply the operator review bar
+to the local served path before packaging. A local pass is not a production
+clearance.
 
 ## Link a rotated hotkey
 
