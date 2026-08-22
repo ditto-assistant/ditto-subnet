@@ -1,36 +1,42 @@
 name: Publish dashboard preview
 
-# The source workflow builds without secrets. This default-branch workflow
-# validates and sanitizes its artifact on an unprivileged runner before either
-# privileged job is allowed to enter the preview environment.
+# Same-run publisher for Preview controls. The caller is an unprivileged
+# pull_request job; this workflow never uses workflow_run or pull_request_target.
+# Inspect checks out only the default branch, sanitizes a downloaded artifact,
+# and injects the repository-owned Worker. Publish and retire may enter the
+# preview environment for a Pages-only token.
 on:
-  # zizmor: ignore[dangerous-triggers]
-  # Intentional privilege boundary: inspect checks out only the default branch,
-  # resolves PR identity from a bounded artifact plus live GitHub state, rejects
-  # Pages control files/symlinks, and republishes a sanitized bounded artifact.
-  workflow_run:
-    workflows: [Preview controls]
-    types: [completed]
-  # zizmor: ignore[dangerous-triggers]
-  # Trusted retirement path: this workflow never checks out or executes PR
-  # code for pull_request_target. It only carries event identity into the
-  # default-branch retirement policy and a scoped Pages API call.
-  pull_request_target:
-    types: [opened, reopened, synchronize, closed]
+  workflow_call:
+    inputs:
+      action:
+        description: pull_request action (opened, reopened, synchronize, closed)
+        required: true
+        type: string
+      bundle_result:
+        description: dashboard-bundle job result (success, failure, skipped, cancelled)
+        required: true
+        type: string
+      proof_result:
+        description: cheatcodes job result (success, failure, skipped, cancelled)
+        required: true
+        type: string
+      pr:
+        description: Pull request number
+        required: true
+        type: number
+      repo:
+        description: Head repository full name; must equal github.repository
+        required: true
+        type: string
+      sha:
+        description: Exact 40-character head SHA
+        required: true
+        type: string
 
 permissions: {}
 
 jobs:
   inspect:
-    if: >-
-      (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.event == 'pull_request' &&
-        github.event.workflow_run.head_repository.full_name == github.repository
-      ) || (
-        github.event_name == 'pull_request_target' &&
-        github.event.pull_request.head.repo.full_name == github.repository
-      )
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -38,68 +44,71 @@ jobs:
       contents: read
       pull-requests: read
     env:
-      RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
-      SOURCE_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
-      SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
-      SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+      BUNDLE_RESULT: ${{ inputs.bundle_result }}
+      PR_ACTION: ${{ inputs.action }}
+      PROOF_RESULT: ${{ inputs.proof_result }}
+      PREVIEW_PR: ${{ inputs.pr }}
+      PREVIEW_REPO: ${{ inputs.repo }}
+      PREVIEW_SHA: ${{ inputs.sha }}
     outputs:
-      mode: ${{ steps.validate.outputs.mode || steps.target.outputs.mode }}
-      pr: ${{ steps.validate.outputs.pr || steps.target.outputs.pr }}
-      sha: ${{ steps.validate.outputs.sha || steps.target.outputs.sha }}
-      branch: ${{ steps.validate.outputs.branch || steps.target.outputs.branch }}
-      reason: ${{ steps.validate.outputs.reason || steps.target.outputs.reason }}
+      mode: ${{ steps.validate.outputs.mode }}
+      pr: ${{ steps.validate.outputs.pr }}
+      sha: ${{ steps.validate.outputs.sha }}
+      branch: ${{ steps.validate.outputs.branch }}
+      reason: ${{ steps.validate.outputs.reason }}
     steps:
       - name: Check out trusted publisher policy
-        if: github.event_name == 'workflow_run'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event.repository.default_branch }}
 
-      - name: Discover the attempt-scoped dashboard artifact
-        id: discover
-        if: github.event_name == 'workflow_run'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          artifacts="$(gh api --paginate \
-            "repos/${GITHUB_REPOSITORY}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
-            --jq '.artifacts[] | select(.expired == false) | .name')"
-          dashboard_name="dashboard-preview-${SOURCE_RUN_ATTEMPT}"
-          dashboard_count="$(grep -Fcx "$dashboard_name" <<<"$artifacts" || true)"
-          test "$dashboard_count" -le 1
-          if [ "$dashboard_count" = 1 ]; then
-            echo "name=$dashboard_name" >> "$GITHUB_OUTPUT"
-            echo "expected_mode=publish" >> "$GITHUB_OUTPUT"
-          else
-            echo "expected_mode=none" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Download the untrusted source artifact
-        if: >-
-          github.event_name == 'workflow_run' &&
-          steps.discover.outputs.expected_mode != 'none'
+        if: inputs.bundle_result == 'success' && inputs.action != 'closed'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: ${{ steps.discover.outputs.name }}
+          name: dashboard-preview-${{ github.run_attempt }}
           path: ${{ runner.temp }}/source-artifact
-          github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
 
       - name: Validate identity and sanitize the artifact
         id: validate
-        if: github.event_name == 'workflow_run'
         env:
-          EXPECTED_MODE: ${{ steps.discover.outputs.expected_mode }}
           GH_TOKEN: ${{ github.token }}
           SOURCE_DIR: ${{ runner.temp }}/source-artifact
         run: |
           set -euo pipefail
-          if [ "$EXPECTED_MODE" = none ]; then
-            echo "mode=none" >> "$GITHUB_OUTPUT"
+          emit() {
+            echo "mode=$1" >> "$GITHUB_OUTPUT"
+            echo "pr=$PREVIEW_PR" >> "$GITHUB_OUTPUT"
+            echo "sha=$PREVIEW_SHA" >> "$GITHUB_OUTPUT"
+            echo "branch=pr-$PREVIEW_PR" >> "$GITHUB_OUTPUT"
+            echo "reason=$2" >> "$GITHUB_OUTPUT"
+          }
+
+          [[ "$PREVIEW_PR" =~ ^[1-9][0-9]*$ ]]
+          [[ "$PREVIEW_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$PREVIEW_REPO" = "$GITHUB_REPOSITORY"
+
+          worker=apps/platform/dashboard/preview/cloudflare-pages-worker.mjs
+          if [ ! -f "$worker" ]; then
+            echo "trusted preview worker is not on the default branch; skip publish" >&2
+            emit none worker-missing-on-default-branch
             exit 0
           fi
+
+          if [ "$PR_ACTION" = closed ]; then
+            emit retire retire-closed
+            exit 0
+          fi
+          if [ "$BUNDLE_RESULT" != success ] || [ "$PROOF_RESULT" != success ]; then
+            if [ "$BUNDLE_RESULT" = failure ] || [ "$PROOF_RESULT" = failure ]; then
+              emit retire retire-ineligible
+            else
+              emit retire retire-prepublish
+            fi
+            exit 0
+          fi
+
           if find "$SOURCE_DIR" -type l -print -quit | grep -q .; then
             echo "preview artifact contains a symbolic link" >&2
             exit 2
@@ -111,65 +120,33 @@ jobs:
             "$SOURCE_DIR/manifest.json" >/dev/null
           test "$(jq -r .schema "$SOURCE_DIR/manifest.json")" = 1
           mode="$(jq -r .mode "$SOURCE_DIR/manifest.json")"
-          reason="$mode"
           pr="$(jq -r .pr "$SOURCE_DIR/manifest.json")"
           repo="$(jq -r .repo "$SOURCE_DIR/manifest.json")"
           sha="$(jq -r .sha "$SOURCE_DIR/manifest.json")"
-          test "$EXPECTED_MODE" = publish
           test "$mode" = publish
           [[ "$pr" =~ ^[1-9][0-9]*$ ]]
           [[ "$sha" =~ ^[0-9a-f]{40}$ ]]
+          test "$pr" = "$PREVIEW_PR"
           test "$repo" = "$GITHUB_REPOSITORY"
-          test "$sha" = "$RUN_HEAD_SHA"
+          test "$sha" = "$PREVIEW_SHA"
 
-          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${pr}")"
+          pr_json="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PREVIEW_PR}")"
           test "$(jq -r .head.repo.full_name <<<"$pr_json")" = "$repo"
-          if [ "$mode" = publish ]; then
-            if [ "$(jq -r .state <<<"$pr_json")" != open ] || \
-              [ "$(jq -r .head.sha <<<"$pr_json")" != "$sha" ]; then
-              echo "mode=none" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if [ "$SOURCE_CONCLUSION" != success ]; then
-              mode=retire
-              reason=retire-ineligible
-            else
-              test -f "$SOURCE_DIR/dist/index.html"
-              for reserved in _worker.js _routes.json _redirects _headers; do
-                if [ -e "$SOURCE_DIR/dist/$reserved" ]; then
-                  echo "untrusted artifact supplied reserved Pages control file: $reserved" >&2
-                  exit 2
-                fi
-              done
-              test ! -e "$SOURCE_DIR/dist/functions"
-              cp apps/platform/dashboard/preview/cloudflare-pages-worker.mjs \
-                "$SOURCE_DIR/dist/_worker.js"
-            fi
+          if [ "$(jq -r .state <<<"$pr_json")" != open ] || \
+            [ "$(jq -r .head.sha <<<"$pr_json")" != "$sha" ]; then
+            emit none stale
+            exit 0
           fi
-          echo "mode=$mode" >> "$GITHUB_OUTPUT"
-          echo "pr=$pr" >> "$GITHUB_OUTPUT"
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "branch=pr-$pr" >> "$GITHUB_OUTPUT"
-          echo "reason=$reason" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve trusted PR-event retirement
-        id: target
-        if: github.event_name == 'pull_request_target'
-        env:
-          PR_ACTION: ${{ github.event.action }}
-          PREVIEW_PR: ${{ github.event.pull_request.number }}
-          PREVIEW_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          [[ "$PREVIEW_PR" =~ ^[1-9][0-9]*$ ]]
-          [[ "$PREVIEW_SHA" =~ ^[0-9a-f]{40}$ ]]
-          reason=retire-prepublish
-          [ "$PR_ACTION" != closed ] || reason=retire-closed
-          echo "mode=retire" >> "$GITHUB_OUTPUT"
-          echo "pr=$PREVIEW_PR" >> "$GITHUB_OUTPUT"
-          echo "sha=$PREVIEW_SHA" >> "$GITHUB_OUTPUT"
-          echo "branch=pr-$PREVIEW_PR" >> "$GITHUB_OUTPUT"
-          echo "reason=$reason" >> "$GITHUB_OUTPUT"
+          test -f "$SOURCE_DIR/dist/index.html"
+          for reserved in _worker.js _routes.json _redirects _headers; do
+            if [ -e "$SOURCE_DIR/dist/$reserved" ]; then
+              echo "untrusted artifact supplied reserved Pages control file: $reserved" >&2
+              exit 2
+            fi
+          done
+          test ! -e "$SOURCE_DIR/dist/functions"
+          cp "$worker" "$SOURCE_DIR/dist/_worker.js"
+          emit publish publish
 
       - name: Repackage the bounded dashboard artifact
         if: steps.validate.outputs.mode == 'publish'
@@ -218,7 +195,7 @@ jobs:
           version: 10.34.5
           run_install: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe502e # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: pnpm
@@ -470,7 +447,7 @@ jobs:
           version: 10.34.5
           run_install: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe502e # v7.0.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: >-
           steps.existing.outputs.found == 'true' &&
           steps.current.outputs.current == 'true'

@@ -29,6 +29,6 @@ the namespace holds live operator grants and tokens, and this repository is
 public. Recreating the namespace revokes every operator's MCP connection.
 
 The stack also creates the `ditto-subnet-dashboard-preview` Direct Upload Pages
-project. The trusted `Publish dashboard preview` workflow uploads exact-SHA
-dashboard bundles there; the project has no production secrets or Backroom
-bindings.
+project. The same-run `Publish dashboard preview` reusable workflow uploads
+exact-SHA dashboard bundles there after checking out the default branch; the
+project has no production secrets or Backroom bindings.

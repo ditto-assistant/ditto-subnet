@@ -89,8 +89,11 @@ scored v12 gates. Procedure: [`references/localstack.md`](references/localstack.
 ## GitHub
 
 Dispatch `.github/workflows/preview.yml` with `profiles` and an optional exact
-SHA. It validates composition and the mock controls at that SHA; it does not
-publish a URL. PR selection fails closed to `stack` for unknown runtime paths.
+SHA. It validates composition and the mock controls at that SHA. Dashboard-only
+same-repo PRs may also publish a native `pages.dev` URL after the Pages project
+and `preview` environment are activated; that publisher checks out the default
+branch and never uses `workflow_run` or `pull_request_target`. PR selection
+fails closed to `stack` for unknown runtime paths.
 
 ## Invariants
 
