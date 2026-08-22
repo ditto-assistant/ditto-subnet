@@ -4467,6 +4467,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-shadow/inference-exchange": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Exchange Coding Inference Grant
+         * @description Rotate a live coding grant onto one validator broker key.
+         */
+        post: operations["exchange_coding_inference_grant_api_v1_validator_coding_shadow_inference_exchange_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-shadow/inference-grant": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Request Coding Inference Grant
+         * @description Mint or replay the one pending/active grant for a private coding task.
+         */
+        post: operations["request_coding_inference_grant_api_v1_validator_coding_shadow_inference_grant_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-shadow/inference-revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Coding Inference Grant Endpoint
+         * @description Durably revoke exactly the validator's observed grant generation.
+         */
+        post: operations["revoke_coding_inference_grant_endpoint_api_v1_validator_coding_shadow_inference_revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/heartbeat": {
         parameters: {
             query?: never;
@@ -10126,6 +10186,323 @@ export interface components {
              * Format: date-time
              */
             ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingInferenceExchangeRequest
+         * @description Rotate one live grant onto a validator-authorized broker key.
+         */
+        CodingInferenceExchangeRequest: {
+            /** Broker Public Key */
+            broker_public_key: string;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingInferenceExchangeResponse */
+        CodingInferenceExchangeResponse: {
+            /** Bearer */
+            bearer: string;
+            /** Case Id */
+            case_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Completion Token Budget */
+            completion_token_budget: number;
+            /** Cost Budget Usd Micros */
+            cost_budget_usd_micros: number;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /**
+             * Model
+             * @constant
+             */
+            model: "openai/gpt-5.6-luna";
+            /** Profile Capability Id */
+            profile_capability_id: string;
+            /** Prompt Token Budget */
+            prompt_token_budget: number;
+            /**
+             * Provider Account Guardrail
+             * @constant
+             */
+            provider_account_guardrail: "openrouter_private_account_v1";
+            /**
+             * Provider Api
+             * @constant
+             */
+            provider_api: "openrouter";
+            /**
+             * Provider Cache Policy
+             * @constant
+             */
+            provider_cache_policy: "disabled_v1";
+            /**
+             * Provider Pipeline Policy
+             * @constant
+             */
+            provider_pipeline_policy: "no_plugins_no_transforms_v1";
+            /** Provider Route */
+            provider_route: string;
+            /** Provider Route Profile */
+            provider_route_profile: string;
+            /** Proxy Url */
+            proxy_url: string;
+            /**
+             * Reasoning Effort
+             * @constant
+             */
+            reasoning_effort: "medium";
+            /** Receipt Provider */
+            receipt_provider: string;
+            /** Request Budget */
+            request_budget: number;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-inference-exchange-v1";
+            /**
+             * Status
+             * @constant
+             */
+            status: "active";
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /** CodingInferenceGrantOffer */
+        CodingInferenceGrantOffer: {
+            /** Case Id */
+            case_id: string;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Completion Token Budget */
+            completion_token_budget: number;
+            /** Cost Budget Usd Micros */
+            cost_budget_usd_micros: number;
+            /** Exchange Url */
+            exchange_url: string;
+            /**
+             * Expires At
+             * Format: date-time
+             */
+            expires_at: string;
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Inference Grant Sha256 */
+            inference_grant_sha256: string;
+            /**
+             * Model
+             * @constant
+             */
+            model: "openai/gpt-5.6-luna";
+            /** Profile Capability Id */
+            profile_capability_id: string;
+            /** Prompt Token Budget */
+            prompt_token_budget: number;
+            /**
+             * Provider Account Guardrail
+             * @constant
+             */
+            provider_account_guardrail: "openrouter_private_account_v1";
+            /**
+             * Provider Api
+             * @constant
+             */
+            provider_api: "openrouter";
+            /**
+             * Provider Cache Policy
+             * @constant
+             */
+            provider_cache_policy: "disabled_v1";
+            /**
+             * Provider Pipeline Policy
+             * @constant
+             */
+            provider_pipeline_policy: "no_plugins_no_transforms_v1";
+            /** Provider Route */
+            provider_route: string;
+            /** Provider Route Profile */
+            provider_route_profile: string;
+            /**
+             * Reasoning Effort
+             * @constant
+             */
+            reasoning_effort: "medium";
+            /** Receipt Provider */
+            receipt_provider: string;
+            /** Request Budget */
+            request_budget: number;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-inference-grant-offer-v1";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "pending" | "active";
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
+        /**
+         * CodingInferenceGrantRequest
+         * @description Signed request for the one grant bound to a coding ticket.
+         */
+        CodingInferenceGrantRequest: {
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /**
+         * CodingInferenceRevokeRequest
+         * @description Signed terminal revocation of a coding inference grant generation.
+         */
+        CodingInferenceRevokeRequest: {
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingInferenceRevokeResponse */
+        CodingInferenceRevokeResponse: {
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Generation */
+            generation: number;
+            /**
+             * Grant Id
+             * Format: uuid
+             */
+            grant_id: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /**
+             * Revoked At
+             * Format: date-time
+             */
+            revoked_at: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-inference-revocation-v1";
+            /**
+             * Status
+             * @constant
+             */
+            status: "revoked";
             /**
              * Ticket Id
              * Format: uuid
@@ -29598,6 +29975,175 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    exchange_coding_inference_grant_api_v1_validator_coding_shadow_inference_exchange_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingInferenceExchangeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingInferenceExchangeResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay, expiry, or grant authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Coding grant transport unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    request_coding_inference_grant_api_v1_validator_coding_shadow_inference_grant_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingInferenceGrantRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingInferenceGrantOffer"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Coding shadow ticket is unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay or immutable authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Private task or grant transport unavailable. */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    revoke_coding_inference_grant_endpoint_api_v1_validator_coding_shadow_inference_revoke_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingInferenceRevokeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingInferenceRevokeResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Coding inference grant unavailable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay or generation conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

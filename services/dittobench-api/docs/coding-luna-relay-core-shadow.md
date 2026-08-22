@@ -127,9 +127,9 @@ responsible for the outer source-bound route and network policy.
 
 The package has an evidence-only adapter for the existing certification port,
 but nothing constructs or mounts it in production. No current model-relay
-traffic may claim this evidence. The remaining gateway work includes Platform
-coding-grant acquisition and settlement, capability mount/revocation, harness
-orchestration, and terminal publication.
+traffic may claim this evidence. Platform now defines an unwired coding-grant
+authority; the remaining gateway work includes trusted request settlement,
+capability mount/revocation, harness orchestration, and terminal publication.
 
 Validation:
 

@@ -36,6 +36,14 @@ from ditto.api_models.coding import (
     coding_authoring_evidence_digest,
     run_evidence_digest,
 )
+from ditto.api_models.coding_inference_grants import (
+    CodingInferenceExchangeRequest,
+    CodingInferenceExchangeResponse,
+    CodingInferenceGrantOffer,
+    CodingInferenceGrantRequest,
+    CodingInferenceRevokeRequest,
+    CodingInferenceRevokeResponse,
+)
 from ditto.api_models.inference import (
     InferenceExchangeRequest,
     InferenceExchangeResponse,
@@ -78,6 +86,9 @@ from ditto.validator.signing import (
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
     sign_coding_grading_lease,
+    sign_coding_inference_exchange,
+    sign_coding_inference_grant,
+    sign_coding_inference_revoke,
     sign_coding_shadow_result,
     sign_inference_exchange,
     sign_job_fail_request,
@@ -119,6 +130,35 @@ _CODING_AUTHORING_LEASE_MAX_BYTES = 512 << 10
 _CODING_AUTHORING_FREEZE_MAX_BYTES = 64 << 10
 _CODING_GRADING_LEASE_MAX_BYTES = 256 << 10
 _CODING_SHADOW_RESULT_MAX_BYTES = 64 << 10
+_CODING_INFERENCE_GRANT_MAX_BYTES = 64 << 10
+
+
+def _coding_grant_authority(value: object) -> tuple[object, ...]:
+    fields = (
+        "coding_contract_version",
+        "weight_eligible",
+        "grant_id",
+        "ticket_id",
+        "run_row_id",
+        "case_id",
+        "profile_capability_id",
+        "inference_grant_sha256",
+        "model",
+        "provider_api",
+        "provider_route",
+        "receipt_provider",
+        "provider_route_profile",
+        "provider_account_guardrail",
+        "provider_pipeline_policy",
+        "provider_cache_policy",
+        "reasoning_effort",
+        "request_budget",
+        "prompt_token_budget",
+        "completion_token_budget",
+        "cost_budget_usd_micros",
+        "expires_at",
+    )
+    return tuple(getattr(value, field) for field in fields)
 
 
 def _json_budget_evidence(exchange: InferenceExchangeResponse) -> dict[str, int] | None:
@@ -305,6 +345,205 @@ class PlatformClient:
                 "coding authoring lease response identity is invalid"
             )
         return lease
+
+    async def request_coding_inference_grant(
+        self,
+        ticket_id: UUID,
+    ) -> CodingInferenceGrantOffer:
+        """Fetch the unwired shadow Luna grant bound to one coding ticket."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingInferenceGrantRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            ticket_id=ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_inference_grant(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                ticket_id=ticket_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}/coding-shadow/inference-grant",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding inference grants are temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding inference grant rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_INFERENCE_GRANT_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding inference grant response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding inference grant request failed"
+            ) from error
+        try:
+            offer = CodingInferenceGrantOffer.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding inference grant response is invalid"
+            ) from None
+        expected_exchange_url = (
+            f"{self._base}{_PREFIX}/coding-shadow/inference-exchange"
+        )
+        if offer.ticket_id != ticket_id or offer.exchange_url != expected_exchange_url:
+            raise PlatformInfrastructureError(
+                "coding inference grant response identity is invalid"
+            )
+        return offer
+
+    async def exchange_coding_inference_grant(
+        self,
+        offer: CodingInferenceGrantOffer,
+        *,
+        broker_public_key: str,
+    ) -> CodingInferenceExchangeResponse:
+        """Rotate one offered coding grant onto the local trusted broker key."""
+
+        expected_url = f"{self._base}{_PREFIX}/coding-shadow/inference-exchange"
+        if offer.exchange_url != expected_url:
+            raise PlatformInfrastructureError(
+                "coding inference exchange URL is invalid"
+            )
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingInferenceExchangeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            grant_id=offer.grant_id,
+            broker_public_key=broker_public_key,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_inference_exchange(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                grant_id=offer.grant_id,
+                broker_public_key=broker_public_key,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                expected_url,
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding inference exchange is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding inference exchange rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_INFERENCE_GRANT_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding inference exchange response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding inference exchange request failed"
+            ) from error
+        try:
+            exchange = CodingInferenceExchangeResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding inference exchange response is invalid"
+            ) from None
+        if (
+            _coding_grant_authority(exchange) != _coding_grant_authority(offer)
+            or exchange.generation <= offer.generation
+        ):
+            raise PlatformInfrastructureError(
+                "coding inference exchange response identity is invalid"
+            )
+        return exchange
+
+    async def revoke_coding_inference_grant(
+        self,
+        *,
+        grant_id: UUID,
+        generation: int,
+    ) -> CodingInferenceRevokeResponse:
+        """Durably revoke the exact coding grant generation observed locally."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingInferenceRevokeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            grant_id=grant_id,
+            generation=generation,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_inference_revoke(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                grant_id=grant_id,
+                generation=generation,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        try:
+            response = await self._client.post(
+                f"{self._base}{_PREFIX}/coding-shadow/inference-revoke",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            )
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding inference revocation request failed"
+            ) from error
+        if response.status_code == 503:
+            raise PlatformInfrastructureError(
+                "coding inference revocation is temporarily unavailable"
+            )
+        if response.status_code != 200:
+            raise PlatformError(
+                f"coding inference revocation rejected ({response.status_code})"
+            )
+        if not response.content or len(response.content) > (
+            _CODING_INFERENCE_GRANT_MAX_BYTES
+        ):
+            raise PlatformInfrastructureError(
+                "coding inference revocation response size is invalid"
+            )
+        try:
+            revoked = CodingInferenceRevokeResponse.model_validate_json(
+                response.content
+            )
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding inference revocation response is invalid"
+            ) from None
+        if revoked.grant_id != grant_id or revoked.generation != generation:
+            raise PlatformInfrastructureError(
+                "coding inference revocation response identity is invalid"
+            )
+        return revoked
 
     async def submit_coding_authoring_freeze(
         self,
