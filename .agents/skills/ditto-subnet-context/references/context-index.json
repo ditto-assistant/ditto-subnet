@@ -167,7 +167,7 @@
       "search": ["rg -n 'BenchVersion|v8|Composite|Score' services/dittobench-api/internal services/dittobench-api/cmd", "rg -n 'relay|inference|embedding' services/dittobench-api/cmd services/dittobench-api/internal"],
       "validate": ["cd services/dittobench-api && go test ./...", "uv run pytest ditto/tests/test_validator_compose.py ditto/tests/test_compose_stack.py -q"],
       "invariants": ["Research adapters do not create alternate production scoring paths.", "Any scoring change must preserve explicit version negotiation and frozen calibration inputs."],
-      "related": ["validator-miner", "mine", "research-adapters", "contracts"]
+      "related": ["validator-miner", "mine", "research-adapters", "contracts", "preview-channels"]
     },
     {
       "id": "research-adapters",
@@ -219,15 +219,15 @@
     },
     {
       "id": "preview-channels",
-      "title": "Preview planning and the loopback mock engine",
-      "keywords": ["preview", "localstack", "cheatcode", "foundry", "stack-copy", "preview-control", "fault injection", "localnet"],
-      "summary": "Preview plan validation and a loopback-only overlay/fault harness tested locally and in GitHub Actions; it does not deploy the planned stack.",
-      "owns": ["ditto/preview", "preview", "scripts/preview", ".github/workflows/preview.yml", ".agents/skills/ditto-subnet-preview"],
-      "read": ["preview/README.md", ".agents/skills/ditto-subnet-preview/SKILL.md"],
-      "search": ["rg -n 'compose\\(|assert_isolated|inject_provider' ditto/preview", "rg -n 'profiles:' .github/workflows/preview.yml"],
-      "validate": ["uv run pytest ditto/tests/preview -q", "uv run python -m ditto.preview compose dashboard"],
-      "invariants": ["Only dashboard plans may attach to production Platform; Backroom requires isolation.", "preview-control accepts only loopback endpoints and binds.", "The workflow validates controls but does not deploy resources or publish releases."],
-      "related": ["worktrees", "platform-api", "backroom", "infra-cloud"]
+      "title": "Preview planning, Foundry overlay, and local DittoBench simulator",
+      "keywords": ["preview", "localstack", "cheatcode", "foundry", "stack-copy", "preview-control", "fault injection", "localnet", "simulator", "mock", "warp_block", "inject_provider", "scored v12", "phase1", "score locally"],
+      "summary": "Preview plan validation and a loopback-only overlay/fault harness, plus the localstack/phase-1 simulator that actually scores a harness. Preview up does not deploy the planned stack.",
+      "owns": ["ditto/preview", "preview", "scripts/preview", "localstack", ".github/workflows/preview.yml", ".agents/skills/ditto-subnet-preview"],
+      "read": ["preview/README.md", "localstack/README.md", "localstack/phase1/README.md", ".agents/skills/ditto-subnet-preview/SKILL.md", ".agents/skills/ditto-subnet-preview/references/cheatcodes.md", ".agents/skills/ditto-subnet-preview/references/localstack.md"],
+      "search": ["rg -n 'compose\\(|assert_isolated|inject_provider' ditto/preview", "rg -n 'profiles:' .github/workflows/preview.yml", "rg -n 'SCORED|AGENT_URL|phase1' localstack Makefile"],
+      "validate": ["uv run pytest ditto/tests/preview -q", "uv run python -m ditto.preview compose dashboard", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Only dashboard plans may attach to production Platform; Backroom requires isolation.", "preview-control accepts only loopback endpoints and binds.", "The workflow validates controls but does not deploy resources or publish releases.", "Sessionless SCORED=1 v9+ cannot complete without a broker session; use SCORED=0 or phase-1 for v12."],
+      "related": ["worktrees", "platform-api", "backroom", "infra-cloud", "dittobench-scoring"]
     }
   ]
 }

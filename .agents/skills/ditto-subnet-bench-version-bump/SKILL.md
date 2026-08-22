@@ -168,9 +168,11 @@ or you will validate against old code and regenerate a bogus artifact.
 
 A new gate multiplies into the composite: a false positive **zeroes an honest miner**.
 
-- Run the new version against **real cleared top-of-board agents** before activation. The
-  session-enabled localstack (`localstack/phase1/`) runs a real agent image + real inference
-  end-to-end and reports every gate factor.
+- Run the new version against **real cleared top-of-board agents** before activation.
+  Use `$ditto-subnet-preview` / `localstack/phase1/` (scored v12, gates firing).
+  Sessionless `SCORED=0` is the v12 *dataset* only; it does not fire
+  `model_dependence`. See
+  `.agents/skills/ditto-subnet-preview/references/localstack.md`.
 - v12 caught exactly this: the answer-stuffing gate at `enforce` **false-zeroed the genuine
   champion** while missing the real exploit. Fix was a **graduated, capped, never-zero penalty**.
 - Prefer, in order: `review` (flag only) → `penalize` (graduated, capped) → `enforce` (zero).

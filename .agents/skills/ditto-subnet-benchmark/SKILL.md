@@ -19,6 +19,11 @@ from the monorepo overview rather than injecting every benchmark owner.
 
 Read [`references/benchmark-index.md`](references/benchmark-index.md), then the returned protocol and test anchors.
 
+To score a harness locally (composite, `tool_mean`, `memory_mean`, v12 gates),
+use `$ditto-subnet-preview` and
+[`../ditto-subnet-preview/references/localstack.md`](../ditto-subnet-preview/references/localstack.md).
+Do not treat `uv run ditto practice` or cargo `evaluate` as that path.
+
 ## Evidence workflow
 
 1. Identify the exact versioned contract and authoritative implementation before proposing a change.

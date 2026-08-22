@@ -31,7 +31,9 @@ production Platform. Backroom always requires an isolated stack.
 uv run python -m ditto.preview up stack --sha "$(git rev-parse HEAD)"
 ```
 
-See `$ditto-subnet-preview` and `preview/README.md`.
+See `$ditto-subnet-preview`, `preview/README.md`, and `localstack/README.md`.
+To score a harness locally, `make localstack-up` / `localstack/phase1/` — not
+`preview up`.
 
 ## Backroom MCP debug first
 
