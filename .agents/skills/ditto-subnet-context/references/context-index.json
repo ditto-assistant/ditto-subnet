@@ -294,7 +294,19 @@
       "search": ["rg -n 'CodingInferenceRequest|begin_coding_inference_request|settle_coding_inference_request|provider_settlement' apps/platform/ditto", "rg -n 'coding_inference_requests' apps/platform/alembic services/model-relay/db/schema.sql"],
       "validate": ["cd apps/platform && python scripts/check_migration_order.py origin/main", "cd apps/platform && uv run pytest -q ditto/tests/db/queries/test_coding_inference_requests.py", "cd apps/platform && make lint lint-copy typecheck test", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
       "invariants": ["Every provider dispatch is durably reserved before upstream activity and only one request is active per grant.", "Receipt-free retries preserve logical request identity; ambiguous provider activity is terminal and never rerunnable.", "Only bounded canonical settlement projections are stored; prompts, raw responses, bearers, credentials, and private coding artifacts never enter the ledger.", "The ledger remains shadow-only and weight_eligible=false until separately reviewed provider, gateway, scoring, and activation layers land."],
-      "related": ["coding-inference-grants", "coding-relay-journal", "coding-repair-research", "platform-api", "dittobench-scoring"]
+      "related": ["coding-platform-upstream", "coding-inference-grants", "coding-relay-journal", "coding-repair-research", "platform-api", "dittobench-scoring"]
+    },
+    {
+      "id": "coding-platform-upstream",
+      "title": "Shadow coding Platform upstream client",
+      "keywords": ["coding Platform upstream", "coding Luna dispatch", "coding inference DPoP", "coding provider settlement client", "coding model relay client"],
+      "summary": "Send one proof-bound locked Luna dispatch from the validator relay to the future coding model-relay handler and verify its canonical trusted settlement.",
+      "owns": ["services/dittobench-api/internal/codingplatform", "services/dittobench-api/docs/coding-platform-upstream-client-shadow.md"],
+      "read": ["services/dittobench-api/docs/coding-luna-relay-core-shadow.md", "services/dittobench-api/docs/coding-luna-relay-journal-shadow.md", "apps/platform/docs/coding-inference-grant-authority.md", "apps/platform/docs/coding-inference-request-ledger.md"],
+      "search": ["rg -n 'codingplatform|dispatchRequestSchema|dispatchProofMessage|ErrUnsettledResponse' services/dittobench-api/internal/codingplatform", "rg -n 'coding/chat/completions|CodingInferenceGrant|coding_inference_requests' services/model-relay apps/platform/ditto"],
+      "validate": ["cd services/dittobench-api && go test -race ./internal/codingplatform ./internal/codingrelay ./internal/codingrelayjournal", "cd services/dittobench-api && go vet ./internal/codingplatform ./internal/codingrelay ./internal/codingrelayjournal", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Only the already-locked request enters the proof-bound dispatch; grant bearer, signing key, control fields, and miner headers never reach the model provider.", "The client makes one no-redirect HTTP attempt and returns only a settlement whose complete binding and response digest it independently verifies.", "Secrets are deep-owned, redacted, and zeroed; errors never include provider or private task text.", "The client remains unwired and weight_eligible=false until the separately reviewed model-relay handler and gateway land."],
+      "related": ["coding-inference-requests", "coding-inference-grants", "coding-relay-journal", "coding-repair-research", "dittobench-scoring"]
     },
     {
       "id": "research-adapters",
