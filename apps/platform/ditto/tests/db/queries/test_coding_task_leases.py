@@ -29,6 +29,7 @@ from ditto.db.queries import coding_task_leases
 from ditto.db.queries.coding_task_leases import (
     CodingTaskLeaseIntegrityError,
     CodingTaskLeaseNotAvailableError,
+    authorize_coding_shadow_task_delivery,
     build_coding_shadow_task_lease,
 )
 
@@ -191,6 +192,21 @@ class _Session:
         return [self.fixture.exposure]
 
 
+class _AuthorizationSession:
+    def __init__(self, fixture: SimpleNamespace) -> None:
+        self.fixture = fixture
+
+    async def get(self, model, identity):
+        assert model is CodingShadowTicket
+        return (
+            self.fixture.ticket if identity == self.fixture.ticket.ticket_id else None
+        )
+
+    async def scalar(self, statement):
+        del statement
+        return self.fixture.now
+
+
 async def _build(monkeypatch, fixture: SimpleNamespace):
     monkeypatch.setattr(
         coding_task_leases,
@@ -228,6 +244,29 @@ async def test_task_lease_reconstructs_exact_shared_authority(monkeypatch) -> No
     assert lease.runtime_policy == fixture.material.runtime_policy
     assert lease.budgets == fixture.material.budgets
     assert lease.weight_eligible is False
+
+
+async def test_delivery_authorization_precedes_private_catalog_access() -> None:
+    fixture = _fixture()
+    session = _AuthorizationSession(fixture)
+    await authorize_coding_shadow_task_delivery(
+        session,  # type: ignore[arg-type]
+        ticket_id=fixture.ticket.ticket_id,
+        validator_hotkey=fixture.ticket.validator_hotkey,
+    )
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
+        await authorize_coding_shadow_task_delivery(
+            session,  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            validator_hotkey="5" + "X" * 47,
+        )
+    fixture.now = fixture.ticket.deadline
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
+        await authorize_coding_shadow_task_delivery(
+            session,  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            validator_hotkey=fixture.ticket.validator_hotkey,
+        )
 
 
 async def test_different_validator_tickets_share_identical_manifests(

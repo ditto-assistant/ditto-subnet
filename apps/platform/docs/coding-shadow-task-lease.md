@@ -20,7 +20,9 @@ workspace capability, or inference grant capability.
 
 ## Activation boundary
 
-There is no HTTP endpoint, validator claim, task/capsule delivery, workspace
-capability, Luna relay grant, execution, scoring, deployment, or emissions
-effect. Presigned artifact URLs exist only as an unexposed internal projection.
-Coding contract v1 remains permanently `weight_eligible=false`.
+One signed authoring-only endpoint can reconstruct this lease for its owning
+validator and project exactly visible, memory, and resource capabilities. No
+scheduler or validator worker calls it, and it never returns grader material.
+There is no workspace capability, Luna relay grant, execution, scoring,
+deployment, or emissions effect. Coding contract v1 remains permanently
+`weight_eligible=false`.
