@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dittobench.ai/schemas/coding/practice-source-v1.json",
+  "title": "DittoBench coding public practice source",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "coding_contract_version",
+    "generation_mode",
+    "practice_pack_id",
+    "task_entropy_bits",
+    "weight_eligible",
+    "users",
+    "memories",
+    "tasks"
+  ],
+  "properties": {
+    "schema": {"const": "dittobench-coding-practice-v1"},
+    "coding_contract_version": {"const": 1},
+    "generation_mode": {"const": "static_public_protocol_demo"},
+    "practice_pack_id": {
+      "type": "string",
+      "pattern": "^coding-practice-3x3-v[1-9][0-9]*$"
+    },
+    "weight_eligible": {"const": false},
+    "task_entropy_bits": {"const": 0},
+    "users": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/user"}
+    },
+    "memories": {
+      "type": "array",
+      "minItems": 18,
+      "maxItems": 18,
+      "items": {"$ref": "#/$defs/memory"}
+    },
+    "tasks": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "items": {"$ref": "#/$defs/task"}
+    }
+  },
+  "$defs": {
+    "userId": {"type": "string", "pattern": "^P0[1-3]$"},
+    "repositoryId": {
+      "type": "string",
+      "pattern": "^practice-[a-z][a-z0-9-]{1,48}$"
+    },
+    "nonempty": {"type": "string", "minLength": 1},
+    "user": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user_id",
+        "display_name",
+        "summary",
+        "known_repositories"
+      ],
+      "properties": {
+        "user_id": {"$ref": "#/$defs/userId"},
+        "display_name": {"$ref": "#/$defs/nonempty"},
+        "summary": {"$ref": "#/$defs/nonempty"},
+        "known_repositories": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 2,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/repositoryId"}
+        }
+      }
+    },
+    "memory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "memory_id",
+        "owner_user_id",
+        "content",
+        "repository_id",
+        "valid_from_revision",
+        "valid_until_revision",
+        "supersedes"
+      ],
+      "properties": {
+        "memory_id": {
+          "type": "string",
+          "pattern": "^P0[1-3]-M[0-9]{3}$"
+        },
+        "owner_user_id": {"$ref": "#/$defs/userId"},
+        "content": {"$ref": "#/$defs/nonempty"},
+        "repository_id": {
+          "anyOf": [
+            {"$ref": "#/$defs/repositoryId"},
+            {"type": "null"}
+          ]
+        },
+        "valid_from_revision": {"$ref": "#/$defs/nonempty"},
+        "valid_until_revision": {
+          "anyOf": [
+            {"$ref": "#/$defs/nonempty"},
+            {"type": "null"}
+          ]
+        },
+        "supersedes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^P0[1-3]-M[0-9]{3}$"
+          }
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "task_id",
+        "repository_id",
+        "active_user_id",
+        "base_revision",
+        "memory_condition",
+        "fixture",
+        "problem_statement"
+      ],
+      "properties": {
+        "task_id": {
+          "type": "string",
+          "pattern": "^PRACTICE-[A-Z0-9-]{3,64}$"
+        },
+        "repository_id": {"$ref": "#/$defs/repositoryId"},
+        "active_user_id": {"$ref": "#/$defs/userId"},
+        "base_revision": {"$ref": "#/$defs/nonempty"},
+        "memory_condition": {
+          "enum": [
+            "required_constraint",
+            "relevant_nonrequired",
+            "irrelevant",
+            "stale_conflicting",
+            "current_override"
+          ]
+        },
+        "fixture": {"$ref": "#/$defs/nonempty"},
+        "problem_statement": {"$ref": "#/$defs/nonempty"}
+      }
+    }
+  }
+}

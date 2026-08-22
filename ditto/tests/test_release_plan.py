@@ -110,6 +110,28 @@ def test_datagen_change_rebuilds_scorer_and_validator_stack(
     }
 
 
+def test_coding_datagen_change_is_shadow_only(components, ignored_paths) -> None:
+    assert selected(
+        components,
+        ignored_paths,
+        "research/dittobench-coding-datagen/src/dittobench_coding_datagen/compiler.py",
+    ) == {"dittobench_coding_datagen"}
+    assert (
+        root_verification(
+            components,
+            ignored_paths,
+            "research/dittobench-coding-datagen/src/dittobench_coding_datagen/compiler.py",
+        )
+        == "none"
+    )
+
+
+def test_coding_datagen_workflow_is_release_owned(components, ignored_paths) -> None:
+    assert selected(
+        components, ignored_paths, ".github/workflows/coding-datagen-ci.yml"
+    ) == {"dittobench_coding_datagen"}
+
+
 def test_platform_change_does_not_release_validator_stack(
     components, ignored_paths
 ) -> None:

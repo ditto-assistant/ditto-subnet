@@ -48,6 +48,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Screener worker | `workers/screener/` |
 | Shared screening protocol | `packages/ditto-screening-protocol/` |
 | Benchmark datagen research | `research/dittobench-datagen/` |
+| Shadow coding-repair research | `research/dittobench-coding-datagen/` |
 | Terraform and Ansible | `infra/` |
 | Release ownership graph | `release/components.toml` |
 | Backroom quarantine and ATH review | `.agents/skills/backroom-review/` |

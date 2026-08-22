@@ -10,6 +10,13 @@ The scorer's Go module replaces `dittobench-datagen` with the in-tree
 `research/dittobench-datagen` module. A datagen change therefore selects the
 generator, scorer, and validator-stack components in one release plan.
 
+The shadow-only coding-repair compiler under
+`research/dittobench-coding-datagen` is independently release-owned. It
+verifies public practice and curation tooling but does not select the scorer or
+validator stack, publish a runtime image, or affect weights. A future scored
+coding service must add its own explicit dependencies rather than silently
+joining the existing validator stack.
+
 The `Release` workflow first rejects a merge that a newer queued `main` push
 already superseded. For the current merge, affected root surfaces and every
 selected component verify the exact source in parallel before one aggregate
