@@ -581,7 +581,10 @@ func TestCertifierRequiresTheCompleteArtifactBoundCanary(t *testing.T) {
 	fixture.inference.mu.Lock()
 	inferenceBinding := fixture.inference.binding
 	fixture.inference.mu.Unlock()
-	if inferenceBinding.InferenceGrantSHA256 != fixture.request.InferenceGrantSHA256 {
+	if inferenceBinding.InferenceGrantSHA256 != fixture.request.InferenceGrantSHA256 ||
+		inferenceBinding.ProfileCapabilityID != fixture.request.Seed.ProfileCapabilityID ||
+		inferenceBinding.Budgets != fixture.request.Budgets ||
+		inferenceBinding.RequestBudget != codingcontract.EffectiveInferenceRequestBudget(fixture.request.Budgets.WorkspaceToolCalls) {
 		t.Fatalf("inference binding=%#v", inferenceBinding)
 	}
 }
@@ -656,6 +659,17 @@ func TestCertifierRequiresTrustedInferenceEvidence(t *testing.T) {
 	if receipt.Status != StatusFailed || receipt.FailureCode == nil ||
 		*receipt.FailureCode != "coding_inference_not_observed" || receipt.ModelEvidence != nil {
 		t.Fatalf("receipt=%#v", receipt)
+	}
+}
+
+func TestCertifierRejectsInferenceEvidenceBeyondSignedRunBudget(t *testing.T) {
+	fixture := newCertificationFixture(t)
+	fixture.inference.evidence.PromptTokens = fixture.request.Budgets.ModelInputTokens + 1
+	fixture.inference.evidence.TotalTokens =
+		fixture.inference.evidence.PromptTokens + fixture.inference.evidence.CompletionTokens
+	receipt, err := fixture.certifier.Certify(t.Context(), fixture.request)
+	if err == nil || receipt.Status != "" || !strings.Contains(err.Error(), "canary authority") {
+		t.Fatalf("receipt=%#v err=%v", receipt, err)
 	}
 }
 

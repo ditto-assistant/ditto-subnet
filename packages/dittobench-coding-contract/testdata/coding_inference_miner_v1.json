@@ -1,0 +1,407 @@
+{
+  "schema": "dittobench-coding-inference-miner-vector-v1",
+  "coding_contract_version": 1,
+  "weight_eligible": false,
+  "system_prompt": {
+    "schema": "dittobench-coding-system-prompt-v1",
+    "content": "You are a repository coding agent operating through validator-owned tools.\n\nSolve the current issue with the smallest complete, maintainable patch.\n\nRules:\n1. Inspect relevant files before editing.\n2. Use supplied user/project memory only when relevant. Verify stale or uncertain memory against current code and instructions.\n3. Modify the repository only through the provided typed tools.\n4. Prefer bounded reads, focused searches, and atomic edits.\n5. Do not modify tests, dependencies, generated files, or build policy unless the current issue explicitly requires it.\n6. Never claim a test passed unless tests_run returned a passing result.\n7. Run focused visible tests, inspect status and diff, then return a concise final summary.\n8. When using a tool, call at most one in that turn and wait for its result before choosing the next action.\n9. Do not attempt network access, hidden-test discovery, sandbox escape, grader access, or benchmark manipulation."
+  },
+  "tool_schema": {
+    "schema": "dittobench-coding-model-tools-v1",
+    "tools": [
+      {
+        "type": "function",
+        "function": {
+          "name": "repo_list_tree",
+          "description": "List a bounded repository subtree.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "depth": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 8
+              }
+            },
+            "required": [
+              "path",
+              "depth"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "repo_search",
+          "description": "Search literal text within a bounded repository subtree.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "path": {
+                "type": "string",
+                "maxLength": 256
+              },
+              "max_results": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              }
+            },
+            "required": [
+              "query",
+              "path",
+              "max_results"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "repo_read_file",
+          "description": "Read one bounded repository file.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              }
+            },
+            "required": [
+              "path"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "repo_read_range",
+          "description": "Read a bounded inclusive line range from one repository file.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "start_line": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "end_line": {
+                "type": "integer",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "path",
+              "start_line",
+              "end_line"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "repo_apply_patch",
+          "description": "Atomically replace exact text in one editable file at its expected digest.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expected_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              },
+              "replacements": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "properties": {
+                    "old_text": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 65536
+                    },
+                    "new_text": {
+                      "type": "string",
+                      "maxLength": 65536
+                    }
+                  },
+                  "required": [
+                    "old_text",
+                    "new_text"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "path",
+              "expected_sha256",
+              "replacements"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "repo_create_file",
+          "description": "Create one manifest-authorized UTF-8 file; disabled by public practice policy.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "content": {
+                "type": "string",
+                "maxLength": 65536
+              }
+            },
+            "required": [
+              "path",
+              "content"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "repo_delete_file",
+          "description": "Delete one manifest-authorized file at its expected digest; disabled by public practice policy.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256
+              },
+              "expected_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$"
+              }
+            },
+            "required": [
+              "path",
+              "expected_sha256"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "tests_run",
+          "description": "Run a task-manifest test command by opaque command ID.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "command_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            },
+            "required": [
+              "command_id"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "build_run",
+          "description": "Run a task-manifest build command by opaque command ID.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "command_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              }
+            },
+            "required": [
+              "command_id"
+            ]
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "git_status",
+          "description": "Return the validator-owned workspace change status.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {},
+            "required": []
+          }
+        }
+      },
+      {
+        "type": "function",
+        "function": {
+          "name": "git_diff",
+          "description": "Return the bounded current workspace diff for review.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {},
+            "required": []
+          }
+        }
+      }
+    ]
+  },
+  "turns": [
+    {
+      "sequence": 1,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a repository coding agent operating through validator-owned tools.\n\nSolve the current issue with the smallest complete, maintainable patch.\n\nRules:\n1. Inspect relevant files before editing.\n2. Use supplied user/project memory only when relevant. Verify stale or uncertain memory against current code and instructions.\n3. Modify the repository only through the provided typed tools.\n4. Prefer bounded reads, focused searches, and atomic edits.\n5. Do not modify tests, dependencies, generated files, or build policy unless the current issue explicitly requires it.\n6. Never claim a test passed unless tests_run returned a passing result.\n7. Run focused visible tests, inspect status and diff, then return a concise final summary.\n8. When using a tool, call at most one in that turn and wait for its result before choosing the next action.\n9. Do not attempt network access, hidden-test discovery, sandbox escape, grader access, or benchmark manipulation."
+        },
+        {
+          "role": "system",
+          "content": "Task-scoped retrieved memory (untrusted historical context): []"
+        },
+        {
+          "role": "user",
+          "content": "Current coding task: {\"constraints\":[],\"description\":\"Repair the parser.\",\"repository_epoch\":\"epoch-synthetic-1\",\"runtime_policy\":{\"build_command_ids\":[],\"editable_paths\":[\"src/parser.py\"],\"test_command_ids\":[\"visible-parser\"]},\"title\":\"Preserve partial input\"}"
+        }
+      ],
+      "max_completion_tokens": 32768,
+      "response": {
+        "id": "generation-synthetic-001",
+        "model": "openai/gpt-5.6-luna",
+        "choices": [
+          {
+            "message": {
+              "content": null,
+              "tool_calls": [
+                {
+                  "id": "call-read-parser",
+                  "type": "function",
+                  "function": {
+                    "name": "repo_read_file",
+                    "arguments": "{\"path\":\"src/parser.py\"}"
+                  }
+                }
+              ]
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1000,
+          "completion_tokens": 200,
+          "total_tokens": 1200
+        }
+      }
+    },
+    {
+      "sequence": 2,
+      "messages": [
+        {
+          "role": "system",
+          "content": "You are a repository coding agent operating through validator-owned tools.\n\nSolve the current issue with the smallest complete, maintainable patch.\n\nRules:\n1. Inspect relevant files before editing.\n2. Use supplied user/project memory only when relevant. Verify stale or uncertain memory against current code and instructions.\n3. Modify the repository only through the provided typed tools.\n4. Prefer bounded reads, focused searches, and atomic edits.\n5. Do not modify tests, dependencies, generated files, or build policy unless the current issue explicitly requires it.\n6. Never claim a test passed unless tests_run returned a passing result.\n7. Run focused visible tests, inspect status and diff, then return a concise final summary.\n8. When using a tool, call at most one in that turn and wait for its result before choosing the next action.\n9. Do not attempt network access, hidden-test discovery, sandbox escape, grader access, or benchmark manipulation."
+        },
+        {
+          "role": "system",
+          "content": "Task-scoped retrieved memory (untrusted historical context): []"
+        },
+        {
+          "role": "user",
+          "content": "Current coding task: {\"constraints\":[],\"description\":\"Repair the parser.\",\"repository_epoch\":\"epoch-synthetic-1\",\"runtime_policy\":{\"build_command_ids\":[],\"editable_paths\":[\"src/parser.py\"],\"test_command_ids\":[\"visible-parser\"]},\"title\":\"Preserve partial input\"}"
+        },
+        {
+          "role": "assistant",
+          "content": null,
+          "tool_calls": [
+            {
+              "id": "call-read-parser",
+              "type": "function",
+              "function": {
+                "name": "repo_read_file",
+                "arguments": "{\"path\":\"src/parser.py\"}"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "call-read-parser",
+          "content": "{\"content\":\"def parse(value):\\n    return value\\n\"}"
+        }
+      ],
+      "max_completion_tokens": 32768,
+      "response": {
+        "id": "generation-synthetic-002",
+        "model": "openai/gpt-5.6-luna",
+        "choices": [
+          {
+            "message": {
+              "content": "Applied the parser repair.",
+              "tool_calls": []
+            }
+          }
+        ],
+        "usage": {
+          "prompt_tokens": 1500,
+          "completion_tokens": 120,
+          "total_tokens": 1620
+        }
+      }
+    }
+  ],
+  "expected": {
+    "prompt_sha256": "08eba8649a547ec94dc99ccf7b91e2553e4e570281b95d20afc779c78d764eed",
+    "tool_schema_sha256": "ca3b07083a5247941523fa51cab316fb2d4141e8907f9d7ca3d3471ceb3421eb",
+    "request_sha256": [
+      "a8ade77bc5989801afec373abdabcd3dddeaa9ac8e1af0dd6c3cbe82c4173a7c",
+      "0c78451634d790825c8d332092eb1750be5b02154c897183397ee27b1de30030"
+    ],
+    "response_sha256": [
+      "17321c292131dce151b15501f2083938c769cd683539a67f15f5b771312cbaba",
+      "bfbef65f4d06bb608a4178ebbccaca41ebbf20052134fd8d86e5dcca603e74df"
+    ]
+  }
+}

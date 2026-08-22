@@ -148,6 +148,9 @@ networkless supervisor adapter is in
 [`docs/coding-sandbox-shadow.md`](docs/coding-sandbox-shadow.md). Health discovery
 and the artifact-bound active canary are separated by
 [`docs/coding-capability-certification-shadow.md`](docs/coding-capability-certification-shadow.md).
+The locked Luna policy, miner-safe request fixture, and validator-only receipt
+authority are frozen separately in
+[`docs/coding-luna-relay-contract-shadow.md`](docs/coding-luna-relay-contract-shadow.md).
 Green core tests do not imply a production supervisor/test-driver image,
 private catalog, Platform lease, deployment, or score activation.
 
