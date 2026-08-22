@@ -453,7 +453,7 @@ mod tests {
                 valid_from_epoch: Some("repo-v2".to_string()),
                 valid_until_epoch: None,
                 supersedes: Vec::new(),
-                confidence_micros: Some(900_000),
+                confidence_micros: 900_000,
             }],
         };
         request.memory_bundle_sha256 = memory_bundle_sha256(&request).unwrap();
@@ -515,7 +515,7 @@ mod tests {
                     valid_from_epoch: record["valid_from_revision"].as_str().map(str::to_string),
                     valid_until_epoch: record["valid_until_revision"].as_str().map(str::to_string),
                     supersedes: serde_json::from_value(record["supersedes"].clone()).unwrap(),
-                    confidence_micros: Some(900_000),
+                    confidence_micros: 900_000,
                 }
             })
             .collect::<Vec<_>>();
@@ -558,6 +558,33 @@ mod tests {
         assert_eq!(
             memory_bundle_sha256(&request).unwrap(),
             vector["digests"]["unicode"].as_str().unwrap()
+        );
+    }
+
+    #[test]
+    fn shared_contract_seed_and_unicode_digest_match_python_and_go() {
+        const CONTRACT: &str = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../packages/dittobench-coding-contract/testdata/coding_contract_v1.json"
+        ));
+        let contract: Value = serde_json::from_str(CONTRACT).unwrap();
+        let seed: CodingSeedRequest =
+            serde_json::from_value(contract["seed_request"].clone()).unwrap();
+        seed.validate().unwrap();
+        assert_eq!(
+            memory_bundle_sha256(&seed).unwrap(),
+            seed.memory_bundle_sha256
+        );
+        let run: crate::protocol::CodingRunRequest =
+            serde_json::from_value(contract["run_request"].clone()).unwrap();
+        run.validate().unwrap();
+
+        let mut unicode_seed = seed;
+        unicode_seed.memories[0].content =
+            "Preserve café <tag> & separators \u{2028} and \u{2029}.".to_string();
+        assert_eq!(
+            memory_bundle_sha256(&unicode_seed).unwrap(),
+            contract["digests"]["unicode_seed_memory"].as_str().unwrap()
         );
     }
 
