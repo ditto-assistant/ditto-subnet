@@ -48,6 +48,9 @@ _ZERO_LONGMEM_FIXTURE_PATH = (
 
 _V12_FIXTURE_PATH = _FIXTURE_PATH.with_name("go_confirmation_evidence_v12.json")
 _UNAVAILABLE_ABLATION_PATH = _FIXTURE_PATH.with_name("go_ablation_unavailable_v9.json")
+_OBSERVATIONAL_DROP_PATH = _FIXTURE_PATH.with_name(
+    "go_ablation_observational_drop_v9.json"
+)
 
 
 def _fixture() -> dict[str, object]:
@@ -332,6 +335,54 @@ def test_counterfactual_reason_cannot_label_a_completed_result() -> None:
         AblationEvidence.model_validate(evidence)
 
 
+def test_shadow_observational_drop_is_a_completed_non_causal_failure() -> None:
+    evidence = _report().inference_ablation.evidence.model_dump(mode="json")
+    evidence.update(
+        {
+            "mode": "shadow",
+            "status": "failed",
+            "reason": "observational_drop_not_causal",
+            "baseline_mean_micros": 900_000,
+            "ablated_mean_micros": 400_000,
+            "delta_micros": 500_000,
+            "semantic_factor_bps": 0,
+            "applied_factor_bps": 10_000,
+        }
+    )
+
+    parsed = AblationEvidence.model_validate(evidence)
+    assert parsed.status == "failed"
+    assert parsed.reason == "observational_drop_not_causal"
+    assert parsed.delta_micros == 500_000
+    assert parsed.delta_micros >= parsed.threshold_micros
+
+
+def test_observational_drop_cannot_label_enforce_or_a_sub_threshold_delta() -> None:
+    evidence = _report().inference_ablation.evidence.model_dump(mode="json")
+    evidence.update(
+        {
+            "mode": "enforce",
+            "status": "failed",
+            "reason": "observational_drop_not_causal",
+            "baseline_mean_micros": 900_000,
+            "ablated_mean_micros": 400_000,
+            "delta_micros": 500_000,
+            "semantic_factor_bps": 0,
+            "applied_factor_bps": 0,
+        }
+    )
+    with pytest.raises(ValidationError, match="completed shadow failure"):
+        AblationEvidence.model_validate(evidence)
+
+    evidence["mode"] = "shadow"
+    evidence["applied_factor_bps"] = 10_000
+    evidence["baseline_mean_micros"] = 700_000
+    evidence["ablated_mean_micros"] = 600_000
+    evidence["delta_micros"] = 100_000
+    with pytest.raises(ValidationError, match="threshold-meeting delta"):
+        AblationEvidence.model_validate(evidence)
+
+
 def test_go_evidence_carries_its_own_bench_version_through_the_wire() -> None:
     """The converter is the boundary the whole v12 lane died at.
 
@@ -433,5 +484,23 @@ def test_production_unavailable_ablation_converts_without_score_commitments() ->
         assert envelope.evidence.ablated_scores_sha256 is None
         assert envelope.evidence.delta_micros is None
         assert envelope.evidence.semantic_factor_bps is None
+        assert envelope.evidence.sample_count == 2
+        assert envelope.evidence.affected_call_count == 4
+
+
+def test_production_shadow_high_drop_converts_as_completed_observation() -> None:
+    raw = json.loads(_OBSERVATIONAL_DROP_PATH.read_text())
+    for intervention in ("inference", "embedding"):
+        dimension = raw[intervention]
+        assert isinstance(dimension, dict)
+        envelope = ablation_envelope_from_go(
+            dimension, expected_intervention=intervention
+        )
+        assert envelope.status == "completed"
+        assert envelope.evidence.status == "failed"
+        assert envelope.evidence.reason == "observational_drop_not_causal"
+        assert envelope.evidence.delta_micros == 800_000
+        assert envelope.evidence.semantic_factor_bps == 0
+        assert envelope.evidence.applied_factor_bps == 10_000
         assert envelope.evidence.sample_count == 2
         assert envelope.evidence.affected_call_count == 4

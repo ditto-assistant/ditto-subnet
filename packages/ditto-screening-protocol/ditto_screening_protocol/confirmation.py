@@ -307,10 +307,19 @@ class AblationEvidence(BaseModel):
                 self.baseline_mean_micros - self.ablated_mean_micros
             ):
                 raise ValueError("delta_micros does not match the paired means")
-            passed = self.delta_micros >= self.threshold_micros
-            if passed != (self.status == "passed"):
+            drop_meets_threshold = self.delta_micros >= self.threshold_micros
+            if self.reason == "observational_drop_not_causal":
+                if self.status != "failed" or self.mode != "shadow":
+                    raise ValueError(
+                        "observational drop requires a completed shadow failure"
+                    )
+                if not drop_meets_threshold:
+                    raise ValueError(
+                        "observational drop requires a threshold-meeting delta"
+                    )
+            elif drop_meets_threshold != (self.status == "passed"):
                 raise ValueError("ablation status contradicts its threshold")
-            expected_semantic = 10_000 if passed else 0
+            expected_semantic = 10_000 if self.status == "passed" else 0
             expected_applied = 10_000 if self.mode == "shadow" else expected_semantic
             if self.semantic_factor_bps != expected_semantic:
                 raise ValueError("semantic factor contradicts ablation result")

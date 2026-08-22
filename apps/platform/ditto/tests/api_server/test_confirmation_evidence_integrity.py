@@ -690,6 +690,44 @@ class TestAblationReplay:
         assert projection.full_quality_micros is None
         assert projection.full_effective_micros is None
 
+    def test_shadow_observational_drop_qualifies_and_projects_longmem(self) -> None:
+        failed = ablation_envelope("inference", status="failed")
+        evidence = failed.evidence.model_copy(
+            update={
+                "reason": "observational_drop_not_causal",
+                "baseline_mean_micros": 900_000,
+                "ablated_mean_micros": 400_000,
+                "delta_micros": 500_000,
+                "semantic_factor_bps": 0,
+                "applied_factor_bps": 10_000,
+            }
+        )
+        inference = failed.model_copy(
+            update={
+                "evidence": evidence,
+                "evidence_sha256": evidence_digest(evidence),
+            }
+        )
+        report = unsigned_report(embedding_status="failed").model_copy(
+            update={"inference_ablation": inference}
+        )
+        verified = rebuild(report)
+        assert verified.ablations_complete is True
+        assert verified.ablation_semantic_factor_bps == 0
+        assert verified.longmem_mean_micros == 500_000
+        projection = compute_subject_projection(
+            mode=ConfirmationBundleMode.SHADOW,
+            base_quality_micros=882_550,
+            base_stderr_micros=10_668,
+            base_model_factor_bps=10_000,
+            base_tool_factor_bps=10_000,
+            verified=verified,
+            composite=verification_profile().composite,
+        )
+        assert projection.full_quality_micros == 729_530
+        assert projection.applied_factor_bps == 10_000
+        assert projection.full_effective_micros == 729_530
+
 
 class TestSharedRootAndSubjectProjection:
     def test_root_binds_artifact_profile_settings_generation_and_typed_children(

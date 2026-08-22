@@ -42,6 +42,9 @@ FIXTURE_PATH = (
     / "go_confirmation_evidence_v9.json"
 )
 UNAVAILABLE_ABLATION_PATH = FIXTURE_PATH.with_name("go_ablation_unavailable_v9.json")
+OBSERVATIONAL_DROP_PATH = FIXTURE_PATH.with_name(
+    "go_ablation_observational_drop_v9.json"
+)
 EXECUTION_PROFILE_FIXTURE_PATH = (
     Path(__file__).parents[5]
     / "services"
@@ -354,6 +357,43 @@ def test_production_unavailable_ablation_rebuilds_with_fixture_longmem() -> None
     )
     assert verified.ablations_complete is False
     assert verified.ablation_semantic_factor_bps is None
+    assert verified.longmem_mean_micros == 500_000
+
+
+def test_production_shadow_high_drop_qualifies_and_keeps_longmem_score() -> None:
+    fixture = _fixture()
+    drop = json.loads(OBSERVATIONAL_DROP_PATH.read_text())
+    longmemeval = fixture["longmemeval"]
+    inference = drop["inference"]
+    embedding = drop["embedding"]
+    assert isinstance(longmemeval, dict)
+    assert isinstance(inference, dict)
+    assert isinstance(embedding, dict)
+    report = completion_report_from_go_dimensions(
+        ablation_coordinator_latency_ms=ABLATION_COORDINATOR_LATENCY_MS,
+        longmemeval=longmemeval,
+        inference_ablation=inference,
+        embedding_ablation=embedding,
+    )
+    assert report.inference_ablation.status == "completed"
+    assert report.embedding_ablation.status == "completed"
+    assert report.inference_ablation.evidence.reason == "observational_drop_not_causal"
+    assert report.embedding_ablation.evidence.reason == "observational_drop_not_causal"
+
+    profile = _verification_profile()
+    verified = rebuild_confirmation_evidence(
+        report,
+        artifact_sha256=ARTIFACT_SHA256,
+        profile_revision=profile.revision,
+        profile_checksum=profile.checksum(),
+        settings_revision=7,
+        settings_checksum=SETTINGS_SHA256,
+        retest_generation=3,
+        mode=ConfirmationBundleMode.SHADOW,
+        profile=profile,
+    )
+    assert verified.ablations_complete is True
+    assert verified.ablation_semantic_factor_bps == 0
     assert verified.longmem_mean_micros == 500_000
 
 

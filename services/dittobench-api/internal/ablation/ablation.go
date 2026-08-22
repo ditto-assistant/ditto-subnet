@@ -692,14 +692,15 @@ const (
 type Reason string
 
 const (
-	ReasonDisabled                Reason = "disabled"
-	ReasonThresholdMet            Reason = "threshold_met"
-	ReasonDeltaBelowThreshold     Reason = "delta_below_threshold"
-	ReasonNoRelevantCalls         Reason = "no_relevant_trusted_calls"
-	ReasonInsufficientCalls       Reason = "insufficient_relevant_trusted_calls"
-	ReasonBudgetExhausted         Reason = "synthetic_budget_exhausted"
-	ReasonInterventionUnavailable Reason = "intervention_unavailable"
-	ReasonEnforceProofUnavailable Reason = "counterfactual_proof_unavailable"
+	ReasonDisabled                   Reason = "disabled"
+	ReasonThresholdMet               Reason = "threshold_met"
+	ReasonDeltaBelowThreshold        Reason = "delta_below_threshold"
+	ReasonObservationalDropNotCausal Reason = "observational_drop_not_causal"
+	ReasonNoRelevantCalls            Reason = "no_relevant_trusted_calls"
+	ReasonInsufficientCalls          Reason = "insufficient_relevant_trusted_calls"
+	ReasonBudgetExhausted            Reason = "synthetic_budget_exhausted"
+	ReasonInterventionUnavailable    Reason = "intervention_unavailable"
+	ReasonEnforceProofUnavailable    Reason = "counterfactual_proof_unavailable"
 )
 
 type CaseScore struct {
@@ -1186,13 +1187,12 @@ func Evaluate(input EvaluateInput) (Evaluation, error) {
 		// therefore cannot prove a positive counterfactual in enforce mode.
 		status, reason = StatusUnavailable, ReasonEnforceProofUnavailable
 	case deltaRaw >= input.Threshold:
-		// A score drop is observationally ambiguous: it can mean genuine model
-		// dependence, or it can be manufactured after recognizing the synthetic
-		// lane. Never promote that ambiguity to a passing shadow result. The
-		// committed coordinator report remains available for private research,
-		// while signed evidence carries no numeric gate that could be mistaken
-		// for causal proof.
-		status, reason = StatusUnavailable, ReasonEnforceProofUnavailable
+		// A score drop is observationally ambiguous: genuine model use or
+		// synthetic-lane sabotage. Never emit StatusPassed / threshold_met.
+		// Do still complete the failed observation with the numeric gate so
+		// shadow confirmation can qualify and project LongMem scores. Leaving
+		// this unavailable made reader-used runs unprojectable.
+		status, reason = StatusFailed, ReasonObservationalDropNotCausal
 	}
 	semanticFactor := 1.0
 	if status != StatusPassed {
