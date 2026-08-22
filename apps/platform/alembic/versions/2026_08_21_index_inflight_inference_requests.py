@@ -1,7 +1,7 @@
 """index in-flight inference requests so observability stops scanning the ledger
 
 Revision ID: 6570642aba4a
-Revises: b7e2c91a04d6
+Revises: c8f4e1a92b70
 Create Date: 2026-08-21
 
 ``/admin/inference-runtime-metrics`` counts requests still ``started`` past the
@@ -48,7 +48,7 @@ from alembic import op
 from ditto.db.migration_lock import MAX_ATTEMPTS, backoff_delay, is_retryable, sqlstate
 
 revision: str = "6570642aba4a"
-down_revision: str | Sequence[str] | None = "b7e2c91a04d6"
+down_revision: str | Sequence[str] | None = "c8f4e1a92b70"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
