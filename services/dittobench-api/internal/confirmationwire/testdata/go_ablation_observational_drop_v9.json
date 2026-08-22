@@ -1,0 +1,96 @@
+{
+  "inference": {
+    "go_evidence_sha256": "b3ee800054b000ac6b4ba21e6dce7e910205a6346f63ebc7c8c15f31053104cb",
+    "latency_ms": 111,
+    "evidence": {
+      "contract_version": "dittobench-v9-ablation-v1",
+      "bench_version": 9,
+      "intervention": "inference",
+      "mode": "shadow",
+      "status": "failed",
+      "reason": "observational_drop_not_causal",
+      "profile_revision": "ablation-launch-v1",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ablation_profile_sha256": "1801748138fb6d3e1b37f54a8a9f1db994c92564ecb62818b9c9c04290a77dbe",
+      "coordinator_sha256": "fa7ff664e438bcbe62d2d87a3c272bd1ffc628215482e8ecf3beb9c3d3cb61db",
+      "selected_cases_sha256": "7486b50c34ba6375ce44de83e4ffcfc6a4d98b55581e18eefeaf7555db226094",
+      "threshold_manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "dataset_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "case_set_sha256": "0acfb9b6566c0ce2d4d628352cfbaa6871dec4a2b9de242d32a2407e3d529d7e",
+      "baseline_scores_sha256": "9a22d3df4610e0fd29ba35e1f3b91f46449d60b37eef872b1fcd5eab6749e33a",
+      "ablated_scores_sha256": "64db7ecfdbab9bccf050659376318f242924967b7adb0dad38de7b43f33a8c5b",
+      "baseline_mean": 0.9,
+      "ablated_mean": 0.1,
+      "delta": 0.8,
+      "threshold": 0.2,
+      "sample_count": 2,
+      "affected_call_count": 4,
+      "semantic_factor": 0,
+      "applied_factor": 1,
+      "synthetic_usage": {
+        "synthetic": true,
+        "telemetry_namespace": "dittobench.v9.ablation.inference",
+        "intervention": "inference",
+        "budget": {
+          "max_chat_requests": 4,
+          "max_chat_input_bytes": 256
+        },
+        "chat_attempts": 4,
+        "chat_applied": 4,
+        "chat_input_bytes": 80,
+        "upstream_requests": 0,
+        "upstream_input_tokens": 0,
+        "upstream_output_tokens": 0,
+        "upstream_provider_cost_microusd": 0
+      }
+    }
+  },
+  "embedding": {
+    "go_evidence_sha256": "fc355c08988009b2a1391bbe0b5da4592463b9885213d1e9b9e4519fbebeafc9",
+    "latency_ms": 222,
+    "evidence": {
+      "contract_version": "dittobench-v9-ablation-v1",
+      "bench_version": 9,
+      "intervention": "embedding",
+      "mode": "shadow",
+      "status": "failed",
+      "reason": "observational_drop_not_causal",
+      "profile_revision": "ablation-launch-v1",
+      "artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "ablation_profile_sha256": "1801748138fb6d3e1b37f54a8a9f1db994c92564ecb62818b9c9c04290a77dbe",
+      "coordinator_sha256": "fa7ff664e438bcbe62d2d87a3c272bd1ffc628215482e8ecf3beb9c3d3cb61db",
+      "selected_cases_sha256": "7486b50c34ba6375ce44de83e4ffcfc6a4d98b55581e18eefeaf7555db226094",
+      "threshold_manifest_sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "dataset_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "case_set_sha256": "0acfb9b6566c0ce2d4d628352cfbaa6871dec4a2b9de242d32a2407e3d529d7e",
+      "baseline_scores_sha256": "9a22d3df4610e0fd29ba35e1f3b91f46449d60b37eef872b1fcd5eab6749e33a",
+      "ablated_scores_sha256": "64db7ecfdbab9bccf050659376318f242924967b7adb0dad38de7b43f33a8c5b",
+      "baseline_mean": 0.9,
+      "ablated_mean": 0.1,
+      "delta": 0.8,
+      "threshold": 0.2,
+      "sample_count": 2,
+      "affected_call_count": 4,
+      "semantic_factor": 0,
+      "applied_factor": 1,
+      "synthetic_usage": {
+        "synthetic": true,
+        "telemetry_namespace": "dittobench.v9.ablation.embedding",
+        "intervention": "embedding",
+        "budget": {
+          "max_embedding_requests": 4,
+          "max_embedding_inputs": 4,
+          "max_embedding_input_bytes": 256
+        },
+        "embedding_attempts": 4,
+        "embedding_applied": 4,
+        "embedding_inputs": 4,
+        "embedding_input_bytes": 72,
+        "upstream_requests": 0,
+        "upstream_input_tokens": 0,
+        "upstream_output_tokens": 0,
+        "upstream_provider_cost_microusd": 0
+      }
+    }
+  }
+}

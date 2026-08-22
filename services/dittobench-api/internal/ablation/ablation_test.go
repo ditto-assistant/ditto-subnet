@@ -944,8 +944,8 @@ func TestGateStatusThresholdsAndFactors(t *testing.T) {
 		{"enforce fails closed on observed drop", ModeEnforce, 0.5, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
 		{"enforce fails closed at threshold", ModeEnforce, 0.5, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
 		{"enforce fails closed below threshold", ModeEnforce, 0.500001, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
-		{"shadow drop is not causal proof", ModeShadow, 0.2, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 1},
-		{"shadow threshold boundary is not causal proof", ModeShadow, 0.5, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 1},
+		{"shadow drop is a completed non-causal observation", ModeShadow, 0.2, 6, nil, StatusFailed, ReasonObservationalDropNotCausal, 0, 1},
+		{"shadow threshold boundary is a completed non-causal observation", ModeShadow, 0.5, 6, nil, StatusFailed, ReasonObservationalDropNotCausal, 0, 1},
 		{"shadow failure neutral", ModeShadow, 0.500001, 6, nil, StatusFailed, ReasonDeltaBelowThreshold, 0, 1},
 		{"negative delta remains shadow failure", ModeShadow, 0.1, 6, func(input *EvaluateInput) {
 			input.Baseline = []CaseScore{{CaseID: "a", Score: 0.1}}
@@ -988,7 +988,7 @@ func TestGateThresholdDecisionUsesUnroundedMeansAndDelta(t *testing.T) {
 			name: "raw delta is ambiguous although separately rounded means would fail",
 			// Raw delta is 0.50000098. The published means are 0.8 and 0.3,
 			// whose subtraction is only 0.5.
-			baseline: 0.80000049, ablated: 0.29999951, threshold: 0.5000005, want: StatusUnavailable,
+			baseline: 0.80000049, ablated: 0.29999951, threshold: 0.5000005, want: StatusFailed,
 		},
 		{
 			name: "raw delta fails although published delta and threshold are equal",
@@ -1247,13 +1247,12 @@ func TestAdaptiveTreatmentDetectionIsContainedToShadow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if shadow.Evidence.Status != StatusUnavailable || shadow.Evidence.Reason != ReasonEnforceProofUnavailable ||
+		if shadow.Evidence.Status != StatusFailed || shadow.Evidence.Reason != ReasonObservationalDropNotCausal ||
 			shadow.Evidence.SemanticFactor != 0 || shadow.Evidence.AppliedFactor != 1 {
 			t.Fatalf("adaptive shadow treatment was promoted for %s: %+v", intervention, shadow.Evidence)
 		}
-		if shadow.Evidence.BaselineScoresSHA256 != "" || shadow.Evidence.AblatedScoresSHA256 != "" ||
-			shadow.Evidence.BaselineMean != 0 || shadow.Evidence.AblatedMean != 0 || shadow.Evidence.Delta != 0 {
-			t.Fatalf("ambiguous shadow treatment published a numeric gate for %s: %+v", intervention, shadow.Evidence)
+		if shadow.Evidence.BaselineScoresSHA256 == "" || shadow.Evidence.AblatedScoresSHA256 == "" {
+			t.Fatalf("shadow observational drop omitted numeric gate for %s: %+v", intervention, shadow.Evidence)
 		}
 		enforce, err := Evaluate(evaluateInputFromReport(t, config, report, intervention, ModeEnforce))
 		if err != nil {
@@ -1321,12 +1320,14 @@ func TestProbeOnlyPositiveDeltasNeverPublishACompletedGate(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if got.Evidence.Status != StatusUnavailable || got.Evidence.Reason != ReasonEnforceProofUnavailable {
-					t.Fatalf("probe-only positive delta qualified: %+v", got.Evidence)
+				if got.Evidence.Status != StatusFailed || got.Evidence.Reason != ReasonObservationalDropNotCausal {
+					t.Fatalf("probe-only positive delta was not a completed non-causal observation: %+v", got.Evidence)
 				}
-				if got.Evidence.BaselineScoresSHA256 != "" || got.Evidence.AblatedScoresSHA256 != "" ||
-					got.Evidence.BaselineMean != 0 || got.Evidence.AblatedMean != 0 || got.Evidence.Delta != 0 {
-					t.Fatalf("ambiguous probe result published numeric evidence: %+v", got.Evidence)
+				if got.Evidence.Status == StatusPassed || got.Evidence.Reason == ReasonThresholdMet {
+					t.Fatalf("probe-only positive delta qualified as a pass: %+v", got.Evidence)
+				}
+				if got.Evidence.BaselineScoresSHA256 == "" || got.Evidence.AblatedScoresSHA256 == "" {
+					t.Fatalf("probe-only observational drop omitted numeric evidence: %+v", got.Evidence)
 				}
 				if got.Evidence.SampleCount != len(input.Baseline) || got.Evidence.AffectedCallCount != 6 ||
 					got.Evidence.CoordinatorSHA256 != input.Coordinator.CoordinatorSHA256 {
@@ -1358,9 +1359,11 @@ func FuzzPositiveShadowDeltaIsNeverPassingEvidence(f *testing.F) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Evidence.Status == StatusPassed || got.Evidence.Reason == ReasonThresholdMet ||
-			got.Evidence.BaselineScoresSHA256 != "" || got.Evidence.AblatedScoresSHA256 != "" {
+		if got.Evidence.Status == StatusPassed || got.Evidence.Reason == ReasonThresholdMet {
 			t.Fatalf("positive synthetic delta escaped fail-closed classification: %+v", got.Evidence)
+		}
+		if got.Evidence.Status != StatusFailed || got.Evidence.Reason != ReasonObservationalDropNotCausal {
+			t.Fatalf("positive synthetic delta was not a completed non-causal observation: %+v", got.Evidence)
 		}
 	})
 }
