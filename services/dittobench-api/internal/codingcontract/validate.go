@@ -93,6 +93,7 @@ func (task ManifestTask) Validate() error {
 		"resource_profile_sha256": task.ResourceProfileSHA256,
 		"grader_bundle_sha256":    task.GraderBundleSHA256,
 		"test_manifest_sha256":    task.TestManifestSHA256,
+		"grader_plan_sha256":      task.GraderPlanSHA256,
 	} {
 		if !validSHA256(digest) {
 			return fmt.Errorf("%s is not lowercase SHA-256", label)
@@ -101,8 +102,8 @@ func (task ManifestTask) Validate() error {
 	if !validOCIDigest(task.EnvironmentImageDigest) || !validOCIDigest(task.GraderImageDigest) {
 		return errors.New("manifest task image digest is invalid")
 	}
-	if task.EnvironmentPlatform != "linux/amd64" {
-		return errors.New("environment_platform must be linux/amd64")
+	if task.EnvironmentPlatform != "linux/amd64" || task.GraderPlatform != "linux/amd64" {
+		return errors.New("candidate and grader platforms must be linux/amd64")
 	}
 	return nil
 }
@@ -292,9 +293,15 @@ func (evidence AuthoringEvidence) Validate() error {
 func (evidence GraderEvidence) Validate() error {
 	if !validSHA256(evidence.GraderContractSHA256) || !validSHA256(evidence.GraderBundleSHA256) ||
 		!validOCIDigest(evidence.GraderImageDigest) ||
-		!validSHA256(evidence.TestManifestSHA256) || !validSHA256(evidence.GraderIntegrityBeforeSHA256) ||
+		evidence.GraderPlatform != "linux/amd64" ||
+		!validSHA256(evidence.TestManifestSHA256) || !validSHA256(evidence.GraderPlanSHA256) ||
+		!validSHA256(evidence.ResourceProfileSHA256) || !validSHA256(evidence.ExecutionReceiptRootSHA256) ||
+		!validSHA256(evidence.GraderIntegrityBeforeSHA256) ||
 		!validSHA256(evidence.GraderIntegrityAfterSHA256) || !validIdentifier(evidence.Build.CommandID, 80) {
 		return errors.New("grader evidence identity is invalid")
+	}
+	if evidence.ExecutionReceiptCount > uint32(len(requiredTestGroups)+1) {
+		return errors.New("grader execution receipt count is outside contract bounds")
 	}
 	if len(evidence.TestGroups) != len(requiredTestGroups) {
 		return errors.New("grader test groups are incomplete")
@@ -319,7 +326,11 @@ func (evidence GraderEvidence) resolved() bool {
 			return false
 		}
 	}
-	return true
+	wantReceipts := uint32(len(requiredTestGroups))
+	if evidence.Build.Required {
+		wantReceipts++
+	}
+	return evidence.ExecutionReceiptCount == wantReceipts
 }
 
 func (evidence TaskEvidence) Validate() error {
@@ -345,7 +356,10 @@ func (evidence TaskEvidence) Validate() error {
 		}
 		if evidence.Grader.GraderBundleSHA256 != evidence.Task.GraderBundleSHA256 ||
 			evidence.Grader.GraderImageDigest != evidence.Task.GraderImageDigest ||
-			evidence.Grader.TestManifestSHA256 != evidence.Task.TestManifestSHA256 {
+			evidence.Grader.GraderPlatform != evidence.Task.GraderPlatform ||
+			evidence.Grader.TestManifestSHA256 != evidence.Task.TestManifestSHA256 ||
+			evidence.Grader.GraderPlanSHA256 != evidence.Task.GraderPlanSHA256 ||
+			evidence.Grader.ResourceProfileSHA256 != evidence.Task.ResourceProfileSHA256 {
 			return errors.New("grader evidence does not match manifest task")
 		}
 	}
@@ -468,8 +482,16 @@ func (evidence TaskEvidence) ValidateAgainst(manifest RunManifest, validatorTick
 		evidence.Authoring.Model.InferenceGrantSHA256 != manifest.InferenceGrantSHA256 {
 		return errors.New("task evidence inference grant does not match manifest")
 	}
-	if evidence.Grader != nil && evidence.Grader.GraderContractSHA256 != manifest.GraderContractSHA256 {
-		return errors.New("task evidence grader contract does not match manifest")
+	if evidence.Grader != nil {
+		if evidence.Grader.GraderContractSHA256 != manifest.GraderContractSHA256 ||
+			evidence.Grader.GraderBundleSHA256 != selected.GraderBundleSHA256 ||
+			evidence.Grader.GraderImageDigest != selected.GraderImageDigest ||
+			evidence.Grader.GraderPlatform != selected.GraderPlatform ||
+			evidence.Grader.TestManifestSHA256 != selected.TestManifestSHA256 ||
+			evidence.Grader.GraderPlanSHA256 != selected.GraderPlanSHA256 ||
+			evidence.Grader.ResourceProfileSHA256 != selected.ResourceProfileSHA256 {
+			return errors.New("task evidence grader authority does not match manifest")
+		}
 	}
 	return nil
 }

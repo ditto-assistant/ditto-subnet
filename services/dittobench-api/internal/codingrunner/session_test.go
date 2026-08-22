@@ -657,6 +657,40 @@ func TestCapsuleAndCreatedFileModesIgnoreProcessUmask(t *testing.T) {
 	}
 }
 
+func TestFreezeRejectsNoncanonicalCommandSideEffects(t *testing.T) {
+	tests := map[string]struct {
+		mutate   func(*Session) error
+		wantCode string
+	}{
+		"binary modified file": {
+			mutate: func(session *Session) error {
+				return os.WriteFile(filepath.Join(session.root, "src", "parser.py"), []byte{0xff, 0xfe}, 0o644)
+			},
+			wantCode: "binary_change",
+		},
+		"noncanonical created-file mode": {
+			mutate: func(session *Session) error {
+				return os.WriteFile(filepath.Join(session.root, "src", "helper.py"), []byte("value = True\n"), 0o600)
+			},
+			wantCode: "mode_change",
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			session, _ := newFixtureSession(t, nil)
+			defer session.Close()
+			if err := test.mutate(session); err != nil {
+				t.Fatal(err)
+			}
+			frozen := session.Freeze()
+			if frozen.Submission != nil || frozen.Failure == nil || frozen.Failure.Kind != "candidate_integrity" ||
+				frozen.Failure.Code != test.wantCode {
+				t.Fatalf("freeze=%#v", frozen)
+			}
+		})
+	}
+}
+
 func TestExpiredCapabilityStillProducesFrozenEvidence(t *testing.T) {
 	session, _ := newFixtureSession(t, nil)
 	session.now = func() time.Time { return session.manifest.Deadline.Add(time.Second) }

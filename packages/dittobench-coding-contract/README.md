@@ -4,9 +4,11 @@ This directory is the language-neutral public authority for DittoBench Coding
 wire examples and canonical digest vectors. Contract v1 is shadow-only and
 hard-codes `weight_eligible=false`.
 
-Python, Go, and Rust consumers must parse the same files under `testdata/` and
-produce the recorded canonical SHA-256 roots. A contract change is incomplete
-until all three consumers pass the same vectors and boundary cases.
+Consumers verify the vectors they are authorized to see. Python and Go verify
+run manifests, evidence, grader plans, resource profiles, and ordered execution
+receipts. The Rust miner verifies only miner-facing seed/run and memory vectors;
+it must never receive grader plans or receipts. A contract change is incomplete
+until every affected consumer passes the same relevant vectors and boundaries.
 
 The vectors contain synthetic identifiers and digests only. Private catalog
 records, repository bundles, hidden tests, policy labels, provider credentials,

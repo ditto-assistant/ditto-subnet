@@ -123,6 +123,11 @@ authoring-transcript digest/byte count. The later
 pristine grader must replay these exact full-file transitions and verify every
 digest; it must not fuzzy-apply a miner-provided diff.
 
+Canonical cloning preserves the distinction between absent and present-empty
+arrays/bytes. A no-change attempt therefore freezes as empty `changed_paths`
+and `changes` arrays, while an added or modified empty file retains non-null
+empty content. Both remain replayable and score as ordinary repair outcomes.
+
 If freeze detects a protected path, undeclared add/delete, directory/mode
 change, symlink, special file, resource overflow, or previously latched command
 mutation, it returns bounded failure identity instead of a partial submission.

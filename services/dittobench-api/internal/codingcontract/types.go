@@ -41,7 +41,9 @@ type ManifestTask struct {
 	ResourceProfileSHA256  string `json:"resource_profile_sha256"`
 	GraderBundleSHA256     string `json:"grader_bundle_sha256"`
 	GraderImageDigest      string `json:"grader_image_digest"`
+	GraderPlatform         string `json:"grader_platform"`
 	TestManifestSHA256     string `json:"test_manifest_sha256"`
+	GraderPlanSHA256       string `json:"grader_plan_sha256"`
 }
 
 type RunManifest struct {
@@ -169,7 +171,12 @@ type GraderEvidence struct {
 	GraderContractSHA256        string              `json:"grader_contract_sha256"`
 	GraderBundleSHA256          string              `json:"grader_bundle_sha256"`
 	GraderImageDigest           string              `json:"grader_image_digest"`
+	GraderPlatform              string              `json:"grader_platform"`
 	TestManifestSHA256          string              `json:"test_manifest_sha256"`
+	GraderPlanSHA256            string              `json:"grader_plan_sha256"`
+	ResourceProfileSHA256       string              `json:"resource_profile_sha256"`
+	ExecutionReceiptRootSHA256  string              `json:"execution_receipt_root_sha256"`
+	ExecutionReceiptCount       uint32              `json:"execution_receipt_count"`
 	GraderIntegrityBeforeSHA256 string              `json:"grader_integrity_before_sha256"`
 	GraderIntegrityAfterSHA256  string              `json:"grader_integrity_after_sha256"`
 	Build                       BuildEvidence       `json:"build"`

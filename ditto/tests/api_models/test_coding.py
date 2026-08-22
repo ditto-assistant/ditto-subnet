@@ -10,6 +10,9 @@ import pytest
 from pydantic import ValidationError
 
 from ditto.api_models.coding import (
+    CodingGraderExecutionReceipt,
+    CodingGraderPlan,
+    CodingGraderResourceProfile,
     CodingRunEvidence,
     CodingRunManifest,
     CodingRunRequest,
@@ -17,6 +20,9 @@ from ditto.api_models.coding import (
     CodingTaskEvidence,
     canonical_digest,
     canonical_json_bytes,
+    grader_execution_receipt_root,
+    grader_plan_digest,
+    grader_resource_profile_digest,
     memory_bundle_digest,
     parse_canonical_json,
     run_evidence_digest,
@@ -73,6 +79,40 @@ def test_evidence_golden_vectors_require_manifest_authority() -> None:
         canonical_digest(task)  # type: ignore[arg-type]
     with pytest.raises(TypeError, match="transport models"):
         canonical_digest(task.model_dump(mode="json"))  # type: ignore[arg-type]
+
+    incomplete = copy.deepcopy(vectors["task_evidence"])
+    incomplete["grader"]["execution_receipt_count"] = 5
+    with pytest.raises(ValidationError, match="passing repair"):
+        parse_canonical_json(CodingTaskEvidence, _body(incomplete))
+
+
+def test_grader_plan_resource_and_receipt_vectors_are_independently_replayable() -> (
+    None
+):
+    vectors = _vectors()
+    plan = parse_canonical_json(CodingGraderPlan, _body(vectors["grader_plan"]))
+    resource = parse_canonical_json(
+        CodingGraderResourceProfile, _body(vectors["grader_resource_profile"])
+    )
+    receipts = [
+        parse_canonical_json(CodingGraderExecutionReceipt, _body(receipt))
+        for receipt in vectors["grader_execution_receipts"]
+    ]
+    assert grader_plan_digest(plan) == vectors["digests"]["grader_plan"]
+    assert (
+        grader_resource_profile_digest(resource)
+        == vectors["digests"]["grader_resource_profile"]
+        == plan.resource_profile_sha256
+    )
+    assert (
+        grader_execution_receipt_root(plan, receipts)
+        == vectors["digests"]["grader_execution_receipt_root"]
+    )
+
+    broken = receipts.copy()
+    broken[1] = broken[1].model_copy(update={"previous_receipt_sha256": "f" * 64})
+    with pytest.raises(ValueError, match="receipt chain"):
+        grader_execution_receipt_root(plan, broken)
 
 
 def test_unknown_fields_are_ignored_and_excluded_from_canonical_digest() -> None:
@@ -288,6 +328,22 @@ def test_run_evidence_replays_against_manifest_and_task_roots() -> None:
     )
     with pytest.raises(ValueError, match="inference grant"):
         task_evidence_digest(changed_grant, "validator-ticket-001", task)
+
+    assert task.grader is not None
+    for field, value in {
+        "grader_bundle_sha256": "1" * 64,
+        "grader_image_digest": "sha256:" + "1" * 64,
+        "grader_platform": "linux/arm64",
+        "test_manifest_sha256": "1" * 64,
+        "grader_plan_sha256": "1" * 64,
+        "resource_profile_sha256": "1" * 64,
+    }.items():
+        changed_grader = task.grader.model_copy(update={field: value})
+        changed_task = task.model_copy(update={"grader": changed_grader})
+        with pytest.raises(
+            (ValueError, ValidationError), match="grader|manifest|linux/amd64"
+        ):
+            task_evidence_digest(manifest, "validator-ticket-001", changed_task)
 
 
 def test_zero_model_attempt_has_canonical_attributable_evidence() -> None:
