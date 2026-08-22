@@ -12,6 +12,8 @@ package metrics
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
+
+	"github.com/ditto-assistant/model-relay/internal/traces"
 )
 
 // Admission lane label values. NOTE: the metric lane vocabulary is
@@ -78,3 +80,71 @@ var (
 		Help: "Validator lease force-expiries declined (platform role; static on a relay).",
 	})
 )
+
+// --- Inference trace capture (internal/traces) ----------------------------
+
+var (
+	TraceRecords = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ditto_inference_trace_records_total",
+		Help: "Inference trace records accepted into the spool, by event, lane and kind.",
+	}, []string{"event", "lane", "kind"})
+
+	TraceRecordBytes = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ditto_inference_trace_record_bytes_total",
+		Help: "Uncompressed JSONL bytes written to the trace spool.",
+	})
+
+	TraceDropped = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ditto_inference_trace_dropped_total",
+		Help: "Trace records dropped instead of blocking an inference call, by reason.",
+	}, []string{"reason"})
+
+	TraceRotations = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ditto_inference_trace_rotations_total",
+		Help: "Trace spool files rotated into the upload queue, by trigger.",
+	}, []string{"reason"})
+
+	TraceUploads = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ditto_inference_trace_uploads_total",
+		Help: "Trace objects successfully stored, by sink.",
+	}, []string{"sink"})
+
+	TraceUploadBytes = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ditto_inference_trace_upload_bytes_total",
+		Help: "Compressed bytes successfully stored, by sink.",
+	}, []string{"sink"})
+
+	TraceUploadFailures = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "ditto_inference_trace_upload_failures_total",
+		Help: "Trace object PUTs that failed after retries, by sink.",
+	}, []string{"sink"})
+
+	TraceSpoolBytes = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "ditto_inference_trace_spool_bytes",
+		Help: "Bytes currently held in the local trace spool (open + ready + compressed).",
+	})
+
+	TraceFilesReleased = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "ditto_inference_trace_files_released_total",
+		Help: "Trace spool files deleted locally after every required sink confirmed them.",
+	})
+)
+
+// TraceMetrics adapts the families above to the traces package hooks.
+func TraceMetrics() *traces.Metrics {
+	return &traces.Metrics{
+		Recorded: func(event, lane, kind string, bytes int64) {
+			TraceRecords.WithLabelValues(event, lane, kind).Inc()
+			TraceRecordBytes.Add(float64(bytes))
+		},
+		Dropped: func(reason string) { TraceDropped.WithLabelValues(reason).Inc() },
+		Rotated: func(reason string, _ int64, _ int64) { TraceRotations.WithLabelValues(reason).Inc() },
+		Uploaded: func(sink string, bytes int64) {
+			TraceUploads.WithLabelValues(sink).Inc()
+			TraceUploadBytes.WithLabelValues(sink).Add(float64(bytes))
+		},
+		UploadFail: func(sink string) { TraceUploadFailures.WithLabelValues(sink).Inc() },
+		SpoolBytes: func(bytes int64) { TraceSpoolBytes.Set(float64(bytes)) },
+		Released:   func(files int64) { TraceFilesReleased.Add(float64(files)) },
+	}
+}

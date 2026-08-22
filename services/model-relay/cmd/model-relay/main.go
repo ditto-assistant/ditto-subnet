@@ -10,6 +10,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -18,16 +19,20 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/ditto-assistant/model-relay/internal/chain"
 	"github.com/ditto-assistant/model-relay/internal/config"
 	"github.com/ditto-assistant/model-relay/internal/inference"
+	"github.com/ditto-assistant/model-relay/internal/metrics"
 	"github.com/ditto-assistant/model-relay/internal/postgres"
 	"github.com/ditto-assistant/model-relay/internal/pprofserver"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/server"
+	"github.com/ditto-assistant/model-relay/internal/tracebackfill"
+	"github.com/ditto-assistant/model-relay/internal/traces"
 	"github.com/ditto-assistant/model-relay/internal/upload"
 )
 
@@ -86,10 +91,91 @@ func newLegacyUploadProxy(target *url.URL) *httputil.ReverseProxy {
 }
 
 func main() {
+	// Subcommands share the binary (the release ships exactly one) but never
+	// the server's flag set: `model-relay trace-backfill ...` is an operator
+	// one-shot, everything else is the relay.
+	if len(os.Args) > 1 && os.Args[1] == "trace-backfill" {
+		if err := runTraceBackfill(os.Args[2:]); err != nil {
+			fmt.Fprintf(os.Stderr, "model-relay trace-backfill: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "model-relay: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// runTraceBackfill exports the historical inference ledgers to the trace
+// sinks (and optionally deletes the exported rows). It reads the same
+// environment as the relay for Postgres and the sinks, so on the host it is
+// `set -a; . .env; set +a; model-relay trace-backfill --spool-dir ...`.
+func runTraceBackfill(args []string) error {
+	fs := flag.NewFlagSet("model-relay trace-backfill", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	spoolDir := fs.String("spool-dir", "", "directory for the backfill's own spool and cursor (REQUIRED; keep it off the live relay spool)")
+	cursorPath := fs.String("cursor", "", "progress file (default <spool-dir>/cursor.json)")
+	until := fs.String("until", "", "export rows started before this RFC3339 time (default now-1h)")
+	batchRows := fs.Int("batch-rows", 5000, "rows per SELECT")
+	lanes := fs.String("lanes", "inference,confirmation", "comma-separated lanes to export")
+	del := fs.Bool("delete", false, "delete exported rows once every required sink holds them (rows younger than --retain-hours, still started, or under an unexpired grant are never deleted)")
+	retainHours := fs.Int("retain-hours", 168, "never delete rows younger than this (floor 24)")
+	drainWait := fs.Duration("drain-wait", 30*time.Minute, "how long to wait for uploads before deleting")
+	rotateBytes := fs.Int64("rotate-bytes", 64<<20, "uncompressed bytes per object")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *spoolDir == "" {
+		return errors.New("--spool-dir is required")
+	}
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		return err
+	}
+	if !cfg.Traces.Enabled {
+		return errors.New("INFERENCE_TRACE_ENABLED and at least one INFERENCE_TRACE_SINK are required")
+	}
+	var untilAt time.Time
+	if *until != "" {
+		untilAt, err = time.Parse(time.RFC3339, *until)
+		if err != nil {
+			return fmt.Errorf("--until: %w", err)
+		}
+	}
+	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slogLevel(cfg.LogLevel)}))
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	bootCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	_, pool, err := postgres.NewClientWithPool(bootCtx, cfg.Postgres)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	sinks, err := buildTraceSinks(cfg.Traces)
+	if err != nil {
+		return err
+	}
+	var laneList []string
+	for _, l := range strings.Split(*lanes, ",") {
+		if l = strings.TrimSpace(l); l != "" {
+			laneList = append(laneList, l)
+		}
+	}
+	summary, err := tracebackfill.Run(ctx, tracebackfill.Options{
+		Pool: pool, Sinks: sinks, SpoolDir: *spoolDir, CursorPath: *cursorPath, Until: untilAt,
+		BatchRows: int32(*batchRows), Lanes: laneList, Delete: *del, Retain: time.Duration(*retainHours) * time.Hour,
+		DrainWait: *drainWait, RotateBytes: *rotateBytes, Logger: logger, Metrics: metrics.TraceMetrics(),
+	})
+	if summary != nil {
+		logger.Info("trace backfill finished",
+			slog.Any("rows_exported", summary.RowsExported),
+			slog.Any("rows_deleted", summary.RowsDeleted),
+			slog.Int("batches", summary.Batches),
+			slog.Int64("dropped", summary.Dropped))
+	}
+	return err
 }
 
 func slogLevel(name string) slog.Level {
@@ -171,6 +257,22 @@ func run() error {
 			logger.Error("inference policy refresh stopped", slog.String("error", refreshErr.Error()))
 		}
 	}()
+	// Inference trace capture: spool on local disk, ship to every sink.
+	// Boot fails loudly if a configured sink cannot be reached -- a relay that
+	// silently captures nothing is worse than one that refuses to start --
+	// and the spooler/uploader are drained AFTER the HTTP server so the last
+	// in-flight settlements are recorded before the process exits.
+	var recorder traces.Recorder
+	var spooler *traces.Spooler
+	var uploader *traces.Uploader
+	if cfg.Traces.Enabled {
+		var err error
+		spooler, uploader, err = startTraceCapture(ctx, bootCtx, cfg, logger, commit)
+		if err != nil {
+			return err
+		}
+		recorder = spooler
+	}
 	handlers := inference.NewHandlers(&inference.Deps{
 		Cfg:      cfg,
 		Logger:   logger,
@@ -179,6 +281,7 @@ func run() error {
 		Permits:  prober,
 		Upstream: inference.NewUpstreamClient(cfg.Inference),
 		Settings: settings,
+		Traces:   recorder,
 	})
 	legacyURL, err := url.Parse(cfg.Upload.LegacyBaseURL)
 	if err != nil {
@@ -196,5 +299,93 @@ func run() error {
 
 	srv := server.New(cfg, logger, pool, prober, commit,
 		server.WithInferenceHandlers(handlers), server.WithUploadHandlers(uploadHandlers))
-	return srv.Run(ctx)
+	runErr := srv.Run(ctx)
+	if spooler != nil {
+		// The server has drained: every settle has run. Flush, rotate and make
+		// one last shipping pass inside pm2's kill_timeout budget; whatever
+		// does not make it stays on disk for the next process.
+		drainCtx, cancelDrain := context.WithTimeout(context.Background(), traceDrainTimeout)
+		defer cancelDrain()
+		if err := spooler.Close(drainCtx); err != nil {
+			logger.Warn("trace spool close", slog.String("error", err.Error()))
+		}
+		uploader.Drain(drainCtx)
+	}
+	return runErr
+}
+
+// traceDrainTimeout bounds the post-server flush + final upload pass. The
+// server drain itself can take TimeoutSeconds+5 (≤125s); pm2 kills at 135s,
+// so this must stay small.
+const traceDrainTimeout = 8 * time.Second
+
+// startTraceCapture builds the sinks from config, verifies each bucket,
+// recovers any spool left by the previous process and starts shipping.
+func startTraceCapture(ctx, bootCtx context.Context, cfg *config.Config, logger *slog.Logger, commit string) (*traces.Spooler, *traces.Uploader, error) {
+	sinks, err := buildTraceSinks(cfg.Traces)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, sink := range sinks {
+		if err := sink.Ensure(bootCtx); err != nil {
+			return nil, nil, fmt.Errorf("trace sink %s: %w", sink.Name(), err)
+		}
+	}
+	spooler, err := traces.NewSpooler(traces.SpoolOptions{
+		Dir:            cfg.Traces.SpoolDir,
+		RotateBytes:    cfg.Traces.RotateBytes,
+		RotateInterval: cfg.Traces.RotateInterval,
+		MaxSpoolBytes:  cfg.Traces.MaxSpoolBytes,
+		QueueSize:      cfg.Traces.QueueSize,
+		Instance:       fmt.Sprintf("%s:%d", hostnameOr("relay"), cfg.Port),
+		Commit:         commit,
+		Logger:         logger,
+		Metrics:        metrics.TraceMetrics(),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	uploader, err := traces.NewUploader(spooler, traces.UploaderOptions{
+		Sinks:   sinks,
+		Logger:  logger,
+		Metrics: metrics.TraceMetrics(),
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	uploader.Start(ctx)
+	names := make([]string, 0, len(sinks))
+	for _, s := range sinks {
+		names = append(names, s.Name())
+	}
+	logger.Info("inference trace capture enabled",
+		slog.String("spool_dir", cfg.Traces.SpoolDir),
+		slog.Any("sinks", names),
+		slog.Bool("embedding_vectors", cfg.Traces.EmbeddingVectors))
+	return spooler, uploader, nil
+}
+
+func buildTraceSinks(tc config.TraceConfig) ([]traces.Sink, error) {
+	client := &http.Client{Timeout: 10 * time.Minute}
+	sinks := make([]traces.Sink, 0, len(tc.Sinks))
+	for _, sc := range tc.Sinks {
+		sink, err := traces.NewS3Sink(traces.S3Config{
+			Name: sc.Name, Endpoint: sc.Endpoint, Region: sc.Region, Bucket: sc.Bucket,
+			AccessKeyID: sc.AccessKeyID, SecretAccessKey: sc.SecretAccessKey,
+			Required: sc.Required, PathStyle: sc.PathStyle, Prefix: sc.Prefix,
+		}, client)
+		if err != nil {
+			return nil, err
+		}
+		sinks = append(sinks, sink)
+	}
+	return sinks, nil
+}
+
+func hostnameOr(def string) string {
+	host, err := os.Hostname()
+	if err != nil || host == "" {
+		return def
+	}
+	return host
 }

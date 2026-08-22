@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
+	"github.com/ditto-assistant/model-relay/internal/traces"
 )
 
 // validatedEmbeddingPayload mirrors _validated_embedding_payload: the body
@@ -153,7 +154,7 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		relayhttp.WriteHTTPError(w, r, http.StatusUnauthorized, "invalid inference proof", nil)
 		return
 	}
-	_, decline, err := beginInferenceRequest(ctx, tx, q, beginParams{
+	result, decline, err := beginInferenceRequest(ctx, tx, q, beginParams{
 		grantID:             headers.grant,
 		nonce:               headers.nonce,
 		bearer:              strings.TrimPrefix(headers.authorization, "Bearer "),
@@ -171,6 +172,8 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if decline != nil {
+		d.traceDeclined(r, headers, traces.LaneInference, traces.KindEmbedding, body, now,
+			traceInferenceGrant(&grantSnapshot, cfg.EmbeddingModel), decline.String())
 		relayhttp.WriteDecline(w, r, *decline, relayhttp.LaneEmbedding)
 		return
 	}
@@ -268,6 +271,12 @@ func (d *Deps) handleEmbeddings(w http.ResponseWriter, r *http.Request) {
 		}()
 	}
 	settle()
+	d.traceEmbeddingSettled(embeddingTrace{
+		r: r, headers: headers, body: body, receivedAt: now, grant: &result.grant, model: cfg.EmbeddingModel,
+		inputs: inputs, outcome: outcome, result: providerResult, callErr: callErr, raw: raw, started: started,
+		deliverable: deliverable, failure: requestFailure, settleErr: settleErr,
+		reserved: result.request.ReservedTokens, chargeable: result.request.MaxChargeableTokens, admittedAt: now,
+	})
 	if settleErr != nil {
 		relayhttp.WriteInternalError(w, r)
 		return

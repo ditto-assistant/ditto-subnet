@@ -51,6 +51,8 @@ locals {
       google_secret_manager_secret.taostats_api_key.secret_id,
       google_secret_manager_secret.hippius_access_key_id.secret_id,
       google_secret_manager_secret.hippius_secret_access_key.secret_id,
+      google_secret_manager_secret.backblaze_key_id.secret_id,
+      google_secret_manager_secret.backblaze_application_key.secret_id,
     ],
     [for s in google_secret_manager_secret.pylon_open_access_token : s.secret_id],
   )
@@ -373,6 +375,43 @@ import {
 import {
   to = google_secret_manager_secret.hippius_secret_access_key
   id = "projects/${var.project}/secrets/platform-hippius-secret-access-key"
+}
+
+# Optional Backblaze B2 (S3-compatible) credentials: the mirror/fallback sink
+# for the inference trace capture (services/model-relay internal/traces).
+# CONTAINER ONLY, like the Hippius pair: operators add versions out of band.
+# The bucket name lives in Ansible (platform_trace_backblaze_bucket); an empty
+# bucket leaves the mirror off and the Hippius primary keeps shipping alone.
+resource "google_secret_manager_secret" "backblaze_key_id" {
+  project   = var.project
+  secret_id = "platform-backblaze-key-id"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+resource "google_secret_manager_secret" "backblaze_application_key" {
+  project   = var.project
+  secret_id = "platform-backblaze-application-key"
+  replication {
+    auto {}
+  }
+  lifecycle {
+    prevent_destroy = true
+  }
+}
+
+import {
+  to = google_secret_manager_secret.backblaze_key_id
+  id = "projects/${var.project}/secrets/platform-backblaze-key-id"
+}
+
+import {
+  to = google_secret_manager_secret.backblaze_application_key
+  id = "projects/${var.project}/secrets/platform-backblaze-application-key"
 }
 
 # Let the runtime SA read every platform secret above.

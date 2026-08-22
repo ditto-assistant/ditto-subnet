@@ -995,6 +995,7 @@ type chatCompletionResult struct {
 	upstreamAttempts   int
 	openrouterAttempts int
 	fallbackPhase      int
+	phases             []phaseTrace // every phase tried, in order (trace capture)
 }
 
 type chatProviderExhausted struct {
@@ -1005,6 +1006,22 @@ type chatProviderExhausted struct {
 	timedOut           bool
 	upstreamProvider   string
 	routeObservable    bool
+	phases             []phaseTrace
+}
+
+// phaseTrace is what one provider-route phase sent and got back, kept for
+// the inference trace capture (internal/traces). It is never consulted by
+// accounting or routing: those read the typed fields above.
+type phaseTrace struct {
+	phase     int
+	route     string
+	payload   []byte // the JSON actually POSTed (provider preferences included)
+	status    int
+	headers   http.Header
+	body      []byte // raw provider body, pre-sanitization (nil on transport failure)
+	attempts  int
+	errorCode string
+	timedOut  bool
 }
 
 func (e *chatProviderExhausted) Error() string { return e.terminalErrorCode }
@@ -1043,8 +1060,15 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 	lastPhase := 0
 	lastProvider := ""
 	routeObservable := false
+	var traced []phaseTrace
 	for _, spec := range phases {
 		lastPhase = spec.phase
+		route := "openrouter"
+		if spec.phase == 1 {
+			route = "reliable"
+		}
+		sentPayload, _ := json.Marshal(spec.payload)
+		trace := phaseTrace{phase: spec.phase, route: route, payload: sentPayload}
 		result, callErr := postProviderWithRetry(ctx, client, cfg.UpstreamURL, spec.payload, headers,
 			cfg.ResponseBodyBytes, cfg.TimeoutSeconds, true, "", sleep)
 		if callErr != nil {
@@ -1056,11 +1080,16 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 				lastCode = "provider_transport"
 			}
 			routeObservable = true
+			trace.attempts, trace.timedOut, trace.errorCode = callErr.attempts, callErr.timedOut, lastCode
+			traced = append(traced, trace)
 			continue
 		}
 		totalAttempts += result.attempts
+		trace.attempts, trace.status, trace.headers, trace.body = result.attempts, result.status, result.header, result.body
 		if result.bodyOverLimit {
 			lastCode = "response_too_large"
+			trace.errorCode = lastCode
+			traced = append(traced, trace)
 			continue
 		}
 		decoded, _ := decodeJSONNumbers(result.body)
@@ -1072,16 +1101,22 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 			lastTimedOut = result.status == 408 || result.status == 504
 			lastCode = "upstream_http_" + strconv.Itoa(result.status)
 			routeObservable = routeObservable || providerRejectionIsRouteObservable(result.status)
+			trace.errorCode, trace.timedOut = lastCode, lastTimedOut
+			traced = append(traced, trace)
 			continue
 		}
 		routeObservable = true
 		decodedMap, ok := decoded.(map[string]any)
 		if !ok {
 			lastCode = "invalid_provider_response"
+			trace.errorCode = lastCode
+			traced = append(traced, trace)
 			continue
 		}
 		if m, ok := decodedMap["model"].(string); !ok || m != model {
 			lastCode = "provider_identity_mismatch"
+			trace.errorCode = lastCode
+			traced = append(traced, trace)
 			continue
 		}
 		phaseResult, herr := func() (*chatCompletionResult, *httpError) {
@@ -1127,11 +1162,15 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 		}()
 		if herr != nil {
 			lastCode = phaseErrorCode(herr)
+			trace.errorCode = lastCode
+			traced = append(traced, trace)
 			continue
 		}
+		traced = append(traced, trace)
 		phaseResult.upstreamAttempts = totalAttempts
 		phaseResult.openrouterAttempts = routerAttempts
 		phaseResult.fallbackPhase = spec.phase
+		phaseResult.phases = traced
 		return phaseResult, nil
 	}
 	return nil, &chatProviderExhausted{
@@ -1142,6 +1181,7 @@ func completeChatWithRecovery(ctx context.Context, client *http.Client, cfg conf
 		timedOut:           lastTimedOut,
 		upstreamProvider:   lastProvider,
 		routeObservable:    routeObservable,
+		phases:             traced,
 	}
 }
 

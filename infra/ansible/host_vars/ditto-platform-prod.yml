@@ -34,6 +34,17 @@ platform_bucket: ditto-platform-agents-prod
 platform_hippius_bucket: ditto-subnet
 platform_hippius_endpoint: "https://eu-central-1.hippius.com"
 
+# Inference trace capture: the Go relays spool every brokered call (bodies,
+# provider exchange, usage, grant context) under /opt/ditto-platform-relay/
+# traces and ship it to the PRIVATE Hippius bucket ditto-subnet-traces --
+# a different bucket from the avatars on purpose (different audience, a
+# different partition scheme, and a graded benchmark catalog burns on
+# exposure). Same hip_ credentials; the relay creates the bucket if it is
+# missing. Add the Backblaze mirror by pinning platform_trace_backblaze_*
+# once platform-backblaze-key-id / -application-key have versions.
+platform_trace_enabled: true
+platform_trace_hippius_bucket: ditto-subnet-traces
+
 # Route /api/v1/inference/* to the ditto-api-relay-{1,2} pm2 processes instead
 # of the single-core `ditto-api` event loop. These ports mirror RELAY_PORTS in
 # ditto-platform scripts/ecosystem.config.js; the relays are already running and

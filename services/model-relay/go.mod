@@ -8,6 +8,7 @@ require (
 	github.com/ChainSafe/go-schnorrkel v1.1.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.9.2
+	github.com/klauspost/compress v1.17.9
 	github.com/mr-tron/base58 v1.3.0
 	github.com/omniaura/go-kit/tasker v0.0.0-20260709222828-4e0881e5cf86
 	github.com/prometheus/client_golang v1.20.5
@@ -35,7 +36,6 @@ require (
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
-	github.com/klauspost/compress v1.17.9 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/mimoo/StrobeGo v0.0.0-20181016162300-f8f6d4d2b643 // indirect
