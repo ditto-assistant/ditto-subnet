@@ -75,7 +75,9 @@ func TestChatSettlementIsTracedWithBodiesAndProviderExchange(t *testing.T) {
 
 	nonce := uuid.New()
 	body := []byte(chatBody)
-	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), f.signedProxyHeaders(1, nonce, body)))
+	headers := f.signedProxyHeaders(1, nonce, body)
+	headers["X-Ditto-Trace-Context"] = `{"v":1,"run_id":"run-42","agent_id":"` + f.agentID.String() + `","case_id":"web_search-0007","case_source":"in_flight","case_verified":true,"cases_in_flight":["web_search-0007"]}`
+	w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), headers))
 	if w.Code != 200 {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}
@@ -86,6 +88,9 @@ func TestChatSettlementIsTracedWithBodiesAndProviderExchange(t *testing.T) {
 	r := recs[0]
 	if r.Schema != traces.SchemaVersion || r.Event != traces.EventSettled || r.Relay.Instance != "test-relay:8010" || r.Relay.Commit != "c0ffee" {
 		t.Fatalf("envelope: %+v", r)
+	}
+	if r.Request.RunID != "run-42" || r.Request.CaseID != "web_search-0007" || !strings.Contains(string(r.Request.Context), `"case_verified":true`) {
+		t.Fatalf("broker trace context must be recorded verbatim and lifted: run=%q case=%q ctx=%s", r.Request.RunID, r.Request.CaseID, r.Request.Context)
 	}
 	if r.Request.Lane != "inference" || r.Request.Kind != "chat" || r.Request.GrantID != f.grantID.String() || r.Request.Nonce != nonce.String() || r.Request.Generation != 1 {
 		t.Fatalf("request: %+v", r.Request)
@@ -132,6 +137,8 @@ func TestDeclineIsTracedWithReason(t *testing.T) {
 	nonce := uuid.New()
 	body := []byte(chatBody)
 	headers := f.signedProxyHeaders(1, nonce, body)
+	// An oversized or non-object context is ignored, never a 4xx.
+	headers["X-Ditto-Trace-Context"] = `[1,2,3]`
 	if w := serve(f.deps, proxyRequest("/api/v1/inference/chat/completions", string(body), headers)); w.Code != 200 {
 		t.Fatalf("first call: %d %s", w.Code, w.Body.String())
 	}
@@ -146,6 +153,9 @@ func TestDeclineIsTracedWithReason(t *testing.T) {
 	declined := recs[1]
 	if declined.Event != traces.EventDeclined || declined.Admission == nil || declined.Admission.Decline != "nonce_replayed" {
 		t.Fatalf("declined record: %+v %+v", declined.Event, declined.Admission)
+	}
+	if len(recs[0].Request.Context) != 0 || recs[0].Request.CaseID != "" {
+		t.Fatalf("non-object context must be dropped: %s", recs[0].Request.Context)
 	}
 	if declined.Grant == nil || declined.Grant.AgentID != f.agentID.String() || string(declined.Request.Body) != chatBody {
 		t.Fatalf("declined record must keep grant + body: %+v", declined)

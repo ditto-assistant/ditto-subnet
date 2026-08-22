@@ -28,6 +28,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -203,6 +204,12 @@ type brokerSession struct {
 	caseCapabilities     map[string]uint64
 	caseCapabilityTokens map[uint64]string
 	caseIDs              map[string]uint64
+	// runCases is the set of ordinary /run cases currently in flight on this
+	// session (refcounted: the scorer may re-enter a case id on retry). It is
+	// attribution evidence for the inference trace capture only -- never an
+	// admission or accounting input -- and it is what lets a concurrent v10+
+	// run still tell the relay which cases a call could belong to.
+	runCases map[string]int
 	// Session-scoped v10+ tool provenance. Concurrent /run opens no exclusive
 	// case windows, so every ordinary chat completion is admitted at
 	// caseGeneration 0: its model-emitted tool calls are recorded here,
@@ -2123,6 +2130,7 @@ func (a brokerConfirmationAuthorizer) Authorize(
 	session.mu.Lock()
 	grant, ok := session.confirmationGrants[lane]
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
+	traceCtx := traceContextLocked(session, session.activeCaseGeneration, lane, "")
 	active := session.confirmationSession && session.expiresAt.After(time.Now())
 	session.mu.Unlock()
 	if !ok || !active || request.URL.String() != grant.ProxyURL || len(privateKey) != ed25519.PrivateKeySize {
@@ -2143,6 +2151,9 @@ func (a brokerConfirmationAuthorizer) Authorize(
 	request.Header.Set("X-Ditto-Nonce", nonce)
 	request.Header.Set("X-Ditto-Requested-At", requested)
 	request.Header.Set("X-Ditto-Proof", base64.RawURLEncoding.EncodeToString(ed25519.Sign(privateKey, []byte(message))))
+	if traceCtx != "" {
+		request.Header.Set(traceContextHeader, traceCtx)
+	}
 	return nil
 }
 
@@ -3603,6 +3614,7 @@ func (b *inferenceBroker) forwardPlatformEmbedding(
 		dimensions = embeddingDimensions
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
+	traceCtx := traceContextLocked(session, session.activeCaseGeneration, "", "")
 	session.mu.Unlock()
 	body, err := json.Marshal(platformEmbeddingRequest{
 		Model: model, Input: inputs,
@@ -3634,6 +3646,9 @@ func (b *inferenceBroker) forwardPlatformEmbedding(
 	upstream.Header.Set("X-Ditto-Nonce", nonce)
 	upstream.Header.Set("X-Ditto-Requested-At", requested)
 	upstream.Header.Set("X-Ditto-Proof", proof)
+	if traceCtx != "" {
+		upstream.Header.Set(traceContextHeader, traceCtx)
+	}
 	// Count every signed dispatch before transport. A request can commit its
 	// Platform reservation and then lose its response, or still be in provider
 	// flight while a concurrent sibling receives a terminal budget decline.
@@ -4008,6 +4023,7 @@ func (b *inferenceBroker) proxy(
 	}
 	privateKey := append(ed25519.PrivateKey(nil), session.privateKey...)
 	currentChargeUpperBound := platformChatChargeUpperBound(body, maxOutputTokens)
+	traceCtx := traceContextLocked(session, caseGeneration, "", r.Header.Get(harnessCaseHeader))
 	session.requests++
 	if caseGeneration != 0 {
 		snapshot := session.caseSnapshots[caseGeneration]
@@ -4098,6 +4114,9 @@ func (b *inferenceBroker) proxy(
 			req.Header.Set("X-Ditto-Nonce", nonce)
 			req.Header.Set("X-Ditto-Requested-At", requested)
 			req.Header.Set("X-Ditto-Proof", proof)
+			if traceCtx != "" {
+				req.Header.Set(traceContextHeader, traceCtx)
+			}
 			// Count before transport for the same reason as embedding dispatches:
 			// concurrent or response-lost admissions must remain in the
 			// conservative upper bound when a sibling receives 4102/4104.
@@ -4461,6 +4480,124 @@ type brokerCaseSnapshot struct {
 // beginCaseSnapshot advances the source-bound generation before one ordinary
 // v9 case starts. Requests admitted before this point remain attached to the
 // preceding generation even if their provider recovery finishes later.
+// Inference trace context. Every request the broker forwards to the platform
+// relay carries X-Ditto-Trace-Context: what this broker knows about WHICH run,
+// agent, slot and benchmark case the call serves, so the relay's trace capture
+// can file the call as training data instead of as an anonymous completion.
+//
+// Attribution is best-effort and honest about its source: an exclusive case
+// window (v9 serial / confirmation reader) names the case exactly; under
+// concurrent /run the broker reports the cases in flight and, when the
+// harness sent X-Ditto-Case-Id, that claim (verified only if it names an
+// in-flight case). None of this feeds admission, scoring or accounting; the
+// relay records it verbatim and the proof does not cover it.
+const (
+	traceContextHeader = "X-Ditto-Trace-Context"
+	harnessCaseHeader  = "X-Ditto-Case-Id"
+	traceContextMaxIn  = 64 // cases_in_flight is capped (case_concurrency max is 64)
+)
+
+type traceContext struct {
+	Version        int      `json:"v"`
+	RunID          string   `json:"run_id,omitempty"`
+	SessionID      string   `json:"session_id,omitempty"`
+	AgentID        string   `json:"agent_id,omitempty"`
+	SlotID         string   `json:"slot_id,omitempty"`
+	BenchVersion   int      `json:"bench_version,omitempty"`
+	Lane           string   `json:"lane,omitempty"` // confirmation lane when applicable
+	CaseID         string   `json:"case_id,omitempty"`
+	CaseSource     string   `json:"case_source,omitempty"` // window | claim | in_flight
+	CaseVerified   bool     `json:"case_verified"`
+	ClaimedCaseID  string   `json:"claimed_case_id,omitempty"`
+	CaseGeneration uint64   `json:"case_generation,omitempty"`
+	CasesInFlight  []string `json:"cases_in_flight,omitempty"`
+}
+
+// traceContextLocked builds the header value. Caller holds session.mu.
+func traceContextLocked(session *brokerSession, caseGeneration uint64, lane, claimed string) string {
+	tc := traceContext{
+		Version:        1,
+		RunID:          session.boundRunID,
+		SessionID:      session.id,
+		AgentID:        session.ticketAgentID,
+		SlotID:         session.ticketSlotID,
+		BenchVersion:   session.benchVersion,
+		Lane:           lane,
+		CaseGeneration: caseGeneration,
+	}
+	if len(session.runCases) > 0 {
+		tc.CasesInFlight = make([]string, 0, len(session.runCases))
+		for caseID := range session.runCases {
+			tc.CasesInFlight = append(tc.CasesInFlight, caseID)
+		}
+		sort.Strings(tc.CasesInFlight)
+		if len(tc.CasesInFlight) > traceContextMaxIn {
+			tc.CasesInFlight = tc.CasesInFlight[:traceContextMaxIn]
+		}
+	}
+	claimed = strings.TrimSpace(claimed)
+	if len(claimed) > 128 {
+		claimed = claimed[:128]
+	}
+	tc.ClaimedCaseID = claimed
+	switch {
+	case caseGeneration != 0 && session.activeCaseGeneration == caseGeneration && session.activeCaseID != "":
+		tc.CaseID, tc.CaseSource, tc.CaseVerified = session.activeCaseID, "window", true
+	case claimed != "" && session.runCases[claimed] > 0:
+		tc.CaseID, tc.CaseSource, tc.CaseVerified = claimed, "claim", true
+	case claimed != "":
+		tc.CaseID, tc.CaseSource = claimed, "claim"
+	case len(session.runCases) == 1:
+		for caseID := range session.runCases {
+			tc.CaseID, tc.CaseSource, tc.CaseVerified = caseID, "in_flight", true
+		}
+	}
+	encoded, err := json.Marshal(tc)
+	if err != nil {
+		return ""
+	}
+	return string(encoded)
+}
+
+// beginRunCase marks caseID in flight on the session for trace attribution.
+// Returns false when the session is unknown (the scorer ignores that: the
+// run proceeds, the traces are merely less attributed).
+func (b *inferenceBroker) beginRunCase(id, caseID string) bool {
+	if caseID == "" {
+		return false
+	}
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return false
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.runCases == nil {
+		session.runCases = make(map[string]int)
+	}
+	session.runCases[caseID]++
+	return true
+}
+
+// endRunCase releases one beginRunCase.
+func (b *inferenceBroker) endRunCase(id, caseID string) {
+	b.mu.RLock()
+	session := b.sessions[id]
+	b.mu.RUnlock()
+	if session == nil {
+		return
+	}
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.runCases[caseID] <= 1 {
+		delete(session.runCases, caseID)
+		return
+	}
+	session.runCases[caseID]--
+}
+
 func (b *inferenceBroker) beginCaseSnapshot(id string, caseIDs ...string) (uint64, brokerCaseSnapshot, error) {
 	b.mu.RLock()
 	session := b.sessions[id]

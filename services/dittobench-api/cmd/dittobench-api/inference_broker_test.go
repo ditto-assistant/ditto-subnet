@@ -3505,3 +3505,86 @@ func TestToolRouteWithoutProvenanceLeavesSessionLedgerUntouched(t *testing.T) {
 		t.Fatalf("unbound route must not book attempts: %+v", evidence)
 	}
 }
+
+func TestInferenceBrokerStampsTraceContextForRelayCapture(t *testing.T) {
+	var seen []traceContext
+	var mu sync.Mutex
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw := r.Header.Get(traceContextHeader)
+		if raw == "" {
+			t.Errorf("missing %s", traceContextHeader)
+		}
+		var tc traceContext
+		if err := json.Unmarshal([]byte(raw), &tc); err != nil {
+			t.Errorf("trace context is not JSON: %v", err)
+		}
+		mu.Lock()
+		seen = append(seen, tc)
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"usage":{"prompt_tokens":3,"completion_tokens":4},"choices":[]}`))
+	}))
+	defer upstream.Close()
+	broker := newInferenceBroker(1)
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSession(t, broker, prepared, proxyURL)
+	sessionID := prepared["session_id"]
+	runID := claimAndBindBrokerSession(t, broker, sessionID, "192.0.2.10", protocol.BenchVersionV6)
+
+	call := func(claim string) {
+		t.Helper()
+		request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"qwen/qwen3-32b","max_tokens":32}`))
+		request.RemoteAddr = "192.0.2.10:4321"
+		request.SetPathValue("rest", "v1/chat/completions")
+		if claim != "" {
+			request.Header.Set(harnessCaseHeader, claim)
+		}
+		recorder := httptest.NewRecorder()
+		broker.handle(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("proxy status = %d: %s", recorder.Code, recorder.Body.String())
+		}
+	}
+
+	// 1. One case in flight: attributed exactly without any harness claim.
+	if !broker.beginRunCase(sessionID, "web_search-0001") {
+		t.Fatal("beginRunCase refused a live session")
+	}
+	call("")
+	// 2. Two in flight: only a candidate set, unless the harness claims one.
+	broker.beginRunCase(sessionID, "web_search-0002")
+	call("")
+	call("web_search-0002")
+	call("not-in-flight")
+	broker.endRunCase(sessionID, "web_search-0001")
+	broker.endRunCase(sessionID, "web_search-0002")
+	// 3. Nothing in flight: run/agent context only.
+	call("")
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(seen) != 5 {
+		t.Fatalf("want 5 upstream calls, got %d", len(seen))
+	}
+	for i, tc := range seen {
+		if tc.Version != 1 || tc.RunID != runID || tc.SessionID != sessionID || tc.BenchVersion != protocol.BenchVersionV6 {
+			t.Fatalf("call %d envelope: %+v", i, tc)
+		}
+	}
+	if seen[0].CaseID != "web_search-0001" || seen[0].CaseSource != "in_flight" || !seen[0].CaseVerified {
+		t.Fatalf("single in-flight case must attribute exactly: %+v", seen[0])
+	}
+	if seen[1].CaseID != "" || len(seen[1].CasesInFlight) != 2 || seen[1].CaseVerified {
+		t.Fatalf("two in flight without a claim is a candidate set: %+v", seen[1])
+	}
+	if seen[2].CaseID != "web_search-0002" || seen[2].CaseSource != "claim" || !seen[2].CaseVerified {
+		t.Fatalf("a claim naming an in-flight case is verified: %+v", seen[2])
+	}
+	if seen[3].CaseID != "not-in-flight" || seen[3].CaseSource != "claim" || seen[3].CaseVerified {
+		t.Fatalf("a claim naming an unknown case is recorded but unverified: %+v", seen[3])
+	}
+	if seen[4].CaseID != "" || len(seen[4].CasesInFlight) != 0 || seen[4].ClaimedCaseID != "" {
+		t.Fatalf("nothing in flight: %+v", seen[4])
+	}
+}
