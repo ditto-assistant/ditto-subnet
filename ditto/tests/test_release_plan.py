@@ -208,10 +208,16 @@ def test_coding_contract_models_select_scorer_and_validator_stack(
     ) == {"dittobench_api", "validator", "validator_stack"}
 
 
-def test_validator_coding_inference_model_is_release_owned(
-    components, ignored_paths
+@pytest.mark.parametrize(
+    "path",
+    [
+        "ditto/api_models/coding_inference.py",
+        "ditto/api_models/coding_inference_grants.py",
+    ],
+)
+def test_validator_coding_inference_models_are_release_owned(
+    components, ignored_paths, path: str
 ) -> None:
-    path = "ditto/api_models/coding_inference.py"
     assert selected(components, ignored_paths, path) == {
         "validator",
         "validator_stack",

@@ -194,6 +194,18 @@
       "related": ["coding-repair-research", "dittobench-scoring", "release-delivery"]
     },
     {
+      "id": "coding-inference-grants",
+      "title": "Shadow coding inference grant authority",
+      "keywords": ["coding inference grant", "Luna grant authority", "coding inference exchange", "coding inference revoke", "coding grant bearer"],
+      "summary": "Mint, exchange, and revoke the one locked Luna capability bound to a private shadow coding ticket without enabling provider execution.",
+      "owns": ["ditto/api_models/coding_inference_grants.py", "apps/platform/ditto/api_models/coding_inference_grants.py", "apps/platform/ditto/api_server/endpoints/validator_coding_inference.py", "apps/platform/ditto/db/queries/coding_inference_grants.py", "apps/platform/alembic/versions/2026_08_22_add_coding_inference_grants.py", "apps/platform/docs/coding-inference-grant-authority.md"],
+      "read": ["services/dittobench-api/docs/coding-luna-relay-contract-shadow.md", "services/dittobench-api/docs/coding-luna-relay-core-shadow.md", "services/dittobench-api/docs/coding-luna-relay-journal-shadow.md", "apps/platform/docs/coding-inference-grant-authority.md"],
+      "search": ["rg -n 'CodingInferenceGrant|coding_inference_grants|coding-shadow/inference' apps/platform/ditto ditto/validator ditto/api_models", "rg -n 'inference_grant_sha256|effective_inference_request_budget|openai/gpt-5.6-luna' apps/platform/ditto/api_models/coding_inference.py apps/platform/ditto/db/queries/coding_inference_grants.py"],
+      "validate": ["cd apps/platform && python scripts/check_migration_order.py origin/main", "cd apps/platform && make lint lint-copy typecheck test", "uv run pytest ditto/tests/api_models/test_coding_inference_grants.py ditto/tests/validator/test_platform.py -q -k coding_inference", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Coding grants bind CodingShadowTicket and the canonical locked Luna policy; ordinary inference grants are never reused.", "Only bearer digests are stored and no provider credential is returned.", "The transport remains explicitly disabled, shadow-only, and weight-ineligible until trusted settlement and gateway layers land."],
+      "related": ["coding-relay-journal", "coding-repair-research", "platform-api", "dittobench-scoring"]
+    },
+    {
       "id": "research-adapters",
       "title": "Datagen research and third-party benchmark adapters",
       "keywords": ["research", "datagen", "longmemeval", "openclaw", "hermes", "adapter", "calibration", "baseline", "provider study"],

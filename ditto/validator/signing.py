@@ -39,6 +39,11 @@ from ditto.api_models.coding import (
     coding_grading_lease_signing_message,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_inference_grants import (
+    coding_inference_exchange_signing_message,
+    coding_inference_grant_signing_message,
+    coding_inference_revoke_signing_message,
+)
 from ditto.api_models.confirmation_progress import (
     ConfirmationProgress,
     confirmation_progress_signing_token,
@@ -227,6 +232,73 @@ def sign_coding_authoring_lease(
         requested_at=requested_at,
     )
     signature: bytes = keypair.sign(message)
+    return signature.hex()
+
+
+def sign_coding_inference_grant(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    ticket_id: UUID,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Sign one shadow coding inference grant request."""
+
+    signature: bytes = keypair.sign(
+        coding_inference_grant_signing_message(
+            validator_hotkey=validator_hotkey,
+            ticket_id=ticket_id,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_inference_exchange(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    grant_id: UUID,
+    broker_public_key: str,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Sign one shadow coding inference broker exchange."""
+
+    signature: bytes = keypair.sign(
+        coding_inference_exchange_signing_message(
+            validator_hotkey=validator_hotkey,
+            grant_id=grant_id,
+            broker_public_key=broker_public_key,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
+    return signature.hex()
+
+
+def sign_coding_inference_revoke(
+    keypair: Any,
+    *,
+    validator_hotkey: str,
+    grant_id: UUID,
+    generation: int,
+    nonce: UUID,
+    requested_at: datetime,
+) -> str:
+    """Sign one shadow coding inference grant revocation."""
+
+    signature: bytes = keypair.sign(
+        coding_inference_revoke_signing_message(
+            validator_hotkey=validator_hotkey,
+            grant_id=grant_id,
+            generation=generation,
+            nonce=nonce,
+            requested_at=requested_at,
+        )
+    )
     return signature.hex()
 
 
