@@ -251,6 +251,94 @@ def test_source_review_probe_runs_exact_job_and_cleans_up(monkeypatch, capsys) -
     assert '"capability": "AVAILABLE"' in output
 
 
+def test_live_model_source_review_probe_pins_layered_env(
+    monkeypatch, capsys
+) -> None:
+    class LiveSourceReviewTargon(_Targon):
+        def inventory(self) -> list[dict[str, object]]:
+            return [{"name": "cpu-small", "available": 2}]
+
+        def create_rental(self, **values: object) -> dict[str, str]:
+            self.created.append(values)
+            return {"uid": f"wrk-probe-{len(self.created)}"}
+
+        def state(self, uid: str) -> dict[str, object]:
+            state = super().state(uid)
+            if uid == "wrk-probe-1":
+                state["urls"] = [
+                    {
+                        "port": 8080,
+                        "url": "https://source-review-mock.example",
+                    }
+                ]
+            return state
+
+        def logs(self, uid: str, *, tail: int) -> str:
+            assert tail > 0
+            if uid == "wrk-probe-1":
+                return (
+                    'SOURCE_REVIEW_COMPLETE={"categories": ["none"], '
+                    '"clearance_certified": true, "ok": true, '
+                    '"prompt_revision": "l2-kimi-source-review-v33", '
+                    '"risk_level": "low"}'
+                )
+            return "layered source review kimi-k3 gpt-5.6-sol"
+
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+        def read(self) -> bytes:
+            return (
+                b'{"ok": true, "artifact_sha256": "' + (b"a" * 64) + b'"}'
+            )
+
+    client = LiveSourceReviewTargon()
+    monkeypatch.setattr(
+        "screener_capacity.targon_cli._client", lambda *_args, **_kwargs: client
+    )
+    monkeypatch.setattr(
+        "screener_capacity.targon_cli.urllib.request.urlopen",
+        lambda *_args, **_kwargs: Response(),
+    )
+    monkeypatch.setattr(
+        "screener_capacity.targon_cli.time.sleep", lambda _seconds: None
+    )
+    monkeypatch.setattr(
+        "screener_capacity.targon_cli._load_source_review_api_key",
+        lambda: "probe-live-openrouter-key",
+    )
+    args = Namespace(
+        resource="cpu-small",
+        image="registry.example/screener@sha256:" + "a" * 64,
+        provision_timeout_seconds=1,
+        review_timeout_seconds=1800,
+        keep=False,
+        starter_kit=True,
+        live_model=True,
+    )
+
+    assert command_source_review_probe(args) == 0
+
+    env = {row["name"]: row["value"] for row in client.created[1]["envs"]}
+    assert env["SCREENER_SOURCE_REVIEW_API_KEY"] == "probe-live-openrouter-key"
+    assert env["SCREENER_SOURCE_REVIEW_BASE_URL"] == "https://openrouter.ai/api/v1"
+    assert env["SCREENER_L2_REVIEW_MODE"] == "enforce"
+    assert env["SCREENER_L2_REVIEW_MODEL"] == "moonshotai/kimi-k3"
+    assert env["SCREENER_L3_REVIEW_ENABLED"] == "true"
+    assert env["SCREENER_L3_REVIEW_MODEL"] == "openai/gpt-5.6-sol"
+    assert env["SCREENER_L2_ALWAYS_ESCALATE"] == "true"
+    output = capsys.readouterr().out
+    assert '"capability": "AVAILABLE"' in output
+    assert "l2-kimi-source-review-v33" in output
+    assert "kimi-k3" in output
+
+
 def test_starter_kit_source_review_mock_script_compiles() -> None:
     script = _source_review_starter_kit_mock_script(
         review_id="550e8400-e29b-41d4-a716-446655440000",

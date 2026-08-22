@@ -3541,7 +3541,10 @@ class LayeredSourceReviewAgent:
     ) -> SourceReviewObservation:
         """Resolve a precomputed, artifact-bound L1 lead without rerunning L1."""
         l1 = l1_observation
-        should_escalate = l1.risk_level in {"medium", "high"} or (
+        always_escalate = os.environ.get(
+            "SCREENER_L2_ALWAYS_ESCALATE", ""
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        should_escalate = always_escalate or l1.risk_level in {"medium", "high"} or (
             l1.risk_level == "low" and not l1.clearance_certified
         )
         if self._mode == "off" or not l1.ok or not should_escalate:
