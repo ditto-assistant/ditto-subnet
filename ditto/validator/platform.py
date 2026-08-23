@@ -32,8 +32,14 @@ from ditto.api_models.coding import (
     SubmitCodingCertificationResponse,
     SubmitCodingShadowResultRequest,
     SubmitCodingShadowResultResponse,
+    canonical_digest,
     coding_authoring_evidence_digest,
     run_evidence_digest,
+)
+from ditto.api_models.coding_claims import (
+    CodingClaimActionRequest,
+    CodingClaimNextRequest,
+    CodingClaimResponse,
 )
 from ditto.api_models.coding_harness import (
     CodingHarnessLaunchRequest,
@@ -78,11 +84,21 @@ from ditto.api_models.validator_confirmation import (
     V9ConfirmationSubmitRequest,
     V9ConfirmationSubmitResponse,
 )
-from ditto.validator.errors import PlatformError, PlatformInfrastructureError
+from ditto.validator.coding_publication import (
+    PreparedCodingPublication,
+    PublicationAuthority,
+)
+from ditto.validator.errors import (
+    PlatformError,
+    PlatformInfrastructureError,
+    truncate_failure_detail,
+)
 from ditto.validator.signing import (
     sign_artifact_request,
     sign_coding_authoring_freeze,
     sign_coding_authoring_lease,
+    sign_coding_claim_action,
+    sign_coding_claim_next,
     sign_coding_grading_lease,
     sign_coding_harness_launch,
     sign_coding_inference_exchange,
@@ -130,6 +146,7 @@ _CODING_GRADING_LEASE_MAX_BYTES = 2 << 20
 _CODING_SHADOW_RESULT_MAX_BYTES = 64 << 10
 _CODING_INFERENCE_GRANT_MAX_BYTES = 64 << 10
 _CODING_HARNESS_LAUNCH_MAX_BYTES = 64 << 10
+_CODING_CLAIM_MAX_BYTES = 64 << 10
 
 
 def _coding_grant_authority(value: object) -> tuple[object, ...]:
@@ -409,6 +426,157 @@ class PlatformClient:
             )
         return launch
 
+    async def claim_next_coding_ticket(
+        self,
+        instance_id: str,
+    ) -> CodingClaimResponse | None:
+        """Claim or recover the one shadow coding ticket for this instance."""
+
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingClaimNextRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            instance_id=instance_id,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_claim_next(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                instance_id=instance_id,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        return await self._send_coding_claim(
+            path="/coding-shadow/claims/next",
+            payload=payload,
+            allow_empty=True,
+            expected_instance_id=instance_id,
+        )
+
+    async def start_coding_ticket_claim(
+        self,
+        claim: CodingClaimResponse,
+    ) -> CodingClaimResponse:
+        return await self._coding_claim_action("start", claim)
+
+    async def heartbeat_coding_ticket_claim(
+        self,
+        claim: CodingClaimResponse,
+    ) -> CodingClaimResponse:
+        return await self._coding_claim_action("heartbeat", claim)
+
+    async def _coding_claim_action(
+        self,
+        action: Literal["start", "heartbeat"],
+        claim: CodingClaimResponse,
+    ) -> CodingClaimResponse:
+        if claim.validator_hotkey != self._config.validator_hotkey:
+            raise PlatformInfrastructureError(
+                "coding claim validator identity is invalid"
+            )
+        requested_at = datetime.now(UTC)
+        nonce = uuid4()
+        payload = CodingClaimActionRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            instance_id=claim.instance_id,
+            ticket_id=claim.ticket_id,
+            claim_generation=claim.claim_generation,
+            nonce=nonce,
+            requested_at=requested_at,
+            signature=sign_coding_claim_action(
+                self._keypair,
+                action=action,
+                validator_hotkey=self._config.validator_hotkey,
+                instance_id=claim.instance_id,
+                ticket_id=claim.ticket_id,
+                claim_generation=claim.claim_generation,
+                nonce=nonce,
+                requested_at=requested_at,
+            ),
+        )
+        result = await self._send_coding_claim(
+            path=f"/coding-shadow/claims/{claim.ticket_id}/{action}",
+            payload=payload,
+            allow_empty=False,
+            expected_instance_id=claim.instance_id,
+            expected_ticket_id=claim.ticket_id,
+            expected_generation=claim.claim_generation,
+        )
+        if result is None:  # pragma: no cover - allow_empty is false
+            raise PlatformInfrastructureError("coding claim response is unavailable")
+        return result
+
+    async def _send_coding_claim(
+        self,
+        *,
+        path: str,
+        payload: CodingClaimNextRequest,
+        allow_empty: bool,
+        expected_instance_id: str,
+        expected_ticket_id: UUID | None = None,
+        expected_generation: int | None = None,
+    ) -> CodingClaimResponse | None:
+        body = bytearray()
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}{path}",
+                headers=self._headers,
+                json=payload.model_dump(mode="json"),
+                follow_redirects=False,
+            ) as response:
+                if "no-store" not in {
+                    directive.strip().lower()
+                    for directive in response.headers.get("Cache-Control", "").split(
+                        ","
+                    )
+                }:
+                    raise PlatformInfrastructureError(
+                        "coding claim response cache policy is invalid"
+                    )
+                if allow_empty and response.status_code == 404:
+                    return None
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding claim service is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding claim request rejected ({response.status_code})"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(body) + len(chunk) > _CODING_CLAIM_MAX_BYTES:
+                        raise PlatformInfrastructureError(
+                            "coding claim response size is invalid"
+                        )
+                    body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError("coding claim request failed") from error
+        if not body:
+            raise PlatformInfrastructureError("coding claim response size is invalid")
+        try:
+            claim = CodingClaimResponse.model_validate_json(body)
+        except ValidationError:
+            raise PlatformInfrastructureError(
+                "coding claim response is invalid"
+            ) from None
+        if (
+            claim.validator_hotkey != self._config.validator_hotkey
+            or claim.instance_id != expected_instance_id
+            or (
+                expected_ticket_id is not None and claim.ticket_id != expected_ticket_id
+            )
+            or (
+                expected_generation is not None
+                and claim.claim_generation != expected_generation
+            )
+        ):
+            raise PlatformInfrastructureError(
+                "coding claim response identity is invalid"
+            )
+        return claim
+
     async def request_coding_inference_grant(
         self,
         ticket_id: UUID,
@@ -607,6 +775,287 @@ class PlatformClient:
                 "coding inference revocation response identity is invalid"
             )
         return revoked
+
+    def prepare_coding_authoring_freeze(
+        self,
+        agent_id: UUID,
+        *,
+        bench_version: int,
+        run_row_id: UUID,
+        ticket_id: UUID,
+        ticket_deadline: datetime,
+        coding_run_id: str,
+        agent_artifact_sha256: str,
+        screened_image_sha256: str,
+        run_manifest_sha256: str,
+        task_set_manifest_sha256: str,
+        evidence: CodingAuthoringEvidence,
+        authoring_transcript_object_key: str,
+        authoring_transcript_bytes: int,
+        authoring_event_count: int,
+        frozen_submission_object_key: str,
+    ) -> PreparedCodingPublication:
+        evidence_sha256 = coding_authoring_evidence_digest(evidence)
+        payload = SubmitCodingAuthoringFreezeRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            agent_id=agent_id,
+            bench_version=bench_version,
+            run_row_id=run_row_id,
+            ticket_id=ticket_id,
+            ticket_deadline=ticket_deadline,
+            coding_run_id=coding_run_id,
+            agent_artifact_sha256=agent_artifact_sha256,
+            screened_image_sha256=screened_image_sha256,
+            run_manifest_sha256=run_manifest_sha256,
+            task_set_manifest_sha256=task_set_manifest_sha256,
+            authoring_evidence_sha256=evidence_sha256,
+            evidence=evidence,
+            authoring_transcript_object_key=authoring_transcript_object_key,
+            authoring_transcript_bytes=authoring_transcript_bytes,
+            authoring_event_count=authoring_event_count,
+            frozen_submission_object_key=frozen_submission_object_key,
+            signature=sign_coding_authoring_freeze(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                bench_version=bench_version,
+                run_row_id=run_row_id,
+                ticket_id=ticket_id,
+                ticket_deadline=ticket_deadline,
+                coding_run_id=coding_run_id,
+                agent_artifact_sha256=agent_artifact_sha256,
+                screened_image_sha256=screened_image_sha256,
+                run_manifest_sha256=run_manifest_sha256,
+                task_set_manifest_sha256=task_set_manifest_sha256,
+                authoring_evidence_sha256=evidence_sha256,
+                authoring_transcript_object_key=authoring_transcript_object_key,
+                authoring_transcript_bytes=authoring_transcript_bytes,
+                authoring_event_count=authoring_event_count,
+                frozen_submission_object_key=frozen_submission_object_key,
+            ),
+        )
+        return PreparedCodingPublication(
+            stage="authoring_freeze",
+            ticket_id=ticket_id,
+            agent_id=agent_id,
+            authority=PublicationAuthority(
+                agent_id=agent_id,
+                bench_version=bench_version,
+                run_row_id=run_row_id,
+                coding_run_id=coding_run_id,
+                screened_image_sha256=screened_image_sha256,
+                run_manifest_sha256=run_manifest_sha256,
+                task_set_manifest_sha256=task_set_manifest_sha256,
+                evidence_sha256=evidence_sha256,
+            ),
+            body=payload.model_dump_json(by_alias=True).encode(),
+        )
+
+    def prepare_coding_shadow_result(
+        self,
+        agent_id: UUID,
+        *,
+        bench_version: int,
+        run_row_id: UUID,
+        ticket_id: UUID,
+        ticket_deadline: datetime,
+        agent_artifact_sha256: str,
+        screened_image_sha256: str,
+        run_manifest: CodingRunManifest,
+        evidence: CodingRunEvidence,
+        task_evidence: list[CodingTaskEvidence],
+    ) -> PreparedCodingPublication:
+        try:
+            if (
+                run_manifest.agent_id != str(agent_id)
+                or run_manifest.agent_artifact_sha256 != agent_artifact_sha256
+            ):
+                raise ValueError("agent identity disagrees with run manifest")
+            evidence_sha256 = run_evidence_digest(
+                run_manifest,
+                str(ticket_id),
+                evidence,
+                task_evidence,
+            )
+        except ValueError as error:
+            raise PlatformInfrastructureError(
+                "coding shadow result local authority is invalid"
+            ) from error
+        payload = SubmitCodingShadowResultRequest(
+            validator_hotkey=self._config.validator_hotkey,
+            bench_version=bench_version,
+            run_row_id=run_row_id,
+            ticket_id=ticket_id,
+            ticket_deadline=ticket_deadline,
+            agent_artifact_sha256=agent_artifact_sha256,
+            screened_image_sha256=screened_image_sha256,
+            run_evidence_sha256=evidence_sha256,
+            evidence=evidence,
+            signature=sign_coding_shadow_result(
+                self._keypair,
+                validator_hotkey=self._config.validator_hotkey,
+                agent_id=agent_id,
+                run_row_id=run_row_id,
+                ticket_id=ticket_id,
+                bench_version=bench_version,
+                ticket_deadline=ticket_deadline,
+                agent_artifact_sha256=agent_artifact_sha256,
+                screened_image_sha256=screened_image_sha256,
+                run_evidence_sha256=evidence_sha256,
+            ),
+        )
+        return PreparedCodingPublication(
+            stage="terminal_result",
+            ticket_id=ticket_id,
+            agent_id=agent_id,
+            authority=PublicationAuthority(
+                agent_id=agent_id,
+                bench_version=bench_version,
+                run_row_id=run_row_id,
+                coding_run_id=run_manifest.coding_run_id,
+                screened_image_sha256=screened_image_sha256,
+                run_manifest_sha256=canonical_digest(run_manifest),
+                task_set_manifest_sha256=run_manifest.task_set_manifest_sha256,
+                evidence_sha256=evidence_sha256,
+            ),
+            body=payload.model_dump_json(by_alias=True).encode(),
+        )
+
+    async def publish_prepared_coding_publication(
+        self,
+        prepared: PreparedCodingPublication,
+    ) -> tuple[
+        SubmitCodingAuthoringFreezeResponse | SubmitCodingShadowResultResponse,
+        bytes,
+    ]:
+        try:
+            if prepared.stage == "authoring_freeze":
+                authoring_request = (
+                    SubmitCodingAuthoringFreezeRequest.model_validate_json(
+                        prepared.body
+                    )
+                )
+                path = "/coding-shadow/authoring-freeze"
+                maximum = _CODING_AUTHORING_FREEZE_MAX_BYTES
+                if (
+                    authoring_request.agent_id != prepared.agent_id
+                    or authoring_request.ticket_id != prepared.ticket_id
+                    or authoring_request.run_row_id != prepared.authority.run_row_id
+                    or authoring_request.bench_version
+                    != prepared.authority.bench_version
+                    or authoring_request.coding_run_id
+                    != prepared.authority.coding_run_id
+                    or authoring_request.screened_image_sha256
+                    != prepared.authority.screened_image_sha256
+                    or authoring_request.run_manifest_sha256
+                    != prepared.authority.run_manifest_sha256
+                    or authoring_request.task_set_manifest_sha256
+                    != prepared.authority.task_set_manifest_sha256
+                    or authoring_request.authoring_evidence_sha256
+                    != prepared.authority.evidence_sha256
+                    or prepared.authority.agent_id != prepared.agent_id
+                ):
+                    raise ValueError("prepared authoring identity mismatch")
+            else:
+                terminal_request = SubmitCodingShadowResultRequest.model_validate_json(
+                    prepared.body
+                )
+                path = f"/agent/{prepared.agent_id}/coding-shadow-result"
+                maximum = _CODING_SHADOW_RESULT_MAX_BYTES
+                if (
+                    terminal_request.ticket_id != prepared.ticket_id
+                    or terminal_request.run_row_id != prepared.authority.run_row_id
+                    or terminal_request.bench_version
+                    != prepared.authority.bench_version
+                    or terminal_request.screened_image_sha256
+                    != prepared.authority.screened_image_sha256
+                    or terminal_request.evidence.coding_run_id
+                    != prepared.authority.coding_run_id
+                    or terminal_request.evidence.run_manifest_sha256
+                    != prepared.authority.run_manifest_sha256
+                    or terminal_request.evidence.task_set_manifest_sha256
+                    != prepared.authority.task_set_manifest_sha256
+                    or terminal_request.run_evidence_sha256
+                    != prepared.authority.evidence_sha256
+                    or prepared.authority.agent_id != prepared.agent_id
+                ):
+                    raise ValueError("prepared terminal identity mismatch")
+        except (ValidationError, ValueError):
+            raise PlatformInfrastructureError(
+                "prepared coding publication is invalid"
+            ) from None
+        response_body = bytearray()
+        headers = {**self._headers, "Content-Type": "application/json"}
+        try:
+            async with self._client.stream(
+                "POST",
+                f"{self._base}{_PREFIX}{path}",
+                headers=headers,
+                content=prepared.body,
+                follow_redirects=False,
+            ) as response:
+                if response.status_code == 503:
+                    raise PlatformInfrastructureError(
+                        "coding publication is temporarily unavailable"
+                    )
+                if response.status_code != 200:
+                    raise PlatformError(
+                        f"coding publication rejected ({response.status_code})"
+                    )
+                if "no-store" not in {
+                    directive.strip().lower()
+                    for directive in response.headers.get("Cache-Control", "").split(
+                        ","
+                    )
+                }:
+                    raise PlatformInfrastructureError(
+                        "coding publication response cache policy is invalid"
+                    )
+                async for chunk in response.aiter_bytes(chunk_size=16 << 10):
+                    if len(response_body) + len(chunk) > maximum:
+                        raise PlatformInfrastructureError(
+                            "coding publication response size is invalid"
+                        )
+                    response_body.extend(chunk)
+        except httpx.HTTPError as error:
+            raise PlatformInfrastructureError(
+                "coding publication request failed"
+            ) from error
+        if not response_body:
+            raise PlatformInfrastructureError(
+                "coding publication response size is invalid"
+            )
+        try:
+            if prepared.stage == "authoring_freeze":
+                authoring_accepted = (
+                    SubmitCodingAuthoringFreezeResponse.model_validate_json(
+                        response_body
+                    )
+                )
+                if (
+                    authoring_accepted.agent_id != prepared.agent_id
+                    or authoring_accepted.ticket_id != prepared.ticket_id
+                    or authoring_accepted.authoring_evidence_sha256
+                    != prepared.authority.evidence_sha256
+                ):
+                    raise ValueError("authoring acknowledgement mismatch")
+                return authoring_accepted, bytes(response_body)
+            else:
+                terminal_accepted = (
+                    SubmitCodingShadowResultResponse.model_validate_json(response_body)
+                )
+                if (
+                    terminal_accepted.agent_id != prepared.agent_id
+                    or terminal_accepted.ticket_id != prepared.ticket_id
+                    or terminal_accepted.coding_run_id
+                    != prepared.authority.coding_run_id
+                ):
+                    raise ValueError("terminal acknowledgement mismatch")
+                return terminal_accepted, bytes(response_body)
+        except (ValidationError, ValueError):
+            raise PlatformInfrastructureError(
+                "coding publication response is invalid"
+            ) from None
 
     async def submit_coding_authoring_freeze(
         self,

@@ -134,6 +134,9 @@ def _fixture() -> SimpleNamespace:
         task_count=1,
         issued_at=now,
         deadline=now.replace(year=now.year + 1),
+        claim_instance_id="coding-worker-test-001",
+        claim_started_at=now,
+        claim_expires_at=now.replace(year=now.year + 1),
     )
     certification = SimpleNamespace(
         validator_hotkey=ticket.validator_hotkey,

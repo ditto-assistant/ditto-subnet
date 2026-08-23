@@ -447,11 +447,36 @@ class CodingShadowTicketRecord(CodingEvaluationModel):
     certification_row_id: UUID
     issued_at: datetime
     deadline: datetime
+    claim_generation: Annotated[int, Field(ge=0, le=(1 << 31) - 1)]
+    claim_instance_id: str | None
+    claim_acquired_at: datetime | None
+    claim_heartbeat_at: datetime | None
+    claim_expires_at: datetime | None
+    claim_started_at: datetime | None
     authoring_freeze: CodingAuthoringFreezeRecord | None
     result: CodingShadowResultRecord | None
 
     @model_validator(mode="after")
     def nested_records_match_ticket(self) -> CodingShadowTicketRecord:
+        claim_values = (
+            self.claim_instance_id,
+            self.claim_acquired_at,
+            self.claim_heartbeat_at,
+            self.claim_expires_at,
+        )
+        if (
+            self.claim_generation == 0
+            and any(value is not None for value in claim_values)
+        ) or (
+            self.claim_generation > 0
+            and not (
+                all(value is None for value in claim_values)
+                or all(value is not None for value in claim_values)
+            )
+        ):
+            raise ValueError("coding ticket claim record is incoherent")
+        if self.claim_instance_id is None and self.claim_started_at is not None:
+            raise ValueError("coding ticket started without an active claim")
         if self.authoring_freeze is not None and (
             self.authoring_freeze.ticket_id != self.ticket_id
             or self.authoring_freeze.validator_hotkey != self.validator_hotkey

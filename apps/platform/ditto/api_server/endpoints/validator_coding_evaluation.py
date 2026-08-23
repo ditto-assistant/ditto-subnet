@@ -168,6 +168,10 @@ async def submit_coding_shadow_result(
         )
         if (
             _aware(ticket.deadline) <= now
+            or ticket.claim_instance_id is None
+            or ticket.claim_started_at is None
+            or ticket.claim_expires_at is None
+            or _aware(ticket.claim_expires_at) <= now
             or certification is None
             or certification.status != "certified"
             or certification.agent_id != agent_id

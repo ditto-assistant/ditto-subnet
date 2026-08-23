@@ -4886,6 +4886,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/validator/coding-shadow/claims/next": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Claim Next */
+        post: operations["claim_next_api_v1_validator_coding_shadow_claims_next_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-shadow/claims/{ticket_id}/heartbeat": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Heartbeat Claim */
+        post: operations["heartbeat_claim_api_v1_validator_coding_shadow_claims__ticket_id__heartbeat_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/validator/coding-shadow/claims/{ticket_id}/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start Claim */
+        post: operations["start_claim_api_v1_validator_coding_shadow_claims__ticket_id__start_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/validator/coding-shadow/grading-lease": {
         parameters: {
             query?: never;
@@ -10987,6 +11038,116 @@ export interface components {
          * @enum {string}
          */
         CodingCertificationTerminalDomain: "resolved" | "repair_failure" | "candidate_integrity";
+        /** CodingClaimActionRequest */
+        CodingClaimActionRequest: {
+            /** Claim Generation */
+            claim_generation: number;
+            /** Instance Id */
+            instance_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingClaimNextRequest */
+        CodingClaimNextRequest: {
+            /** Instance Id */
+            instance_id: string;
+            /**
+             * Nonce
+             * Format: uuid
+             */
+            nonce: string;
+            /**
+             * Requested At
+             * Format: date-time
+             */
+            requested_at: string;
+            /** Signature */
+            signature: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+        };
+        /** CodingClaimResponse */
+        CodingClaimResponse: {
+            /** Agent Artifact Sha256 */
+            agent_artifact_sha256: string;
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Bench Version */
+            bench_version: number;
+            /**
+             * Claim Expires At
+             * Format: date-time
+             */
+            claim_expires_at: string;
+            /** Claim Generation */
+            claim_generation: number;
+            /** Claim Started At */
+            claim_started_at: string | null;
+            /**
+             * Coding Contract Version
+             * @constant
+             */
+            coding_contract_version: 1;
+            /** Coding Run Id */
+            coding_run_id: string;
+            /** Idempotent */
+            idempotent: boolean;
+            /** Instance Id */
+            instance_id: string;
+            /** Run Manifest Sha256 */
+            run_manifest_sha256: string;
+            /**
+             * Run Row Id
+             * Format: uuid
+             */
+            run_row_id: string;
+            /**
+             * Schema
+             * @constant
+             */
+            schema: "dittobench-coding-ticket-claim-v1";
+            /** Screened Image Sha256 */
+            screened_image_sha256: string;
+            /** Task Set Manifest Sha256 */
+            task_set_manifest_sha256: string;
+            /**
+             * Ticket Deadline
+             * Format: date-time
+             */
+            ticket_deadline: string;
+            /**
+             * Ticket Id
+             * Format: uuid
+             */
+            ticket_id: string;
+            /** Validator Hotkey */
+            validator_hotkey: string;
+            /**
+             * Weight Eligible
+             * @constant
+             */
+            weight_eligible: false;
+        };
         /**
          * CodingGradingLeaseRequest
          * @description Signed request for one freeze-gated shadow grading lease.
@@ -11814,6 +11975,18 @@ export interface components {
              * Format: uuid
              */
             certification_row_id: string;
+            /** Claim Acquired At */
+            claim_acquired_at: string | null;
+            /** Claim Expires At */
+            claim_expires_at: string | null;
+            /** Claim Generation */
+            claim_generation: number;
+            /** Claim Heartbeat At */
+            claim_heartbeat_at: string | null;
+            /** Claim Instance Id */
+            claim_instance_id: string | null;
+            /** Claim Started At */
+            claim_started_at: string | null;
             /**
              * Deadline
              * Format: date-time
@@ -32832,6 +33005,130 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content?: never;
+            };
+        };
+    };
+    claim_next_api_v1_validator_coding_shadow_claims_next_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingClaimNextRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingClaimResponse"];
+                };
+            };
+            /** @description Signature invalid or validator not permitted. */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description No coding ticket is claimable. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Replay or claim authority conflict. */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    heartbeat_claim_api_v1_validator_coding_shadow_claims__ticket_id__heartbeat_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingClaimActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    start_claim_api_v1_validator_coding_shadow_claims__ticket_id__start_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                ticket_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CodingClaimActionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CodingClaimResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
             };
         };
     };

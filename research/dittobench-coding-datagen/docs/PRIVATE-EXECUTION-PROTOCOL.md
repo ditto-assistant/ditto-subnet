@@ -656,8 +656,10 @@ harness activation. An exchanged grant carries a distinct revocation-only
 bearer so the Go gateway can revoke durably before evidence finalization while
 the Python validator retains signed revocation as an idempotent fallback. The
 private dormant-harness, source-bound route, revocation, and relay-activation
-adapters now exist but remain unwired. Later reviews still own ticket claiming,
-publication handoff, Python worker connection, and the host sweep schedule.
+adapters now exist but remain unwired. Exclusive non-rerunnable ticket claims
+and the exact-byte durable publication handoff also exist. The final review
+still owns Python worker connection, default-off configuration, and the host
+sweep schedule.
 
 The runtime never supplies aggregate counts or repair mean. It returns
 per-task evidence; the validator orders those tasks by the immutable manifest,

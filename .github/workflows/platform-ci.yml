@@ -23,6 +23,7 @@ on:
       - packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json
       - packages/dittobench-coding-contract/generate_execution_delivery_vectors.py
       - ditto/api_models/coding_harness.py
+      - ditto/api_models/coding_claims.py
       - ditto/api_models/coding_inference.py
       - ditto/api_models/coding_inference_grants.py
       # The static job checks the generated confirmation release assets

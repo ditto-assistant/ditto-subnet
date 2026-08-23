@@ -251,6 +251,10 @@ async def authorize_coding_shadow_grading_delivery(
         or run.agent_id != agent_id
         or freeze.ticket_id != ticket.ticket_id
         or freeze.run_row_id != run.run_row_id
+        or ticket.claim_instance_id is None
+        or ticket.claim_started_at is None
+        or ticket.claim_expires_at is None
+        or _aware(ticket.claim_expires_at) <= _aware(database_now)
         or not _ticket_certification_is_active(
             ticket=ticket,
             run=run,

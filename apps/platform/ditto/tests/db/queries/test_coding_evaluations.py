@@ -54,6 +54,12 @@ from ditto.db.queries.coding_catalog import (
     insert_coding_catalog_release,
     retire_coding_catalog_release,
 )
+from ditto.db.queries.coding_claims import (
+    CodingClaimNotAvailableError,
+    claim_next_coding_ticket,
+    heartbeat_coding_ticket_claim,
+    start_coding_ticket_claim,
+)
 from ditto.db.queries.coding_evaluations import (
     CodingShadowConflictError,
     CodingShadowNotQualifiedError,
@@ -691,6 +697,132 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
             deadline=_NOW + timedelta(hours=1),
         )
     assert ticket_replay.idempotent is True
+    async with session.begin():
+        stored_ticket = await session.get(CodingShadowTicket, ticket_id)
+        assert stored_ticket is not None
+        certification_row_id = stored_ticket.certification_row_id
+        ticket_deadline = stored_ticket.deadline
+        certification = await session.get(
+            CodingCapabilityCertification,
+            certification_row_id,
+        )
+        assert certification is not None
+        certification.expires_at = ticket_deadline
+    async with session.begin():
+        assert (
+            await claim_next_coding_ticket(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id="coding-worker-expiring-certification",
+            )
+            is None
+        )
+    async with session.begin():
+        certification = await session.get(
+            CodingCapabilityCertification,
+            certification_row_id,
+        )
+        assert certification is not None
+        certification.expires_at = ticket_deadline + timedelta(hours=1)
+    instance_id = "coding-worker-instance-a"
+    async with session.begin():
+        claim = await claim_next_coding_ticket(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+        )
+    assert claim is not None and claim.ticket.ticket_id == ticket_id
+    assert claim.ticket.claim_generation == 1 and claim.idempotent is False
+    async with session.begin():
+        replayed_claim = await claim_next_coding_ticket(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+        )
+    assert replayed_claim is not None and replayed_claim.idempotent is True
+    async with session.begin():
+        assert (
+            await claim_next_coding_ticket(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id="coding-worker-instance-b",
+            )
+            is None
+        )
+    async with session.begin():
+        stored_claim = await session.get(CodingShadowTicket, ticket_id)
+        assert stored_claim is not None
+        stored_claim.claim_acquired_at = _NOW - timedelta(minutes=4)
+        stored_claim.claim_heartbeat_at = _NOW - timedelta(minutes=2)
+        stored_claim.claim_expires_at = _NOW - timedelta(minutes=1)
+    transferred_instance = "coding-worker-instance-b"
+    async with session.begin():
+        transferred = await claim_next_coding_ticket(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=transferred_instance,
+        )
+    assert transferred is not None and transferred.ticket.claim_generation == 2
+    with pytest.raises(CodingClaimNotAvailableError):
+        async with session.begin():
+            await start_coding_ticket_claim(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id=instance_id,
+                ticket_id=ticket_id,
+                claim_generation=1,
+            )
+    instance_id = transferred_instance
+    async with session.begin():
+        started = await start_coding_ticket_claim(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+        )
+    assert started.ticket.claim_started_at is not None and not started.idempotent
+    async with session.begin():
+        started_replay = await start_coding_ticket_claim(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+        )
+    assert started_replay.idempotent
+    async with session.begin():
+        heartbeat = await heartbeat_coding_ticket_claim(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+            ticket_id=ticket_id,
+            claim_generation=2,
+        )
+    assert heartbeat.ticket.claim_expires_at is not None
+    async with session.begin():
+        stored_claim = await session.get(CodingShadowTicket, ticket_id)
+        assert stored_claim is not None
+        stored_claim.claim_acquired_at = _NOW - timedelta(minutes=10)
+        stored_claim.claim_started_at = _NOW - timedelta(minutes=2)
+        stored_claim.claim_heartbeat_at = _NOW - timedelta(minutes=2)
+        stored_claim.claim_expires_at = _NOW - timedelta(minutes=1)
+    async with session.begin():
+        assert (
+            await claim_next_coding_ticket(
+                session,
+                validator_hotkey=_VALIDATOR,
+                instance_id="coding-worker-instance-c",
+            )
+            is None
+        )
+    async with session.begin():
+        recovered = await claim_next_coding_ticket(
+            session,
+            validator_hotkey=_VALIDATOR,
+            instance_id=instance_id,
+        )
+    assert recovered is not None and recovered.idempotent
     async with session.begin():
         await insert_core_qualification_policy(
             session,

@@ -1118,6 +1118,13 @@ CREATE TABLE public.coding_shadow_tickets (
     issued_at timestamp with time zone NOT NULL,
     deadline timestamp with time zone NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
+    claim_generation integer DEFAULT 0 NOT NULL,
+    claim_instance_id text,
+    claim_acquired_at timestamp with time zone,
+    claim_heartbeat_at timestamp with time zone,
+    claim_expires_at timestamp with time zone,
+    claim_started_at timestamp with time zone,
+    CONSTRAINT ck_coding_shadow_tickets_coding_shadow_tickets_claim_check CHECK ((((claim_generation = 0) AND (claim_instance_id IS NULL) AND (claim_acquired_at IS NULL) AND (claim_heartbeat_at IS NULL) AND (claim_expires_at IS NULL) AND (claim_started_at IS NULL)) OR (((claim_generation >= 1) AND (claim_generation <= 2147483647)) AND (((claim_instance_id IS NULL) AND (claim_acquired_at IS NULL) AND (claim_heartbeat_at IS NULL) AND (claim_expires_at IS NULL) AND (claim_started_at IS NULL)) OR ((claim_instance_id IS NOT NULL) AND ((octet_length(claim_instance_id) >= 1) AND (octet_length(claim_instance_id) <= 128)) AND (claim_instance_id !~ '[[:space:][:cntrl:]]'::text) AND (claim_acquired_at IS NOT NULL) AND (claim_heartbeat_at IS NOT NULL) AND (claim_expires_at IS NOT NULL) AND (claim_heartbeat_at >= claim_acquired_at) AND (claim_expires_at > claim_heartbeat_at) AND (claim_expires_at <= deadline) AND ((claim_started_at IS NULL) OR ((claim_started_at >= claim_acquired_at) AND (claim_started_at <= claim_heartbeat_at) AND (claim_started_at < deadline)))))))),
     CONSTRAINT ck_coding_shadow_tickets_coding_shadow_tickets_deadline_check CHECK (((deadline > issued_at) AND (deadline <= (issued_at + '02:00:00'::interval)))),
     CONSTRAINT ck_coding_shadow_tickets_coding_shadow_tickets_task_count_check CHECK (((task_count >= 1) AND (task_count <= 100))),
     CONSTRAINT ck_coding_shadow_tickets_coding_shadow_tickets_validator_check CHECK ((validator_hotkey ~ '^[1-9A-HJ-NP-Za-km-z]{47,48}$'::text))
@@ -5165,6 +5172,20 @@ CREATE INDEX coding_shadow_run_issuances_agent_issued_idx ON public.coding_shado
 --
 
 CREATE INDEX coding_shadow_runs_agent_created_idx ON public.coding_shadow_runs USING btree (agent_id, created_at);
+
+
+--
+-- Name: coding_shadow_tickets_claim_instance_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX coding_shadow_tickets_claim_instance_idx ON public.coding_shadow_tickets USING btree (validator_hotkey, claim_instance_id, claim_expires_at);
+
+
+--
+-- Name: coding_shadow_tickets_claim_instance_key; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX coding_shadow_tickets_claim_instance_key ON public.coding_shadow_tickets USING btree (validator_hotkey, claim_instance_id) WHERE (claim_instance_id IS NOT NULL);
 
 
 --

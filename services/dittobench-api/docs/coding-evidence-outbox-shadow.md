@@ -126,14 +126,16 @@ expired records have separate bounded retention windows. An object is removed
 only after no retained record references it and its orphan grace period has elapsed.
 Clock rollback fails closed.
 
-The future transport must send the exact bytes returned by `OpenPublication`,
-not rebuild them through an HTTP client's `json=` convenience path. When it
+The private `internal/codingpublication` handoff and Python loopback client send
+the exact bytes returned by `OpenPublication`, not rebuilt bytes from an HTTP
+client's `json=` convenience path. When the handoff
 stores the verified response it must also supply the request object's SHA-256;
 the journal commits that correlation so a response from another signed request
 cannot be attached by ticket/run identity alone.
 Endpoint paths remain fixed by the Platform client; the terminal agent path is
 derived only from the journal's canonical `agent_id`, never from stored URL
 input.
+These adapters remain unwired until the default-off worker review.
 
 Any error after a publication object starts committing marks physical capacity
 unknown and blocks further allocations in that open store. The owner must close
