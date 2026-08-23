@@ -1006,6 +1006,10 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
                     {"name": "SCREENER_L2_ALWAYS_ESCALATE", "value": "true"},
                     {"name": "SCREENER_L2_TIMEOUT_SECONDS", "value": "900"},
                     {"name": "SCREENER_L2_MAX_STEPS", "value": "18"},
+                    {
+                        "name": "SCREENER_L2_MAX_COMPLETION_TOKENS",
+                        "value": "8192",
+                    },
                 ]
             )
         review = client.create_rental(

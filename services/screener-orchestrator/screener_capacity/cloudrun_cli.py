@@ -330,6 +330,7 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
             "SCREENER_L2_ALWAYS_ESCALATE": "true",
             "SCREENER_L2_TIMEOUT_SECONDS": "900",
             "SCREENER_L2_MAX_STEPS": "18",
+            "SCREENER_L2_MAX_COMPLETION_TOKENS": "8192",
         }
         env_file = tempfile.NamedTemporaryFile(
             "w", suffix=".yaml", delete=False, encoding="utf-8"

@@ -56,6 +56,7 @@ from ditto_screener.l2_review import (
     _parse_l2_review,
     _qualifies_for_direct_clear,
     _require_complete_analysis,
+    _response_output_and_usage,
     _review_adaptation_hold,
     _safety_clearance_gaps,
     _served_generator_hold,
@@ -340,6 +341,41 @@ def _safe() -> SourceReviewObservation:
         finding_digest="b" * 64,
         categories=("none",),
     )
+
+
+def test_response_output_rejects_null_output_and_model_error() -> None:
+    with pytest.raises(
+        ValueError, match="L2 model status:incomplete:max_output_tokens"
+    ):
+        _response_output_and_usage(
+            {
+                "error": None,
+                "error_type": None,
+                "output": None,
+                "usage": None,
+                "status": "incomplete",
+                "incomplete_details": {"reason": "max_output_tokens"},
+            }
+        )
+    with pytest.raises(ValueError, match="output type:NoneType"):
+        _response_output_and_usage(
+            {
+                "error": None,
+                "error_type": None,
+                "output": None,
+                "usage": None,
+                "status": "completed",
+            }
+        )
+    with pytest.raises(ValueError, match="L2 model error:context_length"):
+        _response_output_and_usage(
+            {
+                "error": {"code": "context_length"},
+                "output": None,
+                "usage": None,
+                "status": "failed",
+            }
+        )
 
 
 def test_safety_clearance_does_not_require_l1_evidence_on_certified_low() -> None:
@@ -963,6 +999,48 @@ def test_l2_safe_result_must_cover_every_l1_evidence_file(tmp_path: Path) -> Non
             repository=repository,
             required_paths=("Dockerfile",),
         )
+
+
+def test_safety_adjudicator_safe_result_requires_refutation_path(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha = _tar(tmp_path, "fn main() {}")
+    repository = TarSourceRepository(str(archive))
+    digest = repository.member_sha256("src/main.rs")
+    value = {
+        "disposition": "safe",
+        "risk_level": "low",
+        "confidence": 1.0,
+        "resolution_basis": "authoritative_model_tool_path",
+        "categories": ["none"],
+        "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+        "evidence": [],
+        "causal_path": [],
+        "summary": "safe",
+    }
+    with pytest.raises(ValueError, match="refutation causal path"):
+        _parse_l2_review(
+            value,
+            artifact_sha256=artifact_sha,
+            repository=repository,
+            prompt_revision=L2_SAFETY_PROMPT_REVISION,
+        )
+    value["causal_path"] = [
+        {"path": "src/main.rs", "line": 1, "role": "context"},
+        {"path": "src/main.rs", "line": 1, "role": "decision"},
+        {"path": "src/main.rs", "line": 1, "role": "effect"},
+        {"path": "src/main.rs", "line": 1, "role": "sink"},
+    ]
+    observation, _analyzed, causal, basis = _parse_l2_review(
+        value,
+        artifact_sha256=artifact_sha,
+        repository=repository,
+        prompt_revision=L2_SAFETY_PROMPT_REVISION,
+    )
+    assert observation.ok is True
+    assert observation.risk_level == "low"
+    assert basis == "authoritative_model_tool_path"
+    assert len(causal) == 4
 
 
 def test_l2_safe_result_rejects_contradictory_evidence(tmp_path: Path) -> None:

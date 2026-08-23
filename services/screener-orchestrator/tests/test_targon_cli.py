@@ -333,6 +333,7 @@ def test_live_model_source_review_probe_pins_layered_env(
     assert env["SCREENER_L3_REVIEW_ENABLED"] == "true"
     assert env["SCREENER_L3_REVIEW_MODEL"] == "openai/gpt-5.6-sol"
     assert env["SCREENER_L2_ALWAYS_ESCALATE"] == "true"
+    assert env["SCREENER_L2_MAX_COMPLETION_TOKENS"] == "8192"
     output = capsys.readouterr().out
     assert '"capability": "AVAILABLE"' in output
     assert "l2-kimi-source-review-v33" in output

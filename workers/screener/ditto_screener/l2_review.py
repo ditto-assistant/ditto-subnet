@@ -2637,10 +2637,9 @@ class KimiSolSourceReviewAgent:
                 critic_cache_hit=critic_cache_hit,
             )
         if claimed_safe and not adjudicated_safe:
-            logger.warning(
-                "L3 clearance certificate failed: %s",
-                ",".join(clearance_gaps) or "unknown",
-            )
+            gap_text = ",".join(clearance_gaps) or "unknown"
+            logger.warning("L3 clearance certificate failed: %s", gap_text)
+            print(f"L3_CLEARANCE_GAPS={gap_text}", flush=True)
             return L2RunResult(
                 observation=_failure(
                     "l3-adjudicator-clearance-certificate", "retryable_infra"
@@ -2921,11 +2920,9 @@ class KimiSolSourceReviewAgent:
                 )
             except ValueError as error:
                 logger.warning(
-                    "L2/L3 response contract failed: %s keys=%s",
+                    "L2/L3 response contract failed: %s%s",
                     error,
-                    sorted(payload.keys())
-                    if isinstance(payload, dict)
-                    else type(payload).__name__,
+                    _response_contract_detail(payload),
                 )
                 raise failure("model-response-contract") from error
             usage = _add_usage(usage, turn_usage)
@@ -3191,6 +3188,19 @@ class KimiSolSourceReviewAgent:
                 )
                 if response.status_code != 429 and response.status_code < 500:
                     response.raise_for_status()
+                    payload: object | None = None
+                    with contextlib.suppress(ValueError, TypeError):
+                        payload = response.json()
+                    incomplete = (
+                        isinstance(payload, dict)
+                        and payload.get("status") == "incomplete"
+                    )
+                    if incomplete and attempt < len(_RETRY_DELAYS_SECONDS):
+                        delay = _RETRY_DELAYS_SECONDS[attempt]
+                        remaining = self._turn_timeout(deadline)
+                        if remaining > delay:
+                            await asyncio.sleep(delay)
+                            continue
                     return response
                 response.raise_for_status()
             except (httpx.TransportError, httpx.HTTPStatusError) as error:
@@ -3950,6 +3960,13 @@ def _parse_l2_review(
             raise ValueError("L2 safe result contains contradictory evidence")
         if resolution_basis not in _SAFE_RESOLUTION_BASES:
             raise ValueError("L2 safe result has a non-safe resolution basis")
+        if prompt_revision == L2_SAFETY_PROMPT_REVISION:
+            roles = {str(item.get("role")) for item in normalized_causal}
+            required = {"context", "decision", "effect", "sink"}
+            if float(confidence) < _CHALLENGE_OVERTURN_CONFIDENCE:
+                raise ValueError("L2 safety clearance confidence is below 1.0")
+            if len(normalized_causal) < 4 or not required <= roles:
+                raise ValueError("L2 safety clearance lacks a refutation causal path")
     elif disposition == "violation":
         if risk not in {"medium", "high"} or category_set == {"none"}:
             raise ValueError("L2 violation is not elevated")
@@ -4163,19 +4180,57 @@ def _valid_location(repository: TarSourceRepository, path: str, line: int) -> bo
     return total is None or line <= max(total, 1)
 
 
+def _response_contract_detail(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return f" type={type(payload).__name__}"
+    incomplete = payload.get("incomplete_details")
+    reason = ""
+    if isinstance(incomplete, Mapping):
+        reason = str(incomplete.get("reason") or "")
+    error = payload.get("error")
+    error_code = ""
+    if isinstance(error, Mapping):
+        error_code = str(
+            error.get("code") or error.get("type") or error.get("error_type") or ""
+        )
+    return (
+        f" status={payload.get('status')!r}"
+        f" error_type={payload.get('error_type')!r}"
+        f" error={error_code!r}"
+        f" incomplete={reason!r}"
+        f" output={type(payload.get('output')).__name__}"
+        f" usage={type(payload.get('usage')).__name__}"
+    )
+
+
 def _response_output_and_usage(
     payload: object,
 ) -> tuple[list[dict[str, object]], L2Usage, str | None, str | None]:
     if not isinstance(payload, dict):
         raise ValueError("L2 response is not an object")
+    error = payload.get("error")
+    if isinstance(error, Mapping):
+        code = error.get("code") or error.get("type") or error.get("error_type")
+        raise ValueError(f"L2 model error:{code or 'unknown'}")
+    if error:
+        raise ValueError(f"L2 model error:{payload.get('error_type') or 'unknown'}")
+    status = payload.get("status")
+    if status in {"failed", "cancelled", "incomplete"}:
+        details = payload.get("incomplete_details")
+        reason = "none"
+        if isinstance(details, Mapping) and details.get("reason"):
+            reason = str(details.get("reason"))
+        elif payload.get("error_type"):
+            reason = str(payload.get("error_type"))
+        raise ValueError(f"L2 model status:{status}:{reason}")
     output = payload.get("output")
     usage = payload.get("usage")
-    if (
-        not isinstance(output, list)
-        or any(not isinstance(item, dict) for item in output)
-        or not isinstance(usage, dict)
-    ):
-        raise ValueError("L2 response lacks output or usage")
+    if not isinstance(output, list):
+        raise ValueError(f"L2 response output type:{type(output).__name__}")
+    if any(not isinstance(item, dict) for item in output):
+        raise ValueError("L2 response output item is not an object")
+    if not isinstance(usage, dict):
+        raise ValueError(f"L2 response usage type:{type(usage).__name__}")
     input_tokens = usage.get("input_tokens")
     output_tokens = usage.get("output_tokens")
     if (
