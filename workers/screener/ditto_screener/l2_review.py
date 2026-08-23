@@ -2567,9 +2567,8 @@ class KimiSolSourceReviewAgent:
         claimed_safe = (
             adjudicator.observation.ok and adjudicator.observation.risk_level == "low"
         )
-        adjudicated_safe = claimed_safe and _qualifies_safety_clearance(
-            safety_evidence, adjudicator
-        )
+        clearance_gaps = _safety_clearance_gaps(safety_evidence, adjudicator)
+        adjudicated_safe = claimed_safe and not clearance_gaps
         adjudicated_analyzed = _merge_digest_items(
             analyst.analyzed_files,
             critic.analyzed_files,
@@ -2638,6 +2637,10 @@ class KimiSolSourceReviewAgent:
                 critic_cache_hit=critic_cache_hit,
             )
         if claimed_safe and not adjudicated_safe:
+            logger.warning(
+                "L3 clearance certificate failed: %s",
+                ",".join(clearance_gaps) or "unknown",
+            )
             return L2RunResult(
                 observation=_failure(
                     "l3-adjudicator-clearance-certificate", "retryable_infra"
@@ -3552,8 +3555,10 @@ class LayeredSourceReviewAgent:
         always_escalate = os.environ.get(
             "SCREENER_L2_ALWAYS_ESCALATE", ""
         ).strip().lower() in {"1", "true", "yes", "on"}
-        should_escalate = always_escalate or l1.risk_level in {"medium", "high"} or (
-            l1.risk_level == "low" and not l1.clearance_certified
+        should_escalate = (
+            always_escalate
+            or l1.risk_level in {"medium", "high"}
+            or (l1.risk_level == "low" and not l1.clearance_certified)
         )
         if self._mode == "off" or not l1.ok or not should_escalate:
             if progress is not None:
@@ -3653,39 +3658,59 @@ def _qualifies_safety_clearance(
     evidence_observation: SourceReviewObservation, adjudicator: L2RunResult
 ) -> bool:
     """Require a deterministic certificate before any final safety clearance."""
+    return not _safety_clearance_gaps(evidence_observation, adjudicator)
+
+
+def _safety_clearance_gaps(
+    evidence_observation: SourceReviewObservation, adjudicator: L2RunResult
+) -> tuple[str, ...]:
+    """Name every mechanical certificate miss. Empty means the clearance holds."""
     finding = adjudicator.observation.finding
     evidence_paths = {str(item["path"]) for item in _l1_evidence(evidence_observation)}
     analyzed_paths = {str(item.get("path")) for item in adjudicator.analyzed_files}
-    if (
-        not evidence_paths
-        or not evidence_paths <= analyzed_paths
-        or not adjudicator.observation.ok
-        or adjudicator.observation.risk_level != "low"
-        or adjudicator.observation.categories != ("none",)
-        or adjudicator.resolution_basis not in _SAFE_RESOLUTION_BASES
-        or not adjudicator.dossier_complete
-        or not adjudicator.tools
-        or not adjudicator.response_models
-        or any(
-            model != L3_MODEL and not model.startswith(f"{L3_MODEL}-")
-            for model in adjudicator.response_models
+    gaps: list[str] = []
+    unread = sorted(evidence_paths - analyzed_paths)
+    if unread:
+        gaps.append("unread-l1-paths:" + "+".join(unread[:8]))
+    if not adjudicator.observation.ok:
+        gaps.append("observation-not-ok")
+    if adjudicator.observation.risk_level != "low":
+        gaps.append(f"risk:{adjudicator.observation.risk_level}")
+    if adjudicator.observation.categories != ("none",):
+        gaps.append(
+            "categories:" + ("+".join(adjudicator.observation.categories) or "empty")
         )
-        or not isinstance(finding, Mapping)
-        or _finding_confidence(finding) < _CHALLENGE_OVERTURN_CONFIDENCE
-        or finding.get("evidence") != []
-    ):
-        return False
+    if adjudicator.resolution_basis not in _SAFE_RESOLUTION_BASES:
+        gaps.append(f"basis:{adjudicator.resolution_basis}")
+    if not adjudicator.dossier_complete:
+        gaps.append("dossier-incomplete")
+    if not adjudicator.tools:
+        gaps.append("no-tools")
+    if not adjudicator.response_models:
+        gaps.append("no-models")
+    unexpected = [
+        model
+        for model in adjudicator.response_models
+        if model != L3_MODEL and not model.startswith(f"{L3_MODEL}-")
+    ]
+    if unexpected:
+        gaps.append("models:" + "+".join(unexpected[:4]))
+    if not isinstance(finding, Mapping):
+        gaps.append("no-finding")
+    else:
+        confidence = _finding_confidence(finding)
+        if confidence < _CHALLENGE_OVERTURN_CONFIDENCE:
+            gaps.append(f"confidence:{confidence}")
+        if finding.get("evidence") != []:
+            gaps.append("leftover-evidence")
     roles = {str(item.get("role")) for item in adjudicator.causal_path}
-    return (
-        len(adjudicator.causal_path) >= 4
-        and {
-            "context",
-            "decision",
-            "effect",
-            "sink",
-        }
-        <= roles
-    )
+    required_roles = {"context", "decision", "effect", "sink"}
+    missing_roles = sorted(required_roles - roles)
+    if len(adjudicator.causal_path) < 4:
+        gaps.append(f"causal-len:{len(adjudicator.causal_path)}")
+    if missing_roles:
+        gaps.append("missing-roles:" + "+".join(missing_roles))
+    return tuple(gaps)
 
 
 def _has_mixed_causal_families(

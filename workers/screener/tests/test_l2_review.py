@@ -57,6 +57,7 @@ from ditto_screener.l2_review import (
     _qualifies_for_direct_clear,
     _require_complete_analysis,
     _review_adaptation_hold,
+    _safety_clearance_gaps,
     _served_generator_hold,
     _write_all,
 )
@@ -339,6 +340,65 @@ def _safe() -> SourceReviewObservation:
         finding_digest="b" * 64,
         categories=("none",),
     )
+
+
+def test_safety_clearance_does_not_require_l1_evidence_on_certified_low() -> None:
+    finding = {"confidence": 1.0, "evidence": []}
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="low",
+        finding_digest="b" * 64,
+        categories=("none",),
+        finding=finding,
+    )
+    adjudicator = L2RunResult(
+        observation,
+        ({"path": "src/lib.rs", "sha256": "c" * 64},),
+        (
+            {"path": "src/lib.rs", "line": 1, "role": "context"},
+            {"path": "src/lib.rs", "line": 2, "role": "decision"},
+            {"path": "src/lib.rs", "line": 3, "role": "effect"},
+            {"path": "src/lib.rs", "line": 4, "role": "sink"},
+        ),
+        ("read_file", "submit_l2_review"),
+        L2Usage(),
+        False,
+        response_models=("openai/gpt-5.6-sol",),
+        resolution_basis="authoritative_model_tool_path",
+        dossier_complete=True,
+    )
+
+    assert _safety_clearance_gaps(_l1("low"), adjudicator) == ()
+
+
+def test_safety_clearance_names_unread_l1_paths() -> None:
+    finding = {"confidence": 1.0, "evidence": []}
+    observation = SourceReviewObservation(
+        ok=True,
+        risk_level="low",
+        finding_digest="b" * 64,
+        categories=("none",),
+        finding=finding,
+    )
+    adjudicator = L2RunResult(
+        observation,
+        ({"path": "src/other.rs", "sha256": "c" * 64},),
+        (
+            {"path": "src/other.rs", "line": 1, "role": "context"},
+            {"path": "src/other.rs", "line": 2, "role": "decision"},
+            {"path": "src/other.rs", "line": 3, "role": "effect"},
+            {"path": "src/other.rs", "line": 4, "role": "sink"},
+        ),
+        ("read_file", "submit_l2_review"),
+        L2Usage(),
+        False,
+        response_models=("openai/gpt-5.6-sol",),
+        resolution_basis="authoritative_model_tool_path",
+        dossier_complete=True,
+    )
+    gaps = _safety_clearance_gaps(_l1("medium"), adjudicator)
+
+    assert any(item.startswith("unread-l1-paths:src/main.rs") for item in gaps)
 
 
 def _clearance_certificate(safe: dict[str, object]) -> dict[str, object]:
@@ -1128,7 +1188,9 @@ async def test_inprocess_starter_diff_ignores_non_provenance_json(
     tmp_path: Path,
 ) -> None:
     """Package data/ also holds bench-categories-v1.json; that is not a starter."""
-    (tmp_path / "Cargo.toml").write_text("[package]\nname = \"probe\"\nversion = \"0.0.0\"\n")
+    (tmp_path / "Cargo.toml").write_text(
+        '[package]\nname = "probe"\nversion = "0.0.0"\n'
+    )
     output = await InProcessAnalyzerHarness().run(tmp_path, "starter_diff", {})
     payload = json.loads(output)
     assert "error" not in payload, payload
