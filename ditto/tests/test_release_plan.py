@@ -197,6 +197,20 @@ def test_coding_inference_miner_vector_excludes_platform_authority(
     assert root_verification(components, ignored_paths, path) == "full"
 
 
+def test_coding_execution_plan_vector_is_not_yet_platform_owned(
+    components, ignored_paths
+) -> None:
+    path = "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json"
+    assert selected(components, ignored_paths, path) == {
+        "dittobench_api",
+        "dittobench_coding_datagen",
+        "dittobench_coding_starter_kit",
+        "validator",
+        "validator_stack",
+    }
+    assert root_verification(components, ignored_paths, path) == "full"
+
+
 def test_coding_contract_models_select_scorer_and_validator_stack(
     components, ignored_paths
 ) -> None:

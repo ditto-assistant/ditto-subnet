@@ -33,6 +33,9 @@ from pydantic import (
 CODING_CONTRACT_VERSION = 1
 MAX_CANONICAL_JSON_BYTES = 4 << 20
 REPAIR_SCORE_RESOLVED_MICROS = 1_000_000
+CODING_GRADER_CONTRACT_SHA256 = (
+    "c002260a02a46d7187175e789c9b2b232f0d1072b214330347e136c466368055"
+)
 UINT32_MAX = (1 << 32) - 1
 UINT64_MAX = (1 << 64) - 1
 
@@ -207,7 +210,7 @@ class CodingManifestTask(CodingContractModel):
 
 class CodingGraderCommand(CodingContractModel):
     id: CommandId
-    argv: Annotated[list[str], Field(min_length=1, max_length=64)]
+    argv: Annotated[list[str], Field(min_length=1, max_length=64, repr=False)]
     timeout_milliseconds: Annotated[int, Field(ge=1, le=600_000)]
 
     @model_validator(mode="after")
@@ -327,6 +330,48 @@ class CodingGraderResourceProfile(CodingContractModel):
         )
         if peak > self.max_combined_disk_bytes:
             raise ValueError("grader combined disk peak exceeds its ceiling")
+        return self
+
+
+class CodingRunnerPlan(CodingContractModel):
+    """Task-static authoring authority, excluding ticket and grader material."""
+
+    schema_name: Literal["dittobench-coding-runner-plan-v1"] = Field(alias="schema")
+    coding_contract_version: Literal[1]
+    case_id: OpaqueId
+    visible_bundle_sha256: Sha256
+    base_tree_sha256: Sha256
+    editable_paths: Annotated[list[SafeRelativePath], Field(max_length=64)]
+    creatable_paths: Annotated[list[SafeRelativePath], Field(max_length=64)]
+    deletable_paths: Annotated[list[SafeRelativePath], Field(max_length=64)]
+    test_commands: Annotated[list[CodingGraderCommand], Field(max_length=64)]
+    build_commands: Annotated[list[CodingGraderCommand], Field(max_length=64)]
+    limits: CodingGraderLimits
+
+    @model_validator(mode="after")
+    def plan_is_canonical(self) -> CodingRunnerPlan:
+        path_sets = (
+            self.editable_paths,
+            self.creatable_paths,
+            self.deletable_paths,
+        )
+        paths = [path for values in path_sets for path in values]
+        if any(values != sorted(values) for values in path_sets) or len(paths) != len(
+            set(paths)
+        ):
+            raise ValueError("runner path sets must be sorted, unique, and disjoint")
+        if len(paths) > self.limits.max_entries:
+            raise ValueError("runner path policy exceeds its entry limit")
+        command_sets = (self.test_commands, self.build_commands)
+        command_ids = [command.id for values in command_sets for command in values]
+        if any(
+            [command.id for command in values]
+            != sorted(command.id for command in values)
+            for values in command_sets
+        ) or len(command_ids) != len(set(command_ids)):
+            raise ValueError("runner commands must be sorted, unique, and disjoint")
+        if len(command_ids) > self.limits.max_tool_calls:
+            raise ValueError("runner command policy exceeds its tool-call limit")
         return self
 
 
@@ -1709,6 +1754,58 @@ def grader_resource_profile_digest(profile: CodingGraderResourceProfile) -> str:
     return sha256_hex(_canonical_json_bytes(normalized))
 
 
+def runner_plan_digest(plan: CodingRunnerPlan) -> str:
+    """Hash one validated task-static authoring runner plan."""
+
+    normalized = CodingRunnerPlan.model_validate_json(
+        plan.model_dump_json(by_alias=True)
+    )
+    return sha256_hex(_canonical_json_bytes(normalized))
+
+
+def validate_execution_plan_bundle(
+    *,
+    runner_plan: CodingRunnerPlan,
+    runtime_policy: CodingRuntimePolicy,
+    grader_plan: CodingGraderPlan,
+    resource_profile: CodingGraderResourceProfile,
+) -> None:
+    """Cross-check the phase-separated plans without exposing grader data."""
+
+    runner_plan = CodingRunnerPlan.model_validate_json(
+        runner_plan.model_dump_json(by_alias=True)
+    )
+    runtime_policy = CodingRuntimePolicy.model_validate_json(
+        runtime_policy.model_dump_json()
+    )
+    grader_plan = CodingGraderPlan.model_validate_json(
+        grader_plan.model_dump_json(by_alias=True)
+    )
+    resource_profile = CodingGraderResourceProfile.model_validate_json(
+        resource_profile.model_dump_json(by_alias=True)
+    )
+    authoring_paths = sorted(
+        runner_plan.editable_paths
+        + runner_plan.creatable_paths
+        + runner_plan.deletable_paths
+    )
+    test_ids = [command.id for command in runner_plan.test_commands]
+    build_ids = [command.id for command in runner_plan.build_commands]
+    if (
+        runner_plan.case_id != grader_plan.case_id
+        or runner_plan.visible_bundle_sha256 != grader_plan.visible_bundle_sha256
+        or runner_plan.base_tree_sha256 != grader_plan.base_tree_sha256
+        or runner_plan.limits != resource_profile.candidate_limits
+        or runtime_policy.editable_paths != authoring_paths
+        or runtime_policy.test_command_ids != test_ids
+        or runtime_policy.build_command_ids != build_ids
+        or grader_plan.resource_profile_sha256
+        != grader_resource_profile_digest(resource_profile)
+        or grader_plan.grader_contract_sha256 != CODING_GRADER_CONTRACT_SHA256
+    ):
+        raise ValueError("coding execution plan phases disagree")
+
+
 def grader_execution_receipt_root(
     plan: CodingGraderPlan,
     receipts: list[CodingGraderExecutionReceipt],
@@ -1946,6 +2043,7 @@ def run_evidence_digest(
 
 __all__ = [
     "CODING_CONTRACT_VERSION",
+    "CODING_GRADER_CONTRACT_SHA256",
     "REPAIR_SCORE_RESOLVED_MICROS",
     "CodingArtifactAudience",
     "CodingArtifactCapabilityEnvelope",
@@ -1977,6 +2075,7 @@ __all__ = [
     "CodingRunEvidence",
     "CodingRunManifest",
     "CodingRunRequest",
+    "CodingRunnerPlan",
     "CodingRuntimePolicy",
     "CodingSeedRequest",
     "CodingTaskEvidence",
@@ -2009,7 +2108,9 @@ __all__ = [
     "memory_bundle_digest",
     "parse_canonical_json",
     "run_evidence_digest",
+    "runner_plan_digest",
     "task_evidence_digest",
     "validate_run_evidence_against_manifest",
+    "validate_execution_plan_bundle",
     "validate_task_evidence_against_manifest",
 ]

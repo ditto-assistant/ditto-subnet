@@ -55,6 +55,16 @@ task, patch, transcript, provider credential, control token, broker private
 key, or usable capability. All URLs use reserved `.invalid` hosts and all
 bearer/key material is visibly synthetic.
 
+`coding_execution_plan_v1.json` freezes the missing task-static execution
+preimages required by the trusted Go runtime. Its authoring runner plan contains
+only visible workspace path policy, visible test/build commands, and candidate
+limits. The phase-separated grader plan and resource profile contain synthetic
+protected command paths and are validator-only. Python and Go independently
+recompute all three digests and reject cross-phase identity, command, path,
+limit, resource, or compiled-grader drift. Rust and miner-facing code must never
+consume this vector. The vector defines authority only; a later PR must bind its
+digests into the private catalog and deliver each preimage in the correct lease.
+
 `coding_inference_miner_v1.json` freezes two synthetic, miner-visible Luna Chat
 Completions turns using the public coding prompt and ordered workspace-tool
 schemas. Rust, Python, and Go use it to prove the reference harness emits the

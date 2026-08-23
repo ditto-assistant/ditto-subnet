@@ -69,6 +69,10 @@ def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
         "packages/dittobench-coding-contract/testdata/coding_inference_miner_v1.json"
         not in backend_paths
     )
+    assert (
+        "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json"
+        not in backend_paths
+    )
 
 
 def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:
