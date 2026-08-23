@@ -13,7 +13,7 @@ path = "src/bin/dittobench-miner.rs"
 # The Ditto agent + memory harness (public git dep), pinned to a known-good
 # ditto-harness commit for reproducible builds. Bump `rev` deliberately: set it
 # to the new commit, `cargo update -p ditto-harness`, then run the full suite.
-ditto-harness = { git = "https://github.com/ditto-assistant/ditto-harness", rev = "ba5b463aecd8eec38ada6aa9c2e6e8fac9c5be1d" }
+ditto-harness = { git = "https://github.com/ditto-assistant/ditto-harness", rev = "e58b08aed57d68c3e0d05e7b616a635f73812c89" }
 
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
@@ -34,3 +34,6 @@ ndarray = "0.16"
 dotenvy = "0.15"
 # Outbound HTTP for the playground -> dittobench-api proxy (Submit tab).
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+
+[dev-dependencies]
+tempfile = "3"

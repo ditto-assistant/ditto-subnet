@@ -146,6 +146,7 @@ Full steps: README, *Hosted rehearsal*.
 
 - The kit pins `ditto-harness` to a known-good commit `rev` in `Cargo.toml` for reproducible builds.
 - To pick up a newer harness: bump `rev` deliberately, run `cargo update -p ditto-harness`, then run the full suite.
+- Overlapping `/run` shares one process-wide Turso `Db`. A single connection is not re-entrant (`concurrent use forbidden`); keep the harness pin that connects per overlapping op (`tests/store_concurrency.rs`).
 - The hosted and on-chain validators don't pin a harness ref at all; they build your submitted crate, whose `Cargo.toml` pins the harness. Practice and on-chain runs build the same crate you submitted, so practice scores transfer.
 
 ## Troubleshooting
