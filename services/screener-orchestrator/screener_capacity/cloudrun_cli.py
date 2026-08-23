@@ -110,10 +110,7 @@ def command_kaniko_probe(args: argparse.Namespace) -> int:
         logs = _gcloud(
             "logging",
             "read",
-            (
-                "resource.type=cloud_run_job AND "
-                f"resource.labels.job_name={job}"
-            ),
+            (f"resource.type=cloud_run_job AND resource.labels.job_name={job}"),
             f"--project={_PROJECT}",
             "--limit=80",
             "--format=value(textPayload)",
@@ -332,13 +329,13 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
             "SCREENER_L2_MAX_STEPS": "18",
             "SCREENER_L2_MAX_COMPLETION_TOKENS": "8192",
         }
-        env_file = tempfile.NamedTemporaryFile(
+        with tempfile.NamedTemporaryFile(
             "w", suffix=".yaml", delete=False, encoding="utf-8"
-        )
-        try:
+        ) as env_file:
             for key, value in env_map.items():
                 env_file.write(f"{key}: {json.dumps(value)}\n")
-            env_file.close()
+            env_path = env_file.name
+        try:
             print(json.dumps({"phase": "create-review-job", "job": review}))
             _gcloud(
                 "run",
@@ -356,11 +353,11 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
                 "--cpu=2",
                 "--memory=4Gi",
                 f"--service-account={_UNTRUSTED_SA}",
-                f"--env-vars-file={env_file.name}",
+                f"--env-vars-file={env_path}",
                 timeout=180,
             )
         finally:
-            os.unlink(env_file.name)
+            os.unlink(env_path)
         _gcloud(
             "run",
             "jobs",
@@ -394,10 +391,7 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
         review_logs = _gcloud(
             "logging",
             "read",
-            (
-                "resource.type=cloud_run_job AND "
-                f"resource.labels.job_name={review}"
-            ),
+            (f"resource.type=cloud_run_job AND resource.labels.job_name={review}"),
             f"--project={_PROJECT}",
             "--limit=80",
             "--format=value(textPayload)",

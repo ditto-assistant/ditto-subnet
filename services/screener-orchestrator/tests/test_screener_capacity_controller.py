@@ -16,6 +16,7 @@ from screener_capacity.controller import (
     ProviderRouting,
     Settings,
     _targon_counts,
+    build_parser,
     desired_slots,
     gce_residual,
     reconcile,
@@ -635,6 +636,42 @@ class CapacityDecisionTests(unittest.TestCase):
             self.assertNotIn("workload-1", targon.deleted)
             self.assertIn("workload-2", targon.deleted)
             self.assertNotIn("targon:create", targon.operations)
+
+
+class RetiredUnitFlagTests(unittest.TestCase):
+    def test_parser_accepts_retired_nested_docker_unit_flags(self) -> None:
+        args = build_parser().parse_args(
+            [
+                "--platform-url",
+                "https://platform.invalid",
+                "--targon-platform-url",
+                "https://platform.invalid",
+                "--platform-token-file",
+                "/token",
+                "--targon-org-slug",
+                "ditto",
+                "--gce-project",
+                "test-project",
+                "--gce-region",
+                "test-region",
+                "--gce-mig",
+                "test-mig",
+                "--targon-capability-file",
+                "/capability.json",
+                "--targon-resource",
+                "cpu-medium",
+                "--targon-worker-env-file",
+                "/worker-env.json",
+                "--gcp-bootstrap-service-account",
+                "bootstrap@example.iam.gserviceaccount.com",
+                "--source-review-secret-resource",
+                "projects/test/secrets/key",
+                "--targon-provisioning-timeout-seconds",
+                "600",
+            ]
+        )
+        self.assertEqual(args.targon_org_slug, "ditto")
+        self.assertEqual(args.targon_resource, "cpu-medium")
 
 
 if __name__ == "__main__":

@@ -550,9 +550,7 @@ def command_runtime_probe(args: argparse.Namespace) -> int:
                 try:
                     with urllib.request.urlopen(health_url, timeout=5) as response:
                         body = response.read(256)
-                        healthy = response.status == 200 and (
-                            native or body == b"ok"
-                        )
+                        healthy = response.status == 200 and (native or body == b"ok")
                         if healthy:
                             print(
                                 json.dumps(
@@ -1024,8 +1022,10 @@ def command_source_review_probe(args: argparse.Namespace) -> int:
         print(json.dumps({"phase": "review-registered", "uid": review_uid}))
         client.deploy(review_uid)
 
-        deadline = time.monotonic() + args.provision_timeout_seconds + (
-            float(args.review_timeout_seconds) if live_model else 0
+        deadline = (
+            time.monotonic()
+            + args.provision_timeout_seconds
+            + (float(args.review_timeout_seconds) if live_model else 0)
         )
         while time.monotonic() < deadline:
             mock_logs = _safe_logs(client, mock_uid, tail=80)

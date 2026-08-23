@@ -974,6 +974,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lock-file", default="/run/lock/ditto-screener-capacity.lock")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--once", action="store_true")
+    # Nested-Docker Targon slots were retired in #964. Live systemd units may
+    # still pass these flags until Ansible reapplies the unit template.
+    parser.add_argument("--targon-platform-url")
+    parser.add_argument("--targon-capability-file")
+    parser.add_argument("--targon-resource")
+    parser.add_argument("--targon-worker-env-file")
+    parser.add_argument("--gcp-bootstrap-service-account")
+    parser.add_argument("--gcp-bootstrap-delegate-service-account")
+    parser.add_argument("--source-review-secret-resource")
+    parser.add_argument("--targon-provisioning-timeout-seconds", type=int)
     return parser
 
 

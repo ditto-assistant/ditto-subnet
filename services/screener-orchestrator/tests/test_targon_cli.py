@@ -251,9 +251,7 @@ def test_source_review_probe_runs_exact_job_and_cleans_up(monkeypatch, capsys) -
     assert '"capability": "AVAILABLE"' in output
 
 
-def test_live_model_source_review_probe_pins_layered_env(
-    monkeypatch, capsys
-) -> None:
+def test_live_model_source_review_probe_pins_layered_env(monkeypatch, capsys) -> None:
     class LiveSourceReviewTargon(_Targon):
         def inventory(self) -> list[dict[str, object]]:
             return [{"name": "cpu-small", "available": 2}]
@@ -294,9 +292,7 @@ def test_live_model_source_review_probe_pins_layered_env(
             return None
 
         def read(self) -> bytes:
-            return (
-                b'{"ok": true, "artifact_sha256": "' + (b"a" * 64) + b'"}'
-            )
+            return b'{"ok": true, "artifact_sha256": "' + (b"a" * 64) + b'"}'
 
     client = LiveSourceReviewTargon()
     monkeypatch.setattr(
