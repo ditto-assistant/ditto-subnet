@@ -2673,7 +2673,11 @@ class KimiSolSourceReviewAgent:
                 critic_cache_hit=critic_cache_hit,
             )
         return L2RunResult(
-            observation=adjudicator.observation,
+            observation=(
+                replace(adjudicator.observation, clearance_certified=True)
+                if adjudicated_safe
+                else adjudicator.observation
+            ),
             analyzed_files=adjudicated_analyzed,
             causal_path=adjudicator.causal_path,
             tools=dossier_tools + analyst.tools + critic.tools + adjudicator.tools,
@@ -3373,6 +3377,7 @@ class KimiSolSourceReviewAgent:
                 "error_code": result.observation.error_code,
                 "finding": result.observation.finding,
                 "failure_disposition": result.observation.failure_disposition,
+                "clearance_certified": result.observation.clearance_certified,
                 "review_audit": result.observation.review_audit,
             },
             "analyzed_files": list(result.analyzed_files),

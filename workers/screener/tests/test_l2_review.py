@@ -1031,6 +1031,15 @@ def test_safety_adjudicator_safe_result_requires_refutation_path(
         {"path": "src/main.rs", "line": 1, "role": "effect"},
         {"path": "src/main.rs", "line": 1, "role": "sink"},
     ]
+    value["confidence"] = 0.99
+    with pytest.raises(ValueError, match="confidence is below 1.0"):
+        _parse_l2_review(
+            value,
+            artifact_sha256=artifact_sha,
+            repository=repository,
+            prompt_revision=L2_SAFETY_PROMPT_REVISION,
+        )
+    value["confidence"] = 1.0
     observation, _analyzed, causal, basis = _parse_l2_review(
         value,
         artifact_sha256=artifact_sha,
@@ -1690,6 +1699,7 @@ async def test_scorer_attention_blocks_direct_clear_and_requires_sol(
     assert requests[2]["reasoning"] == {"effort": "medium"}
     assert requests[3]["reasoning"] == {"effort": "medium"}
     assert result.observation.risk_level == "low"
+    assert result.observation.clearance_certified is True
     assert result.clearance_path == "l3_adjudicated_safe"
 
 
@@ -1918,6 +1928,8 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
         == "confirm_safe"
     )
     assert first.clearance_path == second.clearance_path == "l3_adjudicated_safe"
+    assert first.observation.clearance_certified is True
+    assert second.observation.clearance_certified is True
     assert first.response_models == (
         "moonshotai/kimi-k3-20260715",
         "openai/gpt-5.6-sol-20260709",
@@ -2051,6 +2063,7 @@ fn run() -> Answer {
     assert requests[0]["model"] == L2_MODEL
     assert requests[1]["model"] == "openai/gpt-5.6-sol"
     assert result.observation.risk_level == "low"
+    assert result.observation.clearance_certified is True
     assert result.clearance_path == "l3_adjudicated_safe"
     assert result.critic_disposition == "confirm_safe"
 
@@ -2109,6 +2122,7 @@ fn main() {
 
     assert len(requests) == 4
     assert result.observation.risk_level == "low"
+    assert result.observation.clearance_certified is True
     assert result.clearance_path == "l3_adjudicated_safe"
 
 
@@ -2949,11 +2963,8 @@ async def test_agreeing_safe_models_cannot_clear_original_scorer_lead(
     assert result.clearance_path == "l3_adjudicated_violation"
 
 
-@pytest.mark.parametrize(
-    ("adjudicator_confidence", "clears"), [(1.0, True), (0.99, False)]
-)
 async def test_adjudicator_requires_certificate_to_overturn_false_critic_challenge(
-    tmp_path: Path, adjudicator_confidence: float, clears: bool
+    tmp_path: Path,
 ) -> None:
     source = "fn main() { execute_real_tool(); }\nfn execute_real_tool() {}"
     archive, artifact_sha = _tar(tmp_path, source)
@@ -2991,7 +3002,7 @@ async def test_adjudicator_requires_certificate_to_overturn_false_critic_challen
     }
     adjudicated_safe = {
         **safe,
-        "confidence": adjudicator_confidence,
+        "confidence": 1.0,
         "causal_path": [
             {"path": "src/main.rs", "line": 1, "role": "context"},
             {"path": "src/main.rs", "line": 1, "role": "decision"},
@@ -3021,15 +3032,10 @@ async def test_adjudicator_requires_certificate_to_overturn_false_critic_challen
 
     assert requests == 4
     assert result.critic_disposition == "challenge"
-    if clears:
-        assert result.observation.risk_level == "low"
-        assert result.adjudicator_disposition == "overturn_to_safe"
-        assert result.clearance_path == "l3_adjudicated_safe"
-    else:
-        assert not result.observation.ok
-        assert result.observation.failure_disposition == "retryable_infra"
-        assert result.adjudicator_disposition == "inconclusive"
-        assert result.clearance_path == "l3_adjudicator_clearance_unproven"
+    assert result.observation.risk_level == "low"
+    assert result.observation.clearance_certified is True
+    assert result.adjudicator_disposition == "overturn_to_safe"
+    assert result.clearance_path == "l3_adjudicated_safe"
 
 
 async def test_critic_failure_cannot_clear_or_reject(tmp_path: Path) -> None:
