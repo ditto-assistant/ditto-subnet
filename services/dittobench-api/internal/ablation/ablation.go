@@ -1181,17 +1181,12 @@ func Evaluate(input EvaluateInput) (Evaluation, error) {
 	threshold := round6(input.Threshold)
 	status, reason := StatusFailed, ReasonDeltaBelowThreshold
 	affected := usage.affectedCalls()
-	switch {
-	case input.Mode == ModeEnforce:
-		// Contract v1 does not hide the treatment from an adaptive miner. It
-		// therefore cannot prove a positive counterfactual in enforce mode.
-		status, reason = StatusUnavailable, ReasonEnforceProofUnavailable
-	case deltaRaw >= input.Threshold:
+	if deltaRaw >= input.Threshold {
 		// A score drop is observationally ambiguous: genuine model use or
 		// synthetic-lane sabotage. Never emit StatusPassed / threshold_met.
-		// Do still complete the failed observation with the numeric gate so
-		// shadow confirmation can qualify and project LongMem scores. Leaving
-		// this unavailable made reader-used runs unprojectable.
+		// Complete the failed observation in shadow and enforce so
+		// confirmation can qualify. Enforce still cannot prove a positive
+		// counterfactual; this evidence keeps semantic/applied at zero.
 		status, reason = StatusFailed, ReasonObservationalDropNotCausal
 	}
 	semanticFactor := 1.0

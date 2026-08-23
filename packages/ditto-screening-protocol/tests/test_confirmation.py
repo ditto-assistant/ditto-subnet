@@ -357,7 +357,7 @@ def test_shadow_observational_drop_is_a_completed_non_causal_failure() -> None:
     assert parsed.delta_micros >= parsed.threshold_micros
 
 
-def test_observational_drop_cannot_label_enforce_or_a_sub_threshold_delta() -> None:
+def test_enforce_observational_drop_is_a_completed_non_causal_failure() -> None:
     evidence = _report().inference_ablation.evidence.model_dump(mode="json")
     evidence.update(
         {
@@ -371,7 +371,29 @@ def test_observational_drop_cannot_label_enforce_or_a_sub_threshold_delta() -> N
             "applied_factor_bps": 0,
         }
     )
-    with pytest.raises(ValidationError, match="completed shadow failure"):
+
+    parsed = AblationEvidence.model_validate(evidence)
+    assert parsed.status == "failed"
+    assert parsed.mode == "enforce"
+    assert parsed.applied_factor_bps == 0
+    assert parsed.delta_micros >= parsed.threshold_micros
+
+
+def test_observational_drop_cannot_label_off_or_a_sub_threshold_delta() -> None:
+    evidence = _report().inference_ablation.evidence.model_dump(mode="json")
+    evidence.update(
+        {
+            "mode": "off",
+            "status": "failed",
+            "reason": "observational_drop_not_causal",
+            "baseline_mean_micros": 900_000,
+            "ablated_mean_micros": 400_000,
+            "delta_micros": 500_000,
+            "semantic_factor_bps": 0,
+            "applied_factor_bps": 0,
+        }
+    )
+    with pytest.raises(ValidationError, match="completed active-mode failure"):
         AblationEvidence.model_validate(evidence)
 
     evidence["mode"] = "shadow"

@@ -309,9 +309,9 @@ class AblationEvidence(BaseModel):
                 raise ValueError("delta_micros does not match the paired means")
             drop_meets_threshold = self.delta_micros >= self.threshold_micros
             if self.reason == "observational_drop_not_causal":
-                if self.status != "failed" or self.mode != "shadow":
+                if self.status != "failed" or self.mode not in {"shadow", "enforce"}:
                     raise ValueError(
-                        "observational drop requires a completed shadow failure"
+                        "observational drop requires a completed active-mode failure"
                     )
                 if not drop_meets_threshold:
                     raise ValueError(

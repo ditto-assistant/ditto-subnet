@@ -1023,7 +1023,7 @@ class TestCompletionAndRetest:
         assert subject.full_quality_micros is None
         assert subject.full_effective_micros is None
 
-    async def test_failed_enforce_ablation_is_complete_effective_zero(
+    async def test_failed_enforce_ablation_is_complete_and_keeps_the_mix(
         self, session: AsyncSession
     ) -> None:
         async with session.begin():
@@ -1038,8 +1038,8 @@ class TestCompletionAndRetest:
         assert subject.result_status == "full_confirmed"
         assert subject.full_quality_micros == 650_000
         assert subject.semantic_factor_bps == 0
-        assert subject.applied_factor_bps == 0
-        assert subject.full_effective_micros == 0
+        assert subject.applied_factor_bps == 10_000
+        assert subject.full_effective_micros == 650_000
 
     async def test_completion_rejects_cost_mismatch(
         self, session: AsyncSession

@@ -827,7 +827,7 @@ class TestSharedRootAndSubjectProjection:
         assert projection.full_effective_micros == projection.full_quality_micros
         assert projection.result_status == "provisional"
 
-    def test_failed_enforce_gate_is_complete_and_yields_effective_zero(self) -> None:
+    def test_failed_enforce_ablation_keeps_the_longmem_mix(self) -> None:
         verified = rebuild(
             unsigned_report(
                 mode=ConfirmationBundleMode.ENFORCE,
@@ -847,9 +847,56 @@ class TestSharedRootAndSubjectProjection:
         assert projection.result_status == "full_confirmed"
         assert projection.full_quality_micros == 680_000
         assert projection.semantic_factor_bps == 0
-        assert projection.applied_factor_bps == 0
-        assert projection.full_effective_micros == 0
-        assert projection.full_stderr_micros == 0
+        assert projection.applied_factor_bps == 10_000
+        assert projection.full_effective_micros == 680_000
+
+    def test_enforce_observational_drop_projects_the_longmem_mix(self) -> None:
+        failed = ablation_envelope(
+            "inference",
+            mode=ConfirmationBundleMode.ENFORCE,
+            status="failed",
+        )
+        evidence = failed.evidence.model_copy(
+            update={
+                "reason": "observational_drop_not_causal",
+                "baseline_mean_micros": 900_000,
+                "ablated_mean_micros": 400_000,
+                "delta_micros": 500_000,
+                "semantic_factor_bps": 0,
+                "applied_factor_bps": 0,
+            }
+        )
+        inference = failed.model_copy(
+            update={
+                "evidence": evidence,
+                "evidence_sha256": evidence_digest(evidence),
+            }
+        )
+        embedding = ablation_envelope(
+            "embedding",
+            mode=ConfirmationBundleMode.ENFORCE,
+            status="failed",
+        )
+        report = unsigned_report(
+            mode=ConfirmationBundleMode.ENFORCE,
+            inference_status="failed",
+            embedding_status="failed",
+        ).model_copy(update={"inference_ablation": inference, "embedding_ablation": embedding})
+        verified = rebuild(report, mode=ConfirmationBundleMode.ENFORCE)
+        assert verified.ablations_complete is True
+        projection = compute_subject_projection(
+            mode=ConfirmationBundleMode.ENFORCE,
+            base_quality_micros=882_550,
+            base_stderr_micros=10_668,
+            base_model_factor_bps=10_000,
+            base_tool_factor_bps=10_000,
+            verified=verified,
+            composite=verification_profile().composite,
+        )
+        assert projection.result_status == "full_confirmed"
+        assert projection.semantic_factor_bps == 0
+        assert projection.applied_factor_bps == 10_000
+        assert projection.full_effective_micros == projection.full_quality_micros == 729_530
 
     @pytest.mark.parametrize("field", ["model", "tool"])
     def test_base_binary_gates_are_applied_per_subject(self, field: str) -> None:

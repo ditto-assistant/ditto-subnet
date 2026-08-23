@@ -941,9 +941,9 @@ func TestGateStatusThresholdsAndFactors(t *testing.T) {
 		wantSemantic float64
 		wantApplied  float64
 	}{
-		{"enforce fails closed on observed drop", ModeEnforce, 0.5, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
-		{"enforce fails closed at threshold", ModeEnforce, 0.5, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
-		{"enforce fails closed below threshold", ModeEnforce, 0.500001, 6, nil, StatusUnavailable, ReasonEnforceProofUnavailable, 0, 0},
+		{"enforce drop is a completed non-causal observation", ModeEnforce, 0.5, 6, nil, StatusFailed, ReasonObservationalDropNotCausal, 0, 0},
+		{"enforce threshold boundary is a completed non-causal observation", ModeEnforce, 0.5, 6, nil, StatusFailed, ReasonObservationalDropNotCausal, 0, 0},
+		{"enforce below threshold remains a completed failure", ModeEnforce, 0.500001, 6, nil, StatusFailed, ReasonDeltaBelowThreshold, 0, 0},
 		{"shadow drop is a completed non-causal observation", ModeShadow, 0.2, 6, nil, StatusFailed, ReasonObservationalDropNotCausal, 0, 1},
 		{"shadow threshold boundary is a completed non-causal observation", ModeShadow, 0.5, 6, nil, StatusFailed, ReasonObservationalDropNotCausal, 0, 1},
 		{"shadow failure neutral", ModeShadow, 0.500001, 6, nil, StatusFailed, ReasonDeltaBelowThreshold, 0, 1},
@@ -1208,8 +1208,9 @@ func TestLegacyResponseFingerprintSabotageCannotQualify(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Evidence.Status != StatusUnavailable || got.Evidence.Reason != ReasonEnforceProofUnavailable {
-			t.Fatalf("v1 enforce did not fail closed for %s: %+v", intervention, got.Evidence)
+		if got.Evidence.Status != StatusFailed || got.Evidence.Reason != ReasonDeltaBelowThreshold ||
+			got.Evidence.SemanticFactor != 0 || got.Evidence.AppliedFactor != 0 {
+			t.Fatalf("v1 enforce promoted legacy sabotage for %s: %+v", intervention, got.Evidence)
 		}
 	}
 }
@@ -1258,9 +1259,12 @@ func TestAdaptiveTreatmentDetectionIsContainedToShadow(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if enforce.Evidence.Status != StatusUnavailable || enforce.Evidence.Reason != ReasonEnforceProofUnavailable ||
+		if enforce.Evidence.Status != StatusFailed || enforce.Evidence.Reason != ReasonObservationalDropNotCausal ||
 			enforce.Evidence.SemanticFactor != 0 || enforce.Evidence.AppliedFactor != 0 {
-			t.Fatalf("adaptive detection crossed enforce boundary for %s: %+v", intervention, enforce.Evidence)
+			t.Fatalf("adaptive detection promoted an enforce pass for %s: %+v", intervention, enforce.Evidence)
+		}
+		if enforce.Evidence.BaselineScoresSHA256 == "" || enforce.Evidence.AblatedScoresSHA256 == "" {
+			t.Fatalf("enforce observational drop omitted numeric gate for %s: %+v", intervention, enforce.Evidence)
 		}
 	}
 }

@@ -634,7 +634,18 @@ def compute_subject_projection(
         base_tool_factor_bps,
         verified.ablation_semantic_factor_bps,
     )
-    applied = FACTOR_SCALE if mode == ConfirmationBundleMode.SHADOW else semantic
+    # Contract v1 cannot prove a causal ablation pass. Qualification already
+    # requires both ablations to finish; ranking then uses the 70/30 mix.
+    # Base model/tool gates still apply in enforce. Shadow keeps applied=1.
+    ranking_factor = _binary_product(
+        base_model_factor_bps,
+        base_tool_factor_bps,
+    )
+    applied = (
+        FACTOR_SCALE
+        if mode == ConfirmationBundleMode.SHADOW
+        else ranking_factor
+    )
     quality = _round_ratio(
         composite.base_weight_bps * base_quality_micros
         + composite.longmem_weight_bps * verified.longmem_mean_micros,
