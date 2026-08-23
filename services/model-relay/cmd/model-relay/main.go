@@ -226,6 +226,7 @@ func run() error {
 		slog.String("commit", commit),
 		slog.String("role", cfg.Role),
 		slog.Bool("inference_proxy_enabled", cfg.Inference.Enabled),
+		slog.Bool("coding_inference_enabled", cfg.Inference.CodingEnabled),
 	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

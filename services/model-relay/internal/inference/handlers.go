@@ -94,6 +94,7 @@ func NewHandlers(deps *Deps) *server.InferenceHandlers {
 		ConfirmationChatCompletions: http.HandlerFunc(deps.handleConfirmationChatCompletions),
 		ConfirmationEmbeddings:      http.HandlerFunc(deps.handleConfirmationEmbeddings),
 		SourceReviewProviderEvent:   http.HandlerFunc(deps.handleSourceReviewProviderEvent),
+		CodingChatCompletions:       http.HandlerFunc(deps.handleCodingChatCompletions),
 	}
 }
 

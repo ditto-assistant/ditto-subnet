@@ -38,7 +38,7 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
   handler registration points.
 - `internal/inference` — the inference plane: `POST /api/v1/inference/
   {exchange,chat/completions,embeddings,confirmation/chat/completions,
-  confirmation/embeddings}` handlers, the admission
+  confirmation/embeddings,coding/chat/completions}` handlers, the admission
   (`begin_inference_request` 17-step gate order) and settlement
   (`finish_inference_request` + `record_route_observation`) transaction
   orchestration, the OpenRouter/Perplexity provider calls with the bounded
@@ -49,6 +49,8 @@ chain, storage, fingerprinting, and atomic-commit contracts have parity tests.
   context, so a client disconnect neither cancels the upstream call nor skips
   accounting). No route streams: `stream: true` is refused legibly and
   upstream responses are fully buffered, sanitized, and re-serialized.
+  The coding route is a separate disabled-by-default shadow lane; see
+  [`CODING-SHADOW.md`](CODING-SHADOW.md).
 - `internal/chain` — Pylon client: `/health` block probe and the
   validator-permit and registered-owner checks (`/block/recent/neurons`), with
   one-block snapshot caching and single-flight refreshes.
