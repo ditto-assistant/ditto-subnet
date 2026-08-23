@@ -1,0 +1,510 @@
+package codingsupervisor
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"mime"
+	"net/http"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+
+	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
+)
+
+var operationPaths = map[string]Operation{
+	"/v1/coding/supervisor/author":          OperationAuthor,
+	"/v1/coding/supervisor/grade":           OperationGrade,
+	"/v1/coding/supervisor/abort-authoring": OperationAbortAuthoring,
+	"/v1/coding/supervisor/abort-grading":   OperationAbortGrading,
+	"/v1/coding/supervisor/recover":         OperationRecover,
+}
+
+func New(config Config) (*Service, error) {
+	if nilLike(config.Backend) || !validControlToken(config.ControlToken) ||
+		config.OperationTimeout < 0 || config.OperationTimeout > maximumTimeout {
+		return nil, ErrInvalidConfig
+	}
+	if config.OperationTimeout == 0 {
+		config.OperationTimeout = defaultTimeout
+	}
+	if config.Now == nil {
+		config.Now = time.Now
+	}
+	now := config.Now().UTC()
+	if now.IsZero() {
+		return nil, ErrInvalidConfig
+	}
+	return &Service{
+		backend: config.Backend, now: config.Now, timeout: config.OperationTimeout,
+		token: sha256.Sum256([]byte(config.ControlToken)), lastNow: now,
+		active: make(map[string]struct{}),
+	}, nil
+}
+
+func (service *Service) Handler() http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		setPrivateHeaders(response)
+		if service == nil {
+			writeError(response, http.StatusServiceUnavailable, "unavailable")
+			return
+		}
+		operation, pathOK := operationPaths[request.URL.Path]
+		if !pathOK || request.URL.RawQuery != "" {
+			writeError(response, http.StatusNotFound, "not_found")
+			return
+		}
+		if request.Method != http.MethodPost {
+			response.Header().Set("Allow", http.MethodPost)
+			writeError(response, http.StatusMethodNotAllowed, "method_not_allowed")
+			return
+		}
+		if !service.authorized(request) {
+			writeError(response, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+		if err != nil || mediaType != "application/json" || request.Header.Get("Content-Encoding") != "" {
+			writeError(response, http.StatusUnsupportedMediaType, "unsupported_media_type")
+			return
+		}
+		if request.ContentLength > maximumRequestBytes {
+			writeError(response, http.StatusRequestEntityTooLarge, "request_too_large")
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(response, request.Body, maximumRequestBytes))
+		if err != nil {
+			writeError(response, http.StatusRequestEntityTooLarge, "request_too_large")
+			return
+		}
+		now, err := service.trustedNow()
+		if err != nil {
+			writeError(response, http.StatusServiceUnavailable, "clock")
+			return
+		}
+		value, err := parseRequest(body, operation, now)
+		if err != nil {
+			writeError(response, statusForError(err), errorCode(err))
+			return
+		}
+		key := value.TicketID + ":" + value.CodingRunID
+		backend, beginErr := service.begin(key)
+		if beginErr != nil {
+			writeError(response, statusForError(beginErr), errorCode(beginErr))
+			return
+		}
+		defer service.release(key)
+		operationContext, cancel := service.operationContext(request.Context(), value, now)
+		if callErr := operationContext.Err(); callErr != nil {
+			cancel()
+			writeError(response, statusForError(callErr), errorCode(callErr))
+			return
+		}
+		result, backendErr := backend.Execute(operationContext, cloneRequest(value))
+		callErr := operationContext.Err()
+		cancel()
+		if backendErr != nil || callErr != nil {
+			if callErr != nil {
+				backendErr = callErr
+			}
+			writeError(response, statusForError(backendErr), errorCode(backendErr))
+			return
+		}
+		result = cloneResponse(result)
+		if err := validateResponse(value, result); err != nil {
+			writeError(response, http.StatusBadGateway, "backend_invalid")
+			return
+		}
+		encoded, err := json.Marshal(result)
+		if err != nil || len(encoded)+1 > maximumResponseBytes {
+			writeError(response, http.StatusBadGateway, "backend_invalid")
+			return
+		}
+		encoded = append(encoded, '\n')
+		response.Header().Set("Content-Length", strconv.Itoa(len(encoded)))
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(encoded)
+	})
+}
+
+func (service *Service) Close() error {
+	if service == nil {
+		return nil
+	}
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if len(service.active) != 0 {
+		return ErrConcurrent
+	}
+	service.closed = true
+	service.backend = nil
+	clear(service.active)
+	service.token = [sha256.Size]byte{}
+	return nil
+}
+
+func (service *Service) authorized(request *http.Request) bool {
+	values := request.Header.Values("Authorization")
+	if len(values) != 1 || !strings.HasPrefix(values[0], "Bearer ") {
+		return false
+	}
+	token := strings.TrimPrefix(values[0], "Bearer ")
+	digest := sha256.Sum256([]byte(token))
+	service.mu.Lock()
+	expected := service.token
+	closed := service.closed
+	service.mu.Unlock()
+	return !closed && subtle.ConstantTimeCompare(digest[:], expected[:]) == 1
+}
+
+func (service *Service) begin(key string) (Backend, error) {
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.closed {
+		return nil, ErrClosed
+	}
+	if _, exists := service.active[key]; exists {
+		return nil, ErrConcurrent
+	}
+	service.active[key] = struct{}{}
+	return service.backend, nil
+}
+
+func (service *Service) release(key string) {
+	service.mu.Lock()
+	delete(service.active, key)
+	service.mu.Unlock()
+}
+
+func (service *Service) operationContext(
+	parent context.Context,
+	request Request,
+	now time.Time,
+) (context.Context, context.CancelFunc) {
+	duration := service.timeout
+	if request.Operation == OperationAuthor || request.Operation == OperationGrade {
+		remaining := request.Deadline.Sub(now)
+		if remaining < duration {
+			duration = remaining
+		}
+	}
+	return context.WithTimeout(parent, duration)
+}
+
+func (service *Service) trustedNow() (time.Time, error) {
+	now := service.now().UTC()
+	service.mu.Lock()
+	defer service.mu.Unlock()
+	if service.closed {
+		return time.Time{}, ErrClosed
+	}
+	if now.IsZero() || now.Before(service.lastNow) {
+		return time.Time{}, ErrDeadline
+	}
+	service.lastNow = now
+	return now, nil
+}
+
+func parseRequest(body []byte, operation Operation, now time.Time) (Request, error) {
+	var zero Request
+	if len(body) == 0 || len(body) > maximumRequestBytes ||
+		codingcontract.ValidateJSONDocument(body, maximumRequestBytes) != nil {
+		return zero, ErrInvalid
+	}
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	var shape map[string]json.RawMessage
+	if err := decoder.Decode(&shape); err != nil {
+		return zero, ErrInvalid
+	}
+	for _, field := range []string{"schema", "operation", "operation_id", "ticket_id", "coding_run_id", "deadline", "lease", "authoring"} {
+		if _, ok := shape[field]; !ok {
+			return zero, ErrInvalid
+		}
+	}
+	var request Request
+	if err := json.Unmarshal(body, &request); err != nil || request.Schema != RequestSchema ||
+		request.Operation != operation || !canonicalUUID(request.OperationID) ||
+		!canonicalUUID(request.TicketID) || !validIdentifier(request.CodingRunID, 256) ||
+		request.Deadline.IsZero() {
+		return zero, ErrInvalid
+	}
+	leaseObject := rawObject(request.Lease, maximumLeaseBytes)
+	authoringObject := rawObject(request.Authoring, maximumOutcomeBytes)
+	switch operation {
+	case OperationAuthor, OperationAbortAuthoring, OperationAbortGrading:
+		if !leaseObject || authoringObject || !rawNull(request.Authoring) {
+			return zero, ErrInvalid
+		}
+	case OperationGrade:
+		if !leaseObject || !authoringObject {
+			return zero, ErrInvalid
+		}
+	case OperationRecover:
+		if !rawNull(request.Lease) || !rawNull(request.Authoring) {
+			return zero, ErrInvalid
+		}
+	default:
+		return zero, ErrInvalid
+	}
+	if (operation == OperationAuthor || operation == OperationGrade) && !request.Deadline.After(now) {
+		return zero, ErrDeadline
+	}
+	if (operation == OperationAuthor || operation == OperationGrade) &&
+		request.Deadline.After(now.Add(maximumBindingLifetime)) {
+		return zero, ErrInvalid
+	}
+	request.Lease = append(json.RawMessage(nil), request.Lease...)
+	request.Authoring = append(json.RawMessage(nil), request.Authoring...)
+	return request, nil
+}
+
+func validateResponse(request Request, response Response) error {
+	if response.Schema != ResponseSchema || response.Operation != request.Operation ||
+		response.OperationID != request.OperationID || response.TicketID != request.TicketID ||
+		response.CodingRunID != request.CodingRunID {
+		return ErrConflict
+	}
+	switch request.Operation {
+	case OperationAuthor:
+		if response.Authoring == nil || response.Grading != nil || response.Recovery != nil || response.Aborted ||
+			validateAuthoring(*response.Authoring) != nil {
+			return ErrConflict
+		}
+	case OperationGrade:
+		if response.Authoring != nil || response.Grading == nil || response.Recovery != nil || response.Aborted ||
+			validateGrading(*response.Grading, request.CodingRunID, request.TicketID) != nil {
+			return ErrConflict
+		}
+	case OperationAbortAuthoring, OperationAbortGrading:
+		if response.Authoring != nil || response.Grading != nil || response.Recovery != nil || !response.Aborted {
+			return ErrConflict
+		}
+	case OperationRecover:
+		if response.Authoring != nil || response.Grading != nil || response.Recovery == nil || response.Aborted ||
+			validateRecovery(*response.Recovery) != nil {
+			return ErrConflict
+		}
+	default:
+		return ErrConflict
+	}
+	return nil
+}
+
+func validateAuthoring(outcome AuthoringOutcome) error {
+	if !rawObject(outcome.Evidence, maximumOutcomeBytes) ||
+		!contentAddressedKey(outcome.AuthoringTranscriptObjectKey) || outcome.AuthoringTranscriptBytes <= 0 ||
+		outcome.AuthoringTranscriptBytes > 512<<20 || outcome.AuthoringEventCount == 0 ||
+		outcome.AuthoringEventCount > 1_000 || !contentAddressedKey(outcome.FrozenSubmissionObjectKey) ||
+		!outcome.CapabilitiesRevoked || !outcome.AuthoringEnvironmentDestroyed {
+		return ErrConflict
+	}
+	var evidence codingcontract.AuthoringEvidence
+	if err := json.Unmarshal(outcome.Evidence, &evidence); err != nil || evidence.Validate() != nil {
+		return ErrConflict
+	}
+	if outcome.AuthoringTranscriptObjectKey != "sha256/"+evidence.AuthoringTranscriptSHA256 ||
+		outcome.FrozenSubmissionObjectKey != "sha256/"+evidence.FrozenPatchSHA256 {
+		return ErrConflict
+	}
+	return nil
+}
+
+func validateGrading(outcome GradingOutcome, codingRunID, ticketID string) error {
+	if len(outcome.TaskEvidence) == 0 || len(outcome.TaskEvidence) > 100 || !outcome.GradingEnvironmentDestroyed {
+		return ErrConflict
+	}
+	previous := ""
+	for _, evidence := range outcome.TaskEvidence {
+		if !rawObject(evidence, maximumOutcomeBytes) {
+			return ErrConflict
+		}
+		var value codingcontract.TaskEvidence
+		if err := json.Unmarshal(evidence, &value); err != nil || value.Validate() != nil ||
+			value.CodingRunID != codingRunID || value.ValidatorTicketID != ticketID {
+			return ErrConflict
+		}
+		identity := value.Task.CaseID + "\x00" + value.Task.VariantID
+		if previous != "" && identity <= previous {
+			return ErrConflict
+		}
+		previous = identity
+	}
+	return nil
+}
+
+func validateRecovery(outcome RecoveryOutcome) error {
+	validState := outcome.State == "none" || outcome.State == "authoring_pending" ||
+		outcome.State == "terminal_pending" || outcome.State == "released" ||
+		outcome.State == "ambiguous" || outcome.State == "expired"
+	if !validState {
+		return ErrConflict
+	}
+	pending := outcome.State == "authoring_pending" || outcome.State == "terminal_pending"
+	if pending {
+		if outcome.PublicationStage == nil || outcome.RequestSHA256 == nil ||
+			(outcome.State == "authoring_pending" && *outcome.PublicationStage != "authoring_freeze") ||
+			(outcome.State == "terminal_pending" && *outcome.PublicationStage != "terminal_result") ||
+			!lowerSHA256(*outcome.RequestSHA256) {
+			return ErrConflict
+		}
+		return nil
+	}
+	if outcome.PublicationStage != nil || outcome.RequestSHA256 != nil {
+		return ErrConflict
+	}
+	return nil
+}
+
+func cloneRequest(request Request) Request {
+	request.Lease = append(json.RawMessage(nil), request.Lease...)
+	request.Authoring = append(json.RawMessage(nil), request.Authoring...)
+	return request
+}
+
+func cloneResponse(response Response) Response {
+	if response.Authoring != nil {
+		value := *response.Authoring
+		value.Evidence = append(json.RawMessage(nil), value.Evidence...)
+		response.Authoring = &value
+	}
+	if response.Grading != nil {
+		value := *response.Grading
+		value.TaskEvidence = append([]json.RawMessage(nil), value.TaskEvidence...)
+		for index := range value.TaskEvidence {
+			value.TaskEvidence[index] = append(json.RawMessage(nil), value.TaskEvidence[index]...)
+		}
+		response.Grading = &value
+	}
+	if response.Recovery != nil {
+		value := *response.Recovery
+		if value.PublicationStage != nil {
+			stage := *value.PublicationStage
+			value.PublicationStage = &stage
+		}
+		if value.RequestSHA256 != nil {
+			digest := *value.RequestSHA256
+			value.RequestSHA256 = &digest
+		}
+		response.Recovery = &value
+	}
+	return response
+}
+
+func rawObject(value json.RawMessage, maximum int) bool {
+	trimmed := bytes.TrimSpace(value)
+	return len(trimmed) >= 2 && len(trimmed) <= maximum && trimmed[0] == '{' && trimmed[len(trimmed)-1] == '}' &&
+		codingcontract.ValidateJSONDocument(trimmed, maximum) == nil
+}
+
+func rawNull(value json.RawMessage) bool { return bytes.Equal(bytes.TrimSpace(value), []byte("null")) }
+
+func setPrivateHeaders(response http.ResponseWriter) {
+	response.Header().Set("Cache-Control", "no-store")
+	response.Header().Set("Content-Type", "application/json")
+	response.Header().Set("X-Content-Type-Options", "nosniff")
+}
+
+func writeError(response http.ResponseWriter, status int, code string) {
+	body, _ := json.Marshal(map[string]any{"error": map[string]string{
+		"code": code, "message": strings.ReplaceAll(code, "_", " "),
+	}})
+	body = append(body, '\n')
+	response.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	response.WriteHeader(status)
+	_, _ = response.Write(body)
+}
+
+func statusForError(err error) int {
+	switch {
+	case errors.Is(err, ErrInvalid):
+		return http.StatusBadRequest
+	case errors.Is(err, ErrUnauthorized):
+		return http.StatusUnauthorized
+	case errors.Is(err, ErrConcurrent), errors.Is(err, ErrConflict):
+		return http.StatusConflict
+	case errors.Is(err, ErrDeadline), errors.Is(err, context.DeadlineExceeded):
+		return http.StatusGatewayTimeout
+	case errors.Is(err, context.Canceled):
+		return http.StatusRequestTimeout
+	default:
+		return http.StatusServiceUnavailable
+	}
+}
+
+func errorCode(err error) string {
+	switch {
+	case errors.Is(err, ErrInvalid):
+		return "invalid_request"
+	case errors.Is(err, ErrUnauthorized):
+		return "unauthorized"
+	case errors.Is(err, ErrConcurrent):
+		return "concurrent"
+	case errors.Is(err, ErrConflict):
+		return "conflict"
+	case errors.Is(err, ErrDeadline), errors.Is(err, context.DeadlineExceeded):
+		return "deadline"
+	case errors.Is(err, context.Canceled):
+		return "canceled"
+	case errors.Is(err, ErrClosed):
+		return "closed"
+	default:
+		return "unavailable"
+	}
+}
+
+func canonicalUUID(value string) bool {
+	parsed, err := uuid.Parse(value)
+	return err == nil && parsed != uuid.Nil && parsed.String() == value
+}
+
+func contentAddressedKey(value string) bool {
+	return strings.HasPrefix(value, "sha256/") && lowerSHA256(strings.TrimPrefix(value, "sha256/"))
+}
+
+func lowerSHA256(value string) bool {
+	if len(value) != sha256.Size*2 || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func validIdentifier(value string, maximum int) bool {
+	if value == "" || len(value) > maximum || !utf8.ValidString(value) {
+		return false
+	}
+	for _, character := range value {
+		if unicode.IsSpace(character) || unicode.IsControl(character) {
+			return false
+		}
+	}
+	return true
+}
+
+func validControlToken(value string) bool {
+	return len(value) >= 32 && len(value) <= 256 && validIdentifier(value, 256)
+}
+
+func nilLike(value any) bool {
+	if value == nil {
+		return true
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return reflected.IsNil()
+	default:
+		return false
+	}
+}

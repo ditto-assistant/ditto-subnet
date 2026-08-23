@@ -64,11 +64,11 @@ retryable infrastructure without parsing error prose.
 
 ## Activation
 
-This package is unwired. A later local gateway must connect it to the Python
-validator coordinator, a source-bound capability publisher,
-the harness lifecycle, the now-available but unwired ticket-scoped Luna relay
-core and durable evidence outbox, concrete relay journal/upstream adapters, and
-a host sweeper. No production composition root imports it. It cannot
+This package is unwired. The private supervisor wire and Python runtime client
+now exist, but the supervisor's injected backend must still compose this
+runtime with a source-bound capability publisher, the harness lifecycle, the
+ticket-scoped Luna gateway, durable evidence/publication outbox, and a host
+sweeper. No production composition root imports it. It cannot
 claim jobs, start miners, submit scores, rank agents, set weights, or make coding
 contract v1 weight eligible.
 

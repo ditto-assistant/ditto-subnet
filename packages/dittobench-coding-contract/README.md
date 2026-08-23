@@ -45,6 +45,14 @@ validator-infrastructure submission and accepted response shared by Platform
 and the validator client. It contains synthetic manifests and evidence only,
 no repository, patch, transcript, memory, grader, or private task bytes.
 
+`coding_attempt_supervisor_v1.json` freezes the synthetic private control wire
+shared by the Go supervisor handler and Python runtime client. It covers
+authoring, grading, both abort operations, and restart recovery. Its lease and
+evidence objects are deliberately synthetic placeholders: the vector proves
+outer operation/identity/nullability compatibility and contains no artifact
+URL, task, patch, transcript, provider credential, control token, or usable
+capability.
+
 `coding_inference_miner_v1.json` freezes two synthetic, miner-visible Luna Chat
 Completions turns using the public coding prompt and ordered workspace-tool
 schemas. Rust, Python, and Go use it to prove the reference harness emits the

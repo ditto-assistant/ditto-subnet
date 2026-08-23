@@ -1,0 +1,127 @@
+{
+  "schema": "dittobench-coding-attempt-supervisor-vector-v1",
+  "requests": {
+    "author": {
+      "schema": "dittobench-coding-attempt-supervisor-request-v1",
+      "operation": "author",
+      "operation_id": "11111111-1111-4111-8111-111111111111",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "deadline": "2026-08-23T07:00:00Z",
+      "lease": {"schema": "synthetic-authoring-lease-v1"},
+      "authoring": null
+    },
+    "grade": {
+      "schema": "dittobench-coding-attempt-supervisor-request-v1",
+      "operation": "grade",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "deadline": "2026-08-23T07:00:00Z",
+      "lease": {"schema": "synthetic-grading-lease-v1"},
+      "authoring": {"schema": "synthetic-authoring-outcome-v1"}
+    },
+    "abort_authoring": {
+      "schema": "dittobench-coding-attempt-supervisor-request-v1",
+      "operation": "abort_authoring",
+      "operation_id": "44444444-4444-4444-8444-444444444444",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "deadline": "2026-08-23T07:00:00Z",
+      "lease": {"schema": "synthetic-authoring-lease-v1"},
+      "authoring": null
+    },
+    "abort_grading": {
+      "schema": "dittobench-coding-attempt-supervisor-request-v1",
+      "operation": "abort_grading",
+      "operation_id": "66666666-6666-4666-8666-666666666666",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "deadline": "2026-08-23T07:00:00Z",
+      "lease": {"schema": "synthetic-grading-lease-v1"},
+      "authoring": null
+    },
+    "recover": {
+      "schema": "dittobench-coding-attempt-supervisor-request-v1",
+      "operation": "recover",
+      "operation_id": "55555555-5555-4555-8555-555555555555",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "deadline": "2026-08-23T07:00:00Z",
+      "lease": null,
+      "authoring": null
+    }
+  },
+  "responses": {
+    "author": {
+      "schema": "dittobench-coding-attempt-supervisor-response-v1",
+      "operation": "author",
+      "operation_id": "11111111-1111-4111-8111-111111111111",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "authoring": {
+        "evidence": {"schema": "synthetic-authoring-evidence-v1"},
+        "authoring_transcript_object_key": "sha256/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "authoring_transcript_bytes": 128,
+        "authoring_event_count": 2,
+        "frozen_submission_object_key": "sha256/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "capabilities_revoked": true,
+        "authoring_environment_destroyed": true
+      },
+      "grading": null,
+      "recovery": null,
+      "aborted": false
+    },
+    "grade": {
+      "schema": "dittobench-coding-attempt-supervisor-response-v1",
+      "operation": "grade",
+      "operation_id": "33333333-3333-4333-8333-333333333333",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "authoring": null,
+      "grading": {
+        "task_evidence": [{"schema": "synthetic-task-evidence-v1"}],
+        "grading_environment_destroyed": true
+      },
+      "recovery": null,
+      "aborted": false
+    },
+    "abort_authoring": {
+      "schema": "dittobench-coding-attempt-supervisor-response-v1",
+      "operation": "abort_authoring",
+      "operation_id": "44444444-4444-4444-8444-444444444444",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "authoring": null,
+      "grading": null,
+      "recovery": null,
+      "aborted": true
+    },
+    "abort_grading": {
+      "schema": "dittobench-coding-attempt-supervisor-response-v1",
+      "operation": "abort_grading",
+      "operation_id": "66666666-6666-4666-8666-666666666666",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "authoring": null,
+      "grading": null,
+      "recovery": null,
+      "aborted": true
+    },
+    "recover": {
+      "schema": "dittobench-coding-attempt-supervisor-response-v1",
+      "operation": "recover",
+      "operation_id": "55555555-5555-4555-8555-555555555555",
+      "ticket_id": "22222222-2222-4222-8222-222222222222",
+      "coding_run_id": "coding-run-supervisor-001",
+      "authoring": null,
+      "grading": null,
+      "recovery": {
+        "state": "terminal_pending",
+        "publication_stage": "terminal_result",
+        "request_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      },
+      "aborted": false
+    }
+  }
+}

@@ -36,8 +36,9 @@ when a trusted runtime stage occurred rather than classifying exception text.
 
 ## Activation
 
-No composition root imports or starts the coordinator. The runtime is a
-protocol, not a Docker, scorer, or relay implementation. This change does not
-claim tickets, fetch artifacts, start a miner, invoke Luna, grade production
-code, submit ordinary scores, rank agents, or set weights. Coding contract v1
-remains permanently `weight_eligible=false`.
+No composition root imports or starts the coordinator. The private
+`CodingSupervisorRuntime` now implements its runtime protocol, but no worker
+constructs that client and the Go supervisor handler still has no mounted
+backend. This change does not claim tickets, fetch artifacts, start a miner,
+invoke Luna, grade production code, submit ordinary scores, rank agents, or set
+weights. Coding contract v1 remains permanently `weight_eligible=false`.
