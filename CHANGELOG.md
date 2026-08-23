@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.107.1 (2026-08-23)
+
+### Bug Fixes
+
+- **mine**: Pin harness that connects Turso per overlapping /run
+  ([#1125](https://github.com/ditto-assistant/ditto-subnet/pull/1125),
+  [`ffe4041`](https://github.com/ditto-assistant/ditto-subnet/commit/ffe4041bc9e682c1e3190e56e9e454986ef8206a))
+
+
 ## v0.107.0 (2026-08-23)
 
 ### Bug Fixes
