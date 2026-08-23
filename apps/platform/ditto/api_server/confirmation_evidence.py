@@ -641,11 +641,7 @@ def compute_subject_projection(
         base_model_factor_bps,
         base_tool_factor_bps,
     )
-    applied = (
-        FACTOR_SCALE
-        if mode == ConfirmationBundleMode.SHADOW
-        else ranking_factor
-    )
+    applied = FACTOR_SCALE if mode == ConfirmationBundleMode.SHADOW else ranking_factor
     quality = _round_ratio(
         composite.base_weight_bps * base_quality_micros
         + composite.longmem_weight_bps * verified.longmem_mean_micros,
