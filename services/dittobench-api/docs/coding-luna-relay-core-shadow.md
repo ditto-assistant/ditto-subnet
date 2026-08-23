@@ -127,11 +127,12 @@ responsible for the outer source-bound route and network policy.
 
 The package has an evidence-only adapter for the existing certification port,
 but nothing constructs or mounts it in production. No current model-relay
-traffic may claim this evidence. Platform defines an unwired coding-grant and
-settlement authority, and `internal/codingplatform` now implements the unwired
-validator-side upstream client. The target model-relay handler still does not
-exist. Remaining gateway work includes that trusted settlement producer,
-capability mount/revocation, harness orchestration, and terminal publication.
+traffic may claim this evidence. Platform defines the coding-grant and
+settlement authority, `internal/codingplatform` implements its validator-side
+client, the disabled model-relay route produces trusted settlements, and
+`internal/codinggateway` now composes the source-bound mount and revocation
+lifecycle. Harness orchestration, terminal publication, deployment, and
+activation remain absent.
 
 Validation:
 

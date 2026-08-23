@@ -299,6 +299,65 @@ func TestStoreCompleteWithoutBeginFailsClosed(t *testing.T) {
 	}
 }
 
+func TestBindPersistsActivationBeforeFirstDispatch(t *testing.T) {
+	fixture := newJournalFixture(t)
+	tooSmallRoot := makeJournalRoot(t)
+	tooSmall := fixture.storeConfig(tooSmallRoot)
+	tooSmall.MaxTotalBytes = 2 * maximumEntryBytes
+	undersized, err := Open(tooSmall)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := undersized.Bind(t.Context(), fixture.binding); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("undersized bind err=%v", err)
+	}
+	if err := undersized.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	root := makeJournalRoot(t)
+	store, err := Open(fixture.storeConfig(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Bind(t.Context(), fixture.binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Bind(t.Context(), fixture.binding); err != nil {
+		t.Fatalf("idempotent bind: %v", err)
+	}
+	drifted := fixture.binding
+	drifted.CaseID = "case-journal-other"
+	if err := store.Bind(t.Context(), drifted); !errors.Is(err, ErrConflict) {
+		t.Fatalf("drifted bind err=%v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := Open(fixture.storeConfig(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := reopened.Load(t.Context(), fixture.binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Binding == nil || !reflect.DeepEqual(*snapshot.Binding, fixture.binding) ||
+		snapshot.Revoked || len(snapshot.Entries) != 0 {
+		t.Fatalf("activation snapshot=%+v", snapshot)
+	}
+	if err := reopened.Revoke(t.Context(), fixture.binding); err != nil {
+		t.Fatal(err)
+	}
+	if err := reopened.Bind(t.Context(), fixture.binding); !errors.Is(err, ErrState) {
+		t.Fatalf("bind after revoke err=%v", err)
+	}
+	if err := reopened.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestStoreSurvivesRestartAndReplaysExactMinerResponse(t *testing.T) {
 	fixture := newJournalFixture(t)
 	root := makeJournalRoot(t)
