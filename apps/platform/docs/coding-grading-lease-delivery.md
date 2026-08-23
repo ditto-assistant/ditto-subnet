@@ -27,6 +27,12 @@ resource-profile
 grader-bundle
 ```
 
+The freeze-gated response also carries the canonical protected grader-plan and
+resource-profile preimages. Platform checks their digests against the selected
+task, the compiled grader-v1 contract, and the case/variant/bundle/image/test
+identity. The authoring runner plan, memory material, and inference grant are
+structurally absent.
+
 The grading-only minter never checks or signs the memory bundle. Platform
 rechecks the active artifact certification, ticket, and freeze after URL
 minting and discards the bearer URLs if authority changed. Responses are

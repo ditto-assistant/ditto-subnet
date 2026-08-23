@@ -29,12 +29,19 @@ resource-profile
 
 The response binds the shared run manifest and digest, task-set digest,
 repository epoch, issue/runtime/budget material and digests, ticket deadline,
-and `weight_eligible=false`. It is `Cache-Control: no-store`. The manifest still
-carries opaque catalog identifiers. Grader capability, grader tests, gold
-patches, private catalog records, source URLs, policy labels, and curator
-metadata are structurally absent.
+the Merkle-committed runner-plan digest and preimage, and
+`weight_eligible=false`. The manifest still carries opaque catalog identifiers.
+The runner plan contains only disjoint workspace path policy, fixed visible
+test/build commands, and candidate limits. Platform revalidates its canonical
+digest, selected case/bundle/tree identity, and exact runtime-policy
+path/command projection before returning it.
 
-The root validator client has a typed request method with a 512 KiB response
+The response is `Cache-Control: no-store`. Grader capability, protected grader
+plan, protected resource limits, hidden test counts, gold patches, catalog
+coordinates, source URLs, policy labels, and curator metadata are structurally
+absent.
+
+The root validator client has a typed request method with a 2 MiB response
 ceiling and redacted parse errors. No worker or scheduler calls the method.
 
 After a trusted runner revokes its authoring capability and freezes the

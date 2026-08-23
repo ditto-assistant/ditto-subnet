@@ -22,7 +22,9 @@ from ditto.api_models.coding_artifacts import (
 )
 from ditto.api_models.coding_selection import (
     CodingCatalogBudgets,
+    CodingCatalogGraderPlan,
     CodingCatalogIssue,
+    CodingCatalogResourceProfile,
     CodingCatalogRuntimePolicy,
     CodingSelectionRunManifest,
     CodingTaskSetManifest,
@@ -55,10 +57,18 @@ _SELECTION_PATH = (
     / "testdata"
     / "coding_selection_v1.json"
 )
+_EXECUTION_PATH = (
+    Path(__file__).parents[6]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_execution_plan_v1.json"
+)
 
 
 def _lease() -> CodingShadowTaskLeaseCore:
     vector = json.loads(_SELECTION_PATH.read_text(encoding="utf-8"))
+    execution = json.loads(_EXECUTION_PATH.read_text(encoding="utf-8"))
     return CodingShadowTaskLeaseCore(
         ticket_id=UUID("33333333-3333-4333-8333-333333333333"),
         validator_hotkey=_VALIDATOR,
@@ -75,6 +85,10 @@ def _lease() -> CodingShadowTaskLeaseCore:
             vector["runtime_policy"]
         ),
         budgets=CodingCatalogBudgets.model_validate(vector["budgets"]),
+        grader_plan=CodingCatalogGraderPlan.model_validate(execution["grader_plan"]),
+        grader_resource_profile=CodingCatalogResourceProfile.model_validate(
+            execution["grader_resource_profile"]
+        ),
     )
 
 
@@ -222,6 +236,10 @@ async def test_signed_grading_lease_returns_no_memory_and_no_store(
         "grader-bundle",
     ]
     assert all(item["delivery_phase"] == "grading" for item in body["capabilities"])
+    assert body["grader_plan"]["case_id"] == lease.run_manifest.tasks[0].case_id
+    assert body["grader_resource_profile"]["candidate_limits"]
+    assert "runner_plan" not in body
+    assert "runner_plan_sha256" not in body
     assert "memory-bundle" not in response.text
     assert mocks.authorize.await_count == 2
     mocks.minter.mint_grading.assert_awaited_once_with(lease)
@@ -280,6 +298,21 @@ async def test_grading_lease_rejects_forgery_replay_stale_and_unconfigured(
     )
     assert response.status_code == 503
     assert "X-Amz-Signature" not in response.text
+
+
+async def test_grading_lease_rejects_missing_protected_plan(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    session_maker: async_sessionmaker[AsyncSession],
+    monkeypatch,
+) -> None:
+    lease = replace(_lease(), grader_plan=None, grader_resource_profile=None)
+    _install(app, session_maker, monkeypatch, lease)
+    response = await client.post(
+        "/api/v1/validator/coding-shadow/grading-lease",
+        json=_payload(lease),
+    )
+    assert response.status_code == 409
 
 
 async def test_grading_lease_discards_urls_when_freeze_changes_after_mint(

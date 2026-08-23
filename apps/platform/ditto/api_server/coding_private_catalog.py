@@ -36,7 +36,7 @@ from ditto.coding_selection import (
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _BUCKET = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$")
 _OBJECT_PREFIX = "coding-catalog/v1"
-_DEFAULT_MAX_RECORD_BYTES = 1 << 20
+_DEFAULT_MAX_RECORD_BYTES = 2 << 20
 _DEFAULT_TIMEOUT_SECONDS = 10.0
 _MAX_JSON_DEPTH = 32
 _MAX_CATALOG_INDEX = 999_999
@@ -111,9 +111,9 @@ class CodingPrivateCatalogConfig:
             raise CodingPrivateCatalogConfigurationError(
                 "private coding catalog region is outside safe bounds"
             )
-        if not 4 << 10 <= self.max_record_bytes <= 1 << 20:
+        if not 4 << 10 <= self.max_record_bytes <= 2 << 20:
             raise CodingPrivateCatalogConfigurationError(
-                "private coding catalog record bound must be between 4 KiB and 1 MiB"
+                "private coding catalog record bound must be between 4 KiB and 2 MiB"
             )
         if not 0.1 <= self.timeout_seconds <= 60.0:
             raise CodingPrivateCatalogConfigurationError(

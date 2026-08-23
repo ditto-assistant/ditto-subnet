@@ -18,7 +18,10 @@ from ditto.api_models.coding_evaluation import (
 )
 from ditto.api_models.coding_selection import (
     CodingCatalogBudgets,
+    CodingCatalogGraderPlan,
     CodingCatalogIssue,
+    CodingCatalogResourceProfile,
+    CodingCatalogRunnerPlan,
     CodingCatalogRuntimePolicy,
     CodingPrivateCatalogRecord,
     CodingSelectionAssignment,
@@ -78,6 +81,10 @@ class CodingShadowTaskLeaseCore:
     issue: CodingCatalogIssue
     runtime_policy: CodingCatalogRuntimePolicy
     budgets: CodingCatalogBudgets
+    runner_plan_sha256: str | None = None
+    runner_plan: CodingCatalogRunnerPlan | None = None
+    grader_plan: CodingCatalogGraderPlan | None = None
+    grader_resource_profile: CodingCatalogResourceProfile | None = None
     weight_eligible: Literal[False] = False
 
 
@@ -469,6 +476,7 @@ async def build_coding_shadow_task_lease(
         != rebuilt.selection_proof.selection_proof_sha256
         or not _run_matches(run, rebuilt.authority)
         or not _exposure_matches(exposures[0], rebuilt.exposure)
+        or material.task_version.payload.runner_plan_sha256 is None
     ):
         raise CodingTaskLeaseIntegrityError(
             "reconstructed coding task disagrees with persisted run authority"
@@ -485,4 +493,8 @@ async def build_coding_shadow_task_lease(
         issue=material.issue,
         runtime_policy=material.runtime_policy,
         budgets=material.budgets,
+        runner_plan_sha256=material.task_version.payload.runner_plan_sha256,
+        runner_plan=material.runner_plan,
+        grader_plan=material.grader_plan,
+        grader_resource_profile=material.grader_resource_profile,
     )

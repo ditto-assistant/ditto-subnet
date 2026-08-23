@@ -231,6 +231,8 @@ class CodingGraderCommand(CodingContractModel):
         for argument in self.argv[1:]:
             if not argument or len(argument.encode()) > 4096 or "\x00" in argument:
                 raise ValueError("grader command argument is outside contract bounds")
+        if sum(len(argument.encode()) for argument in self.argv) > 8192:
+            raise ValueError("grader command argv exceeds 8192 UTF-8 bytes")
         return self
 
 
@@ -1116,6 +1118,8 @@ class CodingAuthoringLeaseResponse(CodingContractModel):
     issue: CodingIssue
     runtime_policy: CodingRuntimePolicy
     budgets: CodingBudgets
+    runner_plan_sha256: Sha256
+    runner_plan: CodingRunnerPlan
     run_manifest: CodingRunManifest
     capabilities: Annotated[
         list[CodingArtifactCapabilityEnvelope], Field(min_length=3, max_length=3)
@@ -1135,6 +1139,7 @@ class CodingAuthoringLeaseResponse(CodingContractModel):
             or coding_runtime_policy_digest(self.runtime_policy)
             != self.runtime_policy_sha256
             or coding_budgets_digest(self.budgets) != self.budgets_sha256
+            or runner_plan_digest(self.runner_plan) != self.runner_plan_sha256
         ):
             raise ValueError("coding authoring lease material disagrees with authority")
         expected_kinds = [
@@ -1149,6 +1154,22 @@ class CodingAuthoringLeaseResponse(CodingContractModel):
                 "coding authoring capabilities are incomplete or unordered"
             )
         task = self.run_manifest.tasks[0]
+        if (
+            self.runner_plan.case_id != task.case_id
+            or self.runner_plan.visible_bundle_sha256 != task.visible_bundle_sha256
+            or self.runner_plan.base_tree_sha256 != task.base_tree_sha256
+            or self.runtime_policy.editable_paths
+            != sorted(
+                self.runner_plan.editable_paths
+                + self.runner_plan.creatable_paths
+                + self.runner_plan.deletable_paths
+            )
+            or self.runtime_policy.test_command_ids
+            != [command.id for command in self.runner_plan.test_commands]
+            or self.runtime_policy.build_command_ids
+            != [command.id for command in self.runner_plan.build_commands]
+        ):
+            raise ValueError("coding authoring runner plan disagrees with lease")
         expected_digests = [
             task.visible_bundle_sha256,
             task.memory_bundle_sha256,
@@ -1217,6 +1238,8 @@ class CodingGradingLeaseResponse(CodingContractModel):
     frozen_patch_sha256: Sha256
     frozen_submission_object_key: ContentAddressedKey
     run_manifest: CodingRunManifest
+    grader_plan: CodingGraderPlan
+    grader_resource_profile: CodingGraderResourceProfile
     capabilities: Annotated[
         list[CodingArtifactCapabilityEnvelope], Field(min_length=3, max_length=3)
     ]
@@ -1244,6 +1267,10 @@ class CodingGradingLeaseResponse(CodingContractModel):
             != self.task_set_manifest_sha256
             or canonical_digest(self.run_manifest) != self.run_manifest_sha256
             or self.frozen_submission_object_key != f"sha256/{self.frozen_patch_sha256}"
+            or grader_plan_digest(self.grader_plan)
+            != self.run_manifest.tasks[0].grader_plan_sha256
+            or grader_resource_profile_digest(self.grader_resource_profile)
+            != self.run_manifest.tasks[0].resource_profile_sha256
         ):
             raise ValueError("coding grading lease material disagrees with authority")
         expected_kinds = [
@@ -1254,6 +1281,17 @@ class CodingGradingLeaseResponse(CodingContractModel):
         if [item.artifact_kind for item in self.capabilities] != expected_kinds:
             raise ValueError("coding grading capabilities are incomplete or unordered")
         task = self.run_manifest.tasks[0]
+        if (
+            self.grader_plan.case_id != task.case_id
+            or self.grader_plan.variant_id != task.variant_id
+            or self.grader_plan.visible_bundle_sha256 != task.visible_bundle_sha256
+            or self.grader_plan.base_tree_sha256 != task.base_tree_sha256
+            or self.grader_plan.grader_bundle_sha256 != task.grader_bundle_sha256
+            or self.grader_plan.grader_image_digest != task.grader_image_digest
+            or self.grader_plan.test_manifest_sha256 != task.test_manifest_sha256
+        ):
+            raise ValueError("coding grading plan disagrees with selected task")
+        validate_grading_plan_bundle(self.grader_plan, self.grader_resource_profile)
         expected_digests = [
             task.visible_bundle_sha256,
             task.resource_profile_sha256,
@@ -1791,6 +1829,7 @@ def validate_execution_plan_bundle(
     )
     test_ids = [command.id for command in runner_plan.test_commands]
     build_ids = [command.id for command in runner_plan.build_commands]
+    validate_grading_plan_bundle(grader_plan, resource_profile)
     if (
         runner_plan.case_id != grader_plan.case_id
         or runner_plan.visible_bundle_sha256 != grader_plan.visible_bundle_sha256
@@ -1799,11 +1838,26 @@ def validate_execution_plan_bundle(
         or runtime_policy.editable_paths != authoring_paths
         or runtime_policy.test_command_ids != test_ids
         or runtime_policy.build_command_ids != build_ids
-        or grader_plan.resource_profile_sha256
+    ):
+        raise ValueError("coding execution plan phases disagree")
+
+
+def validate_grading_plan_bundle(
+    grader_plan: CodingGraderPlan,
+    resource_profile: CodingGraderResourceProfile,
+) -> None:
+    grader_plan = CodingGraderPlan.model_validate_json(
+        grader_plan.model_dump_json(by_alias=True)
+    )
+    resource_profile = CodingGraderResourceProfile.model_validate_json(
+        resource_profile.model_dump_json(by_alias=True)
+    )
+    if (
+        grader_plan.resource_profile_sha256
         != grader_resource_profile_digest(resource_profile)
         or grader_plan.grader_contract_sha256 != CODING_GRADER_CONTRACT_SHA256
     ):
-        raise ValueError("coding execution plan phases disagree")
+        raise ValueError("coding grading plan and resource authority disagree")
 
 
 def grader_execution_receipt_root(
@@ -2112,5 +2166,6 @@ __all__ = [
     "task_evidence_digest",
     "validate_run_evidence_against_manifest",
     "validate_execution_plan_bundle",
+    "validate_grading_plan_bundle",
     "validate_task_evidence_against_manifest",
 ]

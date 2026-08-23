@@ -194,6 +194,11 @@ async def request_coding_authoring_lease(
         ) from None
 
     selected = lease.task_set_manifest.tasks[0]
+    if lease.runner_plan_sha256 is None or lease.runner_plan is None:
+        raise HTTPException(
+            status_code=409,
+            detail="coding authoring execution plan is unavailable",
+        )
     try:
         return CodingAuthoringLeaseResponse(
             schema="dittobench-coding-authoring-lease-v1",
@@ -213,6 +218,8 @@ async def request_coding_authoring_lease(
             issue=lease.issue,
             runtime_policy=lease.runtime_policy,
             budgets=lease.budgets,
+            runner_plan_sha256=lease.runner_plan_sha256,
+            runner_plan=lease.runner_plan,
             run_manifest=lease.run_manifest,
             capabilities=capabilities,
         )

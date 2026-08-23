@@ -225,6 +225,11 @@ async def request_coding_grading_lease(
             status_code=409,
             detail="coding grading phase authority changed",
         )
+    if lease.grader_plan is None or lease.grader_resource_profile is None:
+        raise HTTPException(
+            status_code=409,
+            detail="coding grading execution plan is unavailable",
+        )
     try:
         return CodingGradingLeaseResponse(
             schema="dittobench-coding-grading-lease-v1",
@@ -244,6 +249,8 @@ async def request_coding_grading_lease(
             frozen_patch_sha256=authority.frozen_patch_sha256,
             frozen_submission_object_key=authority.frozen_submission_object_key,
             run_manifest=lease.run_manifest,
+            grader_plan=lease.grader_plan,
+            grader_resource_profile=lease.grader_resource_profile,
             capabilities=capabilities,
         )
     except ValidationError:

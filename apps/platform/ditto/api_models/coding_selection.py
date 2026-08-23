@@ -120,6 +120,185 @@ class CodingCatalogBudgets(CodingEvaluationModel):
     wall_time_seconds: Annotated[int, Field(ge=1, le=7_200)]
 
 
+CODING_GRADER_CONTRACT_SHA256 = (
+    "c002260a02a46d7187175e789c9b2b232f0d1072b214330347e136c466368055"
+)
+_GRADER_GROUPS = (
+    "adversarial",
+    "fail_to_pass",
+    "hidden",
+    "integrity",
+    "pass_to_pass",
+)
+_GRADER_EXECUTION_ORDER = (
+    "fail_to_pass",
+    "pass_to_pass",
+    "hidden",
+    "adversarial",
+    "integrity",
+)
+
+
+class CodingCatalogCommand(CodingEvaluationModel):
+    id: CommandId
+    argv: Annotated[list[str], Field(min_length=1, max_length=64, repr=False)]
+    timeout_milliseconds: Annotated[int, Field(ge=1, le=600_000)]
+
+    @model_validator(mode="after")
+    def command_is_bounded(self) -> CodingCatalogCommand:
+        executable = self.argv[0]
+        if (
+            len(executable.encode()) > 128
+            or "/" in executable
+            or "\\" in executable
+            or any(
+                character.isspace() or unicodedata.category(character) == "Cc"
+                for character in executable
+            )
+            or executable.casefold()
+            in {"bash", "cmd", "dash", "env", "fish", "powershell", "pwsh", "sh", "zsh"}
+        ):
+            raise ValueError("execution command is outside safe bounds")
+        if any(
+            not argument or len(argument.encode()) > 4096 or "\x00" in argument
+            for argument in self.argv[1:]
+        ):
+            raise ValueError("execution command argument is outside safe bounds")
+        if sum(len(argument.encode()) for argument in self.argv) > 8192:
+            raise ValueError("execution command argv exceeds 8192 UTF-8 bytes")
+        return self
+
+
+class CodingCatalogLimits(CodingEvaluationModel):
+    max_bundle_bytes: Annotated[int, Field(ge=1, le=2 << 30)]
+    max_workspace_bytes: Annotated[int, Field(ge=1, le=4 << 30)]
+    max_file_bytes: Annotated[int, Field(ge=1, le=128 << 20)]
+    max_patch_bytes: Annotated[int, Field(ge=1, le=128 << 20)]
+    max_entries: Annotated[int, Field(ge=1, le=200_000)]
+    max_tool_calls: Annotated[int, Field(ge=1, le=1_000)]
+    max_read_bytes: Annotated[int, Field(ge=1, le=256 << 10)]
+    max_response_bytes: Annotated[int, Field(ge=4096, le=2 << 20)]
+    max_search_results: Annotated[int, Field(ge=1, le=1_000)]
+    max_replay_cache_bytes: Annotated[int, Field(ge=1, le=512 << 20)]
+    max_transcript_bytes: Annotated[int, Field(ge=1, le=512 << 20)]
+
+    @model_validator(mode="after")
+    def aggregate_limits_are_coherent(self) -> CodingCatalogLimits:
+        max_event_bytes = 2 * (64 << 10) + self.max_response_bytes + 8192
+        if (
+            self.max_file_bytes > self.max_workspace_bytes
+            or self.max_patch_bytes > self.max_workspace_bytes
+            or self.max_read_bytes > self.max_response_bytes - 2048
+            or self.max_tool_calls * self.max_response_bytes
+            > self.max_replay_cache_bytes
+            or self.max_tool_calls * max_event_bytes > self.max_transcript_bytes
+        ):
+            raise ValueError("execution limits are internally inconsistent")
+        return self
+
+
+class CodingCatalogRunnerPlan(CodingEvaluationModel):
+    schema_name: Literal["dittobench-coding-runner-plan-v1"] = Field(alias="schema")
+    coding_contract_version: Literal[1]
+    case_id: OpaqueId
+    visible_bundle_sha256: Sha256
+    base_tree_sha256: Sha256
+    editable_paths: Annotated[list[SafeRelativePath], Field(max_length=64)]
+    creatable_paths: Annotated[list[SafeRelativePath], Field(max_length=64)]
+    deletable_paths: Annotated[list[SafeRelativePath], Field(max_length=64)]
+    test_commands: Annotated[list[CodingCatalogCommand], Field(max_length=64)]
+    build_commands: Annotated[list[CodingCatalogCommand], Field(max_length=64)]
+    limits: CodingCatalogLimits
+
+    @model_validator(mode="after")
+    def plan_is_canonical(self) -> CodingCatalogRunnerPlan:
+        path_sets = (self.editable_paths, self.creatable_paths, self.deletable_paths)
+        paths = [path for values in path_sets for path in values]
+        command_sets = (self.test_commands, self.build_commands)
+        command_ids = [command.id for values in command_sets for command in values]
+        if (
+            any(values != sorted(values) for values in path_sets)
+            or len(paths) != len(set(paths))
+            or len(paths) > self.limits.max_entries
+            or any(
+                [command.id for command in values]
+                != sorted(command.id for command in values)
+                for values in command_sets
+            )
+            or len(command_ids) != len(set(command_ids))
+            or len(command_ids) > self.limits.max_tool_calls
+        ):
+            raise ValueError("runner plan paths or commands are not canonical")
+        return self
+
+
+class CodingCatalogGraderGroup(CodingEvaluationModel):
+    group: Literal["fail_to_pass", "pass_to_pass", "hidden", "adversarial", "integrity"]
+    command: CodingCatalogCommand
+    expected_total: Annotated[int, Field(ge=1, le=(1 << 32) - 1)]
+
+
+class CodingCatalogGraderPlan(CodingEvaluationModel):
+    schema_name: Literal["dittobench-coding-grader-plan-v1"] = Field(alias="schema")
+    coding_contract_version: Literal[1]
+    case_id: OpaqueId
+    variant_id: OpaqueId
+    visible_bundle_sha256: Sha256
+    base_tree_sha256: Sha256
+    grader_contract_sha256: Sha256
+    grader_bundle_sha256: Sha256
+    grader_image_digest: OciDigest
+    grader_platform: Literal["linux/amd64"]
+    test_manifest_sha256: Sha256
+    resource_profile_sha256: Sha256
+    execution_timeout_milliseconds: Annotated[int, Field(ge=1, le=3_600_000)]
+    build_required: bool
+    build_command: CodingCatalogCommand
+    test_groups: Annotated[
+        list[CodingCatalogGraderGroup], Field(min_length=5, max_length=5)
+    ]
+    execution_order: Annotated[list[str], Field(min_length=5, max_length=5)]
+
+    @model_validator(mode="after")
+    def plan_is_canonical(self) -> CodingCatalogGraderPlan:
+        command_ids = [self.build_command.id] + [
+            group.command.id for group in self.test_groups
+        ]
+        if (
+            tuple(group.group for group in self.test_groups) != _GRADER_GROUPS
+            or tuple(self.execution_order) != _GRADER_EXECUTION_ORDER
+            or len(command_ids) != len(set(command_ids))
+        ):
+            raise ValueError("grader plan order or commands are not canonical")
+        return self
+
+
+class CodingCatalogResourceProfile(CodingEvaluationModel):
+    schema_name: Literal["dittobench-coding-grader-resource-v1"] = Field(alias="schema")
+    candidate_limits: CodingCatalogLimits
+    protected_limits: CodingCatalogLimits
+    max_combined_disk_bytes: Annotated[int, Field(ge=1, le=8 << 30)]
+    memory_limit_bytes: Annotated[int, Field(ge=256 << 20, le=64 << 30)]
+    scratch_limit_bytes: Annotated[int, Field(ge=1, le=8 << 30)]
+    pids_limit: Annotated[int, Field(ge=1, le=4096)]
+    cpu_quota_millis: Annotated[int, Field(ge=100, le=64_000)]
+
+    @model_validator(mode="after")
+    def combined_disk_is_bounded(self) -> CodingCatalogResourceProfile:
+        peak = (
+            self.candidate_limits.max_workspace_bytes
+            + self.protected_limits.max_workspace_bytes
+            + max(
+                self.candidate_limits.max_bundle_bytes,
+                self.protected_limits.max_bundle_bytes,
+            )
+            + self.scratch_limit_bytes
+        )
+        if peak > self.max_combined_disk_bytes:
+            raise ValueError("resource profile exceeds combined disk authority")
+        return self
+
+
 class CodingCatalogManifestTask(CodingEvaluationModel):
     """The miner-visible task identity committed by one private catalog leaf."""
 
@@ -152,6 +331,7 @@ class CodingCatalogTaskPayload(CodingEvaluationModel):
     issue_sha256: Sha256
     runtime_policy_sha256: Sha256
     budgets_sha256: Sha256
+    runner_plan_sha256: Sha256 | None = None
     task: CodingCatalogManifestTask
 
 
@@ -214,6 +394,9 @@ class CodingPrivateCatalogRecord(CodingEvaluationModel):
     issue: CodingCatalogIssue
     runtime_policy: CodingCatalogRuntimePolicy
     budgets: CodingCatalogBudgets
+    runner_plan: CodingCatalogRunnerPlan
+    grader_plan: CodingCatalogGraderPlan
+    grader_resource_profile: CodingCatalogResourceProfile
 
     @model_validator(mode="after")
     def task_and_membership_are_coherent(self) -> CodingPrivateCatalogRecord:
@@ -229,8 +412,21 @@ class CodingPrivateCatalogRecord(CodingEvaluationModel):
             != task.payload.runtime_policy_sha256
             or coding_catalog_budgets_digest(self.budgets)
             != task.payload.budgets_sha256
+            or task.payload.runner_plan_sha256 is None
+            or coding_catalog_runner_plan_digest(self.runner_plan)
+            != task.payload.runner_plan_sha256
+            or coding_catalog_grader_plan_digest(self.grader_plan)
+            != task.payload.task.grader_plan_sha256
+            or coding_catalog_resource_profile_digest(self.grader_resource_profile)
+            != task.payload.task.resource_profile_sha256
         ):
             raise ValueError("private catalog task material disagrees with its digests")
+        validate_coding_catalog_execution_bundle(
+            runner_plan=self.runner_plan,
+            runtime_policy=self.runtime_policy,
+            grader_plan=self.grader_plan,
+            resource_profile=self.grader_resource_profile,
+        )
         return self
 
 
@@ -416,6 +612,98 @@ def coding_catalog_budgets_digest(budgets: CodingCatalogBudgets) -> str:
         maximum_bytes=_MAX_CANONICAL_JSON_BYTES,
         label="coding catalog budgets",
     )
+
+
+def coding_catalog_runner_plan_digest(plan: CodingCatalogRunnerPlan) -> str:
+    plan = CodingCatalogRunnerPlan.model_validate_json(
+        plan.model_dump_json(by_alias=True)
+    )
+    return coding_canonical_sha256(
+        plan.model_dump(mode="json", by_alias=True),
+        maximum_bytes=_MAX_CANONICAL_JSON_BYTES,
+        label="coding runner plan",
+    )
+
+
+def coding_catalog_grader_plan_digest(plan: CodingCatalogGraderPlan) -> str:
+    plan = CodingCatalogGraderPlan.model_validate_json(
+        plan.model_dump_json(by_alias=True)
+    )
+    return coding_canonical_sha256(
+        plan.model_dump(mode="json", by_alias=True),
+        maximum_bytes=_MAX_CANONICAL_JSON_BYTES,
+        label="coding grader plan",
+    )
+
+
+def coding_catalog_resource_profile_digest(
+    profile: CodingCatalogResourceProfile,
+) -> str:
+    profile = CodingCatalogResourceProfile.model_validate_json(
+        profile.model_dump_json(by_alias=True)
+    )
+    return coding_canonical_sha256(
+        profile.model_dump(mode="json", by_alias=True),
+        maximum_bytes=_MAX_CANONICAL_JSON_BYTES,
+        label="coding resource profile",
+    )
+
+
+def validate_coding_catalog_execution_bundle(
+    *,
+    runner_plan: CodingCatalogRunnerPlan,
+    runtime_policy: CodingCatalogRuntimePolicy,
+    grader_plan: CodingCatalogGraderPlan,
+    resource_profile: CodingCatalogResourceProfile,
+) -> None:
+    runner_plan = CodingCatalogRunnerPlan.model_validate_json(
+        runner_plan.model_dump_json(by_alias=True)
+    )
+    runtime_policy = CodingCatalogRuntimePolicy.model_validate_json(
+        runtime_policy.model_dump_json()
+    )
+    grader_plan = CodingCatalogGraderPlan.model_validate_json(
+        grader_plan.model_dump_json(by_alias=True)
+    )
+    resource_profile = CodingCatalogResourceProfile.model_validate_json(
+        resource_profile.model_dump_json(by_alias=True)
+    )
+    paths = sorted(
+        runner_plan.editable_paths
+        + runner_plan.creatable_paths
+        + runner_plan.deletable_paths
+    )
+    validate_coding_catalog_grading_bundle(grader_plan, resource_profile)
+    if (
+        runner_plan.case_id != grader_plan.case_id
+        or runner_plan.visible_bundle_sha256 != grader_plan.visible_bundle_sha256
+        or runner_plan.base_tree_sha256 != grader_plan.base_tree_sha256
+        or runner_plan.limits != resource_profile.candidate_limits
+        or runtime_policy.editable_paths != paths
+        or runtime_policy.test_command_ids
+        != [command.id for command in runner_plan.test_commands]
+        or runtime_policy.build_command_ids
+        != [command.id for command in runner_plan.build_commands]
+    ):
+        raise ValueError("coding execution plan phases disagree")
+
+
+def validate_coding_catalog_grading_bundle(
+    grader_plan: CodingCatalogGraderPlan,
+    resource_profile: CodingCatalogResourceProfile,
+) -> None:
+    grader_plan = CodingCatalogGraderPlan.model_validate_json(
+        grader_plan.model_dump_json(by_alias=True)
+    )
+    resource_profile = CodingCatalogResourceProfile.model_validate_json(
+        resource_profile.model_dump_json(by_alias=True)
+    )
+    if (
+        grader_plan.resource_profile_sha256
+        != coding_catalog_resource_profile_digest(resource_profile)
+        or grader_plan.grader_contract_sha256 != CODING_GRADER_CONTRACT_SHA256
+    ):
+        raise ValueError("coding grading plan and resource authority disagree")
 
 
 def coding_catalog_membership_proof_digest(
