@@ -301,7 +301,7 @@ func newFixture(t *testing.T) *fixture {
 			codingartifacts.AudienceMemorySeedProjector, memorySHA, len(memory)),
 		ResourceProfile: capability(binding, codingartifacts.PhaseAuthoring, codingartifacts.KindResourceProfile,
 			codingartifacts.AudienceResourceSupervisor, resourceSHA, len(resource)),
-		RunnerManifest: runnerManifest, ResourcePolicy: policy,
+		RunnerManifest: runnerManifest, CandidateLimits: policy.CandidateLimits,
 		MemoryBundleSHA256: memorySHA, ResourceProfileSHA256: resourceSHA,
 	}
 	value.gradingSpec = GradingSpec{
@@ -642,7 +642,10 @@ func TestPhaseAndDigestDriftFailBeforeArtifactOpen(t *testing.T) {
 		"memory phase":    func(spec *AuthoringSpec) { spec.MemoryBundle.Phase = codingartifacts.PhaseGrading },
 		"memory digest":   func(spec *AuthoringSpec) { spec.MemoryBundleSHA256 = strings.Repeat("f", 64) },
 		"resource digest": func(spec *AuthoringSpec) { spec.ResourceProfile.SHA256 = strings.Repeat("f", 64) },
-		"deadline":        func(spec *AuthoringSpec) { spec.Binding.Deadline = spec.Binding.Deadline.Add(time.Second) },
+		"candidate limits": func(spec *AuthoringSpec) {
+			spec.CandidateLimits.MaxToolCalls--
+		},
+		"deadline": func(spec *AuthoringSpec) { spec.Binding.Deadline = spec.Binding.Deadline.Add(time.Second) },
 		"expired capability": func(spec *AuthoringSpec) {
 			spec.MemoryBundle.ExpiresAt = spec.Binding.Deadline.Add(-time.Hour - time.Second)
 		},

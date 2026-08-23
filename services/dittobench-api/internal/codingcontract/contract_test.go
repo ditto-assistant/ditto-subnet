@@ -496,3 +496,32 @@ func TestCanonicalJSONHasOneTrailingNewline(t *testing.T) {
 		t.Fatal("pretty-printed JSON accepted as canonical")
 	}
 }
+
+func TestAuthoringEvidenceCanonicalDigestMatchesSharedVector(t *testing.T) {
+	body, err := os.ReadFile(filepath.Join(
+		"..", "..", "..", "..", "packages", "dittobench-coding-contract", "testdata",
+		"coding_authoring_freeze_v1.json",
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vector struct {
+		Request struct {
+			Evidence AuthoringEvidence `json:"evidence"`
+		} `json:"request"`
+		Expected struct {
+			AuthoringEvidenceSHA256 string `json:"authoring_evidence_sha256"`
+		} `json:"expected"`
+	}
+	if err := json.Unmarshal(body, &vector); err != nil {
+		t.Fatal(err)
+	}
+	canonical, err := AuthoringEvidenceJSON(vector.Request.Evidence)
+	if err != nil || len(canonical) == 0 || canonical[len(canonical)-1] != '\n' {
+		t.Fatalf("canonical=%q err=%v", canonical, err)
+	}
+	digest, err := AuthoringEvidenceDigest(vector.Request.Evidence)
+	if err != nil || digest != vector.Expected.AuthoringEvidenceSHA256 {
+		t.Fatalf("digest=%q want=%q err=%v", digest, vector.Expected.AuthoringEvidenceSHA256, err)
+	}
+}

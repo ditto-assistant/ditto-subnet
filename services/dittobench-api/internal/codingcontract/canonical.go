@@ -61,6 +61,36 @@ func BudgetsDigest(budgets Budgets) (string, error) {
 	return digestUnchecked(budgets)
 }
 
+// AuthoringEvidenceJSON emits the canonical known-field evidence projection.
+func AuthoringEvidenceJSON(evidence AuthoringEvidence) ([]byte, error) {
+	if err := evidence.Validate(); err != nil {
+		return nil, err
+	}
+	return canonicalJSONUnchecked(evidence)
+}
+
+// AuthoringEvidenceDigest binds the canonical known-field evidence projection.
+func AuthoringEvidenceDigest(evidence AuthoringEvidence) (string, error) {
+	body, err := AuthoringEvidenceJSON(evidence)
+	if err != nil {
+		return "", err
+	}
+	return digestBytes(body), nil
+}
+
+// TaskEvidenceJSON emits canonical evidence only after binding it to the exact
+// run manifest task and validator ticket.
+func TaskEvidenceJSON(
+	manifest RunManifest,
+	validatorTicketID string,
+	evidence TaskEvidence,
+) ([]byte, error) {
+	if err := evidence.ValidateAgainst(manifest, validatorTicketID); err != nil {
+		return nil, err
+	}
+	return canonicalJSONUnchecked(evidence)
+}
+
 // TaskEvidenceDigest is the only signing-capable task-evidence digest path.
 func TaskEvidenceDigest(
 	manifest RunManifest,
