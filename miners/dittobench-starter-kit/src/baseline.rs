@@ -786,6 +786,11 @@ impl Baseline {
     /// Opens (creating if needed) the local Turso store with the Ollama
     /// embedder, the production weight-predictor MLP, and the production
     /// cross-encoder reranker — mirroring the production retrieval stack 1:1.
+    ///
+    /// The returned `Store` is process-wide and shared across overlapping
+    /// `/run`. Turso connections are not re-entrant (`concurrent use
+    /// forbidden`); `ditto-harness` `Db` opens one connection per overlapping
+    /// op. See `tests/store_concurrency.rs`.
     pub async fn open_store(db_path: &str) -> anyhow::Result<Arc<Store>> {
         let db = Db::open(db_path)
             .await
