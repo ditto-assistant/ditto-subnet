@@ -30,8 +30,9 @@ func (store *Store) reconcilePhysical(ctx context.Context) error {
 		if record.Frozen != nil {
 			references[record.Frozen.Artifact.FrozenPatchSHA256] = struct{}{}
 		}
+		addPublicationReferences(references, record)
 	}
-	limit := store.config.MaxAttempts*4 + 1024
+	limit := store.config.MaxAttempts*8 + 1024
 	files := 0
 	orphanBytes := int64(0)
 	if _, err := store.dirs.staging.Seek(0, 0); err != nil {

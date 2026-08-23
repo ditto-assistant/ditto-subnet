@@ -15,11 +15,14 @@ import (
 )
 
 const (
-	recordSchema       = "dittobench-coding-evidence-outbox-v1"
-	maximumRecordBytes = 4 << 20
-	recordReserveBytes = 2 * maximumRecordBytes
-	maximumRootBytes   = 1 << 40
-	maximumAttempts    = 100_000
+	recordSchema                   = "dittobench-coding-evidence-outbox-v2"
+	maximumRecordBytes             = 4 << 20
+	recordReserveBytes             = 2 * maximumRecordBytes
+	maximumPublicationRequestBytes = 4 << 20
+	maximumPublicationAckBytes     = 1 << 20
+	publicationReserveBytes        = 2 * (maximumPublicationRequestBytes + maximumPublicationAckBytes)
+	maximumRootBytes               = 1 << 40
+	maximumAttempts                = 100_000
 )
 
 var (
@@ -35,6 +38,7 @@ var (
 
 type State string
 type Purpose string
+type PublicationStage string
 
 const (
 	StateReserved             State = "reserved"
@@ -43,6 +47,11 @@ const (
 	StateTerminalWithoutPatch State = "terminal_without_patch"
 	StateReleased             State = "released"
 	StateExpired              State = "expired"
+)
+
+const (
+	PublicationAuthoringFreeze PublicationStage = "authoring_freeze"
+	PublicationTerminalResult  PublicationStage = "terminal_result"
 )
 
 const (
@@ -102,6 +111,14 @@ func reservationForLimits(value codingrunner.Limits) int64 {
 	return value.MaxTranscriptBytes + value.MaxPatchBytes + recordReserveBytes
 }
 
+func reservationForPurpose(purpose Purpose, value codingrunner.Limits) int64 {
+	reservation := reservationForLimits(value)
+	if purpose == PurposeShadowAttempt {
+		reservation += publicationReserveBytes
+	}
+	return reservation
+}
+
 func (value SignedLimits) runner() codingrunner.Limits {
 	return codingrunner.Limits{
 		MaxBundleBytes: value.MaxBundleBytes, MaxWorkspaceBytes: value.MaxWorkspaceBytes,
@@ -133,6 +150,58 @@ type FrozenRecord struct {
 	Metadata FrozenMetadata `json:"metadata"`
 }
 
+// PublicationAuthority is trusted local identity independently checked against
+// the signed request and acknowledgement bytes before either object is stored.
+type PublicationAuthority struct {
+	AgentID               string `json:"agent_id"`
+	BenchVersion          int    `json:"bench_version"`
+	RunRowID              string `json:"run_row_id"`
+	CodingRunID           string `json:"coding_run_id"`
+	ScreenedImageSHA256   string `json:"screened_image_sha256"`
+	RunManifestSHA256     string `json:"run_manifest_sha256"`
+	TaskSetManifestSHA256 string `json:"task_set_manifest_sha256"`
+	EvidenceSHA256        string `json:"evidence_sha256"`
+}
+
+type PublicationArtifact struct {
+	ObjectKey string `json:"object_key"`
+	SHA256    string `json:"sha256"`
+	SizeBytes int64  `json:"size_bytes"`
+}
+
+type PublicationRecord struct {
+	Stage                     PublicationStage     `json:"stage"`
+	Authority                 PublicationAuthority `json:"authority"`
+	Request                   PublicationArtifact  `json:"request"`
+	Acknowledgement           *PublicationArtifact `json:"acknowledgement,omitempty"`
+	AcknowledgedRequestSHA256 string               `json:"acknowledged_request_sha256,omitempty"`
+	RemoteAuthorityID         string               `json:"remote_authority_id,omitempty"`
+	PreparedAtUnix            int64                `json:"prepared_at_unix"`
+	AcknowledgedAtUnix        int64                `json:"acknowledged_at_unix,omitempty"`
+}
+
+type PendingPublication struct {
+	RecordID  string
+	Binding   Binding
+	Stage     PublicationStage
+	Authority PublicationAuthority
+	Request   PublicationArtifact
+}
+
+func (publication PendingPublication) String() string {
+	return "CodingPendingPublication{stage=" + strconv.Quote(string(publication.Stage)) + "}"
+}
+
+func (publication PendingPublication) GoString() string { return publication.String() }
+
+func (publication PendingPublication) LogValue() slog.Value {
+	return slog.StringValue("coding-pending-publication-" + string(publication.Stage))
+}
+
+func (publication PendingPublication) MarshalJSON() ([]byte, error) {
+	return nil, errors.New("coding pending publications cannot be serialized")
+}
+
 type FrozenMetadata struct {
 	CodingContractVersion     int    `json:"coding_contract_version"`
 	CaseID                    string `json:"case_id"`
@@ -162,6 +231,8 @@ type Record struct {
 	Frozen                *FrozenRecord               `json:"frozen,omitempty"`
 	Failure               *codingrunner.FreezeFailure `json:"failure,omitempty"`
 	OutcomeSHA256         string                      `json:"outcome_sha256,omitempty"`
+	AuthoringPublication  *PublicationRecord          `json:"authoring_publication,omitempty"`
+	TerminalPublication   *PublicationRecord          `json:"terminal_publication,omitempty"`
 	ReleaseEvidenceSHA256 string                      `json:"release_evidence_sha256,omitempty"`
 	CreatedAtUnixNano     int64                       `json:"created_at_unix_nano"`
 	UpdatedAtUnixNano     int64                       `json:"updated_at_unix_nano"`

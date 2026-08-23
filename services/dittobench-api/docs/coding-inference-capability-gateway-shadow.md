@@ -49,9 +49,9 @@ and is terminally ambiguous: the local and Platform grants are revoked and the
 request is never repeated.
 
 The future gateway/worker remains responsible for mapping that typed outcome,
-persisting the complete signed Platform publication envelope, coordinating the
-harness and workspace capability, and retaining both journal and outbox until
-terminal acknowledgement.
+preparing the complete signed Platform publication envelope in the durable
+evidence outbox, coordinating the harness and workspace capability, and
+retaining both journal and outbox until terminal acknowledgement.
 
 ## Activation boundary
 
