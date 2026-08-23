@@ -70,6 +70,7 @@ def test_harness_signing_domain_is_exact() -> None:
     [
         ("image_url", "http://storage.invalid/image?signature=x"),
         ("screened_image_size_bytes", (8 << 30) + 1),
+        ("screened_image_ref", "ditto-screen/foreign:latest"),
         ("expires_at", "2026-08-23T07:00:01Z"),
     ],
 )

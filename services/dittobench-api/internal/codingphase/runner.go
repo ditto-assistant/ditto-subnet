@@ -64,7 +64,8 @@ func (runner *Runner) Author(
 	harness, err := runner.harnesses.Acquire(ctx, HarnessBinding{
 		ExecutionID: input.Request.TicketID, AgentID: authority.harness.AgentID,
 		RunRowID: authority.harness.RunRowID, AgentArtifactSHA256: authority.manifest.AgentArtifactSHA256,
-		TicketID: input.Request.TicketID, CaseID: authority.task.CaseID, Deadline: input.Request.Deadline,
+		TicketID: input.Request.TicketID, CaseID: authority.task.CaseID,
+		ProfileCapabilityID: authority.task.ProfileCapabilityID, Deadline: input.Request.Deadline,
 		BenchVersion: authority.harness.BenchVersion, ScreenedImageSHA256: authority.harness.ScreenedImageSHA256,
 		ScreenedImageSize: authority.harness.ScreenedImageSizeBytes,
 		ScreenedImageID:   authority.harness.ScreenedImageID, ScreenedImageRef: authority.harness.ScreenedImageRef,
@@ -143,6 +144,10 @@ func (runner *Runner) Author(
 		}
 		state.gateway, primary = runner.inference.Activate(ctx, activation)
 		zero(grant.capability.BrokerPrivateKey)
+		grant.capability.Bearer = ""
+		grant.capability.ProxyURL = ""
+		grant.revocation.Bearer = ""
+		grant.revocation.URL = ""
 		if primary == nil && nilLike(state.gateway) {
 			primary = ErrLifecycle
 		}

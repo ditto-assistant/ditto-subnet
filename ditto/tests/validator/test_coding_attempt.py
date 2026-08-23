@@ -182,7 +182,7 @@ def _harness_launch() -> CodingHarnessLaunchResponse:
         screened_image_sha256=ticket.screened_image_sha256,
         screened_image_size_bytes=1024,
         screened_image_id="sha256:" + "77" * 32,
-        screened_image_ref="ditto-screened/test:latest",
+        screened_image_ref=f"ditto-screen/{ticket.agent_id}:latest",
         screening_policy_version=9,
         image_url="https://storage.invalid/screened.tar?signature=test",
         expires_at=datetime(2026, 8, 21, 12, 5, tzinfo=UTC),

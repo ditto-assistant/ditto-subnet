@@ -283,6 +283,18 @@
       "related": ["coding-attempt-supervisor", "coding-inference-grants", "coding-repair-research", "platform-api", "dittobench-scoring"]
     },
     {
+      "id": "coding-private-runtime-adapters",
+      "title": "Shadow coding private runtime adapters",
+      "keywords": ["coding harness controller", "dormant screened harness", "source-bound coding routes", "coding source registry", "coding grant revoker", "coding gateway activator", "private coding runtime adapters"],
+      "summary": "Load the exact screened image without executing it, bind workspace and Luna routes to the observed container source, and revoke the exact Platform grant without wiring a worker.",
+      "owns": ["services/dittobench-api/internal/codingharness", "services/dittobench-api/internal/codingsource", "services/dittobench-api/internal/codinggrantrevoke", "services/dittobench-api/docs/coding-private-runtime-adapters-shadow.md"],
+      "read": ["services/dittobench-api/docs/coding-supervisor-phase-runner-shadow.md", "services/dittobench-api/docs/coding-inference-capability-gateway-shadow.md", "services/dittobench-api/docs/coding-platform-upstream-client-shadow.md", "apps/platform/docs/coding-harness-launch-authority.md", "apps/platform/docs/coding-inference-grant-authority.md", "research/dittobench-coding-datagen/docs/PRIVATE-EXECUTION-PROTOCOL.md"],
+      "search": ["rg -n 'Acquire|Activate|Destroy|LoadScreenedImage|RequireRootless|RequireIsolatedDaemon' services/dittobench-api/internal/codingharness services/dittobench-api/internal/sandbox", "rg -n 'WorkspacePublisher|InferencePublisher|RemoteAddr|X-Forwarded|Revoke' services/dittobench-api/internal/codingsource", "rg -n 'RevocationCapability|GatewayActivator|JournalRoot|revoke-capability' services/dittobench-api/internal/codinggrantrevoke services/dittobench-api/internal/codingphase"],
+      "validate": ["cd services/dittobench-api && go test -race ./internal/codingharness ./internal/codingsource ./internal/codinggrantrevoke ./internal/codingphase ./internal/codinggateway ./internal/codingplatform ./internal/sandbox", "cd services/dittobench-api && go vet ./internal/codingharness ./internal/codingsource ./internal/codinggrantrevoke ./internal/codingphase ./internal/codinggateway ./internal/codingplatform ./internal/sandbox", "uv run pytest -q ditto/tests/api_models/test_coding_harness.py ditto/tests/validator/test_coding_attempt.py ditto/tests/validator/test_coding_supervisor.py", "python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check"],
+      "invariants": ["Screened-image loading cannot execute candidate code; Activate is separate and follows the durable non-rerunnable marker.", "Workspace and inference routes require both an opaque token and the exact directly observed active container source; forwarding headers never grant authority.", "The revocation client owns only the distinct revocation bearer and validates the exact terminal no-store acknowledgement before forgetting it.", "No production worker constructs these adapters and coding v1 remains permanently weight_eligible=false."],
+      "related": ["coding-harness-authority", "coding-inference-grants", "coding-inference-gateway", "coding-attempt-supervisor", "coding-repair-research", "dittobench-scoring"]
+    },
+    {
       "id": "coding-inference-grants",
       "title": "Shadow coding inference grant authority",
       "keywords": ["coding inference grant", "Luna grant authority", "coding inference exchange", "coding inference revoke", "coding revoke capability", "revocation-only bearer", "coding grant bearer"],

@@ -654,9 +654,10 @@ The supervisor phase runner now consumes a separately signed, short-lived
 screened-harness launch authority and commits the outbox marker before dormant
 harness activation. An exchanged grant carries a distinct revocation-only
 bearer so the Go gateway can revoke durably before evidence finalization while
-the Python validator retains signed revocation as an idempotent fallback. Later
-composition reviews still own the concrete harness/route adapters, ticket
-claiming, publication handoff, Python worker connection, and host sweep schedule.
+the Python validator retains signed revocation as an idempotent fallback. The
+private dormant-harness, source-bound route, revocation, and relay-activation
+adapters now exist but remain unwired. Later reviews still own ticket claiming,
+publication handoff, Python worker connection, and the host sweep schedule.
 
 The runtime never supplies aggregate counts or repair mean. It returns
 per-task evidence; the validator orders those tasks by the immutable manifest,
