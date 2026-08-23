@@ -13,15 +13,17 @@ Every request fixes:
   `abort_grading`, or `recover`;
 - a canonical operation UUID, ticket UUID, coding-run ID, and deadline;
 - one bounded lease object when the operation requires it;
+- one ticket-bound screened-harness launch capability only for `author`;
 - the complete authoring outcome only for grading.
 
 `prepare` asks the trusted process-local session backend to generate and retain one Ed25519
 broker key and returns only its public key plus an opaque session UUID. Python
 uses that public key to request/exchange the exact ticket-bound Platform grant.
-Only `author` carries the active exchange object; the broker private key never
+Only `author` carries the active exchange and screened-harness objects; the broker private key never
 leaves the Go backend and the provider credential never enters either process.
-Python revokes the exact active (or still-pending) grant generation in a
-terminal `finally` path before it accepts the authoring outcome.
+The exchange includes a distinct revocation-only bearer so the Go gateway can
+durably revoke before releasing model evidence. Python repeats the exact signed
+revocation in a terminal `finally` path as an idempotent fallback.
 
 `SessionBackend` binds that preparation to the exact ticket/run, canonical
 authoring lease object, and deadline. It lends a deep-owned private-key buffer
@@ -66,7 +68,9 @@ operation, operation UUID, ticket, run, and typed outcome before returning
 coordinator dataclasses.
 It independently checks the grant ticket, case/profile, policy digest,
 deadline, request budget, and prompt/completion budgets against the authoring
-lease before forwarding the active exchange.
+lease before forwarding the active exchange. It also binds the screened image
+to the ticket, agent, run, source artifact, and deadline before forwarding its
+private URL.
 
 ## Current boundary
 

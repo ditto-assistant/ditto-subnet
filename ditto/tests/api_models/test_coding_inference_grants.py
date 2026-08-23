@@ -83,6 +83,11 @@ def test_grant_offer_exchange_and_revocation_are_strict_and_forward_compatible()
             "proxy_url": (
                 "https://relay.invalid/api/v1/inference/coding/chat/completions"
             ),
+            "revoke_bearer": "r" * 43,
+            "revoke_url": (
+                "https://platform.invalid/api/v1/validator/"
+                "coding-shadow/inference-revoke-capability"
+            ),
         }
     )
     assert exchange.generation == 1

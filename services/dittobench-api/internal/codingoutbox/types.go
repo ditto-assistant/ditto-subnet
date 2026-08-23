@@ -71,15 +71,17 @@ type Config struct {
 }
 
 type Binding struct {
-	Purpose             Purpose   `json:"purpose"`
-	ExecutionID         string    `json:"execution_id"`
-	AgentArtifactSHA256 string    `json:"agent_artifact_sha256"`
-	HarnessInstanceID   string    `json:"harness_instance_id"`
-	AuthoritySHA256     string    `json:"authority_sha256"`
-	TicketID            string    `json:"ticket_id"`
-	CaseID              string    `json:"case_id"`
-	ProfileCapabilityID string    `json:"profile_capability_id"`
-	Deadline            time.Time `json:"deadline"`
+	Purpose                Purpose   `json:"purpose"`
+	ExecutionID            string    `json:"execution_id"`
+	AgentArtifactSHA256    string    `json:"agent_artifact_sha256"`
+	HarnessInstanceID      string    `json:"harness_instance_id"`
+	AuthoritySHA256        string    `json:"authority_sha256"`
+	HarnessAuthoritySHA256 string    `json:"harness_authority_sha256,omitempty"`
+	ScreenedImageSHA256    string    `json:"screened_image_sha256,omitempty"`
+	TicketID               string    `json:"ticket_id"`
+	CaseID                 string    `json:"case_id"`
+	ProfileCapabilityID    string    `json:"profile_capability_id"`
+	Deadline               time.Time `json:"deadline"`
 }
 
 type SignedLimits struct {

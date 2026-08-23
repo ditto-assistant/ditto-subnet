@@ -8,12 +8,13 @@ from typing import Annotated
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.coding_inference import CodingInferencePolicy
 from ditto.api_models.coding_inference_grants import (
+    CodingInferenceCapabilityRevokeRequest,
     CodingInferenceExchangeRequest,
     CodingInferenceExchangeResponse,
     CodingInferenceGrantOffer,
@@ -43,6 +44,7 @@ from ditto.db.queries.coding_inference_grants import (
     activate_coding_inference_grant,
     ensure_coding_inference_grant,
     revoke_coding_inference_grant,
+    revoke_coding_inference_grant_by_capability,
 )
 from ditto.db.queries.coding_task_leases import (
     CodingTaskLeaseIntegrityError,
@@ -69,6 +71,7 @@ class CodingInferenceGrantTransport:
     policy: CodingInferencePolicy
     exchange_url: str
     proxy_url: str
+    revoke_url: str
 
 
 def _transport(request: Request) -> CodingInferenceGrantTransport:
@@ -88,6 +91,10 @@ def _transport(request: Request) -> CodingInferenceGrantTransport:
                 "/api/v1/validator/coding-shadow/inference-exchange",
             ),
             (value.proxy_url, "/api/v1/inference/coding/chat/completions"),
+            (
+                value.revoke_url,
+                "/api/v1/validator/coding-shadow/inference-revoke-capability",
+            ),
         )
         for url, suffix in urls:
             parsed = urlsplit(url)
@@ -354,7 +361,7 @@ async def exchange_coding_inference_grant(
         raise ValidatorAuthError("coding inference exchange signature did not verify")
     await _permitted(request, chain, payload.validator_hotkey)
     now = datetime.now(UTC)
-    activated: tuple[CodingInferenceGrant, str] | None = None
+    activated = None
     grant_error: Exception | None = None
     async with session.begin():
         await _consume_nonce(
@@ -389,7 +396,7 @@ async def exchange_coding_inference_grant(
             status_code=503,
             detail="coding inference exchange result is unavailable",
         )
-    grant, bearer = activated
+    grant = activated.grant
     try:
         return CodingInferenceExchangeResponse.model_validate(
             {
@@ -397,8 +404,10 @@ async def exchange_coding_inference_grant(
                 **_authority(grant),
                 "status": "active",
                 "generation": grant.generation,
-                "bearer": bearer,
+                "bearer": activated.bearer,
                 "proxy_url": transport.proxy_url,
+                "revoke_bearer": activated.revoke_bearer,
+                "revoke_url": transport.revoke_url,
             }
         )
     except ValidationError:
@@ -406,6 +415,76 @@ async def exchange_coding_inference_grant(
             status_code=503,
             detail="coding inference exchange transport is invalid",
         ) from None
+
+
+@router.post(
+    "/coding-shadow/inference-revoke-capability",
+    response_model=CodingInferenceRevokeResponse,
+    responses={
+        401: {"description": "Revocation capability is missing or invalid."},
+        404: {"description": "Coding inference grant unavailable."},
+        409: {"description": "Grant generation or state conflicts."},
+        503: {"description": "Coding inference transport unavailable."},
+    },
+)
+async def revoke_coding_inference_grant_capability_endpoint(
+    payload: CodingInferenceCapabilityRevokeRequest,
+    request: Request,
+    response: Response,
+    session: SessionDep,
+    authorization: Annotated[str | None, Header()] = None,
+) -> CodingInferenceRevokeResponse:
+    """Revoke one active generation through its revocation-only bearer."""
+
+    response.headers["Cache-Control"] = "no-store"
+    _transport(request)
+    if authorization is None or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="revoke capability is missing")
+    bearer = authorization.removeprefix("Bearer ")
+    if not bearer or bearer != bearer.strip():
+        raise HTTPException(status_code=401, detail="revoke capability is invalid")
+    revoked = None
+    grant_error: Exception | None = None
+    async with session.begin():
+        try:
+            revoked = await revoke_coding_inference_grant_by_capability(
+                session,
+                grant_id=payload.grant_id,
+                ticket_id=payload.ticket_id,
+                generation=payload.generation,
+                revoke_bearer=bearer,
+            )
+        except (
+            CodingInferenceGrantNotAvailableError,
+            CodingInferenceGrantConflictError,
+        ) as error:
+            grant_error = error
+    if isinstance(grant_error, CodingInferenceGrantNotAvailableError):
+        raise HTTPException(
+            status_code=404,
+            detail="coding inference revoke capability is unavailable",
+        )
+    if grant_error is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="coding inference grant is not revocable",
+        )
+    if revoked is None or revoked.grant.revoked_at is None:
+        raise HTTPException(
+            status_code=503,
+            detail="coding inference revocation result is unavailable",
+        )
+    return CodingInferenceRevokeResponse(
+        schema="dittobench-coding-inference-revocation-v1",
+        coding_contract_version=1,
+        weight_eligible=False,
+        grant_id=revoked.grant.grant_id,
+        ticket_id=revoked.grant.ticket_id,
+        status="revoked",
+        generation=revoked.grant.generation,
+        revoked_at=revoked.grant.revoked_at,
+        idempotent=revoked.idempotent,
+    )
 
 
 @router.post(

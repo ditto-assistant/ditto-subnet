@@ -200,6 +200,8 @@ class CodingInferenceExchangeResponse(CodingInferenceGrantAuthority):
     generation: Annotated[int, Field(strict=True, ge=1, le=(1 << 31) - 1)]
     bearer: Annotated[str, Field(pattern=_BEARER_PATTERN, repr=False)]
     proxy_url: Annotated[str, Field(min_length=1, max_length=_MAX_URL_BYTES)]
+    revoke_bearer: Annotated[str, Field(pattern=_BEARER_PATTERN, repr=False)]
+    revoke_url: Annotated[str, Field(min_length=1, max_length=_MAX_URL_BYTES)]
 
     @field_validator("proxy_url")
     @classmethod
@@ -208,6 +210,34 @@ class CodingInferenceExchangeResponse(CodingInferenceGrantAuthority):
             value,
             suffix="/api/v1/inference/coding/chat/completions",
         )
+
+    @field_validator("revoke_url")
+    @classmethod
+    def revoke_url_is_approved(cls, value: str) -> str:
+        return _validate_https_url(
+            value,
+            suffix="/api/v1/validator/coding-shadow/inference-revoke-capability",
+        )
+
+    @model_validator(mode="after")
+    def bearer_scopes_are_distinct(self) -> CodingInferenceExchangeResponse:
+        if self.bearer == self.revoke_bearer:
+            raise ValueError("coding inference and revoke bearers must differ")
+        return self
+
+
+class CodingInferenceCapabilityRevokeRequest(CodingInferenceGrantModel):
+    """One revocation-only bearer request owned by the trusted Go gateway."""
+
+    grant_id: UUID
+    ticket_id: UUID
+    generation: Annotated[int, Field(strict=True, ge=1, le=(1 << 31) - 1)]
+
+    @model_validator(mode="after")
+    def identifiers_are_nonzero(self) -> CodingInferenceCapabilityRevokeRequest:
+        if self.grant_id.int == 0 or self.ticket_id.int == 0:
+            raise ValueError("coding inference capability revoke UUID is nil")
+        return self
 
 
 class CodingInferenceRevokeRequest(BaseModel):
@@ -331,6 +361,7 @@ def coding_inference_revoke_signing_message(
 
 
 __all__ = [
+    "CodingInferenceCapabilityRevokeRequest",
     "CodingInferenceExchangeRequest",
     "CodingInferenceExchangeResponse",
     "CodingInferenceGrantOffer",

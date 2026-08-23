@@ -13,7 +13,6 @@ import (
 	"github.com/ditto-assistant/dittobench-api/internal/codingcontract"
 	"github.com/ditto-assistant/dittobench-api/internal/codinggateway"
 	"github.com/ditto-assistant/dittobench-api/internal/codingoutbox"
-	"github.com/ditto-assistant/dittobench-api/internal/codingplatform"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrelay"
 	"github.com/ditto-assistant/dittobench-api/internal/codingrunner"
 	"github.com/ditto-assistant/dittobench-api/internal/codingsupervisor"
@@ -63,8 +62,14 @@ func (runner *Runner) Author(
 		return codingsupervisor.AuthoringOutcome{}, err
 	}
 	harness, err := runner.harnesses.Acquire(ctx, HarnessBinding{
-		ExecutionID: input.Request.TicketID, AgentArtifactSHA256: authority.manifest.AgentArtifactSHA256,
+		ExecutionID: input.Request.TicketID, AgentID: authority.harness.AgentID,
+		RunRowID: authority.harness.RunRowID, AgentArtifactSHA256: authority.manifest.AgentArtifactSHA256,
 		TicketID: input.Request.TicketID, CaseID: authority.task.CaseID, Deadline: input.Request.Deadline,
+		BenchVersion: authority.harness.BenchVersion, ScreenedImageSHA256: authority.harness.ScreenedImageSHA256,
+		ScreenedImageSize: authority.harness.ScreenedImageSizeBytes,
+		ScreenedImageID:   authority.harness.ScreenedImageID, ScreenedImageRef: authority.harness.ScreenedImageRef,
+		ScreeningPolicyVersion: authority.harness.ScreeningPolicyVersion,
+		ImageURL:               authority.harness.ImageURL, ImageExpiresAt: authority.harness.ExpiresAt,
 	})
 	if err != nil || nilLike(harness) || !validIdentifier(harness.InstanceID(), 256) || nilLike(harness.Client()) {
 		var destroyErr error
@@ -80,7 +85,9 @@ func (runner *Runner) Author(
 		Purpose: codingoutbox.PurposeShadowAttempt, ExecutionID: input.Request.TicketID,
 		AgentArtifactSHA256: authority.manifest.AgentArtifactSHA256,
 		HarnessInstanceID:   harness.InstanceID(), AuthoritySHA256: authority.lease.RunManifestSHA256,
-		TicketID: input.Request.TicketID, CaseID: authority.task.CaseID,
+		HarnessAuthoritySHA256: authority.harnessSHA256,
+		ScreenedImageSHA256:    authority.harness.ScreenedImageSHA256,
+		TicketID:               input.Request.TicketID, CaseID: authority.task.CaseID,
 		ProfileCapabilityID: authority.task.ProfileCapabilityID, Deadline: input.Request.Deadline,
 	}
 	attempt, err := runner.outbox.Reserve(ctx, binding, authority.runnerManifest.Limits)
@@ -120,22 +127,22 @@ func (runner *Runner) Author(
 	if primary == nil {
 		_, primary = runner.seeds.Deliver(ctx, client, session.SeedProjection())
 	}
-	var capability codingplatform.GrantCapability
+	var grant parsedGrant
 	if primary == nil {
-		capability, primary = parseGrant(
+		grant, primary = parseGrant(
 			input.Request.Grant, input.Request, authority, runner.policy, harness.InstanceID(), input.SessionID,
 			input.BrokerPublicKey, input.BrokerPrivateKey, runner.now().UTC(),
 		)
 	}
 	if primary == nil {
 		activation := InferenceActivation{
-			Policy: runner.policy, Capability: capability,
+			Policy: runner.policy, Capability: grant.capability, Revocation: grant.revocation,
 			Authorizer: markerAuthorizer{
-				outbox: runner.outbox, binding: binding, relay: capability.Binding,
+				outbox: runner.outbox, binding: binding, relay: grant.capability.Binding,
 			},
 		}
 		state.gateway, primary = runner.inference.Activate(ctx, activation)
-		zero(capability.BrokerPrivateKey)
+		zero(grant.capability.BrokerPrivateKey)
 		if primary == nil && nilLike(state.gateway) {
 			primary = ErrLifecycle
 		}
@@ -175,7 +182,7 @@ func (runner *Runner) Author(
 			_, primary = client.Run(ctx, runRequest)
 		}
 	}
-	return runner.finalizeAuthoring(ctx, input.Request, authority, state, capability.Binding, primary)
+	return runner.finalizeAuthoring(ctx, input.Request, authority, state, grant.capability.Binding, primary)
 }
 
 type authoringState struct {

@@ -28,6 +28,7 @@
 | Shadow coding Platform upstream client | `services/dittobench-api/internal/codingplatform/`, `services/dittobench-api/docs/coding-platform-upstream-client-shadow.md` |
 | Shadow coding model-relay handler | `services/model-relay/internal/inference/coding*.go`, `services/model-relay/CODING-SHADOW.md` |
 | Shadow private coding attempt supervisor | `services/dittobench-api/internal/codingsupervisor/`, `ditto/validator/coding_supervisor.py`, `services/dittobench-api/docs/coding-attempt-supervisor-shadow.md` |
+| Shadow screened-harness launch authority | `ditto/api_models/coding_harness.py`, `apps/platform/ditto/api_server/endpoints/validator_coding_harness.py`, `apps/platform/docs/coding-harness-launch-authority.md` |
 | Shadow durable coding phase runner | `services/dittobench-api/internal/codingphase/`, `services/dittobench-api/docs/coding-supervisor-phase-runner-shadow.md` |
 | Shadow private execution-plan contract | `services/dittobench-api/internal/codingexecution/`, `packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json`, `services/dittobench-api/docs/coding-private-execution-plan-contract.md` |
 | Shadow private catalog selector | `apps/platform/ditto/coding_selection.py` |

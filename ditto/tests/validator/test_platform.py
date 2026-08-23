@@ -32,6 +32,10 @@ from ditto.api_models.coding import (
     coding_grading_lease_signing_message,
     coding_shadow_result_signing_message,
 )
+from ditto.api_models.coding_harness import (
+    CodingHarnessLaunchRequest,
+    coding_harness_launch_signing_message,
+)
 from ditto.api_models.coding_inference_grants import (
     CodingInferenceExchangeRequest,
     CodingInferenceGrantRequest,
@@ -88,6 +92,13 @@ _SHADOW_RESULT_VECTOR_PATH = (
     / "dittobench-coding-contract"
     / "testdata"
     / "coding_shadow_result_submission_v1.json"
+)
+_SUPERVISOR_PATH = (
+    Path(__file__).parents[3]
+    / "packages"
+    / "dittobench-coding-contract"
+    / "testdata"
+    / "coding_attempt_supervisor_v1.json"
 )
 
 
@@ -285,6 +296,11 @@ async def test_coding_inference_client_offer_exchange_and_revoke_are_signed() ->
                     "proxy_url": (
                         "https://relay.invalid/api/v1/inference/coding/chat/completions"
                     ),
+                    "revoke_bearer": "r" * 43,
+                    "revoke_url": (
+                        "https://platform.test/api/v1/validator/"
+                        "coding-shadow/inference-revoke-capability"
+                    ),
                 },
             )
         revoke_payload = CodingInferenceRevokeRequest.model_validate_json(
@@ -331,6 +347,7 @@ async def test_coding_inference_client_offer_exchange_and_revoke_are_signed() ->
             generation=exchange.generation,
         )
     assert exchange.bearer == "b" * 43
+    assert exchange.revoke_bearer == "r" * 43
     assert exchange.generation == 1
     assert revoked.status == "revoked"
 
@@ -357,6 +374,41 @@ async def test_coding_authoring_client_redacts_invalid_bearer_response() -> None
             ).request_coding_authoring_lease(ticket_id)
     assert "X-Amz-Signature" not in str(captured.value)
     assert response_body["capabilities"][0]["url"] not in str(captured.value)
+
+
+async def test_coding_harness_client_posts_signed_request_and_parses_capability() -> (
+    None
+):
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    vector = json.loads(_SUPERVISOR_PATH.read_text(encoding="utf-8"))
+    response_body = vector["requests"]["author"]["harness"]
+    ticket_id = UUID(response_body["ticket_id"])
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path.endswith("/validator/coding-shadow/harness-launch")
+        payload = CodingHarnessLaunchRequest.model_validate_json(request.content)
+        message = coding_harness_launch_signing_message(
+            validator_hotkey=payload.validator_hotkey,
+            ticket_id=payload.ticket_id,
+            nonce=payload.nonce,
+            requested_at=payload.requested_at,
+        )
+        assert keypair.verify(message, bytes.fromhex(payload.signature))
+        return httpx.Response(200, json=response_body)
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        launch = await PlatformClient(
+            config,  # type: ignore[arg-type]
+            http,
+            keypair,
+        ).request_coding_harness_launch(ticket_id)
+    assert launch.ticket_id == ticket_id
+    assert launch.screened_image_sha256 == "bb" * 32
+    assert "X-Amz-Signature" not in repr(launch)
 
 
 async def test_coding_authoring_client_rejects_oversized_response() -> None:

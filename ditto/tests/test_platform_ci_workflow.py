@@ -64,6 +64,7 @@ def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
         "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
     } <= backend_paths
     assert (
         "packages/dittobench-coding-contract/testdata/coding_inference_miner_v1.json"
@@ -77,6 +78,11 @@ def test_backend_workflow_owns_every_platform_coding_contract_vector() -> None:
         "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py"
         in backend_paths
     )
+    assert {
+        "ditto/api_models/coding_harness.py",
+        "ditto/api_models/coding_inference.py",
+        "ditto/api_models/coding_inference_grants.py",
+    } <= backend_paths
 
 
 def test_path_gated_callers_select_the_shared_exact_source_gates() -> None:

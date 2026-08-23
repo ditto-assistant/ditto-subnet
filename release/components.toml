@@ -86,6 +86,7 @@ paths = [
   "ditto/api_models/coding.py",
   "ditto/api_models/coding_inference.py",
   "ditto/api_models/coding_inference_grants.py",
+  "ditto/api_models/coding_harness.py",
   "ditto/api_models/confirmation_progress.py",
   "ditto/api_models/inference.py",
   "ditto/api_models/stack_health.py",
@@ -191,7 +192,11 @@ paths = [
   "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
   "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
   "packages/dittobench-coding-contract/testdata/coding_execution_plan_v1.json",
+  "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
   "packages/dittobench-coding-contract/generate_execution_delivery_vectors.py",
+  "ditto/api_models/coding_harness.py",
+  "ditto/api_models/coding_inference.py",
+  "ditto/api_models/coding_inference_grants.py",
   # The Go inference relay is Platform relay runtime: its releases are rolled
   # by the platform deploy workflow's relay-release job, so its changes must
   # select the platform aggregate rather than a standalone component.

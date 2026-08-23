@@ -113,13 +113,14 @@ func TestSessionBackendLifecycleCachesOutcomesAndZerosBrokerKey(t *testing.T) {
 	gradeCalls := 0
 	var runnerKey ed25519.PrivateKey
 	var runnerGrant json.RawMessage
+	var runnerHarness json.RawMessage
 	runner := &phaseRunnerFuncs{
 		author: func(_ context.Context, input AuthoringInput) (AuthoringOutcome, error) {
 			mu.Lock()
 			defer mu.Unlock()
 			authorCalls++
 			if input.SessionID != fixtureSessionID || input.Request.Operation != OperationAuthor ||
-				len(input.Request.Grant) == 0 {
+				len(input.Request.Grant) == 0 || len(input.Request.Harness) == 0 {
 				t.Fatal("author input lost prepared authority")
 			}
 			publicKey, err := base64.RawURLEncoding.DecodeString(input.BrokerPublicKey)
@@ -128,6 +129,7 @@ func TestSessionBackendLifecycleCachesOutcomesAndZerosBrokerKey(t *testing.T) {
 			}
 			runnerKey = input.BrokerPrivateKey
 			runnerGrant = input.Request.Grant
+			runnerHarness = input.Request.Harness
 			return cloneAuthoringOutcome(expectedAuthoring), nil
 		},
 		grade: func(_ context.Context, request Request) (GradingOutcome, error) {
@@ -165,6 +167,9 @@ func TestSessionBackendLifecycleCachesOutcomesAndZerosBrokerKey(t *testing.T) {
 	}
 	if !allZero(runnerGrant) {
 		t.Fatal("phase runner retained a live inference-grant alias")
+	}
+	if !allZero(runnerHarness) {
+		t.Fatal("phase runner retained a live harness-capability alias")
 	}
 	record := backend.sessions[sessionKey(author)]
 	if record.privateKey != nil || record.state != sessionAuthored {

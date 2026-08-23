@@ -1970,6 +1970,7 @@ class CodingInferenceGrant(Base):
     reasoning_effort: Mapped[str] = mapped_column(Text, nullable=False)
     status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
     bearer_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
+    revoke_bearer_digest: Mapped[str | None] = mapped_column(Text, nullable=True)
     broker_public_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     generation: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     request_budget: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -2044,6 +2045,8 @@ class CodingInferenceGrant(Base):
         CheckConstraint(
             "inference_grant_sha256 ~ '^[0-9a-f]{64}$' "
             "AND (bearer_digest IS NULL OR bearer_digest ~ '^[0-9a-f]{64}$') "
+            "AND (revoke_bearer_digest IS NULL OR "
+            "revoke_bearer_digest ~ '^[0-9a-f]{64}$') "
             "AND (broker_public_key IS NULL OR "
             "broker_public_key ~ '^[A-Za-z0-9_-]{43}$')",
             name="coding_inference_grants_crypto_check",
@@ -2060,7 +2063,8 @@ class CodingInferenceGrant(Base):
         CheckConstraint(
             "status IN ('pending', 'active', 'revoked', 'exhausted') "
             "AND ((status = 'pending' AND generation = 0 "
-            "AND bearer_digest IS NULL AND broker_public_key IS NULL) "
+            "AND bearer_digest IS NULL AND revoke_bearer_digest IS NULL "
+            "AND broker_public_key IS NULL) "
             "OR (status = 'active' AND generation > 0 "
             "AND bearer_digest IS NOT NULL AND broker_public_key IS NOT NULL) "
             "OR (status IN ('revoked', 'exhausted') "

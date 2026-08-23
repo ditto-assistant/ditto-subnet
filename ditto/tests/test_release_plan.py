@@ -247,12 +247,16 @@ def test_coding_contract_models_select_scorer_and_validator_stack(
     [
         "ditto/api_models/coding_inference.py",
         "ditto/api_models/coding_inference_grants.py",
+        "ditto/api_models/coding_harness.py",
     ],
 )
 def test_validator_coding_inference_models_are_release_owned(
     components, ignored_paths, path: str
 ) -> None:
     assert selected(components, ignored_paths, path) == {
+        "backroom",
+        "platform",
+        "platform_api",
         "validator",
         "validator_stack",
     }
@@ -290,6 +294,7 @@ def test_shadow_coding_execution_selects_only_scorer_stack(
         "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
     ],
 )
 def test_shared_coding_contract_vectors_select_every_consumer(

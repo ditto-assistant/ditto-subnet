@@ -69,6 +69,11 @@ def test_platform_grant_models_project_locked_shadow_authority() -> None:
             "proxy_url": (
                 "https://relay.invalid/api/v1/inference/coding/chat/completions"
             ),
+            "revoke_bearer": "r" * 43,
+            "revoke_url": (
+                "https://platform.invalid/api/v1/validator/"
+                "coding-shadow/inference-revoke-capability"
+            ),
         }
     )
     assert exchange.weight_eligible is False

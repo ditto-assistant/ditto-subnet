@@ -320,6 +320,16 @@ func TestSupervisorRejectsGrantAndPreparationAuthorityDrift(t *testing.T) {
 	if response.Code != http.StatusBadRequest || calls != 0 {
 		t.Fatalf("grant drift status=%d calls=%d body=%s", response.Code, calls, response.Body.String())
 	}
+	var harnessDrift map[string]any
+	if err := json.Unmarshal(vector.Requests["author"], &harnessDrift); err != nil {
+		t.Fatal(err)
+	}
+	harnessDrift["harness"].(map[string]any)["screened_image_sha256"] = "bad"
+	body, _ = json.Marshal(harnessDrift)
+	response = invoke(t, service.Handler(), "/v1/coding/supervisor/author", body, fixtureToken)
+	if response.Code != http.StatusBadRequest || calls != 0 {
+		t.Fatalf("harness drift status=%d calls=%d body=%s", response.Code, calls, response.Body.String())
+	}
 	response = invoke(t, service.Handler(), "/v1/coding/supervisor/prepare", vector.Requests["prepare"], fixtureToken)
 	if response.Code != http.StatusBadGateway || calls != 1 {
 		t.Fatalf("preparation drift status=%d calls=%d body=%s", response.Code, calls, response.Body.String())

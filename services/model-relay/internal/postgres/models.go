@@ -90,6 +90,7 @@ type CodingInferenceGrant struct {
 	WeightEligible           bool               `json:"weightEligible"`
 	CreatedAt                pgtype.Timestamptz `json:"createdAt"`
 	UpdatedAt                pgtype.Timestamptz `json:"updatedAt"`
+	RevokeBearerDigest       pgtype.Text        `json:"revokeBearerDigest"`
 }
 
 type CodingInferenceRequest struct {

@@ -97,6 +97,22 @@ class CodingShadowGradingAuthority:
     frozen_submission_object_key: str
 
 
+@dataclass(frozen=True)
+class CodingShadowHarnessAuthority:
+    agent_id: UUID
+    run_row_id: UUID
+    ticket_id: UUID
+    deadline: datetime
+    bench_version: int
+    agent_artifact_sha256: str
+    screened_image_sha256: str
+    screened_image_size_bytes: int
+    screened_image_id: str
+    screened_image_ref: str
+    screened_image_upload_id: UUID
+    screening_policy_version: int
+
+
 async def authorize_coding_shadow_task_delivery(
     session: AsyncSession,
     *,
@@ -117,6 +133,84 @@ async def authorize_coding_shadow_task_delivery(
         raise CodingTaskLeaseNotAvailableError(
             "coding shadow ticket is unavailable for this validator"
         )
+
+
+async def authorize_coding_shadow_harness_delivery(
+    session: AsyncSession,
+    *,
+    ticket_id: UUID,
+    validator_hotkey: str,
+) -> CodingShadowHarnessAuthority:
+    """Return the exact current screened image for one open authoring ticket."""
+
+    ticket = await session.get(CodingShadowTicket, ticket_id, with_for_update=True)
+    run = (
+        await session.get(CodingShadowRun, ticket.run_row_id)
+        if ticket is not None
+        else None
+    )
+    certification = (
+        await session.get(CodingCapabilityCertification, ticket.certification_row_id)
+        if ticket is not None
+        else None
+    )
+    agent = await session.get(Agent, run.agent_id) if run is not None else None
+    database_now = await session.scalar(select(func.clock_timestamp()))
+    if not isinstance(database_now, datetime):  # pragma: no cover - DB invariant
+        raise RuntimeError("database clock did not return a timestamp")
+    freeze = await session.scalar(
+        select(CodingShadowAuthoringFreeze.freeze_id).where(
+            CodingShadowAuthoringFreeze.ticket_id == ticket_id
+        )
+    )
+    result = await session.scalar(
+        select(CodingShadowResult.result_id).where(
+            CodingShadowResult.ticket_id == ticket_id
+        )
+    )
+    if (
+        ticket is None
+        or run is None
+        or certification is None
+        or agent is None
+        or ticket.validator_hotkey != validator_hotkey
+        or not _ticket_certification_is_active(
+            ticket=ticket,
+            run=run,
+            certification=certification,
+            agent=agent,
+            database_now=database_now,
+        )
+        or freeze is not None
+        or result is not None
+        or run.artifact_sha256 != agent.sha256
+        or run.screened_image_sha256 != agent.screened_image_sha256
+        or agent.screened_image_sha256 is None
+        or agent.screened_image_size_bytes is None
+        or agent.screened_image_size_bytes <= 0
+        or agent.screened_image_size_bytes > 8 << 30
+        or agent.screened_image_id is None
+        or agent.screened_image_ref is None
+        or agent.screened_image_upload_id is None
+        or agent.screening_policy_version < 9
+    ):
+        raise CodingTaskLeaseNotAvailableError(
+            "coding screened harness is unavailable for this validator"
+        )
+    return CodingShadowHarnessAuthority(
+        agent_id=agent.agent_id,
+        run_row_id=run.run_row_id,
+        ticket_id=ticket.ticket_id,
+        deadline=_aware(ticket.deadline),
+        bench_version=run.bench_version,
+        agent_artifact_sha256=run.artifact_sha256,
+        screened_image_sha256=agent.screened_image_sha256,
+        screened_image_size_bytes=agent.screened_image_size_bytes,
+        screened_image_id=agent.screened_image_id,
+        screened_image_ref=agent.screened_image_ref,
+        screened_image_upload_id=agent.screened_image_upload_id,
+        screening_policy_version=agent.screening_policy_version,
+    )
 
 
 async def authorize_coding_shadow_grading_delivery(

@@ -30,9 +30,11 @@ from ditto.db.models import (
 from ditto.db.queries import coding_task_leases
 from ditto.db.queries.coding_task_leases import (
     CodingShadowGradingAuthority,
+    CodingShadowHarnessAuthority,
     CodingTaskLeaseIntegrityError,
     CodingTaskLeaseNotAvailableError,
     authorize_coding_shadow_grading_delivery,
+    authorize_coding_shadow_harness_delivery,
     authorize_coding_shadow_task_delivery,
     build_coding_shadow_task_lease,
 )
@@ -144,8 +146,14 @@ def _fixture() -> SimpleNamespace:
         expires_at=ticket.deadline.replace(year=ticket.deadline.year + 1),
     )
     agent = SimpleNamespace(
+        agent_id=authority.agent_id,
         sha256=authority.agent_artifact_sha256,
         screened_image_sha256=authority.screened_image_sha256,
+        screened_image_size_bytes=1024,
+        screened_image_id="sha256:" + "77" * 32,
+        screened_image_ref="ditto-screened/test:latest",
+        screened_image_upload_id=uuid4(),
+        screening_policy_version=9,
     )
     issuance = SimpleNamespace(
         assignment_row_id=assignment_row_id,
@@ -302,6 +310,40 @@ class _GradingAuthorizationSession:
         return value
 
 
+class _HarnessAuthorizationSession:
+    def __init__(self, fixture: SimpleNamespace) -> None:
+        self.fixture = fixture
+        self.scalar_index = 0
+
+    async def get(self, model, identity, **kwargs):
+        del kwargs
+        return {
+            CodingShadowTicket: (
+                self.fixture.ticket
+                if identity == self.fixture.ticket.ticket_id
+                else None
+            ),
+            CodingShadowRun: (
+                self.fixture.run if identity == self.fixture.run.run_row_id else None
+            ),
+            CodingCapabilityCertification: (
+                self.fixture.certification
+                if identity == self.fixture.ticket.certification_row_id
+                else None
+            ),
+            Agent: (
+                self.fixture.agent if identity == self.fixture.run.agent_id else None
+            ),
+        }.get(model)
+
+    async def scalar(self, statement):
+        del statement
+        values = (self.fixture.now, None, None)
+        value = values[self.scalar_index]
+        self.scalar_index += 1
+        return value
+
+
 async def _build(monkeypatch, fixture: SimpleNamespace):
     monkeypatch.setattr(
         coding_task_leases,
@@ -359,6 +401,41 @@ async def test_delivery_authorization_precedes_private_catalog_access() -> None:
     with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
         await authorize_coding_shadow_task_delivery(
             session,  # type: ignore[arg-type]
+            ticket_id=fixture.ticket.ticket_id,
+            validator_hotkey=fixture.ticket.validator_hotkey,
+        )
+
+
+async def test_harness_authorization_binds_current_screened_image(monkeypatch) -> None:
+    fixture = _fixture()
+    monkeypatch.setattr(
+        coding_task_leases,
+        "coding_certification_stale_reason",
+        lambda *_args, **_kwargs: "active",
+    )
+    authority = await authorize_coding_shadow_harness_delivery(
+        _HarnessAuthorizationSession(fixture),  # type: ignore[arg-type]
+        ticket_id=fixture.ticket.ticket_id,
+        validator_hotkey=fixture.ticket.validator_hotkey,
+    )
+    assert authority == CodingShadowHarnessAuthority(
+        agent_id=fixture.run.agent_id,
+        run_row_id=fixture.run.run_row_id,
+        ticket_id=fixture.ticket.ticket_id,
+        deadline=fixture.ticket.deadline,
+        bench_version=fixture.run.bench_version,
+        agent_artifact_sha256=fixture.run.artifact_sha256,
+        screened_image_sha256=fixture.agent.screened_image_sha256,
+        screened_image_size_bytes=fixture.agent.screened_image_size_bytes,
+        screened_image_id=fixture.agent.screened_image_id,
+        screened_image_ref=fixture.agent.screened_image_ref,
+        screened_image_upload_id=fixture.agent.screened_image_upload_id,
+        screening_policy_version=fixture.agent.screening_policy_version,
+    )
+    fixture.agent.screened_image_sha256 = "ff" * 32
+    with pytest.raises(CodingTaskLeaseNotAvailableError, match="unavailable"):
+        await authorize_coding_shadow_harness_delivery(
+            _HarnessAuthorizationSession(fixture),  # type: ignore[arg-type]
             ticket_id=fixture.ticket.ticket_id,
             validator_hotkey=fixture.ticket.validator_hotkey,
         )

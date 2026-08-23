@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 import secrets
 from dataclasses import dataclass
@@ -56,6 +57,13 @@ class CodingInferenceGrantResult:
 class CodingInferenceGrantRevocation:
     grant: CodingInferenceGrant
     idempotent: bool
+
+
+@dataclass(frozen=True)
+class CodingInferenceGrantActivation:
+    grant: CodingInferenceGrant
+    bearer: str
+    revoke_bearer: str
 
 
 def coding_inference_bearer_digest(value: str) -> str:
@@ -280,6 +288,7 @@ async def ensure_coding_inference_grant(
         **expected,
         status="pending",
         bearer_digest=None,
+        revoke_bearer_digest=None,
         broker_public_key=None,
         generation=0,
         request_count=0,
@@ -303,7 +312,7 @@ async def activate_coding_inference_grant(
     validator_hotkey: str,
     broker_public_key: str,
     policy: CodingInferencePolicy,
-) -> tuple[CodingInferenceGrant, str]:
+) -> CodingInferenceGrantActivation:
     """Rotate a live grant to one broker key and return a fresh opaque bearer."""
 
     try:
@@ -375,14 +384,88 @@ async def activate_coding_inference_grant(
             "coding inference grant is not live"
         )
     bearer = secrets.token_urlsafe(32)
+    revoke_bearer = secrets.token_urlsafe(32)
+    while revoke_bearer == bearer:  # pragma: no cover - cryptographic collision
+        revoke_bearer = secrets.token_urlsafe(32)
     grant.bearer_digest = coding_inference_bearer_digest(bearer)
+    grant.revoke_bearer_digest = coding_inference_bearer_digest(revoke_bearer)
     grant.broker_public_key = normalized_broker_key
     grant.generation += 1
     grant.status = "active"
     grant.revoked_at = None
     grant.updated_at = now
     await session.flush()
-    return grant, bearer
+    return CodingInferenceGrantActivation(
+        grant=grant,
+        bearer=bearer,
+        revoke_bearer=revoke_bearer,
+    )
+
+
+async def revoke_coding_inference_grant_by_capability(
+    session: AsyncSession,
+    *,
+    grant_id: UUID,
+    ticket_id: UUID,
+    generation: int,
+    revoke_bearer: str,
+) -> CodingInferenceGrantRevocation:
+    """Idempotently revoke one active generation through its narrow bearer."""
+
+    if (
+        generation < 1
+        or generation > (1 << 31) - 1
+        or re.fullmatch(r"[A-Za-z0-9_-]{32,128}", revoke_bearer) is None
+    ):
+        raise CodingInferenceGrantNotAvailableError(
+            "coding inference revoke capability is malformed"
+        )
+    observed_digest = coding_inference_bearer_digest(revoke_bearer)
+    snapshot = await session.get(CodingInferenceGrant, grant_id)
+    if (
+        snapshot is None
+        or snapshot.ticket_id != ticket_id
+        or snapshot.generation != generation
+        or snapshot.revoke_bearer_digest is None
+        or not hmac.compare_digest(snapshot.revoke_bearer_digest, observed_digest)
+    ):
+        raise CodingInferenceGrantNotAvailableError(
+            "coding inference grant is unavailable"
+        )
+    ticket = await session.get(
+        CodingShadowTicket,
+        ticket_id,
+        with_for_update=True,
+    )
+    grant = await session.scalar(
+        select(CodingInferenceGrant)
+        .where(CodingInferenceGrant.grant_id == grant_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    now = await _database_now(session)
+    if (
+        ticket is None
+        or grant is None
+        or grant.ticket_id != ticket.ticket_id
+        or grant.generation != generation
+        or grant.revoke_bearer_digest is None
+        or not hmac.compare_digest(grant.revoke_bearer_digest, observed_digest)
+    ):
+        raise CodingInferenceGrantNotAvailableError(
+            "coding inference revoke capability is unavailable"
+        )
+    if grant.status == "revoked":
+        return CodingInferenceGrantRevocation(grant=grant, idempotent=True)
+    if grant.status != "active":
+        raise CodingInferenceGrantConflictError("coding inference grant is not active")
+    if grant.active_requests != 0:
+        raise CodingInferenceGrantConflictError(
+            "coding inference grant still has an active request"
+        )
+    _revoke(grant, now=now)
+    await session.flush()
+    return CodingInferenceGrantRevocation(grant=grant, idempotent=False)
 
 
 async def revoke_coding_inference_grant(
@@ -461,6 +544,7 @@ async def revoke_ticket_coding_inference(
 
 __all__ = [
     "CodingInferenceGrantConflictError",
+    "CodingInferenceGrantActivation",
     "CodingInferenceGrantIntegrityError",
     "CodingInferenceGrantNotAvailableError",
     "CodingInferenceGrantResult",
@@ -469,5 +553,6 @@ __all__ = [
     "coding_inference_bearer_digest",
     "ensure_coding_inference_grant",
     "revoke_coding_inference_grant",
+    "revoke_coding_inference_grant_by_capability",
     "revoke_ticket_coding_inference",
 ]

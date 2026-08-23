@@ -25,8 +25,9 @@ The persisted authority fixes:
 - zeroed accounting counters and permanent `weight_eligible=false`.
 
 States are `pending`, `active`, `revoked`, and reserved future `exhausted`.
-Exchange rotates a fresh opaque bearer and increments `generation`. Platform
-stores only `sha256(bearer)` and the normalized broker public key. A new signed
+Exchange rotates a fresh inference bearer plus a separate revocation-only
+bearer and increments `generation`. Platform stores only their SHA-256 digests
+and the normalized broker public key. A new signed
 exchange may safely rotate after a lost response; the missing prior bearer then
 becomes invalid. Revocation binds the exact observed generation and is durable
 and idempotent. Platform also revokes any pending or active grant inside the
@@ -35,15 +36,26 @@ forgotten validator cleanup cannot keep authoring inference live.
 
 ## Validator API
 
-All three requests bind validator hotkey, fresh nonce, timestamp, and a
+The three validator-authority requests bind validator hotkey, fresh nonce, timestamp, and a
 domain-separated sr25519 signature:
 
 - `POST /api/v1/validator/coding-shadow/inference-grant`
 - `POST /api/v1/validator/coding-shadow/inference-exchange`
 - `POST /api/v1/validator/coding-shadow/inference-revoke`
 
+The trusted Go gateway can additionally call
+`POST /api/v1/validator/coding-shadow/inference-revoke-capability` with the
+revocation-only bearer and exact grant/ticket/generation body. That bearer
+cannot dispatch inference. Its digest is retained after revocation so a lost
+successful response can be retried and receive an authenticated idempotent
+acknowledgement.
+An active grant created during a rolling upgrade before the revocation digest
+column is populated remains valid but cannot use this narrow endpoint; the
+validator's existing signed revocation remains the fail-closed fallback.
+
 Responses are `Cache-Control: no-store`. The offer contains no bearer. The
-exchange response contains the validator-scoped opaque bearer, but never a
+exchange response contains the validator-scoped inference and revocation-only
+bearers, but never a
 provider API key, provider credential, private prompt, receipt, or settlement.
 The validator client refuses redirects, bounds response bytes, verifies the
 complete authority projection, and never follows the response URL as an

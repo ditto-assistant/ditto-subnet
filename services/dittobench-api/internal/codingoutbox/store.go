@@ -659,6 +659,12 @@ func validateBindingShape(binding Binding) error {
 		!validIdentifier(binding.ProfileCapabilityID, 256) || binding.Deadline.IsZero() {
 		return fmt.Errorf("%w: evidence binding is invalid", ErrInvalid)
 	}
+	shadowAuthority := lowerSHA256(binding.HarnessAuthoritySHA256) && lowerSHA256(binding.ScreenedImageSHA256)
+	certificationAuthority := binding.HarnessAuthoritySHA256 == "" && binding.ScreenedImageSHA256 == ""
+	if (binding.Purpose == PurposeShadowAttempt && !shadowAuthority) ||
+		(binding.Purpose == PurposeCertification && !certificationAuthority) {
+		return fmt.Errorf("%w: evidence harness authority is invalid", ErrInvalid)
+	}
 	return nil
 }
 

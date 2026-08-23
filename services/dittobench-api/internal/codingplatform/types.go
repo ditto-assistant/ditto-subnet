@@ -41,6 +41,19 @@ type GrantCapability struct {
 	ProxyURL         string
 }
 
+// RevocationCapability is a narrow Platform bearer that can only revoke the
+// exact active grant generation. It is separate from the inference bearer so
+// an ambiguous revoke can be retried after inference admission is disabled.
+type RevocationCapability struct {
+	GrantID              string
+	TicketID             string
+	Generation           uint32
+	InferenceGrantSHA256 string
+	Deadline             time.Time
+	Bearer               string
+	URL                  string
+}
+
 // Config constructs one validator-side codingrelay.Upstream adapter. It does
 // not contain a provider credential or a live-provider routing choice.
 type Config struct {
@@ -60,6 +73,20 @@ func (capability GrantCapability) LogValue() slog.Value {
 }
 
 func (capability GrantCapability) MarshalJSON() ([]byte, error) {
+	return nil, ErrSecretSerialization
+}
+
+func (capability RevocationCapability) String() string {
+	return "CodingPlatformRevocationCapability{private}"
+}
+
+func (capability RevocationCapability) GoString() string { return capability.String() }
+
+func (capability RevocationCapability) LogValue() slog.Value {
+	return slog.StringValue("coding-platform-revocation-capability")
+}
+
+func (RevocationCapability) MarshalJSON() ([]byte, error) {
 	return nil, ErrSecretSerialization
 }
 
@@ -125,4 +152,5 @@ func (response dispatchResponse) MarshalJSON() ([]byte, error) {
 }
 
 var _ json.Marshaler = GrantCapability{}
+var _ json.Marshaler = RevocationCapability{}
 var _ json.Marshaler = Config{}

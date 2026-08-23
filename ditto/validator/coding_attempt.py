@@ -23,6 +23,7 @@ from ditto.api_models.coding import (
     canonical_digest,
     coding_authoring_evidence_digest,
 )
+from ditto.api_models.coding_harness import CodingHarnessLaunchResponse
 from ditto.validator.coding_terminal import (
     CodingTerminalEvidenceError,
     build_coding_run_evidence,
@@ -119,6 +120,11 @@ class CodingGradingOutcome:
 
 
 class CodingAttemptPlatform(Protocol):
+    async def request_coding_harness_launch(
+        self,
+        ticket_id: UUID,
+    ) -> CodingHarnessLaunchResponse: ...
+
     async def request_coding_authoring_lease(
         self,
         ticket_id: UUID,
@@ -175,6 +181,7 @@ class CodingAttemptRuntime(Protocol):
     async def author(
         self,
         lease: CodingAuthoringLeaseResponse,
+        harness: CodingHarnessLaunchResponse,
     ) -> CodingAuthoringOutcome: ...
 
     async def grade(
@@ -217,8 +224,10 @@ class CodingAttemptCoordinator:
             ticket.ticket_id
         )
         self._validate_authoring_lease(ticket, authoring_lease)
+        harness = await self._platform.request_coding_harness_launch(ticket.ticket_id)
+        self._validate_harness_launch(ticket, authoring_lease, harness)
         try:
-            authoring = await self._runtime.author(authoring_lease)
+            authoring = await self._runtime.author(authoring_lease, harness)
         except BaseException:
             await self._abort_authoring(authoring_lease)
             raise
@@ -344,6 +353,27 @@ class CodingAttemptCoordinator:
         ):
             raise CodingAttemptIntegrityError(
                 "coding authoring lease disagrees with ticket authority"
+            )
+
+    @staticmethod
+    def _validate_harness_launch(
+        ticket: CodingAttemptTicket,
+        lease: CodingAuthoringLeaseResponse,
+        harness: CodingHarnessLaunchResponse,
+    ) -> None:
+        if (
+            harness.agent_id != ticket.agent_id
+            or harness.run_row_id != ticket.run_row_id
+            or harness.ticket_id != ticket.ticket_id
+            or harness.ticket_deadline != ticket.ticket_deadline
+            or harness.bench_version != ticket.bench_version
+            or harness.agent_artifact_sha256 != ticket.agent_artifact_sha256
+            or harness.screened_image_sha256 != ticket.screened_image_sha256
+            or harness.agent_artifact_sha256 != lease.run_manifest.agent_artifact_sha256
+            or harness.weight_eligible is not False
+        ):
+            raise CodingAttemptIntegrityError(
+                "coding harness launch disagrees with ticket authority"
             )
 
     @staticmethod

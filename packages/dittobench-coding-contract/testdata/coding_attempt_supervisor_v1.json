@@ -11,13 +11,16 @@
       "lease": {
         "schema": "synthetic-authoring-lease-v1",
         "run_manifest": {
+          "agent_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "agent_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "inference_grant_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
           "tasks": [{"case_id": "case-supervisor-001", "profile_capability_id": "profile-supervisor-001"}]
         },
         "budgets": {"model_input_tokens": 200000, "model_output_tokens": 30000, "workspace_tool_calls": 32}
       },
       "authoring": null,
-      "grant": null
+      "grant": null,
+      "harness": null
     },
     "author": {
       "schema": "dittobench-coding-attempt-supervisor-request-v1",
@@ -29,6 +32,8 @@
       "lease": {
         "schema": "synthetic-authoring-lease-v1",
         "run_manifest": {
+          "agent_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+          "agent_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "inference_grant_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
           "tasks": [{"case_id": "case-supervisor-001", "profile_capability_id": "profile-supervisor-001"}]
         },
@@ -42,16 +47,47 @@
         "status": "active",
         "grant_id": "88888888-8888-4888-8888-888888888888",
         "ticket_id": "22222222-2222-4222-8222-222222222222",
+        "run_row_id": "99999999-9999-4999-8999-999999999999",
         "case_id": "case-supervisor-001",
         "profile_capability_id": "profile-supervisor-001",
         "inference_grant_sha256": "9999999999999999999999999999999999999999999999999999999999999999",
+        "model": "openai/gpt-5.6-luna",
+        "provider_api": "openrouter",
+        "provider_route": "azure/eu",
+        "receipt_provider": "Azure",
+        "provider_route_profile": "luna-azure-eu-zdr-v1",
+        "provider_account_guardrail": "openrouter_private_account_v1",
+        "provider_pipeline_policy": "no_plugins_no_transforms_v1",
+        "provider_cache_policy": "disabled_v1",
+        "reasoning_effort": "medium",
         "generation": 1,
         "request_budget": 48,
         "prompt_token_budget": 200000,
         "completion_token_budget": 30000,
+        "cost_budget_usd_micros": 10000000,
         "bearer": "synthetic-coding-bearer-0000000000000000",
         "proxy_url": "https://relay.invalid/api/v1/inference/coding/chat/completions",
+        "revoke_bearer": "synthetic-revoke-bearer-0000000000000000",
+        "revoke_url": "https://platform.invalid/api/v1/validator/coding-shadow/inference-revoke-capability",
         "expires_at": "2026-08-23T06:50:00Z"
+      },
+      "harness": {
+        "schema": "dittobench-coding-harness-launch-v1",
+        "coding_contract_version": 1,
+        "weight_eligible": false,
+        "agent_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        "run_row_id": "99999999-9999-4999-8999-999999999999",
+        "ticket_id": "22222222-2222-4222-8222-222222222222",
+        "ticket_deadline": "2026-08-23T07:00:00Z",
+        "bench_version": 12,
+        "agent_artifact_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "screened_image_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "screened_image_size_bytes": 1024,
+        "screened_image_id": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "screened_image_ref": "ditto-screened/synthetic:latest",
+        "screening_policy_version": 9,
+        "image_url": "https://storage.invalid/screened-image.tar?X-Amz-Signature=synthetic",
+        "expires_at": "2026-08-23T06:05:00Z"
       }
     },
     "grade": {
@@ -63,7 +99,8 @@
       "deadline": "2026-08-23T07:00:00Z",
       "lease": {"schema": "synthetic-grading-lease-v1"},
       "authoring": {"schema": "synthetic-authoring-outcome-v1"},
-      "grant": null
+      "grant": null,
+      "harness": null
     },
     "abort_authoring": {
       "schema": "dittobench-coding-attempt-supervisor-request-v1",
@@ -74,7 +111,8 @@
       "deadline": "2026-08-23T07:00:00Z",
       "lease": {"schema": "synthetic-authoring-lease-v1"},
       "authoring": null,
-      "grant": null
+      "grant": null,
+      "harness": null
     },
     "abort_grading": {
       "schema": "dittobench-coding-attempt-supervisor-request-v1",
@@ -85,7 +123,8 @@
       "deadline": "2026-08-23T07:00:00Z",
       "lease": {"schema": "synthetic-grading-lease-v1"},
       "authoring": null,
-      "grant": null
+      "grant": null,
+      "harness": null
     },
     "recover": {
       "schema": "dittobench-coding-attempt-supervisor-request-v1",
@@ -96,7 +135,8 @@
       "deadline": "2026-08-23T07:00:00Z",
       "lease": null,
       "authoring": null,
-      "grant": null
+      "grant": null,
+      "harness": null
     }
   },
   "responses": {

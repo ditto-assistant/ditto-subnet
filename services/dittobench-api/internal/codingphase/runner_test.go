@@ -312,6 +312,12 @@ func (activator *fakeInferenceActivator) Activate(
 ) (InferenceGateway, error) {
 	*activator.trace = append(*activator.trace, "inference_activate")
 	binding := activation.Capability.Binding
+	if activation.Revocation.GrantID != binding.GrantID ||
+		activation.Revocation.TicketID != binding.TicketID ||
+		activation.Revocation.Generation != binding.Generation ||
+		activation.Revocation.Bearer == "" || activation.Revocation.URL == "" {
+		return nil, errors.New("inference revocation authority mismatch")
+	}
 	if err := activation.Authorizer.Authorize(ctx, codinggateway.CapabilityBinding{
 		AttemptID: binding.AttemptID, AgentArtifactSHA256: binding.AgentArtifactSHA256,
 		HarnessInstanceID: binding.HarnessInstanceID, TicketID: binding.TicketID, CaseID: binding.CaseID,
@@ -501,13 +507,27 @@ func (fixture *phaseFixture) authorRequest(t *testing.T) codingsupervisor.Reques
 		"request_budget": 48, "prompt_token_budget": 200_000, "completion_token_budget": 30_000,
 		"cost_budget_usd_micros": fixture.policy.MaxCostUSDMicros,
 		"expires_at":             fixture.now.Add(10 * time.Minute), "generation": 1,
-		"bearer":    "synthetic-coding-bearer-0000000000000000",
-		"proxy_url": "https://relay.invalid/api/v1/inference/coding/chat/completions",
+		"bearer":        "synthetic-coding-bearer-0000000000000000",
+		"proxy_url":     "https://relay.invalid/api/v1/inference/coding/chat/completions",
+		"revoke_bearer": "synthetic-revoke-bearer-0000000000000000",
+		"revoke_url":    "https://platform.invalid/api/v1/validator/coding-shadow/inference-revoke-capability",
+	}
+	harness := map[string]any{
+		"schema": "dittobench-coding-harness-launch-v1", "coding_contract_version": 1,
+		"weight_eligible": false, "agent_id": fixtureAgent, "run_row_id": fixtureRunRow,
+		"ticket_id": fixtureTicket, "ticket_deadline": fixture.deadline, "bench_version": 12,
+		"agent_artifact_sha256": fixture.manifest.AgentArtifactSHA256,
+		"screened_image_sha256": strings.Repeat("2", 64), "screened_image_size_bytes": 1024,
+		"screened_image_id":  "sha256:" + strings.Repeat("3", 64),
+		"screened_image_ref": "ditto-screened/phase:latest", "screening_policy_version": 9,
+		"image_url":  "https://storage.invalid/screened-image.tar?X-Amz-Signature=synthetic",
+		"expires_at": fixture.now.Add(5 * time.Minute),
 	}
 	return codingsupervisor.Request{
 		Schema: codingsupervisor.RequestSchema, Operation: codingsupervisor.OperationAuthor,
 		OperationID: "ffffffff-ffff-4fff-8fff-ffffffffffff", TicketID: fixtureTicket,
-		CodingRunID: fixtureRun, Deadline: fixture.deadline, Lease: mustJSON(t, lease), Grant: mustJSON(t, grant),
+		CodingRunID: fixtureRun, Deadline: fixture.deadline, Lease: mustJSON(t, lease),
+		Grant: mustJSON(t, grant), Harness: mustJSON(t, harness),
 	}
 }
 
@@ -675,6 +695,11 @@ func TestGrantAuthorityDriftFailsBeforeInferenceActivation(t *testing.T) {
 		"request budget": func(grant map[string]any) { grant["request_budget"] = 49 },
 		"cost budget":    func(grant map[string]any) { grant["cost_budget_usd_micros"] = 10_000_001 },
 		"proxy path":     func(grant map[string]any) { grant["proxy_url"] = "https://relay.invalid/wrong" },
+		"revoke path": func(grant map[string]any) {
+			grant["revoke_url"] = "https://platform.invalid/wrong"
+		},
+		"revoke bearer": func(grant map[string]any) { grant["revoke_bearer"] = "short" },
+		"shared bearer": func(grant map[string]any) { grant["revoke_bearer"] = grant["bearer"] },
 	} {
 		t.Run(name, func(t *testing.T) {
 			fixture := newPhaseFixture(t)
@@ -693,6 +718,42 @@ func TestGrantAuthorityDriftFailsBeforeInferenceActivation(t *testing.T) {
 			_, record, err := fixture.outbox.Lookup(t.Context(), codingoutbox.PurposeShadowAttempt, fixtureTicket)
 			if err != nil || record.State != codingoutbox.StateReady {
 				t.Fatalf("invalid-grant terminal record=%#v err=%v", record, err)
+			}
+		})
+	}
+}
+
+func TestHarnessLaunchDriftFailsBeforeDormantAcquire(t *testing.T) {
+	for name, mutate := range map[string]func(map[string]any){
+		"agent": func(harness map[string]any) {
+			harness["agent_id"] = "99999999-9999-4999-8999-999999999999"
+		},
+		"artifact": func(harness map[string]any) {
+			harness["agent_artifact_sha256"] = strings.Repeat("f", 64)
+		},
+		"screened digest": func(harness map[string]any) {
+			harness["screened_image_sha256"] = "bad"
+		},
+		"image URL": func(harness map[string]any) {
+			harness["image_url"] = "http://storage.invalid/image?signature=x"
+		},
+		"expiry": func(harness map[string]any) {
+			harness["expires_at"] = time.Now().UTC().Add(3 * time.Hour)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fixture := newPhaseFixture(t)
+			var harness map[string]any
+			if err := json.Unmarshal(fixture.input.Request.Harness, &harness); err != nil {
+				t.Fatal(err)
+			}
+			mutate(harness)
+			fixture.input.Request.Harness = mustJSON(t, harness)
+			if _, err := fixture.runner.Author(t.Context(), fixture.input); err == nil {
+				t.Fatal("drifted harness authority was accepted")
+			}
+			if len(fixture.trace) != 0 {
+				t.Fatalf("dormant harness acquired before authority rejection: %v", fixture.trace)
 			}
 		})
 	}
@@ -797,6 +858,7 @@ func TestRuntimeAdapterAndConfigFailClosed(t *testing.T) {
 	}
 	for name, value := range map[string]any{
 		"config": Config{}, "activation": InferenceActivation{}, "runner": fixture.runner,
+		"harness": HarnessBinding{ImageURL: "https://private.invalid/image?secret=value"},
 	} {
 		if _, err := json.Marshal(value); err == nil {
 			t.Fatalf("%s serialized private state", name)
