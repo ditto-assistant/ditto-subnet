@@ -381,7 +381,9 @@ def test_v9_receipt_verifies_without_overwriting_ordinary_composite() -> None:
 
 
 def test_failed_enforce_ablation_receipt_keeps_the_longmem_mix() -> None:
-    entry = _entry(ordinary_micros=882_550, longmem_micros=333_333, ablation_status="failed")
+    entry = _entry(
+        ordinary_micros=882_550, longmem_micros=333_333, ablation_status="failed"
+    )
     receipt = entry.v9_confirmation
     assert receipt is not None
     assert receipt.semantic_factor_bps == 0

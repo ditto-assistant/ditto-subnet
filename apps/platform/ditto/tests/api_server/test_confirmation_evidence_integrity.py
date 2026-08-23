@@ -881,7 +881,9 @@ class TestSharedRootAndSubjectProjection:
             mode=ConfirmationBundleMode.ENFORCE,
             inference_status="failed",
             embedding_status="failed",
-        ).model_copy(update={"inference_ablation": inference, "embedding_ablation": embedding})
+        ).model_copy(
+            update={"inference_ablation": inference, "embedding_ablation": embedding}
+        )
         verified = rebuild(report, mode=ConfirmationBundleMode.ENFORCE)
         assert verified.ablations_complete is True
         projection = compute_subject_projection(
@@ -896,7 +898,11 @@ class TestSharedRootAndSubjectProjection:
         assert projection.result_status == "full_confirmed"
         assert projection.semantic_factor_bps == 0
         assert projection.applied_factor_bps == 10_000
-        assert projection.full_effective_micros == projection.full_quality_micros == 729_530
+        assert (
+            projection.full_effective_micros
+            == projection.full_quality_micros
+            == 729_530
+        )
 
     def test_enforce_observational_drop_projects_the_live_70_30_mix(self) -> None:
         verified = rebuild(
@@ -929,7 +935,11 @@ class TestSharedRootAndSubjectProjection:
         assert projection.result_status == "full_confirmed"
         assert projection.semantic_factor_bps == 0
         assert projection.applied_factor_bps == 10_000
-        assert projection.full_effective_micros == projection.full_quality_micros == 717_785
+        assert (
+            projection.full_effective_micros
+            == projection.full_quality_micros
+            == 717_785
+        )
 
     @pytest.mark.parametrize("field", ["model", "tool"])
     def test_base_binary_gates_are_applied_per_subject(self, field: str) -> None:
