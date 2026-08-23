@@ -876,6 +876,7 @@ class TestCompletionAndRetest:
         embedding_status: Literal[
             "passed", "failed", "unavailable", "not_run"
         ] = "passed",
+        observational_drop: bool = False,
         actual_cost: int = 15_000,
     ) -> tuple[
         UUID,
@@ -908,6 +909,7 @@ class TestCompletionAndRetest:
                     mode=mode,
                     inference_status=inference_status,
                     embedding_status=embedding_status,
+                    observational_drop=observational_drop,
                 ),
                 verification_profile=verification_profile(),
                 now=_NOW + timedelta(minutes=5),
@@ -1040,6 +1042,38 @@ class TestCompletionAndRetest:
         assert subject.semantic_factor_bps == 0
         assert subject.applied_factor_bps == 10_000
         assert subject.full_effective_micros == 650_000
+
+    async def test_enforce_observational_drop_is_complete_and_keeps_the_mix(
+        self, session: AsyncSession
+    ) -> None:
+        async with session.begin():
+            agent_id, _, _, bundle, _ = await self.completed_bundle(
+                session,
+                mode=ConfirmationBundleMode.ENFORCE,
+                inference_status="failed",
+                embedding_status="failed",
+                observational_drop=True,
+            )
+        assert bundle.qualification_status == "qualified"
+        subject = await session.get(ConfirmationBundleSubject, (agent_id, 9))
+        assert subject is not None
+        assert subject.result_status == "full_confirmed"
+        assert subject.full_quality_micros == 650_000
+        assert subject.semantic_factor_bps == 0
+        assert subject.applied_factor_bps == 10_000
+        assert subject.full_effective_micros == 650_000
+        stored = await confirmation_bundle_dimensions(
+            session, bundle_id=bundle.bundle_id
+        )
+        reasons = {
+            row.dimension: row.evidence["reason"]
+            for row in stored
+            if row.dimension in {"inference_ablation", "embedding_ablation"}
+        }
+        assert reasons == {
+            "inference_ablation": "observational_drop_not_causal",
+            "embedding_ablation": "observational_drop_not_causal",
+        }
 
     async def test_completion_rejects_cost_mismatch(
         self, session: AsyncSession

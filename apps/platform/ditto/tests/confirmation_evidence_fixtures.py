@@ -506,6 +506,7 @@ def ablation_envelope(
     status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
     artifact_sha256: str = ARTIFACT_SHA256,
     bench_version: int = 9,
+    observational_drop: bool = False,
 ) -> AblationDimensionEnvelope:
     profile = verification_profile(bench_version)
     policy = (
@@ -516,8 +517,12 @@ def ablation_envelope(
     baseline: int | None
     ablated: int | None
     delta: int | None
+    if observational_drop and status != "failed":
+        raise ValueError("observational drop requires a completed failure")
     if status == "passed":
         baseline, ablated, delta = 800_000, 500_000, 300_000
+    elif status == "failed" and observational_drop:
+        baseline, ablated, delta = 900_000, 400_000, 500_000
     elif status == "failed":
         baseline, ablated, delta = 700_000, 600_000, 100_000
     else:
@@ -560,7 +565,11 @@ def ablation_envelope(
         status=status,
         reason={
             "passed": "threshold_met",
-            "failed": "delta_below_threshold",
+            "failed": (
+                "observational_drop_not_causal"
+                if observational_drop
+                else "delta_below_threshold"
+            ),
             "unavailable": "budget_exhausted",
             "not_run": "disabled",
         }[status],
@@ -608,6 +617,7 @@ def unsigned_report(
     inference_status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
     embedding_status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
     bench_version: int = 9,
+    observational_drop: bool = False,
 ) -> ConfirmationCompletionReport:
     return ConfirmationCompletionReport(
         ablation_coordinator_latency_ms=200,
@@ -620,6 +630,7 @@ def unsigned_report(
             status=inference_status,
             artifact_sha256=artifact_sha256,
             bench_version=bench_version,
+            observational_drop=observational_drop and inference_status == "failed",
         ),
         embedding_ablation=ablation_envelope(
             "embedding",
@@ -627,6 +638,7 @@ def unsigned_report(
             status=embedding_status,
             artifact_sha256=artifact_sha256,
             bench_version=bench_version,
+            observational_drop=observational_drop and embedding_status == "failed",
         ),
         bundle_signature="00",
     )
@@ -639,6 +651,7 @@ def signed_report(
     mode: ConfirmationBundleMode,
     inference_status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
     embedding_status: Literal["passed", "failed", "unavailable", "not_run"] = "passed",
+    observational_drop: bool = False,
     keypair: bittensor.Keypair = VALIDATOR_KEYPAIR,
 ) -> ConfirmationCompletionReport:
     # The installed profile is the instrument; the bundle's own bench_version
@@ -649,6 +662,7 @@ def signed_report(
         mode=mode,
         inference_status=inference_status,
         embedding_status=embedding_status,
+        observational_drop=observational_drop,
     )
     verified = rebuild_confirmation_evidence(
         report,

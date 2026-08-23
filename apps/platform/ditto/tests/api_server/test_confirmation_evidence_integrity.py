@@ -898,6 +898,39 @@ class TestSharedRootAndSubjectProjection:
         assert projection.applied_factor_bps == 10_000
         assert projection.full_effective_micros == projection.full_quality_micros == 729_530
 
+    def test_enforce_observational_drop_projects_the_live_70_30_mix(self) -> None:
+        verified = rebuild(
+            unsigned_report(
+                mode=ConfirmationBundleMode.ENFORCE,
+                inference_status="failed",
+                embedding_status="failed",
+                observational_drop=True,
+            ),
+            mode=ConfirmationBundleMode.ENFORCE,
+        )
+        verified = replace(
+            verified,
+            longmem_mean_micros=333_333,
+            longmem_stderr_micros=204_124,
+        )
+        projection = compute_subject_projection(
+            mode=ConfirmationBundleMode.ENFORCE,
+            base_quality_micros=882_550,
+            base_stderr_micros=10_668,
+            base_model_factor_bps=10_000,
+            base_tool_factor_bps=10_000,
+            verified=verified,
+            composite=replace(
+                verification_profile().composite,
+                base_weight_bps=7_000,
+                longmem_weight_bps=3_000,
+            ),
+        )
+        assert projection.result_status == "full_confirmed"
+        assert projection.semantic_factor_bps == 0
+        assert projection.applied_factor_bps == 10_000
+        assert projection.full_effective_micros == projection.full_quality_micros == 717_785
+
     @pytest.mark.parametrize("field", ["model", "tool"])
     def test_base_binary_gates_are_applied_per_subject(self, field: str) -> None:
         kwargs = {

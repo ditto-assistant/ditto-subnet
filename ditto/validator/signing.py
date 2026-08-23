@@ -389,7 +389,11 @@ def verify_v9_confirmation_receipt(entry: LedgerEntry) -> bool:
         longmem_score = root.longmemeval.evidence.score
         longmem_mean = _strict_int(longmem_score.longmem_mean_micros)
         longmem_stderr = _strict_int(longmem_score.longmem_stderr_micros)
-        factors = [receipt.base_model_factor_bps, receipt.base_tool_factor_bps]
+        ranking_factors = [
+            receipt.base_model_factor_bps,
+            receipt.base_tool_factor_bps,
+        ]
+        semantic_factors = list(ranking_factors)
         for envelope in (root.inference_ablation, root.embedding_ablation):
             if envelope.status != "completed":
                 return False
@@ -400,8 +404,9 @@ def verify_v9_confirmation_receipt(entry: LedgerEntry) -> bool:
             applied = _strict_int(evidence.applied_factor_bps)
             if semantic not in {0, 10_000} or applied != semantic:
                 return False
-            factors.append(semantic)
-        semantic_factor = 0 if 0 in factors else 10_000
+            semantic_factors.append(semantic)
+        semantic_factor = 0 if 0 in semantic_factors else 10_000
+        ranking_factor = 0 if 0 in ranking_factors else 10_000
         quality = _confirmation_round_ratio(
             policy.base_weight_bps * receipt.base_quality_micros
             + policy.longmem_weight_bps * longmem_mean,
@@ -424,14 +429,16 @@ def verify_v9_confirmation_receipt(entry: LedgerEntry) -> bool:
                 .sqrt()
                 .quantize(Decimal(1), rounding=ROUND_HALF_UP)
             )
-        effective = _confirmation_round_ratio(quality * semantic_factor, 10_000)
-        effective_stderr = _confirmation_round_ratio(stderr * semantic_factor, 10_000)
+        # Contract v1 cannot prove a causal ablation pass. Ranking uses the
+        # 70/30 mix once both ablations finished; base model/tool still gate.
+        effective = _confirmation_round_ratio(quality * ranking_factor, 10_000)
+        effective_stderr = _confirmation_round_ratio(stderr * ranking_factor, 10_000)
         return (
             receipt.mode == "enforce"
             and receipt.result_status == "full_confirmed"
             and receipt.qualification_status == "qualified"
             and receipt.semantic_factor_bps == semantic_factor
-            and receipt.applied_factor_bps == semantic_factor
+            and receipt.applied_factor_bps == ranking_factor
             and receipt.full_quality_micros == quality
             and receipt.full_stderr_micros == effective_stderr
             and receipt.full_effective_micros == effective

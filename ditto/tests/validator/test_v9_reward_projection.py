@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
+from decimal import ROUND_HALF_UP, Decimal, localcontext
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -27,6 +28,7 @@ from ditto.validator.signing import (
     sign_score,
     sign_v9_confirmation_bundle,
     verify_ledger_entry,
+    verify_v9_confirmation_receipt,
 )
 from ditto.validator.weights import (
     _effective_composite,
@@ -56,18 +58,58 @@ def _base(*, quality_micros: int) -> V9BaseEvidence:
     return V9BaseEvidence.model_validate(payload)
 
 
-def _policy() -> dict[str, object]:
+def _policy(
+    *,
+    base_weight_bps: int = 6_000,
+    longmem_weight_bps: int = 4_000,
+) -> dict[str, object]:
     payload: dict[str, object] = {
         "schema_version": 1,
         "revision": "composite-test-1",
         "formula_revision": "weighted-quality-gates-v1",
-        "base_weight_bps": 6_000,
-        "longmem_weight_bps": 4_000,
+        "base_weight_bps": base_weight_bps,
+        "longmem_weight_bps": longmem_weight_bps,
     }
     payload["checksum"] = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
     ).hexdigest()
     return payload
+
+
+def _mix_quality(
+    ordinary_micros: int,
+    longmem_micros: int,
+    *,
+    base_weight_bps: int,
+    longmem_weight_bps: int,
+) -> int:
+    return (
+        base_weight_bps * ordinary_micros + longmem_weight_bps * longmem_micros + 5_000
+    ) // 10_000
+
+
+def _mix_stderr(
+    *,
+    base_stderr_micros: int = 12_345,
+    longmem_stderr_micros: int = 204_124,
+    base_weight_bps: int,
+    longmem_weight_bps: int,
+) -> int:
+    with localcontext() as context:
+        context.prec = 50
+        base_component = (
+            Decimal(base_weight_bps) * Decimal(base_stderr_micros) / Decimal(10_000)
+        )
+        longmem_component = (
+            Decimal(longmem_weight_bps)
+            * Decimal(longmem_stderr_micros)
+            / Decimal(10_000)
+        )
+        return int(
+            (base_component**2 + longmem_component**2)
+            .sqrt()
+            .quantize(Decimal(1), rounding=ROUND_HALF_UP)
+        )
 
 
 def _longmem(*, artifact_sha256: str, mean_micros: int) -> dict[str, object]:
@@ -99,8 +141,14 @@ def _longmem(*, artifact_sha256: str, mean_micros: int) -> dict[str, object]:
     }
 
 
-def _ablation(*, artifact_sha256: str, intervention: str) -> dict[str, object]:
+def _ablation(
+    *,
+    artifact_sha256: str,
+    intervention: str,
+    status: str = "passed",
+) -> dict[str, object]:
     inference = intervention == "inference"
+    passed = status == "passed"
     return {
         "status": "completed",
         "evidence_sha256": ("b8" if inference else "c9") * 32,
@@ -116,8 +164,8 @@ def _ablation(*, artifact_sha256: str, intervention: str) -> dict[str, object]:
             "artifact_sha256": artifact_sha256,
             "intervention": intervention,
             "mode": "enforce",
-            "status": "passed",
-            "reason": "threshold_met",
+            "status": status,
+            "reason": "threshold_met" if passed else "observational_drop_not_causal",
             "profile_revision": "ablation-profile-test-1",
             "profile_checksum": "da" * 32,
             "threshold_manifest_sha256": "eb" * 32,
@@ -126,14 +174,14 @@ def _ablation(*, artifact_sha256: str, intervention: str) -> dict[str, object]:
             "case_set_sha256": "2e" * 32,
             "baseline_scores_sha256": "3f" * 32,
             "ablated_scores_sha256": "40" * 32,
-            "baseline_mean_micros": 800_000,
-            "ablated_mean_micros": 500_000,
-            "delta_micros": 300_000,
+            "baseline_mean_micros": 900_000 if not passed else 800_000,
+            "ablated_mean_micros": 400_000 if not passed else 500_000,
+            "delta_micros": 500_000 if not passed else 300_000,
             "threshold_micros": 200_000,
             "sample_count": 1,
             "affected_call_count": 1,
-            "semantic_factor_bps": 10_000,
-            "applied_factor_bps": 10_000,
+            "semantic_factor_bps": 10_000 if passed else 0,
+            "applied_factor_bps": 10_000 if passed else 0,
             "synthetic_usage": {
                 "synthetic": True,
                 "intervention": intervention,
@@ -169,6 +217,9 @@ def _entry(
     longmem_micros: int = 500_000,
     first_seen: datetime = datetime(2026, 8, 8, tzinfo=UTC),
     efficiency_factor: float | None = None,
+    ablation_status: str = "passed",
+    base_weight_bps: int = 6_000,
+    longmem_weight_bps: int = 4_000,
 ) -> LedgerEntry:
     base = _base(quality_micros=ordinary_micros)
     validators = [
@@ -216,15 +267,22 @@ def _entry(
             "settings_checksum": _SETTINGS_SHA,
             "retest_generation": 0,
             "ablation_coordinator_latency_ms": 13,
-            "composite_policy": _policy(),
+            "composite_policy": _policy(
+                base_weight_bps=base_weight_bps,
+                longmem_weight_bps=longmem_weight_bps,
+            ),
             "longmemeval": _longmem(
                 artifact_sha256=base.artifact_sha256, mean_micros=longmem_micros
             ),
             "inference_ablation": _ablation(
-                artifact_sha256=base.artifact_sha256, intervention="inference"
+                artifact_sha256=base.artifact_sha256,
+                intervention="inference",
+                status=ablation_status,
             ),
             "embedding_ablation": _ablation(
-                artifact_sha256=base.artifact_sha256, intervention="embedding"
+                artifact_sha256=base.artifact_sha256,
+                intervention="embedding",
+                status=ablation_status,
             ),
             "totals": {
                 "request_count": 3,
@@ -257,9 +315,16 @@ def _entry(
         retest_generation=0,
         evidence_sha256=evidence_sha,
     )
-    full_quality = (6_000 * ordinary_micros + 4_000 * longmem_micros + 5_000) // 10_000
-    # sqrt((.6 * 12345)^2 + (.4 * 204124)^2), half-up.
-    full_stderr = 81_985
+    full_quality = _mix_quality(
+        ordinary_micros,
+        longmem_micros,
+        base_weight_bps=base_weight_bps,
+        longmem_weight_bps=longmem_weight_bps,
+    )
+    full_stderr = _mix_stderr(
+        base_weight_bps=base_weight_bps,
+        longmem_weight_bps=longmem_weight_bps,
+    )
     receipt = V9ConfirmationReceipt(
         mode="enforce",
         result_status="full_confirmed",
@@ -278,7 +343,7 @@ def _entry(
         base_tool_factor_bps=10_000,
         full_quality_micros=full_quality,
         full_stderr_micros=full_stderr,
-        semantic_factor_bps=10_000,
+        semantic_factor_bps=10_000 if ablation_status == "passed" else 0,
         applied_factor_bps=10_000,
         full_effective_micros=full_quality,
         verified_at=datetime(2026, 8, 9, tzinfo=UTC),
@@ -312,6 +377,35 @@ def test_v9_receipt_verifies_without_overwriting_ordinary_composite() -> None:
     assert entry.composite == pytest.approx(0.812345)
     assert entry.v9_confirmation is not None
     assert entry.v9_confirmation.full_effective_micros == 687_407
+    assert verify_ledger_entry(entry)
+
+
+def test_failed_enforce_ablation_receipt_keeps_the_longmem_mix() -> None:
+    entry = _entry(ordinary_micros=882_550, longmem_micros=333_333, ablation_status="failed")
+    receipt = entry.v9_confirmation
+    assert receipt is not None
+    assert receipt.semantic_factor_bps == 0
+    assert receipt.applied_factor_bps == 10_000
+    assert receipt.full_effective_micros == receipt.full_quality_micros == 662_863
+    assert verify_v9_confirmation_receipt(entry)
+    assert verify_ledger_entry(entry)
+
+
+def test_failed_enforce_ablation_receipt_keeps_the_live_70_30_mix() -> None:
+    # harry.xiv 27e7fa08: base 0.882550, LongMem 4/12 = 0.333333.
+    entry = _entry(
+        ordinary_micros=882_550,
+        longmem_micros=333_333,
+        ablation_status="failed",
+        base_weight_bps=7_000,
+        longmem_weight_bps=3_000,
+    )
+    receipt = entry.v9_confirmation
+    assert receipt is not None
+    assert receipt.semantic_factor_bps == 0
+    assert receipt.applied_factor_bps == 10_000
+    assert receipt.full_effective_micros == receipt.full_quality_micros == 717_785
+    assert verify_v9_confirmation_receipt(entry)
     assert verify_ledger_entry(entry)
 
 
@@ -421,6 +515,37 @@ def test_weights_use_verified_full_composite_for_v9_enforce() -> None:
         rank_shares=(0.8, 0.2),
     )
     assert weights[full_leader.miner_hotkey] == pytest.approx(0.8)
+
+
+def test_weights_rank_reader_used_mix_above_unused_reader_zero() -> None:
+    unused_reader = _entry(
+        ordinary_micros=893_494,
+        longmem_micros=0,
+        ablation_status="failed",
+        base_weight_bps=7_000,
+        longmem_weight_bps=3_000,
+    )
+    harry = _entry(
+        agent_id=UUID("10000000-0000-0000-0000-000000000099"),
+        ordinary_micros=882_550,
+        longmem_micros=333_333,
+        ablation_status="failed",
+        first_seen=unused_reader.first_seen + timedelta(minutes=1),
+        base_weight_bps=7_000,
+        longmem_weight_bps=3_000,
+    )
+    assert unused_reader.v9_confirmation is not None
+    assert harry.v9_confirmation is not None
+    assert unused_reader.v9_confirmation.full_effective_micros == 625_446
+    assert harry.v9_confirmation.full_effective_micros == 717_785
+    assert harry.composite < unused_reader.composite
+    weights = compute_weights(
+        [unused_reader, harry],
+        margin=0.005,
+        tail_size=1,
+        rank_shares=(0.8, 0.2),
+    )
+    assert weights[harry.miner_hotkey] == pytest.approx(0.8)
 
 
 @pytest.mark.parametrize("factor", [0.85, 1.0, 1.1])
