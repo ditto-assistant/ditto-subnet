@@ -269,7 +269,7 @@ function emissionsColTip(store: LeaderboardStore): string {
   );
 }
 
-function Bar(props: { kind: "tool" | "memory"; value: number }): JSX.Element {
+function Bar(props: { kind: "tool" | "memory" | "longmem"; value: number }): JSX.Element {
   return (
     <div class="metric">
       <div class="barwrap">
@@ -288,6 +288,19 @@ function Bar(props: { kind: "tool" | "memory"; value: number }): JSX.Element {
 // (compositeCell 5582–5601).
 function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): JSX.Element {
   const value = (): number => displayComposite(props.entry, props.store.settledView());
+  const longmemScore = (): number | null | undefined => props.entry.v9_longmem_mean_composite;
+  const longmemPlaceholder = (): string | null => {
+    if (longmemScore() != null) return null;
+    if (props.store.payload()?.v9_confirmation_mode !== "shadow") return null;
+    switch (props.entry.v9_confirmation_status) {
+      case "provisional":
+        return "running";
+      case "base_only":
+        return "queued";
+      default:
+        return null;
+    }
+  };
   const showsEfficiencyTieBreak = (): boolean => props.entry.efficiency_factor != null;
   const band = (): { lo: number; hi: number; width: number } | null =>
     showsCompositeErrBand(props.entry, props.store.settledView())
@@ -332,6 +345,17 @@ function ScoreStackCell(props: { entry: BoardEntry; store: LeaderboardStore }): 
           <span class="score-stack-label">Memory</span>
           <Bar kind="memory" value={props.entry.memory_mean} />
         </div>
+        <Show when={longmemScore() != null || longmemPlaceholder() != null}>
+          <div class="score-stack-row">
+            <span class="score-stack-label">LongMem</span>
+            <Show
+              when={longmemScore() != null}
+              fallback={<span class="mval muted">{longmemPlaceholder()}</span>}
+            >
+              <Bar kind="longmem" value={longmemScore() as number} />
+            </Show>
+          </div>
+        </Show>
         <div class="cline2 score-stack-context">
           <RolloutChip
             entry={props.entry}

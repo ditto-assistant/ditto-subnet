@@ -718,6 +718,11 @@ describe("board view controls (row 1 slice)", () => {
     await waitFor(() =>
       expect(document.querySelector(".v9-confirmation-chip")?.textContent).toBe("LongMem 0.333"),
     );
+    const longmemRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "LongMem",
+    );
+    expect(longmemRow?.querySelector(".mval")?.textContent).toBe("0.333");
+    expect(longmemRow?.querySelector(".bar.longmem")).toBeTruthy();
   });
 
   it("shows a completed shadow LongMemEval zero as a measured score", async () => {
@@ -747,6 +752,10 @@ describe("board view controls (row 1 slice)", () => {
     await waitFor(() =>
       expect(document.querySelector(".v9-confirmation-chip")?.textContent).toBe("LongMem 0.000"),
     );
+    const longmemRow = Array.from(document.querySelectorAll(".score-stack-row")).find(
+      (row) => row.querySelector(".score-stack-label")?.textContent === "LongMem",
+    );
+    expect(longmemRow?.querySelector(".mval")?.textContent).toBe("0.000");
   });
 
   it("defaults to the Scored tab with live counts (provisional is pre-quorum feedback)", async () => {
