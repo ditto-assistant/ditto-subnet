@@ -68,6 +68,27 @@ the rollback; it omits every catalog variable from `.env` and leaves the source
 unavailable after rerunning `scripts/start.sh` or restarting/reloading with
 `--update-env`.
 
+## Curator publication preflight
+
+The public repository contains a no-upload curator preflight:
+
+```bash
+cd apps/platform
+uv run python scripts/plan_coding_catalog_publication.py \
+  --commitment /protected/catalog/commitment.json \
+  --records-dir /protected/catalog/records \
+  --output /protected/catalog/publication.json
+```
+
+It accepts only canonical external files named `000000.json` through the exact
+committed task count. Every record is revalidated against the commitment,
+position-bound Merkle proof, task version, runner plan, grader plan, and
+resource profile before the tool emits its only permitted object key. The
+output is a protected upload plan containing object hashes and opaque task
+identities, not task bytes or credentials. It does not contact S3, write a
+catalog object, register the commitment, or sign an admin request; those remain
+separate offline curator operations.
+
 ## Record contract
 
 Each object uses `dittobench-coding-private-catalog-record-v1` and contains:

@@ -312,27 +312,52 @@ class S3CodingPrivateCatalogSource:
             raise CodingSelectionCatalogIntegrityError(
                 "private catalog record is malformed"
             ) from error
-        task = record.task_version
-        proof = record.membership_proof
-        if (
-            record.catalog_commitment_sha256 != commitment.commitment_sha256
-            or task.payload.coding_contract_version
-            != commitment.coding_contract_version
-            or task.payload.corpus_release_id != commitment.corpus_release_id
-            or task.payload.catalog_index != catalog_index
-            or task.payload.weight_eligible
-            or proof.coding_contract_version != commitment.coding_contract_version
-            or proof.corpus_release_id != commitment.corpus_release_id
-            or proof.catalog_merkle_root != commitment.catalog_merkle_root
-            or proof.task_version_count != commitment.task_version_count
-            or proof.catalog_index != catalog_index
-            or proof.task_commitment_sha256 != task.task_commitment_sha256
-            or not verify_coding_catalog_membership(proof)
-        ):
-            raise CodingSelectionCatalogIntegrityError(
-                "private catalog record does not match its registered commitment"
-            )
-        return record
+        return validate_coding_private_catalog_record(
+            commitment=commitment,
+            catalog_index=catalog_index,
+            record=record,
+        )
+
+
+def validate_coding_private_catalog_record(
+    *,
+    commitment: CodingCatalogCommitment,
+    catalog_index: int,
+    record: CodingPrivateCatalogRecord,
+) -> CodingPrivateCatalogRecord:
+    """Revalidate one curator record against its exact committed catalog leaf."""
+
+    try:
+        commitment = CodingCatalogCommitment.model_validate_json(
+            commitment.model_dump_json(by_alias=True)
+        )
+        record = CodingPrivateCatalogRecord.model_validate_json(
+            record.model_dump_json(by_alias=True)
+        )
+    except (ValidationError, ValueError) as error:
+        raise CodingSelectionCatalogIntegrityError(
+            "private catalog record authority is malformed"
+        ) from error
+    task = record.task_version
+    proof = record.membership_proof
+    if (
+        record.catalog_commitment_sha256 != commitment.commitment_sha256
+        or task.payload.coding_contract_version != commitment.coding_contract_version
+        or task.payload.corpus_release_id != commitment.corpus_release_id
+        or task.payload.catalog_index != catalog_index
+        or task.payload.weight_eligible
+        or proof.coding_contract_version != commitment.coding_contract_version
+        or proof.corpus_release_id != commitment.corpus_release_id
+        or proof.catalog_merkle_root != commitment.catalog_merkle_root
+        or proof.task_version_count != commitment.task_version_count
+        or proof.catalog_index != catalog_index
+        or proof.task_commitment_sha256 != task.task_commitment_sha256
+        or not verify_coding_catalog_membership(proof)
+    ):
+        raise CodingSelectionCatalogIntegrityError(
+            "private catalog record does not match its registered commitment"
+        )
+    return record
 
 
 def create_coding_private_catalog_source(
