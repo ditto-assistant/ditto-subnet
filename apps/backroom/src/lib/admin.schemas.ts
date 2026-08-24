@@ -5877,3 +5877,86 @@ export type AgentScoresDetail = z.infer<typeof agentScoresDetailSchema>
 export type PublicSubmissionPipeline = z.infer<typeof publicSubmissionPipelineSchema>
 export type AgentScoreHistory = z.infer<typeof agentScoreHistorySchema>
 export type OwnerFootprintDetail = z.infer<typeof ownerFootprintDetailSchema>
+
+// --- Inference trace archive (private Hippius bucket ditto-subnet-traces) ---
+
+export const traceObjectSchema = z.object({
+  key: z.string(),
+  size: z.number().int().nonnegative(),
+  last_modified: z.string(),
+  etag: z.string(),
+})
+
+export const traceObjectListSchema = z.object({
+  bucket: z.string(),
+  prefix: z.string(),
+  objects: z.array(traceObjectSchema),
+  continuation_token: z.string().nullable(),
+})
+
+export const listInferenceTracesInputSchema = z.object({
+  scope: z.enum(['traces', 'ledger']).default('traces'),
+  lane: z.enum(['inference', 'confirmation']).optional(),
+  kind: z.enum(['chat', 'embedding']).optional(),
+  dt: z
+    .string()
+    .regex(/^\d{4}-\d{2}-\d{2}$/, 'dt is a UTC day like 2026-08-24')
+    .optional(),
+  hour: z
+    .string()
+    .regex(/^\d{2}$/, 'hour is a two-digit UTC hour like 17')
+    .optional(),
+  prefix: z.string().max(512).optional(),
+  maxKeys: z.number().int().min(1).max(1000).default(200),
+  continuationToken: z.string().max(2048).optional(),
+})
+
+export const traceDownloadUrlInputSchema = z.object({
+  key: z.string().min(1).max(1024),
+  expiresInSeconds: z.number().int().min(60).max(3600).default(300),
+})
+
+export const traceDownloadUrlSchema = z.object({
+  bucket: z.string(),
+  key: z.string(),
+  url: z.string(),
+  expires_in: z.number().int().positive(),
+})
+
+export const peekInferenceTraceInputSchema = z.object({
+  key: z.string().min(1).max(1024),
+  maxRecords: z.number().int().min(1).max(50).default(5),
+  offsetRecords: z.number().int().min(0).max(100_000).default(0),
+  includeBodies: z.boolean().default(false),
+})
+
+export const traceRecordSummarySchema = z.object({
+  index: z.number().int().nonnegative(),
+  recorded_at: z.string().nullish(),
+  event: z.string().nullish(),
+  lane: z.string().nullish(),
+  kind: z.string().nullish(),
+  run_id: z.string().nullish(),
+  case_id: z.string().nullish(),
+  grant_id: z.string().nullish(),
+  nonce: z.string().nullish(),
+  agent_id: z.string().nullish(),
+  validator_hotkey: z.string().nullish(),
+  bench_version: z.number().int().nullish(),
+  status: z.string().nullish(),
+  prompt_tokens: z.number().int().nullish(),
+  completion_tokens: z.number().int().nullish(),
+  provider: z.string().nullish(),
+  latency_ms: z.number().int().nullish(),
+  body_bytes: z.number().int().nullish(),
+  record: z.record(z.string(), z.unknown()).nullish(),
+  record_omitted: z.literal('too_large').nullish(),
+})
+
+export const tracePeekResponseSchema = z.object({
+  bucket: z.string(),
+  key: z.string(),
+  records: z.array(traceRecordSummarySchema),
+  records_scanned: z.number().int().nonnegative(),
+  scan_complete: z.boolean(),
+})

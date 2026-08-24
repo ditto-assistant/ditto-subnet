@@ -27,6 +27,7 @@ dependencies = [
     "cryptography>=42",
     "aioboto3>=13.0",
     "ditto-screening-protocol==0.17.0",
+    "zstandard>=0.23",
 ]
 
 [tool.uv.sources]

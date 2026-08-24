@@ -85,6 +85,9 @@ describe('Backroom MCP tools', () => {
         'get_efficiency_bonus_settings',
         'get_inference_concurrency_settings',
         'get_inference_runtime_metrics',
+        'list_inference_traces',
+        'download_inference_trace',
+        'peek_inference_trace',
         'download_runtime_profile',
         'get_queue_policy_settings',
         'get_screener_review_settings',
@@ -173,15 +176,18 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 87_000 whole-payload includes the L1 model/timeout fields on the
-    // screener-review settings write schema and the validator fleet/assignment
-    // read schemas. Keep modest headroom for schema evolution; tighten the
-    // description budgets, not this whole-payload backstop, to push back on
-    // tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(87_000)
+    // 90_000 whole-payload includes the L1 model/timeout fields on the
+    // screener-review settings write schema, the validator fleet/assignment
+    // read schemas, and the three inference-trace archive tools (partitioned
+    // listing, presigned download, bounded peek). Keep modest headroom for
+    // schema evolution; tighten the description budgets, not this
+    // whole-payload backstop, to push back on tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(90_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
+    // Grew by the three inference-trace archive catalog lines (their
+    // tutorials live in get_backroom_tool_help, not here).
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      20_700,
+      20_850,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -356,6 +362,103 @@ describe('Backroom MCP tools', () => {
 
     await client.close()
     await server.close()
+  })
+
+  it('pages the trace archive openly but gates record content on the artifact scope', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const key =
+      'traces/v1/lane=inference/kind=chat/dt=2026-08-24/hour=17/relay_1-a.jsonl.zst'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        Response.json({
+          bucket: 'ditto-subnet-traces',
+          prefix: 'traces/v1/lane=inference/kind=chat/dt=2026-08-24/',
+          objects: [
+            {
+              key,
+              size: 1234,
+              last_modified: '2026-08-24T17:10:00.000Z',
+              etag: 'abc',
+            },
+          ],
+          continuation_token: null,
+        }),
+      )
+      .mockResolvedValueOnce(
+        Response.json({
+          bucket: 'ditto-subnet-traces',
+          key,
+          records: [
+            {
+              index: 0,
+              recorded_at: '2026-08-24T17:09:59Z',
+              event: 'inference.settled',
+              lane: 'inference',
+              kind: 'chat',
+              run_id: 'run-1',
+              case_id: 'web_search-0001',
+              status: 'completed',
+              prompt_tokens: 12,
+              completion_tokens: 5,
+              provider: 'deepinfra',
+              latency_ms: 800,
+            },
+          ],
+          records_scanned: 1,
+          scan_complete: true,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    const readOnly = await connect([BACKROOM_READ_SCOPE])
+    const listing = await readOnly.client.callTool({
+      name: 'list_inference_traces',
+      arguments: { lane: 'inference', kind: 'chat', dt: '2026-08-24' },
+    })
+    expect(listing.isError).not.toBe(true)
+    expect(readJsonResult(listing)).toMatchObject({
+      objects: [{ key, size: 1234 }],
+      continuation_token: null,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/traces?scope=traces&lane=inference&kind=chat&dt=2026-08-24&max_keys=200',
+      expect.objectContaining({ method: 'GET' }),
+    )
+
+    // Record content is miner-sensitive: without the artifact scope the peek
+    // is refused before any platform call is made.
+    const refused = await readOnly.client.callTool({
+      name: 'peek_inference_trace',
+      arguments: { key },
+    })
+    expect(refused.isError).toBe(true)
+    expect(readTextResult(refused)).toContain('backroom:artifact:read')
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    await readOnly.client.close()
+    await readOnly.server.close()
+
+    const artifactConn = await connect([BACKROOM_READ_SCOPE, BACKROOM_ARTIFACT_SCOPE])
+    const peek = await artifactConn.client.callTool({
+      name: 'peek_inference_trace',
+      arguments: { key, maxRecords: 1 },
+    })
+    expect(peek.isError).not.toBe(true)
+    expect(readJsonResult(peek)).toMatchObject({
+      records: [{ case_id: 'web_search-0001', provider: 'deepinfra' }],
+      scan_complete: true,
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/traces/peek',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+    await artifactConn.client.close()
+    await artifactConn.server.close()
   })
 
   it('reads confirmation policy as an isolated no-activation control', async () => {

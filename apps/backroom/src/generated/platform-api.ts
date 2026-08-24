@@ -1615,6 +1615,77 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/traces": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Trace Objects
+         * @description List archive objects, newest partitions by explicit prefix.
+         *
+         *     Either give the partition levels (scope/lane/kind/dt/hour) or a raw
+         *     ``prefix`` under ``traces/v1/`` / ``ledger/v1/``. Keys and sizes only --
+         *     no miner content -- so this is a plain read.
+         */
+        get: operations["list_trace_objects_api_v1_admin_traces_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/traces/download-url": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Create Trace Download Url
+         * @description Issue an audited, time-bounded download URL for one trace object.
+         */
+        post: operations["create_trace_download_url_api_v1_admin_traces_download_url_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/traces/peek": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Peek Trace Object
+         * @description Read a bounded excerpt of one trace object server-side.
+         *
+         *     Streams the zstd decode and stops as soon as the requested records are in
+         *     hand, under hard caps (compressed fetch, scanned bytes, line size), so a
+         *     misnamed or pathological object cannot exhaust the API process. Summaries
+         *     are always returned; the full records ride along only when
+         *     ``include_bodies`` is set, and any single record over 512 KiB is elided
+         *     with ``record_omitted="too_large"``.
+         */
+        post: operations["peek_trace_object_api_v1_admin_traces_peek_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/trusted-image-builds": {
         parameters: {
             query?: never;
@@ -18424,6 +18495,127 @@ export interface components {
              */
             validator_hotkey: string;
         };
+        /** TraceDownloadURL */
+        TraceDownloadURL: {
+            /** Bucket */
+            bucket: string;
+            /** Expires In */
+            expires_in: number;
+            /** Key */
+            key: string;
+            /** Url */
+            url: string;
+        };
+        /** TraceDownloadURLRequest */
+        TraceDownloadURLRequest: {
+            /**
+             * Expires In
+             * @default 300
+             */
+            expires_in: number;
+            /** Key */
+            key: string;
+        };
+        /** TraceObject */
+        TraceObject: {
+            /** Etag */
+            etag: string;
+            /** Key */
+            key: string;
+            /** Last Modified */
+            last_modified: string;
+            /** Size */
+            size: number;
+        };
+        /** TraceObjectList */
+        TraceObjectList: {
+            /** Bucket */
+            bucket: string;
+            /** Continuation Token */
+            continuation_token: string | null;
+            /** Objects */
+            objects: components["schemas"]["TraceObject"][];
+            /** Prefix */
+            prefix: string;
+        };
+        /** TracePeekRequest */
+        TracePeekRequest: {
+            /**
+             * Include Bodies
+             * @default false
+             */
+            include_bodies: boolean;
+            /** Key */
+            key: string;
+            /**
+             * Max Records
+             * @default 5
+             */
+            max_records: number;
+            /**
+             * Offset Records
+             * @default 0
+             */
+            offset_records: number;
+        };
+        /** TracePeekResponse */
+        TracePeekResponse: {
+            /** Bucket */
+            bucket: string;
+            /** Key */
+            key: string;
+            /** Records */
+            records: components["schemas"]["TraceRecordSummary"][];
+            /** Records Scanned */
+            records_scanned: number;
+            /** Scan Complete */
+            scan_complete: boolean;
+        };
+        /** TraceRecordSummary */
+        TraceRecordSummary: {
+            /** Agent Id */
+            agent_id?: string | null;
+            /** Bench Version */
+            bench_version?: number | null;
+            /** Body Bytes */
+            body_bytes?: number | null;
+            /** Case Id */
+            case_id?: string | null;
+            /** Completion Tokens */
+            completion_tokens?: number | null;
+            /** Event */
+            event?: string | null;
+            /** Grant Id */
+            grant_id?: string | null;
+            /** Index */
+            index: number;
+            /** Kind */
+            kind?: string | null;
+            /** Lane */
+            lane?: string | null;
+            /** Latency Ms */
+            latency_ms?: number | null;
+            /** Nonce */
+            nonce?: string | null;
+            /** Prompt Tokens */
+            prompt_tokens?: number | null;
+            /** Provider */
+            provider?: string | null;
+            /** Record */
+            record?: {
+                [key: string]: unknown;
+            } | null;
+            /** Record Omitted */
+            record_omitted?: "too_large" | null;
+            /** Recorded At */
+            recorded_at?: string | null;
+            /** Run Id */
+            run_id?: string | null;
+            /** Status */
+            status?: string | null;
+            /** Validator Hotkey */
+            validator_hotkey?: string | null;
+        };
         /** TrustedImageBuildClaimRequest */
         TrustedImageBuildClaimRequest: {
             /** Controller Epoch */
@@ -22805,6 +22997,118 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SubmissionSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_trace_objects_api_v1_admin_traces_get: {
+        parameters: {
+            query?: {
+                scope?: "traces" | "ledger";
+                lane?: ("inference" | "confirmation") | null;
+                kind?: ("chat" | "embedding") | null;
+                dt?: string | null;
+                hour?: string | null;
+                prefix?: string | null;
+                max_keys?: number;
+                continuation_token?: string | null;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceObjectList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_trace_download_url_api_v1_admin_traces_download_url_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TraceDownloadURLRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TraceDownloadURL"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    peek_trace_object_api_v1_admin_traces_peek_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-Admin-Actor"?: string | null;
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TracePeekRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TracePeekResponse"];
                 };
             };
             /** @description Validation Error */

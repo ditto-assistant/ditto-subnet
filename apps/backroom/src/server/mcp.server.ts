@@ -69,6 +69,9 @@ import {
   setInferenceConcurrencySettingsInputSchema,
   runtimeProfileCaptureInputSchema,
   runtimeProfileLookupInputSchema,
+  listInferenceTracesInputSchema,
+  traceDownloadUrlInputSchema,
+  peekInferenceTraceInputSchema,
   applyScreenerReviewSettingsInputSchema,
   setQueuePolicySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
@@ -141,6 +144,9 @@ import {
   setContinualRetestSettings,
   fetchInferenceConcurrencySettings,
   fetchInferenceRuntimeMetrics,
+  fetchInferenceTraceObjects,
+  createInferenceTraceDownloadUrl,
+  peekInferenceTrace,
   captureRuntimeProfile,
   downloadRuntimeProfile,
   fetchQueuePolicySettings,
@@ -221,6 +227,11 @@ export const TOOL_SCOPE_REQUIREMENTS = new Map<string, string>([
   ...[...WRITE_TOOL_NAMES].map((name) => [name, BACKROOM_WRITE_SCOPE] as const),
   ['get_screening_artifact', BACKROOM_ARTIFACT_SCOPE],
   ['download_runtime_profile', BACKROOM_ARTIFACT_SCOPE],
+  // Trace records carry miner prompts and full model responses, so anything
+  // that discloses record CONTENT gates on the artifact scope. Listing object
+  // keys and sizes does not, and stays a plain read.
+  ['download_inference_trace', BACKROOM_ARTIFACT_SCOPE],
+  ['peek_inference_trace', BACKROOM_ARTIFACT_SCOPE],
   // Source listings and excerpts expose miner-submitted code, so they gate
   // on the same dedicated artifact scope as the tarball download.
   ['list_screening_source_files', BACKROOM_ARTIFACT_SCOPE],
@@ -425,6 +436,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Capture bounded private relay pprof.',
   download_runtime_profile:
     'Download profile base64; artifact scope.',
+  list_inference_traces: 'Page trace archive objects by partition.',
+  download_inference_trace: 'Presigned trace URL; artifact scope.',
+  peek_inference_trace: 'Peek trace records; artifact scope.',
   get_owner_attestations:
     'Read direct signed owner links for one hotkey. Links are symmetric, direct-only, non-transitive, and exempt only near-duplicate screening; evidence_grade is context, not a gate. Include revoked links when judging historical submissions. Requires backroom:read, not artifact access.',
   list_lease_revocations:
@@ -1664,6 +1678,44 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchInferenceRuntimeMetrics()),
+  )
+
+  registerTool(
+    'list_inference_traces',
+    {
+      title: 'List inference trace archive objects',
+      description:
+        'Page the private Hippius trace archive (bucket ditto-subnet-traces) that the Go relay ships every brokered inference call into. scope=traces is the live capture (zstd JSONL, full request/response bodies, provider exchange, usage, grant context, keyed traces/v1/lane=<inference|confirmation>/kind=<chat|embedding>/dt=YYYY-MM-DD/hour=HH/...); scope=ledger is the Postgres backfill export (metadata only, keyed ledger/v1/...). Give the partition levels top-down — lane, then kind, then dt, then hour; a deeper level without the ones above it is refused — or pass a raw prefix under traces/v1/ or ledger/v1/. Returns keys, sizes, and timestamps only (no miner content, so backroom:read suffices) with an S3 continuation_token: pass it back verbatim for the next page; null means complete. AN EMPTY PARTITION IS A FINDING — for a recent hour it means the relay shipped nothing (capture off, spool stuck, or sink down): check get_inference_runtime_metrics and the relay trace counters before assuming there was no traffic.',
+      inputSchema: listInferenceTracesInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) => result(await fetchInferenceTraceObjects(input)),
+  )
+
+  registerTool(
+    'download_inference_trace',
+    {
+      title: 'Issue a download URL for one trace object',
+      description:
+        'Issue an audited, time-bounded (default 300s, max 3600s) presigned GET URL for one object under traces/v1/ or ledger/v1/. The bucket stays private; the URL is the only thing that leaves. Download with curl, decompress with zstd -d, and read JSONL — one record per brokered call. Requires backroom:artifact:read because trace bodies are miner-authored prompts and benchmark case text. For a quick look at a few records, peek_inference_trace avoids the download entirely.',
+      inputSchema: traceDownloadUrlInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      artifact(() => createInferenceTraceDownloadUrl(input, props.session.email)),
+  )
+
+  registerTool(
+    'peek_inference_trace',
+    {
+      title: 'Peek at records inside one trace object',
+      description:
+        'Read up to 50 records from one trace object without downloading it: the platform fetches and zstd-decodes the object server-side under hard caps (64 MiB compressed; an over-limit object is a 413 telling you to use download_inference_trace). Every record comes back as a compact summary (recorded_at, event, lane, kind, run_id, case_id, grant/nonce, agent, bench_version, status, tokens, provider, latency); includeBodies=true attaches each full record — request body, per-phase raw provider responses, sanitized response — and any single record over 512 KiB is elided with record_omitted="too_large". offsetRecords + records_scanned page through a file; scan_complete=false means a bounded scan ended before the file did. This is the first debugging read for "what did the model actually see/say" on a specific case or run. Requires backroom:artifact:read.',
+      inputSchema: peekInferenceTraceInputSchema,
+      annotations: toolAnnotations('read'),
+    },
+    async (input) =>
+      artifact(() => peekInferenceTrace(input, props.session.email)),
   )
 
   registerTool(

@@ -172,6 +172,12 @@ import {
   confirmationBundleSettingsControlSchema,
   confirmationBundleViewSchema,
   setConfirmationBundleSettingsInputSchema,
+  listInferenceTracesInputSchema,
+  traceObjectListSchema,
+  traceDownloadUrlInputSchema,
+  traceDownloadUrlSchema,
+  peekInferenceTraceInputSchema,
+  tracePeekResponseSchema,
 } from '../lib/admin.schemas'
 import {
   CONFIRMATION_LANE_STATES,
@@ -814,6 +820,7 @@ export async function setQueuePolicySettings(rawInput: unknown, actor: string) {
 
 const INFERENCE_CONCURRENCY_SETTINGS_PATH = '/api/v1/admin/inference-concurrency-settings'
 const INFERENCE_RUNTIME_METRICS_PATH = '/api/v1/admin/inference-runtime-metrics'
+const INFERENCE_TRACES_PATH = '/api/v1/admin/traces'
 const RUNTIME_PROFILES_PATH = '/api/v1/admin/runtime-profiles'
 
 export async function fetchInferenceRuntimeMetrics() {
@@ -821,6 +828,57 @@ export async function fetchInferenceRuntimeMetrics() {
     timeoutMs: 30_000,
   })
   return inferenceRuntimeMetricsSchema.parse(payload)
+}
+
+export async function fetchInferenceTraceObjects(rawInput: unknown) {
+  const input = listInferenceTracesInputSchema.parse(rawInput)
+  const query = new URLSearchParams()
+  query.set('scope', input.scope)
+  if (input.lane) query.set('lane', input.lane)
+  if (input.kind) query.set('kind', input.kind)
+  if (input.dt) query.set('dt', input.dt)
+  if (input.hour) query.set('hour', input.hour)
+  if (input.prefix) query.set('prefix', input.prefix)
+  query.set('max_keys', String(input.maxKeys))
+  if (input.continuationToken) {
+    query.set('continuation_token', input.continuationToken)
+  }
+  const payload = await platformAdminRequest(
+    `${INFERENCE_TRACES_PATH}?${query.toString()}`,
+    { timeoutMs: 30_000, retries: 1 },
+  )
+  return traceObjectListSchema.parse(payload)
+}
+
+export async function createInferenceTraceDownloadUrl(
+  rawInput: unknown,
+  actor: string,
+) {
+  const input = traceDownloadUrlInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(`${INFERENCE_TRACES_PATH}/download-url`, {
+    method: 'POST',
+    actor,
+    timeoutMs: 30_000,
+    body: { key: input.key, expires_in: input.expiresInSeconds },
+  })
+  return traceDownloadUrlSchema.parse(payload)
+}
+
+export async function peekInferenceTrace(rawInput: unknown, actor: string) {
+  const input = peekInferenceTraceInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(`${INFERENCE_TRACES_PATH}/peek`, {
+    method: 'POST',
+    actor,
+    // The platform downloads and decodes the object server-side first.
+    timeoutMs: 60_000,
+    body: {
+      key: input.key,
+      max_records: input.maxRecords,
+      offset_records: input.offsetRecords,
+      include_bodies: input.includeBodies,
+    },
+  })
+  return tracePeekResponseSchema.parse(payload)
 }
 
 export async function captureRuntimeProfile(rawInput: unknown, actor: string) {
