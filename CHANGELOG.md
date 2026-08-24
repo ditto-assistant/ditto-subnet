@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.109.1 (2026-08-24)
+
+### Bug Fixes
+
+- **platform**: Show shadow LongMem scores and live fleet progress
+  ([#1136](https://github.com/ditto-assistant/ditto-subnet/pull/1136),
+  [`73a045a`](https://github.com/ditto-assistant/ditto-subnet/commit/73a045ab43e12acedac62a878ee24829deea64dc))
+
+
 ## v0.109.0 (2026-08-24)
 
 ### Documentation
