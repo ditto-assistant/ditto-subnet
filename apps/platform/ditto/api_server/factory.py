@@ -75,6 +75,7 @@ from ditto.api_server.endpoints import (
     admin_screener_review_settings_router,
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
+    admin_traces_router,
     admin_validation_retry_router,
     admin_validator_slot_settings_router,
     attestation_router,
@@ -228,12 +229,28 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
             app.state.storage = storage
 
-            from ditto.api_server.hippius import create_hippius_client
+            from ditto.api_server.hippius import (
+                create_hippius_client,
+                parse_traces_hippius_config_from_env,
+            )
 
             hippius = create_hippius_client()
             if hippius is not None:
                 stack.push_async_callback(hippius.aclose)
             app.state.hippius = hippius
+
+            # The inference trace archive (private ditto-subnet-traces bucket)
+            # shares the Hippius credentials but not the bucket; None leaves
+            # the /admin/traces endpoints answering 503 without affecting boot.
+            traces_config = parse_traces_hippius_config_from_env()
+            traces_hippius = (
+                create_hippius_client(traces_config)
+                if traces_config is not None
+                else None
+            )
+            if traces_hippius is not None:
+                stack.push_async_callback(traces_hippius.aclose)
+            app.state.traces_hippius = traces_hippius
 
             embedder = create_embedder(config.embedding)
             stack.push_async_callback(embedder.aclose)
@@ -494,6 +511,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
+    app.include_router(admin_traces_router, prefix="/api/v1")
     app.include_router(admin_efficiency_bonus_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_routes_router, prefix="/api/v1")
     app.include_router(admin_leaderboard_router, prefix="/api/v1")

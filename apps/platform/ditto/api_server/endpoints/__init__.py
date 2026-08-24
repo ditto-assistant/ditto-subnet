@@ -71,6 +71,9 @@ from ditto.api_server.endpoints.admin_submission_deposit_address import (
 from ditto.api_server.endpoints.admin_submission_settings import (
     router as admin_submission_settings_router,
 )
+from ditto.api_server.endpoints.admin_traces import (
+    router as admin_traces_router,
+)
 from ditto.api_server.endpoints.admin_validation_retry import (
     router as admin_validation_retry_router,
 )
@@ -105,6 +108,7 @@ __all__ = [
     "admin_burn_settings_router",
     "admin_inference_concurrency_settings_router",
     "admin_inference_observability_router",
+    "admin_traces_router",
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",
     "admin_inference_routes_router",

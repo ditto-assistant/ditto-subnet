@@ -48,6 +48,22 @@ describe('Backroom MCP collection pagination', () => {
         const properties = tool.inputSchema.properties as
           | Record<string, NumberSchema>
           | undefined
+        // S3-backed archive listings page with a continuation token, not an
+        // offset: the store hands back an opaque cursor and an offset cannot
+        // be honored without walking every prior page. The bounded-page
+        // guarantee this test exists for is carried by maxKeys instead.
+        if (properties && 'continuationToken' in properties) {
+          expect.soft(properties.maxKeys, `${tool.name}.maxKeys`).toMatchObject({
+            type: 'integer',
+            minimum: 1,
+            maximum: expect.any(Number),
+            default: expect.any(Number),
+          })
+          expect
+            .soft(properties.maxKeys?.default, `${tool.name}.maxKeys default`)
+            .toBeLessThanOrEqual(properties.maxKeys?.maximum ?? -1)
+          continue
+        }
         const limit = properties?.limit
         const offset = properties?.offset
 
