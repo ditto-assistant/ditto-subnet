@@ -2030,9 +2030,8 @@ class ValidatorWorker:
                     job=job,
                 )
                 artifact = await self._platform.get_v9_confirmation_artifact(job)
-                case_total = (
-                    job.execution_profile.longmem_cases_per_capability
-                    * len(CAPABILITY_ORDER)
+                case_total = job.execution_profile.longmem_cases_per_capability * len(
+                    CAPABILITY_ORDER
                 )
                 await self._publish_confirmation_progress(
                     job,

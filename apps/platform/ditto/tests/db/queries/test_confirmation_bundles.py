@@ -729,9 +729,7 @@ class TestBudgetAndTicketLifecycle:
                 reserve_microusd=40_000,
             )
             assert decision.reservation is not None
-            with pytest.raises(
-                ConfirmationBundlePersistenceError, match="four hours"
-            ):
+            with pytest.raises(ConfirmationBundlePersistenceError, match="four hours"):
                 await issue_confirmation_bundle_ticket(
                     session,
                     bundle_id=bundle.bundle_id,

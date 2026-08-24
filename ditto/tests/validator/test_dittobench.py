@@ -2515,3 +2515,82 @@ def test_overlong_container_log_tail_announces_its_cut() -> None:
     assert len(bounded) <= CONTAINER_LOG_TAIL_MAX_LENGTH
     assert bounded.endswith("chars]")
     assert "9000" in bounded
+
+
+@pytest.mark.asyncio
+async def test_confirmation_progress_poll_accepts_counts_and_skips_malformed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[int, int]] = []
+    responses: list[object] = [
+        httpx.ConnectError("control plane unreachable"),
+        httpx.Response(500),
+        httpx.Response(200, json={"ready": False}),
+        httpx.Response(200, content=b"{"),
+        httpx.Response(200, json={"ready": True, "done": "3", "total": 48}),
+        httpx.Response(200, json={"ready": True, "done": 7, "total": 3}),
+        httpx.Response(200, json={"ready": True, "done": 7, "total": 48}),
+    ]
+    sleeps = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        if not responses:
+            return httpx.Response(200, json={"ready": False})
+        item = responses.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def fake_sleep(_: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 20:
+            raise asyncio.CancelledError
+
+    async def record(done: int, total: int) -> None:
+        seen.append((done, total))
+
+    monkeypatch.setattr("ditto.validator.dittobench.asyncio.sleep", fake_sleep)
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_control_token="control-token",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, config), http)
+        with pytest.raises(asyncio.CancelledError):
+            await client._poll_confirmation_progress(record)
+
+    assert seen == [(7, 48)]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_progress_callback_failure_does_not_stop_polling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[int, int]] = []
+    sleeps = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"ready": True, "done": 3, "total": 48})
+
+    async def fake_sleep(_: float) -> None:
+        nonlocal sleeps
+        sleeps += 1
+        if sleeps > 3:
+            raise asyncio.CancelledError
+
+    async def broken(done: int, total: int) -> None:
+        seen.append((done, total))
+        raise RuntimeError("telemetry sink unavailable")
+
+    monkeypatch.setattr("ditto.validator.dittobench.asyncio.sleep", fake_sleep)
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_control_token="control-token",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(cast(Any, config), http)
+        with pytest.raises(asyncio.CancelledError):
+            await client._poll_confirmation_progress(broken)
+
+    assert seen == [(3, 48), (3, 48), (3, 48)]

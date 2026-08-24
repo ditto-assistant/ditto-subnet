@@ -198,6 +198,24 @@ func TestConfirmationProgressReportsCaseCounts(t *testing.T) {
 	}
 }
 
+func TestConfirmationProgressSnapshotIsRaceFree(t *testing.T) {
+	executor := &trustedConfirmationExecutor{}
+	done := make(chan struct{})
+	go func() {
+		for index := 0; index < 1000; index++ {
+			executor.reportLongMemProgress(index%49, 48)
+			if index%17 == 0 {
+				executor.reportLongMemProgress(0, 0)
+			}
+		}
+		close(done)
+	}()
+	for index := 0; index < 1000; index++ {
+		_, _, _ = executor.SnapshotProgress()
+	}
+	<-done
+}
+
 func TestConfirmationReadinessFailsClosedWithoutExecutor(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	(&server{}).handleConfirmationReadiness(

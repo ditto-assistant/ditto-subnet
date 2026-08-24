@@ -529,8 +529,8 @@ class TestV9ConfirmationExecution:
         platform.request_v9_confirmation_job.return_value = job
         platform.get_v9_confirmation_artifact.return_value = _artifact(job)
         release = asyncio.Event()
-        case_total = (
-            job.execution_profile.longmem_cases_per_capability * len(CAPABILITY_ORDER)
+        case_total = job.execution_profile.longmem_cases_per_capability * len(
+            CAPABILITY_ORDER
         )
 
         async def execute(
