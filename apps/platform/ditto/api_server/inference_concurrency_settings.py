@@ -70,10 +70,12 @@ def apply_settings(
     """Overlay the resolved hosted-inference policy onto a proxy config.
 
     Returns a new frozen config so the admission query keeps its existing
-    signature and every field this board does not own -- the chat rate limits,
-    the embedding token budget, the upstream URLs, the routing
-    weights -- is carried through untouched by construction rather than by
-    remembering to copy it.
+    signature and every field this board does not own -- the embedding token
+    budget, the upstream URLs, the routing weights -- is carried through
+    untouched by construction rather than by remembering to copy it. Chat
+    and embedding request-per-minute limits *are* owned: they return the same
+    503 as concurrency, and leaving them boot-time is what made 8-wide runs
+    look like a saturated lane.
 
     ``request_budget`` and ``token_budget`` are overlaid here too, but note where
     they are *consumed*: the grant-minting path (``ensure_inference_grant``)
@@ -89,11 +91,25 @@ def apply_settings(
         per_ticket_concurrency=settings.chat_per_ticket_concurrency,
         per_validator_concurrency=settings.chat_per_validator_concurrency,
         global_concurrency=settings.chat_global_concurrency,
+        per_ticket_requests_per_minute=settings.chat_per_ticket_requests_per_minute,
+        per_validator_requests_per_minute=(
+            settings.chat_per_validator_requests_per_minute
+        ),
+        global_requests_per_minute=settings.chat_global_requests_per_minute,
         embedding_per_ticket_concurrency=settings.embedding_per_ticket_concurrency,
         embedding_per_validator_concurrency=(
             settings.embedding_per_validator_concurrency
         ),
         embedding_global_concurrency=settings.embedding_global_concurrency,
+        embedding_per_ticket_requests_per_minute=(
+            settings.embedding_per_ticket_requests_per_minute
+        ),
+        embedding_per_validator_requests_per_minute=(
+            settings.embedding_per_validator_requests_per_minute
+        ),
+        embedding_global_requests_per_minute=(
+            settings.embedding_global_requests_per_minute
+        ),
     )
 
 

@@ -170,10 +170,16 @@ async def get_inference_runtime_metrics(
             per_ticket = settings.chat_per_ticket_concurrency
             per_validator = settings.chat_per_validator_concurrency
             global_limit = settings.chat_global_concurrency
+            per_ticket_rpm = settings.chat_per_ticket_requests_per_minute
+            per_validator_rpm = settings.chat_per_validator_requests_per_minute
+            global_rpm = settings.chat_global_requests_per_minute
         else:
             per_ticket = settings.embedding_per_ticket_concurrency
             per_validator = settings.embedding_per_validator_concurrency
             global_limit = settings.embedding_global_concurrency
+            per_ticket_rpm = settings.embedding_per_ticket_requests_per_minute
+            per_validator_rpm = settings.embedding_per_validator_requests_per_minute
+            global_rpm = settings.embedding_global_requests_per_minute
         lanes.append(
             InferenceLaneCurrent(
                 request_kind=kind,
@@ -183,6 +189,9 @@ async def get_inference_runtime_metrics(
                 per_ticket_limit=per_ticket,
                 per_validator_limit=per_validator,
                 global_limit=global_limit,
+                per_ticket_rpm_limit=per_ticket_rpm,
+                per_validator_rpm_limit=per_validator_rpm,
+                global_rpm_limit=global_rpm,
                 peak_per_ticket_concurrency_60m=peaks.get(("ticket", kind), 0),
                 peak_per_validator_concurrency_60m=peaks.get(("validator", kind), 0),
                 peak_global_concurrency_60m=global_peaks.get(kind, 0),

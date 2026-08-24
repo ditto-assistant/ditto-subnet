@@ -38,6 +38,9 @@ class InferenceLaneCurrent(BaseModel):
     per_ticket_limit: int
     per_validator_limit: int
     global_limit: int
+    per_ticket_rpm_limit: int
+    per_validator_rpm_limit: int
+    global_rpm_limit: int
     peak_per_ticket_concurrency_60m: int
     peak_per_validator_concurrency_60m: int
     peak_global_concurrency_60m: int

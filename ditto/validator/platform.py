@@ -78,6 +78,7 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "/api/v1/validator"
 # The scoring ledger lives under a sibling prefix, not /validator.
+_SCORE_SUBMIT_RETRY_DELAYS = (0.25, 1.0, 2.0)
 _SCORING_PREFIX = "/api/v1/scoring"
 # Exchange is idempotent for one signed nonce. Keep fast recovery for ordinary
 # blips, but survive a full relay handover window without throwing away a
@@ -865,7 +866,14 @@ class PlatformClient:
         report: ScoreReport,
         ticket_deadline: datetime | None = None,
     ) -> SubmitScoreResponse:
-        """Report a signed score for ``agent_id``."""
+        """Report a signed score for ``agent_id``.
+
+        A 5xx or transport failure after a finished run is platform
+        infrastructure, not a scoring error. Retrying here is cheaper than
+        re-running the benchmark, and handing the ticket back as
+        ``scoring_error`` consumes the attempt for a Cloudflare/proxy blip
+        (empty 502) that has nothing to do with the harness.
+        """
         url = f"{self._base}{_PREFIX}/agent/{agent_id}/score"
         payload = SubmitScoreRequest(
             validator_hotkey=self._config.validator_hotkey,
@@ -873,17 +881,35 @@ class PlatformClient:
             signature=signature,
             report=report,
         )
-        try:
-            resp = await self._client.post(
-                url, json=payload.model_dump(mode="json"), headers=self._headers
-            )
-        except httpx.HTTPError as e:
-            raise PlatformError(f"score submit failed: {e}") from e
-        if resp.status_code != 200:
-            raise PlatformError(
-                f"score rejected ({resp.status_code}): {resp.text[:200]}"
-            )
-        return SubmitScoreResponse.model_validate(resp.json())
+        attempts = len(_SCORE_SUBMIT_RETRY_DELAYS) + 1
+        last_error: Exception | None = None
+        for attempt in range(attempts):
+            try:
+                resp = await self._client.post(
+                    url, json=payload.model_dump(mode="json"), headers=self._headers
+                )
+            except httpx.HTTPError as error:
+                last_error = error
+                if attempt < attempts - 1:
+                    await asyncio.sleep(_SCORE_SUBMIT_RETRY_DELAYS[attempt])
+                    continue
+                raise PlatformInfrastructureError(
+                    f"score submit failed after {attempts} attempts: {error}"
+                ) from error
+            if resp.status_code == 200:
+                return SubmitScoreResponse.model_validate(resp.json())
+            message = f"score rejected ({resp.status_code}): {resp.text[:200]}"
+            retryable = resp.status_code in {408, 429} or resp.status_code >= 500
+            if retryable and attempt < attempts - 1:
+                last_error = PlatformInfrastructureError(message)
+                await asyncio.sleep(_SCORE_SUBMIT_RETRY_DELAYS[attempt])
+                continue
+            if retryable:
+                raise PlatformInfrastructureError(
+                    f"{message} after {attempts} attempts"
+                )
+            raise PlatformError(message)
+        raise AssertionError(f"score submit retry loop did not return: {last_error}")
 
     async def submit_top5_confirmation_score(
         self,

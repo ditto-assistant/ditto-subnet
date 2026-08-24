@@ -900,7 +900,14 @@ const platformEmbeddingCapacityMaxWaits = 260
 // the request context already caps the call, and this is the second bound so a
 // platform pinned at zero headroom surfaces as a failed run in bounded time
 // rather than holding every check open until the ticket deadline.
-const platformChatCapacityMaxWaits = 12
+//
+// Must outlast the platform's rolling one-minute RPM window. Retry-After is 1s,
+// so 12 waits (12s) cannot survive a per-ticket rate cap: 8-wide tickets sit on
+// 240 starts/min, every extra call 503s, and the run fail-closes as
+// inference_lane_saturated while concurrency peaks stay idle. 70 waits cover
+// the 60s window plus Retry-After jitter without holding a check open for the
+// whole ticket.
+const platformChatCapacityMaxWaits = 70
 
 // platformEmbeddingIsAtCapacity recognises the platform's backpressure answer.
 // Both conditions are required: 503 alone is the generic transient class, and

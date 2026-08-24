@@ -1606,10 +1606,12 @@ export type QueuePolicySettingsControl = z.infer<typeof queuePolicySettingsContr
 // Both budgets are stamped onto a grant when the grant is MINTED and read from
 // the grant's own row thereafter, so a revision governs the next lease and can
 // never retroactively exhaust one already in flight. Chat and embedding
-// concurrency are enforced at admission instead, which makes either per-ticket
-// value a live emergency brake: the platform
-// answers a concurrency decline with 503 + Retry-After, so a validator holding a
-// ticket backs off rather than discarding the run.
+// concurrency AND request-per-minute limits are enforced at admission instead,
+// which makes either per-ticket value a live emergency brake: the platform
+// answers a concurrency or RPM decline with the same 503 + Retry-After, so a
+// validator holding a ticket backs off rather than discarding the run. RPM
+// used to be boot-time only; 8-wide tickets then died as inference_lane_saturated
+// on the 240/min cap while concurrency peaks looked idle.
 //
 // Every bound below mirrors ditto-platform's MAX_* constants, which are the same
 // constants its boot-time `check_config` enforces -- deliberately identical, so
@@ -1635,6 +1637,9 @@ export const inferenceRuntimeMetricsSchema = z.object({
       per_ticket_limit: z.number().int().positive(),
       per_validator_limit: z.number().int().positive(),
       global_limit: z.number().int().positive(),
+      per_ticket_rpm_limit: z.number().int().positive(),
+      per_validator_rpm_limit: z.number().int().positive(),
+      global_rpm_limit: z.number().int().positive(),
       peak_per_ticket_concurrency_60m: z.number().int().nonnegative(),
       peak_per_validator_concurrency_60m: z.number().int().nonnegative(),
       peak_global_concurrency_60m: z.number().int().nonnegative(),
@@ -1730,6 +1735,7 @@ export const MAX_CHAT_REQUEST_BUDGET = 32768
 export const MAX_CHAT_TOKEN_BUDGET = 100_000_000
 export const MAX_CHAT_CONCURRENCY = 512
 export const MAX_EMBEDDING_CONCURRENCY = 512
+export const MAX_REQUESTS_PER_MINUTE = 100_000
 export const MAX_BENCHMARK_CASE_CONCURRENCY = 64
 export const MAX_RELAY_DELAY_FINGERPRINT_MS = 5_000
 
@@ -1776,6 +1782,12 @@ const inferenceConcurrencySettingsBaseSchema = z.object({
   // simultaneous burst: concurrent admissions can overshoot it by at most the
   // number of racers. Size it as a load-shedding backstop, not an exact valve.
   embedding_global_concurrency: z.number().int().min(1).max(MAX_EMBEDDING_CONCURRENCY),
+  chat_per_ticket_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
+  chat_per_validator_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
+  chat_global_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
+  embedding_per_ticket_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
+  embedding_per_validator_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
+  embedding_global_requests_per_minute: z.number().int().min(1).max(MAX_REQUESTS_PER_MINUTE),
   // Additive rolling-upgrade field. A Platform predating the v10 controls
   // omits it, which fills the shipped default (4 overlapping /run, delay off).
   benchmark_runtime: benchmarkRuntimeSettingsSchema
@@ -1819,6 +1831,44 @@ const refineInferenceConcurrencyHierarchy = (
       message:
         'embedding_per_validator_concurrency may not exceed embedding_global_concurrency: a single validator cannot be allowed more concurrency than the fleet',
       path: ['embedding_per_validator_concurrency'],
+    })
+  }
+  if (value.chat_per_ticket_requests_per_minute > value.chat_per_validator_requests_per_minute) {
+    context.addIssue({
+      code: 'custom',
+      message:
+        'chat_per_ticket_requests_per_minute may not exceed chat_per_validator_requests_per_minute',
+      path: ['chat_per_ticket_requests_per_minute'],
+    })
+  }
+  if (value.chat_per_validator_requests_per_minute > value.chat_global_requests_per_minute) {
+    context.addIssue({
+      code: 'custom',
+      message:
+        'chat_per_validator_requests_per_minute may not exceed chat_global_requests_per_minute',
+      path: ['chat_per_validator_requests_per_minute'],
+    })
+  }
+  if (
+    value.embedding_per_ticket_requests_per_minute >
+    value.embedding_per_validator_requests_per_minute
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message:
+        'embedding_per_ticket_requests_per_minute may not exceed embedding_per_validator_requests_per_minute',
+      path: ['embedding_per_ticket_requests_per_minute'],
+    })
+  }
+  if (
+    value.embedding_per_validator_requests_per_minute >
+    value.embedding_global_requests_per_minute
+  ) {
+    context.addIssue({
+      code: 'custom',
+      message:
+        'embedding_per_validator_requests_per_minute may not exceed embedding_global_requests_per_minute',
+      path: ['embedding_per_validator_requests_per_minute'],
     })
   }
 }
