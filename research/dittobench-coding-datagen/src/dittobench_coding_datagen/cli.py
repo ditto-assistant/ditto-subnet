@@ -13,6 +13,10 @@ from dittobench_coding_datagen.canonical import canonical_json_bytes
 from dittobench_coding_datagen.compiler import compile_practice, grade, materialize
 from dittobench_coding_datagen.model import CorpusError
 from dittobench_coding_datagen.practice_server import evaluate_practice_harness
+from dittobench_coding_datagen.public_release import (
+    build_public_practice_release,
+    verify_public_practice_release,
+)
 from dittobench_coding_datagen.validation import validate_pack
 
 
@@ -66,6 +70,21 @@ def _parser() -> argparse.ArgumentParser:
     )
     audit_parser.add_argument("root", type=Path)
     audit_parser.add_argument("--output", type=Path)
+
+    release_parser = subcommands.add_parser(
+        "build-public-release",
+        help="build a deterministic public practice archive and release descriptor",
+    )
+    release_parser.add_argument("--pack", type=Path, required=True)
+    release_parser.add_argument("--output", type=Path, required=True)
+    release_parser.add_argument("--replace", action="store_true")
+
+    verify_release_parser = subcommands.add_parser(
+        "verify-public-release",
+        help="verify a public practice archive against its release descriptor",
+    )
+    verify_release_parser.add_argument("--archive", type=Path, required=True)
+    verify_release_parser.add_argument("--descriptor", type=Path, required=True)
     return parser
 
 
@@ -111,6 +130,21 @@ def main(argv: Sequence[str] | None = None) -> int:
                 args.output.write_bytes(body)
             print(body.decode("utf-8"), end="")
             return 1 if result["status"] == "BLOCKED" else 0
+        if args.command == "build-public-release":
+            result = build_public_practice_release(
+                args.pack,
+                args.output,
+                replace=args.replace,
+            )
+            print(canonical_json_bytes(result).decode("utf-8"), end="")
+            return 0
+        if args.command == "verify-public-release":
+            result = verify_public_practice_release(
+                archive=args.archive,
+                descriptor=args.descriptor,
+            )
+            print(canonical_json_bytes(result).decode("utf-8"), end="")
+            return 0
         raise CorpusError(f"unknown command: {args.command}")
     except CorpusError as error:
         print(json.dumps({"error": str(error)}, sort_keys=True), file=sys.stderr)

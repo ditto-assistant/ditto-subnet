@@ -7,6 +7,7 @@ on:
       - research/dittobench-coding-datagen/**
       - packages/dittobench-coding-contract/**
       - .github/workflows/coding-datagen-ci.yml
+      - .github/workflows/publish-coding-practice.yml
 
 permissions:
   contents: read
@@ -46,3 +47,5 @@ jobs:
           uv run mypy src
           uv run pytest -q
           uv run dittobench-coding-datagen validate-pack practice/v1
+          uv run dittobench-coding-datagen build-public-release --pack practice/v1 --output /tmp/dittobench-coding-practice-release
+          uv run dittobench-coding-datagen verify-public-release --archive /tmp/dittobench-coding-practice-release/coding-practice-3x3-v1.tar.gz --descriptor /tmp/dittobench-coding-practice-release/coding-practice-3x3-v1.release.json
