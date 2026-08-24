@@ -595,7 +595,7 @@ func TestHostileRetryLoopIsCappedAndUnavailable(t *testing.T) {
 	got := report.InferenceIntervention
 	if hostileCalls.Load() != maximumAttemptsPerCase || got.AttemptCount != maximumAttemptsPerCase ||
 		got.Observation != ObservationUnavailable || got.UnavailableReason != UnavailableRetryExhausted ||
-		got.SyntheticUsage.ChatApplied != minimumRelevantCallsPerCase*maximumAttemptsPerCase {
+		got.SyntheticUsage.ChatApplied != 2*maximumAttemptsPerCase {
 		t.Fatalf("hostile calls=%d lane=%+v", hostileCalls.Load(), got)
 	}
 	if !report.EmbeddingIntervention.Complete {

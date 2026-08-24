@@ -24,10 +24,11 @@ const (
 	maximumTotalTimeout    = 30 * time.Minute
 	minimumProjectionBytes = 32
 	maximumProjectionBytes = 1024
-	// A single admitted request is only a probe: it is not enough evidence that
-	// the selected case exercised the intervened provider path. Requiring two
-	// independently synthesized responses removes the trivial one-probe oracle.
-	minimumRelevantCallsPerCase = uint64(2)
+	// One admitted request on the intervened path is enough evidence that the
+	// selected case used that provider. Zero calls still mean the path was
+	// unused. The older two-call floor treated a one-shot agent loop as a
+	// probe and left confirmation ablations unavailable.
+	minimumRelevantCallsPerCase = uint64(1)
 )
 
 var ErrUnavailablePopulation = errors.New("paired ablation population is unavailable")
