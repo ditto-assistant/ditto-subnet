@@ -226,7 +226,6 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("exposure_id", name="coding_catalog_exposures_pkey"),
         sa.UniqueConstraint(
-            "release_row_id",
             "task_version_id",
             name="coding_catalog_exposures_task_version_key",
         ),

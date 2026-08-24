@@ -50,7 +50,9 @@ private, but their immutable identities are available for later audit.
 
 The database enforces:
 
-- one use of a task-version ID per catalog release;
+- one use of a task-version ID across every catalog release, including retired
+  releases; a later pack cannot re-expose an identifier that may already be
+  public or previously observed;
 - one exposure per shared-run manifest index;
 - the exposure's release ID, corpus ID, run ID, and task count through composite
   foreign keys;

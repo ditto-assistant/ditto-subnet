@@ -1429,7 +1429,6 @@ class CodingCatalogExposure(Base):
             name="coding_catalog_exposures_run_fkey",
         ),
         UniqueConstraint(
-            "release_row_id",
             "task_version_id",
             name="coding_catalog_exposures_task_version_key",
         ),

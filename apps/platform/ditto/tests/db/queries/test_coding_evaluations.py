@@ -116,15 +116,16 @@ def _task_exposure(
     )
 
 
-async def _seed_catalog(session: AsyncSession) -> None:
+async def _seed_catalog(session: AsyncSession) -> datetime:
     async with session.begin():
-        await insert_coding_catalog_release(
+        inserted = await insert_coding_catalog_release(
             session,
             commitment=_catalog_commitment(),
             signature="88" * 64,
             reason="register private shadow catalog",
             actor="test-admin",
         )
+    return inserted.row.created_at
 
 
 def _evidence(ticket_id) -> CodingRunEvidence:
@@ -169,7 +170,11 @@ def _authority(agent_id) -> CodingShadowRunAuthority:
     )
 
 
-async def _seed_qualified_agent(session: AsyncSession) -> Agent:
+async def _seed_qualified_agent(
+    session: AsyncSession,
+    *,
+    created_at: datetime = _NOW,
+) -> Agent:
     agent = Agent(
         agent_id=uuid4(),
         miner_hotkey="5CodingShadowMiner11111111111111111111111111111111",
@@ -183,7 +188,7 @@ async def _seed_qualified_agent(session: AsyncSession) -> Agent:
         screened_image_ref="ditto-screen/coding-shadow:latest",
         screened_image_upload_id=uuid4(),
         screened_image_verified_at=_NOW,
-        created_at=_NOW,
+        created_at=created_at,
     )
     async with session.begin():
         session.add(agent)
@@ -263,6 +268,7 @@ async def _seed_certification(session: AsyncSession, agent: Agent) -> None:
 
 
 async def test_run_requires_core_qualification(session: AsyncSession) -> None:
+    registered_at = await _seed_catalog(session)
     agent = Agent(
         agent_id=uuid4(),
         miner_hotkey="5UnqualifiedCodingMiner1111111111111111111111111111",
@@ -276,11 +282,10 @@ async def test_run_requires_core_qualification(session: AsyncSession) -> None:
         screened_image_ref="ditto-screen/unqualified-coding:latest",
         screened_image_upload_id=uuid4(),
         screened_image_verified_at=_NOW,
-        created_at=_NOW,
+        created_at=registered_at + timedelta(seconds=1),
     )
     async with session.begin():
         session.add(agent)
-    await _seed_catalog(session)
     with pytest.raises(CodingShadowNotQualifiedError, match="core qualification"):
         async with session.begin():
             await insert_coding_shadow_run(
@@ -325,9 +330,12 @@ async def test_catalog_commitment_must_predate_candidate_artifact(
 async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
     session: AsyncSession,
 ) -> None:
-    agent = await _seed_qualified_agent(session)
+    registered_at = await _seed_catalog(session)
+    agent = await _seed_qualified_agent(
+        session,
+        created_at=registered_at + timedelta(seconds=1),
+    )
     await _seed_certification(session, agent)
-    await _seed_catalog(session)
     authority = _authority(agent.agent_id)
     async with session.begin():
         created = await insert_coding_shadow_run(session, authority=authority)
@@ -475,8 +483,22 @@ async def test_shadow_run_ticket_and_result_are_separate_and_idempotent(
 async def test_catalog_exposure_is_single_use_and_retirement_is_terminal(
     session: AsyncSession,
 ) -> None:
-    agent = await _seed_qualified_agent(session)
     await _seed_catalog(session)
+    second_commitment = _catalog_commitment(
+        corpus_release_id="private-coding-corpus-v2",
+    )
+    async with session.begin():
+        second_catalog = await insert_coding_catalog_release(
+            session,
+            commitment=second_commitment,
+            signature="77" * 64,
+            reason="register successor private catalog",
+            actor="test-admin",
+        )
+    agent = await _seed_qualified_agent(
+        session,
+        created_at=second_catalog.row.created_at + timedelta(seconds=1),
+    )
     authority = _authority(agent.agent_id)
     async with session.begin():
         first_run = await insert_coding_shadow_run(session, authority=authority)
@@ -488,6 +510,34 @@ async def test_catalog_exposure_is_single_use_and_retirement_is_terminal(
             exposures=[_task_exposure()],
         )
     assert first_exposure.idempotent is False
+
+    # A catalog retirement eventually permits public corpus disclosure.  The
+    # task-version namespace is therefore global: changing the catalog release
+    # must not make an already exposed identifier eligible again.
+    second_catalog_authority = authority.model_copy(
+        update={
+            "coding_run_id": "coding-run-global-reuse-v2",
+            "corpus_release_id": second_commitment.corpus_release_id,
+            "catalog_merkle_root": second_commitment.catalog_merkle_root,
+            "task_set_id": "task-set-global-reuse-v2",
+            "task_set_manifest_sha256": "14" * 32,
+            "run_manifest_sha256": "15" * 32,
+        }
+    )
+    async with session.begin():
+        second_catalog_run = await insert_coding_shadow_run(
+            session,
+            authority=second_catalog_authority,
+        )
+        assert isinstance(second_catalog_run.row, CodingShadowRun)
+        second_catalog_run_row_id = second_catalog_run.row.run_row_id
+    with pytest.raises(CodingCatalogConflictError, match="already exposed"):
+        async with session.begin():
+            await expose_coding_shadow_run_tasks(
+                session,
+                run_row_id=second_catalog_run_row_id,
+                exposures=[_task_exposure()],
+            )
 
     second_authority = authority.model_copy(
         update={
