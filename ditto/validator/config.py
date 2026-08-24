@@ -379,6 +379,15 @@ class ValidatorConfig:
     still cannot redirect a grant exchange to a host of its choosing. Empty
     means "same host as the API", which is the historical behaviour."""
 
+    coding_shadow_enabled: bool = False
+    """Run the separate shadow coding worker. Disabled by default."""
+
+    coding_shadow_instance_id: str = ""
+    """Stable, non-secret instance identity used by the exclusive claim ledger."""
+
+    coding_shadow_poll_seconds: float = 10.0
+    """Idle polling interval for the separate shadow coding queue."""
+
     def signing_source_present(self) -> bool:
         """Whether a usable signing key source is configured (wallet files)."""
         return bool(self.wallet_name and self.wallet_hotkey)
@@ -515,6 +524,17 @@ def parse_validator_config_from_env() -> ValidatorConfig:
     longmem_capacity = int(
         os.environ.get("VALIDATOR_LONGMEM_CAPACITY", str((benchmark_capacity + 1) // 2))
     )
+    coding_shadow_enabled = (
+        os.environ.get("VALIDATOR_CODING_SHADOW_ENABLED", "false").lower() in _truthy
+    )
+    coding_shadow_instance_id = os.environ.get(
+        "VALIDATOR_CODING_SHADOW_INSTANCE_ID", ""
+    ).strip()
+    coding_shadow_poll_seconds = (
+        _parse_float("VALIDATOR_CODING_SHADOW_POLL_SECONDS", "10")
+        if coding_shadow_enabled
+        else 10.0
+    )
     config = ValidatorConfig(
         platform_api_url=platform_api_url,
         platform_inference_base_url=(
@@ -573,6 +593,9 @@ def parse_validator_config_from_env() -> ValidatorConfig:
             os.environ.get("VALIDATOR_HTTP_TIMEOUT_SECONDS", "30")
         ),
         scorer_require_binary_provenance=scorer_require_binary_provenance,
+        coding_shadow_enabled=coding_shadow_enabled,
+        coding_shadow_instance_id=coding_shadow_instance_id,
+        coding_shadow_poll_seconds=coding_shadow_poll_seconds,
     )
     if not config.signing_source_present():
         raise ValidatorConfigError(
@@ -586,5 +609,28 @@ def parse_validator_config_from_env() -> ValidatorConfig:
         raise ValidatorConfigError(
             "VALIDATOR_LONGMEM_CAPACITY cannot exceed half rounded up of "
             "VALIDATOR_BENCHMARK_CAPACITY"
+        )
+    if config.coding_shadow_enabled and (
+        not config.coding_shadow_instance_id
+        or len(config.coding_shadow_instance_id.encode()) > 128
+        or any(
+            character.isspace() or ord(character) < 32
+            for character in config.coding_shadow_instance_id
+        )
+        or not 32 <= len(config.dittobench_control_token.encode()) <= 256
+        or not all(
+            character.isascii() and (character.isalnum() or character in "_-")
+            for character in config.dittobench_control_token
+        )
+    ):
+        raise ValidatorConfigError(
+            "enabled shadow coding requires a stable instance ID and control token"
+        )
+    if config.coding_shadow_enabled and (
+        not math.isfinite(config.coding_shadow_poll_seconds)
+        or not 1 <= config.coding_shadow_poll_seconds <= 300
+    ):
+        raise ValidatorConfigError(
+            "VALIDATOR_CODING_SHADOW_POLL_SECONDS must be in [1, 300]"
         )
     return config

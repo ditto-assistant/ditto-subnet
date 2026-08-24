@@ -42,14 +42,20 @@ async def test_dispatch_fence_is_fail_fast_and_does_not_block_settlement(
         assert await try_lock_rollout_dispatch(holder)
 
         async with session_maker() as contender, contender.begin():
+            # Time the nonblocking advisory-lock query, not first-connection
+            # setup on a busy xdist worker.
+            await contender.connection()
             assert not await asyncio.wait_for(
                 try_lock_rollout_dispatch(contender), timeout=0.2
             )
 
-        async def settle() -> None:
-            async with session_maker() as session, session.begin():
+        async with session_maker() as settlement:
+            await settlement.begin()
+            await settlement.connection()
+
+            async def settle() -> None:
                 await upsert_score(
-                    session,
+                    settlement,
                     agent_id=agent_id,
                     validator_hotkey="5SettlementValidator",
                     bench_version=7,
@@ -63,7 +69,8 @@ async def test_dispatch_fence_is_fail_fast_and_does_not_block_settlement(
                     generated_at=now,
                 )
 
-        await asyncio.wait_for(settle(), timeout=0.5)
+            await asyncio.wait_for(settle(), timeout=0.5)
+            await settlement.commit()
         assert await holder.scalar(
             text("SELECT pg_try_advisory_xact_lock(hashtextextended(:lock_key, 0))"),
             {"lock_key": ROLLOUT_DISPATCH_LOCK_KEY},

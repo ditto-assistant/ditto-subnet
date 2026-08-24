@@ -42,6 +42,8 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("GET /v1/confirmation/readiness", s.handleConfirmationReadiness)
 	mux.HandleFunc("GET /v1/confirmation/progress", s.handleConfirmationProgress)
 	mux.HandleFunc("POST /v1/confirmation/execute", s.handleConfirmationExecute)
+	mux.HandleFunc("POST /v1/coding/supervisor/{operation}", s.handleCodingSupervisor)
+	mux.HandleFunc("POST /v1/coding/publications/{operation}", s.handleCodingPublication)
 	return mux
 }
 
@@ -67,6 +69,24 @@ var controlPlaneRoutes = []string{
 	"GET /v1/confirmation/readiness",
 	"GET /v1/confirmation/progress",
 	"POST /v1/confirmation/execute",
+	"POST /v1/coding/supervisor/{operation}",
+	"POST /v1/coding/publications/{operation}",
+}
+
+func (s *server) handleCodingSupervisor(response http.ResponseWriter, request *http.Request) {
+	if s == nil || s.codingHost == nil {
+		http.NotFound(response, request)
+		return
+	}
+	s.codingHost.SupervisorHandler().ServeHTTP(response, request)
+}
+
+func (s *server) handleCodingPublication(response http.ResponseWriter, request *http.Request) {
+	if s == nil || s.codingHost == nil {
+		http.NotFound(response, request)
+		return
+	}
+	s.codingHost.PublicationHandler().ServeHTTP(response, request)
 }
 
 // controlAuthMode selects what the control plane does with a request that fails

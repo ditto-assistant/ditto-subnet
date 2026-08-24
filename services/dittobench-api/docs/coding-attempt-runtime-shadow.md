@@ -64,13 +64,11 @@ retryable infrastructure without parsing error prose.
 
 ## Activation
 
-This package is unwired. `internal/codingphase` now composes it with the
-source-bound capability, harness lifecycle, ticket-scoped Luna gateway, and
-durable evidence outbox. The remaining disabled-shadow wiring review must
-construct those adapters and the host sweeper. No production composition root
-imports either package. They cannot
-claim jobs, start miners, submit scores, rank agents, set weights, or make coding
-contract v1 weight eligible.
+`internal/codinghost` now composes this package with the source-bound
+capability, harness lifecycle, ticket-scoped Luna gateway, durable evidence
+outbox, and bounded sweep loop. Construction occurs only behind the scorer
+shadow gate. It submits no ordinary score, cannot set weights, and cannot make
+coding contract v1 weight eligible.
 
 ## Validation
 

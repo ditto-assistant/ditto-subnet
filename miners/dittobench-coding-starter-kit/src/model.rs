@@ -960,12 +960,18 @@ mod tests {
     #[test]
     fn rust_source_never_includes_validator_only_inference_policy_vector() {
         let validator_filename = ["coding_inference_", "policy_v1.json"].concat();
+        let locked_filename = ["coding_inference_", "policy_locked_v1.json"].concat();
         let validator_schema = ["dittobench-coding-inference-", "policy-vector-v1"].concat();
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         visit_rust_sources(&source, &mut |path, body| {
             assert!(
                 !body.contains(&validator_filename),
                 "{} references the validator-only policy filename",
+                path.display()
+            );
+            assert!(
+                !body.contains(&locked_filename),
+                "{} references the validator-only locked policy filename",
                 path.display()
             );
             assert!(

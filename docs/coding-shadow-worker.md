@@ -1,0 +1,95 @@
+# Default-off shadow coding worker
+
+The shadow coding pipeline now has one complete composition path, but every
+release keeps it disabled by default and every coding artifact remains
+`weight_eligible=false`.
+
+## Runtime order
+
+The validator runs a separate `CodingShadowWorker` beside the ordinary
+tool/memory scoring loop only when `VALIDATOR_CODING_SHADOW_ENABLED=true`.
+For one stable worker instance it:
+
+1. claims one Platform coding ticket;
+2. proves the private scorer handoff and fetches the non-executing authoring,
+   screened-harness, and Luna-grant authority while the claim is transferable;
+3. commits the Platform `start` boundary before invoking candidate code;
+4. heartbeats the exact claim generation while work is active;
+5. calls the private Go supervisor for authoring and pristine grading;
+6. stores the exact signed authoring-freeze request in the Go outbox before
+   Platform transmission and stores the exact verified acknowledgement after;
+7. obtains the freeze-bound grading lease, runs the protected grader, and uses
+   the same prepare -> publish -> acknowledge order for terminal evidence.
+
+The Go host is constructed only when
+`DITTOBENCH_CODING_SHADOW_ENABLED=true`. It composes the phase-specific Docker
+executor factory, artifact fetcher, scoped memory projector, durable outbox,
+dormant screened-harness controller, direct-source registry, opaque workspace
+and Luna routes, relay journal, attempt supervisor, publication service, and a
+bounded outbox sweep loop.
+The relay-journal root has a durable directory-cardinality ceiling equal to the
+host attempt bound; an unexpected entry or exhausted root fails closed instead
+of allocating unbounded restart residue.
+
+Authoring and grading do not share one prebuilt executor. Authoring receives
+only the selected public environment-image digest and the validator-only
+resource profile. The complete protected grader manifest is accepted only
+after Platform returns the freeze-gated grading lease.
+
+## Recovery
+
+A started claim is never reassigned to another instance. On restart the same
+instance asks the supervisor for durable state:
+
+- `terminal_pending` reopens and republishes only the exact stored request;
+- `authoring_pending` publishes the exact stored freeze, then continues from
+  the acknowledged immutable patch;
+- `authoring_published` reloads the stored request and acknowledgement and may
+  enter pristine grading without rerunning candidate authoring;
+- `released` is already complete;
+- `none`, `ambiguous`, and `expired` never execute candidate code again.
+
+Restored grading is admitted only when the phase runner independently observes
+the acknowledged authoring publication in the durable outbox and the supplied
+authoring evidence matches that outbox record. Process-local session loss by
+itself grants no retry.
+Terminal acknowledgement advances the outbox to `released`; observing that
+durable state is also the only point where the supervisor may evict its
+process-local session tombstone.
+
+## Activation checklist
+
+Activation is deliberately a coordinated operator action, not a code default.
+All of the following must be configured together:
+
+- Platform: `DITTO_CODING_SHADOW_ENABLED=true`, the canonical locked policy
+  file, and exact HTTPS exchange, proxy, and revocation URLs;
+- scorer: `DITTOBENCH_CODING_SHADOW_ENABLED=true`, an euid-owned mode-0700
+  private root, the canonical locked policy file, the source-bound port/base
+  URL, and the reviewed runtime-image repository with every selected immutable
+  environment/grader digest preloaded on the dedicated daemon;
+- sandbox: a dedicated rootless daemon with the isolated-daemon label, the
+  capability-only egress network, and an explicit allowlisting proxy;
+- validator: `VALIDATOR_CODING_SHADOW_ENABLED=true`, one stable instance ID,
+  and the existing private scorer control token.
+
+Setting only a subset fails closed: no ticket is claimed, or startup rejects
+the incomplete runtime. The committed Compose values keep both worker gates
+false. This PR does not deploy the Platform transport configuration, change a
+benchmark version, combine coding with ordinary scoring, alter emissions, or
+enable a leaderboard weight.
+
+## Validation
+
+```bash
+uv run pytest -q ditto/tests/validator/test_coding_worker.py \
+  ditto/tests/validator/test_coding_attempt.py \
+  ditto/tests/validator/test_coding_supervisor.py \
+  ditto/tests/validator/test_coding_publication.py
+
+cd services/dittobench-api
+go test -race ./internal/codinghost ./internal/codingpublication \
+  ./internal/codingsupervisor ./internal/codingphase \
+  ./internal/codingattempt ./internal/codingexecutor
+go vet ./...
+```

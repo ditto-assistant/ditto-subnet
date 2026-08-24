@@ -19,7 +19,7 @@ const (
 	maximumLeaseBytes      = 6 << 20
 	maximumOutcomeBytes    = 6 << 20
 	defaultTimeout         = 15 * time.Minute
-	maximumTimeout         = 30 * time.Minute
+	maximumTimeout         = 32 * time.Minute
 	maximumBindingLifetime = 2 * time.Hour
 )
 

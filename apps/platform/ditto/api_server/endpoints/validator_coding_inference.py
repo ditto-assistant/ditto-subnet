@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import urlsplit
 from uuid import UUID
@@ -12,7 +15,11 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from pydantic import ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ditto.api_models.coding_inference import CodingInferencePolicy
+from ditto.api_models.coding_inference import (
+    CodingInferencePolicy,
+    parse_coding_inference_json,
+    policy_digest,
+)
 from ditto.api_models.coding_inference_grants import (
     CodingInferenceCapabilityRevokeRequest,
     CodingInferenceExchangeRequest,
@@ -62,6 +69,9 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 ChainDep = Annotated[ChainClient, Depends(get_chain_client)]
 
 _REQUEST_MAX_AGE = timedelta(minutes=5)
+_LOCKED_POLICY_SHA256 = (
+    "b2f38d9f6b5484e9a056d74be4dc0250912f05c9e51512801b590dff934a41d6"
+)
 
 
 @dataclass(frozen=True)
@@ -74,6 +84,79 @@ class CodingInferenceGrantTransport:
     revoke_url: str
 
 
+def coding_inference_transport_from_env(
+    environ: Mapping[str, str] | None = None,
+) -> CodingInferenceGrantTransport | None:
+    """Load the complete locked transport only behind the explicit feature gate."""
+
+    values = os.environ if environ is None else environ
+    if values.get("DITTO_CODING_SHADOW_ENABLED", "false").strip().lower() not in {
+        "1",
+        "true",
+        "yes",
+    }:
+        return None
+    path = values.get("DITTO_CODING_INFERENCE_POLICY_FILE", "").strip()
+    exchange_url = values.get("DITTO_CODING_INFERENCE_EXCHANGE_URL", "").strip()
+    proxy_url = values.get("DITTO_CODING_INFERENCE_PROXY_URL", "").strip()
+    revoke_url = values.get("DITTO_CODING_INFERENCE_REVOKE_URL", "").strip()
+    if not all((path, exchange_url, proxy_url, revoke_url)):
+        raise ValueError("enabled coding inference transport is incomplete")
+    policy_path = Path(path)
+    if not policy_path.is_absolute():
+        raise ValueError("coding inference policy path must be absolute")
+    try:
+        body = policy_path.read_bytes()
+        policy = parse_coding_inference_json(CodingInferencePolicy, body)
+    except OSError as error:
+        raise ValueError("coding inference policy file is unavailable") from error
+    if policy_digest(policy) != _LOCKED_POLICY_SHA256:
+        raise ValueError("coding inference policy digest is not locked")
+    return _validated_transport(
+        CodingInferenceGrantTransport(
+            policy=policy,
+            exchange_url=exchange_url,
+            proxy_url=proxy_url,
+            revoke_url=revoke_url,
+        )
+    )
+
+
+def _validated_transport(
+    value: CodingInferenceGrantTransport,
+) -> CodingInferenceGrantTransport:
+    policy = CodingInferencePolicy.model_validate_json(
+        value.policy.model_dump_json(by_alias=True)
+    )
+    urls = (
+        (
+            value.exchange_url,
+            "/api/v1/validator/coding-shadow/inference-exchange",
+        ),
+        (value.proxy_url, "/api/v1/inference/coding/chat/completions"),
+        (
+            value.revoke_url,
+            "/api/v1/validator/coding-shadow/inference-revoke-capability",
+        ),
+    )
+    for url, suffix in urls:
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.port not in (None, 443)
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+            or not parsed.path.endswith(suffix)
+        ):
+            raise ValueError("invalid coding inference transport URL")
+    if policy != value.policy:
+        raise ValueError("coding inference grant policy is invalid")
+    return value
+
+
 def _transport(request: Request) -> CodingInferenceGrantTransport:
     value = getattr(request.app.state, "coding_inference_grant_transport", None)
     if not isinstance(value, CodingInferenceGrantTransport):
@@ -82,44 +165,12 @@ def _transport(request: Request) -> CodingInferenceGrantTransport:
             detail="coding inference grants are not configured",
         )
     try:
-        policy = CodingInferencePolicy.model_validate_json(
-            value.policy.model_dump_json(by_alias=True)
-        )
-        urls = (
-            (
-                value.exchange_url,
-                "/api/v1/validator/coding-shadow/inference-exchange",
-            ),
-            (value.proxy_url, "/api/v1/inference/coding/chat/completions"),
-            (
-                value.revoke_url,
-                "/api/v1/validator/coding-shadow/inference-revoke-capability",
-            ),
-        )
-        for url, suffix in urls:
-            parsed = urlsplit(url)
-            if (
-                parsed.scheme != "https"
-                or not parsed.hostname
-                or parsed.port not in (None, 443)
-                or parsed.username is not None
-                or parsed.password is not None
-                or parsed.query
-                or parsed.fragment
-                or not parsed.path.endswith(suffix)
-            ):
-                raise ValueError("invalid coding inference transport URL")
+        return _validated_transport(value)
     except (TypeError, ValueError):
         raise HTTPException(
             status_code=503,
             detail="coding inference grant transport is invalid",
         ) from None
-    if policy != value.policy:
-        raise HTTPException(
-            status_code=503,
-            detail="coding inference grant policy is invalid",
-        )
-    return value
 
 
 def _fresh(value: datetime) -> bool:
@@ -579,4 +630,8 @@ async def revoke_coding_inference_grant_endpoint(
     )
 
 
-__all__ = ["CodingInferenceGrantTransport", "router"]
+__all__ = [
+    "CodingInferenceGrantTransport",
+    "coding_inference_transport_from_env",
+    "router",
+]

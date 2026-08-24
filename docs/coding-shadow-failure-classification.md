@@ -28,7 +28,8 @@ terminal evidence.
 
 ## Activation
 
-The classifier is not called by the production worker or the still-unwired
-attempt coordinator. It does not run a miner, retrieve private artifacts,
+The classifier remains a typed boundary for later terminal reconciliation; the
+default-off success-path worker does not infer stages from exception prose. It
+does not run a miner, retrieve private artifacts,
 invoke Luna, execute a grader, submit an ordinary score, affect rank, or set
 weights. Coding contract v1 remains permanently `weight_eligible=false`.

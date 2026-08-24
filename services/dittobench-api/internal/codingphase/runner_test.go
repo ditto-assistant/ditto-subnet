@@ -614,6 +614,27 @@ func TestRunnerAuthorsThenGradesAcrossOutboxRestart(t *testing.T) {
 	}
 }
 
+func TestPendingRecoveryDistinguishesAcknowledgedAuthoring(t *testing.T) {
+	digest := strings.Repeat("a", 64)
+	ack := &codingoutbox.PublicationArtifact{
+		ObjectKey: "sha256/" + strings.Repeat("b", 64),
+		SHA256:    strings.Repeat("b", 64), SizeBytes: 10,
+	}
+	record := codingoutbox.Record{AuthoringPublication: &codingoutbox.PublicationRecord{
+		Stage: codingoutbox.PublicationAuthoringFreeze,
+		Request: codingoutbox.PublicationArtifact{
+			ObjectKey: "sha256/" + digest, SHA256: digest, SizeBytes: 10,
+		},
+		Acknowledgement: ack,
+	}}
+	outcome, ok := pendingRecovery(record)
+	if !ok || outcome.State != "authoring_published" || outcome.PublicationStage == nil ||
+		*outcome.PublicationStage != string(codingoutbox.PublicationAuthoringFreeze) ||
+		outcome.RequestSHA256 == nil || *outcome.RequestSHA256 != digest {
+		t.Fatalf("outcome=%#v ok=%v", outcome, ok)
+	}
+}
+
 func TestRunnerFailureStillRevokesFreezesAndForbidsCleanRetry(t *testing.T) {
 	fixture := newPhaseFixture(t)
 	fixture.harness.runErr = errors.New("candidate run failed")

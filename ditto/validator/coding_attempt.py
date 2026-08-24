@@ -1,4 +1,4 @@
-"""Unused shadow-only coordinator for one gradeable coding attempt."""
+"""Shadow-only coordinator used by the default-off coding worker."""
 
 from __future__ import annotations
 
@@ -225,6 +225,54 @@ class CodingAttemptCoordinator:
         )
         self._validate_authoring_lease(ticket, authoring_lease)
         harness = await self._platform.request_coding_harness_launch(ticket.ticket_id)
+        return await self._execute_prepared(
+            ticket,
+            authoring_lease=authoring_lease,
+            harness=harness,
+            check_active=False,
+        )
+
+    async def execute_prepared(
+        self,
+        ticket: CodingAttemptTicket,
+        *,
+        authoring_lease: CodingAuthoringLeaseResponse,
+        harness: CodingHarnessLaunchResponse,
+    ) -> SubmitCodingShadowResultResponse:
+        """Execute after non-mutating lease, harness, and grant preflight."""
+
+        return await self._execute_prepared(
+            ticket,
+            authoring_lease=authoring_lease,
+            harness=harness,
+            check_active=True,
+        )
+
+    def validate_preflight(
+        self,
+        ticket: CodingAttemptTicket,
+        *,
+        authoring_lease: CodingAuthoringLeaseResponse,
+        harness: CodingHarnessLaunchResponse,
+    ) -> None:
+        """Validate every non-executing authority before committing start."""
+
+        self._require_active(ticket, phase="authoring")
+        self._validate_authoring_lease(ticket, authoring_lease)
+        self._validate_harness_launch(ticket, authoring_lease, harness)
+
+    async def _execute_prepared(
+        self,
+        ticket: CodingAttemptTicket,
+        *,
+        authoring_lease: CodingAuthoringLeaseResponse,
+        harness: CodingHarnessLaunchResponse,
+        check_active: bool,
+    ) -> SubmitCodingShadowResultResponse:
+        if check_active:
+            self._require_active(ticket, phase="authoring")
+
+        self._validate_authoring_lease(ticket, authoring_lease)
         self._validate_harness_launch(ticket, authoring_lease, harness)
         try:
             authoring = await self._runtime.author(authoring_lease, harness)
@@ -256,6 +304,32 @@ class CodingAttemptCoordinator:
             authoring_event_count=authoring.authoring_event_count,
             frozen_submission_object_key=authoring.frozen_submission_object_key,
         )
+
+        return await self.resume_after_authoring(
+            ticket,
+            authoring_lease=authoring_lease,
+            authoring=authoring,
+            freeze=freeze,
+        )
+
+    async def resume_after_authoring(
+        self,
+        ticket: CodingAttemptTicket,
+        *,
+        authoring_lease: CodingAuthoringLeaseResponse,
+        authoring: CodingAuthoringOutcome,
+        freeze: SubmitCodingAuthoringFreezeResponse,
+    ) -> SubmitCodingShadowResultResponse:
+        """Continue from one durably published freeze without rerunning authoring."""
+
+        self._validate_authoring_lease(ticket, authoring_lease)
+        if (
+            authoring.evidence.model.inference_grant_sha256
+            != authoring_lease.run_manifest.inference_grant_sha256
+        ):
+            raise CodingAttemptIntegrityError(
+                "authoring evidence disagrees with inference authority"
+            )
 
         evidence_sha256 = coding_authoring_evidence_digest(authoring.evidence)
         self._validate_freeze(

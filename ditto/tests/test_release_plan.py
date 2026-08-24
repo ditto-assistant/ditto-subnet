@@ -298,6 +298,7 @@ def test_shadow_coding_execution_selects_only_scorer_stack(
         "packages/dittobench-coding-contract/testdata/coding_grading_lease_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_shadow_result_submission_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_inference_policy_v1.json",
+        "packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json",
         "packages/dittobench-coding-contract/testdata/coding_attempt_supervisor_v1.json",
     ],
 )

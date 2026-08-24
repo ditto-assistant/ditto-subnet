@@ -2,14 +2,14 @@
 
 `internal/codingoutbox` is the validator-local persistence core for canonical
 authoring transcripts, replayable frozen patches, and the exact signed shadow
-publication request/acknowledgement bytes. It is deliberately unwired: no
-endpoint, worker, Platform client, Compose volume, score, or weight path imports
-it.
+publication request/acknowledgement bytes. `internal/codinghost` and the Python
+shadow worker use it only behind independent default-off gates. No ordinary
+score or weight path imports it.
 
 The private record schema is now `dittobench-coding-evidence-outbox-v2` so the
 reserved publication capacity and acknowledgement commitments cannot be
-misread as the earlier artifact-only shape. No production composition root has
-activated either schema; there is no live spool migration in this PR.
+misread as the earlier artifact-only shape. The committed feature gates are
+false, so there is no live spool to migrate merely by deploying this change.
 
 ## Authority and lifecycle
 
@@ -135,7 +135,8 @@ cannot be attached by ticket/run identity alone.
 Endpoint paths remain fixed by the Platform client; the terminal agent path is
 derived only from the journal's canonical `agent_id`, never from stored URL
 input.
-These adapters remain unwired until the default-off worker review.
+The default-off worker uses these exact-byte adapters; ambiguous states remain
+non-rerunnable rather than being reconstructed from unsigned data.
 
 Any error after a publication object starts committing marks physical capacity
 unknown and blocks further allocations in that open store. The owner must close

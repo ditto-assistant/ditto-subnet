@@ -106,8 +106,9 @@ func (runner *Runner) Author(
 		},
 		VisibleBundle: authority.visible, MemoryBundle: authority.memory, ResourceProfile: authority.resource,
 		RunnerManifest: authority.runnerManifest, CandidateLimits: authority.runnerManifest.Limits,
-		MemoryBundleSHA256:    authority.task.MemoryBundleSHA256,
-		ResourceProfileSHA256: authority.task.ResourceProfileSHA256,
+		EnvironmentImageDigest: authority.task.EnvironmentImageDigest,
+		MemoryBundleSHA256:     authority.task.MemoryBundleSHA256,
+		ResourceProfileSHA256:  authority.task.ResourceProfileSHA256,
 	}
 	session, err := runner.attempts.BeginAuthoring(ctx, spec)
 	if err != nil {
@@ -368,7 +369,7 @@ func (runner *Runner) Recover(
 	if runner == nil || ctx == nil || ctx.Err() != nil {
 		return codingsupervisor.RecoveryOutcome{}, ErrLifecycle
 	}
-	_, record, err := runner.outbox.Lookup(ctx, codingoutbox.PurposeShadowAttempt, request.TicketID)
+	attempt, record, err := runner.outbox.Lookup(ctx, codingoutbox.PurposeShadowAttempt, request.TicketID)
 	if errors.Is(err, codingoutbox.ErrInvalid) {
 		return codingsupervisor.RecoveryOutcome{State: "none"}, nil
 	}
@@ -383,6 +384,15 @@ func (runner *Runner) Recover(
 	cancel()
 	if revokeErr != nil {
 		return codingsupervisor.RecoveryOutcome{}, errors.Join(ErrLifecycle, revokeErr)
+	}
+	if record.State == codingoutbox.StateReady && record.TerminalPublication != nil &&
+		record.TerminalPublication.Acknowledgement != nil {
+		if err := runner.outbox.Release(
+			ctx, attempt.ID(), record.TerminalPublication.Authority.EvidenceSHA256,
+		); err != nil {
+			return codingsupervisor.RecoveryOutcome{}, errors.Join(ErrLifecycle, err)
+		}
+		return codingsupervisor.RecoveryOutcome{State: "released"}, nil
 	}
 	switch record.State {
 	case codingoutbox.StateReserved:
@@ -400,6 +410,46 @@ func (runner *Runner) Recover(
 		return codingsupervisor.RecoveryOutcome{State: "ambiguous"}, nil
 	default:
 		return codingsupervisor.RecoveryOutcome{}, ErrRecovery
+	}
+}
+
+func (runner *Runner) RecoverAuthoring(
+	ctx context.Context,
+	request codingsupervisor.Request,
+) error {
+	if runner == nil || ctx == nil || ctx.Err() != nil {
+		return ErrLifecycle
+	}
+	attempt, record, err := runner.outbox.Lookup(
+		ctx, codingoutbox.PurposeShadowAttempt, request.TicketID,
+	)
+	if err != nil || record.State != codingoutbox.StateReady ||
+		record.Binding.TicketID != request.TicketID ||
+		!record.Binding.Deadline.Equal(request.Deadline) ||
+		record.AuthoringPublication == nil ||
+		record.AuthoringPublication.Acknowledgement == nil ||
+		record.AuthoringPublication.Authority.CodingRunID != request.CodingRunID ||
+		record.TerminalPublication != nil {
+		return errors.Join(ErrRecovery, err)
+	}
+	var outcome codingsupervisor.AuthoringOutcome
+	if err := json.Unmarshal(request.Authoring, &outcome); err != nil ||
+		!outcome.CapabilitiesRevoked || !outcome.AuthoringEnvironmentDestroyed {
+		return ErrInvalid
+	}
+	defer zeroBytes(outcome.Evidence)
+	return attempt.ValidateAuthoringPublicationOutcome(ctx, codingoutbox.AuthoringPublicationOutcome{
+		Evidence:                     outcome.Evidence,
+		AuthoringTranscriptObjectKey: outcome.AuthoringTranscriptObjectKey,
+		AuthoringTranscriptBytes:     outcome.AuthoringTranscriptBytes,
+		AuthoringEventCount:          outcome.AuthoringEventCount,
+		FrozenSubmissionObjectKey:    outcome.FrozenSubmissionObjectKey,
+	})
+}
+
+func zeroBytes(value []byte) {
+	for index := range value {
+		value[index] = 0
 	}
 }
 
@@ -512,6 +562,13 @@ func pendingRecovery(record codingoutbox.Record) (codingsupervisor.RecoveryOutco
 				State: publication.state, PublicationStage: &stage, RequestSHA256: &digest,
 			}, true
 		}
+	}
+	if record.AuthoringPublication != nil && record.AuthoringPublication.Acknowledgement != nil &&
+		record.TerminalPublication == nil && lowerSHA256(record.AuthoringPublication.Request.SHA256) {
+		stage, digest := string(codingoutbox.PublicationAuthoringFreeze), record.AuthoringPublication.Request.SHA256
+		return codingsupervisor.RecoveryOutcome{
+			State: "authoring_published", PublicationStage: &stage, RequestSHA256: &digest,
+		}, true
 	}
 	return codingsupervisor.RecoveryOutcome{}, false
 }

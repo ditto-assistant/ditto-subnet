@@ -63,17 +63,19 @@ arbitrary destination.
 
 ## Current activation boundary
 
-Grant offer and exchange are mounted but fail with `503` unless the application
-receives an explicit `CodingInferenceGrantTransport`. Revocation remains
-available for already-persisted grants if that transport is removed. The normal
-factory does not create a transport. The separate request ledger can reserve
-and settle an already-authorized generation, but no provider or model-relay
-route invokes it. Consequently the current stack cannot send a Luna request,
-produce model evidence, run a coding task, affect a score, or affect weights.
+Grant offer and exchange are mounted but fail with `503` unless
+`DITTO_CODING_SHADOW_ENABLED=true` and the application can load the exact
+standalone locked policy plus all three reviewed HTTPS transport URLs. The
+normal default creates no transport. Revocation remains available for
+already-persisted grants if transport configuration is later removed.
 
-See `coding-inference-request-ledger.md` for the durable dispatch boundary. A
-later PR must add the dedicated provider adapter and gateway without exposing
-OpenRouter credentials or accepting miner-authored settlement evidence.
+The dedicated model-relay coding route and validator-local gateway consume
+this authority only when their independent gates are also enabled. No committed
+deployment enables those gates, so deploying this code alone cannot send a
+Luna request, run a coding task, affect an ordinary score, or affect weights.
+
+See `coding-inference-request-ledger.md` and `docs/coding-shadow-worker.md` for
+the durable dispatch and coordinated activation boundaries.
 
 Validation:
 

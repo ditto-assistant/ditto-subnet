@@ -36,9 +36,10 @@ when a trusted runtime stage occurred rather than classifying exception text.
 
 ## Activation
 
-No composition root imports or starts the coordinator. The private
-`CodingSupervisorRuntime` now implements its runtime protocol, but no worker
-constructs that client and the Go supervisor handler still has no mounted
-backend. This change does not claim tickets, fetch artifacts, start a miner,
-invoke Luna, grade production code, submit ordinary scores, rank agents, or set
-weights. Coding contract v1 remains permanently `weight_eligible=false`.
+The separate `CodingShadowWorker` now composes this coordinator with the
+private supervisor and durable publication client. Both validator and scorer
+feature gates remain false in committed deployment configuration; Platform
+transport, rootless sandbox, policy, and runtime-image authority must also be
+configured together before the worker can claim. See
+`docs/coding-shadow-worker.md`. Coding contract v1 remains permanently
+`weight_eligible=false` and no ordinary score or weight path imports it.

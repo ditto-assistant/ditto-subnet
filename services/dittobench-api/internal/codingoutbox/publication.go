@@ -19,27 +19,35 @@ import (
 )
 
 type authoringFreezeRequest struct {
-	ValidatorHotkey              string    `json:"validator_hotkey"`
-	AgentID                      string    `json:"agent_id"`
-	BenchVersion                 int       `json:"bench_version"`
-	RunRowID                     string    `json:"run_row_id"`
-	TicketID                     string    `json:"ticket_id"`
-	TicketDeadline               time.Time `json:"ticket_deadline"`
-	CodingRunID                  string    `json:"coding_run_id"`
-	AgentArtifactSHA256          string    `json:"agent_artifact_sha256"`
-	ScreenedImageSHA256          string    `json:"screened_image_sha256"`
-	RunManifestSHA256            string    `json:"run_manifest_sha256"`
-	TaskSetManifestSHA256        string    `json:"task_set_manifest_sha256"`
-	AuthoringEvidenceSHA256      string    `json:"authoring_evidence_sha256"`
-	AuthoringTranscriptObjectKey string    `json:"authoring_transcript_object_key"`
-	AuthoringTranscriptBytes     int64     `json:"authoring_transcript_bytes"`
-	AuthoringEventCount          uint64    `json:"authoring_event_count"`
-	FrozenSubmissionObjectKey    string    `json:"frozen_submission_object_key"`
-	Signature                    string    `json:"signature"`
-	Evidence                     struct {
-		AuthoringTranscriptSHA256 string `json:"authoring_transcript_sha256"`
-		FrozenPatchSHA256         string `json:"frozen_patch_sha256"`
-	} `json:"evidence"`
+	ValidatorHotkey              string          `json:"validator_hotkey"`
+	AgentID                      string          `json:"agent_id"`
+	BenchVersion                 int             `json:"bench_version"`
+	RunRowID                     string          `json:"run_row_id"`
+	TicketID                     string          `json:"ticket_id"`
+	TicketDeadline               time.Time       `json:"ticket_deadline"`
+	CodingRunID                  string          `json:"coding_run_id"`
+	AgentArtifactSHA256          string          `json:"agent_artifact_sha256"`
+	ScreenedImageSHA256          string          `json:"screened_image_sha256"`
+	RunManifestSHA256            string          `json:"run_manifest_sha256"`
+	TaskSetManifestSHA256        string          `json:"task_set_manifest_sha256"`
+	AuthoringEvidenceSHA256      string          `json:"authoring_evidence_sha256"`
+	AuthoringTranscriptObjectKey string          `json:"authoring_transcript_object_key"`
+	AuthoringTranscriptBytes     int64           `json:"authoring_transcript_bytes"`
+	AuthoringEventCount          uint64          `json:"authoring_event_count"`
+	FrozenSubmissionObjectKey    string          `json:"frozen_submission_object_key"`
+	Signature                    string          `json:"signature"`
+	Evidence                     json.RawMessage `json:"evidence"`
+}
+
+// AuthoringPublicationOutcome is the complete non-secret phase result that a
+// restarted supervisor must prove against the exact stored signed request
+// before pristine grading can be restored.
+type AuthoringPublicationOutcome struct {
+	Evidence                     json.RawMessage
+	AuthoringTranscriptObjectKey string
+	AuthoringTranscriptBytes     int64
+	AuthoringEventCount          uint64
+	FrozenSubmissionObjectKey    string
 }
 
 type terminalResultRequest struct {
@@ -340,6 +348,78 @@ func (store *Store) OpenPublicationAcknowledgement(
 	return store.openPublicationPart(ctx, id, stage, true)
 }
 
+// ValidateAuthoringPublicationOutcome binds restart grading to the exact
+// acknowledged signed authoring request, not merely to the existence of an
+// outbox record for the same ticket.
+func (attempt *Attempt) ValidateAuthoringPublicationOutcome(
+	ctx context.Context,
+	outcome AuthoringPublicationOutcome,
+) error {
+	if attempt == nil || attempt.store == nil || ctx == nil || ctx.Err() != nil ||
+		len(outcome.Evidence) == 0 || outcome.AuthoringTranscriptObjectKey == "" ||
+		outcome.AuthoringTranscriptBytes <= 0 || outcome.AuthoringEventCount == 0 ||
+		outcome.FrozenSubmissionObjectKey == "" {
+		return ErrInvalid
+	}
+	acknowledgement, err := attempt.store.OpenPublicationAcknowledgement(
+		ctx, attempt.id, PublicationAuthoringFreeze,
+	)
+	if err != nil {
+		return err
+	}
+	if err := acknowledgement.Close(); err != nil {
+		return err
+	}
+	reader, err := attempt.store.OpenPublication(ctx, attempt.id, PublicationAuthoringFreeze)
+	if err != nil {
+		return err
+	}
+	body, readErr := io.ReadAll(io.LimitReader(reader, maximumPublicationRequestBytes+1))
+	closeErr := reader.Close()
+	if readErr != nil || closeErr != nil || len(body) == 0 || int64(len(body)) > maximumPublicationRequestBytes {
+		return errors.Join(ErrCorrupt, readErr, closeErr)
+	}
+	var request authoringFreezeRequest
+	if err := decodeRequiredPublication(body, &request,
+		"validator_hotkey", "agent_id", "bench_version", "run_row_id", "ticket_id", "ticket_deadline",
+		"coding_run_id", "agent_artifact_sha256", "screened_image_sha256", "run_manifest_sha256",
+		"task_set_manifest_sha256", "authoring_evidence_sha256", "evidence",
+		"authoring_transcript_object_key", "authoring_transcript_bytes", "authoring_event_count",
+		"frozen_submission_object_key", "signature"); err != nil {
+		return ErrCorrupt
+	}
+	if !canonicalJSONEqual(request.Evidence, outcome.Evidence) ||
+		request.AuthoringTranscriptObjectKey != outcome.AuthoringTranscriptObjectKey ||
+		request.AuthoringTranscriptBytes != outcome.AuthoringTranscriptBytes ||
+		request.AuthoringEventCount != outcome.AuthoringEventCount ||
+		request.FrozenSubmissionObjectKey != outcome.FrozenSubmissionObjectKey {
+		return ErrConflict
+	}
+	return nil
+}
+
+func canonicalJSONEqual(left, right []byte) bool {
+	canonical := func(body []byte) ([]byte, error) {
+		if codingcontract.ValidateJSONDocument(body, maximumPublicationRequestBytes) != nil {
+			return nil, ErrInvalid
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		decoder.UseNumber()
+		var value any
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+			return nil, ErrInvalid
+		}
+		return json.Marshal(value)
+	}
+	leftCanonical, leftErr := canonical(left)
+	rightCanonical, rightErr := canonical(right)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftCanonical, rightCanonical)
+}
+
 func (store *Store) openPublicationPart(
 	ctx context.Context,
 	id string,
@@ -426,6 +506,10 @@ func validatePublicationRequest(
 			"frozen_submission_object_key", "signature"); err != nil {
 			return err
 		}
+		var evidence codingcontract.AuthoringEvidence
+		if err := json.Unmarshal(request.Evidence, &evidence); err != nil || evidence.Validate() != nil {
+			return ErrInvalid
+		}
 		if !validValidatorHotkey(request.ValidatorHotkey) || !validSignature(request.Signature) ||
 			request.AgentID != authority.AgentID || request.BenchVersion != authority.BenchVersion ||
 			request.RunRowID != authority.RunRowID ||
@@ -439,8 +523,8 @@ func validatePublicationRequest(
 			request.AuthoringTranscriptBytes != record.Transcript.SizeBytes ||
 			request.AuthoringEventCount != record.Transcript.Events ||
 			request.FrozenSubmissionObjectKey != record.Frozen.Artifact.ObjectKey ||
-			request.Evidence.AuthoringTranscriptSHA256 != record.Transcript.SHA256 ||
-			request.Evidence.FrozenPatchSHA256 != record.Frozen.Artifact.FrozenPatchSHA256 {
+			evidence.AuthoringTranscriptSHA256 != record.Transcript.SHA256 ||
+			evidence.FrozenPatchSHA256 != record.Frozen.Artifact.FrozenPatchSHA256 {
 			return ErrConflict
 		}
 	case PublicationTerminalResult:

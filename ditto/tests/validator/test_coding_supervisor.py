@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
@@ -29,6 +29,7 @@ from ditto.validator.coding_attempt import (
 )
 from ditto.validator.coding_supervisor import (
     CodingInferencePlatform,
+    CodingSupervisorRecovery,
     CodingSupervisorRuntime,
 )
 from ditto.validator.errors import ValidatorInfrastructureError
@@ -48,12 +49,34 @@ def _config() -> Any:
     )
 
 
+def _clock() -> datetime:
+    deadline = datetime.fromisoformat(
+        _SUPERVISOR["requests"]["author"]["deadline"].replace("Z", "+00:00")
+    )
+    return deadline - timedelta(minutes=5)
+
+
 def _response(payload: dict[str, Any]) -> httpx.Response:
     return httpx.Response(
         200,
         headers={"content-type": "application/json", "cache-control": "no-store"},
         json=payload,
     )
+
+
+def test_authoring_published_recovery_requires_exact_freeze_authority() -> None:
+    recovery = CodingSupervisorRecovery(
+        state="authoring_published",
+        publication_stage="authoring_freeze",
+        request_sha256="aa" * 32,
+    )
+    assert recovery.publication_stage == "authoring_freeze"
+    with pytest.raises(ValueError):
+        CodingSupervisorRecovery(
+            state="authoring_published",
+            publication_stage="terminal_result",
+            request_sha256="aa" * 32,
+        )
 
 
 def _lease(model: type[Any], *, grading: bool = False) -> Any:
@@ -231,7 +254,7 @@ async def test_runtime_author_grade_abort_and_recover() -> None:
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         authoring_lease = _lease(CodingAuthoringLeaseResponse)
         platform = _Platform(authoring_lease)
-        runtime = CodingSupervisorRuntime(_config(), client, platform)
+        runtime = CodingSupervisorRuntime(_config(), client, platform, clock=_clock)
         runtime_port: CodingAttemptRuntime = runtime
         assert runtime_port is runtime
         authoring = await runtime.author(authoring_lease, _harness(authoring_lease))
@@ -269,6 +292,9 @@ async def test_runtime_author_grade_abort_and_recover() -> None:
         assert request.headers["authorization"].startswith("Bearer ")
         assert request.headers["cache-control"] == "no-store"
         assert request.url.host == "dittobench-api"
+        timeout = request.extensions["timeout"]
+        assert timeout["read"] > 30
+        assert timeout["connect"] <= 10
     assert "control-token" not in repr(runtime)
 
 
@@ -281,7 +307,7 @@ async def test_runtime_rejects_redirect_error_oversize_and_identity_drift() -> N
             transport=httpx.MockTransport(lambda _: response)
         ) as client:
             runtime = CodingSupervisorRuntime(
-                _config(), client, _Platform(authoring_lease)
+                _config(), client, _Platform(authoring_lease), clock=_clock
             )
             with pytest.raises(Exception) as captured:
                 await runtime.author(authoring_lease, _harness(authoring_lease))
@@ -320,14 +346,14 @@ async def test_authoring_rejects_grant_drift_and_requires_terminal_revocation() 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         drifted = _Platform(lease)
         drifted.exchange = drifted.exchange.model_copy(update={"case_id": "case-other"})
-        runtime = CodingSupervisorRuntime(_config(), client, drifted)
+        runtime = CodingSupervisorRuntime(_config(), client, drifted, clock=_clock)
         with pytest.raises(CodingAttemptIntegrityError):
             await runtime.author(lease, _harness(lease))
         assert observed == ["prepare"]
         assert drifted.revoked == [(drifted.exchange.grant_id, 1)]
 
         failing = _FailingRevocationPlatform(lease)
-        runtime = CodingSupervisorRuntime(_config(), client, failing)
+        runtime = CodingSupervisorRuntime(_config(), client, failing, clock=_clock)
         with pytest.raises(ValidatorInfrastructureError):
             await runtime.author(lease, _harness(lease))
 
@@ -341,7 +367,9 @@ async def test_authoring_rejects_harness_drift_before_prepare() -> None:
         return _dynamic_response(request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
-        runtime = CodingSupervisorRuntime(_config(), client, _Platform(lease))
+        runtime = CodingSupervisorRuntime(
+            _config(), client, _Platform(lease), clock=_clock
+        )
         harness = _harness(lease).model_copy(
             update={"agent_artifact_sha256": "ff" * 32}
         )
@@ -364,7 +392,7 @@ async def test_authoring_cancellation_still_revokes_active_grant() -> None:
         return _dynamic_response(request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
-        runtime = CodingSupervisorRuntime(_config(), client, platform)
+        runtime = CodingSupervisorRuntime(_config(), client, platform, clock=_clock)
         task = asyncio.create_task(runtime.author(lease, _harness(lease)))
         await entered.wait()
         task.cancel()

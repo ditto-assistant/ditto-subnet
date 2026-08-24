@@ -30,5 +30,6 @@ replays remain idempotent after the lease expires. A terminal result is cleared
 from the instance's claim slot on its next claim request, allowing that worker
 to receive another ticket.
 
-This claim ledger does not run a worker, start a container, score a result, or
-change weights. The default-off worker composition remains a separate review.
+The separate validator worker now consumes this ledger only behind its
+default-off gate. The ledger itself does not start a container, score a result,
+or change weights.

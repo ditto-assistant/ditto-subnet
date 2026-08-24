@@ -64,6 +64,10 @@ class PendingPublication(_WireModel):
     request: PublicationArtifact
 
 
+class PublicationRecord(PendingPublication):
+    acknowledgement: PublicationArtifact | None = None
+
+
 @dataclass(frozen=True, repr=False)
 class PreparedCodingPublication:
     stage: PublicationStage
@@ -90,10 +94,11 @@ class _Result(_WireModel):
     )
     coding_contract_version: Literal[1]
     weight_eligible: Literal[False]
-    operation: Literal["prepare", "acknowledge", "pending", "open"]
+    operation: Literal["prepare", "acknowledge", "pending", "open", "lookup"]
     record_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     artifact: PublicationArtifact | None = None
     pending: list[PendingPublication] | None = None
+    publication: PublicationRecord | None = None
     body_base64: str | None = None
 
     @model_validator(mode="after")
@@ -103,6 +108,7 @@ class _Result(_WireModel):
             "acknowledge": self.record_id is not None and self.artifact is not None,
             "pending": self.pending is not None,
             "open": self.record_id is not None and self.body_base64 is not None,
+            "lookup": self.record_id is not None and self.publication is not None,
         }
         if not valid[self.operation]:
             raise ValueError("coding publication response shape is invalid")
@@ -119,18 +125,14 @@ class CodingPublicationClient:
         parsed = urlsplit(self.base_url)
         if (
             parsed.scheme != "http"
-            or parsed.hostname not in {"127.0.0.1", "::1"}
+            or parsed.hostname not in {"127.0.0.1", "::1", "sandbox-docker"}
             or not parsed.port
             or parsed.username is not None
             or parsed.password is not None
             or parsed.path not in {"", "/"}
             or parsed.query
             or parsed.fragment
-            or not 32 <= len(self.control_token.encode()) <= 256
-            or any(
-                character.isspace() or ord(character) < 32
-                for character in self.control_token
-            )
+            or not _valid_control_token(self.control_token)
             or getattr(self.client, "trust_env", True)
         ):
             raise ValueError("coding publication client configuration is invalid")
@@ -251,6 +253,36 @@ class CodingPublicationClient:
             )
         return body
 
+    async def lookup(
+        self,
+        *,
+        ticket_id: str,
+        stage: PublicationStage,
+    ) -> PublicationRecord:
+        if not _canonical_uuid(ticket_id) or stage not in {
+            "authoring_freeze",
+            "terminal_result",
+        }:
+            raise ValueError("coding publication lookup authority is invalid")
+        result = await self._call(
+            "lookup",
+            {
+                "schema": "dittobench-coding-publication-command-v1",
+                "ticket_id": ticket_id,
+                "stage": stage,
+            },
+        )
+        if (
+            result.publication is None
+            or result.record_id != result.publication.record_id
+            or result.publication.ticket_id != UUID(ticket_id)
+            or result.publication.stage != stage
+        ):
+            raise PlatformInfrastructureError(
+                "coding publication lookup result is invalid"
+            )
+        return result.publication
+
     async def _call(self, operation: str, payload: dict[str, object]) -> _Result:
         body = bytearray()
         try:
@@ -322,10 +354,18 @@ def _canonical_uuid(value: str) -> bool:
     return parsed.int != 0 and str(parsed) == value
 
 
+def _valid_control_token(value: str) -> bool:
+    return 32 <= len(value) <= 256 and all(
+        character.isascii() and (character.isalnum() or character in "_-")
+        for character in value
+    )
+
+
 __all__ = [
     "CodingPublicationClient",
     "PendingPublication",
     "PreparedCodingPublication",
+    "PublicationRecord",
     "PublicationArtifact",
     "PublicationAuthority",
     "PublicationStage",

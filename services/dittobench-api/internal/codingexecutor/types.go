@@ -2,6 +2,7 @@ package codingexecutor
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -41,6 +42,7 @@ const (
 type Config struct {
 	Manifest                codinggrader.Manifest
 	ImageRef                string
+	AuthoringOnly           bool
 	SupervisorPath          string
 	CandidateUID            uint32
 	CandidateGID            uint32
@@ -52,10 +54,16 @@ type Config struct {
 }
 
 func (config Config) validate() error {
-	if err := config.Manifest.Validate(time.Now()); err != nil {
+	if config.AuthoringOnly {
+		if config.Manifest.ResourcePolicy.Validate() != nil ||
+			!ociDigest(config.Manifest.GraderImageDigest) ||
+			config.Manifest.GraderPlatform != "linux/amd64" {
+			return errors.New("coding authoring executor authority is invalid")
+		}
+	} else if err := config.Manifest.Validate(time.Now()); err != nil {
 		return fmt.Errorf("coding executor manifest: %w", err)
 	}
-	if config.Manifest.GraderContractSHA256 != codinggrader.GraderContractSHA256() ||
+	if (!config.AuthoringOnly && config.Manifest.GraderContractSHA256 != codinggrader.GraderContractSHA256()) ||
 		config.Manifest.GraderPlatform != "linux/amd64" ||
 		!strings.HasSuffix(config.ImageRef, "@"+config.Manifest.GraderImageDigest) ||
 		strings.Count(config.ImageRef, "@") != 1 || strings.HasPrefix(config.ImageRef, "-") ||
@@ -63,21 +71,25 @@ func (config Config) validate() error {
 		!config.RequireRootless || !config.RequireIsolatedDaemon {
 		return errors.New("coding executor identity or daemon policy is invalid")
 	}
-	planSHA, err := codinggrader.GraderPlanSHA256(config.Manifest)
-	if err != nil || planSHA != config.Manifest.GraderPlanSHA256 {
-		return errors.New("coding executor grader plan is invalid")
-	}
-	resourceSHA, err := codinggrader.ResourceProfileSHA256(config.Manifest.ResourcePolicy)
-	if err != nil || resourceSHA != config.Manifest.ResourceProfileSHA256 {
-		return errors.New("coding executor resource profile is invalid")
+	if !config.AuthoringOnly {
+		planSHA, err := codinggrader.GraderPlanSHA256(config.Manifest)
+		if err != nil || planSHA != config.Manifest.GraderPlanSHA256 {
+			return errors.New("coding executor grader plan is invalid")
+		}
+		resourceSHA, err := codinggrader.ResourceProfileSHA256(config.Manifest.ResourcePolicy)
+		if err != nil || resourceSHA != config.Manifest.ResourceProfileSHA256 {
+			return errors.New("coding executor resource profile is invalid")
+		}
 	}
 	if config.Manifest.ResourcePolicy.ScratchLimitBytes <
 		uint64(config.Manifest.ResourcePolicy.CandidateLimits.MaxWorkspaceBytes) {
 		return errors.New("coding executor scratch cannot hold the bounded candidate workspace")
 	}
-	for _, group := range config.Manifest.TestGroups {
-		if len(group.Command.Argv) == 0 || group.Command.Argv[0] != trustedTestDriverName {
-			return errors.New("coding executor test command does not use the trusted driver")
+	if !config.AuthoringOnly {
+		for _, group := range config.Manifest.TestGroups {
+			if len(group.Command.Argv) == 0 || group.Command.Argv[0] != trustedTestDriverName {
+				return errors.New("coding executor test command does not use the trusted driver")
+			}
 		}
 	}
 	if config.SupervisorPath == "" {
@@ -121,6 +133,18 @@ func validProfileName(value string) bool {
 		}
 	}
 	return true
+}
+
+func ociDigest(value string) bool {
+	if !strings.HasPrefix(value, "sha256:") || len(value) != len("sha256:")+64 {
+		return false
+	}
+	digest := strings.TrimPrefix(value, "sha256:")
+	if digest != strings.ToLower(digest) {
+		return false
+	}
+	_, err := hex.DecodeString(digest)
+	return err == nil
 }
 
 type supervisorRequest struct {

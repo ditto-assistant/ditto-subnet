@@ -31,6 +31,7 @@ type PhaseRunner interface {
 	AbortAuthoring(context.Context, Request) error
 	AbortGrading(context.Context, Request) error
 	Recover(context.Context, Request) (RecoveryOutcome, error)
+	RecoverAuthoring(context.Context, Request) error
 }
 
 // AuthoringInput gives the trusted phase runner the prepared broker authority.
@@ -352,6 +353,10 @@ func (backend *SessionBackend) grade(ctx context.Context, request Request) (Resp
 	if err != nil {
 		return Response{}, ErrInvalid
 	}
+	var supplied AuthoringOutcome
+	if err := json.Unmarshal(request.Authoring, &supplied); err != nil || validateAuthoring(supplied) != nil {
+		return Response{}, ErrInvalid
+	}
 	key := sessionKey(request)
 	backend.mu.Lock()
 	if backend.closed {
@@ -359,7 +364,44 @@ func (backend *SessionBackend) grade(ctx context.Context, request Request) (Resp
 		return Response{}, ErrClosed
 	}
 	record := backend.sessions[key]
-	if record == nil || record.authoring == nil || !requestMatchesAuthoring(request.Authoring, *record.authoring) {
+	if record == nil {
+		backend.mu.Unlock()
+		recoveryRequest := cloneRequest(request)
+		recoveryRequest.Operation = OperationRecover
+		zero(recoveryRequest.Lease)
+		zero(recoveryRequest.Authoring)
+		recoveryRequest.Lease = nil
+		recoveryRequest.Authoring = nil
+		recovery, recoveryErr := backend.runRecover(ctx, recoveryRequest)
+		if recoveryErr != nil || recovery.State != "authoring_published" {
+			return Response{}, ErrConflict
+		}
+		if recoveryErr := backend.runRecoverAuthoring(ctx, cloneRequest(request)); recoveryErr != nil {
+			return Response{}, ErrConflict
+		}
+		backend.mu.Lock()
+		if backend.closed {
+			backend.mu.Unlock()
+			return Response{}, ErrClosed
+		}
+		record = backend.sessions[key]
+	}
+	if record == nil {
+		if len(backend.sessions) >= backend.maximumSessions {
+			backend.mu.Unlock()
+			return Response{}, ErrUnavailable
+		}
+		// A process restart loses only the session cache. The phase runner below
+		// independently proves this exact authoring outcome against the durable
+		// outbox before protected grader material is opened.
+		cloned := cloneAuthoringOutcome(supplied)
+		record = &sessionRecord{
+			deadlineUnix: request.Deadline.UnixNano(), state: sessionAuthored,
+			authoring: &cloned,
+		}
+		backend.sessions[key] = record
+	}
+	if record.authoring == nil || !requestMatchesAuthoring(request.Authoring, *record.authoring) {
 		backend.mu.Unlock()
 		return Response{}, ErrConflict
 	}
@@ -508,12 +550,30 @@ func (backend *SessionBackend) recover(ctx context.Context, request Request) (Re
 	if validateRecovery(outcome) != nil {
 		return Response{}, ErrConflict
 	}
+	if outcome.State == "released" {
+		backend.mu.Lock()
+		if record := backend.sessions[sessionKey(request)]; record != nil &&
+			record.state != sessionAuthoring && record.state != sessionGrading && record.state != sessionAborting {
+			zero(record.privateKey)
+			zeroAuthoringOutcome(record.authoring)
+			zeroGradingOutcome(record.grading)
+			delete(backend.sessionIDs, record.preparation.SessionID)
+			delete(backend.publicKeys, record.preparation.BrokerPublicKey)
+			delete(backend.sessions, sessionKey(request))
+		}
+		backend.mu.Unlock()
+	}
 	return recoveryResponse(request, outcome), nil
 }
 
 func (backend *SessionBackend) runRecover(ctx context.Context, request Request) (RecoveryOutcome, error) {
 	defer zeroRequest(&request)
 	return backend.runner.Recover(ctx, request)
+}
+
+func (backend *SessionBackend) runRecoverAuthoring(ctx context.Context, request Request) error {
+	defer zeroRequest(&request)
+	return backend.runner.RecoverAuthoring(ctx, request)
 }
 
 func (backend *SessionBackend) Close() error {

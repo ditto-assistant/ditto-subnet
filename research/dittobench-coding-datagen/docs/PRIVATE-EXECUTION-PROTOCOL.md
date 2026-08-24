@@ -637,9 +637,10 @@ sequence.
 The validator's shadow attempt coordinator encodes this order through injected
 Platform and runtime ports. Runtime exceptions trigger shielded phase cleanup;
 normal authoring and grading outcomes are accepted only after capability
-revocation and environment destruction are attested. The coordinator remains
-unwired and covers the complete gradeable path only; terminal failure
-classification remains a later worker layer.
+revocation and environment destruction are attested. The default-off worker
+now invokes the coordinator for the complete gradeable path. Ambiguous restart
+states remain non-rerunnable; typed terminal reconciliation does not infer a
+classification from exception prose.
 
 The trusted Go attempt runtime now composes verified phase-specific artifacts,
 the runner/freezer, sandbox executor, and pristine grader in process. Authoring
@@ -647,19 +648,19 @@ types cannot contain grader material; grading types cannot contain memory. The
 attempt runtime invokes the scoped-memory projector and closes raw memory bytes
 during authoring construction, retaining only an immutable miner-visible seed
 projection. The outer workspace route must be revoked before the runtime
-freezes the internal session. The validator-local evidence outbox now has an
-unwired durable core. The ticket-bound Luna relay now has an unwired request,
-pre-dispatch journal, trusted-settlement, retry, revocation, and evidence core.
+freezes the internal session. The validator-local evidence outbox and
+ticket-bound Luna relay supply the durable request, pre-dispatch journal,
+trusted-settlement, retry, revocation, and evidence cores.
 The supervisor phase runner now consumes a separately signed, short-lived
 screened-harness launch authority and commits the outbox marker before dormant
 harness activation. An exchanged grant carries a distinct revocation-only
 bearer so the Go gateway can revoke durably before evidence finalization while
 the Python validator retains signed revocation as an idempotent fallback. The
-private dormant-harness, source-bound route, revocation, and relay-activation
-adapters now exist but remain unwired. Exclusive non-rerunnable ticket claims
-and the exact-byte durable publication handoff also exist. The final review
-still owns Python worker connection, default-off configuration, and the host
-sweep schedule.
+private dormant-harness, source-bound route, revocation, relay activation,
+exclusive non-rerunnable ticket claims, exact-byte publication handoff, Python
+worker, and bounded host composition are now connected behind independent
+Platform, scorer, and validator feature gates. Every committed gate is false;
+partial configuration fails closed and coding remains shadow-only.
 
 The runtime never supplies aggregate counts or repair mean. It returns
 per-task evidence; the validator orders those tasks by the immutable manifest,

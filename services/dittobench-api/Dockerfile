@@ -85,6 +85,9 @@ RUN chmod 0555 /opt/ditto/confirmation && \
 COPY --from=confirmation-assets --chown=65532:65532 --chmod=0444 \
     /longmemeval_s_cleaned.json \
     /opt/ditto/confirmation/longmemeval_s_cleaned.json
+COPY --chown=65532:65532 --chmod=0444 \
+    packages/dittobench-coding-contract/testdata/coding_inference_policy_locked_v1.json \
+    /opt/ditto/coding/coding_inference_policy_locked_v1.json
 ENV HOME=/tmp
 # Legacy fallback only; the binary above already carries these values.
 ENV DITTOBENCH_SOFTWARE_VERSION=${DITTOBENCH_SOFTWARE_VERSION}

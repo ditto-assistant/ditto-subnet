@@ -57,10 +57,10 @@ Freeze or close clears the session-owned projection after harness seeding.
 
 ## Activation
 
-This layer is unwired. It does not start a harness, publish a workspace
-capability, call `/coding/run`, invoke Luna, persist evidence, claim a job,
-submit a score, or change weights. Coding contract v1 remains permanently
-`weight_eligible=false`.
+The default-off coding host invokes this layer before `/coding/run` and clears
+the projection during terminal cleanup. It never publishes memory through
+diagnostics and remains unreachable while the scorer gate is false. Coding
+contract v1 remains permanently `weight_eligible=false`.
 
 ## Validation
 

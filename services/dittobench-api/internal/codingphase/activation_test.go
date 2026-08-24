@@ -21,6 +21,30 @@ func (function activationRoundTrip) RoundTrip(request *http.Request) (*http.Resp
 	return function(request)
 }
 
+func TestJournalDirectoryCapacityIsDurableAndFailClosed(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	first := "relay-" + strings.Repeat("a", 64)
+	second := "relay-" + strings.Repeat("b", 64)
+	if err := ensureBoundedJournalDirectory(root, first, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureBoundedJournalDirectory(root, first, 1); err != nil {
+		t.Fatalf("exact directory replay: %v", err)
+	}
+	if err := ensureBoundedJournalDirectory(root, second, 1); err == nil {
+		t.Fatal("journal directory capacity was bypassed")
+	}
+	if err := os.WriteFile(root+"/unexpected", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureBoundedJournalDirectory(root, first, 2); err == nil {
+		t.Fatal("unexpected relay-root entry was accepted")
+	}
+}
+
 type activationAuthorizer struct{ calls int }
 
 func (authorizer *activationAuthorizer) Authorize(context.Context, codinggateway.CapabilityBinding) error {

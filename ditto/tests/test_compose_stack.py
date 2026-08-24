@@ -187,6 +187,29 @@ def test_scorer_allows_only_verified_screened_image_downloads() -> None:
     assert "DITTOBENCH_ALLOW_PRIVATE_HARNESS" not in environment
 
 
+def test_shadow_coding_worker_is_present_but_default_off_on_both_sides() -> None:
+    compose = yaml.safe_load(COMPOSE_PATH.read_text())
+    services = compose["services"]
+    scorer = services["dittobench-api"]["environment"]
+    validator = services["ditto-subnet"]["environment"]
+
+    assert _compose_default(scorer["DITTOBENCH_CODING_SHADOW_ENABLED"]) == "false"
+    assert _compose_default(validator["VALIDATOR_CODING_SHADOW_ENABLED"]) == "false"
+    assert scorer["DITTOBENCH_CODING_PRIVATE_ROOT"].startswith(
+        "/var/lib/dittobench-private-artifacts/"
+    )
+    assert scorer["DITTOBENCH_CODING_POLICY_FILE"].endswith(
+        "coding_inference_policy_locked_v1.json"
+    )
+    assert (
+        "coding_inference_policy_locked_v1.json" in SCORER_DOCKERFILE_PATH.read_text()
+    )
+    assert (
+        "DITTOBENCH_CODING_SHADOW_ENABLED"
+        not in services["sandbox-docker"]["environment"]
+    )
+
+
 def test_confirmation_runtime_uses_only_exact_public_release_assets() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     environment = compose["services"]["dittobench-api"]["environment"]

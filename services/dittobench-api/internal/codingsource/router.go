@@ -107,10 +107,12 @@ func NewRouter(config RouterConfig) (*Router, error) {
 	router.server = &http.Server{
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       5 * time.Minute,
-		WriteTimeout:      5 * time.Minute,
-		IdleTimeout:       30 * time.Second,
-		MaxHeaderBytes:    32 << 10,
+		// The locked provider timeout is five minutes; retain one minute for
+		// trusted settlement validation and response projection.
+		ReadTimeout:    6 * time.Minute,
+		WriteTimeout:   6 * time.Minute,
+		IdleTimeout:    30 * time.Second,
+		MaxHeaderBytes: 32 << 10,
 	}
 	go func() {
 		err := router.server.Serve(config.Listener)

@@ -127,7 +127,7 @@ func (executor *Executor) Preflight(
 	ctx context.Context,
 	_ string,
 ) (codinggrader.ExecutorAttestation, error) {
-	if ctx == nil {
+	if ctx == nil || executor == nil || executor.config.AuthoringOnly {
 		return codinggrader.ExecutorAttestation{}, errors.New("coding executor preflight context is required")
 	}
 	if err := executor.ensurePreflight(ctx); err != nil {
@@ -169,6 +169,9 @@ func (executor *Executor) Build(
 	workspace string,
 	command codingrunner.CommandSpec,
 ) (codinggrader.BuildRun, error) {
+	if executor == nil || executor.config.AuthoringOnly {
+		return codinggrader.BuildRun{}, errors.New("coding executor is not scoped to grading")
+	}
 	result, err := executor.execute(ctx, modeBuild, workspace, "", command, 0)
 	if err != nil {
 		return codinggrader.BuildRun{}, err
@@ -188,6 +191,9 @@ func (executor *Executor) Test(
 	protectedGrader string,
 	group codinggrader.TestGroupSpec,
 ) (codinggrader.TestRun, error) {
+	if executor == nil || executor.config.AuthoringOnly {
+		return codinggrader.TestRun{}, errors.New("coding executor is not scoped to grading")
+	}
 	result, err := executor.execute(ctx, modeTest, workspace, protectedGrader, group.Command, group.ExpectedTotal)
 	if err != nil {
 		return codinggrader.TestRun{}, err

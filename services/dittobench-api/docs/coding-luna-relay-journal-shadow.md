@@ -2,8 +2,8 @@
 
 `internal/codingrelayjournal` is the validator-local filesystem implementation
 of the `codingrelay.Journal` port. One store owns one private relay root and one
-immutable ticket/grant/budget binding. It is an unwired shadow component: no
-current validator, worker, scorer, or model relay constructs it.
+immutable ticket/grant/budget binding. `internal/codinghost` constructs it only
+behind the scorer shadow gate; the committed default is off.
 
 ## Durable state machine
 
