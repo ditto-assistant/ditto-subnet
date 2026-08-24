@@ -58,7 +58,7 @@ if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
 GLOBAL_SCOPE = "*"
-CONFIRMATION_TICKET_TTL = timedelta(minutes=90)
+CONFIRMATION_TICKET_TTL = timedelta(hours=4)
 
 
 class ConfirmationBundlePersistenceError(ValueError):
@@ -1013,12 +1013,12 @@ async def issue_confirmation_bundle_ticket(
     now: datetime,
     ttl: timedelta = CONFIRMATION_TICKET_TTL,
 ) -> ConfirmationBundleTicket:
-    """Issue or resume the bundle's one append-only 90-minute lease attempt."""
+    """Issue or resume the bundle's one append-only four-hour lease attempt."""
     if now.tzinfo is None:
         raise ConfirmationBundlePersistenceError("ticket time must be timezone-aware")
     if ttl != CONFIRMATION_TICKET_TTL:
         raise ConfirmationBundlePersistenceError(
-            "confirmation ticket TTL must remain exactly 90 minutes"
+            "confirmation ticket TTL must remain exactly four hours"
         )
     bundle = await session.scalar(
         select(ConfirmationBundle)

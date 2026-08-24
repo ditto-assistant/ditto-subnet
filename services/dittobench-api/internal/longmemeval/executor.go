@@ -46,6 +46,9 @@ type Executor struct {
 	Judge   Judge
 	Meter   ProviderMeter
 	Limits  ExecutionLimits
+	// OnCase is optional privacy-safe progress: completed cases out of the
+	// selected total. It must not observe question IDs, prompts, or answers.
+	OnCase func(completed, total int)
 }
 
 // ExecutionResult keeps the raw selected IDs private while giving trusted
@@ -102,6 +105,9 @@ func (e Executor) Execute(
 
 	outcomes := make([]Outcome, 0, len(projected))
 	receivedFailures := 0
+	if e.OnCase != nil {
+		e.OnCase(0, len(projected))
+	}
 	for _, item := range projected {
 		for _, seed := range item.SeedRequests {
 			if err := requireLaneHeadroom(profile, current, ReaderLane); err != nil {
@@ -165,6 +171,9 @@ func (e Executor) Execute(
 			current = next
 			outcomes = append(outcomes, Outcome{QuestionID: item.questionID, Correct: false})
 			receivedFailures++
+			if e.OnCase != nil {
+				e.OnCase(len(outcomes), len(projected))
+			}
 			continue
 		}
 		current = next
@@ -189,6 +198,9 @@ func (e Executor) Execute(
 			return ExecutionResult{}, fmt.Errorf("LongMemEval official judge failed for opaque case: %w", operationErr)
 		}
 		outcomes = append(outcomes, Outcome{QuestionID: item.questionID, Correct: correct})
+		if e.OnCase != nil {
+			e.OnCase(len(outcomes), len(projected))
+		}
 	}
 
 	if err := ctx.Err(); err != nil {

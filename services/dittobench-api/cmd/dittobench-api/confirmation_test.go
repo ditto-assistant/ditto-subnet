@@ -160,6 +160,62 @@ func assertConfirmationError(t *testing.T, recorder *httptest.ResponseRecorder, 
 	}
 }
 
+func TestConfirmationProgressFailsOpenWithoutSnapshot(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	(&server{}).handleConfirmationProgress(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/v1/confirmation/progress", nil),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := strings.TrimSpace(recorder.Body.String()); got != `{"ready":false}` {
+		t.Fatalf("body = %s, want ready=false without case counts", got)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestConfirmationProgressReportsCaseCounts(t *testing.T) {
+	executor := &trustedConfirmationExecutor{}
+	executor.reportLongMemProgress(7, 48)
+	recorder := httptest.NewRecorder()
+	(&server{confirmation: executor}).handleConfirmationProgress(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/v1/confirmation/progress", nil),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var got confirmationProgressSnapshot
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := confirmationProgressSnapshot{Ready: true, Done: 7, Total: 48, Stage: "running_confirmation"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("progress = %+v, want %+v", got, want)
+	}
+}
+
+func TestConfirmationProgressSnapshotIsRaceFree(t *testing.T) {
+	executor := &trustedConfirmationExecutor{}
+	done := make(chan struct{})
+	go func() {
+		for index := 0; index < 1000; index++ {
+			executor.reportLongMemProgress(index%49, 48)
+			if index%17 == 0 {
+				executor.reportLongMemProgress(0, 0)
+			}
+		}
+		close(done)
+	}()
+	for index := 0; index < 1000; index++ {
+		_, _, _ = executor.SnapshotProgress()
+	}
+	<-done
+}
+
 func TestConfirmationReadinessFailsClosedWithoutExecutor(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	(&server{}).handleConfirmationReadiness(
@@ -645,6 +701,25 @@ func TestConfirmationExecuteRejectsMalformedWireBodiesBeforeExecution(t *testing
 	}
 }
 
+func TestConfirmationExecuteRejectsTicketWithoutReportMargin(t *testing.T) {
+	request := validConfirmationRequest()
+	request.Deadline = time.Now().Add(time.Minute)
+	executor := readyConfirmationExecutor()
+	recorder := executeConfirmationRequest(
+		t,
+		&server{confirmation: executor},
+		nil,
+		confirmationRequestBody(t, request),
+	)
+	assertConfirmationError(
+		t, recorder, http.StatusConflict,
+		"confirmation ticket cannot fund execution while preserving its reporting margin",
+	)
+	if got := executor.callCount(); got != 0 {
+		t.Fatalf("executor called %d times without a report margin", got)
+	}
+}
+
 func TestConfirmationExecutePropagatesTicketDeadlineToExecutor(t *testing.T) {
 	deadline := time.Now().Add(time.Hour).UTC().Round(time.Millisecond)
 	executor := readyConfirmationExecutor()
@@ -653,8 +728,9 @@ func TestConfirmationExecutePropagatesTicketDeadlineToExecutor(t *testing.T) {
 		if !ok {
 			t.Fatal("executor context has no deadline")
 		}
-		if !got.Equal(deadline) {
-			t.Fatalf("executor deadline = %s, want %s", got, deadline)
+		want := deadline.Add(-2 * time.Minute)
+		if !got.Equal(want) {
+			t.Fatalf("executor deadline = %s, want %s (ticket minus report margin)", got, want)
 		}
 		return validConfirmationResult(), nil
 	}
@@ -701,7 +777,7 @@ func TestConfirmationExecuteEnforcesTicketDeadlineDuringExecution(t *testing.T) 
 		return confirmationExecutionResult{}, ctx.Err()
 	}
 	request := validConfirmationRequest()
-	request.Deadline = time.Now().Add(20 * time.Millisecond)
+	request.Deadline = time.Now().Add(2*time.Minute + 20*time.Millisecond)
 	recorder := executeConfirmationRequest(
 		t,
 		&server{confirmation: executor},

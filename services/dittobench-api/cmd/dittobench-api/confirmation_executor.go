@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ditto-assistant/dittobench-api/internal/ablation"
@@ -236,7 +237,7 @@ func confirmationBenchVersionSupported(benchVersion int) bool {
 
 // confirmationSubjectEpochSupported is the bundle/job allow-list: which
 // subject epochs the installed instrument may confirm. This must track Python
-// ``supports_confirmation`` / ``CONFIRMATION_BENCH_VERSIONS`` (9, 10, 11, 12).
+// “supports_confirmation“ / “CONFIRMATION_BENCH_VERSIONS“ (9, 10, 11, 12).
 // Using the instrument allow-list here is what rejected live v11 jobs against
 // the shipped v9 profile in ~4s at running_confirmation.
 func confirmationSubjectEpochSupported(benchVersion int) bool {
@@ -401,11 +402,18 @@ func nilInterface(value any) bool {
 		reflected.IsNil()
 }
 
+type confirmationCaseProgress struct {
+	mu    sync.Mutex
+	done  int
+	total int
+}
+
 type trustedConfirmationExecutor struct {
 	profile        confirmationExecutionProfileWire
 	profileRaw     json.RawMessage
 	runtimeFactory confirmationRuntimeFactory
 	now            func() time.Time
+	progress       confirmationCaseProgress
 	coordinate     func(context.Context, confirmationExecutionRequest, confirmationExecutionProfileWire, *confirmationRuntime) (confirmationExecutionResult, error)
 }
 
@@ -426,10 +434,40 @@ func newTrustedConfirmationExecutor(
 	if err := runtimeFactory.ValidateInstallation(profile); err != nil {
 		return nil, fmt.Errorf("confirmation runtime installation is not ready: %w", err)
 	}
-	return &trustedConfirmationExecutor{
+	executor := &trustedConfirmationExecutor{
 		profile: profile, profileRaw: raw, runtimeFactory: runtimeFactory, now: time.Now,
-		coordinate: executeTrustedConfirmationDimensions,
-	}, nil
+	}
+	executor.coordinate = func(
+		ctx context.Context,
+		request confirmationExecutionRequest,
+		wire confirmationExecutionProfileWire,
+		runtime *confirmationRuntime,
+	) (confirmationExecutionResult, error) {
+		return executeTrustedConfirmationDimensions(ctx, request, wire, runtime, executor.reportLongMemProgress)
+	}
+	return executor, nil
+}
+
+func (executor *trustedConfirmationExecutor) reportLongMemProgress(completed, total int) {
+	if executor == nil {
+		return
+	}
+	executor.progress.mu.Lock()
+	defer executor.progress.mu.Unlock()
+	executor.progress.done = completed
+	executor.progress.total = total
+}
+
+func (executor *trustedConfirmationExecutor) SnapshotProgress() (completed, total int, ok bool) {
+	if executor == nil {
+		return 0, 0, false
+	}
+	executor.progress.mu.Lock()
+	defer executor.progress.mu.Unlock()
+	if executor.progress.total <= 0 {
+		return 0, 0, false
+	}
+	return executor.progress.done, executor.progress.total, true
 }
 
 func (executor *trustedConfirmationExecutor) Readiness() confirmationReadiness {
@@ -452,6 +490,9 @@ func (executor *trustedConfirmationExecutor) Execute(
 	if executor == nil || !executor.Readiness().Ready {
 		return confirmationExecutionResult{}, errors.New("confirmation executor is not ready")
 	}
+	// Drop leftover counts from a prior bundle so a concurrent progress poll
+	// cannot report another ticket's completed/total pair.
+	executor.reportLongMemProgress(0, 0)
 	if ctx == nil {
 		return confirmationExecutionResult{}, errors.New("confirmation execution context is required")
 	}
@@ -551,6 +592,7 @@ func executeTrustedConfirmationDimensions(
 	request confirmationExecutionRequest,
 	profile confirmationExecutionProfileWire,
 	runtime *confirmationRuntime,
+	onCase func(completed, total int),
 ) (confirmationExecutionResult, error) {
 	mode, err := ablation.ParseMode(request.Mode)
 	if err != nil || mode == ablation.ModeOff {
@@ -569,6 +611,7 @@ func executeTrustedConfirmationDimensions(
 	longMemResult, err := (longmemeval.Executor{
 		Harness: runtime.LongMemHarness, Judge: runtime.LongMemJudge, Meter: runtime.LongMemMeter,
 		Limits: longmemeval.ExecutionLimits{MaxElapsed: longMemBudget, SeedBatchPairs: profile.LongMemSeedBatchPairs},
+		OnCase: onCase,
 	}).Execute(ctx, runtime.LongMemSource, longMemProfile, request.ArtifactSHA256, runtime.LongMemProjectionKey)
 	if err != nil {
 		return confirmationExecutionResult{}, fmt.Errorf("execute LongMemEval: %w", err)

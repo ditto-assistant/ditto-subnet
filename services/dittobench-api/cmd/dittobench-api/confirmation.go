@@ -212,7 +212,15 @@ func (s *server) handleConfirmationExecute(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusTooManyRequests, "confirmation capacity is full")
 		return
 	}
-	ctx, cancel := context.WithDeadline(r.Context(), request.Deadline)
+	// Match the validator's HTTP timeout: ticket remaining minus the two-minute
+	// signed-report margin. Otherwise a 48-case LongMem run can consume the
+	// LongMem slice, then die two minutes into the 30-minute ablation window.
+	executionDeadline := request.Deadline.Add(-2 * time.Minute)
+	if !executionDeadline.After(time.Now()) {
+		writeError(w, http.StatusConflict, "confirmation ticket cannot fund execution while preserving its reporting margin")
+		return
+	}
+	ctx, cancel := context.WithDeadline(r.Context(), executionDeadline)
 	defer cancel()
 	result, err := s.confirmation.Execute(ctx, request)
 	if err != nil {
@@ -243,4 +251,28 @@ func (s *server) handleConfirmationExecute(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+type confirmationProgressSnapshot struct {
+	Ready bool   `json:"ready"`
+	Done  int    `json:"done,omitempty"`
+	Total int    `json:"total,omitempty"`
+	Stage string `json:"stage,omitempty"`
+}
+
+func (s *server) handleConfirmationProgress(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	executor, ok := s.confirmation.(*trustedConfirmationExecutor)
+	if !ok || executor == nil {
+		writeJSON(w, http.StatusOK, confirmationProgressSnapshot{Ready: false})
+		return
+	}
+	done, total, ready := executor.SnapshotProgress()
+	if !ready {
+		writeJSON(w, http.StatusOK, confirmationProgressSnapshot{Ready: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, confirmationProgressSnapshot{
+		Ready: true, Done: done, Total: total, Stage: "running_confirmation",
+	})
 }
