@@ -182,9 +182,11 @@ class CodingRunEvidence(CodingEvaluationModel):
 
 
 class CodingAuthoringModelEvidence(CodingEvaluationModel):
-    model: ShortName
-    provider: ShortName
-    provider_route_profile: ShortName
+    # A validator signature is not authority to substitute the locked v1
+    # solver route.  Route changes require a new immutable coding contract.
+    model: Literal["openai/gpt-5.6-luna"]
+    provider: Literal["azure/eu"]
+    provider_route_profile: Literal["luna-azure-eu-zdr-v1"]
     reasoning_effort: Literal["medium"]
     inference_grant_sha256: Sha256
     prompt_sha256: Sha256

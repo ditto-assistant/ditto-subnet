@@ -254,6 +254,21 @@ def test_authoring_freeze_vector_matches_platform_contract() -> None:
     assert response.ticket_id == request.ticket_id
 
 
+def test_authoring_evidence_rejects_solver_route_substitution() -> None:
+    raw = json.loads(_AUTHORING_FREEZE_VECTOR_PATH.read_text(encoding="utf-8"))[
+        "request"
+    ]["evidence"]
+    for field, value in (
+        ("model", "openai/another-model"),
+        ("provider", "other-route"),
+        ("provider_route_profile", "other-profile-v1"),
+    ):
+        changed = copy.deepcopy(raw)
+        changed["model"][field] = value
+        with pytest.raises(ValidationError):
+            CodingAuthoringEvidence.model_validate(changed)
+
+
 def test_evidence_golden_vectors_require_manifest_authority() -> None:
     vectors = _vectors()
     manifest = parse_canonical_json(CodingRunManifest, _body(vectors["manifest"]))

@@ -545,8 +545,16 @@ class CodingModelEvidence(CodingContractModel):
         return self
 
 
+class CodingAuthoringModelEvidence(CodingModelEvidence):
+    """The immutable v1 authoring route, distinct from capability evidence."""
+
+    model: Literal["openai/gpt-5.6-luna"]
+    provider: Literal["azure/eu"]
+    provider_route_profile: Literal["luna-azure-eu-zdr-v1"]
+
+
 class CodingAuthoringEvidence(CodingContractModel):
-    model: CodingModelEvidence
+    model: CodingAuthoringModelEvidence
     authoring_event_root: Sha256
     authoring_transcript_sha256: Sha256
     frozen_patch_sha256: Sha256
@@ -1726,6 +1734,7 @@ __all__ = [
     "CodingAuthoringLeaseRequest",
     "CodingAuthoringLeaseResponse",
     "CodingAuthoringEvidence",
+    "CodingAuthoringModelEvidence",
     "CodingBudgets",
     "CodingBuildEvidence",
     "CodingCapabilityCertificationReceipt",

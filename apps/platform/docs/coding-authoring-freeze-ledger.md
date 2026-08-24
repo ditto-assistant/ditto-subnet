@@ -29,6 +29,11 @@ protected-path flag, and freeze time. It does not expose model receipts,
 transcript bytes, frozen patch bytes, object keys, repository content, or
 private task identity.
 
+For coding contract v1, authoring evidence is accepted only for the locked
+`openai/gpt-5.6-luna` / `azure/eu` / `luna-azure-eu-zdr-v1` route with medium
+reasoning. A validator signature cannot substitute another solver or route;
+that requires a new immutable coding contract.
+
 ## Trust boundary
 
 The row records a validator-signed claim produced after the trusted runner

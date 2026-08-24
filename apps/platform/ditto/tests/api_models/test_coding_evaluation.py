@@ -112,6 +112,17 @@ def test_authoring_freeze_rejects_digest_key_and_known_field_drift() -> None:
         SubmitCodingAuthoringFreezeRequest.model_validate_json(
             json.dumps(changed_counter)
         )
+    for field, value in (
+        ("model", "openai/another-model"),
+        ("provider", "other-route"),
+        ("provider_route_profile", "other-profile-v1"),
+    ):
+        changed_route = json.loads(json.dumps(raw))
+        changed_route["evidence"]["model"][field] = value
+        with pytest.raises(ValidationError):
+            SubmitCodingAuthoringFreezeRequest.model_validate_json(
+                json.dumps(changed_route)
+            )
     changed_counts = {**raw, "authoring_event_count": 0}
     with pytest.raises(ValidationError, match="disagree"):
         SubmitCodingAuthoringFreezeRequest.model_validate_json(
