@@ -318,3 +318,83 @@ func TestProviderURLsArePinnedCredentialBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestTraceConfigDisabledIgnoresSinks(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{})
+	if cfg.Traces.Enabled || len(cfg.Traces.Sinks) != 0 {
+		t.Fatalf("traces should be off by default: %+v", cfg.Traces)
+	}
+}
+
+func TestTraceConfigHippiusInheritsPlatformCredentials(t *testing.T) {
+	cfg := mustLoad(t, map[string]string{
+		"INFERENCE_TRACE_ENABLED":                          "true",
+		"INFERENCE_TRACE_SPOOL_DIR":                        "/var/tmp/traces",
+		"INFERENCE_TRACE_SINKS":                            "hippius, backblaze",
+		"HIPPIUS_ENDPOINT":                                 "https://eu-central-1.hippius.com",
+		"HIPPIUS_REGION":                                   "decentralized",
+		"HIPPIUS_ACCESS_KEY_ID":                            "hip_abc",
+		"HIPPIUS_SECRET_ACCESS_KEY":                        "s3cr3t",
+		"INFERENCE_TRACE_SINK_BACKBLAZE_ENDPOINT":          "https://s3.us-west-004.backblazeb2.com",
+		"INFERENCE_TRACE_SINK_BACKBLAZE_REGION":            "us-west-004",
+		"INFERENCE_TRACE_SINK_BACKBLAZE_BUCKET":            "ditto-subnet-traces",
+		"INFERENCE_TRACE_SINK_BACKBLAZE_ACCESS_KEY_ID":     "004abc",
+		"INFERENCE_TRACE_SINK_BACKBLAZE_SECRET_ACCESS_KEY": "K004xyz",
+		"INFERENCE_TRACE_SINK_BACKBLAZE_REQUIRED":          "false",
+	})
+	if !cfg.Traces.Enabled || len(cfg.Traces.Sinks) != 2 {
+		t.Fatalf("traces: %+v", cfg.Traces)
+	}
+	h := cfg.Traces.Sinks[0]
+	if h.Name != "hippius" || h.Endpoint != "https://eu-central-1.hippius.com" || h.Region != "decentralized" ||
+		h.Bucket != "ditto-subnet-traces" || h.AccessKeyID != "hip_abc" || h.SecretAccessKey != "s3cr3t" || !h.Required || !h.PathStyle {
+		t.Fatalf("hippius sink: %+v", h)
+	}
+	b := cfg.Traces.Sinks[1]
+	if b.Name != "backblaze" || b.Required || b.Region != "us-west-004" || b.AccessKeyID != "004abc" {
+		t.Fatalf("backblaze sink: %+v", b)
+	}
+	if cfg.Traces.RotateBytes != 64<<20 || cfg.Traces.RotateInterval.Seconds() != 300 || !cfg.Traces.EmbeddingVectors {
+		t.Fatalf("defaults: %+v", cfg.Traces)
+	}
+}
+
+func TestTraceConfigEnabledFailsLoudlyWithoutSinkOrDir(t *testing.T) {
+	_, err := Load(MapLookup(withBase(map[string]string{"INFERENCE_TRACE_ENABLED": "1"})))
+	if err == nil {
+		t.Fatalf("expected boot failure")
+	}
+	for _, want := range []string{"INFERENCE_TRACE_SPOOL_DIR", "INFERENCE_TRACE_SINKS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error should name %s: %v", want, err)
+		}
+	}
+	_, err = Load(MapLookup(withBase(map[string]string{
+		"INFERENCE_TRACE_ENABLED":   "1",
+		"INFERENCE_TRACE_SPOOL_DIR": "/x",
+		"INFERENCE_TRACE_SINKS":     "hippius",
+		"HIPPIUS_ENDPOINT":          "https://eu-central-1.hippius.com",
+		"HIPPIUS_ACCESS_KEY_ID":     "notahipkey",
+		"HIPPIUS_SECRET_ACCESS_KEY": "s",
+	})))
+	if err == nil || !strings.Contains(err.Error(), "hip_") {
+		t.Fatalf("non-Hippius key id must be refused for the hippius sink: %v", err)
+	}
+}
+
+func withBase(extra map[string]string) map[string]string {
+	env := minimalEnv()
+	for k, v := range extra {
+		env[k] = v
+	}
+	return env
+}
+
+func mustLoad(t *testing.T, extra map[string]string) *Config {
+	t.Helper()
+	cfg, err := Load(MapLookup(withBase(extra)))
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	return cfg
+}

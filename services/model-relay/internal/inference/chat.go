@@ -19,6 +19,7 @@ import (
 
 	"github.com/ditto-assistant/model-relay/internal/postgres"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
+	"github.com/ditto-assistant/model-relay/internal/traces"
 )
 
 // lockedGrantModel mirrors _locked_grant_model: the model is a property of
@@ -298,6 +299,8 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if decline != nil {
 		// The decline rolls the admission transaction back (deferred
 		// rollback): stale reclamation and status writes are discarded.
+		d.traceDeclined(r, headers, traces.LaneInference, traces.KindChat, body, now,
+			traceInferenceGrant(&grantSnapshot, model), decline.String())
 		relayhttp.WriteDecline(w, r, *decline, relayhttp.LaneInference)
 		return
 	}
@@ -393,6 +396,12 @@ func (d *Deps) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		outcome.routeObservable = true
 	}
 	settle()
+	d.traceChatSettled(chatTrace{
+		r: r, headers: headers, body: body, receivedAt: now, grant: &reservedGrant, model: model,
+		locked: upstreamPayload, outcome: outcome, recovered: recovered, exhausted: exhausted, raw: raw,
+		started: started, deliverable: deliverable, failure: providerFailure, settleErr: settleErr,
+		reserved: result.request.ReservedTokens, chargeable: result.request.MaxChargeableTokens, admittedAt: now,
+	})
 	if settleErr != nil {
 		relayhttp.WriteInternalError(w, r)
 		return

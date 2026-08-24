@@ -15,6 +15,7 @@ import (
 	"github.com/ditto-assistant/model-relay/internal/postgres"
 	"github.com/ditto-assistant/model-relay/internal/relayhttp"
 	"github.com/ditto-assistant/model-relay/internal/server"
+	"github.com/ditto-assistant/model-relay/internal/traces"
 )
 
 // Wire timing constants (endpoints/inference.py).
@@ -36,6 +37,9 @@ type Deps struct {
 	Permits  chain.PermitChecker
 	Upstream *http.Client
 	Settings *SettingsResolver
+	// Traces is the inference trace capture (nil = disabled). Hooks run after
+	// settlement and never block the request.
+	Traces traces.Recorder
 
 	// Sleep is the provider-retry backoff hook (tests replace it).
 	Sleep sleepFunc

@@ -120,6 +120,34 @@ var declineWire = map[Decline]struct {
 // (AT_CAPACITY); every other decline is terminal.
 func (d Decline) Retryable() bool { return d == DeclineAtCapacity }
 
+// String is the stable snake_case label used in logs, metrics and the
+// inference trace capture. It is NOT the wire message.
+func (d Decline) String() string {
+	switch d {
+	case DeclineUnattributed:
+		return "unattributed"
+	case DeclineGrantRevoked:
+		return "grant_revoked"
+	case DeclineBudgetExhausted:
+		return "budget_exhausted"
+	case DeclineAtCapacity:
+		return "at_capacity"
+	case DeclineTokenBudgetExhausted:
+		return "token_budget_exhausted"
+	case DeclineLeaseExpired:
+		return "lease_expired"
+	case DeclineNonceReplayed:
+		return "nonce_replayed"
+	case DeclineModelNotPermitted:
+		return "model_not_permitted"
+	case DeclineGrantNotExchanged:
+		return "grant_not_exchanged"
+	case DeclineReservationTooLarge:
+		return "reservation_too_large"
+	}
+	return "unknown"
+}
+
 // WriteDecline writes the decline envelope for the given lane.
 // AT_CAPACITY → 503 + "Retry-After: 1"; terminal declines → 429. The message
 // is "{lane} {text}" (AT_CAPACITY reads "{lane} lane is at capacity").

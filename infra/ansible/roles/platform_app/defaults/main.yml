@@ -128,6 +128,25 @@ platform_hippius_bucket: ""
 secret_hippius_access_key_id: platform-hippius-access-key-id
 secret_hippius_secret_access_key: platform-hippius-secret-access-key
 
+# Inference trace capture (services/model-relay internal/traces): every
+# brokered call's bodies, provider exchange, usage and timing, spooled on the
+# relay host and shipped to S3-compatible buckets. Off until a host pins
+# platform_trace_enabled; then the Hippius sink reuses the HIPPIUS_* creds
+# above and needs only its own PRIVATE bucket, and an optional Backblaze B2
+# mirror is added when platform_trace_backblaze_bucket is set (its keys come
+# from Secret Manager: platform-backblaze-key-id / -application-key). The
+# relay refuses to boot if an enabled sink is unreachable.
+platform_trace_enabled: false
+platform_trace_spool_dir: /opt/ditto-platform-relay/traces
+platform_trace_hippius_bucket: ditto-subnet-traces
+platform_trace_backblaze_bucket: ""
+platform_trace_backblaze_endpoint: ""
+platform_trace_backblaze_region: ""
+platform_trace_backblaze_required: false
+platform_trace_embedding_vectors: true
+secret_backblaze_key_id: platform-backblaze-key-id
+secret_backblaze_application_key: platform-backblaze-application-key
+
 # Subnet / pricing config (mirrors .env.example defaults).
 platform_netuid: 118
 platform_subtensor_network: finney

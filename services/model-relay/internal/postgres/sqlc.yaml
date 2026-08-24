@@ -10,6 +10,7 @@ sql:
       - "concurrency_settings_queries.sql"
       - "confirmation_inference_queries.sql"
       - "upload_queries.sql"
+      - "trace_backfill_queries.sql"
     # schema.sql is GENERATED from the apps/platform Alembic chain by
     # scripts/gen-schema.sh — never hand-edit it. Alembic owns the schema;
     # this service only reads/writes existing tables.
