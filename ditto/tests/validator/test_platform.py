@@ -1048,7 +1048,9 @@ async def test_submit_score_retries_empty_502_as_infrastructure(
         validator_hotkey=keypair.ss58_address,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        with pytest.raises(PlatformInfrastructureError, match="score rejected \\(502\\)"):
+        with pytest.raises(
+            PlatformInfrastructureError, match="score rejected \\(502\\)"
+        ):
             await PlatformClient(cast(Any, config), http, keypair).submit_score(
                 agent_id,
                 signature="ab" * 64,
@@ -1085,9 +1087,9 @@ async def test_submit_score_recovers_after_transient_502(
         validator_hotkey=keypair.ss58_address,
     )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        response = await PlatformClient(
-            cast(Any, config), http, keypair
-        ).submit_score(agent_id, signature="ab" * 64, report=_score_report())
+        response = await PlatformClient(cast(Any, config), http, keypair).submit_score(
+            agent_id, signature="ab" * 64, report=_score_report()
+        )
 
     assert attempts == 2
     assert response.accepted is True
