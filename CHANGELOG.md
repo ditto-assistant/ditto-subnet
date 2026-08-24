@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.108.0 (2026-08-24)
+
+### Bug Fixes
+
+- **platform**: Name public pipeline infrastructure failure codes
+  ([#1132](https://github.com/ditto-assistant/ditto-subnet/pull/1132),
+  [`d147de5`](https://github.com/ditto-assistant/ditto-subnet/commit/d147de5bf1b05ad71b72d1d604beca0dcd247ac8))
+
+### Features
+
+- **dittobench**: Attribute relayed inference calls to their run and case
+  ([#1081](https://github.com/ditto-assistant/ditto-subnet/pull/1081),
+  [`faf1690`](https://github.com/ditto-assistant/ditto-subnet/commit/faf1690a259dae8b2661d470d8cb65c23c95b8f1))
+
+- **model-relay**: Capture every brokered inference call to S3 trace buckets
+  ([#1079](https://github.com/ditto-assistant/ditto-subnet/pull/1079),
+  [`2cc12c0`](https://github.com/ditto-assistant/ditto-subnet/commit/2cc12c00737fb45824b5d2f43d75eb1728011890))
+
+
 ## v0.107.1 (2026-08-23)
 
 ### Bug Fixes
