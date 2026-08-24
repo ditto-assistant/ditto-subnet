@@ -59,7 +59,7 @@
       "search": ["rg -n 'LIVE_SCORING_BENCH_VERSION|run-size|tool_endpoint' miners/dittobench-starter-kit/scripts ditto/miner_cli/commands/practice.py", "rg -n 'evaluate|practice' miners/dittobench-starter-kit/README.md docs/MINER.md", "python3 .agents/skills/backroom-review/scripts/search-precedents.py --list"],
       "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/mine", "python3 miners/dittobench-starter-kit/scripts/test_local_rehearsal.py", "uv run pytest ditto/tests/miner_cli/commands/test_practice.py -q", "python3 .agents/skills/backroom-review/scripts/search-precedents.py family-compiler"],
       "invariants": ["Do not treat cargo evaluate or hosted rehearsal as on-chain certification.", "Local ditto practice --run-size full matches the on-chain dataset envelope and observed-tool scorer, not the locked model or screened image.", "Do not package or upload a harness that fails the operator two-limb or production-engine bar."],
-      "related": ["validator-miner", "dittobench-scoring", "backroom-review"]
+      "related": ["validator-miner", "dittobench-scoring", "backroom-review", "miner-comms"]
     },
     {
       "id": "wandb-operations",
@@ -143,7 +143,19 @@
       "search": ["rg -n 'search_ath_precedents|copy-reviews/precedents' apps/backroom apps/platform", "python3 .agents/skills/backroom-review/scripts/search-precedents.py --list"],
       "validate": ["python3 .agents/skills/backroom-review/scripts/search-precedents.py family-compiler", "cd apps/platform && uv run pytest ditto/tests/api_server/endpoints/test_admin_copy_review.py -q -k precedents", "cd apps/backroom && pnpm exec vitest run src/server/mcp.server.test.ts src/server/admin.service.test.ts"],
       "invariants": ["Cite a live or local precedent before resolving an ATH hold.", "Ban is per agent UUID; same SHA or hotkey is a different row.", "Do not open ATH on evaluating agents."],
-      "related": ["backroom", "platform-api", "mine"]
+      "related": ["backroom", "platform-api", "mine", "miner-comms"]
+    },
+    {
+      "id": "miner-comms",
+      "title": "Miner Discord and DM replies",
+      "keywords": ["miner comms", "discord", "dm", "reply for this miner", "owner-link", "copy hold", "champion", "confirmation seeds", "gimme a reply"],
+      "summary": "Investigate miner questions against live Backroom state, then draft a paste-ready Discord reply. Mutations stay on backroom-review.",
+      "owns": [".agents/skills/miner-comms"],
+      "read": [".agents/skills/miner-comms/SKILL.md", ".agents/skills/miner-comms/references/topics.md", "docs/OWNER-LINKS.md", "services/dittobench-api/docs/seed-and-scoring.md"],
+      "search": ["rg -n 'TOP5_MAX_CONFIRMATION_SEEDS|KOTH_MARGIN' ditto/validator/config.py"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/miner-comms"],
+      "invariants": ["Investigate live Backroom state before drafting.", "Do not promise a clear, un-ban, or extra emission slot in the miner-facing paste."],
+      "related": ["backroom-review", "mine", "validator-miner"]
     },
     {
       "id": "screener-capacity",

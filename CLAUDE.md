@@ -32,7 +32,9 @@ Load only the returned anchors and the relevant specialized skill:
 - `.agents/skills/ditto-subnet-dependabot-review` for Dependabot and other
   dependency-PR security review;
 - `.agents/skills/backroom-review` for quarantine triage, high-score ATH
-  review, and precedents.
+  review, and precedents;
+- `.agents/skills/miner-comms` for Discord/DM miner replies after a live
+  Backroom investigation.
 
 ## Ownership map
 
@@ -51,6 +53,7 @@ Load only the returned anchors and the relevant specialized skill:
 | Terraform and Ansible | `infra/` |
 | Release ownership graph | `release/components.toml` |
 | Backroom quarantine and ATH review | `.agents/skills/backroom-review/` |
+| Miner Discord / DM replies | `.agents/skills/miner-comms/` |
 | Dependabot / dependency-PR review | `.agents/skills/ditto-subnet-dependabot-review/` |
 | Preview channels and mock engine | `ditto/preview/`, `preview/` |
 
