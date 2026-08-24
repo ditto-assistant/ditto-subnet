@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.109.0 (2026-08-24)
+
+### Documentation
+
+- **skills**: Add miner-comms for Discord replies
+  ([#1134](https://github.com/ditto-assistant/ditto-subnet/pull/1134),
+  [`b03eba6`](https://github.com/ditto-assistant/ditto-subnet/commit/b03eba68f94756cbb44a347c4e5a6979684222e4))
+
+### Features
+
+- **platform**: Give Backroom audited MCP access to the inference trace archive
+  ([#1135](https://github.com/ditto-assistant/ditto-subnet/pull/1135),
+  [`89abcf0`](https://github.com/ditto-assistant/ditto-subnet/commit/89abcf0f6a7408f29b447f0ae411fa335e04ccdb))
+
+
 ## v0.108.0 (2026-08-24)
 
 ### Bug Fixes
