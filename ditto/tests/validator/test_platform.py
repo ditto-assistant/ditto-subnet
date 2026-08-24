@@ -1027,6 +1027,9 @@ def _score_report() -> ScoreReport:
         median_ms=10,
         n=1,
         generated_at=datetime.now(UTC),
+        per_case=[],
+        structural_fingerprint=None,
+        details=None,
     )
 
 
