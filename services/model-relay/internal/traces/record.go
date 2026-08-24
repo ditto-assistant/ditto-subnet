@@ -87,6 +87,14 @@ type Request struct {
 	Body        json.RawMessage `json:"body,omitempty"` // exact bytes the miner sent (JSON)
 	BodyBytes   int64           `json:"body_bytes"`
 	BodySHA256  string          `json:"body_sha256,omitempty"`
+	// Context is the broker's X-Ditto-Trace-Context: which run, agent, slot
+	// and benchmark case the call served (dittobench-api traceContext, v1),
+	// recorded verbatim. RunID/CaseID are lifted out for convenience; CaseID
+	// may be a candidate the broker could not verify -- read
+	// context.case_verified before trusting it.
+	Context json.RawMessage `json:"context,omitempty"`
+	RunID   string          `json:"run_id,omitempty"`
+	CaseID  string          `json:"case_id,omitempty"`
 }
 
 // Grant is the capability the call ran under, snapshotted at admission.

@@ -89,6 +89,13 @@ rejects header-signed PUTs; Backblaze B2 and AWS accept both).
 inherits the Platform's `HIPPIUS_*` credentials and defaults its bucket to
 `ditto-subnet-traces`; every other sink is configured with
 `INFERENCE_TRACE_SINK_<NAME>_{ENDPOINT,REGION,BUCKET,ACCESS_KEY_ID,SECRET_ACCESS_KEY,REQUIRED,PREFIX}`.
+Each record also carries the broker's `X-Ditto-Trace-Context` (`request.context`,
+with `run_id`/`case_id` lifted): which run, agent, slot and benchmark case the
+call served — exact for serial runs and confirmation windows, a candidate set
+(`cases_in_flight`) under concurrent `/run` unless the harness claimed a case
+with `X-Ditto-Case-Id` (see dittobench-api PROTOCOL.md). Check
+`context.case_verified` before trusting `case_id`; the header is advisory and
+is dropped (never a 4xx) when oversized or not a JSON object.
 A file leaves the disk only when every *required* sink holds it; per-sink
 completion lives in a sidecar so a sink outage never re-sends to the others
 and a restart resumes where it stopped. Capture never blocks an inference

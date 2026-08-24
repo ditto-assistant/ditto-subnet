@@ -46,6 +46,16 @@ func traceRequest(r *http.Request, h *proxyHeaders, lane, kind string, body []by
 	if h.hasRequestedAt {
 		req.RequestedAt = traces.TimePtr(h.requestedAt)
 	}
+	if len(h.traceContext) > 0 {
+		req.Context = json.RawMessage(h.traceContext)
+		var lifted struct {
+			RunID  string `json:"run_id"`
+			CaseID string `json:"case_id"`
+		}
+		if json.Unmarshal(h.traceContext, &lifted) == nil {
+			req.RunID, req.CaseID = lifted.RunID, lifted.CaseID
+		}
+	}
 	return req
 }
 
