@@ -101,6 +101,16 @@ whenever either holds:
 treating the kept failure as current made every retried-then-scored quorum input
 render as a failure in the public submission drawer.
 
+`failure_code` is the allowlisted machine cause. Agent-attributable codes
+(`inference_allowance_exhausted`, `inference_request_rejected`,
+`model_inference_required`) are terminal. Infrastructure relay causes
+(`inference_lane_saturated`, `provider_recovery_exhausted`,
+`grant_decline_evidence_mismatch`, `budget_evidence_absent`) stay no-fault —
+the pipeline still marks them deferred — but they must be published so the
+dashboard can say "Inference lane saturated" instead of a generic
+"Validator infrastructure failure". Validators store those as
+`model_relay_unavailable:{cause}`; the public field publishes the cause.
+
 ## When is a submission "stuck"?
 
 A below-quorum submission is one of these retry states (surfaced per agent and

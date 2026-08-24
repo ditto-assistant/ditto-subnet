@@ -141,6 +141,7 @@ from ditto.api_models import (
     PublicValidatorScore,
     PublicValidatorSlotPolicy,
     PublicValidatorWeightVector,
+    public_validation_failure_code,
 )
 from ditto.api_models import bench_glossary as bench_glossary_data
 from ditto.api_models.agent_status import AgentStatus
@@ -6491,23 +6492,7 @@ async def agent_pipeline(
                     Literal["infrastructure", "scoring_error", "sandbox_oom"] | None,
                     ticket.failure_reason,
                 ),
-                failure_code=(
-                    cast(
-                        Literal[
-                            "inference_allowance_exhausted",
-                            "inference_request_rejected",
-                            "model_inference_required",
-                        ],
-                        ticket.failure_detail,
-                    )
-                    if ticket.failure_detail
-                    in {
-                        "inference_allowance_exhausted",
-                        "inference_request_rejected",
-                        "model_inference_required",
-                    }
-                    else None
-                ),
+                failure_code=public_validation_failure_code(ticket.failure_detail),
                 failed_at=ticket.failed_at,
                 attempt_count=ticket.attempt_count,
             )

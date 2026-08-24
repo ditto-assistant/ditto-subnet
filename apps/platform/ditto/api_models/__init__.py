@@ -115,6 +115,7 @@ from ditto.api_models.public import (
     PublicV9ModelUseGate,
     PublicV9ScoreGateEvidence,
     PublicValidationAttempt,
+    PublicValidationFailureCode,
     PublicValidatorHeartbeat,
     PublicValidatorHeartbeatsResponse,
     PublicValidatorName,
@@ -122,6 +123,7 @@ from ditto.api_models.public import (
     PublicValidatorScore,
     PublicValidatorSlotPolicy,
     PublicValidatorWeightVector,
+    public_validation_failure_code,
 )
 from ditto.api_models.retrieval import AgentResponse, AgentStatusResponse
 from ditto.api_models.screener import (
@@ -303,6 +305,8 @@ __all__ = [
     "PublicScreeningReviewFinding",
     "PublicScreeningReviewLocation",
     "PublicValidationAttempt",
+    "PublicValidationFailureCode",
+    "public_validation_failure_code",
     "PublicValidatorHeartbeat",
     "PublicValidatorHeartbeatsResponse",
     "PublicValidatorName",

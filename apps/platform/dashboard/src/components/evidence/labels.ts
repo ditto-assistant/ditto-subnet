@@ -23,12 +23,22 @@ export function attemptLabel(status: string | null | undefined, role: string): C
   return (status != null && labels[status]) || [String(status || "Unknown").replace(/_/g, " "), ""];
 }
 
+const INFRA_RELAY_CAUSE_LABELS: Record<string, string> = {
+  inference_lane_saturated: "Inference lane saturated",
+  provider_recovery_exhausted: "Inference provider recovery exhausted",
+  grant_decline_evidence_mismatch: "Inference grant evidence mismatch",
+  budget_evidence_absent: "Inference budget evidence missing",
+};
+
 export function validatorFailureLabel(
   reason: string | null | undefined,
   code?: string | null,
 ): string {
   if (code === "inference_allowance_exhausted") return "Inference allowance exhausted";
   if (code === "inference_request_rejected") return "Inference request rejected";
+  if (code === "model_inference_required") return "Model inference required";
+  const relayLabel = code ? INFRA_RELAY_CAUSE_LABELS[code] : undefined;
+  if (relayLabel) return relayLabel;
   const labels: Record<string, string> = {
     sandbox_oom: "Sandbox out of memory",
     infrastructure: "Validator infrastructure failure",
@@ -38,7 +48,15 @@ export function validatorFailureLabel(
 }
 
 function isAgentTerminalInferenceCode(code?: string | null): boolean {
-  return code === "inference_allowance_exhausted" || code === "inference_request_rejected";
+  return (
+    code === "inference_allowance_exhausted" ||
+    code === "inference_request_rejected" ||
+    code === "model_inference_required"
+  );
+}
+
+function isInfraRelayCause(code?: string | null): boolean {
+  return !!code && code in INFRA_RELAY_CAUSE_LABELS;
 }
 
 /** Screening attempt chip; a resolved quarantine reads by its resolution
@@ -127,9 +145,15 @@ export function validationAttemptView(a: ValidationAttempt): ValidationAttemptVi
       ? "The agent exhausted its request or token allowance, or sent one request larger than the run token allowance. It is not validator infrastructure and does not receive an automatic infrastructure retry."
       : a.failure_code === "inference_request_rejected" && currentFailure
         ? "The platform refused the harness's inference request before reserving capacity (schema, size, or an unsupported field). It is not a spent grant and does not receive an automatic infrastructure retry."
-        : canonical && (a.actively_running ? "running" : a.status) === "expired"
-          ? VALIDATOR_RETRY_EXPLANATION
-          : null;
+        : a.failure_code === "model_inference_required" && currentFailure
+          ? "The scorer could not prove the harness reached hosted inference. It is not validator infrastructure and does not receive an automatic infrastructure retry."
+          : a.failure_code === "inference_lane_saturated" && currentFailure
+            ? "The hosted inference rail was full, so the scorer refused to publish a score. This is not the agent's fault; another validator retries automatically."
+            : isInfraRelayCause(a.failure_code) && currentFailure
+              ? "Hosted inference failed as validator infrastructure. This is not the agent's fault; another validator retries automatically."
+              : canonical && (a.actively_running ? "running" : a.status) === "expired"
+                ? VALIDATOR_RETRY_EXPLANATION
+                : null;
   let meta = "";
   if (a.actively_running) meta += " is running the benchmark";
   else if (a.status === "issued") meta += " has this assignment";
@@ -141,6 +165,10 @@ export function validationAttemptView(a: ValidationAttempt): ValidationAttemptVi
     meta += " · exceeded the run inference allowance";
   } else if (currentFailure && a.failure_code === "inference_request_rejected") {
     meta += " · request refused before reservation";
+  } else if (currentFailure && a.failure_code === "model_inference_required") {
+    meta += " · no proven hosted inference";
+  } else if (currentFailure && a.failure_code === "inference_lane_saturated") {
+    meta += " · hosted inference rail was full";
   } else if (currentFailure) meta += " · reported " + failureLabel.toLowerCase();
   else if (priorFailure) meta += " · an earlier attempt reported " + failureLabel.toLowerCase();
   if (a.deadline && (a.actively_running || a.status === "issued")) {
