@@ -158,6 +158,8 @@ The next implementation steps are intentionally narrow:
 
 The lease boundary is defined in
 [`coding-qualified-certification-lease-shadow.md`](coding-qualified-certification-lease-shadow.md).
+The later screening and private-score boundary is defined in
+[`coding-screening-private-scoring-policy.md`](coding-screening-private-scoring-policy.md).
 
 Each step remains score-neutral. A separate owner-approved activation, new
 contract version, calibration evidence, and emissions-policy review are
