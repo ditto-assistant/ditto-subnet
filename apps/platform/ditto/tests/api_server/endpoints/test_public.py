@@ -45,6 +45,7 @@ from ditto.api_models.public import (
     PublicSubmissionPipeline,
     PublicSystemMetrics,
     PublicV9BaseEvidence,
+    public_validation_failure_code,
 )
 from ditto.api_models.screener import (
     SCREENING_POLICY_VERSION,
@@ -1516,6 +1517,44 @@ def _chain_epoch() -> ChainEpoch:
         reveal_period_epochs=1,
         weights_rate_limit=100,
     )
+
+
+class TestPublicValidationFailureCode:
+    def test_exact_agent_and_infra_codes(self) -> None:
+        assert (
+            public_validation_failure_code("inference_allowance_exhausted")
+            == "inference_allowance_exhausted"
+        )
+        assert (
+            public_validation_failure_code("inference_lane_saturated")
+            == "inference_lane_saturated"
+        )
+
+    def test_prefixed_relay_cause(self) -> None:
+        assert (
+            public_validation_failure_code(
+                "model_relay_unavailable:inference_lane_saturated"
+            )
+            == "inference_lane_saturated"
+        )
+        assert (
+            public_validation_failure_code(
+                "model_relay_unavailable:provider_recovery_exhausted"
+            )
+            == "provider_recovery_exhausted"
+        )
+
+    def test_unknown_detail_stays_private(self) -> None:
+        assert public_validation_failure_code(None) is None
+        assert public_validation_failure_code("model_relay_unavailable") is None
+        assert (
+            public_validation_failure_code("model_relay_unavailable:not_a_public_cause")
+            is None
+        )
+        assert (
+            public_validation_failure_code("database error: concurrent use forbidden")
+            is None
+        )
 
 
 class TestPublicChainWeights:
@@ -8716,6 +8755,97 @@ class TestPublicActivity:
         attempt = response.json()["validation_attempts"][0]
         assert attempt["failure_reason"] == "scoring_error"
         assert attempt["failure_code"] == "inference_request_rejected"
+
+    async def test_pipeline_publishes_inference_lane_saturated(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """Publish the no-fault relay cause, not the generic infrastructure label.
+
+        Validators store ``model_relay_unavailable:inference_lane_saturated`` so
+        old workers still treat the ticket as no-fault infrastructure. The public
+        pipeline must still name the cause: otherwise the dashboard can only say
+        "Validator infrastructure failure · deferred".
+        """
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="lane-saturated-agent",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        now = datetime.now(UTC)
+        deadline = now - timedelta(minutes=5)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=_MINER_B,
+                    slot_id="slot-0",
+                    bench_version=_ERA,
+                    status=TicketStatus.EXPIRED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    issued_at=now - timedelta(hours=1),
+                    deadline=deadline,
+                    failure_reason="infrastructure",
+                    failure_detail="model_relay_unavailable:inference_lane_saturated",
+                    failed_at=deadline,
+                )
+            )
+        _install_db(app, session_maker)
+
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+
+        assert response.status_code == 200
+        attempt = response.json()["validation_attempts"][0]
+        assert attempt["failure_reason"] == "infrastructure"
+        assert attempt["failure_code"] == "inference_lane_saturated"
+
+    async def test_pipeline_keeps_freeform_infrastructure_detail_private(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = UUID(
+            await _seed_agent(
+                session_maker,
+                miner=_MINER_A,
+                status=AgentStatus.EVALUATING,
+                name="opaque-infra-agent",
+                screening_policy_version=SCREENING_POLICY_VERSION,
+            )
+        )
+        now = datetime.now(UTC)
+        deadline = now - timedelta(minutes=5)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ValidatorTicket(
+                    agent_id=agent_id,
+                    validator_hotkey=_MINER_B,
+                    slot_id="slot-0",
+                    bench_version=_ERA,
+                    status=TicketStatus.EXPIRED,
+                    purpose=TicketPurpose.CANONICAL_QUORUM,
+                    issued_at=now - timedelta(hours=1),
+                    deadline=deadline,
+                    failure_reason="infrastructure",
+                    failure_detail="model_relay_unavailable:not_a_public_cause",
+                    failed_at=deadline,
+                )
+            )
+        _install_db(app, session_maker)
+
+        response = await client.get(f"/api/v1/public/agent/{agent_id}/pipeline")
+
+        assert response.status_code == 200
+        attempt = response.json()["validation_attempts"][0]
+        assert attempt["failure_reason"] == "infrastructure"
+        assert attempt["failure_code"] is None
 
     async def test_pipeline_dates_a_retried_lease_after_its_kept_failure(
         self,

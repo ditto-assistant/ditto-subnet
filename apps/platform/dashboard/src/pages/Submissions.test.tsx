@@ -582,6 +582,27 @@ describe("superseded validator failures stay history (row 21, #459)", () => {
     expect(view.retryTip).toContain("does not receive an automatic infrastructure retry");
   });
 
+  it("names a saturated inference rail without calling it the agent's fault", () => {
+    const view = validationAttemptView({
+      validator_hotkey: "5CFtzzb4",
+      status: "expired",
+      purpose: "canonical_quorum",
+      issued_at: "2026-07-25T20:00:00Z",
+      deadline: "2026-07-25T22:00:00Z",
+      bench_version: 11,
+      actively_running: false,
+      failure_reason: "infrastructure",
+      failure_code: "inference_lane_saturated",
+      failed_at: "2026-07-25T21:00:00Z",
+    });
+    expect(view.headline).toBe("Inference lane saturated · deferred");
+    expect(view.headline).not.toBe("Validator infrastructure failure · deferred");
+    expect(view.tone).toBe("warn");
+    expect(view.metaRest).toContain("hosted inference rail was full");
+    expect(view.retryTip).toContain("not the agent's fault");
+    expect(view.retryTip).toContain("retries automatically");
+  });
+
   it("keeps a clean first-attempt score plainly worded", () => {
     const view = validationAttemptView({
       validator_hotkey: "5HmP9732",

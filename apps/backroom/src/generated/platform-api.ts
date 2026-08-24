@@ -15718,7 +15718,7 @@ export interface components {
             /** Failed At */
             failed_at?: string | null;
             /** Failure Code */
-            failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required") | null;
+            failure_code?: ("inference_allowance_exhausted" | "inference_request_rejected" | "model_inference_required" | "inference_lane_saturated" | "provider_recovery_exhausted" | "grant_decline_evidence_mismatch" | "budget_evidence_absent") | null;
             /** Failure Reason */
             failure_reason?: ("infrastructure" | "scoring_error" | "sandbox_oom") | null;
             /**

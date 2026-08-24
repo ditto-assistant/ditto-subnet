@@ -171,6 +171,10 @@ export interface ValidationAttempt {
     | "inference_allowance_exhausted"
     | "inference_request_rejected"
     | "model_inference_required"
+    | "inference_lane_saturated"
+    | "provider_recovery_exhausted"
+    | "grant_decline_evidence_mismatch"
+    | "budget_evidence_absent"
     | null;
   deadline?: string | null;
   benchmark_progress?: BenchmarkProgress | null;

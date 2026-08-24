@@ -10,7 +10,7 @@ hand a miner the benchmark's answer key (per-case ``expected``/``called``). See
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -2865,6 +2865,56 @@ class CreateScreeningDisputeResponse(BaseModel):
     dispute: PublicScreeningDispute
 
 
+PublicValidationFailureCode = Literal[
+    "inference_allowance_exhausted",
+    "inference_request_rejected",
+    "model_inference_required",
+    "inference_lane_saturated",
+    "provider_recovery_exhausted",
+    "grant_decline_evidence_mismatch",
+    "budget_evidence_absent",
+]
+
+_PUBLIC_AGENT_FAILURE_CODES: frozenset[str] = frozenset(
+    {
+        "inference_allowance_exhausted",
+        "inference_request_rejected",
+        "model_inference_required",
+    }
+)
+_PUBLIC_INFRA_RELAY_CAUSES: frozenset[str] = frozenset(
+    {
+        "inference_lane_saturated",
+        "provider_recovery_exhausted",
+        "grant_decline_evidence_mismatch",
+        "budget_evidence_absent",
+    }
+)
+
+
+def public_validation_failure_code(
+    failure_detail: str | None,
+) -> PublicValidationFailureCode | None:
+    """Map a ticket ``failure_detail`` onto the public allowlist, or None.
+
+    Agent-attributable codes are stored as the exact detail string.
+    Infrastructure relay causes are stored as ``{code}:{cause}`` so old
+    validators still treat them as no-fault ``model_relay_unavailable``; the
+    public field publishes the cause alone.
+    """
+    if failure_detail is None:
+        return None
+    if failure_detail in _PUBLIC_AGENT_FAILURE_CODES:
+        return cast(PublicValidationFailureCode, failure_detail)
+    if failure_detail in _PUBLIC_INFRA_RELAY_CAUSES:
+        return cast(PublicValidationFailureCode, failure_detail)
+    if ":" in failure_detail:
+        _code, cause = failure_detail.split(":", 1)
+        if cause in _PUBLIC_INFRA_RELAY_CAUSES:
+            return cast(PublicValidationFailureCode, cause)
+    return None
+
+
 class PublicValidationAttempt(BaseModel):
     """One validator ticket for either quorum scoring or continual retesting.
 
@@ -2889,19 +2939,14 @@ class PublicValidationAttempt(BaseModel):
     failure_reason: Literal["infrastructure", "scoring_error", "sandbox_oom"] | None = (
         None
     )
-    failure_code: (
-        Literal[
-            "inference_allowance_exhausted",
-            "inference_request_rejected",
-            "model_inference_required",
-        ]
-        | None
-    ) = None
-    """Allowlisted terminal cause behind ``failure_reason``.
+    failure_code: PublicValidationFailureCode | None = None
+    """Allowlisted machine cause behind ``failure_reason``.
 
     The validator's free-form diagnostic remains private. This field publishes
     only machine codes whose meaning is safe and useful to a miner; it is never
-    derived from arbitrary message text.
+    derived from arbitrary message text. Agent-attributable codes are terminal.
+    Infrastructure relay causes stay no-fault (the dashboard still marks them
+    deferred) so miners can see *why* a run was not scored.
     """
     failed_at: datetime | None = None
     attempt_count: Annotated[int, Field(ge=1)] = 1
