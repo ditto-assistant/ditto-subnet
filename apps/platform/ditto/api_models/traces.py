@@ -27,7 +27,7 @@ class TraceObjectList(BaseModel):
 
 
 class TraceDownloadURLRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     key: str = Field(min_length=1, max_length=1024)
     expires_in: int = Field(default=300, ge=60, le=3600)
@@ -43,7 +43,7 @@ class TraceDownloadURL(BaseModel):
 
 
 class TracePeekRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     key: str = Field(min_length=1, max_length=1024)
     max_records: int = Field(default=5, ge=1, le=50)
