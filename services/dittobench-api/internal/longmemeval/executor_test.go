@@ -134,10 +134,18 @@ func TestExecutorReferenceHarnessHTTPSEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	judge := &exactJudge{meter: meter}
-	executor := Executor{Harness: harness, Judge: judge, Meter: meter, Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64}}
+	var progress [][2]int
+	executor := Executor{
+		Harness: harness, Judge: judge, Meter: meter,
+		Limits: ExecutionLimits{MaxElapsed: time.Second, SeedBatchPairs: 64},
+		OnCase: func(completed, total int) { progress = append(progress, [2]int{completed, total}) },
+	}
 	result, err := executor.Execute(context.Background(), bytes.NewReader(raw), profile, artifactDigestA, fixtureProjectionKey)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(progress) < 2 || progress[0] != [2]int{0, 12} || progress[len(progress)-1] != [2]int{12, 12} {
+		t.Fatalf("case progress=%v", progress)
 	}
 	if result.Evidence.Score.CaseCount != 12 || result.Evidence.Score.LongMemMean != 0 {
 		t.Fatalf("reference floor score=%#v", result.Evidence.Score)

@@ -2541,7 +2541,7 @@ class TestV9ConfirmationClaimAdmission:
         )
         assert ticket.ticket_id == UUID(body["ticket_id"])
         assert reservation.reservation_id == UUID(body["reservation_id"])
-        assert ticket.deadline - ticket.issued_at == timedelta(minutes=90)
+        assert ticket.deadline - ticket.issued_at == timedelta(hours=4)
         assert bundle.state == "leased"
         # Reader, judge, and embedding caps are all reserved before execution.
         assert reservation.reserved_microusd == 300_000

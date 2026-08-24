@@ -122,6 +122,7 @@ from ditto.validator.weights import (
     select_champion,
 )
 from ditto_screening_protocol.bench_v9 import supports_confirmation
+from ditto_screening_protocol.confirmation import CAPABILITY_ORDER
 from ditto_screening_protocol.confirmation_transport import (
     CONFIRMATION_FAILURE_CLASS_VALUES,
 )
@@ -1965,12 +1966,7 @@ class ValidatorWorker:
                 failure_stage = (
                     self._confirmation_stage(slot_id) if error is not None else None
                 )
-                await self._publish_confirmation_progress(
-                    job,
-                    "failed_retrying",
-                    completed=0,
-                    total=1,
-                )
+                await self._publish_confirmation_progress(job, "failed_retrying")
                 try:
                     await asyncio.wait_for(
                         asyncio.shield(
@@ -2034,16 +2030,30 @@ class ValidatorWorker:
                     job=job,
                 )
                 artifact = await self._platform.get_v9_confirmation_artifact(job)
+                case_total = (
+                    job.execution_profile.longmem_cases_per_capability
+                    * len(CAPABILITY_ORDER)
+                )
                 await self._publish_confirmation_progress(
                     job,
                     "running_confirmation",
                     completed=0,
-                    total=1,
+                    total=case_total,
                 )
+
+                async def _on_longmem_case(completed: int, total: int) -> None:
+                    await self._publish_confirmation_progress(
+                        job,
+                        "running_confirmation",
+                        completed=completed,
+                        total=total,
+                    )
+
                 result = await self._dittobench.execute_v9_confirmation(
                     job=job,
                     artifact=artifact,
                     inference_session_id=inference_session.session_id,
+                    progress_callback=_on_longmem_case,
                 )
                 if job.deadline <= datetime.now(UTC):
                     raise LeaseDeadlineError(
@@ -2052,8 +2062,8 @@ class ValidatorWorker:
                 await self._publish_confirmation_progress(
                     job,
                     "finalizing",
-                    completed=1,
-                    total=1,
+                    completed=case_total,
+                    total=case_total,
                 )
                 prepared = await self._platform.prepare_v9_confirmation_report(
                     job, result
@@ -2091,8 +2101,8 @@ class ValidatorWorker:
                 await self._publish_confirmation_progress(
                     job,
                     "submitting_result",
-                    completed=1,
-                    total=1,
+                    completed=case_total,
+                    total=case_total,
                 )
                 await self._platform.submit_v9_confirmation_report(job, report)
             except asyncio.CancelledError:

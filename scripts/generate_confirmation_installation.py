@@ -73,9 +73,9 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-19-zdr-v5"
-LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-12-zdr-v3"
-ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-5-v1"
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-24-zdr-v6"
+LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-48-zdr-v4"
+ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-6-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
 STARTER_MAX_AGENT_TURNS = 24
 
@@ -158,7 +158,7 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
     ablation_sha = _file_sha256(ABLATION_DATASET)
     thresholds = {
         "schema_version": 1,
-        "revision": "v9-confirmation-ablation-thresholds-shadow-2026-08-13",
+        "revision": "v9-confirmation-ablation-thresholds-shadow-2026-08-24",
         "mode": "shadow",
         "sample_size": 4,
         "inference_threshold_micros": 200_000,
@@ -177,7 +177,7 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
         longmem_dataset_sha256=LONGMEM_DATASET_SHA256,
         longmem_selector_revision=LONGMEM_SELECTOR_REVISION_V1,
         longmem_selection_seed=17,
-        longmem_cases_per_capability=2,
+        longmem_cases_per_capability=8,
         longmem_seed_batch_pairs=32,
         longmem_projection_key_sha256=_domain_sha256("longmem-projection"),
         provider_lanes=(
@@ -195,15 +195,15 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
                 ),
                 model="openai/gpt-oss-20b",
                 # The public starter harness declares 24 agent turns per case.
-                # Twelve selected cases therefore require 288 reader requests
-                # at the frozen protocol maximum. Scale the original per-turn
-                # prompt/completion rails by six; the per-request completion
-                # bound remains 2,000 tokens.
-                max_requests=288,
-                max_prompt_tokens=3_600_000,
-                max_completion_tokens=576_000,
-                max_total_tokens=4_176_000,
-                max_cost_usd_micros=1_500_000,
+                # Forty-eight selected cases therefore require 1,152 reader
+                # requests at the frozen protocol maximum. Scale the original
+                # 12-case rails by four; the per-request completion bound
+                # remains 2,000 tokens.
+                max_requests=1_152,
+                max_prompt_tokens=14_400_000,
+                max_completion_tokens=2_304_000,
+                max_total_tokens=16_704_000,
+                max_cost_usd_micros=6_000_000,
             ),
             ProviderLanePolicy(
                 lane="judge",
@@ -212,11 +212,11 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
                 receipt_provider="Azure",
                 profile_revision="longmemeval-official-gpt4o-azure-zdr-v2",
                 model="openai/gpt-4o-2024-08-06",
-                max_requests=12,
-                max_prompt_tokens=20_000,
-                max_completion_tokens=6_000,
-                max_total_tokens=26_000,
-                max_cost_usd_micros=1_000_000,
+                max_requests=48,
+                max_prompt_tokens=80_000,
+                max_completion_tokens=24_000,
+                max_total_tokens=104_000,
+                max_cost_usd_micros=4_000_000,
             ),
         ),
         embedding_lane=EmbeddingLanePolicy(
@@ -238,10 +238,13 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
         ablation_coordinator_policy=AblationCoordinatorPolicy(
             sample_size=4,
             max_attempts=2,
-            max_requests=12,
+            # Floor is sample_size * 3 = 12 (one ordinary + two interventions).
+            # v5 used that floor and had no retry budget. The useful max is
+            # 12 * max_attempts = 24 so a retryable case can still finish.
+            max_requests=24,
             request_timeout_milliseconds=90_000,
-            # Go hard-max is 30 minutes. v4's 20-minute total was enough for
-            # inference (19 synthetic chats) but not a v11-shaped embedding run.
+            # Go hard-max is 30 minutes. Live v5 embedding exhausted the
+            # request rail, not the clock; keep the full window.
             total_timeout_milliseconds=1_800_000,
         ),
         inference_ablation=AblationVerificationPolicy(
@@ -249,7 +252,7 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             contract_version=ABLATION_PROFILE_CONTRACT_VERSION,
             threshold_micros=200_000,
             budget=SyntheticBudgetPolicy(
-                max_chat_requests=32,
+                max_chat_requests=128,
                 max_chat_input_bytes=32 * 1024 * 1024,
                 max_embedding_requests=0,
                 max_embedding_inputs=0,
@@ -263,11 +266,10 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             budget=SyntheticBudgetPolicy(
                 max_chat_requests=0,
                 max_chat_input_bytes=0,
-                # Live v4 canary 2591346f exhausted 128 applied / 6 rejected
-                # with sample_count=0 on a v11-subject / v9-instrument run.
+                # Live v5 rb-v11-v32 exhausted 2048 applied / 2 rejected.
                 # Synthetic embeddings have no provider cost; this is a
-                # coordinator-time rail. 2048 stays under Go's 4096 hard max.
-                max_embedding_requests=2_048,
+                # coordinator-time rail. 4096 is Go's hard max.
+                max_embedding_requests=4_096,
                 max_embedding_inputs=4_096,
                 max_embedding_input_bytes=32 * 1024 * 1024,
             ),
@@ -306,11 +308,11 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
 
     launch = {
         "schema_version": 1,
-        "revision": "v9-confirmation-shadow-launch-2026-08-19-zdr-v5".replace(
+        "revision": "v9-confirmation-shadow-launch-2026-08-24-zdr-v6".replace(
             "v9-", f"{tag}-", 1
         )
         if bench_version != BENCH_VERSION_V9
-        else "v9-confirmation-shadow-launch-2026-08-19-zdr-v5",
+        else "v9-confirmation-shadow-launch-2026-08-24-zdr-v6",
         "mode": "shadow",
         "execution_profile_revision": profile.revision,
         "execution_profile_checksum": profile.checksum(),
@@ -326,19 +328,12 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             # v9's caps are frozen literals with their arithmetic in a comment;
             # a deep-history epoch derives the same quantities from its own
             # frozen lanes so the cost of the larger case set is explicit.
-            "daily_cost_microusd": 5_000_000
-            if bench_version == BENCH_VERSION_V9
-            else profile.embedding_lane.max_cost_usd_micros
+            "daily_cost_microusd": profile.embedding_lane.max_cost_usd_micros
             + sum(lane.max_cost_usd_micros for lane in profile.provider_lanes),
-            # embedding 5,000 + reader 288 + judge 12.
-            "requests_per_bundle": 5_300
-            if bench_version == BENCH_VERSION_V9
-            else profile.embedding_lane.max_requests
+            # embedding + reader + judge frozen maxima.
+            "requests_per_bundle": profile.embedding_lane.max_requests
             + sum(lane.max_requests for lane in profile.provider_lanes),
-            # embedding 5m + reader 4.176m + judge 26k, rounded up.
-            "tokens_per_bundle": 9_300_000
-            if bench_version == BENCH_VERSION_V9
-            else profile.embedding_lane.max_input_tokens
+            "tokens_per_bundle": profile.embedding_lane.max_input_tokens
             + sum(lane.max_total_tokens for lane in profile.provider_lanes),
         },
         "guarantees": {

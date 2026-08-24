@@ -565,6 +565,7 @@ class DittobenchClient:
         job: V9ConfirmationJobResponse,
         artifact: ArtifactResponse,
         inference_session_id: str,
+        progress_callback: Callable[[int, int], Awaitable[None]] | None = None,
     ) -> V9ConfirmationScorerResult:
         """Execute one costly bundle through the protected local control plane."""
         if (
@@ -627,6 +628,11 @@ class DittobenchClient:
                 "v9 confirmation ticket cannot fund execution while preserving "
                 "its reporting margin"
             )
+        poll_task: asyncio.Task[None] | None = None
+        if progress_callback is not None:
+            poll_task = asyncio.create_task(
+                self._poll_confirmation_progress(progress_callback)
+            )
         try:
             response = await self._client.post(
                 f"{self._config.dittobench_api_url}/v1/confirmation/execute",
@@ -642,6 +648,11 @@ class DittobenchClient:
             raise ValidatorInfrastructureError(
                 f"v9 confirmation execution failed: {error}"
             ) from error
+        finally:
+            if poll_task is not None:
+                poll_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await poll_task
         if response.status_code != 200:
             diagnostic = _confirmation_failure_diagnostic(response)
             raise DittobenchError(
@@ -652,6 +663,45 @@ class DittobenchClient:
             return V9ConfirmationScorerResult.model_validate(response.json())
         except (TypeError, ValueError) as error:
             raise DittobenchError("v9 confirmation result was invalid") from error
+
+    async def _poll_confirmation_progress(
+        self, callback: Callable[[int, int], Awaitable[None]]
+    ) -> None:
+        """Best-effort LongMem case counts; never gates the blocking execute."""
+        while True:
+            await asyncio.sleep(2)
+            try:
+                response = await self._client.get(
+                    f"{self._config.dittobench_api_url}/v1/confirmation/progress",
+                    headers=self._control_headers(),
+                    timeout=5,
+                )
+            except httpx.HTTPError:
+                continue
+            if response.status_code != 200:
+                continue
+            try:
+                body = response.json()
+            except ValueError:
+                continue
+            if not isinstance(body, dict) or body.get("ready") is not True:
+                continue
+            completed = body.get("done")
+            total = body.get("total")
+            if (
+                type(completed) is not int
+                or type(total) is not int
+                or completed < 0
+                or total < 1
+                or completed > total
+            ):
+                continue
+            try:
+                await callback(completed, total)
+            except Exception:  # noqa: BLE001 - progress is fail-open
+                logger.warning(
+                    "confirmation progress callback failed; execution continues"
+                )
 
     async def prepare_inference_session(self) -> InferenceBrokerSession:
         """Create a trusted memory-only broker key before claiming provider access."""

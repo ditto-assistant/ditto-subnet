@@ -244,3 +244,27 @@ func (s *server) handleConfirmationExecute(w http.ResponseWriter, r *http.Reques
 	}
 	writeJSON(w, http.StatusOK, result)
 }
+
+type confirmationProgressSnapshot struct {
+	Ready bool   `json:"ready"`
+	Done  int    `json:"done,omitempty"`
+	Total int    `json:"total,omitempty"`
+	Stage string `json:"stage,omitempty"`
+}
+
+func (s *server) handleConfirmationProgress(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	executor, ok := s.confirmation.(*trustedConfirmationExecutor)
+	if !ok || executor == nil {
+		writeJSON(w, http.StatusOK, confirmationProgressSnapshot{Ready: false})
+		return
+	}
+	done, total, ready := executor.SnapshotProgress()
+	if !ready {
+		writeJSON(w, http.StatusOK, confirmationProgressSnapshot{Ready: false})
+		return
+	}
+	writeJSON(w, http.StatusOK, confirmationProgressSnapshot{
+		Ready: true, Done: done, Total: total, Stage: "running_confirmation",
+	})
+}

@@ -160,6 +160,44 @@ func assertConfirmationError(t *testing.T, recorder *httptest.ResponseRecorder, 
 	}
 }
 
+func TestConfirmationProgressFailsOpenWithoutSnapshot(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	(&server{}).handleConfirmationProgress(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/v1/confirmation/progress", nil),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	if got := strings.TrimSpace(recorder.Body.String()); got != `{"ready":false}` {
+		t.Fatalf("body = %s, want ready=false without case counts", got)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", got)
+	}
+}
+
+func TestConfirmationProgressReportsCaseCounts(t *testing.T) {
+	executor := &trustedConfirmationExecutor{}
+	executor.reportLongMemProgress(7, 48)
+	recorder := httptest.NewRecorder()
+	(&server{confirmation: executor}).handleConfirmationProgress(
+		recorder,
+		httptest.NewRequest(http.MethodGet, "/v1/confirmation/progress", nil),
+	)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body=%s", recorder.Code, http.StatusOK, recorder.Body.String())
+	}
+	var got confirmationProgressSnapshot
+	if err := json.Unmarshal(recorder.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := confirmationProgressSnapshot{Ready: true, Done: 7, Total: 48, Stage: "running_confirmation"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("progress = %+v, want %+v", got, want)
+	}
+}
+
 func TestConfirmationReadinessFailsClosedWithoutExecutor(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	(&server{}).handleConfirmationReadiness(

@@ -3,7 +3,7 @@
   "embedding_threshold_micros": 200000,
   "inference_threshold_micros": 200000,
   "mode": "shadow",
-  "revision": "v9-confirmation-ablation-thresholds-shadow-2026-08-13",
+  "revision": "v9-confirmation-ablation-thresholds-shadow-2026-08-24",
   "reward_eligible": false,
   "sample_size": 4,
   "schema_version": 1

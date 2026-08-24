@@ -12,7 +12,7 @@ import hashlib
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 from uuid import UUID
 
 import pytest
@@ -34,6 +34,7 @@ from ditto.validator.errors import (
     ValidatorInfrastructureError,
 )
 from ditto.validator.worker import ValidatorWorker
+from ditto_screening_protocol.confirmation import CAPABILITY_ORDER
 
 _HOTKEY = "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY"
 _PROFILE_REVISION = "confirmation-v9-calibrated-1"
@@ -91,7 +92,7 @@ def _profile(
             "longmem_dataset_sha256": "55" * 32,
             "longmem_selector_revision": "longmemeval-s-stratified-sha256-v1",
             "longmem_selection_seed": 118,
-            "longmem_cases_per_capability": 8 if deep_history else 2,
+            "longmem_cases_per_capability": 8,
             "longmem_seed_batch_pairs": 2,
             "bench_version": bench_version,
             "longmem_min_history_sessions": 55 if deep_history else 0,
@@ -477,6 +478,7 @@ class TestV9ConfirmationExecution:
             job=job,
             artifact=artifact,
             inference_session_id="confirmation-session-0001",
+            progress_callback=ANY,
         )
         platform.submit_v9_confirmation_report.assert_awaited_once()
         submitted_job, report = platform.submit_v9_confirmation_report.await_args.args
@@ -513,10 +515,57 @@ class TestV9ConfirmationExecution:
             job=job,
             artifact=artifact,
             inference_session_id="confirmation-session-0001",
+            progress_callback=ANY,
         )
         platform.submit_v9_confirmation_report.assert_awaited_once()
         platform.fail_v9_confirmation_job.assert_not_awaited()
         _assert_score_lanes_untouched(platform)
+
+    async def test_longmem_case_progress_is_published_like_dittobench_checks(
+        self,
+    ) -> None:
+        worker, platform, dittobench, _ = _worker(capacity=1)
+        job = _job("longmem-0")
+        platform.request_v9_confirmation_job.return_value = job
+        platform.get_v9_confirmation_artifact.return_value = _artifact(job)
+        release = asyncio.Event()
+        case_total = (
+            job.execution_profile.longmem_cases_per_capability * len(CAPABILITY_ORDER)
+        )
+
+        async def execute(
+            *,
+            progress_callback: Any,
+            **_: object,
+        ) -> V9ConfirmationScorerResult:
+            await progress_callback(3, case_total)
+            await release.wait()
+            return _result()
+
+        dittobench.execute_v9_confirmation.side_effect = execute
+        heartbeat = AsyncMock(return_value=True)
+        worker._report_heartbeat = heartbeat  # type: ignore[method-assign]
+
+        lane = asyncio.create_task(worker._run_v9_confirmation_lane())
+        for _ in range(200):
+            progress = worker._confirmation_progress.get("longmem-0")
+            if (
+                progress is not None
+                and progress.stage == "running_confirmation"
+                and progress.completed == 3
+                and progress.total == case_total
+            ):
+                break
+            await asyncio.sleep(0.001)
+        else:
+            raise AssertionError(
+                f"missing live case progress: {worker._confirmation_progress!r}"
+            )
+        release.set()
+        await lane
+
+        assert "longmem-0" not in worker._confirmation_progress
+        assert case_total == 48
 
     async def test_long_execution_keeps_validator_live_without_claiming_canonical_state(
         self, monkeypatch: pytest.MonkeyPatch
@@ -654,8 +703,9 @@ class TestV9ConfirmationExecution:
             job: V9ConfirmationJobResponse,
             artifact: ArtifactResponse,
             inference_session_id: str,
+            progress_callback: object = None,
         ) -> V9ConfirmationScorerResult:
-            del artifact, inference_session_id
+            del artifact, inference_session_id, progress_callback
             if failing_stage == "execute" and job.slot_id == "longmem-0":
                 raise DittobenchError("execute failed")
             return _result()
