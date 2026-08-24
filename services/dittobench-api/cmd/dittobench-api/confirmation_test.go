@@ -701,6 +701,25 @@ func TestConfirmationExecuteRejectsMalformedWireBodiesBeforeExecution(t *testing
 	}
 }
 
+func TestConfirmationExecuteRejectsTicketWithoutReportMargin(t *testing.T) {
+	request := validConfirmationRequest()
+	request.Deadline = time.Now().Add(time.Minute)
+	executor := readyConfirmationExecutor()
+	recorder := executeConfirmationRequest(
+		t,
+		&server{confirmation: executor},
+		nil,
+		confirmationRequestBody(t, request),
+	)
+	assertConfirmationError(
+		t, recorder, http.StatusConflict,
+		"confirmation ticket cannot fund execution while preserving its reporting margin",
+	)
+	if got := executor.callCount(); got != 0 {
+		t.Fatalf("executor called %d times without a report margin", got)
+	}
+}
+
 func TestConfirmationExecutePropagatesTicketDeadlineToExecutor(t *testing.T) {
 	deadline := time.Now().Add(time.Hour).UTC().Round(time.Millisecond)
 	executor := readyConfirmationExecutor()
@@ -709,8 +728,9 @@ func TestConfirmationExecutePropagatesTicketDeadlineToExecutor(t *testing.T) {
 		if !ok {
 			t.Fatal("executor context has no deadline")
 		}
-		if !got.Equal(deadline) {
-			t.Fatalf("executor deadline = %s, want %s", got, deadline)
+		want := deadline.Add(-2 * time.Minute)
+		if !got.Equal(want) {
+			t.Fatalf("executor deadline = %s, want %s (ticket minus report margin)", got, want)
 		}
 		return validConfirmationResult(), nil
 	}
@@ -757,7 +777,7 @@ func TestConfirmationExecuteEnforcesTicketDeadlineDuringExecution(t *testing.T) 
 		return confirmationExecutionResult{}, ctx.Err()
 	}
 	request := validConfirmationRequest()
-	request.Deadline = time.Now().Add(20 * time.Millisecond)
+	request.Deadline = time.Now().Add(2*time.Minute + 20*time.Millisecond)
 	recorder := executeConfirmationRequest(
 		t,
 		&server{confirmation: executor},

@@ -651,8 +651,9 @@ class DittobenchClient:
         finally:
             if poll_task is not None:
                 poll_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await poll_task
+                # wait() does not swallow a parent CancelledError the way
+                # suppress(CancelledError) can on 3.11+.
+                await asyncio.wait({poll_task})
         if response.status_code != 200:
             diagnostic = _confirmation_failure_diagnostic(response)
             raise DittobenchError(

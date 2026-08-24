@@ -2594,3 +2594,43 @@ async def test_confirmation_progress_callback_failure_does_not_stop_polling(
             await client._poll_confirmation_progress(broken)
 
     assert seen == [(3, 48), (3, 48), (3, 48)]
+
+
+@pytest.mark.asyncio
+async def test_confirmation_progress_cancel_during_poll_cleanup_stays_cancelled() -> (
+    None
+):
+    started = asyncio.Event()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"ready": True, "done": 1, "total": 48})
+        return httpx.Response(200, json={"purpose": "v9_confirmation_bundle"})
+
+    async def hang_callback(_done: int, _total: int) -> None:
+        started.set()
+        await asyncio.Event().wait()
+
+    config = SimpleNamespace(
+        dittobench_api_url="http://dittobench.test",
+        dittobench_control_token="control-token",
+    )
+
+    async def run() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            client = DittobenchClient(cast(Any, config), http)
+            poll_task = asyncio.create_task(
+                client._poll_confirmation_progress(hang_callback)
+            )
+            await started.wait()
+            try:
+                await asyncio.sleep(3600)
+            finally:
+                poll_task.cancel()
+                await asyncio.wait({poll_task})
+
+    task = asyncio.create_task(run())
+    await started.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task

@@ -212,7 +212,15 @@ func (s *server) handleConfirmationExecute(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusTooManyRequests, "confirmation capacity is full")
 		return
 	}
-	ctx, cancel := context.WithDeadline(r.Context(), request.Deadline)
+	// Match the validator's HTTP timeout: ticket remaining minus the two-minute
+	// signed-report margin. Otherwise a 48-case LongMem run can consume the
+	// LongMem slice, then die two minutes into the 30-minute ablation window.
+	executionDeadline := request.Deadline.Add(-2 * time.Minute)
+	if !executionDeadline.After(time.Now()) {
+		writeError(w, http.StatusConflict, "confirmation ticket cannot fund execution while preserving its reporting margin")
+		return
+	}
+	ctx, cancel := context.WithDeadline(r.Context(), executionDeadline)
 	defer cancel()
 	result, err := s.confirmation.Execute(ctx, request)
 	if err != nil {
