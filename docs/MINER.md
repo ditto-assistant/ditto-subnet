@@ -86,6 +86,16 @@ cargo run -- submit
 This creates `dittobench-submission.tgz`. It does **not** make an on-chain
 submission or charge a fee. Do not package `.env` or any API or wallet secret.
 
+### Optional future coding capability
+
+The active submission contract requires only the normal harness routes. A
+future coding-capable miner will still upload one normal Docker build context,
+then add an optional `/coding/health` capability from that same image. A
+normal-only image remains valid and is never penalized for omitting that route.
+Coding remains shadow-only and score-ineligible today; see
+[`coding-unified-miner-capability-shadow.md`](coding-unified-miner-capability-shadow.md)
+for the planned compatibility boundary.
+
 ## Prepare for mainnet
 
 To submit, you need:
