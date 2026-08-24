@@ -533,7 +533,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-coding-starter-kit-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock') }}
+          key: ${{ runner.os }}-coding-starter-kit-${{ hashFiles('miners/dittobench-coding-starter-kit/Cargo.lock', 'miners/dittobench-starter-kit/Cargo.lock', 'miners/dittobench-unified-starter-kit/Cargo.lock') }}
 
       - name: Gate coding starter kit release on exact merge source
         run: |
@@ -547,6 +547,31 @@ jobs:
 
       - name: Build coding starter kit image from exact merge source
         run: docker build --tag dittobench-coding-starter-kit:release-gate .
+
+      - name: Verify unified starter kit from exact merge source
+        working-directory: miners/dittobench-unified-starter-kit
+        run: |
+          cargo fmt --check
+          cargo clippy --locked --all-targets --all-features -- -D warnings
+          cargo test --locked --all-targets --all-features --verbose
+          cargo run --locked -- submit
+          cd ../..
+          uv run ditto verify \
+            --path miners/dittobench-unified-starter-kit/dittobench-submission.tgz
+
+      - name: Build unified starter kit image from exact merge source
+        working-directory: miners
+        run: >-
+          docker build
+          --file dittobench-unified-starter-kit/Dockerfile
+          --tag dittobench-unified-miner:release-gate
+          .
+
+      - name: Probe unified starter kit routes from exact merge source
+        working-directory: .
+        run: >-
+          bash miners/dittobench-unified-starter-kit/scripts/test-image-health.sh
+          dittobench-unified-miner:release-gate
 
   verify-platform:
     needs: [plan, admit-current]

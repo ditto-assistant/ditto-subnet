@@ -47,12 +47,28 @@ def test_miner_only_change_does_not_release_validator_stack(
     ) == {"miner_cli"}
 
 
-def test_starter_kit_change_is_an_isolated_miner_release(
+def test_normal_starter_change_revalidates_the_unified_reference(
     components, ignored_paths
 ) -> None:
     assert selected(
         components, ignored_paths, "miners/dittobench-starter-kit/src/baseline.rs"
-    ) == {"miner_starter_kit"}
+    ) == {"dittobench_coding_starter_kit", "miner_starter_kit"}
+
+
+def test_unified_starter_change_selects_both_required_reference_lanes(
+    components, ignored_paths
+) -> None:
+    path = "miners/dittobench-unified-starter-kit/src/main.rs"
+    assert selected(components, ignored_paths, path) == {
+        "dittobench_coding_starter_kit",
+        "miner_starter_kit",
+    }
+    assert root_verification(components, ignored_paths, path) == "none"
+
+    assert selected(components, ignored_paths, "miners/.dockerignore") == {
+        "dittobench_coding_starter_kit",
+        "miner_starter_kit",
+    }
 
 
 def test_validator_change_propagates_to_stack(components, ignored_paths) -> None:

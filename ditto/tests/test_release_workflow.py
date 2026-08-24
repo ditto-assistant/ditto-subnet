@@ -52,6 +52,8 @@ def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> 
     workflow = yaml.load(CODING_STARTER_CI_PATH.read_text(), Loader=yaml.BaseLoader)
     paths = workflow["on"]["pull_request"]["paths"]
     assert "miners/dittobench-coding-starter-kit/**" in paths
+    assert "miners/dittobench-unified-starter-kit/**" in paths
+    assert "miners/dittobench-starter-kit/**" in paths
     assert "research/dittobench-coding-datagen/**" in paths
     assert "services/dittobench-api/internal/codingcontract/**" in paths
     assert "services/dittobench-api/internal/codingrelay/**" in paths
@@ -66,6 +68,15 @@ def test_coding_starter_ci_tracks_the_public_contract_and_builds_the_image() -> 
     assert "cargo test --locked --all-targets --all-features --verbose" in gate["run"]
     image = _step(verify["steps"], "Build the shadow harness image")
     assert "docker build" in image["run"]
+    unified = _step(verify["steps"], "Verify the unified normal and coding starter")
+    assert unified["working-directory"] == "miners/dittobench-unified-starter-kit"
+    assert "cargo run --locked -- submit" in unified["run"]
+    assert "uv run ditto verify" in unified["run"]
+    unified_image = _step(verify["steps"], "Build the unified starter image")
+    assert unified_image["working-directory"] == "miners"
+    assert "dittobench-unified-starter-kit/Dockerfile" in unified_image["run"]
+    unified_probe = _step(verify["steps"], "Probe unified starter image routes")
+    assert "test-image-health.sh" in unified_probe["run"]
     e2e = _step(verify["steps"], "Run the scripted Rust and Python practice E2E")
     assert "scripts/test-coding-starter-practice-e2e.sh" in e2e["run"]
 
@@ -157,6 +168,23 @@ def test_release_fanout_is_gated_by_the_component_plan() -> None:
         "Build coding starter kit image from exact merge source",
     )
     assert "docker build" in image_gate["run"]
+    unified_gate = _step(
+        coding_starter_gate["steps"],
+        "Verify unified starter kit from exact merge source",
+    )
+    assert unified_gate["working-directory"] == "miners/dittobench-unified-starter-kit"
+    assert "cargo run --locked -- submit" in unified_gate["run"]
+    unified_image_gate = _step(
+        coding_starter_gate["steps"],
+        "Build unified starter kit image from exact merge source",
+    )
+    assert unified_image_gate["working-directory"] == "miners"
+    assert "dittobench-unified-starter-kit/Dockerfile" in unified_image_gate["run"]
+    unified_probe_gate = _step(
+        coding_starter_gate["steps"],
+        "Probe unified starter kit routes from exact merge source",
+    )
+    assert "test-image-health.sh" in unified_probe_gate["run"]
     e2e_gate = _step(
         coding_starter_gate["steps"],
         "Run scripted coding practice E2E from exact merge source",

@@ -68,6 +68,8 @@ paths = [
 description = "Miner reference harness and local practice loop"
 paths = [
   "miners/dittobench-starter-kit/**",
+  "miners/dittobench-unified-starter-kit/**",
+  "miners/.dockerignore",
 ]
 
 [components.validator]
@@ -151,6 +153,11 @@ description = "Shadow-only coding-agent reference harness and practice client"
 depends_on = ["dittobench_coding_datagen"]
 paths = [
   "miners/dittobench-coding-starter-kit/**",
+  # The unified reference image uses the normal kit as a path dependency. A
+  # normal-kit edit must therefore run the unified coding gate before release.
+  "miners/dittobench-starter-kit/**",
+  "miners/dittobench-unified-starter-kit/**",
+  "miners/.dockerignore",
   ".github/workflows/coding-starter-kit-ci.yml",
   "scripts/test-coding-starter-practice-e2e.sh",
   "packages/dittobench-coding-contract/**",
