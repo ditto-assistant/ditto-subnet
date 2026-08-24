@@ -128,3 +128,6 @@ The implementation must be split after this contract:
 Every stage remains shadow-only. Any reward activation requires a separately
 reviewed contract version, calibration evidence, and owner-approved emissions
 policy.
+
+The future inference provenance boundary is defined in
+[`../services/dittobench-api/docs/coding-certification-trace-context-shadow.md`](../services/dittobench-api/docs/coding-certification-trace-context-shadow.md).
