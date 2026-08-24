@@ -151,10 +151,13 @@ The next implementation steps are intentionally narrow:
 
 1. add a unified reference starter that serves the required normal routes and
    this optional coding-health advertisement from one image;
-2. add an optional screener probe and artifact-bound capability attestation;
-3. connect core qualification plus successful coding certification to
-   default-off shadow admission; and
+2. issue an explicit, core-qualified certification lease for the exact screened
+   image, then run the full validator-owned public canary;
+3. connect a current certified receipt to default-off shadow admission; and
 4. add local unified-package rehearsal and operator-visible diagnostics.
+
+The lease boundary is defined in
+[`coding-qualified-certification-lease-shadow.md`](coding-qualified-certification-lease-shadow.md).
 
 Each step remains score-neutral. A separate owner-approved activation, new
 contract version, calibration evidence, and emissions-policy review are
