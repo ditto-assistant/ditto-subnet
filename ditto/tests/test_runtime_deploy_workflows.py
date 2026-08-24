@@ -109,3 +109,31 @@ def test_platform_deploy_rejects_a_half_provisioned_checkout() -> None:
         f"cd {root} &&"
     )
     assert "HALF provisioned" in command
+
+
+def test_private_coding_catalog_deploy_is_default_off_and_relay_blind() -> None:
+    """Catalog credentials stay with the Python API, not the shared relay pool."""
+    defaults_path = ROOT / "infra/ansible/roles/platform_app/defaults/main.yml"
+    defaults = yaml.safe_load(defaults_path.read_text())
+    template = (
+        ROOT / "infra/ansible/roles/platform_app/templates/platform.env.j2"
+    ).read_text()
+    tasks = (ROOT / "infra/ansible/roles/platform_app/tasks/main.yml").read_text()
+    terraform = (ROOT / "infra/terraform/stacks/gcp-platform/main.tf").read_text()
+    ecosystem = (ROOT / "apps/platform/scripts/ecosystem.config.js").read_text()
+
+    assert defaults["platform_coding_catalog_enabled"] is False
+    assert "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY=" in template
+    assert "platform_coding_catalog_enabled | bool" in tasks
+    assert "platform_coding_catalog_bucket != platform_bucket" in tasks
+    assert "platform_coding_catalog_bucket != (platform_hippius_bucket" in tasks
+    for secret in (
+        "platform-coding-catalog-access-key",
+        "platform-coding-catalog-secret-key",
+    ):
+        assert secret in terraform
+    for key in (
+        "DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY",
+        "DITTO_CODING_CATALOG_STORAGE_SECRET_KEY",
+    ):
+        assert f'{key}: ""' in ecosystem

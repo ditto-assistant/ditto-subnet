@@ -127,6 +127,18 @@ const relayApp = (port, index) => ({
     // set together" -- which is the config layer failing loudly, as intended.
     DITTO_TAOSTATS_VALIDATOR_NAMES_URL: "",
     DITTO_TAOSTATS_API_KEY: "",
+    // The private Coding catalog credential belongs exclusively to the Python
+    // Platform API. The Ansible-owned .env is otherwise shared by every PM2
+    // process, so clear every part here rather than letting the model relay
+    // inherit a credential it neither reads nor needs.
+    DITTO_CODING_CATALOG_STORAGE_ENDPOINT_URL: "",
+    DITTO_CODING_CATALOG_STORAGE_BUCKET: "",
+    DITTO_CODING_CATALOG_STORAGE_ACCESS_KEY: "",
+    DITTO_CODING_CATALOG_STORAGE_SECRET_KEY: "",
+    DITTO_CODING_CATALOG_STORAGE_REGION: "",
+    DITTO_CODING_CATALOG_STORAGE_USE_TLS: "",
+    DITTO_CODING_CATALOG_MAX_RECORD_BYTES: "",
+    DITTO_CODING_CATALOG_TIMEOUT_SECONDS: "",
   },
   autorestart: true,
   max_restarts: 10,
