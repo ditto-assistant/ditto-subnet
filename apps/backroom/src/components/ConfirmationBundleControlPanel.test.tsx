@@ -449,6 +449,8 @@ describe('ConfirmationBundleControlPanel', () => {
     render(<ConfirmationBundleControlPanel initialSettings={control()} initialBundles={listing([completedBundle()])} readOnly={false} />)
 
     fireEvent.click(screen.getByText(/generation 0/).closest('button')!)
+    expect(screen.getAllByText('LongMem 0.5000').length).toBeGreaterThan(0)
+    expect(screen.getByText('Mean 0.5000 · 12 cases')).toBeTruthy()
     expect(screen.getByText('openai · openai/gpt-oss-20b')).toBeTruthy()
     expect(screen.getByText('targon · Qwen/Qwen3-235B')).toBeTruthy()
     expect(screen.getAllByText('threshold_met')).toHaveLength(2)

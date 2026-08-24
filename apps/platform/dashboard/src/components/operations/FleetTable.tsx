@@ -11,7 +11,7 @@
 import { For, Show, createMemo } from "solid-js";
 import type { JSX } from "solid-js";
 
-import { pct, relTime, shortKey } from "../../lib/format";
+import { pct, relTime, relTimeUntil, shortKey } from "../../lib/format";
 import type { ValidatorWeightView } from "../../lib/scoring";
 import { pushEntityRoute } from "../../stores/routeStore";
 import type { ConfirmationProgress, FleetEntry, SystemMetrics } from "../../types/fleet";
@@ -105,6 +105,23 @@ function SlotLabel(props: { slotId: string }): JSX.Element {
 
 function confirmationSubjectLabel(work: ConfirmationProgress): string {
   return work.subjects.length === 1 ? "1 subject" : String(work.subjects.length) + " subjects";
+}
+
+function confirmationHasCaseProgress(work: ConfirmationProgress): boolean {
+  return (
+    work.completed !== null &&
+    work.completed !== undefined &&
+    work.total !== null &&
+    work.total !== undefined &&
+    work.total > 1
+  );
+}
+
+function confirmationHeartbeatLabel(work: ConfirmationProgress): string {
+  if (work.progress_reported_at) {
+    return "Heartbeat " + relTime(work.progress_reported_at);
+  }
+  return "Waiting for heartbeat";
 }
 
 function confirmationStageLabel(work: ConfirmationProgress): string {
@@ -583,42 +600,58 @@ function ConfirmationRows(props: { entry: FleetEntryExt }): JSX.Element {
               <span class={stageClass(work.mode === "enforce" ? "warn" : "success")}>
                 {work.mode === "enforce" ? "Enforce" : "Shadow"}
               </span>
-              <span class="fleet-time" title={work.issued_at}>
-                Running {relTime(work.issued_at)}
+              <span class="fleet-confirmation-subjects">
+                <Show
+                  when={work.subjects.length === 1 ? work.subjects[0] : undefined}
+                  fallback={confirmationSubjectLabel(work)}
+                >
+                  {(subject) => (
+                    <EntityButton
+                      kind="agent"
+                      id={subject().agent_id}
+                      label={subject().agent_name}
+                    />
+                  )}
+                </Show>
               </span>
+              <span class="fleet-confirmation-attempt">Attempt {work.attempt}</span>
               <span
                 class={stageClass(work.stage === "failed_retrying" ? "warn" : "")}
                 title={work.progress_reported_at || "Validator heartbeat has not reported progress"}
               >
                 {confirmationStageLabel(work)}
               </span>
-              <Show when={work.completed !== null && work.completed !== undefined && work.total}>
+              <span class="fleet-time" title={work.issued_at}>
+                Running {relTime(work.issued_at)}
+              </span>
+              <Show
+                when={confirmationHasCaseProgress(work)}
+                fallback={
+                  <span
+                    class="fleet-confirmation-heartbeat"
+                    title={
+                      work.progress_reported_at ||
+                      "Job-level heartbeat only; LongMem case counts have not been reported"
+                    }
+                  >
+                    {confirmationHeartbeatLabel(work)}
+                  </span>
+                }
+              >
                 <span class="fleet-confirmation-progress-view">
                   <span class="fleet-confirmation-progress-count">
-                    {work.completed || 0}/{work.total || 1}
+                    {work.completed}/{work.total} cases
                   </span>
                   <progress
                     class="fleet-confirmation-progress"
                     value={work.completed || 0}
                     max={work.total || 1}
-                    aria-label={`${confirmationStageLabel(work)}: ${work.completed || 0} of ${work.total || 1}`}
+                    aria-label={`${confirmationStageLabel(work)}: ${work.completed || 0} of ${work.total || 1} cases`}
                   />
                 </span>
               </Show>
-              <span class="fleet-confirmation-subjects">
-                {confirmationSubjectLabel(work)}
-                <Show when={work.subjects.length === 1 ? work.subjects[0] : undefined}>
-                  {(subject) => (
-                    <>
-                      <span> · </span>
-                      <EntityButton
-                        kind="agent"
-                        id={subject().agent_id}
-                        label={subject().agent_name}
-                      />
-                    </>
-                  )}
-                </Show>
+              <span class="fleet-time" title={work.deadline}>
+                Deadline {relTimeUntil(work.deadline)}
               </span>
             </div>
           )}

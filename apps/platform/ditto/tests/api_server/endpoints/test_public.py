@@ -807,6 +807,42 @@ def test_public_leaderboard_serializes_unambiguous_v9_confirmation_state(
     assert payload["rank"] == (1 if expected_status == "full_confirmed" else None)
 
 
+def test_public_leaderboard_serializes_shadow_longmem_zero() -> None:
+    row = LedgerRow(
+        miner_hotkey=_MINER_A,
+        agent_id=UUID(int=9),
+        composite=0.75,
+        tool_mean=0.75,
+        memory_mean=0.75,
+        first_seen=datetime(2026, 8, 8, tzinfo=UTC),
+        sha256="ab" * 32,
+        size_bytes=123,
+        run_id="v9-public-shadow-zero",
+        seed=42,
+        validator_hotkey=_VALIDATOR_C,
+        signature=None,
+        status=AgentStatus.SCORED,
+        bench_version=9,
+        n=280,
+        eligible=True,
+    )
+    payload = public_endpoint._public_entry(
+        1,
+        row,
+        "v9-agent",
+        1,
+        finalized=True,
+        v9_confirmation=V9ConfirmationPublicProjection(
+            result_status="provisional",
+            longmem_mean_composite=0.0,
+        ),
+    ).model_dump(mode="json")
+    assert payload["v9_confirmation_status"] == "provisional"
+    assert "v9_full_confirmed_composite" not in payload
+    assert "v9_shadow_quality_composite" not in payload
+    assert payload["v9_longmem_mean_composite"] == 0.0
+
+
 def test_public_v9_base_projection_is_typed_and_fails_closed() -> None:
     vector_path = (
         Path(__file__).resolve().parents[6]

@@ -449,6 +449,9 @@ tr:hover .copy,
 .bar.memory {
   background: var(--memory);
 }
+.bar.longmem {
+  background: var(--good);
+}
 .muted {
   color: var(--text-dim);
 }

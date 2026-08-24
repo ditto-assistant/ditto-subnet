@@ -1233,7 +1233,9 @@
   gap: 0.45rem;
 }
 
-.fleet-confirmation-progress-count {
+.fleet-confirmation-progress-count,
+.fleet-confirmation-attempt,
+.fleet-confirmation-heartbeat {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.72rem;

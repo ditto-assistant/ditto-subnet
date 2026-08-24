@@ -415,7 +415,7 @@ function BundleRow({ bundle, readOnly, onChanged }: { bundle: ConfirmationBundle
         type="button"
         aria-expanded={open}
         aria-controls={detailsId}
-        className="grid w-full gap-3 p-4 text-left hover:bg-[var(--panel-raised)] md:grid-cols-[1.5fr_0.8fr_0.8fr_0.8fr_auto] md:items-center"
+        className="grid w-full gap-3 p-4 text-left hover:bg-[var(--panel-raised)] md:grid-cols-[1.5fr_0.7fr_0.7fr_0.7fr_0.7fr_auto] md:items-center"
         onClick={() => setOpen((value) => !value)}
       >
         <span className="flex min-w-0 items-center gap-3">
@@ -424,6 +424,9 @@ function BundleRow({ bundle, readOnly, onChanged }: { bundle: ConfirmationBundle
         </span>
         <span><Status>{bundle.state}</Status></span>
         <span className="text-xs text-[var(--muted-strong)]">{bundle.completion_mode ?? 'not completed'}</span>
+        <span className="text-xs tabular-nums text-[var(--muted-strong)]">
+          LongMem {micros(root?.longmemeval.evidence.score.longmem_mean_micros ?? null)}
+        </span>
         <span>{bundle.qualification_status ? <Status>{bundle.qualification_status}</Status> : <span className="text-xs text-[var(--muted)]">not qualified</span>}</span>
         <span className="text-xs text-[var(--muted)]">rev {bundle.settings_revision}</span>
       </button>
@@ -445,6 +448,11 @@ function BundleRow({ bundle, readOnly, onChanged }: { bundle: ConfirmationBundle
             </AuditBlock>
 
             <AuditBlock title="LongMem provider lanes">
+              {root?.longmemeval.evidence.score ? (
+                <p className="mb-3 text-sm tabular-nums text-[#f3f6f1]">
+                  Mean {micros(root.longmemeval.evidence.score.longmem_mean_micros)} · {integer(root.longmemeval.evidence.score.case_count)} cases
+                </p>
+              ) : null}
               {lanes.length === 0 ? <p className="text-xs text-[var(--muted)]">No verified lane evidence yet.</p> : lanes.map((lane) => (
                 <div key={lane.lane} className="mb-3 last:mb-0">
                   <div className="flex items-center justify-between"><span className="text-xs font-semibold">{lane.lane}</span><CheckCircle2 className="h-3.5 w-3.5 text-[var(--acid)]" /></div>

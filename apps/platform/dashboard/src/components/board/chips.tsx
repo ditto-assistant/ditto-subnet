@@ -275,8 +275,33 @@ export function V9ConfirmationChip(props: {
   mode: "shadow" | "enforce" | null | undefined;
 }): JSX.Element {
   const status = () => props.entry.v9_confirmation_status;
+  const longmem = () => props.entry.v9_longmem_mean_composite;
+  const mix = () => props.entry.v9_shadow_quality_composite;
+  const measuredLabel = (): string => {
+    const score = longmem();
+    if (score == null) return "LongMem measured";
+    return "LongMem " + score.toFixed(3);
+  };
+  const measuredTip = (): string => {
+    const score = longmem();
+    const mixScore = mix();
+    const parts = [
+      "Independent LongMemEval evidence is complete.",
+      "Shadow does not change ranking or emissions.",
+    ];
+    if (score != null) parts.unshift("LongMemEval mean " + score.toFixed(3) + ".");
+    if (mixScore != null) parts.push("70/30 mix " + mixScore.toFixed(3) + ".");
+    return parts.join(" ");
+  };
   const state = (): { label: string; class: string; tip: string } | null => {
     if (props.mode === "shadow") {
+      if (longmem() != null || mix() != null) {
+        return {
+          label: measuredLabel(),
+          class: "settled",
+          tip: measuredTip(),
+        };
+      }
       switch (status()) {
         case "full_confirmed":
           return {
