@@ -694,6 +694,61 @@ describe("board view controls (row 1 slice)", () => {
     }
   });
 
+  it("shows the completed shadow LongMemEval mean instead of a running badge", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          v9_confirmation_mode: "shadow",
+          entries: (payload.entries ?? []).map((entry) => ({
+            ...entry,
+            bench_version: 9,
+            eligible: true,
+            finalized: true,
+            v9_confirmation_status: "provisional",
+            v9_longmem_mean_composite: 0.333333,
+            v9_shadow_quality_composite: 0.717785,
+          })),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(document.querySelector(".v9-confirmation-chip")?.textContent).toBe("LongMem 0.333"),
+    );
+  });
+
+  it("shows a completed shadow LongMemEval zero as a measured score", async () => {
+    renderPage({
+      patch: (name, body) => {
+        if (name !== "leaderboard") return body;
+        const payload = body as LeaderboardPayload;
+        return {
+          ...payload,
+          v9_confirmation_mode: "shadow",
+          entries: (payload.entries ?? []).map((entry, index) =>
+            index === 0
+              ? {
+                  ...entry,
+                  bench_version: 9,
+                  eligible: true,
+                  finalized: true,
+                  v9_confirmation_status: "provisional",
+                  v9_longmem_mean_composite: 0,
+                }
+              : entry,
+          ),
+        } satisfies LeaderboardPayload;
+      },
+    });
+    await waitForBoard();
+    await waitFor(() =>
+      expect(document.querySelector(".v9-confirmation-chip")?.textContent).toBe("LongMem 0.000"),
+    );
+  });
+
   it("defaults to the Scored tab with live counts (provisional is pre-quorum feedback)", async () => {
     renderPage();
     await waitForBoard();

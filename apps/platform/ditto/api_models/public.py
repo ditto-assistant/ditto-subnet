@@ -786,6 +786,32 @@ class PublicLeaderboardEntry(BaseModel):
             ),
         ),
     ] = None
+    v9_shadow_quality_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Display-only 70/30 mix from a completed shadow confirmation. "
+                "Never ranked or weighted while mode is shadow."
+            ),
+        ),
+    ] = None
+    v9_longmem_mean_composite: Annotated[
+        float | None,
+        Field(
+            default=None,
+            ge=0.0,
+            le=1.0,
+            exclude_if=lambda value: value is None,
+            description=(
+                "Display-only LongMemEval mean from completed confirmation "
+                "evidence. Independent of ranking authority."
+            ),
+        ),
+    ] = None
     v9_confirmation_evidence_sha256: Annotated[
         str | None,
         Field(
@@ -2263,6 +2289,14 @@ class PublicSubmissionScores(BaseModel):
         Field(default=None, exclude_if=lambda value: value is None),
     ] = None
     v9_full_confirmed_composite: Annotated[
+        float | None,
+        Field(default=None, ge=0.0, le=1.0, exclude_if=lambda value: value is None),
+    ] = None
+    v9_shadow_quality_composite: Annotated[
+        float | None,
+        Field(default=None, ge=0.0, le=1.0, exclude_if=lambda value: value is None),
+    ] = None
+    v9_longmem_mean_composite: Annotated[
         float | None,
         Field(default=None, ge=0.0, le=1.0, exclude_if=lambda value: value is None),
     ] = None

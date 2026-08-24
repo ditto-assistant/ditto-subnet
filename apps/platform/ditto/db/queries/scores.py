@@ -1011,8 +1011,51 @@ class V9ConfirmationPublicProjection:
 
     result_status: Literal["base_only", "provisional", "full_confirmed"]
     full_confirmed_composite: float | None = None
+    shadow_quality_composite: float | None = None
+    longmem_mean_composite: float | None = None
     evidence_sha256: str | None = None
     receipt: dict[str, Any] | None = None
+
+
+def _shadow_display_scores(
+    subject: ConfirmationBundleSubject,
+    bundle: ConfirmationBundle | None,
+) -> tuple[float | None, float | None]:
+    """Return display-only shadow mix and raw LongMem means.
+
+    These never become reward authority. Enforce ranks through
+    ``full_confirmed_composite`` and the signed receipt only.
+
+    LongMem mean is read from completed shadow evidence even when ablations
+    did not finish, so a measured ``0.000`` is visible instead of looking
+    like the job never ran. Mix stays the stored full-quality value and is
+    omitted when Platform did not compute it.
+    """
+    if (
+        bundle is None
+        or bundle.completion_mode != "shadow"
+        or bundle.state != "completed"
+    ):
+        return None, None
+    longmem: float | None = None
+    root = bundle.evidence_root
+    if isinstance(root, dict):
+        envelope = root.get("longmemeval") or {}
+        if envelope.get("status") == "completed":
+            score = (envelope.get("evidence") or {}).get("score") or {}
+            mean = score.get("longmem_mean_micros")
+            if (
+                isinstance(mean, int)
+                and not isinstance(mean, bool)
+                and 0 <= mean <= 1_000_000
+            ):
+                longmem = mean / 1_000_000
+    mix = (
+        subject.full_quality_micros / 1_000_000
+        if subject.full_quality_micros is not None
+        else None
+    )
+    return mix, longmem
 
 
 async def v9_confirmation_public_projections(
@@ -1096,17 +1139,28 @@ async def v9_confirmation_public_projections(
                 "full_effective_micros": subject.full_effective_micros,
                 "verified_at": bundle.verified_at,
             }
+            mix, longmem = _shadow_display_scores(subject, bundle)
             projections[subject.agent_id] = V9ConfirmationPublicProjection(
                 result_status="full_confirmed",
                 full_confirmed_composite=subject.full_effective_micros / 1_000_000,
+                shadow_quality_composite=mix,
+                longmem_mean_composite=longmem,
                 evidence_sha256=bundle.evidence_sha256,
                 receipt=receipt,
             )
         else:
+            mix, longmem = _shadow_display_scores(subject, bundle)
             projections[subject.agent_id] = V9ConfirmationPublicProjection(
                 result_status=(
                     "provisional" if subject.bundle_id is not None else "base_only"
-                )
+                ),
+                shadow_quality_composite=mix,
+                longmem_mean_composite=longmem,
+                evidence_sha256=(
+                    bundle.evidence_sha256
+                    if bundle is not None and bundle.state == "completed"
+                    else None
+                ),
             )
     return projections
 

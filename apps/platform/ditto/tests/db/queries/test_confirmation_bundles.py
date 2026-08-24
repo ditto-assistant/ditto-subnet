@@ -934,6 +934,11 @@ class TestCompletionAndRetest:
         assert subject.full_quality_micros == 650_000
         assert subject.full_effective_micros == 650_000
         assert subject.applied_factor_bps == 10_000
+        public = await v9_confirmation_public_projections(session, agent_ids=[agent_id])
+        assert public[agent_id].result_status == "provisional"
+        assert public[agent_id].full_confirmed_composite is None
+        assert public[agent_id].shadow_quality_composite == pytest.approx(0.65)
+        assert public[agent_id].longmem_mean_composite == pytest.approx(0.5)
         stored = await confirmation_bundle_dimensions(
             session, bundle_id=bundle.bundle_id
         )
@@ -1007,6 +1012,25 @@ class TestCompletionAndRetest:
         assert second_subject.full_quality_micros == 740_000
         assert first.full_stderr_micros != second_subject.full_stderr_micros
         assert first.bundle_id == second_subject.bundle_id == bundle.bundle_id
+
+    async def test_shadow_projects_longmem_mean_when_ablations_do_not_qualify(
+        self, session: AsyncSession
+    ) -> None:
+        async with session.begin():
+            agent_id, _, _, bundle, _ = await self.completed_bundle(
+                session,
+                embedding_status="unavailable",
+            )
+        assert bundle.state == ConfirmationBundleState.COMPLETED.value
+        assert bundle.qualification_status == "unqualified"
+        subject = await session.get(ConfirmationBundleSubject, (agent_id, 9))
+        assert subject is not None
+        assert subject.full_quality_micros is None
+        public = await v9_confirmation_public_projections(session, agent_ids=[agent_id])
+        assert public[agent_id].result_status == "provisional"
+        assert public[agent_id].full_confirmed_composite is None
+        assert public[agent_id].shadow_quality_composite is None
+        assert public[agent_id].longmem_mean_composite == pytest.approx(0.5)
 
     async def test_unavailable_ablation_completes_shared_audit_but_not_subject(
         self, session: AsyncSession

@@ -14478,6 +14478,16 @@ export interface components {
              * @description Independently derivable full v9 composite used for this rank. Null for base-only and shadow/provisional rows.
              */
             v9_full_confirmed_composite?: number | null;
+            /**
+             * V9 Longmem Mean Composite
+             * @description Display-only LongMemEval mean from completed confirmation evidence. Independent of ranking authority.
+             */
+            v9_longmem_mean_composite?: number | null;
+            /**
+             * V9 Shadow Quality Composite
+             * @description Display-only 70/30 mix from a completed shadow confirmation. Never ranked or weighted while mode is shadow.
+             */
+            v9_shadow_quality_composite?: number | null;
         };
         /**
          * PublicLeaderboardFamily
@@ -15480,6 +15490,16 @@ export interface components {
             v9_confirmation_status?: ("base_only" | "provisional" | "full_confirmed") | null;
             /** V9 Full Confirmed Composite */
             v9_full_confirmed_composite?: number | null;
+            /**
+             * V9 Longmem Mean Composite
+             * @description Display-only LongMemEval mean from completed confirmation evidence. Independent of ranking authority.
+             */
+            v9_longmem_mean_composite?: number | null;
+            /**
+             * V9 Shadow Quality Composite
+             * @description Display-only 70/30 mix from a completed shadow confirmation. Never ranked or weighted while mode is shadow.
+             */
+            v9_shadow_quality_composite?: number | null;
         };
         /**
          * PublicSubmissionSummary

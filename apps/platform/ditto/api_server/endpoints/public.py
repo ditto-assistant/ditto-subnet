@@ -2158,6 +2158,16 @@ def _public_entry(
             if v9_confirmation is not None
             else None
         ),
+        v9_shadow_quality_composite=(
+            v9_confirmation.shadow_quality_composite
+            if v9_confirmation is not None
+            else None
+        ),
+        v9_longmem_mean_composite=(
+            v9_confirmation.longmem_mean_composite
+            if v9_confirmation is not None
+            else None
+        ),
         v9_confirmation_evidence_sha256=(
             v9_confirmation.evidence_sha256 if v9_confirmation is not None else None
         ),
@@ -4517,6 +4527,16 @@ def _submission_scores(
         ),
         v9_full_confirmed_composite=(
             v9_confirmation.full_confirmed_composite
+            if v9_confirmation is not None
+            else None
+        ),
+        v9_shadow_quality_composite=(
+            v9_confirmation.shadow_quality_composite
+            if v9_confirmation is not None
+            else None
+        ),
+        v9_longmem_mean_composite=(
+            v9_confirmation.longmem_mean_composite
             if v9_confirmation is not None
             else None
         ),

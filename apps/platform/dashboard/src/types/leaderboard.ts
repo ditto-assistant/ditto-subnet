@@ -166,6 +166,10 @@ export interface LeaderboardEntry {
   v9_confirmation_status?: "base_only" | "provisional" | "full_confirmed" | null;
   /** Independently verified full v9 composite; absent before confirmation. */
   v9_full_confirmed_composite?: number | null;
+  /** Display-only 70/30 mix from completed shadow evidence. Not ranked. */
+  v9_shadow_quality_composite?: number | null;
+  /** Display-only LongMemEval mean from completed confirmation evidence. */
+  v9_longmem_mean_composite?: number | null;
   v9_confirmation_evidence_sha256?: string | null;
   /** Authoritative quality and primary ranking key after continual aggregation. */
   official_composite?: number | null;
