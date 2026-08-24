@@ -35,7 +35,7 @@ def test_installed_profile_is_exact_bounded_shadow_contract() -> None:
     ((identity, profile),) = registry.items()
     assert identity == (profile.revision, profile.checksum())
     assert "shadow" in profile.revision
-    assert profile.longmem_cases_per_capability == 2
+    assert profile.longmem_cases_per_capability == 8
     assert profile.ablation_coordinator_policy.sample_size == 4
     assert profile.composite.base_weight_bps == 7_000
     assert profile.composite.longmem_weight_bps == 3_000

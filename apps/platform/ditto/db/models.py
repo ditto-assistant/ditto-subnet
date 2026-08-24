@@ -5433,7 +5433,7 @@ class ConfirmationBundleSubject(Base):
 
 
 class ConfirmationBundleTicket(Base):
-    """Append-only 90-minute lease attempt for one confirmation bundle."""
+    """Append-only four-hour lease attempt for one confirmation bundle."""
 
     __tablename__ = "confirmation_bundle_tickets"
 

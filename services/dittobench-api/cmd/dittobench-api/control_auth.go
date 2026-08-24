@@ -40,6 +40,7 @@ func (s *server) newControlPlaneMux() *http.ServeMux {
 	mux.HandleFunc("POST /v1/inference/session/{id}/activate-confirmation", s.broker.activateConfirmation)
 	mux.HandleFunc("DELETE /v1/inference/session/{id}", s.broker.cancel)
 	mux.HandleFunc("GET /v1/confirmation/readiness", s.handleConfirmationReadiness)
+	mux.HandleFunc("GET /v1/confirmation/progress", s.handleConfirmationProgress)
 	mux.HandleFunc("POST /v1/confirmation/execute", s.handleConfirmationExecute)
 	return mux
 }
@@ -64,6 +65,7 @@ var controlPlaneRoutes = []string{
 	"POST /v1/inference/session/{id}/activate-confirmation",
 	"DELETE /v1/inference/session/{id}",
 	"GET /v1/confirmation/readiness",
+	"GET /v1/confirmation/progress",
 	"POST /v1/confirmation/execute",
 }
 

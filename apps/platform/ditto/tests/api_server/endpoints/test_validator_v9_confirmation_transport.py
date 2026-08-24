@@ -44,6 +44,7 @@ from ditto.api_server.confirmation_candidate_reconciliation import (
 )
 from ditto.api_server.confirmation_evidence import (
     ConfirmationVerificationProfile,
+    confirmation_inference_cap_requirements,
     confirmation_signing_message,
     rebuild_confirmation_evidence,
 )
@@ -565,11 +566,17 @@ def _installed_profile_settings() -> tuple[
     registry = installed_confirmation_verification_profiles()
     assert len(registry) == 1
     profile = next(iter(registry.values()))
+    required_requests, required_tokens = confirmation_inference_cap_requirements(
+        profile
+    )
+    required_cost = profile.embedding_lane.max_cost_usd_micros + sum(
+        lane.max_cost_usd_micros for lane in profile.provider_lanes
+    )
     settings = active_settings(mode=ConfirmationBundleMode.SHADOW).model_copy(
         update={
-            "daily_dollar_cap_microusd": 10_000_000,
-            "per_bundle_request_cap": 10_000,
-            "per_bundle_token_cap": 10_000_000,
+            "daily_dollar_cap_microusd": required_cost,
+            "per_bundle_request_cap": required_requests,
+            "per_bundle_token_cap": required_tokens,
             "profile_revision": profile.revision,
             "profile_checksum": profile.checksum(),
         }
@@ -2541,7 +2548,7 @@ class TestV9ConfirmationClaimAdmission:
         )
         assert ticket.ticket_id == UUID(body["ticket_id"])
         assert reservation.reservation_id == UUID(body["reservation_id"])
-        assert ticket.deadline - ticket.issued_at == timedelta(minutes=90)
+        assert ticket.deadline - ticket.issued_at == timedelta(hours=4)
         assert bundle.state == "leased"
         # Reader, judge, and embedding caps are all reserved before execution.
         assert reservation.reserved_microusd == 300_000

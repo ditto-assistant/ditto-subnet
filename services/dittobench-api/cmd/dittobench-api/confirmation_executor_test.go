@@ -728,7 +728,7 @@ func TestTrustedConfirmationDimensionDeadlineReservesCoordinatorBudget(t *testin
 	request.ArtifactSHA256 = strings.Repeat("c", 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	_, err := executeTrustedConfirmationDimensions(ctx, request, profile, validConfirmationRuntime())
+	_, err := executeTrustedConfirmationDimensions(ctx, request, profile, validConfirmationRuntime(), nil)
 	if err == nil || !strings.Contains(err.Error(), "cannot fund both frozen dimensions") {
 		t.Fatalf("deadline reservation error = %v", err)
 	}
@@ -796,9 +796,16 @@ func TestTrustedConfirmationUnusedReaderZeroContinuesThroughAblationsAndRetainsJ
 	request.ArtifactSHA256 = strings.Repeat("c", 64)
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	result, err := executeTrustedConfirmationDimensions(ctx, request, profile, runtime)
+	var progress [][2]int
+	result, err := executeTrustedConfirmationDimensions(
+		ctx, request, profile, runtime,
+		func(completed, total int) { progress = append(progress, [2]int{completed, total}) },
+	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(progress) < 2 || progress[0] != [2]int{0, 12} || progress[len(progress)-1] != [2]int{12, 12} {
+		t.Fatalf("case progress=%v", progress)
 	}
 	if harness.runs != 12 || runner.calls != 6 {
 		t.Fatalf("longmem runs=%d ablation calls=%d", harness.runs, runner.calls)

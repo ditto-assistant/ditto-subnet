@@ -1076,46 +1076,65 @@ func TestBudgetExhaustionIsUnavailableNotInvariance(t *testing.T) {
 	}
 }
 
-func TestRealCoordinatorUnavailableEvidenceForZeroAndProbeOnlyCalls(t *testing.T) {
-	for _, testCase := range []struct {
-		name       string
-		calls      int
-		wantReason Reason
-	}{
-		{name: "zero calls", calls: 0, wantReason: ReasonNoRelevantCalls},
-		{name: "one probe", calls: 1, wantReason: ReasonInsufficientCalls},
-	} {
-		t.Run(testCase.name, func(t *testing.T) {
-			config := coordinatorConfig(2)
-			coordinator := newCoordinator(t, config)
-			inference, embedding := responders(t, 2)
-			runner := caseRunnerFunc(func(_ context.Context, request RunRequest) (CaseRunResult, error) {
-				if request.Lane == LaneInference {
-					for range testCase.calls {
-						if _, err := request.Responder.Chat("model", 8); err != nil {
-							return CaseRunResult{}, err
-						}
-					}
-					return CaseRunResult{Score: 0}, nil
-				}
-				if err := useSynthetic(request); err != nil {
-					return CaseRunResult{}, err
-				}
-				return CaseRunResult{Score: 0.9}, nil
-			})
-			report, err := coordinator.Coordinate(context.Background(), eligiblePopulation(4), runner, inference, embedding)
-			if err != nil {
-				t.Fatal(err)
+func TestRealCoordinatorUnavailableEvidenceForZeroCalls(t *testing.T) {
+	config := coordinatorConfig(2)
+	coordinator := newCoordinator(t, config)
+	inference, embedding := responders(t, 2)
+	runner := caseRunnerFunc(func(_ context.Context, request RunRequest) (CaseRunResult, error) {
+		if request.Lane == LaneInference {
+			return CaseRunResult{Score: 0}, nil
+		}
+		if err := useSynthetic(request); err != nil {
+			return CaseRunResult{}, err
+		}
+		return CaseRunResult{Score: 0.9}, nil
+	})
+	report, err := coordinator.Coordinate(context.Background(), eligiblePopulation(4), runner, inference, embedding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := Evaluate(evaluateInputFromReport(t, config, report, InterventionInference, ModeEnforce))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Evidence.Status != StatusUnavailable || got.Evidence.Reason != ReasonNoRelevantCalls ||
+		got.Evidence.SampleCount != 0 || got.Evidence.SemanticFactor != 0 || got.Evidence.AppliedFactor != 0 {
+		t.Fatalf("evidence=%+v", got.Evidence)
+	}
+}
+
+func TestRealCoordinatorOneRelevantCallCompletesTheLane(t *testing.T) {
+	config := coordinatorConfig(2)
+	coordinator := newCoordinator(t, config)
+	inference, embedding := responders(t, 2)
+	runner := caseRunnerFunc(func(_ context.Context, request RunRequest) (CaseRunResult, error) {
+		if request.Lane == LaneInference {
+			if _, err := request.Responder.Chat("model", 8); err != nil {
+				return CaseRunResult{}, err
 			}
-			got, err := Evaluate(evaluateInputFromReport(t, config, report, InterventionInference, ModeEnforce))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Evidence.Status != StatusUnavailable || got.Evidence.Reason != testCase.wantReason ||
-				got.Evidence.SampleCount != 0 || got.Evidence.SemanticFactor != 0 || got.Evidence.AppliedFactor != 0 {
-				t.Fatalf("evidence=%+v", got.Evidence)
-			}
-		})
+			return CaseRunResult{Score: 0}, nil
+		}
+		if err := useSynthetic(request); err != nil {
+			return CaseRunResult{}, err
+		}
+		return CaseRunResult{Score: 0.9}, nil
+	})
+	report, err := coordinator.Coordinate(context.Background(), eligiblePopulation(4), runner, inference, embedding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !report.InferenceIntervention.Complete ||
+		report.InferenceIntervention.UnavailableReason != UnavailableNone ||
+		report.InferenceIntervention.SyntheticUsage.affectedCalls() != uint64(config.SampleSize) {
+		t.Fatalf("one-call inference lane=%+v", report.InferenceIntervention)
+	}
+	got, err := Evaluate(evaluateInputFromReport(t, config, report, InterventionInference, ModeShadow))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Evidence.Status == StatusUnavailable || got.Evidence.Reason == ReasonInsufficientCalls ||
+		got.Evidence.AffectedCallCount != uint64(config.SampleSize) {
+		t.Fatalf("one relevant call did not count as coverage: %+v", got.Evidence)
 	}
 }
 
