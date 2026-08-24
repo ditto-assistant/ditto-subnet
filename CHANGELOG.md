@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.109.2 (2026-08-24)
+
+### Bug Fixes
+
+- **platform**: Raise live chat RPM and wait out lane saturation
+  ([#1145](https://github.com/ditto-assistant/ditto-subnet/pull/1145),
+  [`b156404`](https://github.com/ditto-assistant/ditto-subnet/commit/b156404aaf4e87d833eb4b0e0cdf06aa8b5a8d73))
+
+
 ## v0.109.1 (2026-08-24)
 
 ### Bug Fixes
