@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.110.0 (2026-08-24)
+
+### Features
+
+- **dittobench**: Run 48 LongMem cases with live fleet progress
+  ([#1141](https://github.com/ditto-assistant/ditto-subnet/pull/1141),
+  [`71c0720`](https://github.com/ditto-assistant/ditto-subnet/commit/71c0720b40ed877298e174540af285296a068f73))
+
+
 ## v0.109.2 (2026-08-24)
 
 ### Bug Fixes
