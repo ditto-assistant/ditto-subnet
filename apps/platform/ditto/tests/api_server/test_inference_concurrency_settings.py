@@ -78,11 +78,10 @@ class TestApplySettings:
         retuning something unrelated.
 
         ``request_budget`` and ``token_budget`` are both owned deliberately.
-        Note what is *not*: the chat rate limits and the embedding token
-        budget. The chat token budget moved onto the board
-        because leaving it boot-time is what made #473 inert -- the operator
-        raised the request budget from backroom and the number that was actually
-        binding could only be changed by a redeploy.
+        Chat and embedding request-per-minute limits moved onto the board
+        because leaving them boot-time is what made 8-wide runs die as
+        ``inference_lane_saturated`` while concurrency knobs looked open.
+        The embedding token budget stays boot-time.
         """
         config = _config()
         overlaid = apply_settings(
@@ -96,6 +95,12 @@ class TestApplySettings:
                 embedding_per_ticket_concurrency=12,
                 embedding_per_validator_concurrency=48,
                 embedding_global_concurrency=96,
+                chat_per_ticket_requests_per_minute=480,
+                chat_per_validator_requests_per_minute=960,
+                chat_global_requests_per_minute=1920,
+                embedding_per_ticket_requests_per_minute=100,
+                embedding_per_validator_requests_per_minute=200,
+                embedding_global_requests_per_minute=400,
             ),
         )
         changed = {
@@ -109,15 +114,22 @@ class TestApplySettings:
             "per_ticket_concurrency",
             "per_validator_concurrency",
             "global_concurrency",
+            "per_ticket_requests_per_minute",
+            "per_validator_requests_per_minute",
+            "global_requests_per_minute",
             "embedding_per_ticket_concurrency",
             "embedding_per_validator_concurrency",
             "embedding_global_concurrency",
+            "embedding_per_ticket_requests_per_minute",
+            "embedding_per_validator_requests_per_minute",
+            "embedding_global_requests_per_minute",
         }
         assert overlaid.request_budget == 4096
         assert overlaid.token_budget == 12_000_000
         assert overlaid.per_ticket_concurrency == 2
         assert overlaid.per_validator_concurrency == 3
         assert overlaid.global_concurrency == 4
+        assert overlaid.per_ticket_requests_per_minute == 480
         assert overlaid.embedding_token_budget == config.embedding_token_budget
 
 

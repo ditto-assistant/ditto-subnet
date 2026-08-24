@@ -3380,6 +3380,55 @@ func TestChatCapacityWaitingIsBounded(t *testing.T) {
 	}
 }
 
+// TestChatCapacityWaitingCoversAMinuteRateWindow is the 8-wide RPM regression:
+// Platform Retry-After is 1s and the per-ticket rate window is 60s. Twelve
+// waits used to fail-close as inference_lane_saturated while concurrency
+// peaks stayed idle. A call that is refused for a full minute, then admitted,
+// must succeed.
+func TestChatCapacityWaitingCoversAMinuteRateWindow(t *testing.T) {
+	var attempts atomic.Int64
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if attempts.Add(1) <= 60 {
+			w.Header().Set("Retry-After", "1")
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error_code":4103,"message":"inference lane is at capacity"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"c","object":"chat.completion","created":1,"model":"openai/gpt-oss-20b","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+	}))
+	defer upstream.Close()
+
+	broker := newInferenceBroker(1)
+	broker.sleep = func(context.Context, time.Duration) error { return nil }
+	proxyURL := configureBrokerUpstream(broker, upstream)
+	prepared := prepareBrokerSession(t, broker)
+	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", "openrouter-route-0123456789abcdef-v1", llm.V7HarnessModel)
+	sourceIP := "192.0.2.99"
+	claimAndBindBrokerSession(t, broker, prepared["session_id"], sourceIP, protocol.BenchVersionV8)
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/inference/id/v1/chat/completions", bytes.NewBufferString(`{"model":"openai/gpt-oss-20b"}`))
+	request.RemoteAddr = sourceIP + ":4321"
+	request.SetPathValue("rest", "v1/chat/completions")
+	recorder := httptest.NewRecorder()
+	broker.handle(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("a full-minute RPM window failed the request: status=%d", recorder.Code)
+	}
+	if attempts.Load() != 61 {
+		t.Fatalf("deliveries=%d, want 61 (60 capacity waits then success)", attempts.Load())
+	}
+	end, err := broker.snapshot(prepared["session_id"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.CapacityExhaustions != 0 {
+		t.Fatalf("a waited-out rate window was counted as saturation: %+v", end)
+	}
+}
+
 // Session-scoped v10+ tool provenance: with no case window open, overlapping
 // tool_endpoint requests racing for the SAME model emission must consume it
 // exactly once. The consumed flag is the double-spend guard; every loser is

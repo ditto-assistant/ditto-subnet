@@ -17,19 +17,26 @@ from pydantic import ValidationError
 
 from ditto.api_models.inference_concurrency_settings import (
     DEFAULT_CHAT_GLOBAL_CONCURRENCY,
+    DEFAULT_CHAT_GLOBAL_REQUESTS_PER_MINUTE,
     DEFAULT_CHAT_PER_TICKET_CONCURRENCY,
+    DEFAULT_CHAT_PER_TICKET_REQUESTS_PER_MINUTE,
     DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY,
+    DEFAULT_CHAT_PER_VALIDATOR_REQUESTS_PER_MINUTE,
     DEFAULT_CHAT_REQUEST_BUDGET,
     DEFAULT_CHAT_TOKEN_BUDGET,
     DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY,
+    DEFAULT_EMBEDDING_GLOBAL_REQUESTS_PER_MINUTE,
     DEFAULT_EMBEDDING_PER_TICKET_CONCURRENCY,
+    DEFAULT_EMBEDDING_PER_TICKET_REQUESTS_PER_MINUTE,
     DEFAULT_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
+    DEFAULT_EMBEDDING_PER_VALIDATOR_REQUESTS_PER_MINUTE,
     MAX_CHAT_CONCURRENCY,
     MAX_CHAT_REQUEST_BUDGET,
     MAX_CHAT_TOKEN_BUDGET,
     MAX_EMBEDDING_GLOBAL_CONCURRENCY,
     MAX_EMBEDDING_PER_TICKET_CONCURRENCY,
     MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY,
+    MAX_REQUESTS_PER_MINUTE,
     AdminInferenceConcurrencySettingsRequest,
     BenchmarkRuntimeSettings,
     InferenceConcurrencySettings,
@@ -87,11 +94,62 @@ class TestDefaults:
             settings.embedding_global_concurrency
             == DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY
         )
+        assert (
+            settings.chat_per_ticket_requests_per_minute
+            == DEFAULT_CHAT_PER_TICKET_REQUESTS_PER_MINUTE
+            == 1920
+        )
+        assert (
+            settings.chat_per_validator_requests_per_minute
+            == DEFAULT_CHAT_PER_VALIDATOR_REQUESTS_PER_MINUTE
+            == 7680
+        )
+        assert (
+            settings.chat_global_requests_per_minute
+            == DEFAULT_CHAT_GLOBAL_REQUESTS_PER_MINUTE
+            == 23040
+        )
+        assert (
+            settings.embedding_per_ticket_requests_per_minute
+            == DEFAULT_EMBEDDING_PER_TICKET_REQUESTS_PER_MINUTE
+        )
+        assert (
+            settings.embedding_per_validator_requests_per_minute
+            == DEFAULT_EMBEDDING_PER_VALIDATOR_REQUESTS_PER_MINUTE
+        )
+        assert (
+            settings.embedding_global_requests_per_minute
+            == DEFAULT_EMBEDDING_GLOBAL_REQUESTS_PER_MINUTE
+        )
+
+    def test_old_stored_json_without_rpm_fills_the_raised_defaults(self) -> None:
+        """A pre-RPM revision must start 8-wide at the new rail, not 240.
+
+        Stored settings JSON is additive. Missing RPM keys take the shipped
+        defaults, which is how Platform deploy raises the silent 240/min cap
+        without an operator SET.
+        """
+        settings = InferenceConcurrencySettings.model_validate(
+            {
+                "chat_request_budget": 16384,
+                "chat_token_budget": 75_000_000,
+                "chat_per_ticket_concurrency": 32,
+                "chat_per_validator_concurrency": 256,
+                "chat_global_concurrency": 512,
+                "embedding_per_ticket_concurrency": 32,
+                "embedding_per_validator_concurrency": 256,
+                "embedding_global_concurrency": 512,
+            }
+        )
+        assert settings.chat_per_ticket_requests_per_minute == 1920
+        assert settings.chat_per_validator_requests_per_minute == 7680
+        assert settings.chat_global_requests_per_minute == 23040
 
     def test_board_ceiling_matches_the_relay_hard_ceiling(self) -> None:
         """The API must reject values the Go admission process cannot enforce."""
         assert MAX_EMBEDDING_GLOBAL_CONCURRENCY == 512
         assert MAX_CHAT_CONCURRENCY == 512
+        assert MAX_REQUESTS_PER_MINUTE == 100_000
 
     def test_chat_token_ceiling_has_room_for_the_measured_tail(self) -> None:
         assert DEFAULT_CHAT_TOKEN_BUDGET == 25_000_000
@@ -153,6 +211,16 @@ class TestHierarchy:
                 embedding_global_concurrency=16,
             )
 
+    def test_chat_ticket_rpm_may_not_exceed_validator(self) -> None:
+        with pytest.raises(
+            ValidationError, match="chat_per_ticket_requests_per_minute"
+        ):
+            InferenceConcurrencySettings(
+                chat_per_ticket_requests_per_minute=2000,
+                chat_per_validator_requests_per_minute=1000,
+                chat_global_requests_per_minute=4000,
+            )
+
     def test_equal_limits_are_allowed(self) -> None:
         settings = InferenceConcurrencySettings(
             embedding_per_ticket_concurrency=8,
@@ -201,9 +269,31 @@ class TestWriteContract:
             embedding_per_ticket_concurrency=16,
             embedding_per_validator_concurrency=64,
             embedding_global_concurrency=128,
+            chat_per_ticket_requests_per_minute=1920,
+            chat_per_validator_requests_per_minute=7680,
+            chat_global_requests_per_minute=23040,
+            embedding_per_ticket_requests_per_minute=10_000,
+            embedding_per_validator_requests_per_minute=40_000,
+            embedding_global_requests_per_minute=100_000,
         )
         assert request.settings.embedding_per_ticket_concurrency == 16
         assert request.settings.chat_request_budget == 8192
+        assert request.settings.chat_per_ticket_requests_per_minute == 1920
+
+    def test_a_write_omitting_only_rpm_is_refused(self) -> None:
+        with pytest.raises(
+            ValidationError, match="chat_per_ticket_requests_per_minute"
+        ):
+            self._request(
+                chat_request_budget=8192,
+                chat_token_budget=25_000_000,
+                chat_per_ticket_concurrency=16,
+                chat_per_validator_concurrency=48,
+                chat_global_concurrency=96,
+                embedding_per_ticket_concurrency=16,
+                embedding_per_validator_concurrency=64,
+                embedding_global_concurrency=128,
+            )
 
     def test_a_write_omitting_only_the_chat_budget_is_refused(self) -> None:
         """The whole-object guard has to cover the newest field too.

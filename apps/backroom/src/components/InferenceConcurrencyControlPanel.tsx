@@ -8,6 +8,7 @@ import {
   MAX_CHAT_TOKEN_BUDGET,
   MAX_CHAT_CONCURRENCY,
   MAX_EMBEDDING_CONCURRENCY,
+  MAX_REQUESTS_PER_MINUTE,
   MAX_RELAY_DELAY_FINGERPRINT_MS,
   type InferenceConcurrencySettingsControl,
 } from '../lib/admin.schemas'
@@ -16,8 +17,8 @@ import {
   updateInferenceConcurrencySettings,
 } from '../server/admin.functions'
 
-// The eight hosted-inference fields, in the order an operator reaches for them
-// during an incident: the allowance that actually binds first, then the brake.
+// Hosted-inference fields, in the order an operator reaches for them during an
+// incident: the allowance that actually binds first, then the brake, then RPM.
 const fields = [
   {
     key: 'chat_token_budget',
@@ -72,6 +73,43 @@ const fields = [
     detail:
       'Across the whole fleet. Enforced by a cross-grant aggregate, so it is best-effort under a simultaneous burst — size it as a load-shedding backstop, not an exact valve.',
   },
+  {
+    key: 'chat_per_ticket_requests_per_minute',
+    label: 'Chat RPM · per ticket',
+    max: MAX_REQUESTS_PER_MINUTE,
+    detail:
+      'Hosted chat starts one ticket may begin in any rolling minute. This is the rail that bound 8-wide v11 runs at 240/min while concurrency peaks looked idle. Same 503 as a full lane.',
+  },
+  {
+    key: 'chat_per_validator_requests_per_minute',
+    label: 'Chat RPM · per validator',
+    max: MAX_REQUESTS_PER_MINUTE,
+    detail: 'Hosted chat starts summed over one validator’s grants per rolling minute.',
+  },
+  {
+    key: 'chat_global_requests_per_minute',
+    label: 'Chat RPM · fleet',
+    max: MAX_REQUESTS_PER_MINUTE,
+    detail: 'Hosted chat starts across the fleet per rolling minute.',
+  },
+  {
+    key: 'embedding_per_ticket_requests_per_minute',
+    label: 'Embedding RPM · per ticket',
+    max: MAX_REQUESTS_PER_MINUTE,
+    detail: 'Hosted embedding starts one ticket may begin in any rolling minute.',
+  },
+  {
+    key: 'embedding_per_validator_requests_per_minute',
+    label: 'Embedding RPM · per validator',
+    max: MAX_REQUESTS_PER_MINUTE,
+    detail: 'Hosted embedding starts summed over one validator’s grants per rolling minute.',
+  },
+  {
+    key: 'embedding_global_requests_per_minute',
+    label: 'Embedding RPM · fleet',
+    max: MAX_REQUESTS_PER_MINUTE,
+    detail: 'Hosted embedding starts across the fleet per rolling minute.',
+  },
 ] as const
 
 type FieldKey = (typeof fields)[number]['key']
@@ -88,6 +126,16 @@ function draftFrom(control: InferenceConcurrencySettingsControl): Draft {
     embedding_per_ticket_concurrency: String(settings.embedding_per_ticket_concurrency),
     embedding_per_validator_concurrency: String(settings.embedding_per_validator_concurrency),
     embedding_global_concurrency: String(settings.embedding_global_concurrency),
+    chat_per_ticket_requests_per_minute: String(settings.chat_per_ticket_requests_per_minute),
+    chat_per_validator_requests_per_minute: String(settings.chat_per_validator_requests_per_minute),
+    chat_global_requests_per_minute: String(settings.chat_global_requests_per_minute),
+    embedding_per_ticket_requests_per_minute: String(
+      settings.embedding_per_ticket_requests_per_minute,
+    ),
+    embedding_per_validator_requests_per_minute: String(
+      settings.embedding_per_validator_requests_per_minute,
+    ),
+    embedding_global_requests_per_minute: String(settings.embedding_global_requests_per_minute),
   }
 }
 
@@ -135,7 +183,14 @@ export function InferenceConcurrencyControlPanel({
     (parsed.chat_per_ticket_concurrency > parsed.chat_per_validator_concurrency ||
       parsed.chat_per_validator_concurrency > parsed.chat_global_concurrency ||
       parsed.embedding_per_ticket_concurrency > parsed.embedding_per_validator_concurrency ||
-      parsed.embedding_per_validator_concurrency > parsed.embedding_global_concurrency)
+      parsed.embedding_per_validator_concurrency > parsed.embedding_global_concurrency ||
+      parsed.chat_per_ticket_requests_per_minute >
+        parsed.chat_per_validator_requests_per_minute ||
+      parsed.chat_per_validator_requests_per_minute > parsed.chat_global_requests_per_minute ||
+      parsed.embedding_per_ticket_requests_per_minute >
+        parsed.embedding_per_validator_requests_per_minute ||
+      parsed.embedding_per_validator_requests_per_minute >
+        parsed.embedding_global_requests_per_minute)
 
   const parsedCaseConcurrency = Number(caseConcurrency)
   const parsedDelayMinMs = Number(delayMinMs)
@@ -221,6 +276,14 @@ export function InferenceConcurrencyControlPanel({
             embedding_per_ticket_concurrency: parsed.embedding_per_ticket_concurrency,
             embedding_per_validator_concurrency: parsed.embedding_per_validator_concurrency,
             embedding_global_concurrency: parsed.embedding_global_concurrency,
+            chat_per_ticket_requests_per_minute: parsed.chat_per_ticket_requests_per_minute,
+            chat_per_validator_requests_per_minute: parsed.chat_per_validator_requests_per_minute,
+            chat_global_requests_per_minute: parsed.chat_global_requests_per_minute,
+            embedding_per_ticket_requests_per_minute:
+              parsed.embedding_per_ticket_requests_per_minute,
+            embedding_per_validator_requests_per_minute:
+              parsed.embedding_per_validator_requests_per_minute,
+            embedding_global_requests_per_minute: parsed.embedding_global_requests_per_minute,
             benchmark_runtime: {
               case_concurrency: parsedCaseConcurrency,
               relay_delay_fingerprint_mode: delayMode,
@@ -255,8 +318,8 @@ export function InferenceConcurrencyControlPanel({
           <div>
             <h2 className="text-sm font-semibold">Current inference and runtime policy</h2>
             <p className="mt-1 max-w-[76ch] text-xs leading-5 text-[var(--muted)]">
-              What one scoring ticket may spend, how parallel inference traffic may be, and
-              how a newly issued v10 lease schedules and fingerprints its cases.
+              What one scoring ticket may spend, how parallel and per-minute inference
+              traffic may be, and how a newly issued v10 lease schedules its cases.
             </p>
           </div>
         </div>
@@ -294,10 +357,10 @@ export function InferenceConcurrencyControlPanel({
           <span>
             The two budgets are stamped onto a grant when it is minted, so a change here
             governs the <strong>next</strong> lease and can never retroactively exhaust a run
-            already in flight. Both chat and embedding concurrency limits are enforced at
-            admission instead — which is what makes lowering a per-ticket limit safe to pull
-            mid-run: a concurrency decline is answered with 503 and Retry-After, so a validator
-            backs off and continues rather than discarding the run.
+            already in flight. Chat and embedding concurrency and request-per-minute
+            limits are enforced at admission instead — which is what makes lowering a
+            per-ticket limit safe to pull mid-run: a decline is answered with 503 and
+            Retry-After, so a validator backs off and continues rather than discarding the run.
           </span>
         </p>
 

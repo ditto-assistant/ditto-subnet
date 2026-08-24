@@ -10582,15 +10582,30 @@ export interface components {
              */
             chat_global_concurrency: number;
             /**
+             * Chat Global Requests Per Minute
+             * @default 23040
+             */
+            chat_global_requests_per_minute: number;
+            /**
              * Chat Per Ticket Concurrency
              * @default 16
              */
             chat_per_ticket_concurrency: number;
             /**
+             * Chat Per Ticket Requests Per Minute
+             * @default 1920
+             */
+            chat_per_ticket_requests_per_minute: number;
+            /**
              * Chat Per Validator Concurrency
              * @default 48
              */
             chat_per_validator_concurrency: number;
+            /**
+             * Chat Per Validator Requests Per Minute
+             * @default 7680
+             */
+            chat_per_validator_requests_per_minute: number;
             /**
              * Chat Request Budget
              * @default 16384
@@ -10607,15 +10622,30 @@ export interface components {
              */
             embedding_global_concurrency: number;
             /**
+             * Embedding Global Requests Per Minute
+             * @default 100000
+             */
+            embedding_global_requests_per_minute: number;
+            /**
              * Embedding Per Ticket Concurrency
              * @default 12
              */
             embedding_per_ticket_concurrency: number;
             /**
+             * Embedding Per Ticket Requests Per Minute
+             * @default 10000
+             */
+            embedding_per_ticket_requests_per_minute: number;
+            /**
              * Embedding Per Validator Concurrency
              * @default 48
              */
             embedding_per_validator_concurrency: number;
+            /**
+             * Embedding Per Validator Requests Per Minute
+             * @default 40000
+             */
+            embedding_per_validator_requests_per_minute: number;
         };
         /** InferenceConcurrencySettingsRevision */
         InferenceConcurrencySettingsRevision: {
@@ -10730,6 +10760,8 @@ export interface components {
             active_requests: number;
             /** Global Limit */
             global_limit: number;
+            /** Global Rpm Limit */
+            global_rpm_limit: number;
             /** Live Grants */
             live_grants: number;
             /** Peak Global Concurrency 60M */
@@ -10740,8 +10772,12 @@ export interface components {
             peak_per_validator_concurrency_60m: number;
             /** Per Ticket Limit */
             per_ticket_limit: number;
+            /** Per Ticket Rpm Limit */
+            per_ticket_rpm_limit: number;
             /** Per Validator Limit */
             per_validator_limit: number;
+            /** Per Validator Rpm Limit */
+            per_validator_rpm_limit: number;
             /**
              * Request Kind
              * @enum {string}

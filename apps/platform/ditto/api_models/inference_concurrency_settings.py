@@ -3,9 +3,14 @@
 This board governs both hosted lanes: chat completions and embeddings through
 the platform proxy.
 
-* The chat lane's **concurrency** limits are live admission controls here.
-  Request-per-minute limits remain boot-time safety rails so widening
-  simultaneous work does not also widen provider bursts.
+* The chat lane's **concurrency** and **request-per-minute** limits are live
+  admission controls here. RPM used to be a boot-time rail so widening
+  simultaneous work would not also widen provider bursts. That split made
+  8-wide overlapping ``/run`` fail closed as ``inference_lane_saturated``
+  while Backroom concurrency peaks looked idle: every ticket sat on the
+  240/min boot cap, the scorer waited 12 seconds, and the run died. RPM
+  belongs on the same board as concurrency because both gates return the
+  same 503 and the operator has to see which one bound.
 * The chat lane's **request and token budgets** are here because they are
   per-lease resource allowances, not rates. See ``chat_request_budget`` and
   ``chat_token_budget`` for why each moved.
@@ -66,6 +71,22 @@ DEFAULT_EMBEDDING_GLOBAL_CONCURRENCY = 96
 MAX_EMBEDDING_PER_TICKET_CONCURRENCY = 512
 MAX_EMBEDDING_PER_VALIDATOR_CONCURRENCY = 512
 MAX_EMBEDDING_GLOBAL_CONCURRENCY = 512
+
+# Chat request-per-minute defaults. 240/960/2880 were sized for serial and
+# 4-wide tickets. 8 overlapping ``/run`` cases start ~240 hosted chat calls
+# per minute per ticket and then sit on that rail: production 2026-08-24
+# showed a hard 240/grant/min ceiling (24 grant-minutes at the cap in two
+# hours) while concurrency peaks stayed 9/21/46 against 32/256/512. 1920 is
+# 8x the old per-ticket cap (~32 starts/s), matching the live per-ticket
+# concurrency of 32 turning over once a second, with validator/global 4x/12x
+# above that so the ticket rail binds first.
+DEFAULT_CHAT_PER_TICKET_REQUESTS_PER_MINUTE = 1920
+DEFAULT_CHAT_PER_VALIDATOR_REQUESTS_PER_MINUTE = 7680
+DEFAULT_CHAT_GLOBAL_REQUESTS_PER_MINUTE = 23040
+DEFAULT_EMBEDDING_PER_TICKET_REQUESTS_PER_MINUTE = 10_000
+DEFAULT_EMBEDDING_PER_VALIDATOR_REQUESTS_PER_MINUTE = 40_000
+DEFAULT_EMBEDDING_GLOBAL_REQUESTS_PER_MINUTE = 100_000
+MAX_REQUESTS_PER_MINUTE = 100_000
 
 # The chat request budget, sized against the observed distribution rather than
 # against the round number it replaces (1024, which was never justified against
@@ -261,6 +282,42 @@ class InferenceConcurrencySettings(BaseModel):
     backstop with headroom, not as an exact valve.
     """
 
+    chat_per_ticket_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_CHAT_PER_TICKET_REQUESTS_PER_MINUTE
+    """Hosted chat starts one scoring ticket may begin in any rolling minute.
+
+    This is the rail that actually bound 8-wide v11 runs. Admission answers
+    it with the same 503 / 4103 as a full concurrency lane, so a scorer that
+    cannot wait out the 60s window reports ``inference_lane_saturated`` even
+    when in-flight chat is far under the concurrency caps. Live, not stamped.
+    """
+
+    chat_per_validator_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_CHAT_PER_VALIDATOR_REQUESTS_PER_MINUTE
+    """Hosted chat starts summed over one validator's grants per rolling minute."""
+
+    chat_global_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_CHAT_GLOBAL_REQUESTS_PER_MINUTE
+    """Hosted chat starts across the fleet per rolling minute."""
+
+    embedding_per_ticket_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_EMBEDDING_PER_TICKET_REQUESTS_PER_MINUTE
+    """Hosted embedding starts one scoring ticket may begin in any rolling minute."""
+
+    embedding_per_validator_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_EMBEDDING_PER_VALIDATOR_REQUESTS_PER_MINUTE
+    """Hosted embedding starts summed over one validator's grants per rolling minute."""
+
+    embedding_global_requests_per_minute: Annotated[
+        int, Field(ge=1, le=MAX_REQUESTS_PER_MINUTE)
+    ] = DEFAULT_EMBEDDING_GLOBAL_REQUESTS_PER_MINUTE
+    """Hosted embedding starts across the fleet per rolling minute."""
+
     benchmark_runtime: BenchmarkRuntimeSettings = Field(
         default_factory=BenchmarkRuntimeSettings
     )
@@ -298,6 +355,46 @@ class InferenceConcurrencySettings(BaseModel):
                 f"({self.embedding_per_validator_concurrency}) may not exceed "
                 f"embedding_global_concurrency ({self.embedding_global_concurrency}): "
                 "a single validator cannot be allowed more concurrency than the fleet"
+            )
+        if (
+            self.chat_per_ticket_requests_per_minute
+            > self.chat_per_validator_requests_per_minute
+        ):
+            raise ValueError(
+                "chat_per_ticket_requests_per_minute "
+                f"({self.chat_per_ticket_requests_per_minute}) may not exceed "
+                "chat_per_validator_requests_per_minute "
+                f"({self.chat_per_validator_requests_per_minute})"
+            )
+        if (
+            self.chat_per_validator_requests_per_minute
+            > self.chat_global_requests_per_minute
+        ):
+            raise ValueError(
+                "chat_per_validator_requests_per_minute "
+                f"({self.chat_per_validator_requests_per_minute}) may not exceed "
+                "chat_global_requests_per_minute "
+                f"({self.chat_global_requests_per_minute})"
+            )
+        if (
+            self.embedding_per_ticket_requests_per_minute
+            > self.embedding_per_validator_requests_per_minute
+        ):
+            raise ValueError(
+                "embedding_per_ticket_requests_per_minute "
+                f"({self.embedding_per_ticket_requests_per_minute}) may not exceed "
+                "embedding_per_validator_requests_per_minute "
+                f"({self.embedding_per_validator_requests_per_minute})"
+            )
+        if (
+            self.embedding_per_validator_requests_per_minute
+            > self.embedding_global_requests_per_minute
+        ):
+            raise ValueError(
+                "embedding_per_validator_requests_per_minute "
+                f"({self.embedding_per_validator_requests_per_minute}) may not exceed "
+                "embedding_global_requests_per_minute "
+                f"({self.embedding_global_requests_per_minute})"
             )
         return self
 

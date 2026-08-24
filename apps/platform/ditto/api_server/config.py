@@ -359,9 +359,9 @@ class ApiServerConfig:
             per_ticket_concurrency=DEFAULT_CHAT_PER_TICKET_CONCURRENCY,
             per_validator_concurrency=DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY,
             global_concurrency=DEFAULT_CHAT_GLOBAL_CONCURRENCY,
-            per_ticket_requests_per_minute=240,
-            per_validator_requests_per_minute=960,
-            global_requests_per_minute=2880,
+            per_ticket_requests_per_minute=1920,
+            per_validator_requests_per_minute=7680,
+            global_requests_per_minute=23040,
             request_body_bytes=4 << 20,
             response_body_bytes=2 << 20,
             timeout_seconds=90.0,
@@ -662,13 +662,13 @@ def parse_api_server_config_from_env(commit_hash: str) -> ApiServerConfig:
             per_validator_concurrency=DEFAULT_CHAT_PER_VALIDATOR_CONCURRENCY,
             global_concurrency=DEFAULT_CHAT_GLOBAL_CONCURRENCY,
             per_ticket_requests_per_minute=int(
-                os.environ.get("DITTO_INFERENCE_TICKET_RPM", "240")
+                os.environ.get("DITTO_INFERENCE_TICKET_RPM", "1920")
             ),
             per_validator_requests_per_minute=int(
-                os.environ.get("DITTO_INFERENCE_VALIDATOR_RPM", "960")
+                os.environ.get("DITTO_INFERENCE_VALIDATOR_RPM", "7680")
             ),
             global_requests_per_minute=int(
-                os.environ.get("DITTO_INFERENCE_GLOBAL_RPM", "2880")
+                os.environ.get("DITTO_INFERENCE_GLOBAL_RPM", "23040")
             ),
             request_body_bytes=int(
                 os.environ.get("DITTO_INFERENCE_REQUEST_BODY_BYTES", str(4 << 20))

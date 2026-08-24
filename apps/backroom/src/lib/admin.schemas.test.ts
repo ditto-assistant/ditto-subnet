@@ -42,6 +42,7 @@ import {
   MAX_CHAT_REQUEST_BUDGET,
   MAX_CHAT_TOKEN_BUDGET,
   MAX_EMBEDDING_CONCURRENCY,
+  MAX_REQUESTS_PER_MINUTE,
   setInferenceConcurrencySettingsInputSchema,
   QUEUE_POLICY_CONFIRMATION,
   effectiveQueuePolicySettingsSchema,
@@ -96,6 +97,15 @@ type GeneratedConfirmationBundleList =
   PlatformComponents['schemas']['AdminConfirmationBundleListResponse']
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 
+const INFERENCE_RPM = {
+  chat_per_ticket_requests_per_minute: 1920,
+  chat_per_validator_requests_per_minute: 7680,
+  chat_global_requests_per_minute: 23040,
+  embedding_per_ticket_requests_per_minute: 10_000,
+  embedding_per_validator_requests_per_minute: 40_000,
+  embedding_global_requests_per_minute: 100_000,
+}
+
 describe('admin API schemas', () => {
   it('mirrors the Platform 32768 hosted chat-request hard ceiling', () => {
     const settings = {
@@ -107,6 +117,7 @@ describe('admin API schemas', () => {
       embedding_per_ticket_concurrency: 8,
       embedding_per_validator_concurrency: 24,
       embedding_global_concurrency: 32,
+      ...INFERENCE_RPM,
       benchmark_runtime: {
         case_concurrency: 4,
         relay_delay_fingerprint_mode: 'off' as const,
@@ -132,6 +143,7 @@ describe('admin API schemas', () => {
       embedding_per_ticket_concurrency: 8,
       embedding_per_validator_concurrency: 24,
       embedding_global_concurrency: 32,
+      ...INFERENCE_RPM,
       benchmark_runtime: {
         case_concurrency: 4,
         relay_delay_fingerprint_mode: 'off' as const,
@@ -157,6 +169,7 @@ describe('admin API schemas', () => {
       embedding_per_ticket_concurrency: 512,
       embedding_per_validator_concurrency: 512,
       embedding_global_concurrency: 512,
+      ...INFERENCE_RPM,
       benchmark_runtime: {
         case_concurrency: 4,
         relay_delay_fingerprint_mode: 'shadow' as const,
@@ -166,6 +179,7 @@ describe('admin API schemas', () => {
     }
     expect(MAX_CHAT_CONCURRENCY).toBe(512)
     expect(MAX_EMBEDDING_CONCURRENCY).toBe(512)
+    expect(MAX_REQUESTS_PER_MINUTE).toBe(100_000)
     expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
@@ -183,6 +197,7 @@ describe('admin API schemas', () => {
       embedding_per_ticket_concurrency: 12,
       embedding_per_validator_concurrency: 48,
       embedding_global_concurrency: 96,
+      ...INFERENCE_RPM,
     }
     expect(inferenceConcurrencySettingsSchema.parse(settings).benchmark_runtime).toEqual({
       case_concurrency: 4,

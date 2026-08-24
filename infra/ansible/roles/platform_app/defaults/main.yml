@@ -228,9 +228,9 @@ platform_inference_route_exploration_tickets: 3
 platform_inference_route_max_error_rate: 0.25
 platform_inference_route_max_timeout_rate: 0.15
 platform_inference_route_cooldown_seconds: 30
-platform_inference_ticket_rpm: 240
-platform_inference_validator_rpm: 960
-platform_inference_global_rpm: 2880
+platform_inference_ticket_rpm: 1920
+platform_inference_validator_rpm: 7680
+platform_inference_global_rpm: 23040
 # Exact SHA-256 of dittobench-api's reviewed aggregate v7 calibration manifest
 # (sha256 over the raw embedded internal/efficiency/baselines_v7.json bytes, as
 # reported by efficiency.V7CalibrationReadiness). Route admission still fails

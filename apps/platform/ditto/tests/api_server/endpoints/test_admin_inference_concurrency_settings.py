@@ -62,6 +62,12 @@ def _settings(**overrides: object) -> dict[str, object]:
         "embedding_per_ticket_concurrency": 12,
         "embedding_per_validator_concurrency": 48,
         "embedding_global_concurrency": 96,
+        "chat_per_ticket_requests_per_minute": 1920,
+        "chat_per_validator_requests_per_minute": 7680,
+        "chat_global_requests_per_minute": 23040,
+        "embedding_per_ticket_requests_per_minute": 10_000,
+        "embedding_per_validator_requests_per_minute": 40_000,
+        "embedding_global_requests_per_minute": 100_000,
     }
     settings.update(overrides)
     return settings
@@ -131,6 +137,12 @@ class TestRead:
             "embedding_per_ticket_concurrency": 12,
             "embedding_per_validator_concurrency": 48,
             "embedding_global_concurrency": 96,
+            "chat_per_ticket_requests_per_minute": 1920,
+            "chat_per_validator_requests_per_minute": 7680,
+            "chat_global_requests_per_minute": 23040,
+            "embedding_per_ticket_requests_per_minute": 10_000,
+            "embedding_per_validator_requests_per_minute": 40_000,
+            "embedding_global_requests_per_minute": 100_000,
             "benchmark_runtime": {
                 "case_concurrency": 4,
                 "relay_delay_fingerprint_mode": "off",

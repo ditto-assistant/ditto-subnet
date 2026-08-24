@@ -22,6 +22,7 @@ from ditto.api_models.validator import (
     JobResponse,
     LedgerEntry,
     LedgerScoreProof,
+    ScoreReport,
     ValidatorHeartbeatRequest,
 )
 from ditto.validator.errors import PlatformError, PlatformInfrastructureError
@@ -1014,6 +1015,108 @@ async def test_exchange_inference_grant_exhausted_503_is_infrastructure(
             )
 
     assert attempts == 3
+
+
+def _score_report() -> ScoreReport:
+    return ScoreReport(
+        run_id="run_1",
+        seed=1,
+        composite=0.5,
+        tool_mean=0.5,
+        memory_mean=0.5,
+        median_ms=10,
+        n=1,
+        generated_at=datetime.now(UTC),
+        per_case=[],
+        structural_fingerprint=None,
+        details=None,
+    )
+
+
+async def test_submit_score_retries_empty_502_as_infrastructure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(502, text="")
+
+    monkeypatch.setattr("ditto.validator.platform._SCORE_SUBMIT_RETRY_DELAYS", (0, 0))
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(
+            PlatformInfrastructureError, match="score rejected \\(502\\)"
+        ):
+            await PlatformClient(cast(Any, config), http, keypair).submit_score(
+                agent_id,
+                signature="ab" * 64,
+                report=_score_report(),
+            )
+
+    assert attempts == 3
+
+
+async def test_submit_score_recovers_after_transient_502(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+    attempts = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(502, text="")
+        return httpx.Response(
+            200,
+            json={
+                "agent_id": str(agent_id),
+                "status": "evaluating",
+                "accepted": True,
+            },
+        )
+
+    monkeypatch.setattr("ditto.validator.platform._SCORE_SUBMIT_RETRY_DELAYS", (0, 0))
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        response = await PlatformClient(cast(Any, config), http, keypair).submit_score(
+            agent_id, signature="ab" * 64, report=_score_report()
+        )
+
+    assert attempts == 2
+    assert response.accepted is True
+
+
+async def test_submit_score_4xx_stays_a_scoring_error() -> None:
+    keypair = bittensor.Keypair.create_from_uri("//Alice")
+    agent_id = UUID("550e8400-e29b-41d4-a716-446655440000")
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(409, json={"detail": "agent is not scoreable"})
+
+    config = SimpleNamespace(
+        platform_api_url="https://platform.test",
+        validator_hotkey=keypair.ss58_address,
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        with pytest.raises(PlatformError, match="score rejected \\(409\\)") as caught:
+            await PlatformClient(cast(Any, config), http, keypair).submit_score(
+                agent_id,
+                signature="ab" * 64,
+                report=_score_report(),
+            )
+    assert type(caught.value) is PlatformError
 
 
 async def test_submit_transcript_puts_raw_bytes_with_hotkey_header() -> None:
