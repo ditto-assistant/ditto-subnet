@@ -111,6 +111,20 @@ digest. A new pack revision therefore publishes a new immutable artifact rather
 than replacing a prior miner reference. The practice pack remains static,
 public, and permanently `weight_eligible=false`.
 
+## Public certification canary
+
+`certification/v1/manifest.json` is the content-addressed public authority for
+the future qualified capability-certification lease. It binds one public
+practice task, its visible runner policy, public grader-file identities, a
+networkless resource profile, and the locked inference-policy file. Its
+canonical SHA-256 is the future `canary_manifest_sha256`.
+
+It is not a scoring task, private catalog entry, or miner-facing capability.
+The canary uses only public `PRACTICE-LEDGER-001` material and remains
+`weight_eligible=false`. A change requires regenerating its referenced public
+pack and policy hashes together, then reviewing the new manifest digest before
+Platform can issue any related certification lease.
+
 ## Public practice runner
 
 Every compiled task carries a manifest-bound public runtime policy. The current
