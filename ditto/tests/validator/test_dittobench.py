@@ -2539,6 +2539,7 @@ async def test_confirmation_progress_poll_accepts_counts_and_skips_malformed(
         item = responses.pop(0)
         if isinstance(item, Exception):
             raise item
+        assert isinstance(item, httpx.Response)
         return item
 
     async def fake_sleep(_: float) -> None:
