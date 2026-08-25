@@ -1312,8 +1312,8 @@ func (runnerAdapter *screenedAblationCaseRunner) RunCase(
 		}
 		return ablation.CaseRunResult{}, err
 	}
+	defer stopTool()
 	response, err := harness.Run(ctx, runRequest)
-	stopTool()
 	if finishErr := runnerAdapter.stopCurrentLocked(); finishErr != nil {
 		return ablation.CaseRunResult{}, finishErr
 	}

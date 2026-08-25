@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -540,6 +541,108 @@ func TestConfirmationLongMemRunFailsClosedWithoutToolEndpoint(t *testing.T) {
 	}
 }
 
+func TestConfirmationLongMemRunUsesProductionBrokerToolEndpointDuringRun(t *testing.T) {
+	broker := newInferenceBroker(1, 1)
+	port, stopBroker := serveTestBroker(t, broker)
+	defer stopBroker()
+	t.Setenv("DITTOBENCH_BROKER_PORT", strconv.Itoa(port))
+
+	sessionID, runID := "confirmation-longmem-production-tool-endpoint", "confirmation-run"
+	session := &brokerSession{
+		confirmationSession: true, caseSnapshots: make(map[uint64]brokerCaseSnapshot),
+		boundRunID: runID, expiresAt: time.Now().Add(time.Hour), trustedChatHandler: http.NotFoundHandler(),
+	}
+	broker.sessions[sessionID] = session
+
+	type probe struct {
+		status     int
+		body       protocol.ToolExecResponse
+		advertised string
+	}
+	var duringRun probe
+	harnessServer := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/health":
+			writer.WriteHeader(http.StatusOK)
+		case "/seed":
+			_ = json.NewEncoder(writer).Encode(protocol.SeedResponse{})
+		case "/run":
+			var run protocol.RunRequest
+			if err := json.NewDecoder(request.Body).Decode(&run); err != nil {
+				http.Error(writer, "bad run", http.StatusBadRequest)
+				return
+			}
+			duringRun.advertised = run.ToolEndpoint
+			endpoint := localToolURL(t, run.ToolEndpoint)
+			body, err := json.Marshal(protocol.ToolExecRequest{
+				CaseID: run.CaseID, UserID: run.UserID, Name: "search_memories",
+				Args: json.RawMessage(`{"queries":["launch"]}`),
+			})
+			if err != nil {
+				t.Errorf("marshal tool probe: %v", err)
+				http.Error(writer, "probe", http.StatusInternalServerError)
+				return
+			}
+			resp, err := http.Post(endpoint, "application/json", bytes.NewReader(body))
+			if err != nil {
+				t.Errorf("during-run tool probe: %v", err)
+				http.Error(writer, "probe", http.StatusInternalServerError)
+				return
+			}
+			defer resp.Body.Close()
+			duringRun.status = resp.StatusCode
+			if err := json.NewDecoder(resp.Body).Decode(&duringRun.body); err != nil {
+				t.Errorf("decode during-run tool probe: %v", err)
+				http.Error(writer, "probe", http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(writer).Encode(protocol.RunResponse{FinalText: "ok"})
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer harnessServer.Close()
+
+	fake := &fakeConfirmationSandbox{harnessURL: harnessServer.URL, session: session}
+	harness := &confirmationLongMemHarness{
+		sandbox: fake, broker: broker, image: "screened-image", sessionID: sessionID, runID: runID,
+		benchVersion: confirmationBenchVersion, healthTimeout: time.Second,
+		advertiseToolEndpoint: newConfirmationToolEndpointAdvertiser(broker, true),
+		binding:               &confirmationSourceBinding{},
+	}
+	if _, err := harness.Seed(context.Background(), protocol.SeedRequest{UserID: "projected-user"}); err != nil {
+		t.Fatal(err)
+	}
+	runRequest := protocol.RunRequest{
+		CaseID: "case-1", UserID: "projected-user", Tools: longmemeval.NativeMemoryTools(),
+	}
+	if _, err := harness.Run(context.Background(), runRequest); err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(duringRun.advertised) == "" {
+		t.Fatal("confirmation LongMem /run omitted production tool_endpoint")
+	}
+	if duringRun.status != http.StatusOK || duringRun.body.Result != "" ||
+		!strings.Contains(duringRun.body.Error, "tool not available via this endpoint: search_memories") {
+		t.Fatalf("during-run memory tool must stay unserved: %+v", duringRun)
+	}
+	body, err := json.Marshal(protocol.ToolExecRequest{
+		CaseID: "case-1", UserID: "projected-user", Name: "search_memories",
+		Args: json.RawMessage(`{"queries":["launch"]}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(localToolURL(t, duringRun.advertised), "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusOK {
+		t.Fatal("production tool_endpoint still served after stopTool")
+	}
+}
+
 func TestBindConfirmationToolEndpointRejectsIncompleteIdentity(t *testing.T) {
 	advertiser := localConfirmationToolAdvertiser(t)
 	request := protocol.RunRequest{CaseID: "case-1", UserID: "user-1"}
@@ -551,6 +654,9 @@ func TestBindConfirmationToolEndpointRejectsIncompleteIdentity(t *testing.T) {
 	}
 	if _, err := bindConfirmationToolEndpoint(advertiser, "127.0.0.1", &protocol.RunRequest{UserID: "user-1"}, confirmationBenchVersion, "session"); err == nil {
 		t.Fatal("missing case id was accepted")
+	}
+	if _, err := bindConfirmationToolEndpoint(advertiser, "127.0.0.1", &protocol.RunRequest{CaseID: "case-1"}, confirmationBenchVersion, "session"); err == nil {
+		t.Fatal("missing user id was accepted")
 	}
 }
 
