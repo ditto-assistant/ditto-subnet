@@ -11441,6 +11441,11 @@ class TestTop5ConfirmationLane:
         history. The raw member must remain in the cohort so already-issued wave
         work can finish, but it must not outrank the current emission member
         that is missing the shared seed set.
+
+        Putting the folded champion in the seed-completion wave empties the
+        strict intersection until that depth-zero member is scored. The raw
+        cutoff already holds every old seed, so its plan is empty rather than
+        a growth seed the fairness guard would have to refuse.
         """
         from ditto.api_server.crn import champion_anchored_seeds
 
@@ -11482,7 +11487,7 @@ class TestTop5ConfirmationLane:
             json=_top5_job_payload(champion, raw_cutoff, keypair=_KEYPAIRS[0]),
         )
         assert raw_claim.status_code == 409
-        assert "less confirmation coverage" in raw_claim.json()["message"]
+        assert "no pending confirmation seeds" in raw_claim.json()["message"]
 
         entrant_claim = await client.post(
             "/api/v1/validator/top5-confirmation-job",
