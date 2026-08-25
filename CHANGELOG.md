@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.110.4 (2026-08-25)
+
+### Bug Fixes
+
+- **platform**: Do not crash Cloud Run smoke on frozen registry_auth
+  ([#1153](https://github.com/ditto-assistant/ditto-subnet/pull/1153),
+  [`5a797bc`](https://github.com/ditto-assistant/ditto-subnet/commit/5a797bc2ef3eed1d47f9a29656bb368a37e0f414))
+
+- **platform**: Lease confirmation retests to a depth-zero champion
+  ([#1152](https://github.com/ditto-assistant/ditto-subnet/pull/1152),
+  [`5c2ad9a`](https://github.com/ditto-assistant/ditto-subnet/commit/5c2ad9a0a01b7304ab1645982e3bf84281bddfcb))
+
+
 ## v0.110.3 (2026-08-25)
 
 ### Bug Fixes
