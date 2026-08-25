@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.110.6 (2026-08-25)
+
+### Bug Fixes
+
+- Shorten scoring lease from 430 to 180 minutes
+  ([#1154](https://github.com/ditto-assistant/ditto-subnet/pull/1154),
+  [`3c7adf2`](https://github.com/ditto-assistant/ditto-subnet/commit/3c7adf22ae88cb330ed02dcde194b6cdb42a63a8))
+
+
 ## v0.110.5 (2026-08-25)
 
 ### Bug Fixes
