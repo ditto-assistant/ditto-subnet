@@ -12,7 +12,7 @@
   "ablation_projection_key_sha256": "8a00a865d6d36f3e92f39a138ac6eabc627d4d9915440e589805a3d2677b668f",
   "ablation_selection_key_sha256": "2744541342deb53d3504556838313ba27d3bfca625db939054043f5e495b3831",
   "ablation_threshold_manifest_sha256": "fa0ad000b263d3660ad60d6a509573b3154fad8490a16320f34d99c72eaa0c21",
-  "checksum": "edfbcb9051868ff922f07264cc27841782363896fbcf7905f68d85ab9112f407",
+  "checksum": "23e7168e7ee874f1b13ae332297785f78af49fcbc8de1f55111138addaa9cfcb",
   "composite": {
     "base_weight_bps": 7000,
     "checksum": "1ce77c31a1b6f146c4eb79c2422f066441c0eaff6cf3ca67fa13989a87c8101f",
@@ -36,9 +36,9 @@
   "embedding_lane": {
     "dimensions": 768,
     "lane": "embedding",
-    "max_cost_usd_micros": 1000000,
-    "max_input_tokens": 5000000,
-    "max_requests": 5000,
+    "max_cost_usd_micros": 4000000,
+    "max_input_tokens": 20000000,
+    "max_requests": 20000,
     "model": "perplexity/pplx-embed-v1-0.6b",
     "profile_revision": "dittobench-v9-pplx-embed-v1-0.6b-768-v1",
     "provider": "perplexity"
@@ -92,6 +92,6 @@
       "route_provider": "throughput"
     }
   ],
-  "revision": "v9-confirmation-shadow-bounded-2026-08-24-zdr-v6",
+  "revision": "v9-confirmation-shadow-bounded-2026-08-25-zdr-v7",
   "schema_version": 1
 }

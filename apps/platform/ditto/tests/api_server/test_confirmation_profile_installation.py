@@ -41,6 +41,7 @@ def test_installed_profile_is_exact_bounded_shadow_contract() -> None:
     assert profile.composite.longmem_weight_bps == 3_000
     assert {lane.lane for lane in profile.provider_lanes} == {"reader", "judge"}
     assert profile.embedding_lane.provider == "perplexity"
+    assert profile.embedding_lane.max_requests == 20_000
 
 
 def test_installed_profile_covers_starter_turn_and_aggregate_lane_maxima() -> None:

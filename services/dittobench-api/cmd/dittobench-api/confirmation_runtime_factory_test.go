@@ -771,7 +771,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	const installationSHA = "da7d25bd2636f8552b64218aeec7d6306b388cc4968fb5632b545acfaabe1eb0"
+	const installationSHA = "1b8f966e4c62c4c74888cb4b2d671e3b03e2775b003f63383d80ca4827da2c88"
 	if digestBytes(installationRaw) != installationSHA {
 		t.Fatalf("installation digest = %s", digestBytes(installationRaw))
 	}
@@ -787,7 +787,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-24-zdr-v6" ||
+	if profile.Revision != "v9-confirmation-shadow-bounded-2026-08-25-zdr-v7" ||
 		profile.LongMemCasesPerCapability != 8 || profile.AblationCoordinatorPolicy.SampleSize != 4 ||
 		profile.Composite.BaseWeightBPS != 7000 || profile.Composite.LongMemWeightBPS != 3000 {
 		t.Fatalf("unexpected bounded profile: %+v", profile)
@@ -801,7 +801,7 @@ func TestProductionConfirmationInstallationIsExactBoundedAndCredentialFree(t *te
 	}
 	if profile.EmbeddingLane.Provider != "perplexity" ||
 		profile.EmbeddingLane.Model != "perplexity/pplx-embed-v1-0.6b" ||
-		profile.EmbeddingLane.Dimensions != 768 || profile.EmbeddingLane.MaxRequests != 5000 {
+		profile.EmbeddingLane.Dimensions != 768 || profile.EmbeddingLane.MaxRequests != 20000 {
 		t.Fatalf("unexpected embedding lane: %+v", profile.EmbeddingLane)
 	}
 	if installation.LaunchManifestPath != "/opt/ditto/confirmation/confirmation_launch_manifest_v9_shadow.json" ||
