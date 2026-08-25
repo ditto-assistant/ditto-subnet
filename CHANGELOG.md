@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.110.3 (2026-08-25)
+
+### Bug Fixes
+
+- **platform**: Smoke on Cloud Run after Targon timeout
+  ([#1151](https://github.com/ditto-assistant/ditto-subnet/pull/1151),
+  [`4f48a8d`](https://github.com/ditto-assistant/ditto-subnet/commit/4f48a8d4d12d640b4d09fde72a327ac7eb35e31b))
+
+
 ## v0.110.2 (2026-08-25)
 
 ### Bug Fixes
