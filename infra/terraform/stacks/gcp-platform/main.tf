@@ -404,16 +404,6 @@ resource "google_secret_manager_secret" "backblaze_application_key" {
   }
 }
 
-import {
-  to = google_secret_manager_secret.backblaze_key_id
-  id = "projects/${var.project}/secrets/platform-backblaze-key-id"
-}
-
-import {
-  to = google_secret_manager_secret.backblaze_application_key
-  id = "projects/${var.project}/secrets/platform-backblaze-application-key"
-}
-
 # Let the runtime SA read every platform secret above.
 resource "google_secret_manager_secret_iam_member" "platform_access" {
   for_each  = toset(local.platform_secret_ids)
