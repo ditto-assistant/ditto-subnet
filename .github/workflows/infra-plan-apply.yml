@@ -21,6 +21,10 @@ on:
         description: Plan workflow run id (required for apply)
         required: false
         type: string
+      targets:
+        description: Optional comma-separated Terraform -target addresses
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -89,7 +93,16 @@ jobs:
           TF_VAR_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           TF_VAR_cloudflare_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
           TF_VAR_cloudflare_zone_id: ${{ inputs.root == 'gcp-platform' && vars.CLOUDFLARE_HEYDITTO_ZONE_ID || vars.CLOUDFLARE_DITTOBENCH_ZONE_ID }}
-        run: terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan
+          TF_TARGETS: ${{ inputs.targets }}
+        run: |
+          extra=()
+          if [ -n "${TF_TARGETS}" ]; then
+            IFS=',' read -ra addrs <<< "${TF_TARGETS}"
+            for addr in "${addrs[@]}"; do
+              extra+=(-target="${addr}")
+            done
+          fi
+          terraform -chdir=${{ steps.root.outputs.path }} plan -out=tfplan "${extra[@]}"
 
       - name: Seal plan in private GCS
         id: seal
