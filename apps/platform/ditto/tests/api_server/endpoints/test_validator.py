@@ -12510,6 +12510,123 @@ class TestTop5CatchUpConvergence:
             f"(old champion {old_champion}) instead of depth-zero crown {newcomer}"
         )
 
+    async def test_auto_routed_idle_claim_leases_public_board_champion_not_predecessor(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A newer UUID that holds the public crown must beat its predecessor.
+
+        Production 2026-08-25 after #1152: aceron_v23 was the public-board
+        champion at 0 confirmation seeds, but confirmation-enriched owner-dedupe
+        still named aceron_v20. Auto-route logged champion=v20 and leased
+        Hogwarts_v2 v16 from the previous family. The seed lane must follow the
+        board, not the folded predecessor.
+        """
+        from ditto.api_server.crn import champion_anchored_seeds
+
+        pool = await _seed_top5_emission_set(
+            session_maker,
+            composites=[0.90, 0.88, 0.86, 0.84, 0.82],
+            seed_heartbeats=False,
+        )
+        predecessor = pool[0]
+        now = datetime.now(UTC)
+        for keypair in _KEYPAIRS:
+            await _seed_validator_heartbeat(
+                session_maker,
+                keypair=keypair,
+                protocol_version=13,
+                capabilities=_scorer_capable_capabilities(now=now),
+                stack=_V7_STACK,
+            )
+        async with session_maker() as session, session.begin():
+            predecessor_row = await session.get(Agent, predecessor)
+            assert predecessor_row is not None
+            predecessor_hotkey = predecessor_row.miner_hotkey
+            predecessor_row.dataset_seed_block = 1
+            old_seeds = champion_anchored_seeds(
+                predecessor, version=_BENCH_VERSION, max_seeds=16
+            )[:12]
+            for agent_id in pool:
+                for seed in old_seeds:
+                    session.add(
+                        ConfirmationScore(
+                            agent_id=agent_id,
+                            validator_hotkey=_VALIDATOR_HOTKEY,
+                            bench_version=_BENCH_VERSION,
+                            seed=seed,
+                            composite=0.998,
+                            run_id=f"old-family-{agent_id}-{seed}",
+                            signature=None,
+                        )
+                    )
+        newcomer = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCORED,
+            name="public-board-champion",
+            miner_hotkey=predecessor_hotkey,
+            sha256="ab" * 32,
+            created_at=now,
+        )
+        async with session_maker() as session, session.begin():
+            for index, keypair in enumerate(_KEYPAIRS):
+                session.add(
+                    Score(
+                        agent_id=newcomer,
+                        bench_version=_BENCH_VERSION,
+                        validator_hotkey=keypair.ss58_address,
+                        run_id=f"newcomer-{index}",
+                        signature=None,
+                        seed=index,
+                        composite=0.975,
+                        tool_mean=0.975,
+                        memory_mean=0.975,
+                        median_ms=100,
+                        n=114,
+                        details={
+                            "bench_version": _BENCH_VERSION,
+                            "composite_stderr": 0.03,
+                        },
+                        generated_at=now,
+                    )
+                )
+                session.add(
+                    ValidatorTicket(
+                        agent_id=newcomer,
+                        bench_version=_BENCH_VERSION,
+                        validator_hotkey=keypair.ss58_address,
+                        slot_id="slot-0",
+                        status=TicketStatus.SCORED,
+                        purpose=TicketPurpose.CANONICAL_QUORUM,
+                        purpose_revision=1,
+                        issued_at=now - timedelta(hours=1),
+                        deadline=now + timedelta(hours=6),
+                        seed=index,
+                    )
+                )
+        await _set_retest_cohort_size(session_maker, 5, idle_retests_enabled=True)
+        _install_db(app, session_maker)
+        app.state.session_maker = session_maker
+        app.state.continual_retest_settings.invalidate()
+        _install_chain_with_block(app, block_number=361)
+        app.state.config = replace(app.state.config, top5_backoff_base=2)
+
+        response = await client.post(
+            "/api/v1/validator/top5-confirmation-job",
+            headers=_top5_auth_header(_KEYPAIRS[0]),
+            json=_auto_top5_job_payload("slot-0", keypair=_KEYPAIRS[0]),
+        )
+
+        assert response.status_code == 200, response.text
+        leased = response.json()["agent_id"]
+        assert leased == str(newcomer), (
+            f"auto-route leased {leased} "
+            f"(predecessor {predecessor}, tail {pool[1]}) "
+            f"instead of public-board champion {newcomer}"
+        )
+
     async def test_draining_the_backlog_restores_the_shared_seed_set(
         self,
         app: FastAPI,
