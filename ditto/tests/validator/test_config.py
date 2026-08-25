@@ -37,7 +37,7 @@ class TestKothConfig:
         # Cadence knobs stay env-driven, with these defaults.
         assert cfg.sweep_seconds == 30
         assert cfg.epoch_seconds == 3600
-        assert cfg.dittobench_timeout_seconds == 24000
+        assert cfg.dittobench_timeout_seconds == 9900
 
     def test_env_cannot_override_frozen_knobs(
         self, monkeypatch: pytest.MonkeyPatch

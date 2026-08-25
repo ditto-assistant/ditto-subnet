@@ -552,9 +552,9 @@ def test_validator_service_pins_build_and_runtime_contract() -> None:
         HEARTBEAT_PROTOCOL_VERSION
     )
     assert validator["environment"]["VALIDATOR_EXPECTED_COMPATIBILITY_EPOCH"] == "2"
-    assert validator["stop_grace_period"] == "435m"
+    assert validator["stop_grace_period"] == "245m"
     assert validator["environment"]["VALIDATOR_SWEEP_SECONDS"] == "30"
-    assert validator["environment"]["VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS"] == "24000"
+    assert validator["environment"]["VALIDATOR_DITTOBENCH_TIMEOUT_SECONDS"] == "9900"
     wrapper = COMPOSE_WRAPPER_PATH.read_text()
     assert 'git -C "$ROOT_DIR" rev-parse HEAD' in wrapper
     assert 'export DITTO_SOURCE_REVISION="$source_revision"' in wrapper
@@ -571,19 +571,19 @@ def test_run_cap_stop_grace_and_updater_drains_are_coherent() -> None:
     assert stop_grace.endswith("m")
     stop_grace_seconds = int(stop_grace.removesuffix("m")) * 60
 
-    # A direct stop and either updater can wait out one complete 430-minute
-    # ticket plus five minutes for the validator's signed terminal report.
-    # Keep at least 15 minutes over the 400-minute productive-run cap.
-    assert stop_grace_seconds == 26_100
+    # A direct stop and either updater can wait out the longest live ticket
+    # (4h confirmation) plus five minutes for the validator's signed terminal
+    # report. Keep at least 15 minutes over the 165-minute productive-run cap.
+    assert stop_grace_seconds == 14_700
     assert stop_grace_seconds >= run_cap_seconds + 15 * 60
 
     source_wrapper = COMPOSE_WRAPPER_PATH.read_text()
     assert (
-        source_wrapper.count("DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-26100")
+        source_wrapper.count("DITTO_VALIDATOR_COMPOSE_DRAIN_TIMEOUT_SECONDS:-14700")
         == 2
     )
     stack_updater = STACK_UPDATER_PATH.read_text()
-    assert "setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 26100" in stack_updater
+    assert "setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 14700" in stack_updater
 
 
 def test_source_stack_builds_pylon_with_the_reviewed_turbobt_fix() -> None:

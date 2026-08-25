@@ -988,7 +988,7 @@ async def issue_confirmation_ticket(
     # grant, and restart the stateless 351-case run from zero — refuse that.
     # The same slot polling again, including after a process restart, must
     # resume: canonical ``issue_ticket`` already does, and refusing here is how
-    # a 430-minute continual-retest ticket occupies a slot forever with nothing
+    # a 180-minute continual-retest ticket occupies a slot forever with nothing
     # executing.
     existing_retest = await session.scalar(
         select(ValidatorTicket)

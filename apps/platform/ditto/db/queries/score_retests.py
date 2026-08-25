@@ -41,7 +41,7 @@ from ditto.db.queries.lease_liveness import (
     record_lease_revocation,
 )
 
-REPLACEMENT_TICKET_TTL = timedelta(minutes=430)
+REPLACEMENT_TICKET_TTL = timedelta(minutes=180)
 V9_CONTRACT_RETEST_BASIS = "v9_contract_mismatch"
 MAX_AUTOMATIC_CONTRACT_RETEST_ATTEMPTS = 3
 _FINALIZED_STATUSES = (AgentStatus.SCORED, AgentStatus.LIVE)
