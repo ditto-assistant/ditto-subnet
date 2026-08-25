@@ -601,12 +601,115 @@ async def test_runtime_smoke_provision_timeout(
     assert "wrk-2" in targon.deleted
 
 
+@pytest.mark.asyncio
+async def test_runtime_smoke_falls_back_to_cloudrun_after_targon_timeout(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    cloudrun = _FakeCloudRun()
+
+    async def promote(key: str, destination: str, _writer: str) -> str:
+        del key, destination
+        return (
+            "us-central1-docker.pkg.dev/ditto-app-dev/"
+            "ditto-screening-candidates/miner@sha256:" + "cd" * 32
+        )
+
+    async def mint(_sa: str) -> str:
+        return "token-" + "x" * 120
+
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(provision_timeout_seconds=0),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        promote_archive=promote,
+        mint_token=mint,
+        providers=[TargonComputeProvider(targon, _config()), cloudrun],
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.status = "succeeded"
+        build.output_sha256 = "12" * 32
+        build.output_size_bytes = 123
+        build.output_key = f"remote-builds/{build.build_id}/image.tar"
+        build.runtime_status = "pending"
+        build.completed_at = datetime.now(UTC)
+    targon.status = "provisioning"
+    targon.deleted.clear()
+    assert await loop.tick() is True
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.runtime_status == "succeeded"
+        assert build.runtime_error_code is None
+        assert build.runtime_provider_resource_id is not None
+        assert build.runtime_provider_resource_id.startswith("service:")
+    assert cloudrun.smokes
+    assert "wrk-2" in targon.deleted
+
+
+@pytest.mark.asyncio
+async def test_runtime_smoke_reclaims_running_without_resource(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    cloudrun = _FakeCloudRun()
+
+    async def promote(key: str, destination: str, _writer: str) -> str:
+        del key, destination
+        return (
+            "us-central1-docker.pkg.dev/ditto-app-dev/"
+            "ditto-screening-candidates/miner@sha256:" + "cd" * 32
+        )
+
+    async def mint(_sa: str) -> str:
+        return "token-" + "x" * 120
+
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(provision_timeout_seconds=0),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        promote_archive=promote,
+        mint_token=mint,
+        providers=[TargonComputeProvider(targon, _config()), cloudrun],
+        interval_seconds=60,
+    )
+    await loop.tick()
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        build.status = "succeeded"
+        build.output_sha256 = "12" * 32
+        build.output_size_bytes = 123
+        build.output_key = f"remote-builds/{build.build_id}/image.tar"
+        build.runtime_status = "running"
+        build.runtime_provider_resource_id = None
+        build.completed_at = datetime.now(UTC)
+    targon.status = "provisioning"
+    assert await loop.tick() is True
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.runtime_status == "succeeded"
+        assert build.runtime_provider_resource_id is not None
+        assert build.runtime_provider_resource_id.startswith("service:")
+    assert cloudrun.smokes
+
+
 class _FakeCloudRun:
     name = "cloudrun"
     stored_provider = "gcp"
 
     def __init__(self) -> None:
         self.builds: list[str] = []
+        self.smokes: list[str] = []
         self.started: list[str] = []
         self.deleted: list[str] = []
         self.status = "running"
@@ -619,6 +722,7 @@ class _FakeCloudRun:
         return f"job:{spec.name}"
 
     async def create_smoke(self, spec: SmokeSpec) -> str:
+        self.smokes.append(spec.name)
         return f"service:{spec.name}"
 
     async def create_source_review(self, spec: ReviewSpec) -> str:
