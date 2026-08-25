@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -15,7 +17,10 @@ from sqlalchemy.ext.asyncio import (
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_server.screened_image_cleanup import (
+    CleanupResult,
+    PreservationConfigError,
     cleanup_screened_images,
+    emergency_preservation_enabled,
     screened_image_key,
 )
 from ditto.api_server.storage import ListedObject, MultipartUpload
@@ -53,6 +58,9 @@ async def test_cleanup_preserves_active_and_removes_superseded_and_abandoned(
         status=AgentStatus.REJECTED, created_at=now - timedelta(days=60)
     )
     champion = _agent(status=AgentStatus.SCORED, created_at=now - timedelta(days=60))
+    # The M0 breaker fails safe: cleanup is disabled unless explicitly enabled.
+    # This test exercises the destructive path, so it must opt in.
+    monkeypatch.setenv("M0_EMERGENCY_PRESERVATION_MODE", "false")
     async with session_maker() as session, session.begin():
         session.add_all([active, superseded, champion])
 
@@ -110,3 +118,140 @@ async def test_cleanup_preserves_active_and_removes_superseded_and_abandoned(
             and kept_champion.screened_image_upload_id is not None
         )
         assert cleared is not None and cleared.screened_image_upload_id is None
+
+
+def _exploding_storage() -> MagicMock:
+    """Storage whose every destructive dependency fails if touched at all.
+
+    Stronger than asserting zero deletions: it proves the breaker returns before
+    any listing, query or delete is even attempted.
+    """
+    storage = MagicMock()
+    for name in (
+        "list_multipart_uploads",
+        "abort_multipart_upload",
+        "list_objects",
+        "delete_object",
+    ):
+        setattr(
+            storage,
+            name,
+            AsyncMock(
+                side_effect=AssertionError(
+                    f"storage.{name} must not be touched while the M0 "
+                    "preservation breaker is active"
+                )
+            ),
+        )
+    return storage
+
+
+def _exploding_session_maker() -> MagicMock:
+    maker = MagicMock(
+        side_effect=AssertionError(
+            "the database must not be touched while the M0 preservation "
+            "breaker is active"
+        )
+    )
+    return maker
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["true", "TRUE", " on ", "1", "yes"],
+)
+async def test_breaker_disables_cleanup_when_flag_enabled(
+    monkeypatch: pytest.MonkeyPatch, flag: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("M0_EMERGENCY_PRESERVATION_MODE", flag)
+
+    with caplog.at_level(logging.WARNING):
+        result = await cleanup_screened_images(
+            _exploding_session_maker(), _exploding_storage()
+        )
+
+    assert result == CleanupResult.preserved()
+    assert result.preservation_mode is True
+    assert result.aborted_multipart == 0
+    assert result.deleted_superseded == 0
+    assert result.deleted_orphans == 0
+    assert "M0 emergency preservation mode active" in caplog.text
+
+
+async def test_breaker_defaults_to_disabled_when_flag_absent(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.delenv("M0_EMERGENCY_PRESERVATION_MODE", raising=False)
+
+    with caplog.at_level(logging.WARNING):
+        result = await cleanup_screened_images(
+            _exploding_session_maker(), _exploding_storage()
+        )
+
+    assert result.preservation_mode is True
+    assert "M0 emergency preservation mode active" in caplog.text
+
+
+@pytest.mark.parametrize("flag", ["maybe", "", "  ", "2", "disabled"])
+async def test_breaker_fails_safe_on_malformed_flag(
+    monkeypatch: pytest.MonkeyPatch, flag: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setenv("M0_EMERGENCY_PRESERVATION_MODE", flag)
+
+    with caplog.at_level(logging.ERROR):
+        result = await cleanup_screened_images(
+            _exploding_session_maker(), _exploding_storage()
+        )
+
+    assert result.preservation_mode is True
+    assert "configuration is invalid" in caplog.text
+    assert "DISABLED (fail-safe)" in caplog.text
+
+
+@pytest.mark.parametrize("flag", ["false", "FALSE", " off ", "0", "no"])
+def test_parser_accepts_explicit_disable(
+    monkeypatch: pytest.MonkeyPatch, flag: str
+) -> None:
+    monkeypatch.setenv("M0_EMERGENCY_PRESERVATION_MODE", flag)
+    assert emergency_preservation_enabled() is False
+
+
+def test_parser_rejects_plain_truthiness(monkeypatch: pytest.MonkeyPatch) -> None:
+    """bool("false") is True — the mistake this parser exists to prevent."""
+    monkeypatch.setenv("M0_EMERGENCY_PRESERVATION_MODE", "false")
+    assert bool(os.environ["M0_EMERGENCY_PRESERVATION_MODE"]) is True
+    assert emergency_preservation_enabled() is False
+
+
+def test_parser_raises_on_unrecognised_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("M0_EMERGENCY_PRESERVATION_MODE", "maybe")
+    with pytest.raises(PreservationConfigError):
+        emergency_preservation_enabled()
+
+
+async def test_pm2_entry_path_cannot_bypass_the_breaker(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The deployed pm2 process calls this module; it must hit the same guard."""
+    import importlib.util
+    from pathlib import Path
+
+    entry = (
+        Path(__file__).resolve().parents[3] / "scripts" / "cleanup_screened_images.py"
+    )
+    assert entry.exists(), entry
+    spec = importlib.util.spec_from_file_location("m0_entry_probe", entry)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.cleanup_screened_images is cleanup_screened_images
+
+    monkeypatch.setenv("M0_EMERGENCY_PRESERVATION_MODE", "true")
+    with caplog.at_level(logging.WARNING):
+        result = await module.cleanup_screened_images(
+            _exploding_session_maker(), _exploding_storage()
+        )
+    assert result.preservation_mode is True

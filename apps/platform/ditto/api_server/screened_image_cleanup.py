@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -13,18 +15,70 @@ from ditto.api_server.storage import S3StorageClient
 from ditto.db.models import Agent
 from ditto.db.queries.scores import list_eligible_ledger
 
+logger = logging.getLogger(__name__)
+
 _ABANDONED_AFTER = timedelta(days=1)
 _SUPERSEDED_AFTER = timedelta(days=30)
 _IMAGE_MARKER = "/screened-images/"
 
+_PRESERVATION_ENV = "M0_EMERGENCY_PRESERVATION_MODE"
+_PRESERVATION_TRUTHY = {"1", "true", "yes", "on"}
+_PRESERVATION_FALSY = {"0", "false", "no", "off"}
+
+
+class PreservationConfigError(RuntimeError):
+    """Raised when the M0 preservation flag is set to an unrecognised value."""
+
+
+def emergency_preservation_enabled() -> bool:
+    """Whether the M0 emergency preservation breaker disables cleanup.
+
+    Fail-safe by construction: an ABSENT flag disables cleanup, because M0's
+    whole purpose is that a misconfigured host preserves rather than deletes.
+    An UNRECOGNISED value raises, and the caller also disables cleanup — the
+    one thing that must never happen is a config mistake resolving to "delete".
+
+    Plain truthiness is wrong here and dangerously so: ``bool("false")`` is
+    ``True``, which points the mistake in the destructive direction.
+    """
+    raw = os.environ.get(_PRESERVATION_ENV)
+    if raw is None:
+        return True
+    normalized = raw.strip().lower()
+    if normalized in _PRESERVATION_TRUTHY:
+        return True
+    if normalized in _PRESERVATION_FALSY:
+        return False
+    raise PreservationConfigError(
+        f"{_PRESERVATION_ENV}={raw!r} is not a recognised boolean; "
+        "screened-image cleanup stays disabled"
+    )
+
 
 @dataclass(frozen=True)
 class CleanupResult:
-    """Counts emitted by one idempotent cleanup pass."""
+    """Counts emitted by one idempotent cleanup pass.
+
+    ``preservation_mode`` defaults to False so every existing construction and
+    assertion keeps working. It is True only when the M0 breaker short-circuited
+    the pass, so a monitor reading the result cannot mistake a breaker run for an
+    ordinary cleanup that happened to delete nothing.
+    """
 
     aborted_multipart: int
     deleted_orphans: int
     deleted_superseded: int
+    preservation_mode: bool = False
+
+    @classmethod
+    def preserved(cls) -> CleanupResult:
+        """A zeroed result marking that no destructive path was entered."""
+        return cls(
+            aborted_multipart=0,
+            deleted_orphans=0,
+            deleted_superseded=0,
+            preservation_mode=True,
+        )
 
 
 def screened_image_key(agent_id: object, upload_id: object) -> str:
@@ -50,6 +104,25 @@ async def cleanup_screened_images(
     untrusted miner source. Completed objects never accepted by a verdict are
     removed after one day.
     """
+    try:
+        preservation_enabled = emergency_preservation_enabled()
+    except PreservationConfigError:
+        logger.exception(
+            "M0 emergency-preservation configuration is invalid; "
+            "screened-image cleanup is DISABLED (fail-safe)",
+        )
+        return CleanupResult.preserved()
+
+    if preservation_enabled:
+        logger.warning(
+            "M0 emergency preservation mode active; screened-image cleanup is "
+            "DISABLED. multipart abort, superseded detachment, superseded "
+            "deletion and orphan deletion all skipped. mode=%s "
+            "destructive_actions_enabled=false",
+            _PRESERVATION_ENV,
+        )
+        return CleanupResult.preserved()
+
     now = now or datetime.now(UTC)
     abandoned_before = now - _ABANDONED_AFTER
     superseded_before = now - _SUPERSEDED_AFTER
