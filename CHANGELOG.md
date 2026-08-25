@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.110.1 (2026-08-25)
+
+### Bug Fixes
+
+- **dittobench**: Fund 48-case LongMem embedding seeds
+  ([#1148](https://github.com/ditto-assistant/ditto-subnet/pull/1148),
+  [`9f862e0`](https://github.com/ditto-assistant/ditto-subnet/commit/9f862e07b80b44b675c070f6dd5f92c1ac4af121))
+
+- **platform**: Fail-retry targon screens after runtime timeout
+  ([#1147](https://github.com/ditto-assistant/ditto-subnet/pull/1147),
+  [`47be4ec`](https://github.com/ditto-assistant/ditto-subnet/commit/47be4ecf07a5e1defc3c55ee86c348e7a548247f))
+
+
 ## v0.110.0 (2026-08-24)
 
 ### Features
