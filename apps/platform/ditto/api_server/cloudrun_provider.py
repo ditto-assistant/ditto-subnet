@@ -58,7 +58,6 @@ class CloudRunComputeProvider:
         return f"{_JOB_PREFIX}{spec.name}"
 
     async def create_smoke(self, spec: SmokeSpec) -> str:
-        del spec.registry_auth
         try:
             await self._client.create_service(
                 spec.name,

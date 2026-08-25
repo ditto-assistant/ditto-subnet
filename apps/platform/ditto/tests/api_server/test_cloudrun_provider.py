@@ -7,6 +7,7 @@ import pytest
 from ditto.api_server.cloudrun_client import AsyncCloudRunClient
 from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
 from ditto.api_server.config import CloudRunScreeningConfig, TargonRentalConfig
+from ditto.api_server.screening_provider import SmokeSpec
 
 
 class _FakeCloudRunClient:
@@ -136,3 +137,54 @@ async def test_job_status_timeout_when_execution_stays_pending() -> None:
     provider = _provider({"status": {"runningCount": 0}}, job=_V2_PENDING_JOB)
     status = await provider.wait_until_running("job:ditto-miner-build-test", 0.01)
     assert status == "timeout"
+
+
+class _FakeServiceClient:
+    def __init__(self) -> None:
+        self.created: list[str] = []
+
+    async def create_service(self, name: str, **kwargs: Any) -> None:
+        del kwargs
+        self.created.append(name)
+
+
+@pytest.mark.asyncio
+async def test_create_smoke_ignores_frozen_registry_auth() -> None:
+    client = _FakeServiceClient()
+    targon = TargonRentalConfig(
+        api_key="k" * 32,
+        org_slug="ditto",
+        resource="cpu-small",
+        public_platform_url="https://platform-api.heyditto.ai",
+        submission_builder_image=(
+            "us-central1-docker.pkg.dev/ditto-app-dev/"
+            "ditto-public-builders/submission-builder@sha256:" + "ab" * 32
+        ),
+        candidate_writer_sa="push@example.test",
+        candidate_reader_sa="pull@example.test",
+        bootstrap_sa="boot@example.test",
+        source_review_secret_resource="projects/p/secrets/s",
+    )
+    provider = CloudRunComputeProvider(
+        cast(AsyncCloudRunClient, client),
+        CloudRunScreeningConfig(
+            project="ditto-app-dev",
+            region="us-central1",
+            untrusted_sa_email="untrusted@example.test",
+            platform_invoker_sa_email="invoker@example.test",
+        ),
+        targon,
+    )
+    spec = SmokeSpec(
+        name="ditto-runtime-test",
+        image="us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner:tag",
+        env=(("OPENROUTER_API_KEY", "sk-screener-smoke"),),
+        registry_auth={
+            "server": "us-central1-docker.pkg.dev",
+            "username": "oauth2accesstoken",
+            "password": "token",
+        },
+    )
+    uid = await provider.create_smoke(spec)
+    assert uid == "service:ditto-runtime-test"
+    assert client.created == ["ditto-runtime-test"]
