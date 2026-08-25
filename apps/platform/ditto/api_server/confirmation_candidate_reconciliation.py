@@ -234,10 +234,14 @@ async def reconcile_confirmation_candidates(
         and profile is not None
     )
 
+    # Rank confirmation follows the live board's owner representative
+    # (``official`` / continual when that lane is active). Canonical medians
+    # can keep an older family version in front after the board has moved on,
+    # and those are not the rows operators rank as the current kings.
     ledger = await list_eligible_ledger(
         session,
         bench_version=bench_version,
-        owner_score="canonical",
+        owner_score="official",
         apply_v9_confirmation_policy=False,
         include_fingerprints=False,
         details_keys=("v9_base", "base_evidence_sha256"),
@@ -331,10 +335,14 @@ async def reconcile_confirmation_candidates(
             )
         )
 
+    ledger_owner_ids = {candidate.owner_id for candidate in candidates}
+
     # Once a subject has been persisted it remains the durable reconciliation
     # input. This matters after completion and settings changes: those triggers
     # must be able to re-evaluate a candidate even when a concurrent rollout
-    # temporarily removes explicit rows from the canonical ledger read.
+    # temporarily removes explicit rows from the live ledger read. It must not
+    # let a higher-base older sibling steal the slot from the owner already
+    # represented on that ledger.
     persisted_rows = (
         await session.execute(
             select(
@@ -377,6 +385,8 @@ async def reconcile_confirmation_candidates(
             ],
         )
         for root, (subject, agent, _coldkey) in zip(roots, missing_rows, strict=True):
+            if root in ledger_owner_ids:
+                continue
             rows = score_rows.get(agent.agent_id, [])
             if len(rows) < SCORING_QUORUM:
                 continue

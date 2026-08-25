@@ -8,6 +8,7 @@ import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 from uuid import UUID, uuid4
 
 import pytest
@@ -44,6 +45,7 @@ from ditto.db.queries.confirmation_bundles import (
     settle_confirmation_bundle_budget,
 )
 from ditto.db.queries.confirmation_policy_lock import lock_confirmation_policy
+from ditto.db.queries.scores import LedgerRow
 from ditto.tests.confirmation_evidence_fixtures import (
     VALIDATOR_KEYPAIR,
     active_settings,
@@ -521,6 +523,91 @@ async def test_ledger_and_persisted_fallback_share_attested_owner_key_space(
     winner_subject = await session.get(ConfirmationBundleSubject, (winner.agent_id, 9))
     assert older_subject is not None and older_subject.bundle_id is None
     assert winner_subject is not None and winner_subject.bundle_id is not None
+    assert result.selected_subjects == 1
+    assert (
+        await session.scalar(select(func.count()).select_from(ConfirmationBundle)) == 1
+    )
+
+
+async def test_persisted_higher_base_sibling_does_not_steal_live_board_king(
+    session: AsyncSession,
+) -> None:
+    coldkey = "5SharedConfirmationOwner"
+
+    def payment(agent: Agent, *, index: int) -> EvaluationPayment:
+        return EvaluationPayment(
+            block_hash=f"0x{index:064x}",
+            extrinsic_index=index,
+            agent_id=agent.agent_id,
+            miner_hotkey=agent.miner_hotkey,
+            miner_coldkey=coldkey,
+            amount_rao=1,
+            dest_address="5ConfirmationTreasury",
+            timestamp=_NOW + timedelta(minutes=index),
+        )
+
+    async with session.begin():
+        older, older_scores = await _agent_with_quorum(
+            session,
+            index=0,
+            composites=(985_000,) * 3,
+        )
+        session.add(payment(older, index=0))
+        await session.flush()
+        await reconcile_confirmation_candidates(
+            session,
+            bench_version=9,
+            verification_profiles={},
+            finalized_agent=older,
+            finalized_scores=older_scores,
+        )
+
+        await _settings(session, top_n=1)
+        current, current_scores = await _agent_with_quorum(
+            session,
+            index=1,
+            composites=(982_000,) * 3,
+        )
+        session.add(payment(current, index=1))
+        await session.flush()
+        median = sorted(
+            current_scores, key=lambda row: (row.composite, row.validator_hotkey)
+        )[(len(current_scores) - 1) // 2]
+        live_row = LedgerRow(
+            miner_hotkey=current.miner_hotkey,
+            agent_id=current.agent_id,
+            composite=median.composite,
+            tool_mean=median.tool_mean,
+            memory_mean=median.memory_mean,
+            first_seen=current.created_at or _NOW,
+            sha256=current.sha256,
+            size_bytes=100,
+            run_id=median.run_id,
+            seed=median.seed,
+            validator_hotkey=median.validator_hotkey,
+            signature=median.signature,
+            status=AgentStatus.SCORED,
+            miner_coldkey=coldkey,
+            bench_version=9,
+            n=median.n,
+            eligible=True,
+            details=median.details,
+            median_ms=median.median_ms,
+        )
+        with patch(
+            "ditto.api_server.confirmation_candidate_reconciliation.list_eligible_ledger",
+            new=AsyncMock(return_value=[live_row]),
+        ):
+            result = await reconcile_confirmation_candidates(
+                session, bench_version=9, verification_profiles=_registry()
+            )
+
+    older_subject = await session.get(ConfirmationBundleSubject, (older.agent_id, 9))
+    current_subject = await session.get(
+        ConfirmationBundleSubject, (current.agent_id, 9)
+    )
+    assert older_subject is not None and older_subject.bundle_id is None
+    assert current_subject is not None and current_subject.bundle_id is not None
     assert result.selected_subjects == 1
     assert (
         await session.scalar(select(func.count()).select_from(ConfirmationBundle)) == 1
