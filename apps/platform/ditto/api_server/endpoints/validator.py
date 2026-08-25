@@ -4723,8 +4723,23 @@ async def request_top5_confirmation_job(
         # current top-five agent is treated like spare-capacity rank-N work and
         # can remain at zero confirmations while folded-out raw members keep
         # accumulating samples.
-        wave_member_ids = tuple(member.agent_id for member in wave_members)
+        #
+        # The folded champion must sit in the wave used for strict completion
+        # and catch-up. A new crown at seed depth zero is often absent from the
+        # raw-score wave's confirmation history; leaving it out makes
+        # ``completed`` look full (the previous family's intersection) and the
+        # champion's plan empty, so auto-route spends every idle slot on the
+        # tail. Prepending emission members keeps that crown in the intersection
+        # (empty until it is scored) and gives it a growth seed.
         emission_member_ids = frozenset(member.agent_id for member in emission_members)
+        wave_member_ids = tuple(
+            dict.fromkeys(
+                (
+                    *(member.agent_id for member in emission_members),
+                    *(member.agent_id for member in wave_members),
+                )
+            )
+        )
         if not members:
             if auto_routed:
                 if live_retest is not None:
@@ -4747,7 +4762,13 @@ async def request_top5_confirmation_job(
         # Platform's current fold is the only routing authority. Legacy v1
         # validators still send the champion/member they observed; v2 sends a
         # slot only and lets this transaction pick from the authoritative cohort.
-        champion_agent_id = members[0].agent_id
+        # ``combined_cohort[0]`` can disagree with the emission-set champion
+        # when owner-dedupe or the statistical band prepends another member;
+        # seed planning and auto-route must follow the fold that the board
+        # shows, or a depth-zero crown never receives a lease.
+        champion_agent_id = (
+            emission_members[0].agent_id if emission_members else members[0].agent_id
+        )
         if (
             payload.champion_agent_id is not None
             and champion_agent_id != payload.champion_agent_id
@@ -4834,19 +4855,31 @@ async def request_top5_confirmation_job(
         if requested_member_id is not None:
             candidate_member_ids = (requested_member_id,)
         else:
-            # Settle the emission wave before spending spare capacity deeper in
-            # the configured/statistical cohort. Platform's fairness guard below
-            # is still authoritative; this ordering merely avoids rejected probes.
+            # Auto-route tries the folded champion first (often a depth-zero
+            # newcomer), then other unserved catch-up, then the rest of the
+            # emission set, then spare-capacity extended members. Cohort order
+            # alone can put a catching-up tail member ahead of the crown.
+            rest_ids = tuple(
+                member_id for member_id in member_ids if member_id != champion_agent_id
+            )
             candidate_member_ids = (
+                champion_agent_id,
                 *(
                     member_id
-                    for member_id in member_ids
-                    if member_id in emission_member_ids
+                    for member_id in rest_ids
+                    if member_id in catchup_member_ids
                 ),
                 *(
                     member_id
-                    for member_id in member_ids
+                    for member_id in rest_ids
+                    if member_id in emission_member_ids
+                    and member_id not in catchup_member_ids
+                ),
+                *(
+                    member_id
+                    for member_id in rest_ids
                     if member_id not in emission_member_ids
+                    and member_id not in catchup_member_ids
                 ),
             )
 
@@ -4912,7 +4945,7 @@ async def request_top5_confirmation_job(
             wave_seed = claimable if claimable is not None else seeds[0]
             if not await _top5_member_is_least_covered(
                 session,
-                members=members,
+                members=tuple(dict.fromkeys((*emission_members, *members))),
                 emission_member_ids=emission_member_ids,
                 catchup_member_ids=catchup_member_ids,
                 requested_member_id=candidate_member_id,
