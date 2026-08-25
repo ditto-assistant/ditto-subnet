@@ -468,7 +468,13 @@ class TargonRentalLoop:
                 .where(
                     SubmissionImageBuild.environment == self._config.environment,
                     SubmissionImageBuild.status.in_(("succeeded", "consumed")),
-                    SubmissionImageBuild.runtime_status == "pending",
+                    or_(
+                        SubmissionImageBuild.runtime_status == "pending",
+                        and_(
+                            SubmissionImageBuild.runtime_status == "running",
+                            SubmissionImageBuild.runtime_provider_resource_id.is_(None),
+                        ),
+                    ),
                     SubmissionImageBuild.output_sha256.is_not(None),
                     SubmissionImageBuild.output_size_bytes.is_not(None),
                 )
