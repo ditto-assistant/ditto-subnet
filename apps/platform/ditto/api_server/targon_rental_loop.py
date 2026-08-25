@@ -472,9 +472,7 @@ class TargonRentalLoop:
                         SubmissionImageBuild.runtime_status == "pending",
                         and_(
                             SubmissionImageBuild.runtime_status == "running",
-                            SubmissionImageBuild.runtime_provider_resource_id.is_(
-                                None
-                            ),
+                            SubmissionImageBuild.runtime_provider_resource_id.is_(None),
                         ),
                     ),
                     SubmissionImageBuild.output_sha256.is_not(None),

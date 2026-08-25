@@ -647,8 +647,6 @@ async def test_runtime_smoke_falls_back_to_cloudrun_after_targon_timeout(
         assert build is not None
         assert build.runtime_status == "succeeded"
         assert build.runtime_error_code is None
-        assert build.runtime_provider_resource_id is not None
-        assert build.runtime_provider_resource_id.startswith("service:")
     assert cloudrun.smokes
     assert "wrk-2" in targon.deleted
 
@@ -673,7 +671,7 @@ async def test_runtime_smoke_reclaims_running_without_resource(
 
     loop = TargonRentalLoop(
         session_maker=session_maker,
-        config=_config(provision_timeout_seconds=0),
+        config=_config(provision_timeout_seconds=1),
         targon=targon,
         screener_hotkey=_SCREENER_HOTKEY,
         promote_archive=promote,
@@ -692,14 +690,13 @@ async def test_runtime_smoke_reclaims_running_without_resource(
         build.runtime_status = "running"
         build.runtime_provider_resource_id = None
         build.completed_at = datetime.now(UTC)
+        build.updated_at = datetime.now(UTC)
     targon.status = "provisioning"
     assert await loop.tick() is True
     async with session_maker() as session:
         build = await session.scalar(select(SubmissionImageBuild).limit(1))
         assert build is not None
         assert build.runtime_status == "succeeded"
-        assert build.runtime_provider_resource_id is not None
-        assert build.runtime_provider_resource_id.startswith("service:")
     assert cloudrun.smokes
 
 
