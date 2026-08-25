@@ -205,7 +205,7 @@ class TargonRentalLoop:
         return repaired > 0
 
     async def _finalize_ready_attempts(self) -> bool:
-        """Attest Targon passes after smoke, or fail-retry after Kaniko/runtime fallback."""
+        """Attest Targon passes after smoke, or fail-retry after lane fallback."""
         if self._complete_screen is None:
             return False
         now = datetime.now(UTC)
