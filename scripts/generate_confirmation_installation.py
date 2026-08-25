@@ -73,7 +73,7 @@ LONGMEM_DATASET_REVISION = (
     "huggingface-98d7416c24c778c2fee6e6f3006e7a073259d48f-"
     "longmemeval-9e0b455f4ef0e2ab8f2e582289761153549043fc"
 )
-PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-24-zdr-v6"
+PROFILE_REVISION = "v9-confirmation-shadow-bounded-2026-08-25-zdr-v7"
 LONGMEM_PROFILE_REVISION = "longmemeval-s-v9-shadow-48-zdr-v4"
 ABLATION_PROFILE_REVISION = "dittobench-v9-ablation-shadow-6-v1"
 COMPOSITE_REVISION = "v9-confirmation-composite-shadow-70-30-v1"
@@ -225,9 +225,12 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
             profile_revision="dittobench-v9-pplx-embed-v1-0.6b-768-v1",
             model="perplexity/pplx-embed-v1-0.6b",
             dimensions=768,
-            max_requests=5_000,
-            max_input_tokens=5_000_000,
-            max_cost_usd_micros=1_000_000,
+            # Live v6 Omar/lets/rb exhausted this 5,000-request rail while
+            # still seeding the 48-case set (about 5,000 applied, 12 judged).
+            # Scale the original 12-case 5,000 rail by four.
+            max_requests=20_000,
+            max_input_tokens=20_000_000,
+            max_cost_usd_micros=4_000_000,
         ),
         ablation_profile_revision=ABLATION_PROFILE_REVISION,
         ablation_profile_checksum="0" * 64,
@@ -308,11 +311,11 @@ def _outputs(bench_version: int = BENCH_VERSION_V9) -> dict[Path, bytes]:
 
     launch = {
         "schema_version": 1,
-        "revision": "v9-confirmation-shadow-launch-2026-08-24-zdr-v6".replace(
+        "revision": "v9-confirmation-shadow-launch-2026-08-25-zdr-v7".replace(
             "v9-", f"{tag}-", 1
         )
         if bench_version != BENCH_VERSION_V9
-        else "v9-confirmation-shadow-launch-2026-08-24-zdr-v6",
+        else "v9-confirmation-shadow-launch-2026-08-25-zdr-v7",
         "mode": "shadow",
         "execution_profile_revision": profile.revision,
         "execution_profile_checksum": profile.checksum(),

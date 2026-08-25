@@ -5,8 +5,8 @@
     "minimum_base_score_micros": 950000,
     "mode": "score_threshold"
   },
-  "execution_profile_checksum": "edfbcb9051868ff922f07264cc27841782363896fbcf7905f68d85ab9112f407",
-  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-24-zdr-v6",
+  "execution_profile_checksum": "23e7168e7ee874f1b13ae332297785f78af49fcbc8de1f55111138addaa9cfcb",
+  "execution_profile_revision": "v9-confirmation-shadow-bounded-2026-08-25-zdr-v7",
   "guarantees": {
     "changes_canonical_scores": false,
     "changes_rewards": false,
@@ -16,12 +16,12 @@
   },
   "issuance_caps": {
     "daily_bundles": 1,
-    "daily_cost_microusd": 11000000,
-    "requests_per_bundle": 6200,
-    "tokens_per_bundle": 21808000
+    "daily_cost_microusd": 14000000,
+    "requests_per_bundle": 21200,
+    "tokens_per_bundle": 36808000
   },
   "longmem_dataset_sha256": "d6f21ea9d60a0d56f34a05b609c79c88a451d2ae03597821ea3d5a9678c3a442",
   "mode": "shadow",
-  "revision": "v9-confirmation-shadow-launch-2026-08-24-zdr-v6",
+  "revision": "v9-confirmation-shadow-launch-2026-08-25-zdr-v7",
   "schema_version": 1
 }
