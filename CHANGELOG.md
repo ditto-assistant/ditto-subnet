@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.110.5 (2026-08-25)
+
+### Bug Fixes
+
+- **platform**: Admit Cloud Run smoke with embedding sidecar
+  ([#1155](https://github.com/ditto-assistant/ditto-subnet/pull/1155),
+  [`56e4a40`](https://github.com/ditto-assistant/ditto-subnet/commit/56e4a408cef6058e40c378b6891cf3a70c2c1234))
+
+
 ## v0.110.4 (2026-08-25)
 
 ### Bug Fixes
