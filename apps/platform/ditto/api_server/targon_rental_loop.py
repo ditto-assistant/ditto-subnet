@@ -548,7 +548,7 @@ class TargonRentalLoop:
                     error_code = await self._dead_replica_code(
                         provider, uid, provisioned
                     )
-            except ScreeningProviderError:
+            except Exception:
                 logger.exception(
                     "%s runtime launch failed build_id=%s", provider.name, build_id
                 )
