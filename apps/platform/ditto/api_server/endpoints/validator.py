@@ -3735,6 +3735,19 @@ _KOTH_DETAIL_KEYS = (
 )
 
 
+@dataclass(frozen=True)
+class _KothLaneSnapshot:
+    """Folded owner-deduped entries plus the public-board emission set.
+
+    Confirmation-enriched owner-dedupe can keep a predecessor as the family
+    representative after a newer UUID has already taken the public crown.
+    Confirmation *scheduling* must follow ``raw_emission``.
+    """
+
+    folded_entries: list[KothEntry]
+    raw_emission: tuple[KothEntry, ...]
+
+
 async def _current_koth_entries(
     session: AsyncSession,
     *,
@@ -3743,7 +3756,7 @@ async def _current_koth_entries(
     wave_membership: WaveMembership = DEFAULT_WAVE_MEMBERSHIP,
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
-) -> list[KothEntry]:
+) -> _KothLaneSnapshot:
     """Build the active-version KOTH fold from canonical or completed evidence.
 
     Confirmation evidence is admitted only as a complete cohort wave. Partial
@@ -3934,11 +3947,15 @@ async def _current_koth_entries(
         rows, scores=entry_scores, secondary_scores=entry_tiebreaks
     )
     selected_by_id = {row.agent_id: row for row in selected_rows}
-    return [
+    folded_entries = [
         replace(entry, first_seen=selected_by_id[entry.agent_id].fold_first_seen)
         for entry in entries
         if entry.agent_id in selected_by_id
     ]
+    return _KothLaneSnapshot(
+        folded_entries=folded_entries,
+        raw_emission=raw_members,
+    )
 
 
 async def _current_emission_set(
@@ -3950,7 +3967,7 @@ async def _current_emission_set(
     efficiency_config: EfficiencyBonusConfig | None = None,
     now: datetime | None = None,
 ) -> tuple[KothEntry, ...]:
-    entries = await _current_koth_entries(
+    snapshot = await _current_koth_entries(
         session,
         canonical_version=canonical_version,
         completed_waves_only=completed_waves_only,
@@ -3958,7 +3975,7 @@ async def _current_emission_set(
         efficiency_config=efficiency_config,
         now=now,
     )
-    return emission_set(project_koth(entries))
+    return emission_set(project_koth(snapshot.folded_entries))
 
 
 async def _current_retest_cohort(
@@ -3971,10 +3988,10 @@ async def _current_retest_cohort(
 ) -> tuple[tuple[KothEntry, ...], tuple[KothEntry, ...], tuple[KothEntry, ...]]:
     """Return ``(emission_set, wave_members, retest_cohort)`` from one read.
 
-    Both are returned because the lane needs them for different jobs and must
-    not disagree about the champion: the emission set decides when a wave is
-    complete (and therefore which seed is open), the cohort decides who may be
-    leased against that seed.
+    Both are returned because the lane needs them for different jobs: the
+    public-board ``wave_members`` are the seed-family anchor, the folded
+    emission set is who confirmation waves currently move, and the cohort
+    decides who may be leased against that seed.
 
     Only the *cohort* half is widened by the tie band. The emission set is frozen
     consensus shared with the subnet's weight fold and is never five-plus-ties;
@@ -3998,25 +4015,19 @@ async def _current_retest_cohort(
     every raw wave member, in that order. This may add at most five gate
     catch-up members; it changes neither emissions nor score arithmetic.
     """
-    entries = await _current_koth_entries(
+    snapshot = await _current_koth_entries(
         session,
         canonical_version=canonical_version,
         wave_membership=settings.wave_membership,
         efficiency_config=efficiency_config,
         now=now,
     )
+    entries = snapshot.folded_entries
     projection = project_koth(entries)
-    raw_entries = [
-        replace(
-            entry,
-            quorum_composites=None,
-            completed_wave_composites=None,
-            confirmation_composites=None,
-            confirmation_seeds=None,
-        )
-        for entry in entries
-    ]
-    wave_members = emission_set(project_koth(raw_entries))
+    # Public-board top five, owner-deduped on canonical scores. Stripping
+    # confirmation off the *folded* list cannot recover a newer UUID that
+    # confirmation-enriched owner-dedupe already dropped (aceron_v23 vs v20).
+    wave_members = snapshot.raw_emission
     statistical = settings.retest_eligibility_mode == "statistical"
     emission_members = emission_set(projection)
     configured_cohort = retest_cohort(
@@ -4714,32 +4725,25 @@ async def request_top5_confirmation_job(
         )
         # These sets answer different questions and must not be conflated:
         #
-        # * ``wave_member_ids`` is the raw-score gate retained for compatibility
-        #   with already-issued waves.
-        # * ``emission_member_ids`` is the current authoritative top five after
-        #   completed continual aggregates are folded in.
+        # * ``wave_member_ids`` is the public-board top five (canonical
+        #   owner-dedupe). It is the seed-family anchor.
+        # * ``emission_member_ids`` is the confirmation-folded top five, which
+        #   can still name a predecessor the board has already replaced.
         #
-        # The former decides whether a legacy wave may advance.  Fairness and
-        # catch-up priority must use the latter, otherwise a newly promoted
-        # current top-five agent is treated like spare-capacity rank-N work and
-        # can remain at zero confirmations while folded-out raw members keep
-        # accumulating samples.
-        #
-        # The folded champion must sit in the wave used for strict completion
-        # and catch-up. A new crown at seed depth zero is often absent from the
-        # raw-score wave's confirmation history; leaving it out makes
-        # ``completed`` look full (the previous family's intersection) and the
-        # champion's plan empty, so auto-route spends every idle slot on the
-        # tail. Prepending emission members keeps that crown in the intersection
-        # (empty until it is scored) and gives it a growth seed.
-        emission_member_ids = frozenset(member.agent_id for member in emission_members)
+        # Seed planning and auto-route follow the board. The folded set still
+        # belongs in the completion wave so a depth-zero folded entrant empties
+        # the strict intersection (a folded-out raw member that already holds
+        # the old family then has an empty plan instead of taking growth).
         wave_member_ids = tuple(
             dict.fromkeys(
                 (
-                    *(member.agent_id for member in emission_members),
                     *(member.agent_id for member in wave_members),
+                    *(member.agent_id for member in emission_members),
                 )
             )
+        )
+        emission_member_ids = frozenset(
+            member.agent_id for member in (*wave_members, *emission_members)
         )
         if not members:
             if auto_routed:
@@ -4763,12 +4767,16 @@ async def request_top5_confirmation_job(
         # Platform's current fold is the only routing authority. Legacy v1
         # validators still send the champion/member they observed; v2 sends a
         # slot only and lets this transaction pick from the authoritative cohort.
-        # ``combined_cohort[0]`` can disagree with the emission-set champion
-        # when owner-dedupe or the statistical band prepends another member;
-        # seed planning and auto-route must follow the fold that the board
-        # shows, or a depth-zero crown never receives a lease.
+        # Seed planning must follow the public-board champion, not the
+        # confirmation-folded representative. A newer UUID at depth zero can
+        # already hold the crown while owner-dedupe on continual waves still
+        # names its predecessor (aceron_v23 vs aceron_v20).
         champion_agent_id = (
-            emission_members[0].agent_id if emission_members else members[0].agent_id
+            wave_members[0].agent_id
+            if wave_members
+            else emission_members[0].agent_id
+            if emission_members
+            else members[0].agent_id
         )
         if (
             payload.champion_agent_id is not None
@@ -4856,10 +4864,10 @@ async def request_top5_confirmation_job(
         if requested_member_id is not None:
             candidate_member_ids = (requested_member_id,)
         else:
-            # Auto-route tries the folded champion first (often a depth-zero
-            # newcomer), then other unserved catch-up, then the rest of the
-            # emission set, then spare-capacity extended members. Cohort order
-            # alone can put a catching-up tail member ahead of the crown.
+            # Auto-route tries the public-board champion first (often a
+            # depth-zero newcomer), then other unserved catch-up, then the rest
+            # of the emission set, then spare-capacity extended members. Cohort
+            # order alone can put a catching-up tail member ahead of the crown.
             rest_ids = tuple(
                 member_id for member_id in member_ids if member_id != champion_agent_id
             )
@@ -4946,7 +4954,9 @@ async def request_top5_confirmation_job(
             wave_seed = claimable if claimable is not None else seeds[0]
             if not await _top5_member_is_least_covered(
                 session,
-                members=tuple(dict.fromkeys((*emission_members, *members))),
+                members=tuple(
+                    dict.fromkeys((*wave_members, *emission_members, *members))
+                ),
                 emission_member_ids=emission_member_ids,
                 catchup_member_ids=catchup_member_ids,
                 requested_member_id=candidate_member_id,
