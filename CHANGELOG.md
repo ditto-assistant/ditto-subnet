@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.110.2 (2026-08-25)
+
+### Bug Fixes
+
+- **platform**: Issue LongMem confirmation to the live board king
+  ([#1149](https://github.com/ditto-assistant/ditto-subnet/pull/1149),
+  [`d358c36`](https://github.com/ditto-assistant/ditto-subnet/commit/d358c365648ba9280bfc9e9d2470b9504c4604ed))
+
+
 ## v0.110.1 (2026-08-25)
 
 ### Bug Fixes
