@@ -81,6 +81,9 @@ func TestProjectionUsesOneOpaqueNamespacePerCase(t *testing.T) {
 		if _, duplicate := cases[item.RunRequest.CaseID]; duplicate {
 			t.Fatalf("reused case id %q", item.RunRequest.CaseID)
 		}
+		if item.RunRequest.ToolEndpoint != "" {
+			t.Fatalf("projected tool_endpoint must be filled at execution, got %q", item.RunRequest.ToolEndpoint)
+		}
 		users[item.RunRequest.UserID] = struct{}{}
 		cases[item.RunRequest.CaseID] = struct{}{}
 		for _, seed := range item.SeedRequests {

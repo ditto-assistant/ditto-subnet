@@ -277,7 +277,7 @@ func main() {
 	}
 	s.broker.relayWait = s.store.SetRelayWaiting
 	s.broker.terminalAgentFailure = s.failAgentInferenceRun
-	confirmationRuntime, err := confirmationExecutorFromEnvironment(os.Getenv, sandboxRuntime, s.broker)
+	confirmationRuntime, err := confirmationExecutorFromEnvironment(os.Getenv, sandboxRuntime, s.broker, s.allowPrivate)
 	if err != nil {
 		log.Fatalf("v9 confirmation installation failed: %v", err)
 	}
@@ -2448,7 +2448,24 @@ func (s *server) startToolServerForSession(
 	inferenceSessionID string,
 	caseConcurrency int,
 ) (endpoint observedToolEndpoint, stop func(), err error) {
+	return startObservedToolServer(
+		s.broker, s.allowPrivate, h, sandboxSourceIP, benchVersion, inferenceSessionID, caseConcurrency,
+	)
+}
+
+func startObservedToolServer(
+	broker *inferenceBroker,
+	allowPrivate bool,
+	h http.Handler,
+	sandboxSourceIP string,
+	benchVersion int,
+	inferenceSessionID string,
+	caseConcurrency int,
+) (endpoint observedToolEndpoint, stop func(), err error) {
 	if sandboxSourceIP != "" {
+		if broker == nil {
+			return observedToolEndpoint{}, func() {}, fmt.Errorf("tool endpoint broker is unavailable")
+		}
 		requireCaseCapability := benchVersion >= protocol.BenchVersionV9
 		// Bench v10+ binds the route to the run's inference session: the broker
 		// forwards a tool request only after consuming a matching model-emitted
@@ -2463,8 +2480,8 @@ func (s *server) startToolServerForSession(
 			}
 			provenanceSessionID = inferenceSessionID
 		}
-		route, unregister, registerErr := s.broker.registerToolRoute(
-			h, sandboxSourceIP, s.allowPrivate, requireCaseCapability, provenanceSessionID, caseConcurrency,
+		route, unregister, registerErr := broker.registerToolRoute(
+			h, sandboxSourceIP, allowPrivate, requireCaseCapability, provenanceSessionID, caseConcurrency,
 		)
 		if registerErr != nil {
 			return observedToolEndpoint{}, func() {}, registerErr
@@ -2505,7 +2522,7 @@ func (s *server) startToolServerForSession(
 	stop = func() { _ = srv.Close() }
 
 	switch {
-	case s.allowPrivate:
+	case allowPrivate:
 		// Local dev: the harness runs on the same host as the validator. A
 		// CONTAINERIZED local harness (e.g. a miner practicing their own image via
 		// harness_url) cannot reach the validator's 127.0.0.1, so DITTOBENCH_TOOL_HOST

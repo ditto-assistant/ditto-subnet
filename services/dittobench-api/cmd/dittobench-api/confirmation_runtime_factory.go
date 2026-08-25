@@ -131,18 +131,19 @@ func (binding *confirmationSourceBinding) unbind(
 // goroutine from case N waking after case N+1 has begun and borrowing its
 // trusted provider activity.
 type confirmationLongMemHarness struct {
-	mu            sync.Mutex
-	sandbox       sandbox.Sandbox
-	broker        *inferenceBroker
-	image         string
-	sessionID     string
-	runID         string
-	benchVersion  int
-	healthTimeout time.Duration
-	binding       *confirmationSourceBinding
-	current       *sandbox.Handle
-	harness       longmemeval.Harness
-	generation    uint64
+	mu                    sync.Mutex
+	sandbox               sandbox.Sandbox
+	broker                *inferenceBroker
+	image                 string
+	sessionID             string
+	runID                 string
+	benchVersion          int
+	healthTimeout         time.Duration
+	advertiseToolEndpoint confirmationToolEndpointAdvertiser
+	binding               *confirmationSourceBinding
+	current               *sandbox.Handle
+	harness               longmemeval.Harness
+	generation            uint64
 	// currentCapability is retained only while a started process has not yet
 	// been source-bound. It lets Close retry a strict stop after a partial
 	// Sandbox.Run/bind failure without reopening broker admission.
@@ -341,6 +342,17 @@ func (h *confirmationLongMemHarness) Run(
 	if err := h.startCaseLocked(ctx); err != nil {
 		return protocol.RunResponse{}, err
 	}
+	if h.current == nil {
+		return protocol.RunResponse{}, errors.New("confirmation LongMem sandbox identity is unavailable")
+	}
+	stopTool, err := bindConfirmationToolEndpoint(
+		h.advertiseToolEndpoint, h.current.SourceIP, &request, h.benchVersion, h.sessionID,
+	)
+	if err != nil {
+		_, _ = h.finishCaseLocked()
+		return protocol.RunResponse{}, err
+	}
+	defer stopTool()
 	response, runErr := h.harness.Run(ctx, request)
 	snapshot, snapshotErr := h.finishCaseLocked()
 	if snapshotErr != nil {
@@ -415,6 +427,7 @@ func confirmationExecutorFromEnvironment(
 	getenv func(string) string,
 	sandboxRuntime *sandbox.LocalDocker,
 	broker *inferenceBroker,
+	allowPrivate bool,
 ) (confirmationExecutor, error) {
 	path := strings.TrimSpace(getenv(confirmationInstallationPathEnv))
 	expectedSHA := strings.TrimSpace(getenv(confirmationInstallationSHAEnv))
@@ -443,7 +456,7 @@ func confirmationExecutorFromEnvironment(
 		return nil, errors.New("confirmation sandbox health timeout is invalid")
 	}
 	factory, err := newScreenedConfirmationRuntimeFactory(screenedConfirmationRuntimeFactoryConfig{
-		Profile: profile, Sandbox: sandboxRuntime, Broker: broker,
+		Profile: profile, Sandbox: sandboxRuntime, Broker: broker, AllowPrivate: allowPrivate,
 		LaunchManifestPath:   installation.LaunchManifestPath,
 		LaunchManifestSHA256: installation.LaunchManifestSHA256,
 		LongMemDatasetPath:   installation.LongMemDatasetPath,
@@ -466,6 +479,7 @@ type screenedConfirmationRuntimeFactoryConfig struct {
 	Profile              confirmationExecutionProfileWire
 	Sandbox              sandbox.Sandbox
 	Broker               *inferenceBroker
+	AllowPrivate         bool
 	LaunchManifestPath   string
 	LaunchManifestSHA256 string
 	LongMemDatasetPath   string
@@ -474,14 +488,15 @@ type screenedConfirmationRuntimeFactoryConfig struct {
 }
 
 type screenedConfirmationRuntimeFactory struct {
-	profile         confirmationExecutionProfileWire
-	sandbox         sandbox.Sandbox
-	broker          *inferenceBroker
-	launchManifest  verifiedConfirmationFile
-	longMemDataset  verifiedConfirmationFile
-	ablationFile    verifiedConfirmationFile
-	ablationDataset confirmationAblationDataset
-	healthTimeout   time.Duration
+	profile               confirmationExecutionProfileWire
+	sandbox               sandbox.Sandbox
+	broker                *inferenceBroker
+	advertiseToolEndpoint confirmationToolEndpointAdvertiser
+	launchManifest        verifiedConfirmationFile
+	longMemDataset        verifiedConfirmationFile
+	ablationFile          verifiedConfirmationFile
+	ablationDataset       confirmationAblationDataset
+	healthTimeout         time.Duration
 }
 
 type verifiedConfirmationFile struct {
@@ -695,9 +710,10 @@ func newScreenedConfirmationRuntimeFactory(config screenedConfirmationRuntimeFac
 	}
 	factory := &screenedConfirmationRuntimeFactory{
 		profile: config.Profile, sandbox: config.Sandbox, broker: config.Broker,
-		launchManifest: launchFile,
-		longMemDataset: longMemFile,
-		ablationFile:   ablationFile, ablationDataset: dataset,
+		advertiseToolEndpoint: newConfirmationToolEndpointAdvertiser(config.Broker, config.AllowPrivate),
+		launchManifest:        launchFile,
+		longMemDataset:        longMemFile,
+		ablationFile:          ablationFile, ablationDataset: dataset,
 		healthTimeout: config.SandboxHealthTimeout,
 	}
 	if err := factory.ValidateInstallation(config.Profile); err != nil {
@@ -1008,11 +1024,13 @@ func (factory *screenedConfirmationRuntimeFactory) acquireAfterInstallationValid
 	binding := &confirmationSourceBinding{}
 	longMemHarness := &confirmationLongMemHarness{
 		sandbox: factory.sandbox, broker: factory.broker, image: image, sessionID: sessionID, runID: runID,
-		benchVersion: factory.profile.benchVersion(), healthTimeout: factory.healthTimeout, binding: binding,
+		benchVersion: factory.profile.benchVersion(), healthTimeout: factory.healthTimeout,
+		advertiseToolEndpoint: factory.advertiseToolEndpoint, binding: binding,
 	}
 	caseRunner := &screenedAblationCaseRunner{
 		sandbox: factory.sandbox, broker: factory.broker, image: image, sessionID: sessionID, runID: runID,
-		benchVersion: factory.profile.benchVersion(), healthTimeout: factory.healthTimeout, dataset: ablationDataset, binding: binding,
+		benchVersion: factory.profile.benchVersion(), healthTimeout: factory.healthTimeout, dataset: ablationDataset,
+		advertiseToolEndpoint: factory.advertiseToolEndpoint, binding: binding,
 	}
 	closer := &confirmationRuntimeCloser{
 		sandbox: factory.sandbox, broker: factory.broker, image: image, sessionID: sessionID, runID: runID,
@@ -1050,21 +1068,22 @@ func (factory *screenedConfirmationRuntimeFactory) stopHandle(handle *sandbox.Ha
 }
 
 type screenedAblationCaseRunner struct {
-	mu                sync.Mutex
-	sandbox           sandbox.Sandbox
-	broker            *inferenceBroker
-	image             string
-	sessionID         string
-	runID             string
-	benchVersion      int
-	healthTimeout     time.Duration
-	dataset           confirmationAblationDataset
-	current           *sandbox.Handle
-	currentLease      *brokerAblationLease
-	currentCapability string
-	currentBound      bool
-	binding           *confirmationSourceBinding
-	closed            bool
+	mu                    sync.Mutex
+	sandbox               sandbox.Sandbox
+	broker                *inferenceBroker
+	image                 string
+	sessionID             string
+	runID                 string
+	benchVersion          int
+	healthTimeout         time.Duration
+	dataset               confirmationAblationDataset
+	advertiseToolEndpoint confirmationToolEndpointAdvertiser
+	current               *sandbox.Handle
+	currentLease          *brokerAblationLease
+	currentCapability     string
+	currentBound          bool
+	binding               *confirmationSourceBinding
+	closed                bool
 }
 
 func confirmationOpaqueUUID(domain string, values ...string) string {
@@ -1279,10 +1298,22 @@ func (runnerAdapter *screenedAblationCaseRunner) RunCase(
 	}
 	userID := confirmationOpaqueUUID("user", request.OpaqueUserNamespace)
 	caseID := confirmationOpaqueUUID("case", item.CaseID)
-	response, err := harness.Run(ctx, protocol.RunRequest{
+	runRequest := protocol.RunRequest{
 		CaseID: caseID, SystemPrompt: item.SystemPrompt, UserInput: item.Question,
 		Tools: longmemeval.NativeMemoryTools(), BenchVersion: runnerAdapter.benchVersion, UserID: userID,
-	})
+	}
+	stopTool, err := bindConfirmationToolEndpoint(
+		runnerAdapter.advertiseToolEndpoint, handle.SourceIP, &runRequest,
+		runnerAdapter.benchVersion, runnerAdapter.sessionID,
+	)
+	if err != nil {
+		if cleanupErr := runnerAdapter.stopCurrentLocked(); cleanupErr != nil {
+			return ablation.CaseRunResult{}, cleanupErr
+		}
+		return ablation.CaseRunResult{}, err
+	}
+	response, err := harness.Run(ctx, runRequest)
+	stopTool()
 	if finishErr := runnerAdapter.stopCurrentLocked(); finishErr != nil {
 		return ablation.CaseRunResult{}, finishErr
 	}
