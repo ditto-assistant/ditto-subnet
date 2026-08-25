@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.110.7 (2026-08-25)
+
+### Bug Fixes
+
+- **platform**: Lease confirmation retests to the public-board champion
+  ([#1157](https://github.com/ditto-assistant/ditto-subnet/pull/1157),
+  [`d40cc78`](https://github.com/ditto-assistant/ditto-subnet/commit/d40cc781afaa970f5a8c20b5e7c8eaa84e7d3bf0))
+
+
 ## v0.110.6 (2026-08-25)
 
 ### Bug Fixes
