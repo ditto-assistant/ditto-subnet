@@ -50,6 +50,10 @@ if [[ "$AGENT_URL" == "refharness" || -z "$AGENT_URL" ]]; then
   warn "settle the model_use / model_dependence evidence (expected to fail closed)."
 fi
 log "harness = $AGENT_URL   bench=$BENCH run_size=$RUN_SIZE seed=$SEED scored=$SCORED"
+if [[ "$SCORED" == "1" && "$BENCH" -ge 9 && "$AGENT_URL" != "http://localhost:${REFHARNESS_PORT}" ]]; then
+  warn "sessionless SCORED=1 bench>=${BENCH} cannot fire model_dependence."
+  warn "use make localstack-phase1 && make localstack-phase1-handshake for a completing scored v12 run."
+fi
 
 # 3. Build the submit body. For SCORED runs, compute the dataset_sha256 the
 #    scorer will re-derive and reject on mismatch.

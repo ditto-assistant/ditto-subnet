@@ -84,7 +84,7 @@ is pulled from GCP Secret Manager (`gcloud secrets versions access latest
 --secret=LOCAL_OPENROUTER_API_KEY --project=ditto-app-dev`). It is only ever
 assigned to a variable / passed as child-process env, never logged.
 
-## The v12 gate gap (important — read before trusting a scored composite)
+## The v12 gate gap (sessionless vs phase-1)
 
 **A pure direct-harness (sessionless) scored v9+ run cannot COMPLETE**, and the
 v12 counterfactual + `model_dependence` gate **cannot fire on this path**. Two
@@ -104,19 +104,19 @@ independent guards, both requiring a broker inference session:
    without one. So `model_dependence` never gets its dependent/independent slice
    evidence and would read `insufficient_evidence` even if scoring were reached.
 
-**What a completing scored v12 run needs (not built here):** a v12-bound,
-activated, source-active **broker inference session** — `prepare` → `activate`
-(valid UUID grant/agent, valid slot, deadlines, provider/profile/model identity)
-→ `claimRun` → `installSourceCapability`/`bindSource`, then per-case snapshots and
-the counterfactual's live embeddings. The blocker for doing this locally: the
-broker forwards chat to `DITTOBENCH_PLATFORM_INFERENCE_PROXY_URL` — **HTTPS only**,
-exact path `/api/v1/inference/chat/completions` — with an **Ed25519-signed grant
-proof**, using the broker's **default-trust** HTTP client. A local shim would need
-a system-trusted TLS cert (self-signed is rejected) plus a re-implementation of
-the Platform grant/proof contract and an embeddings upstream on
-`:11434/api/embed`. That is a separate sub-project; the v12 gate itself is already
-covered by the modeled unit tests (`v12_dependence_gate_test.go`,
-`v12_counterfactual_test.go`).
+**Do not try to complete scored v12 on sessionless.** That path is the free
+plumbing smoke (`make localstack-smoke`) and practice composites (`SCORED=0`).
+The completing scored-v12 stack is phase-1:
+
+```sh
+make localstack-phase1
+make localstack-phase1-handshake
+```
+
+Phase-1 runs the broker in a Linux container (Go honors `SSL_CERT_FILE` there,
+not on macOS), exchanges a real Platform grant over the TLS terminator, and
+fires `model_use` + `model_dependence`. See `localstack/phase1/README.md`.
+Answer-stuffing stays on **penalize** (capped, never-zero), not enforce.
 
 ### So what IS validated here
 
