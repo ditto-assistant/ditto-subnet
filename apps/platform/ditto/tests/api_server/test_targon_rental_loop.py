@@ -571,7 +571,7 @@ async def test_runtime_smoke_provision_timeout(
 
     loop = TargonRentalLoop(
         session_maker=session_maker,
-        config=_config(provision_timeout_seconds=0),
+        config=_config(smoke_provision_timeout_seconds=0),
         targon=targon,
         screener_hotkey=_SCREENER_HOTKEY,
         promote_archive=promote,
@@ -602,7 +602,7 @@ async def test_runtime_smoke_provision_timeout(
 
 
 @pytest.mark.asyncio
-async def test_runtime_smoke_falls_back_to_cloudrun_after_targon_timeout(
+async def test_runtime_smoke_falls_back_to_cloudrun_after_short_targon_timeout(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -621,7 +621,7 @@ async def test_runtime_smoke_falls_back_to_cloudrun_after_targon_timeout(
 
     loop = TargonRentalLoop(
         session_maker=session_maker,
-        config=_config(provision_timeout_seconds=0),
+        config=_config(smoke_provision_timeout_seconds=0),
         targon=targon,
         screener_hotkey=_SCREENER_HOTKEY,
         promote_archive=promote,

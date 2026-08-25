@@ -46,6 +46,7 @@ def _set_minimum_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("DITTO_TARGON_API_KEY_FILE", raising=False)
     monkeypatch.delenv("DITTO_TARGON_PUBLIC_PLATFORM_URL", raising=False)
     monkeypatch.delenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", raising=False)
+    monkeypatch.delenv("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", raising=False)
 
 
 class TestParseApiServerConfigFromEnv:
@@ -552,6 +553,21 @@ class TestTargonRentalConfig:
         )
         assert self._KEY not in repr(config.targon)
         assert config.targon.max_inflight == 10
+        assert config.targon.smoke_provision_timeout_seconds == 30.0
+
+    def test_targon_smoke_provision_timeout_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
+        monkeypatch.setenv(
+            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
+        )
+        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
+        monkeypatch.setenv("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", "45")
+        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
+        assert config.targon is not None
+        assert config.targon.smoke_provision_timeout_seconds == 45.0
 
     def test_targon_max_inflight_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         _set_minimum_env(monkeypatch)

@@ -232,6 +232,8 @@ class TargonRentalConfig:
     environment: str = "prod"
     interval_seconds: float = 15.0
     provision_timeout_seconds: float = 600.0
+    smoke_provision_timeout_seconds: float = 30.0
+    """Targon-first smoke wait. Kaniko keeps ``provision_timeout_seconds``."""
     build_timeout_seconds: float = 1500.0
     runtime_timeout_seconds: float = 180.0
     source_review_timeout_seconds: float = 1800.0
@@ -468,7 +470,26 @@ def _parse_targon_rental_config_from_env(commit_hash: str) -> TargonRentalConfig
         environment=os.environ.get("DITTO_TARGON_ENVIRONMENT", "prod").strip()
         or "prod",
         max_inflight=_parse_targon_max_inflight(),
+        smoke_provision_timeout_seconds=_parse_targon_smoke_provision_timeout(),
     )
+
+
+def _parse_targon_smoke_provision_timeout() -> float:
+    raw = (
+        os.environ.get("DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS", "30").strip()
+        or "30"
+    )
+    try:
+        value = float(raw)
+    except ValueError as error:
+        raise ApiServerConfigError(
+            "DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS must be a number"
+        ) from error
+    if value < 0 or value > 600:
+        raise ApiServerConfigError(
+            "DITTO_TARGON_SMOKE_PROVISION_TIMEOUT_SECONDS must be between 0 and 600"
+        )
+    return value
 
 
 def _parse_targon_max_inflight() -> int:

@@ -19,6 +19,82 @@ from ditto.api_server.screening_provider import (
 
 _JOB_PREFIX = "job:"
 _SERVICE_PREFIX = "service:"
+_SMOKE_GATEWAY_IMAGE = "python:3.12-alpine"
+_SMOKE_GATEWAY_PORT = 11434
+_SMOKE_GATEWAY_STUB = """
+from http.server import BaseHTTPRequestHandler, HTTPServer
+import json
+TAGS = {
+  "models": [{
+    "name": "embeddinggemma:latest",
+    "model": "embeddinggemma:latest",
+    "modified_at": "2024-01-01T00:00:00Z",
+    "size": 1,
+    "digest": "sha256:" + ("a" * 64),
+    "details": {
+      "format": "gguf",
+      "family": "embeddinggemma",
+      "families": ["embeddinggemma"],
+      "parameter_size": "308M",
+      "quantization_level": "F32",
+    },
+  }]
+}
+class H(BaseHTTPRequestHandler):
+    def _send(self, obj, code=200):
+        body = json.dumps(obj).encode()
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+    def do_GET(self):
+        if self.path.startswith("/api/tags") or self.path.startswith("/api/ps"):
+            self._send(TAGS)
+        else:
+            self._send({"status": "ok"})
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length") or 0)
+        self.rfile.read(n)
+        if "show" in self.path:
+            self._send({
+                "modelfile": "FROM embeddinggemma",
+                "details": TAGS["models"][0]["details"],
+                "model_info": {"general.architecture": "embeddinggemma"},
+            })
+        elif "chat/completions" in self.path:
+            self._send({
+                "id": "chatcmpl-smoke",
+                "object": "chat.completion",
+                "choices": [{
+                    "index": 0,
+                    "message": {"role": "assistant", "content": "ok"},
+                    "finish_reason": "stop",
+                }],
+            })
+        else:
+            vec = [0.0] * 768
+            vec[0] = 1.0
+            self._send({
+                "model": "embeddinggemma:latest",
+                "embedding": vec,
+                "embeddings": [vec],
+                "data": [{"index": 0, "embedding": vec}],
+            })
+    def log_message(self, *args):
+        pass
+HTTPServer(("0.0.0.0", 11434), H).serve_forever()
+"""
+_SMOKE_LOCAL_GATEWAY = f"http://127.0.0.1:{_SMOKE_GATEWAY_PORT}"
+_SMOKE_EXTRA_ENV = (
+    ("OLLAMA_BASE_URL", _SMOKE_LOCAL_GATEWAY),
+    ("DITTOBENCH_INFERENCE_BASE_URL", _SMOKE_LOCAL_GATEWAY),
+    ("OPENAI_BASE_URL", f"{_SMOKE_LOCAL_GATEWAY}/v1"),
+    ("OPENAI_API_KEY", "relay"),
+    ("CHUTES_BASE_URL", f"{_SMOKE_LOCAL_GATEWAY}/v1"),
+    ("CHUTES_API_KEY", "relay"),
+    ("DITTOBENCH_PROVIDER", "chutes"),
+)
 
 
 class CloudRunComputeProvider:
@@ -58,14 +134,27 @@ class CloudRunComputeProvider:
         return f"{_JOB_PREFIX}{spec.name}"
 
     async def create_smoke(self, spec: SmokeSpec) -> str:
+        env = spec.env + _SMOKE_EXTRA_ENV
+        sidecar = {
+            "name": "gateway",
+            "image": _SMOKE_GATEWAY_IMAGE,
+            "command": ["python", "-c", _SMOKE_GATEWAY_STUB],
+            "resources": {"limits": {"cpu": "0.25", "memory": "256Mi"}},
+            "startupProbe": {
+                "tcpSocket": {"port": _SMOKE_GATEWAY_PORT},
+                "periodSeconds": 1,
+                "failureThreshold": 30,
+            },
+        }
         try:
             await self._client.create_service(
                 spec.name,
                 image=spec.image,
-                env=spec.env,
+                env=env,
                 service_account=self._config.untrusted_sa_email,
                 invoker_sa_email=self._config.platform_invoker_sa_email,
                 timeout_seconds=int(self._targon_config.runtime_timeout_seconds),
+                sidecar=sidecar,
             )
         except CloudRunAPIError as error:
             raise ScreeningProviderError(

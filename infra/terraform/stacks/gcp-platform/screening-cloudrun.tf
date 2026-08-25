@@ -61,6 +61,16 @@ resource "google_artifact_registry_repository_iam_member" "cloudrun_agent_candid
   member     = "serviceAccount:service-${data.google_project.this.number}@serverless-robot-prod.iam.gserviceaccount.com"
 }
 
+# Cloud Run create_service checks that the caller can download the image, not
+# only that the Cloud Run robot can pull it later.
+resource "google_artifact_registry_repository_iam_member" "platform_api_candidates_reader" {
+  project    = var.project
+  location   = var.region
+  repository = google_artifact_registry_repository.screening_candidates.repository_id
+  role       = "roles/artifactregistry.reader"
+  member     = "serviceAccount:${local.platform_api_sa_email}"
+}
+
 output "screening_untrusted_sa_email" {
   description = "Runtime identity for untrusted Cloud Run screening Jobs and smoke Services."
   value       = google_service_account.screening_untrusted.email

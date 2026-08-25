@@ -254,6 +254,11 @@ class TargonRentalLoop:
                 return provider
         return self._providers[0]
 
+    def _smoke_wait_seconds(self, provider: ScreeningComputeProvider) -> float:
+        if provider.name == "targon":
+            return self._config.smoke_provision_timeout_seconds
+        return self._config.provision_timeout_seconds
+
     async def _observe_provision(
         self, provider: ScreeningComputeProvider, uid: str
     ) -> ProvisionObservation:
@@ -533,7 +538,7 @@ class TargonRentalLoop:
                         stored.updated_at = datetime.now(UTC)
                 await provider.start(uid)
                 provisioned = await provider.wait_until_running(
-                    uid, self._config.provision_timeout_seconds
+                    uid, self._smoke_wait_seconds(provider)
                 )
                 if provisioned == "running":
                     healthy = await provider.probe_smoke(
