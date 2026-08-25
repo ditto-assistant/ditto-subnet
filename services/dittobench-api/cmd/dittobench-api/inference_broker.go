@@ -43,8 +43,10 @@ import (
 
 const (
 	brokerBodyLimit = 4 << 20
-	// Must exceed Platform ticket TTL (430 minutes). Inference grant
-	// expiry is that deadline, so a shorter cap rejects every activation.
+	// Must exceed the longest live Platform grant. Canonical scoring is
+	// 180 minutes; confirmation is 4h; in-flight 430-minute tickets still
+	// activate until they drain. Inference grant expiry is that deadline,
+	// so a shorter cap rejects every activation.
 	brokerMaximumSessionTTL    = 8 * time.Hour
 	brokerPerSourceConcurrency = 4
 	brokerReadHeaderTimeout    = 5 * time.Second

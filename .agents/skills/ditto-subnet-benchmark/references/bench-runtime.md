@@ -62,6 +62,6 @@ New tickets only.
 | Still serial | Stored revision still 1; or in-flight lease stamp; or scorer predates overlapping `/run` |
 | `6600.0s` / lease abort | `issued_at` before overlapping `/run`; leftover exhausted slots |
 | `tool_mean` ~0 on v10+ | tool route 409 without a case window — session-scoped provenance on 0.100.3+ |
-| `inference broker activation rejected` | grant TTL vs broker session cap (430-min grants need 8h broker TTL) |
+| `inference broker activation rejected` | grant TTL vs broker session cap (180-min canonical / 4h confirmation / leftover 430-min grants need 8h broker TTL) |
 | Chat 413 / allowance exhausted | `chat_request_budget` at 16384 hard max |
 | Embedding 429 | Platform 12/64/192 or Perplexity; local semaphore 8 should bind first |
