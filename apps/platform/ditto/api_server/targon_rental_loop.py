@@ -205,7 +205,7 @@ class TargonRentalLoop:
         return repaired > 0
 
     async def _finalize_ready_attempts(self) -> bool:
-        """Attest Targon passes after smoke, or fail-retry after Kaniko fallback."""
+        """Attest Targon passes after smoke, or fail-retry after Kaniko/runtime fallback."""
         if self._complete_screen is None:
             return False
         now = datetime.now(UTC)
@@ -227,7 +227,9 @@ class TargonRentalLoop:
                                 SubmissionImageBuild.status.in_(
                                     ("succeeded", "consumed")
                                 ),
-                                SubmissionImageBuild.runtime_status == "succeeded",
+                                SubmissionImageBuild.runtime_status.in_(
+                                    ("succeeded", "fallback_required")
+                                ),
                             ),
                         ),
                     )
