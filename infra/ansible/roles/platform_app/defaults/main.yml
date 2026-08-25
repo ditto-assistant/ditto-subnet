@@ -202,6 +202,7 @@ platform_targon_bootstrap_sa: ""
 platform_targon_source_review_secret: ""
 platform_targon_environment: prod
 platform_targon_max_inflight: 10
+platform_targon_smoke_provision_timeout_seconds: 30
 platform_cloudrun_project: ""
 platform_cloudrun_region: us-central1
 platform_cloudrun_untrusted_sa: ""
