@@ -16,6 +16,9 @@ TokenGetter = Callable[[], Awaitable[str]]
 IdentityGetter = Callable[[str], Awaitable[str]]
 
 
+_ERROR_REASON_LIMIT = 300
+
+
 class CloudRunAPIError(RuntimeError):
     def __init__(self, *, operation: str, status: int | None, reason: str) -> None:
         self.operation = operation
@@ -23,6 +26,27 @@ class CloudRunAPIError(RuntimeError):
         self.reason = reason
         status_text = "transport" if status is None else str(status)
         super().__init__(f"Cloud Run {operation} failed ({status_text}): {reason}")
+
+
+def error_reason_from_response(response: httpx.Response) -> str:
+    """Return a bounded Cloud Run error message without dumping the full body."""
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            message = str(error.get("message") or "").strip()
+            if message:
+                return message[:_ERROR_REASON_LIMIT]
+        message = str(payload.get("message") or "").strip()
+        if message:
+            return message[:_ERROR_REASON_LIMIT]
+    text = (response.text or "").strip()
+    if text:
+        return text[:_ERROR_REASON_LIMIT]
+    return "HTTP error"
 
 
 async def metadata_access_token() -> str:
@@ -170,7 +194,24 @@ class AsyncCloudRunClient:
         service_account: str,
         invoker_sa_email: str,
         timeout_seconds: int,
+        sidecar: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        miner: dict[str, Any] = {
+            "name": "miner",
+            "image": image,
+            "ports": [{"containerPort": 8080}],
+            "env": [{"name": key, "value": value} for key, value in env],
+            "resources": {"limits": {"cpu": "1", "memory": "2Gi"}},
+            "startupProbe": {
+                "tcpSocket": {"port": 8080},
+                "periodSeconds": 2,
+                "failureThreshold": 60,
+            },
+        }
+        containers = [miner]
+        if sidecar is not None:
+            miner["dependsOn"] = ["gateway"]
+            containers.append(sidecar)
         body = {
             "ingress": "INGRESS_TRAFFIC_INTERNAL_ONLY",
             "template": {
@@ -178,14 +219,7 @@ class AsyncCloudRunClient:
                 "timeout": f"{int(timeout_seconds)}s",
                 "maxInstanceRequestConcurrency": 1,
                 "scaling": {"minInstanceCount": 0, "maxInstanceCount": 1},
-                "containers": [
-                    {
-                        "image": image,
-                        "ports": [{"containerPort": 8080}],
-                        "env": [{"name": key, "value": value} for key, value in env],
-                        "resources": {"limits": {"cpu": "1", "memory": "2Gi"}},
-                    }
-                ],
+                "containers": containers,
             },
         }
         created = await self._request(
@@ -254,7 +288,7 @@ class AsyncCloudRunClient:
             raise CloudRunAPIError(
                 operation=f"{method} {url.split('?', 1)[0]}",
                 status=response.status_code,
-                reason="HTTP error",
+                reason=error_reason_from_response(response),
             )
         try:
             value = response.json()

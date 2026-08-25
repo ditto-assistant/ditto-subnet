@@ -602,7 +602,7 @@ async def test_runtime_smoke_provision_timeout(
 
 
 @pytest.mark.asyncio
-async def test_runtime_smoke_falls_back_to_cloudrun_after_targon_timeout(
+async def test_runtime_smoke_prefers_cloudrun_sidecar(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
     await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
@@ -648,7 +648,9 @@ async def test_runtime_smoke_falls_back_to_cloudrun_after_targon_timeout(
         assert build.runtime_status == "succeeded"
         assert build.runtime_error_code is None
     assert cloudrun.smokes
-    assert "wrk-2" in targon.deleted
+    # Smoke prefers Cloud Run (localhost embedding sidecar). Targon is not
+    # started when Cloud Run admits the archive.
+    assert "wrk-2" not in targon.deleted
 
 
 @pytest.mark.asyncio

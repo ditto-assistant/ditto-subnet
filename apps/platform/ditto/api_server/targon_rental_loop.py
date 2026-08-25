@@ -517,7 +517,13 @@ class TargonRentalLoop:
         last_uid: str | None = None
         last_provider: ScreeningComputeProvider | None = None
         healthy = False
-        for provider in self._providers:
+        # Cloud Run smoke has a localhost embedding/chat sidecar; Targon does
+        # not. Prefer Cloud Run so succeeded Kaniko archives are not parked
+        # behind a 10-minute Targon provision timeout.
+        smoke_providers = sorted(
+            self._providers, key=lambda provider: provider.name != "cloudrun"
+        )
+        for provider in smoke_providers:
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None

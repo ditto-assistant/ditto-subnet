@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+import httpx
 import pytest
 
-from ditto.api_server.cloudrun_client import AsyncCloudRunClient
+from ditto.api_server.cloudrun_client import (
+    AsyncCloudRunClient,
+    error_reason_from_response,
+)
 from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
 from ditto.api_server.config import CloudRunScreeningConfig, TargonRentalConfig
 from ditto.api_server.screening_provider import SmokeSpec
@@ -142,10 +146,11 @@ async def test_job_status_timeout_when_execution_stays_pending() -> None:
 class _FakeServiceClient:
     def __init__(self) -> None:
         self.created: list[str] = []
+        self.kwargs: dict[str, Any] = {}
 
     async def create_service(self, name: str, **kwargs: Any) -> None:
-        del kwargs
         self.created.append(name)
+        self.kwargs = kwargs
 
 
 @pytest.mark.asyncio
@@ -188,3 +193,35 @@ async def test_create_smoke_ignores_frozen_registry_auth() -> None:
     uid = await provider.create_smoke(spec)
     assert uid == "service:ditto-runtime-test"
     assert client.created == ["ditto-runtime-test"]
+    env = dict(client.kwargs["env"])
+    assert env["OLLAMA_BASE_URL"] == "http://127.0.0.1:11434"
+    assert env["DITTOBENCH_INFERENCE_BASE_URL"] == "http://127.0.0.1:11434"
+    sidecar = client.kwargs["sidecar"]
+    assert sidecar["name"] == "gateway"
+    assert sidecar["command"][0] == "python"
+
+
+def test_error_reason_from_response_uses_api_message() -> None:
+    response = httpx.Response(
+        403,
+        json={
+            "error": {
+                "code": 403,
+                "message": (
+                    "Permission 'artifactregistry.repositories.downloadArtifacts' "
+                    "denied on resource '//artifactregistry.googleapis.com/"
+                    "projects/ditto-app-dev/locations/us-central1/repositories/"
+                    "ditto-screening-candidates'."
+                ),
+                "status": "PERMISSION_DENIED",
+            }
+        },
+    )
+    reason = error_reason_from_response(response)
+    assert "downloadArtifacts" in reason
+    assert len(reason) <= 300
+
+
+def test_error_reason_from_response_falls_back_for_empty_body() -> None:
+    response = httpx.Response(500)
+    assert error_reason_from_response(response) == "HTTP error"
