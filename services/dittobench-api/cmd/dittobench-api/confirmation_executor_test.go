@@ -458,6 +458,28 @@ func TestConfirmationExecutionDiagnosticDoesNotDeriveFromPrivateErrorText(t *tes
 	}
 }
 
+func TestConfirmationExecutionDiagnosticNamesToolEndpointBindFailure(t *testing.T) {
+	t.Parallel()
+	inner := wrapConfirmationExecutionFailure(
+		"tool_endpoint",
+		errors.New("https://submitted.invalid/private?token=credential-material"),
+	)
+	err := wrapConfirmationExecutionFailure("dimension_execution", inner)
+	if confirmationExecutionStage(err) != "tool_endpoint" {
+		t.Fatalf("stage = %q, want tool_endpoint", confirmationExecutionStage(err))
+	}
+	class, status := confirmationExecutionDiagnostic(err)
+	if class != "longmem_run_tool_endpoint" || status != 0 {
+		t.Fatalf("diagnostic = %q, %d", class, status)
+	}
+	if _, ok := longmemeval.FailureDiagnostic(err); ok {
+		t.Fatal("tool_endpoint bind failure was classified as a harness case")
+	}
+	if strings.Contains(err.Error(), "credential-material") || strings.Contains(err.Error(), "submitted.invalid") {
+		t.Fatalf("private cause leaked through public error: %v", err)
+	}
+}
+
 func TestConfirmationExecutionDiagnosticPreservesOnlySafeHarnessClass(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
 		writer.WriteHeader(http.StatusUnprocessableEntity)

@@ -438,6 +438,43 @@ async def test_scorer_failure_diagnostic_reaches_validator_log_boundary() -> Non
 
 
 @pytest.mark.asyncio
+async def test_scorer_tool_endpoint_bind_failure_reaches_validator_log_boundary() -> None:
+    job = _job().model_copy(update={"deadline": datetime.now(UTC) + timedelta(hours=1)})
+    artifact = ArtifactResponse.model_validate(_artifact_payload())
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            422,
+            json={"error": "confirmation execution failed at tool_endpoint"},
+            headers={
+                "X-Ditto-Confirmation-Failure-Class": "longmem_run_tool_endpoint",
+                "X-Ditto-Confirmation-Failure-Status": "0",
+            },
+        )
+
+    config = cast(
+        Any,
+        SimpleNamespace(
+            dittobench_api_url="http://dittobench.test",
+            dittobench_control_token="control-token",
+        ),
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        client = DittobenchClient(config, http)
+        with pytest.raises(DittobenchError) as raised:
+            await client.execute_v9_confirmation(
+                job=job,
+                artifact=artifact,
+                inference_session_id=_CONFIRMATION_SESSION.session_id,
+            )
+
+    message = str(raised.value)
+    assert "confirmation execution failed at tool_endpoint" in message
+    assert "failure_class=longmem_run_tool_endpoint failure_status=0" in message
+    assert "HarnessCaseFailure" not in message
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("headers", "forbidden"),
     [
@@ -456,6 +493,13 @@ async def test_scorer_failure_diagnostic_reaches_validator_log_boundary() -> Non
         (
             {
                 "X-Ditto-Confirmation-Failure-Class": "longmem_run_missing_final_text",
+                "X-Ditto-Confirmation-Failure-Status": "500",
+            },
+            "failure_class=",
+        ),
+        (
+            {
+                "X-Ditto-Confirmation-Failure-Class": "longmem_run_tool_endpoint",
                 "X-Ditto-Confirmation-Failure-Status": "500",
             },
             "failure_class=",

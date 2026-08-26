@@ -91,6 +91,7 @@ _CONFIRMATION_ZERO_STATUS_FAILURES = frozenset(
         "longmem_run_request",
         "longmem_run_response_too_large",
         "longmem_run_missing_final_text",
+        "longmem_run_tool_endpoint",
     }
 )
 _CONFIRMATION_HTTP_STATUS_FAILURES = frozenset(

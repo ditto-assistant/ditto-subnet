@@ -2367,12 +2367,26 @@ const ablationEvidenceSchema = z
         return
       }
       const delta = evidence.baseline_mean_micros! - evidence.ablated_mean_micros!
-      const passed = delta >= evidence.threshold_micros
-      const semantic = passed ? 10_000 : 0
+      const dropMeetsThreshold = delta >= evidence.threshold_micros
+      // Observational drop is a completed failure whose delta meets the gate
+      // but is not causal. Semantic follows status (0), not the naive pass.
+      if (evidence.reason === 'observational_drop_not_causal') {
+        if (
+          evidence.status !== 'failed' ||
+          (evidence.mode !== 'shadow' && evidence.mode !== 'enforce') ||
+          !dropMeetsThreshold
+        ) {
+          context.addIssue({ code: 'custom', message: 'ablation result fields contradict one another' })
+          return
+        }
+      } else if ((evidence.status === 'passed') !== dropMeetsThreshold) {
+        context.addIssue({ code: 'custom', message: 'ablation result fields contradict one another' })
+        return
+      }
+      const semantic = evidence.status === 'passed' ? 10_000 : 0
       const applied = evidence.mode === 'shadow' ? 10_000 : semantic
       if (
         evidence.delta_micros !== delta ||
-        (evidence.status === 'passed') !== passed ||
         evidence.semantic_factor_bps !== semantic ||
         evidence.applied_factor_bps !== applied
       ) {
@@ -2382,6 +2396,29 @@ const ablationEvidenceSchema = z
       context.addIssue({
         code: 'custom',
         message: 'not-run or unavailable ablation cannot carry a numeric gate',
+      })
+    }
+    const appliedCalls =
+      evidence.intervention === 'inference'
+        ? evidence.synthetic_usage.chat_applied
+        : evidence.synthetic_usage.embedding_applied
+    if (evidence.affected_call_count !== appliedCalls) {
+      context.addIssue({ code: 'custom', message: 'ablation affected-call count is not derived' })
+    }
+    if (
+      evidence.status !== 'unavailable' &&
+      evidence.status !== 'not_run' &&
+      evidence.synthetic_usage.budget_exhausted
+    ) {
+      context.addIssue({ code: 'custom', message: 'budget-exhausted ablation cannot complete' })
+    }
+    if (
+      evidence.reason === 'counterfactual_proof_unavailable' &&
+      (evidence.status !== 'unavailable' || evidence.mode === 'off')
+    ) {
+      context.addIssue({
+        code: 'custom',
+        message: 'counterfactual proof reason requires an active unavailable result',
       })
     }
   })

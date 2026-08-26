@@ -530,11 +530,22 @@ func TestConfirmationLongMemRunFailsClosedWithoutToolEndpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, err := harness.Run(context.Background(), protocol.RunRequest{CaseID: "case-1", UserID: "projected-user"})
-	if err == nil || !strings.Contains(err.Error(), "tool_endpoint") {
-		t.Fatalf("missing tool_endpoint error=%v", err)
+	if err == nil || confirmationExecutionStage(err) != "tool_endpoint" {
+		t.Fatalf("missing tool_endpoint stage error=%v", err)
+	}
+	if err.Error() != "confirmation execution failed at tool_endpoint" {
+		t.Fatalf("public error = %q", err.Error())
+	}
+	class, status := confirmationExecutionDiagnostic(err)
+	if class != "longmem_run_tool_endpoint" || status != 0 {
+		t.Fatalf("diagnostic = %q, %d", class, status)
 	}
 	if _, ok := longmemeval.FailureDiagnostic(err); ok {
 		t.Fatalf("infrastructure tool_endpoint failure was classified as harness case failure: %v", err)
+	}
+	var caseFailure *longmemeval.HarnessCaseFailure
+	if errors.As(err, &caseFailure) {
+		t.Fatalf("tool_endpoint bind failure wrapped HarnessCaseFailure: %+v", caseFailure)
 	}
 	if runs.Load() != 0 {
 		t.Fatalf("harness /run was invoked without a tool_endpoint")

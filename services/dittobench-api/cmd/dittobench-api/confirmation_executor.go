@@ -354,10 +354,15 @@ func confirmationExecutionStage(err error) string {
 
 func confirmationExecutionDiagnostic(err error) (string, int) {
 	diagnostic, ok := longmemeval.FailureDiagnostic(err)
-	if !ok {
-		return "unclassified", 0
+	if ok {
+		return "longmem_" + diagnostic.Operation + "_" + diagnostic.Kind, diagnostic.StatusCode
 	}
-	return "longmem_" + diagnostic.Operation + "_" + diagnostic.Kind, diagnostic.StatusCode
+	// Bind/advertise failed before /run. This is infrastructure, not a scored
+	// harness case, so it must not become HarnessCaseFailure or unclassified.
+	if confirmationExecutionStage(err) == "tool_endpoint" {
+		return "longmem_run_tool_endpoint", 0
+	}
+	return "unclassified", 0
 }
 
 // confirmationRuntime contains no provider endpoints or credentials. Real

@@ -879,6 +879,48 @@ func TestConfirmationExecuteLogsOnlyAllowlistedHarnessDiagnostic(t *testing.T) {
 	}
 }
 
+func TestConfirmationExecutePublishesToolEndpointBindFailureHeader(t *testing.T) {
+	executor := readyConfirmationExecutor()
+	executor.execute = func(context.Context, confirmationExecutionRequest) (confirmationExecutionResult, error) {
+		return confirmationExecutionResult{}, wrapConfirmationExecutionFailure(
+			"tool_endpoint",
+			errors.New("https://submitted.invalid/private?token=credential-material"),
+		)
+	}
+	var logs bytes.Buffer
+	originalWriter := log.Writer()
+	log.SetOutput(&logs)
+	t.Cleanup(func() { log.SetOutput(originalWriter) })
+	recorder := executeConfirmationRequest(
+		t,
+		&server{confirmation: executor},
+		nil,
+		confirmationRequestBody(t, validConfirmationRequest()),
+	)
+	assertConfirmationError(
+		t,
+		recorder,
+		http.StatusUnprocessableEntity,
+		"confirmation execution failed at tool_endpoint",
+	)
+	if got := recorder.Header().Get(confirmationFailureClassHeader); got != "longmem_run_tool_endpoint" {
+		t.Fatalf("failure class header = %q", got)
+	}
+	if got := recorder.Header().Get(confirmationFailureStatusHeader); got != "0" {
+		t.Fatalf("failure status header = %q", got)
+	}
+	if !strings.Contains(logs.String(), "failure_class=longmem_run_tool_endpoint failure_status=0") {
+		t.Fatalf("tool_endpoint diagnostic missing from log: %s", logs.String())
+	}
+	for _, output := range []string{logs.String(), recorder.Body.String()} {
+		for _, forbidden := range []string{"submitted.invalid", "private", "token", "credential-material", "HarnessCaseFailure"} {
+			if strings.Contains(output, forbidden) {
+				t.Fatalf("confirmation tool_endpoint failure leaked %q: %s", forbidden, output)
+			}
+		}
+	}
+}
+
 func TestConfirmationExecuteOmitsDiagnosticHeadersForUnclassifiedFailure(t *testing.T) {
 	executor := readyConfirmationExecutor()
 	executor.execute = func(context.Context, confirmationExecutionRequest) (confirmationExecutionResult, error) {
