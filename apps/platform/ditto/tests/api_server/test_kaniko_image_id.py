@@ -392,3 +392,125 @@ async def test_finalize_labels_exhausted_gcp_fallback_as_cloudrun(
         assert attempt.status == "failed"
         assert attempt.reason_code == "cloudrun-build-unavailable"
         assert attempt.public_reason == "Cloud Run submission build was unavailable"
+
+
+@pytest.mark.asyncio
+async def test_finalize_labels_cloudrun_runtime_provision_failure(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                build_only=True,
+                started_at=now - timedelta(minutes=3),
+                deadline=now + timedelta(minutes=60),
+            )
+        )
+        session.add(
+            SubmissionImageBuild(
+                build_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                output_key=f"{agent_id}/builds/{attempt_id}.tar",
+                status="succeeded",
+                provider="targon",
+                output_sha256="12" * 32,
+                output_size_bytes=123,
+                output_image_id=_CONFIG_DIGEST,
+                runtime_status="fallback_required",
+                runtime_error_code="CLOUDRUN_PROVISION_ERROR",
+                attempt_count=1,
+                created_at=now - timedelta(minutes=3),
+                completed_at=now - timedelta(seconds=5),
+                updated_at=now - timedelta(seconds=5),
+            )
+        )
+
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, _FakeStorage()),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "failed"
+        assert attempt.reason_code == "cloudrun-runtime-unavailable"
+        assert attempt.public_reason == "Cloud Run runtime smoke was unavailable"
+        agent = await session.get(Agent, agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.SCREENING_FAILED
+        assert agent.screening_reason_code == "cloudrun-runtime-unavailable"
+
+
+@pytest.mark.asyncio
+async def test_finalize_keeps_targon_label_for_runtime_timeout(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                build_only=True,
+                started_at=now - timedelta(minutes=3),
+                deadline=now + timedelta(minutes=60),
+            )
+        )
+        session.add(
+            SubmissionImageBuild(
+                build_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                output_key=f"{agent_id}/builds/{attempt_id}.tar",
+                status="succeeded",
+                provider="targon",
+                output_sha256="12" * 32,
+                output_size_bytes=123,
+                output_image_id=_CONFIG_DIGEST,
+                runtime_status="fallback_required",
+                runtime_error_code="TARGON_PROVISION_TIMEOUT",
+                attempt_count=1,
+                created_at=now - timedelta(minutes=3),
+                completed_at=now - timedelta(seconds=5),
+                updated_at=now - timedelta(seconds=5),
+            )
+        )
+
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, _FakeStorage()),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.reason_code == "targon-runtime-unavailable"
