@@ -4,6 +4,11 @@
 # Distinct from ssh_users, which is sudo SSH on postgres + both app VMs.
 #
 # Required by those skills:
+#   * Unconditioned compute.viewer — gcloud compute ssh calls
+#     compute.projects.get on the project resource. Conditioned osAdminLogin /
+#     IAP bindings do not satisfy that, so SSH fails with
+#     "Required 'compute.projects.get' permission for 'projects/ditto-app-dev'".
+#     Viewer is read-only (no start/stop/delete).
 #   * IAP + osAdminLogin on named subnet VMs — query_prod_db.sh runs
 #     `sudo -n -u deploy` to source /opt/ditto-platform/.env; py-spy uses sudo
 #     for ptrace; pprofctl wraps IAP SSH to loopback profilers. Dev and the
@@ -76,6 +81,15 @@ locals {
   }
 
   debug_fleet_operators = var.enable_screener_fleet ? local.debug_operators : toset([])
+}
+
+# Unconditioned. compute.projects.get is evaluated on the project resource, so
+# instance-name conditions on osAdminLogin/IAP cannot satisfy gcloud compute ssh.
+resource "google_project_iam_member" "debug_operator_compute_viewer" {
+  for_each = local.debug_operators
+  project  = var.project
+  role     = "roles/compute.viewer"
+  member   = each.value
 }
 
 resource "google_compute_instance_iam_member" "debug_operator_osadmin" {
