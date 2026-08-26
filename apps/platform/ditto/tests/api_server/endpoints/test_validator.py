@@ -1210,6 +1210,12 @@ async def _seed_revoked_grant(
     deadline: datetime = _TICKET_DEADLINE,
     status: str = "revoked",
     keypair: bittensor.Keypair = _KEYPAIR,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    request_count: int = 0,
+    request_budget: int = 1000,
+    token_budget: int = 1_000_000,
+    usage_accounting_version: int = 2,
 ) -> None:
     """Record the platform having terminated a lease's inference grant.
 
@@ -1230,8 +1236,12 @@ async def _seed_revoked_grant(
                 status=status,
                 generation=0,
                 allowed_models=["qwen/qwen3-32b"],
-                request_budget=1000,
-                token_budget=1_000_000,
+                request_budget=request_budget,
+                token_budget=token_budget,
+                request_count=request_count,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                usage_accounting_version=usage_accounting_version,
                 embedding_model="test-embed",
                 embedding_profile="test-embed-v1",
                 embedding_provider="test",
@@ -7126,6 +7136,93 @@ class TestFailJob:
             )
             assert ticket is not None
             assert ticket.infra_retry_grants == 0
+
+    async def test_spent_grant_reported_as_infra_is_billed_to_the_agent(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # Crown-v12-Final: every validator hit the 75M token wall, the Go
+        # exchange omitted budget evidence, and the scorer reported
+        # budget_evidence_absent as retryable infrastructure. Re-leasing the
+        # same image cannot finish the remaining cases. The grant row is the
+        # authoritative meter; settled spend at the wall is the agent's.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        await _seed_revoked_grant(
+            session_maker,
+            agent_id,
+            status="exhausted",
+            prompt_tokens=74_000_000,
+            completion_tokens=1_000_000,
+            token_budget=75_000_000,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="infrastructure",
+                failure_detail="model_relay_unavailable:budget_evidence_absent",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        async with session_maker() as s:
+            ticket = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.infra_retry_grants == 0
+            assert ticket.failure_reason == "scoring_error"
+            assert ticket.failure_detail == "inference_allowance_exhausted"
+
+    async def test_unspent_grant_keeps_budget_evidence_absent_as_infra(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        # The Crown-v11 protection: a 4104 the broker could not confirm, while
+        # the grant still sits at a few percent of the wall, must not bill the
+        # miner. Missing activation evidence is a mixed-rollout gap.
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
+        await _seed_ticket(session_maker, agent_id)
+        await _seed_revoked_grant(
+            session_maker,
+            agent_id,
+            status="exhausted",
+            prompt_tokens=3_000_000,
+            completion_tokens=50_000,
+            token_budget=75_000_000,
+        )
+        _install_db(app, session_maker)
+        _install_chain(app)
+
+        failed = await client.post(
+            "/api/v1/validator/job/fail",
+            headers=_AUTH_HEADER,
+            json=_job_fail_payload(
+                agent_id,
+                reason="infrastructure",
+                failure_detail="model_relay_unavailable:budget_evidence_absent",
+            ),
+        )
+        assert failed.status_code == 200, failed.text
+        async with session_maker() as s:
+            ticket = await s.get(
+                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
+            )
+            assert ticket is not None
+            assert ticket.infra_retry_grants == 1
+            assert ticket.failure_reason == "infrastructure"
+            assert (
+                ticket.failure_detail
+                == "model_relay_unavailable:budget_evidence_absent"
+            )
 
     async def test_infra_retry_grants_are_bounded(
         self,
