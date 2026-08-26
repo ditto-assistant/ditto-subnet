@@ -49,3 +49,12 @@ resource "google_iap_tunnel_instance_iam_member" "ssh_iap" {
   member     = each.value.member
   depends_on = [google_project_service.iap]
 }
+
+# gcloud compute ssh --tunnel-through-iap to a VM with an attached service
+# account needs actAs on that SA. App VMs run as platform_api; postgres has none.
+resource "google_service_account_iam_member" "ssh_user_actas_platform_api" {
+  for_each           = toset(var.ssh_users)
+  service_account_id = google_service_account.platform_api.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = each.value
+}
