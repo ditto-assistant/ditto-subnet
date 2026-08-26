@@ -137,6 +137,9 @@ func projectCase(selection Selection, entry DatasetCase, key []byte, seedBatchPa
 			Tools:        NativeMemoryTools(),
 			BenchVersion: benchVersion,
 			UserID:       userID,
+			// ToolEndpoint is filled at confirmation execution time by the
+			// validator-owned observed-execution server, matching scored
+			// DittoBench memory /run. Memory tools remain unserved.
 		},
 		questionID: entry.QuestionID,
 	}, nil
