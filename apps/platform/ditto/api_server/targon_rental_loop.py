@@ -32,6 +32,12 @@ from ditto.api_server.screening_provider import (
     SmokeSpec,
     inflight_failure_code,
 )
+from ditto.api_server.screening_traces import (
+    SCREENING_TRACE_SCHEMA,
+    PutTrace,
+    encode_screening_trace,
+    screening_trace_key,
+)
 from ditto.api_server.targon_provider import TargonComputeProvider, TargonRentals
 from ditto.api_server.targon_screening import admit_targon_screening_work
 from ditto.db.models import (
@@ -127,6 +133,7 @@ class TargonRentalLoop:
         complete_screen: Callable[[UUID], Awaitable[None]] | None = None,
         resolve_builder_image: Callable[[str], str] | None = None,
         storage: object | None = None,
+        traces_put: PutTrace | None = None,
     ) -> None:
         self._session_maker = session_maker
         self._config = config
@@ -144,6 +151,7 @@ class TargonRentalLoop:
         self._complete_screen = complete_screen
         self._resolve_builder_image = resolve_builder_image or (lambda image: image)
         self._storage = storage
+        self._traces_put = traces_put
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._epoch = "platform-targon-loop"
@@ -412,6 +420,13 @@ class TargonRentalLoop:
             row.job_token_expires_at = now + _JOB_TTL
             row.updated_at = now
             build_id = row.build_id
+            agent_id = row.agent_id
+            artifact_sha256 = row.artifact_sha256
+            skip_targon = (row.error_code or "").startswith("TARGON_")
+        if not skip_targon:
+            skip_targon = await self._targon_kaniko_exhausted(
+                agent_id, artifact_sha256
+            )
         spec = BuildSpec(
             name=f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32],
             image=image,
@@ -423,6 +438,8 @@ class TargonRentalLoop:
         )
         error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
         for provider in self._providers:
+            if skip_targon and provider.stored_provider == "targon":
+                continue
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -452,6 +469,13 @@ class TargonRentalLoop:
                     else "CLOUDRUN_PROVIDER_ERROR"
                 )
             if uid is not None:
+                await self._capture_replica_trace(
+                    kind="kaniko",
+                    build_id=build_id,
+                    uid=uid,
+                    provider=provider,
+                    error_code=error_code,
+                )
                 await provider.delete(uid)
                 await self._clear_resource_id("build", build_id)
         await self._fail_build_provision(build_id, error_code)
@@ -740,6 +764,103 @@ class TargonRentalLoop:
         await self._fail_review_provision(review_id, error_code)
         return True
 
+    async def _targon_kaniko_exhausted(
+        self, agent_id: UUID, artifact_sha256: str
+    ) -> bool:
+        async with self._session_maker() as session:
+            code = await session.scalar(
+                select(SubmissionImageBuild.error_code)
+                .where(
+                    SubmissionImageBuild.agent_id == agent_id,
+                    SubmissionImageBuild.artifact_sha256 == artifact_sha256,
+                    SubmissionImageBuild.error_code.like("TARGON_%"),
+                )
+                .limit(1)
+            )
+        return code is not None
+
+    async def _cloudrun_fallback_available(self) -> bool:
+        for provider in self._providers:
+            if provider.stored_provider != "gcp":
+                continue
+            if await provider.capacity_ok():
+                return True
+        return False
+
+    async def _requeue_build_for_cloudrun(
+        self, build_id: UUID, error_code: str
+    ) -> None:
+        now = datetime.now(UTC)
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(SubmissionImageBuild, build_id)
+            if stored is None or stored.status not in _INFLIGHT_JOB:
+                return
+            stored.status = "queued"
+            stored.error_code = error_code
+            stored.provider = None
+            stored.provider_resource_id = None
+            stored.lease_expires_at = None
+            stored.completed_at = None
+            stored.updated_at = now
+
+    async def _capture_replica_trace(
+        self,
+        *,
+        kind: str,
+        build_id: UUID,
+        uid: str,
+        provider: ScreeningComputeProvider,
+        error_code: str,
+        observation: ProvisionObservation | None = None,
+    ) -> None:
+        if self._traces_put is None:
+            return
+        log_tail = ""
+        try:
+            log_tail = await provider.replica_logs(uid, tail=400)
+        except Exception:
+            logger.exception(
+                "replica log fetch failed provider=%s uid=%s", provider.name, uid
+            )
+        agent_id = None
+        attempt_id = None
+        async with self._session_maker() as session:
+            stored = await session.get(SubmissionImageBuild, build_id)
+            if stored is not None:
+                agent_id = stored.agent_id
+                attempt_id = stored.attempt_id
+        now = datetime.now(UTC)
+        record = {
+            "schema": SCREENING_TRACE_SCHEMA,
+            "captured_at": now.isoformat(),
+            "lane": "screening",
+            "kind": kind,
+            "provider": provider.stored_provider,
+            "agent_id": str(agent_id) if agent_id else None,
+            "attempt_id": str(attempt_id) if attempt_id else None,
+            "build_id": str(build_id),
+            "resource_id": uid,
+            "error_code": error_code,
+            "observation": {
+                "status": observation.status if observation is not None else "",
+                "message": observation.message if observation is not None else "",
+            },
+            "log_tail": log_tail[-16000:],
+        }
+        key = screening_trace_key(
+            kind=kind,
+            provider=provider.stored_provider,
+            build_id=build_id,
+            uid=uid,
+            now=now,
+        )
+        try:
+            await self._traces_put(
+                key, encode_screening_trace(record), "application/zstd"
+            )
+        except Exception:
+            logger.exception("screening trace upload failed key=%s", key)
+
     async def _fail_build_provision(self, build_id: UUID, error_code: str) -> None:
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
@@ -961,6 +1082,23 @@ class TargonRentalLoop:
             elif seen < cutoff:
                 error_code = inflight_failure_code(provider.stored_provider, "timeout")
             else:
+                continue
+            await self._capture_replica_trace(
+                kind=kind if kind != "build" else "kaniko",
+                build_id=row_id,
+                uid=uid,
+                provider=provider,
+                error_code=error_code,
+                observation=observation,
+            )
+            if (
+                kind == "build"
+                and provider.stored_provider == "targon"
+                and await self._cloudrun_fallback_available()
+            ):
+                if await provider.delete(uid):
+                    await self._requeue_build_for_cloudrun(row_id, error_code)
+                handled = True
                 continue
             if kind == "build":
                 await self._fail_build_provision(row_id, error_code)

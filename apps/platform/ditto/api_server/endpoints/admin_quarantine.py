@@ -62,6 +62,9 @@ from ditto.api_models.admin_quarantine import (
     AdminScreeningFailureExample,
     AdminScreeningFailureGroup,
     AdminScreeningFailureSummary,
+    AdminExpireRunningScreeningRequest,
+    AdminExpireRunningScreeningResponse,
+    AdminScreeningImageBuild,
     AdminScreeningRescreenRequest,
     AdminScreeningRescreenResponse,
     AdminScreeningRetryNowRequest,
@@ -135,6 +138,8 @@ from ditto.db.models import (
     ScreeningQuarantine,
     ScreeningQuarantineResolution,
     ScreeningRetryOverride,
+    SubmissionImageBuild,
+    SubmissionSourceReview,
     ValidatorHeartbeat,
     ValidatorTicket,
 )
@@ -1576,6 +1581,7 @@ def _screening_submission(
     agent: Agent,
     attempts: list[AdminScreeningAttempt],
     miner_coldkey: str | None = None,
+    image_builds: list[AdminScreeningImageBuild] | None = None,
 ) -> AdminScreeningSubmission:
     return AdminScreeningSubmission(
         agent_id=agent.agent_id,
@@ -1590,6 +1596,7 @@ def _screening_submission(
         screening_reason_code=agent.screening_reason_code,
         submitted_at=agent.created_at,
         attempts=attempts,
+        image_builds=image_builds or [],
     )
 
 
@@ -1705,7 +1712,41 @@ async def get_screening_submission(
         raise HTTPException(status_code=404, detail="screening submission not found")
     attempts_by_agent = await _screening_attempts_by_agent(session, [agent_id])
     coldkey = await get_miner_coldkey_for_agent(session, agent_id=agent_id)
-    return _screening_submission(agent, attempts_by_agent[agent_id], coldkey)
+    builds = (
+        (
+            await session.execute(
+                select(SubmissionImageBuild)
+                .where(SubmissionImageBuild.agent_id == agent_id)
+                .order_by(
+                    SubmissionImageBuild.created_at.desc(),
+                    SubmissionImageBuild.build_id.desc(),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    image_builds = [
+        AdminScreeningImageBuild(
+            build_id=row.build_id,
+            attempt_id=row.attempt_id,
+            status=row.status,
+            error_code=row.error_code,
+            provider=row.provider,
+            provider_resource_id=row.provider_resource_id,
+            runtime_status=row.runtime_status,
+            runtime_error_code=row.runtime_error_code,
+            runtime_provider_resource_id=row.runtime_provider_resource_id,
+            attempt_count=row.attempt_count,
+            created_at=row.created_at,
+            updated_at=row.updated_at,
+            completed_at=row.completed_at,
+        )
+        for row in builds
+    ]
+    return _screening_submission(
+        agent, attempts_by_agent[agent_id], coldkey, image_builds
+    )
 
 
 @router.post(
@@ -1879,6 +1920,123 @@ async def retry_failed_screening_now(
         backoff_deadline=attempt.deadline,
         created_at=override.created_at,
         idempotent=idempotent,
+    )
+
+
+@router.post(
+    "/screening-submissions/{agent_id}/expire-running",
+    response_model=AdminExpireRunningScreeningResponse,
+)
+async def expire_running_screening(
+    agent_id: UUID,
+    payload: AdminExpireRunningScreeningRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminExpireRunningScreeningResponse:
+    """Expire one live screening attempt so the queue can admit a replacement."""
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    now = datetime.now(UTC)
+    expired_build_ids: list[UUID] = []
+    async with session.begin():
+        agent = await session.scalar(
+            select(Agent).where(Agent.agent_id == agent_id).with_for_update()
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        if agent.sha256 != payload.expected_sha256:
+            raise HTTPException(status_code=409, detail="artifact identity changed")
+        score_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(Score.agent_id == agent_id)
+            )
+            or 0
+        )
+        if score_count != payload.expected_score_count:
+            raise HTTPException(status_code=409, detail="score count changed")
+        attempt = await session.scalar(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.attempt_id == payload.expected_attempt_id,
+                ScreeningAttempt.agent_id == agent_id,
+            )
+            .with_for_update()
+        )
+        if attempt is None:
+            raise HTTPException(status_code=409, detail="screening attempt changed")
+        if (
+            attempt.status == "failed"
+            and attempt.reason_code == "operator-expired-running-screening"
+        ):
+            return AdminExpireRunningScreeningResponse(
+                agent_id=agent_id,
+                attempt_id=attempt.attempt_id,
+                agent_status=agent.status,
+                expired_build_ids=[],
+                idempotent=True,
+            )
+        if attempt.status != "running":
+            raise HTTPException(status_code=409, detail="screening attempt is not running")
+        if agent.status != AgentStatus.SCREENING:
+            raise HTTPException(status_code=409, detail="submission is not screening")
+        attempt.status = "failed"
+        attempt.finished_at = now
+        attempt.public_reason = payload.reason
+        attempt.reason_code = "operator-expired-running-screening"
+        builds = list(
+            await session.scalars(
+                select(SubmissionImageBuild)
+                .where(
+                    SubmissionImageBuild.attempt_id == attempt.attempt_id,
+                    SubmissionImageBuild.status.in_(("queued", "leased", "running")),
+                )
+                .with_for_update()
+            )
+        )
+        for build in builds:
+            build.status = "fallback_required"
+            build.error_code = "OPERATOR_SCREENING_EXPIRED"
+            build.completed_at = now
+            build.updated_at = now
+            build.lease_expires_at = None
+            expired_build_ids.append(build.build_id)
+        reviews = list(
+            await session.scalars(
+                select(SubmissionSourceReview)
+                .where(
+                    SubmissionSourceReview.attempt_id == attempt.attempt_id,
+                    SubmissionSourceReview.status.in_(("queued", "leased", "running")),
+                )
+                .with_for_update()
+            )
+        )
+        for review in reviews:
+            review.status = "fallback_required"
+            review.error_code = "OPERATOR_SCREENING_EXPIRED"
+            review.completed_at = now
+            review.updated_at = now
+            review.lease_expires_at = None
+        agent.status = AgentStatus.SCREENING_FAILED
+        agent.screening_reason = payload.reason
+        agent.screening_reason_code = "operator-expired-running-screening"
+    logger.info(
+        "admin_actor=%s expired running screening agent_id=%s attempt_id=%s "
+        "builds=%s reason=%s",
+        x_admin_actor,
+        agent_id,
+        attempt.attempt_id,
+        expired_build_ids,
+        payload.reason,
+    )
+    return AdminExpireRunningScreeningResponse(
+        agent_id=agent_id,
+        attempt_id=attempt.attempt_id,
+        agent_status=AgentStatus.SCREENING_FAILED,
+        expired_build_ids=expired_build_ids,
+        idempotent=False,
     )
 
 

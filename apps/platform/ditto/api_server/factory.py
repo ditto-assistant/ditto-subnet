@@ -382,6 +382,15 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                             chain=chain,
                         )
 
+                async def traces_put(
+                    key: str, body: bytes, content_type: str
+                ) -> str:
+                    if traces_hippius is None:
+                        return ""
+                    return await traces_hippius.put_object(
+                        key=key, body=body, content_type=content_type
+                    )
+
                 targon_loop = TargonRentalLoop(
                     session_maker=app.state.session_maker,
                     config=config.targon,
@@ -393,6 +402,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                     complete_screen=complete_screen,
                     resolve_builder_image=resolve_submission_builder_image,
                     storage=storage,
+                    traces_put=traces_put if traces_hippius is not None else None,
                 )
                 stack.push_async_callback(targon_loop.aclose)
                 await targon_loop.start()

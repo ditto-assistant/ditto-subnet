@@ -4991,6 +4991,80 @@ class TestQuarantineAdmin:
         assert claimed.status_code == 200, claimed.text
         assert claimed.json()["items"][0]["agent_id"] == str(agent_id)
 
+    async def test_operator_expires_running_screening_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        _install_db(app, session_maker)
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        build_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=70),
+                )
+            )
+            session.add(
+                SubmissionImageBuild(
+                    build_id=build_id,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    environment="prod",
+                    artifact_sha256=_SHA256,
+                    image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                    output_key=f"remote-builds/{build_id}/image.tar",
+                    status="running",
+                    provider="targon",
+                    provider_resource_id="wrk-test",
+                )
+            )
+        response = await client.post(
+            f"/api/v1/admin/screening-submissions/{agent_id}/expire-running",
+            headers={
+                "Authorization": "Bearer test-admin-token-at-least-32-characters",
+                "X-Admin-Actor": "backroom:test-user",
+            },
+            json={
+                "reason": "Targon Kaniko replica looping without Cloud Run fallback",
+                "expected_sha256": _SHA256,
+                "expected_score_count": 0,
+                "expected_attempt_id": str(attempt_id),
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["agent_status"] == AgentStatus.SCREENING_FAILED
+        assert body["expired_build_ids"] == [str(build_id)]
+        assert body["idempotent"] is False
+        listing = await client.get(
+            f"/api/v1/admin/screening-submissions/{agent_id}",
+            headers={
+                "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            },
+        )
+        assert listing.status_code == 200
+        builds = listing.json()["image_builds"]
+        assert builds[0]["error_code"] == "OPERATOR_SCREENING_EXPIRED"
+        assert builds[0]["provider"] == "targon"
+
     async def test_operator_rebuilds_only_the_screened_image_build_only(
         self,
         app: FastAPI,

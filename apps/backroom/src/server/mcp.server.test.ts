@@ -149,6 +149,7 @@ describe('Backroom MCP tools', () => {
         'resolve_ath_review',
         'rescreen_rejected_submission',
         'retry_failed_screening_now',
+        'expire_running_screening',
         'retry_validator_evaluation',
         'replace_validator_score',
         'queue_validator_score_retests',
@@ -184,12 +185,12 @@ describe('Backroom MCP tools', () => {
     // listing, presigned download, bounded peek). Keep modest headroom for
     // schema evolution; tighten the description budgets, not this
     // whole-payload backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(90_000)
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(92_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Grew by the two rollout-control catalog lines (start/read tutorials
     // live in get_backroom_tool_help, not here).
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      20_950,
+      21_500,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -3883,7 +3884,11 @@ describe('Backroom MCP tools', () => {
     })
 
     expect(response.isError).not.toBe(true)
-    expect(readJsonResult(response)).toEqual({ ...submission, miner_coldkey: null })
+    expect(readJsonResult(response)).toEqual({
+      ...submission,
+      miner_coldkey: null,
+      image_builds: [],
+    })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}`,
       expect.any(Object),

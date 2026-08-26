@@ -3536,6 +3536,22 @@ export const screeningAttemptSchema = z.object({
   duplicate_version: z.number().int().positive().nullish().default(null),
 })
 
+export const screeningImageBuildSchema = z.object({
+  build_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  status: z.string(),
+  error_code: z.string().nullable().optional(),
+  provider: z.string().nullable().optional(),
+  provider_resource_id: z.string().nullable().optional(),
+  runtime_status: z.string().nullable().optional(),
+  runtime_error_code: z.string().nullable().optional(),
+  runtime_provider_resource_id: z.string().nullable().optional(),
+  attempt_count: z.number().int().nonnegative().optional().default(0),
+  created_at: z.string(),
+  updated_at: z.string(),
+  completed_at: z.string().nullable().optional(),
+})
+
 export const screeningSubmissionSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),
@@ -3553,6 +3569,7 @@ export const screeningSubmissionSchema = z.object({
   screening_reason_code: z.string().nullable().optional(),
   submitted_at: z.string(),
   attempts: z.array(screeningAttemptSchema),
+  image_builds: z.array(screeningImageBuildSchema).optional().default([]),
 })
 
 export const screeningSubmissionListSchema = z.object({
@@ -3613,6 +3630,22 @@ export const retryFailedScreeningNowResponseSchema = z.object({
   agent_status: z.literal('screening_failed'),
   backoff_deadline: z.string(),
   created_at: z.string(),
+  idempotent: z.boolean(),
+})
+
+export const expireRunningScreeningInputSchema = z.object({
+  agentId: z.string().uuid(),
+  reason: auditReasonSchema(8),
+  expectedSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedScoreCount: z.number().int().nonnegative(),
+  expectedAttemptId: z.string().uuid(),
+})
+
+export const expireRunningScreeningResponseSchema = z.object({
+  agent_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  agent_status: z.string(),
+  expired_build_ids: z.array(z.string().uuid()).optional().default([]),
   idempotent: z.boolean(),
 })
 
@@ -5946,8 +5979,8 @@ export const traceObjectListSchema = z.object({
 
 export const listInferenceTracesInputSchema = z.object({
   scope: z.enum(['traces', 'ledger']).default('traces'),
-  lane: z.enum(['inference', 'confirmation']).optional(),
-  kind: z.enum(['chat', 'embedding']).optional(),
+  lane: z.enum(['inference', 'confirmation', 'screening']).optional(),
+  kind: z.enum(['chat', 'embedding', 'kaniko', 'smoke', 'review']).optional(),
   dt: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, 'dt is a UTC day like 2026-08-24')

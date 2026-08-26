@@ -1359,6 +1359,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-submissions/{agent_id}/expire-running": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Expire Running Screening
+         * @description Expire one live screening attempt so the queue can admit a replacement.
+         */
+        post: operations["expire_running_screening_api_v1_admin_screening_submissions__agent_id__expire_running_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-submissions/{agent_id}/migrate-benchmark-contract": {
         parameters: {
             query?: never;
@@ -5840,6 +5860,48 @@ export interface components {
             /** Validator Hotkey */
             validator_hotkey: string;
         };
+        /**
+         * AdminExpireRunningScreeningRequest
+         * @description Compare-and-swap guards for expiring one live screening attempt.
+         */
+        AdminExpireRunningScreeningRequest: {
+            /**
+             * Expected Attempt Id
+             * Format: uuid
+             */
+            expected_attempt_id: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminExpireRunningScreeningResponse */
+        AdminExpireRunningScreeningResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Expired Build Ids
+             * @default []
+             */
+            expired_build_ids: string[];
+            /**
+             * Idempotent
+             * @default false
+             */
+            idempotent: boolean;
+        };
         /** AdminInferenceConcurrencySettingsRequest */
         AdminInferenceConcurrencySettingsRequest: {
             /**
@@ -7139,6 +7201,53 @@ export interface components {
             /** Screening Failed */
             screening_failed: number;
         };
+        /**
+         * AdminScreeningImageBuild
+         * @description Kaniko/runtime telemetry for one screening image build.
+         */
+        AdminScreeningImageBuild: {
+            /**
+             * Attempt Count
+             * @default 0
+             */
+            attempt_count: number;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Build Id
+             * Format: uuid
+             */
+            build_id: string;
+            /** Completed At */
+            completed_at?: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Error Code */
+            error_code?: string | null;
+            /** Provider */
+            provider?: string | null;
+            /** Provider Resource Id */
+            provider_resource_id?: string | null;
+            /** Runtime Error Code */
+            runtime_error_code?: string | null;
+            /** Runtime Provider Resource Id */
+            runtime_provider_resource_id?: string | null;
+            /** Runtime Status */
+            runtime_status?: string | null;
+            /** Status */
+            status: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** AdminScreeningRescreenRequest */
         AdminScreeningRescreenRequest: {
             /** Expected Score Count */
@@ -7227,6 +7336,11 @@ export interface components {
             artifact_sha256: string;
             /** Attempts */
             attempts: components["schemas"]["AdminScreeningAttempt"][];
+            /**
+             * Image Builds
+             * @default []
+             */
+            image_builds: components["schemas"]["AdminScreeningImageBuild"][];
             /** Miner Coldkey */
             miner_coldkey?: string | null;
             /** Miner Hotkey */
@@ -22454,6 +22568,44 @@ export interface operations {
             };
         };
     };
+    expire_running_screening_api_v1_admin_screening_submissions__agent_id__expire_running_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminExpireRunningScreeningRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminExpireRunningScreeningResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     inspect_benchmark_contract_migration_api_v1_admin_screening_submissions__agent_id__migrate_benchmark_contract_get: {
         parameters: {
             query?: never;
@@ -23064,8 +23216,8 @@ export interface operations {
         parameters: {
             query?: {
                 scope?: "traces" | "ledger";
-                lane?: ("inference" | "confirmation") | null;
-                kind?: ("chat" | "embedding") | null;
+                lane?: ("inference" | "confirmation" | "screening") | null;
+                kind?: ("chat" | "embedding" | "kaniko" | "smoke" | "review") | null;
                 dt?: string | null;
                 hour?: string | null;
                 prefix?: string | null;

@@ -116,6 +116,35 @@ class AsyncTargonClient:
             )
         return value
 
+    async def logs(self, uid: str, *, tail: int = 400) -> str:
+        """Return a bounded replica log tail. Never logs the API key."""
+        from urllib.parse import urlencode
+
+        query = urlencode({"tail": str(int(tail))})
+        return await self._request_text("GET", self._workloads(f"/{uid}/logs?{query}"))
+
+    async def _request_text(self, method: str, url: str) -> str:
+        headers = {
+            "Accept": "text/plain, application/json",
+            "Authorization": f"Bearer {self._api_key}",
+        }
+        try:
+            response = await self._client.request(method, url, headers=headers)
+        except httpx.HTTPError as error:
+            raise TargonAPIError(
+                operation=f"{method} {url.split('?', 1)[0]}",
+                status=None,
+                reason=type(error).__name__,
+            ) from error
+        if response.status_code >= 400:
+            reason = "rate limited" if response.status_code == 429 else "HTTP error"
+            raise TargonAPIError(
+                operation=f"{method} {url.split('?', 1)[0]}",
+                status=response.status_code,
+                reason=reason,
+            )
+        return response.text
+
     async def delete(self, uid: str) -> None:
         try:
             await self._request("DELETE", self._workloads(f"/{uid}"))

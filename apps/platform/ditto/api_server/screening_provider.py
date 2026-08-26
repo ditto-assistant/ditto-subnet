@@ -96,6 +96,8 @@ class ScreeningComputeProvider(Protocol):
 
     async def delete(self, resource_id: str) -> bool: ...
 
+    async def replica_logs(self, resource_id: str, *, tail: int = 400) -> str: ...
+
 
 def provision_error_code(stored_provider: str, result: str) -> str:
     prefix = "TARGON" if stored_provider == "targon" else "CLOUDRUN"

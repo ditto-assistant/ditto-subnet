@@ -119,6 +119,8 @@ class AdminScreeningDisputeResolveResponse(BaseModel):
 
 
 class AdminScreeningAttempt(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     attempt_id: UUID
     policy_version: int
     status: Literal["running", "passed", "rejected", "failed", "expired", "quarantined"]
@@ -133,7 +135,29 @@ class AdminScreeningAttempt(BaseModel):
     duplicate_version: int | None = None
 
 
+class AdminScreeningImageBuild(BaseModel):
+    """Kaniko/runtime telemetry for one screening image build."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    build_id: UUID
+    attempt_id: UUID
+    status: str
+    error_code: str | None = None
+    provider: str | None = None
+    provider_resource_id: str | None = None
+    runtime_status: str | None = None
+    runtime_error_code: str | None = None
+    runtime_provider_resource_id: str | None = None
+    attempt_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+
+
 class AdminScreeningSubmission(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     agent_id: UUID
     miner_hotkey: str
     miner_coldkey: str | None = None
@@ -154,6 +178,7 @@ class AdminScreeningSubmission(BaseModel):
     screening_reason_code: str | None
     submitted_at: datetime
     attempts: list[AdminScreeningAttempt]
+    image_builds: list[AdminScreeningImageBuild] = []
 
 
 class AdminScreeningSubmissionList(BaseModel):
@@ -226,6 +251,27 @@ class AdminScreeningRetryNowResponse(BaseModel):
     agent_status: str
     backoff_deadline: datetime
     created_at: datetime
+    idempotent: bool = False
+
+
+class AdminExpireRunningScreeningRequest(BaseModel):
+    """Compare-and-swap guards for expiring one live screening attempt."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    reason: Annotated[str, Field(min_length=8)]
+    expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    expected_score_count: Annotated[int, Field(ge=0)]
+    expected_attempt_id: UUID
+
+
+class AdminExpireRunningScreeningResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    attempt_id: UUID
+    agent_status: str
+    expired_build_ids: list[UUID] = []
     idempotent: bool = False
 
 
