@@ -126,6 +126,20 @@ async def _queue_kaniko(
     runtime_enabled: bool,
 ) -> None:
     build_id = uuid4()
+    prior_gcp_infra_failure = await session.scalar(
+        select(SubmissionImageBuild.build_id)
+        .where(
+            SubmissionImageBuild.agent_id == agent.agent_id,
+            SubmissionImageBuild.artifact_sha256 == agent.sha256.lower(),
+            SubmissionImageBuild.environment == environment,
+            SubmissionImageBuild.provider == "gcp",
+            SubmissionImageBuild.status == "fallback_required",
+            SubmissionImageBuild.error_code.in_(
+                ("CLOUDRUN_PROVISION_ERROR", "CLOUDRUN_PROVISION_TIMEOUT")
+            ),
+        )
+        .limit(1)
+    )
     await session.execute(
         pg_insert(SubmissionImageBuild)
         .values(
@@ -137,6 +151,7 @@ async def _queue_kaniko(
             image_ref=f"ditto-screen/{agent.agent_id}-{attempt.attempt_id}:latest",
             output_key=f"remote-builds/{build_id}/image.tar",
             status="queued",
+            provider="gcp" if prior_gcp_infra_failure is not None else None,
             runtime_status="pending" if runtime_enabled else "skipped",
             runtime_error_code=(
                 None if runtime_enabled else "TARGON_RUNTIME_DISABLED_BY_POLICY"
@@ -181,11 +196,20 @@ async def maybe_finalize_targon_screen(
                     now=now,
                 )
             else:
+                gcp_failed = build.provider == "gcp"
                 await _fail_retryable(
                     session,
                     attempt,
-                    reason="Targon submission build was unavailable",
-                    code="targon-build-unavailable",
+                    reason=(
+                        "Cloud Run submission build was unavailable"
+                        if gcp_failed
+                        else "Targon submission build was unavailable"
+                    ),
+                    code=(
+                        "cloudrun-build-unavailable"
+                        if gcp_failed
+                        else "targon-build-unavailable"
+                    ),
                     now=now,
                 )
             return True

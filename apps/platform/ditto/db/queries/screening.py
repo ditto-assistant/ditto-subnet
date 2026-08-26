@@ -47,7 +47,9 @@ if TYPE_CHECKING:
 # lease expire naturally. A permanently-inconclusive agent would otherwise
 # re-attempt every lease indefinitely. Only "expired" attempts count --
 # infrastructure "failed" attempts are usually screener-side, so a screener
-# outage must not mass-park every in-flight agent.
+# outage must not mass-park every in-flight agent. Provider-routing failures
+# stay in backoff until that original deadline so a Targon/Cloud Run blip
+# cannot re-lease every few minutes. Heartbeat-proven orphans stay immediate.
 MAX_SCREENING_EXPIRIES = 5
 
 # Duplicate-owner statuses. A later cross-miner submission of the SAME bytes is
@@ -86,6 +88,12 @@ _DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
 _ORPHANED_ATTEMPT_REASON_CODE = "worker-lease-orphaned"
 _ORPHANED_ATTEMPT_REASON = (
     "Screening worker stopped reporting this attempt; retry scheduled"
+)
+PROVIDER_BACKOFF_REASON_CODES = (
+    "targon-build-unavailable",
+    "targon-runtime-unavailable",
+    "targon-source-review-unavailable",
+    "cloudrun-build-unavailable",
 )
 # Active workers report at least every two minutes. Wait through two complete
 # heartbeat intervals before inferring an orphan, and only act on heartbeat
@@ -630,7 +638,15 @@ async def claim_screening_attempts(
             or_(
                 ScreeningAttempt.status == "running",
                 and_(
-                    ScreeningAttempt.status == "expired",
+                    or_(
+                        ScreeningAttempt.status == "expired",
+                        and_(
+                            ScreeningAttempt.status == "failed",
+                            ScreeningAttempt.reason_code.in_(
+                                PROVIDER_BACKOFF_REASON_CODES
+                            ),
+                        ),
+                    ),
                     ScreeningAttempt.deadline > now,
                     ~exists(
                         select(ScreeningRetryOverride.override_id).where(

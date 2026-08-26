@@ -169,6 +169,7 @@ from ditto.db.queries.payments import (
     get_miner_coldkey_for_agent,
     get_miner_coldkeys_for_agents,
 )
+from ditto.db.queries.screening import PROVIDER_BACKOFF_REASON_CODES
 from ditto.db.queries.tickets import RETRY_COOLDOWN, ticket_attempt_cap
 
 logger = logging.getLogger(__name__)
@@ -1882,9 +1883,14 @@ async def retry_failed_screening_now(
                     status_code=409,
                     detail="submission is not waiting after a failed screening",
                 )
-            if attempt.status != "expired":
+            provider_backoff = (
+                attempt.status == "failed"
+                and attempt.reason_code in PROVIDER_BACKOFF_REASON_CODES
+            )
+            if attempt.status != "expired" and not provider_backoff:
                 raise HTTPException(
-                    status_code=409, detail="screening attempt is not expired"
+                    status_code=409,
+                    detail="screening attempt is not in retry backoff",
                 )
             if attempt.deadline <= now:
                 raise HTTPException(

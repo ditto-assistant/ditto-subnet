@@ -806,6 +806,39 @@ async def test_retryable_deep_infrastructure_failure_is_reclaimable(
     assert retry.build_only is False
 
 
+async def test_failed_infrastructure_attempt_waits_until_original_deadline(
+    session: AsyncSession,
+) -> None:
+    agent = await _seed_failed_agent(session)
+    now = datetime.now(UTC)
+    async with session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=agent.agent_id,
+                screener_hotkey=_SCREENER,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="failed",
+                started_at=now - timedelta(minutes=20),
+                deadline=now + timedelta(minutes=50),
+                finished_at=now - timedelta(seconds=1),
+                public_reason="Targon submission build was unavailable",
+                reason_code="targon-build-unavailable",
+                build_only=True,
+            )
+        )
+
+    assert agent.agent_id not in {
+        claimed_agent.agent_id for claimed_agent, _, _ in await _claim(session, now=now)
+    }
+    assert agent.agent_id in {
+        claimed_agent.agent_id
+        for claimed_agent, _, _ in await _claim(
+            session, now=now + timedelta(minutes=51)
+        )
+    }
+
+
 async def test_agent_parked_for_review_after_expiry_cap(session: AsyncSession):
     agent = await _seed_failed_agent(session)
     await _add_expired_attempts(session, agent, MAX_SCREENING_EXPIRIES)
