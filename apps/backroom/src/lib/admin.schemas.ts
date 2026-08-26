@@ -1732,7 +1732,7 @@ export const runtimeProfileDownloadSchema = z.object({
 })
 
 export const MAX_CHAT_REQUEST_BUDGET = 32768
-export const MAX_CHAT_TOKEN_BUDGET = 100_000_000
+export const MAX_CHAT_TOKEN_BUDGET = 200_000_000
 export const MAX_CHAT_CONCURRENCY = 512
 export const MAX_EMBEDDING_CONCURRENCY = 512
 export const MAX_REQUESTS_PER_MINUTE = 100_000

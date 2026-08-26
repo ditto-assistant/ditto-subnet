@@ -153,7 +153,7 @@ class TestDefaults:
 
     def test_chat_token_ceiling_has_room_for_the_measured_tail(self) -> None:
         assert DEFAULT_CHAT_TOKEN_BUDGET == 25_000_000
-        assert MAX_CHAT_TOKEN_BUDGET == 100_000_000
+        assert MAX_CHAT_TOKEN_BUDGET == 200_000_000
         assert (
             InferenceConcurrencySettings(
                 chat_token_budget=MAX_CHAT_TOKEN_BUDGET

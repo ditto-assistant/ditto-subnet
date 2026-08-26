@@ -145,14 +145,14 @@ MAX_CHAT_REQUEST_BUDGET = 32768
 # the request budget was decoration.
 DEFAULT_CHAT_TOKEN_BUDGET = 25_000_000
 
-# Production runs have exhausted 25M grants after more than an hour, and the
-# fastest observed legitimate strategy projects to about 46.6M over a full
-# 90-minute lease. Keep enough distance above that measured tail for a 75M
-# operating cap while retaining the request budget, lease deadline, and this
-# finite hard stop as independent runaway guards. This is also the bound
-# ``check_config`` enforces at boot -- imported there rather than repeated, so a
-# revision this board accepts can never be a value the next restart rejects.
-MAX_CHAT_TOKEN_BUDGET = 100_000_000
+# Production v12 runs have exhausted a 75M grant around 58% of the dataset
+# (Crown-v12-Final: 205/351 checks, ~128M projected for a full run). 150M is
+# the intended operating cap for those heavy-context strategies. Keep a finite
+# hard stop above that so the request budget, lease deadline, and this ceiling
+# remain independent runaway guards. This is also the bound ``check_config``
+# enforces at boot -- imported there rather than repeated, so a revision this
+# board accepts can never be a value the next restart rejects.
+MAX_CHAT_TOKEN_BUDGET = 200_000_000
 
 DEFAULT_BENCHMARK_CASE_CONCURRENCY = 4
 MAX_BENCHMARK_CASE_CONCURRENCY = 64

@@ -196,7 +196,7 @@ type InferenceProxyConfig struct {
 	RoutingMode   string   // DITTO_INFERENCE_ROUTING_MODE
 
 	RequestBudget int   // DB-policy fallback default 16384, max 32768
-	TokenBudget   int64 // DB-policy fallback default 25_000_000, max 100_000_000
+	TokenBudget   int64 // DB-policy fallback default 25_000_000, max 200_000_000
 
 	TicketConcurrency    int // DB-policy fallback default 16
 	ValidatorConcurrency int // DB-policy fallback default 48
@@ -511,7 +511,7 @@ func validateInferenceProxy(r *envReader, ip *InferenceProxyConfig) {
 		}
 	}
 	pos("chat_request_budget", int64(ip.RequestBudget), 32768)
-	pos("chat_token_budget", ip.TokenBudget, 100_000_000)
+	pos("chat_token_budget", ip.TokenBudget, 200_000_000)
 	pos("DITTO_INFERENCE_REQUEST_BODY_BYTES", ip.RequestBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_RESPONSE_BODY_BYTES", ip.ResponseBodyBytes, 8*1024*1024)
 	pos("DITTO_INFERENCE_MAX_OUTPUT_TOKENS", int64(ip.MaxOutputTokens), 65536)
