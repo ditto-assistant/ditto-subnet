@@ -62,11 +62,15 @@ func bindConfirmationToolEndpoint(
 	sessionID string,
 ) (func(), error) {
 	if advertise == nil || request == nil {
-		return nil, errors.New("confirmation tool_endpoint is unavailable")
+		return nil, wrapConfirmationExecutionFailure(
+			"tool_endpoint", errors.New("confirmation tool_endpoint is unavailable"),
+		)
 	}
 	if strings.TrimSpace(request.CaseID) == "" || strings.TrimSpace(request.UserID) == "" ||
 		net.ParseIP(sourceIP) == nil {
-		return nil, errors.New("confirmation tool_endpoint identity is unavailable")
+		return nil, wrapConfirmationExecutionFailure(
+			"tool_endpoint", errors.New("confirmation tool_endpoint identity is unavailable"),
+		)
 	}
 	endpoint, stop, err := advertise(confirmationToolEndpointRequest{
 		SourceIP: sourceIP, CaseID: request.CaseID, UserID: request.UserID,
@@ -76,7 +80,11 @@ func bindConfirmationToolEndpoint(
 		if stop != nil {
 			stop()
 		}
-		return nil, errors.New("confirmation tool_endpoint is unavailable")
+		// Replace the inner advertise cause: it may name a bind address or
+		// identity. The reviewed stage is the only public diagnostic.
+		return nil, wrapConfirmationExecutionFailure(
+			"tool_endpoint", errors.New("confirmation tool_endpoint is unavailable"),
+		)
 	}
 	request.ToolEndpoint = endpoint
 	return stop, nil

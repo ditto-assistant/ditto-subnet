@@ -1163,11 +1163,110 @@ describe('Bench v9 confirmation bundle schemas', () => {
     expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow(/exact zero score/)
   })
 
+  it('accepts live observational-drop inference with unavailable embedding usage', () => {
+    // Completed v7/v11 bundles fail list_confirmation_bundles when Zod treats
+    // observational_drop_not_causal as a naive threshold pass (delta >=
+    // threshold but status=failed, semantic=0, applied=10000 in shadow).
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle())) as MutableConfirmationBundle
+    const inference = bundle.evidence_root!.inference_ablation
+    inference.status = 'completed'
+    Object.assign(inference.evidence, {
+      status: 'failed',
+      reason: 'observational_drop_not_causal',
+      baseline_scores_sha256: confirmationDigest,
+      ablated_scores_sha256: confirmationDigest,
+      baseline_mean_micros: 250_000,
+      ablated_mean_micros: 0,
+      delta_micros: 250_000,
+      threshold_micros: 200_000,
+      sample_count: 4,
+      affected_call_count: 1,
+      semantic_factor_bps: 0,
+      applied_factor_bps: 10_000,
+    })
+    Object.assign(inference.evidence.synthetic_usage, {
+      chat_attempts: 1,
+      chat_applied: 1,
+      chat_input_bytes: 64,
+    })
+    const embedding = bundle.evidence_root!.embedding_ablation
+    embedding.status = 'unavailable'
+    Object.assign(embedding.evidence, {
+      status: 'unavailable',
+      reason: 'intervention_unavailable',
+      affected_call_count: 2,
+    })
+    Object.assign(embedding.evidence.synthetic_usage, {
+      embedding_attempts: 2,
+      embedding_applied: 2,
+      embedding_inputs: 2,
+      embedding_input_bytes: 64,
+    })
+    const inferenceDimension = bundle.dimensions.find((row) => row.dimension === 'inference_ablation')
+    if (inferenceDimension) Object.assign(inferenceDimension, inference)
+    const embeddingDimension = bundle.dimensions.find((row) => row.dimension === 'embedding_ablation')
+    if (embeddingDimension) Object.assign(embeddingDimension, embedding)
+
+    const parsed = confirmationBundleViewSchema.parse(bundle)
+    expect(parsed.evidence_root?.inference_ablation).toMatchObject({
+      status: 'completed',
+      evidence: {
+        status: 'failed',
+        reason: 'observational_drop_not_causal',
+        delta_micros: 250_000,
+        semantic_factor_bps: 0,
+        applied_factor_bps: 10_000,
+      },
+    })
+    expect(parsed.evidence_root?.embedding_ablation).toMatchObject({
+      status: 'unavailable',
+      evidence: {
+        status: 'unavailable',
+        reason: 'intervention_unavailable',
+        affected_call_count: 2,
+        baseline_mean_micros: null,
+        delta_micros: null,
+      },
+    })
+  })
+
+  it('still rejects observational drop that does not meet the threshold', () => {
+    const bundle = JSON.parse(JSON.stringify(confirmationBundle())) as MutableConfirmationBundle
+    const inference = bundle.evidence_root!.inference_ablation
+    inference.status = 'completed'
+    Object.assign(inference.evidence, {
+      status: 'failed',
+      reason: 'observational_drop_not_causal',
+      baseline_scores_sha256: confirmationDigest,
+      ablated_scores_sha256: confirmationDigest,
+      baseline_mean_micros: 250_000,
+      ablated_mean_micros: 100_000,
+      delta_micros: 150_000,
+      threshold_micros: 200_000,
+      sample_count: 4,
+      affected_call_count: 1,
+      semantic_factor_bps: 0,
+      applied_factor_bps: 10_000,
+    })
+    Object.assign(inference.evidence.synthetic_usage, {
+      chat_attempts: 1,
+      chat_applied: 1,
+      chat_input_bytes: 64,
+    })
+    const dimension = bundle.dimensions.find((row) => row.dimension === 'inference_ablation')
+    if (dimension) Object.assign(dimension, inference)
+    expect(() => confirmationBundleViewSchema.parse(bundle)).toThrow(
+      /ablation result fields contradict one another/,
+    )
+  })
+
   it('accepts budget-exhausted embedding usage that counts the rejected attempt past the cap', () => {
     // Go and shared Python cap *applied* calls, not attempts. A rejected overflow
     // makes attempts = applied + 1, which can exceed max_embedding_requests.
     const bundle = JSON.parse(JSON.stringify(confirmationBundle())) as MutableConfirmationBundle
-    const usage = bundle.evidence_root!.embedding_ablation.evidence.synthetic_usage
+    const evidence = bundle.evidence_root!.embedding_ablation.evidence
+    evidence.affected_call_count = 10
+    const usage = evidence.synthetic_usage
     usage.embedding_attempts = 11
     usage.embedding_applied = 10
     usage.embedding_inputs = 10

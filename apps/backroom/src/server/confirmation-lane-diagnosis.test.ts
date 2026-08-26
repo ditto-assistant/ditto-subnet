@@ -137,6 +137,48 @@ function itStates() {
     expect(diagnosis.recent_failures).toHaveLength(5)
   })
 
+  it('surfaces dittobench bind-style execution failures in the histogram', () => {
+    const diagnosis = diagnoseConfirmationLane(
+      baseInput({
+        pages: pages({
+          failed: {
+            count: 3,
+            items: [1, 2, 3].map((index) => ({
+              ...failedBundle(index, 11),
+              tickets: [
+                ticket({
+                  ticket_id: `20000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+                  failure_class: 'dittobench',
+                  failure_stage: 'running_confirmation',
+                  failure_reason: 'confirmation_execution_failed',
+                  issued_at: '2026-08-18T18:00:00.000Z',
+                  failed_at: '2026-08-18T18:01:10.000Z',
+                }),
+              ],
+            })),
+          },
+        }),
+      }),
+    )
+
+    expect(diagnosis.failure_histogram[0]).toMatchObject({
+      failure_class: 'dittobench',
+      failure_stage: 'running_confirmation',
+      failure_reason: 'confirmation_execution_failed',
+      count: 3,
+    })
+    expect(diagnosis.recent_failures).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          failure_class: 'dittobench',
+          failure_stage: 'running_confirmation',
+          failure_reason: 'confirmation_execution_failed',
+        }),
+      ]),
+    )
+    expect(diagnosis.likely_cause.code).toBe('execution_after_preparing')
+  })
+
   it('does not blame the v9 pin when failures happen after execution starts', () => {
     const diagnosis = diagnoseConfirmationLane(
       baseInput({
