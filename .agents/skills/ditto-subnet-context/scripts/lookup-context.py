@@ -176,9 +176,7 @@ def check_index(
     failures: list[str] = []
     seen: set[str] = set()
     topic_ids = {
-        str(topic.get("id", ""))
-        for topic in data["topics"]
-        if topic.get("id")
+        str(topic.get("id", "")) for topic in data["topics"] if topic.get("id")
     }
     for topic in data["topics"]:
         topic_id = str(topic.get("id", ""))
@@ -187,9 +185,7 @@ def check_index(
         seen.add(topic_id)
         for related in topic.get("related", []):
             if str(related) not in topic_ids:
-                failures.append(
-                    f"{topic_id}.related: unknown topic id {related!r}"
-                )
+                failures.append(f"{topic_id}.related: unknown topic id {related!r}")
         for key in ("owns", "read"):
             for relative in topic.get(key, []):
                 candidate = (REPO_ROOT / str(relative)).resolve()
@@ -219,9 +215,7 @@ def check_index(
                 )
     if cover_installed_skills:
         indexed_skills = {
-            str(name)
-            for topic in data["topics"]
-            for name in topic.get("skills", [])
+            str(name) for topic in data["topics"] for name in topic.get("skills", [])
         }
         skills_root = REPO_ROOT / ".agents" / "skills"
         if skills_root.is_dir():

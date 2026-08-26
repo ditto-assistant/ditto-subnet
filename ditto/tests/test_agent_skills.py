@@ -416,8 +416,7 @@ def test_targon_kaniko_log_query_prefers_readonly_skill_over_capacity() -> None:
 
 def test_preview_compose_stack_does_not_route_to_worktrees() -> None:
     topic_ids = {
-        str(topic["id"])
-        for topic in lookup("preview compose stack attach-prod-api")
+        str(topic["id"]) for topic in lookup("preview compose stack attach-prod-api")
     }
     assert "preview-channels" in topic_ids
     assert "worktrees" not in topic_ids
@@ -425,19 +424,13 @@ def test_preview_compose_stack_does_not_route_to_worktrees() -> None:
 
 
 def test_platform_api_review_does_not_select_ath_review() -> None:
-    topic_ids = {
-        str(topic["id"])
-        for topic in lookup("review the platform API change")
-    }
+    topic_ids = {str(topic["id"]) for topic in lookup("review the platform API change")}
     assert "platform-api" in topic_ids
     assert "backroom-review" not in topic_ids
 
 
 def test_dashboard_profile_query_does_not_select_runtime_profiling() -> None:
-    topic_ids = {
-        str(topic["id"])
-        for topic in lookup("profile the dashboard UI")
-    }
+    topic_ids = {str(topic["id"]) for topic in lookup("profile the dashboard UI")}
     assert "platform-dashboard" in topic_ids
     assert "runtime-profiling" not in topic_ids
 
@@ -473,9 +466,7 @@ def test_fuzzy_token_match_allows_plurals_but_rejects_substrings() -> None:
 
 
 def test_partial_keyword_overlap_requires_two_tokens() -> None:
-    assert (
-        lookup_context.keyword_overlap_score({"review"}, ("board", "review")) == 0
-    )
+    assert lookup_context.keyword_overlap_score({"review"}, ("board", "review")) == 0
     assert (
         lookup_context.keyword_overlap_score(
             {"kaniko", "builder", "logs"}, ("kaniko", "logs")
