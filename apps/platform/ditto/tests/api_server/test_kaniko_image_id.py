@@ -330,3 +330,64 @@ async def test_finalize_rejects_kaniko_exit_as_docker_build(
         assert agent is not None
         assert agent.status == AgentStatus.REJECTED
         assert agent.screening_reason_code == "docker-build"
+
+
+@pytest.mark.asyncio
+async def test_finalize_labels_exhausted_gcp_fallback_as_cloudrun(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                build_only=True,
+                started_at=now - timedelta(minutes=3),
+                deadline=now + timedelta(minutes=60),
+            )
+        )
+        session.add(
+            SubmissionImageBuild(
+                build_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                output_key=f"{agent_id}/builds/{attempt_id}.tar",
+                status="fallback_required",
+                provider="gcp",
+                error_code="CLOUDRUN_PROVISION_ERROR",
+                runtime_status="pending",
+                attempt_count=2,
+                created_at=now - timedelta(minutes=3),
+                completed_at=now - timedelta(seconds=5),
+                updated_at=now - timedelta(seconds=5),
+            )
+        )
+
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, _FakeStorage()),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "failed"
+        assert attempt.reason_code == "cloudrun-build-unavailable"
+        assert attempt.public_reason == "Cloud Run submission build was unavailable"
+        agent = await session.get(Agent, attempt.agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.SCREENING_FAILED
+        assert agent.screening_reason_code == "cloudrun-build-unavailable"

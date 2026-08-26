@@ -4903,11 +4903,21 @@ class TestQuarantineAdmin:
             assert [attempt.attempt_id for attempt in attempts] == [attempt_id]
             assert len(scores) == 1
 
-    async def test_operator_retry_now_waives_only_exact_failed_attempt_backoff(
+    @pytest.mark.parametrize(
+        ("attempt_status", "reason_code"),
+        (
+            ("expired", "source-review-step-budget-exhausted"),
+            ("failed", "targon-build-unavailable"),
+            ("failed", "cloudrun-build-unavailable"),
+        ),
+    )
+    async def test_operator_retry_now_waives_only_exact_attempt_backoff(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
+        attempt_status: str,
+        reason_code: str,
     ) -> None:
         app.state.config = replace(
             app.state.config,
@@ -4928,12 +4938,12 @@ class TestQuarantineAdmin:
                     agent_id=agent_id,
                     screener_hotkey=_SCREENER_HOTKEY,
                     policy_version=SCREENING_POLICY_VERSION,
-                    status="expired",
+                    status=attempt_status,
                     started_at=now - timedelta(minutes=10),
                     deadline=original_deadline,
                     finished_at=now,
                     public_reason="Screening was inconclusive; retry scheduled",
-                    reason_code="source-review-step-budget-exhausted",
+                    reason_code=reason_code,
                 )
             )
         _install_db(app, session_maker)
@@ -4982,7 +4992,7 @@ class TestQuarantineAdmin:
                 )
             )
         assert attempt is not None
-        assert attempt.status == "expired"
+        assert attempt.status == attempt_status
         assert attempt.deadline == original_deadline
         assert len(overrides) == 1
         assert overrides[0].actor == "backroom:test-user"

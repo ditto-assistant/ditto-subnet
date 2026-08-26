@@ -52,6 +52,9 @@ _TERMINAL_JOB = ("succeeded", "consumed", "canceled", "fallback_required")
 _TERMINAL_RUNTIME = ("succeeded", "fallback_required", "skipped")
 _INFLIGHT_JOB = ("leased", "running")
 _PROVIDER_TERMINAL = frozenset({"error", "deleted", "suspended"})
+_TARGON_BUILD_FALLBACK_CODES = frozenset(
+    {"TARGON_PROVISION_ERROR", "TARGON_PROVISION_TIMEOUT"}
+)
 _CANDIDATE_REGISTRY = (
     "us-central1-docker.pkg.dev/ditto-app-dev/ditto-screening-candidates/miner"
 )
@@ -254,6 +257,24 @@ class TargonRentalLoop:
                 return provider
         return self._providers[0]
 
+    def _build_providers(
+        self, pinned_provider: str | None
+    ) -> list[ScreeningComputeProvider]:
+        """Return the provider sequence for one queued build.
+
+        A null provider is a fresh attempt and uses the reviewed priority list.
+        A reaped Targon build is durably pinned to GCP so the next launch cannot
+        loop back through Targon.
+        """
+
+        if pinned_provider is None:
+            return self._providers
+        return [
+            provider
+            for provider in self._providers
+            if provider.stored_provider == pinned_provider
+        ]
+
     def _smoke_wait_seconds(self, provider: ScreeningComputeProvider) -> float:
         if provider.name == "targon":
             return self._config.smoke_provision_timeout_seconds
@@ -412,6 +433,7 @@ class TargonRentalLoop:
             row.job_token_expires_at = now + _JOB_TTL
             row.updated_at = now
             build_id = row.build_id
+            pinned_provider = row.provider
         spec = BuildSpec(
             name=f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32],
             image=image,
@@ -422,7 +444,7 @@ class TargonRentalLoop:
             ),
         )
         error_code = "TARGON_SUBMISSION_PROVIDER_ERROR"
-        for provider in self._providers:
+        for provider in self._build_providers(pinned_provider):
             if not await self._provider_has_capacity(provider):
                 continue
             uid: str | None = None
@@ -752,6 +774,49 @@ class TargonRentalLoop:
             stored.updated_at = now
             stored.lease_expires_at = None
 
+    async def _requeue_targon_build_on_gcp(
+        self, build_id: UUID, error_code: str
+    ) -> bool:
+        """Move one dead Targon build to the remaining GCP provider."""
+
+        if not any(provider.stored_provider == "gcp" for provider in self._providers):
+            return False
+        now = datetime.now(UTC)
+        async with self._session_maker() as session, session.begin():
+            stored = await session.get(SubmissionImageBuild, build_id)
+            attempt = (
+                await session.get(ScreeningAttempt, stored.attempt_id)
+                if stored is not None
+                else None
+            )
+            if (
+                stored is None
+                or attempt is None
+                or stored.status not in _INFLIGHT_JOB
+                or stored.provider != "targon"
+                or stored.attempt_count >= 3
+                or error_code not in _TARGON_BUILD_FALLBACK_CODES
+                or attempt.status != "running"
+                or attempt.deadline <= now
+            ):
+                return False
+            stored.status = "queued"
+            stored.provider = "gcp"
+            stored.provider_resource_id = None
+            stored.error_code = error_code
+            stored.controller_epoch = None
+            stored.lease_expires_at = None
+            stored.job_token_hash = None
+            stored.job_token_expires_at = None
+            stored.completed_at = None
+            stored.updated_at = now
+        logger.warning(
+            "requeued dead Targon build on GCP build_id=%s error_code=%s",
+            build_id,
+            error_code,
+        )
+        return True
+
     async def _fail_review_provision(self, review_id: UUID, error_code: str) -> None:
         now = datetime.now(UTC)
         async with self._session_maker() as session, session.begin():
@@ -962,13 +1027,21 @@ class TargonRentalLoop:
                 error_code = inflight_failure_code(provider.stored_provider, "timeout")
             else:
                 continue
+            deleted = await provider.delete(uid)
+            if (
+                kind == "build"
+                and deleted
+                and await self._requeue_targon_build_on_gcp(row_id, error_code)
+            ):
+                handled = True
+                continue
             if kind == "build":
                 await self._fail_build_provision(row_id, error_code)
             elif kind == "runtime":
                 await self._fail_runtime_provision(row_id, error_code)
             else:
                 await self._fail_review_provision(row_id, error_code)
-            if await provider.delete(uid):
+            if deleted:
                 await self._clear_resource_id(kind, row_id)
             handled = True
         return handled

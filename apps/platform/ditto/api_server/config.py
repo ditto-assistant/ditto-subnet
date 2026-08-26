@@ -874,6 +874,14 @@ def check_config(config: ApiServerConfig) -> None:
         raise ApiServerConfigError("SCREENER_HOTKEY is not a valid SS58 address")
     if auth.api_token is not None and len(auth.api_token) < 32:
         raise ApiServerConfigError("SCREENER_API_TOKEN must be at least 32 characters")
+    if config.targon is not None and (
+        config.cloudrun is None or not config.cloudrun.enabled
+    ):
+        raise ApiServerConfigError(
+            "Targon screening requires the Cloud Run fallback; set "
+            "DITTO_CLOUDRUN_PROJECT, DITTO_CLOUDRUN_UNTRUSTED_SA, and "
+            "DITTO_CLOUDRUN_INVOKER_SA"
+        )
     if auth.controller_api_token is not None and len(auth.controller_api_token) < 32:
         raise ApiServerConfigError(
             "SCREENER_CONTROLLER_API_TOKEN must be at least 32 characters"
