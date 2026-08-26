@@ -23,9 +23,12 @@ Useful modes:
 python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --list
 python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check
 python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --json "platform api backroom"
+python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --explain "bench version bump"
 ```
 
-The curated index is [`references/context-index.json`](references/context-index.json). Update it whenever ownership, canonical paths, or validation commands move.
+The curated index is [`references/context-index.json`](references/context-index.json). Update it whenever ownership, canonical paths, skills, or validation commands move. Add a routing assertion in `ditto/tests/test_agent_skills.py` for any new topic or keyword class.
+
+Prefer distinctive phrases over generic verbs (`cargo evaluate`, `gh stack`, `bench version`). A unigram such as `review` or `version` will steal unrelated tasks.
 
 ## Establish current truth
 
@@ -41,12 +44,22 @@ Make one atomic monorepo change when a contract spans components. Keep migration
 
 ## Specialized context
 
+Load a skill named in the lookup `Skills:` list. The usual owners:
+
 - Platform API, database, dashboard, or Backroom: `$ditto-subnet-platform`
 - Validator, scoring, DittoBench, datagen, adapters, or protocol: `$ditto-subnet-benchmark`
+- New or stranded `bench_version`: `$ditto-subnet-bench-version-bump`
+- LongMem confirmation bring-up or live canary: `$longmem-confirmation-rollout`
 - Python py-spy, Go pprof, live hot spots, or performance comparisons: `$ditto-subnet-runtime-profiling`
 - Semantic release, deployments, screeners, Targon/GCE, GCP, Cloudflare, Terraform, or Ansible: `$ditto-subnet-release-ops`
+- Production Postgres or Targon rental logs: `$gcloud-ditto-readonly`
+- Miner rehearsal, local scoring, pre-submit review: `$mine`
+- Miner Discord / DM replies: `$miner-comms`
+- W&B run history: `$wandb-ops`
 - Branches, PR stacks, or current-main reconciliation: `$github`
 - Quarantine triage, high-score ATH review, or precedent search: `$backroom-review`
 - Isolated preview stacks, Foundry cheatcodes, localstack scoring: `$ditto-subnet-preview`
+- Dependabot and lockfile PRs: `$ditto-subnet-dependabot-review`
+- Screening worker policy/gates: `workers/screener/` (lookup topic `screener-worker`)
 
 Keep conclusions live and evidence-backed. `UPSTREAM.md` records migration provenance; after cutover it is not an instruction to sync legacy repositories.

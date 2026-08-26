@@ -39,6 +39,12 @@ def lookup(query: str, maximum: int = 3) -> list[dict[str, object]]:
     return json.loads(completed.stdout)
 
 
+def topic_list(topic: dict[str, object], key: str) -> list[str]:
+    values = topic.get(key, [])
+    assert isinstance(values, list)
+    return [str(value) for value in values]
+
+
 def test_context_index_paths_exist() -> None:
     subprocess.run(
         [sys.executable, str(LOOKUP), "--check"],
@@ -161,6 +167,32 @@ def test_context_index_rejects_paths_outside_repository(capsys) -> None:
         }
         assert lookup_context.check_index(data) == 1
         assert "path escapes repository" in capsys.readouterr().err
+
+
+def test_context_index_requires_installed_skills_to_be_routed(capsys) -> None:
+    data = lookup_context.load_index()
+    data = {**data, "topics": [dict(topic) for topic in data["topics"]]}
+    data["topics"][0] = {**data["topics"][0], "skills": []}
+    # Drop every skills field so coverage must fail closed.
+    for topic in data["topics"]:
+        topic["skills"] = []
+    assert lookup_context.check_index(data, cover_installed_skills=True) == 1
+    assert "not referenced by any topic.skills" in capsys.readouterr().err
+
+
+def test_context_index_rejects_unknown_related_topic(capsys) -> None:
+    data = {
+        "topics": [
+            {
+                "id": "only",
+                "owns": [],
+                "read": [],
+                "related": ["missing"],
+            }
+        ]
+    }
+    assert lookup_context.check_index(data) == 1
+    assert "unknown topic id" in capsys.readouterr().err
 
 
 def test_worktree_parser_preserves_spaces() -> None:
@@ -326,3 +358,137 @@ def test_miner_pre_submit_review_query_stays_on_mine() -> None:
         )
     ]
     assert topic_ids[0] == "mine"
+
+
+def test_generic_evaluate_does_not_route_to_mine() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup(
+            "evaluate and improve agent skills for pulling the right context"
+        )
+    ]
+    assert topic_ids[0] == "agent-skills"
+    assert "mine" not in topic_ids
+
+
+def test_context_index_and_lookup_query_routes_to_agent_skills() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("update the context index and lookup-context.py routing")
+    ]
+    assert topic_ids[0] == "agent-skills"
+
+
+def test_bench_version_bump_query_selects_the_bump_skill() -> None:
+    for query in (
+        "bench version bump",
+        "ship bench_version v13 across every layer",
+        "strand a new bench version with Literal[9]",
+    ):
+        topics = lookup(query)
+        topic_ids = [str(topic["id"]) for topic in topics]
+        assert topic_ids[0] == "bench-version-bump", query
+        assert "ditto-subnet-bench-version-bump" in topic_list(topics[0], "skills")
+
+
+def test_longmem_confirmation_rollout_query_selects_the_rollout_skill() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("LongMem confirmation rollout fail-closed canary")
+    ]
+    assert topic_ids[0] == "longmem-confirmation"
+
+
+def test_dimension_execution_query_selects_longmem_confirmation() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("dimension_execution failure on confirmation ticket")
+    ]
+    assert topic_ids[0] == "longmem-confirmation"
+
+
+def test_production_postgres_explain_routes_to_gcloud_readonly() -> None:
+    topics = lookup("query production postgres EXPLAIN ANALYZE")
+    topic_ids = [str(topic["id"]) for topic in topics]
+    assert topic_ids[0] == "prod-readonly"
+    assert "gcloud-ditto-readonly" in topic_list(topics[0], "skills")
+
+
+def test_targon_kaniko_log_query_prefers_readonly_skill_over_capacity() -> None:
+    topic_ids = [str(topic["id"]) for topic in lookup("Targon kaniko builder logs")]
+    assert topic_ids[0] == "prod-readonly"
+    assert "screener-capacity" in topic_ids or len(topic_ids) == 1
+
+
+def test_preview_compose_stack_does_not_route_to_worktrees() -> None:
+    topic_ids = {
+        str(topic["id"]) for topic in lookup("preview compose stack attach-prod-api")
+    }
+    assert "preview-channels" in topic_ids
+    assert "worktrees" not in topic_ids
+    assert "platform-api" not in topic_ids
+
+
+def test_platform_api_review_does_not_select_ath_review() -> None:
+    topic_ids = {str(topic["id"]) for topic in lookup("review the platform API change")}
+    assert "platform-api" in topic_ids
+    assert "backroom-review" not in topic_ids
+
+
+def test_dashboard_profile_query_does_not_select_runtime_profiling() -> None:
+    topic_ids = {str(topic["id"]) for topic in lookup("profile the dashboard UI")}
+    assert "platform-dashboard" in topic_ids
+    assert "runtime-profiling" not in topic_ids
+
+
+def test_workers_screener_query_owns_the_worker_tree() -> None:
+    topics = lookup("workers/screener policy gate")
+    assert str(topics[0]["id"]) == "screener-worker"
+    assert "workers/screener" in topic_list(topics[0], "owns")
+    reads = topic_list(topics[0], "read")
+    assert any(path.startswith("workers/screener/") for path in reads)
+    assert not any("screener-orchestrator" in path for path in reads)
+
+
+def test_quarantine_false_positive_stays_on_backroom_review() -> None:
+    topic_ids = [
+        str(topic["id"])
+        for topic in lookup("review screening quarantine false positive")
+    ]
+    assert topic_ids[0] == "backroom-review"
+
+
+def test_selected_topics_name_specialized_skills() -> None:
+    topics = lookup("Platform API migration changes Backroom admin behavior")
+    named = {name for topic in topics for name in topic_list(topic, "skills")}
+    assert "ditto-subnet-platform" in named
+
+
+def test_fuzzy_token_match_allows_plurals_but_rejects_substrings() -> None:
+    assert lookup_context.fuzzy_token_match("screener", "screeners")
+    assert lookup_context.fuzzy_token_match("builder", "buildres")
+    assert not lookup_context.fuzzy_token_match("review", "preview")
+    assert not lookup_context.fuzzy_token_match("api", "capital")
+
+
+def test_partial_keyword_overlap_requires_two_tokens() -> None:
+    assert lookup_context.keyword_overlap_score({"review"}, ("board", "review")) == 0
+    assert (
+        lookup_context.keyword_overlap_score(
+            {"kaniko", "builder", "logs"}, ("kaniko", "logs")
+        )
+        == 6
+    )
+
+
+def test_lookup_explain_lists_topic_scores() -> None:
+    completed = subprocess.run(
+        [sys.executable, str(LOOKUP), "--explain", "bench version bump"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    first = completed.stdout.splitlines()[0]
+    assert first.endswith("bench-version-bump")
+    assert first.strip().split()[0].isdigit()
