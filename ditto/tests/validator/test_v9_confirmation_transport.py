@@ -438,7 +438,9 @@ async def test_scorer_failure_diagnostic_reaches_validator_log_boundary() -> Non
 
 
 @pytest.mark.asyncio
-async def test_scorer_tool_endpoint_bind_failure_reaches_validator_log_boundary() -> None:
+async def test_scorer_tool_endpoint_bind_failure_reaches_validator_log_boundary() -> (
+    None
+):
     job = _job().model_copy(update={"deadline": datetime.now(UTC) + timedelta(hours=1)})
     artifact = ArtifactResponse.model_validate(_artifact_payload())
 
