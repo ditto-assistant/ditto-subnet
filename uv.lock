@@ -475,7 +475,7 @@ wheels = [
 
 [[package]]
 name = "ditto"
-version = "0.111.0"
+version = "0.112.0"
 source = { editable = "." }
 dependencies = [
     { name = "async-substrate-interface" },

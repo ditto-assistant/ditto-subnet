@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.112.0 (2026-08-26)
+
+### Bug Fixes
+
+- **infra**: Grant Brian IAP via project IAM the apply SA can write
+  ([#1165](https://github.com/ditto-assistant/ditto-subnet/pull/1165),
+  [`516cda0`](https://github.com/ditto-assistant/ditto-subnet/commit/516cda077eefff4d02919e6bf1a98b50d6babaeb))
+
+- **platform**: Fall Targon Kaniko deaths through to Cloud Run
+  ([#1168](https://github.com/ditto-assistant/ditto-subnet/pull/1168),
+  [`d2584a7`](https://github.com/ditto-assistant/ditto-subnet/commit/d2584a75171646ce3fb327dce5bfcb124f3eeb25))
+
+### Features
+
+- **infra**: Grant Brian subnet debug IAM on leftover VMs
+  ([#1163](https://github.com/ditto-assistant/ditto-subnet/pull/1163),
+  [`c3c6c25`](https://github.com/ditto-assistant/ditto-subnet/commit/c3c6c252155cd126ae39c59fb52494e439f5e097))
+
+
 ## v0.111.0 (2026-08-26)
 
 ### Bug Fixes
