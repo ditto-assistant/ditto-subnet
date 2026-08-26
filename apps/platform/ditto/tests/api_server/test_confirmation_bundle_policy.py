@@ -163,11 +163,11 @@ class TestSettingsValidation:
         with pytest.raises(ConfirmationPolicyError, match="daily_bundle_cap"):
             settings(daily_bundle_cap=cap)
 
-    @pytest.mark.parametrize("cap", [1, 5_000_000, 1_000_000_000])
+    @pytest.mark.parametrize("cap", [1, 5_000_000, 1_000_000_000, 2_000_000_000])
     def test_accepts_daily_dollar_cap_bounds(self, cap: int) -> None:
         assert settings(daily_dollar_cap_microusd=cap).daily_dollar_cap_microusd == cap
 
-    @pytest.mark.parametrize("cap", [-1, 1_000_000_001, True, 1.0])
+    @pytest.mark.parametrize("cap", [-1, 2_000_000_001, True, 1.0])
     def test_rejects_daily_dollar_cap_outside_bounds(self, cap: object) -> None:
         with pytest.raises(ConfirmationPolicyError, match="daily_dollar"):
             settings(daily_dollar_cap_microusd=cap)
