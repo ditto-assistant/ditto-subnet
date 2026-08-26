@@ -9,6 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
+from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.screener_review_settings import ScreenerReviewSettings
 from ditto.api_server.config import TargonRentalConfig
 from ditto.api_server.screening_provider import (
@@ -23,9 +24,15 @@ from ditto.api_server.targon_rental_loop import (
     TargonRentalLoop,
     _source_review_layer_env,
 )
-from ditto.db.models import Agent, SubmissionImageBuild, SubmissionSourceReview
+from ditto.db.models import (
+    Agent,
+    ScreeningAttempt,
+    SubmissionImageBuild,
+    SubmissionSourceReview,
+)
 from ditto.tests.api_server.endpoints.test_screener import (
     _SCREENER_HOTKEY,
+    _SHA256,
     _seed_agent,
 )
 
@@ -956,6 +963,101 @@ async def test_reaper_hands_dead_targon_kaniko_to_cloudrun(
         assert build is not None
         assert build.provider == "gcp"
         assert build.status == "running"
+        assert build.error_code == "TARGON_PROVISION_ERROR"
+
+
+@pytest.mark.asyncio
+async def test_kaniko_exit_72_does_not_requeue_to_cloudrun(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    cloudrun = _FakeCloudRun()
+    config = _config()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=config,
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        providers=[TargonComputeProvider(targon, config), cloudrun],
+        interval_seconds=60,
+    )
+    await loop.tick()
+    targon.status = "error"
+    targon.message = "Container failed (Error) — exit code 72"
+    targon.deleted.clear()
+    assert await loop.tick() is True
+    assert "wrk-1" in targon.deleted
+    assert cloudrun.builds == []
+    async with session_maker() as session:
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        assert build.status == "fallback_required"
+        assert build.error_code == "TARGON_SUBMISSION_KANIKO_FAILED"
+
+
+@pytest.mark.asyncio
+async def test_prior_gcp_infra_failure_keeps_next_attempt_off_targon(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING_FAILED)
+    prior_attempt_id = uuid4()
+    prior_build_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=prior_attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="failed",
+                started_at=now - timedelta(hours=2),
+                deadline=now - timedelta(minutes=50),
+                finished_at=now - timedelta(minutes=50),
+                reason_code="cloudrun-build-unavailable",
+                build_only=True,
+            )
+        )
+        session.add(
+            SubmissionImageBuild(
+                build_id=prior_build_id,
+                agent_id=agent_id,
+                attempt_id=prior_attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{prior_attempt_id}:latest",
+                output_key=f"remote-builds/{prior_build_id}/image.tar",
+                status="fallback_required",
+                provider="gcp",
+                error_code="CLOUDRUN_PROVISION_ERROR",
+                runtime_status="skipped",
+                attempt_count=2,
+            )
+        )
+    targon = _FakeTargon()
+    cloudrun = _FakeCloudRun()
+    config = _config()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=config,
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        providers=[TargonComputeProvider(targon, config), cloudrun],
+        interval_seconds=60,
+    )
+    assert await loop.tick() is True
+    async with session_maker() as session:
+        current = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.build_id != prior_build_id)
+            .limit(1)
+        )
+        assert current is not None
+        assert current.provider == "gcp"
+        assert current.status == "running"
+    assert targon.created == []
+    assert len(cloudrun.builds) == 1
 
 
 @pytest.mark.asyncio

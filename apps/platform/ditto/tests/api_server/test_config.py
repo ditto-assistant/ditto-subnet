@@ -636,6 +636,31 @@ class TestTargonRentalConfig:
         assert config.cloudrun.enabled is True
         assert config.cloudrun.region == "us-central1"
 
+    def test_targon_requires_cloudrun_fallback(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        _set_minimum_env(monkeypatch)
+        monkeypatch.setenv("DITTO_TARGON_API_KEY", self._KEY)
+        monkeypatch.setenv(
+            "DITTO_TARGON_PUBLIC_PLATFORM_URL", "https://platform-api.heyditto.ai"
+        )
+        monkeypatch.setenv("DITTO_TARGON_SUBMISSION_BUILDER_IMAGE", self._BUILDER)
+        config = parse_api_server_config_from_env(commit_hash=self._COMMIT)
+
+        with pytest.raises(ApiServerConfigError, match="Cloud Run fallback"):
+            check_config(config)
+
+        monkeypatch.setenv("DITTO_CLOUDRUN_PROJECT", "ditto-app-dev")
+        monkeypatch.setenv(
+            "DITTO_CLOUDRUN_UNTRUSTED_SA",
+            "ditto-screening-untrusted@ditto-app-dev.iam.gserviceaccount.com",
+        )
+        monkeypatch.setenv(
+            "DITTO_CLOUDRUN_INVOKER_SA",
+            "ditto-platform-api@ditto-app-dev.iam.gserviceaccount.com",
+        )
+        check_config(parse_api_server_config_from_env(commit_hash=self._COMMIT))
+
     def test_the_default_is_an_actual_raise_over_the_number_it_replaced(self):
         """1024 was the ceiling a legitimate heavy strategy hit at check ~266.
 
