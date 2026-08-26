@@ -2,6 +2,47 @@
 
 <!-- version list -->
 
+## v0.113.0 (2026-08-26)
+
+### Bug Fixes
+
+- **dittobench**: Distinguish confirmation tool_endpoint bind failures
+  ([#1171](https://github.com/ditto-assistant/ditto-subnet/pull/1171),
+  [`ca09cfe`](https://github.com/ditto-assistant/ditto-subnet/commit/ca09cfee7de90b99258522822d72a357711f1a69))
+
+- **platform**: Pin Cloud Run after Targon provision deaths
+  ([#1170](https://github.com/ditto-assistant/ditto-subnet/pull/1170),
+  [`635ebad`](https://github.com/ditto-assistant/ditto-subnet/commit/635ebaddab577200c363d2bd10f594c42635bfaa))
+
+- **platform**: Raise confirmation dollar ceiling to $2000
+  ([#1177](https://github.com/ditto-assistant/ditto-subnet/pull/1177),
+  [`0aca476`](https://github.com/ditto-assistant/ditto-subnet/commit/0aca476787624be76f06552c2b012f3f0e72e351))
+
+### Chores
+
+- **tests**: Wrap v9 confirmation transport test signature
+  ([#1179](https://github.com/ditto-assistant/ditto-subnet/pull/1179),
+  [`99ccc64`](https://github.com/ditto-assistant/ditto-subnet/commit/99ccc64cd934eb98ceded6c298a6b2035f98bef1))
+
+### Features
+
+- Add Backroom reject for running screening submissions
+  ([#1172](https://github.com/ditto-assistant/ditto-subnet/pull/1172),
+  [`f6a3e23`](https://github.com/ditto-assistant/ditto-subnet/commit/f6a3e2330803ccb836bc33f694a6523aaaac408d))
+
+- **infra**: Add brian@omniaura.ai to platform ssh_users
+  ([#1174](https://github.com/ditto-assistant/ditto-subnet/pull/1174),
+  [`ae832cc`](https://github.com/ditto-assistant/ditto-subnet/commit/ae832cc87ed834c2210c66b0f042fc467a35af41))
+
+- **infra**: Grant debug operators unconditioned compute.viewer
+  ([#1173](https://github.com/ditto-assistant/ditto-subnet/pull/1173),
+  [`9f43e07`](https://github.com/ditto-assistant/ditto-subnet/commit/9f43e07a3f2e31cedfe3cc9e834d8cfc7c0617f3))
+
+- **infra**: Grant ssh_users actAs on platform API SA
+  ([#1176](https://github.com/ditto-assistant/ditto-subnet/pull/1176),
+  [`dc7fcd9`](https://github.com/ditto-assistant/ditto-subnet/commit/dc7fcd9a875ae8a4ecb70c354720ccfe2ab02387))
+
+
 ## v0.112.2 (2026-08-26)
 
 ### Bug Fixes
