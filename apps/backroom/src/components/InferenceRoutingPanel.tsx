@@ -1,5 +1,5 @@
 import { useServerFn } from '@tanstack/react-start'
-import { ArrowDown, ArrowUp, Check, RefreshCw, X } from 'lucide-react'
+import { Check, RefreshCw, X } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import {
   inferencePolicyConfirmation,
@@ -10,7 +10,6 @@ import {
   type InferenceRoutingAudit,
   type InferenceRoutingInventory,
   type InferenceRoutingPolicy,
-  type InferenceProviderTelemetry,
 } from '../lib/admin.schemas'
 import {
   calibrateInferenceRoute,
@@ -642,23 +641,6 @@ export function InferenceRoutingPanel({
         ))}
       </div>
 
-      <div className="mt-4 grid overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)] sm:grid-cols-2 sm:divide-x sm:divide-[var(--line)]">
-        <div className="px-4 py-3.5">
-          <p className="text-[11px] text-[var(--muted)]">Benchmark relay abort tickets</p>
-          <p className="mt-1 text-xl font-semibold tabular-nums">
-            {inventory.relay_recovery_telemetry.benchmark_relay_abort_ticket_count.toLocaleString()}
-          </p>
-        </div>
-        <div className="border-t border-[var(--line)] px-4 py-3.5 sm:border-t-0">
-          <p className="text-[11px] text-[var(--muted)]">Broker recovery exhausted tickets</p>
-          <p className="mt-1 text-xl font-semibold tabular-nums text-[var(--red)]">
-            {inventory.relay_recovery_telemetry.broker_recovery_exhausted_ticket_count.toLocaleString()}
-          </p>
-        </div>
-      </div>
-
-      <ProviderTelemetryPanel rows={inventory.provider_telemetry} />
-
       <div className="mt-4 overflow-hidden rounded-xl border border-[var(--line)]">
         <div className="bg-[var(--panel-raised)] px-4 py-3">
           <h3 className="text-sm font-semibold">Per-model routing policy</h3>
@@ -756,193 +738,6 @@ export function InferenceRoutingPanel({
 
       <AuditHistory audits={inventory.audits} />
     </div>
-  )
-}
-
-function providerCost(value: number) {
-  return `$${(value / 1_000_000).toFixed(4)}`
-}
-
-type ProviderTokenSort = 'prompt_tokens' | 'completion_tokens'
-
-function ProviderTelemetryPanel({ rows }: { rows: InferenceProviderTelemetry[] }) {
-  const [tokenSort, setTokenSort] = useState<ProviderTokenSort>('prompt_tokens')
-  const [sortDirection, setSortDirection] = useState<'ascending' | 'descending'>('descending')
-  const totals = useMemo(
-    () =>
-      rows.reduce(
-        (sum, row) => ({
-          prompt: sum.prompt + row.prompt_tokens,
-          completion: sum.completion + row.completion_tokens,
-        }),
-        { prompt: 0, completion: 0 },
-      ),
-    [rows],
-  )
-  const sortedRows = useMemo(
-    () =>
-      [...rows].sort((left, right) => {
-        const difference = left[tokenSort] - right[tokenSort]
-        if (difference !== 0) return sortDirection === 'ascending' ? difference : -difference
-        return left.provider.localeCompare(right.provider)
-      }),
-    [rows, sortDirection, tokenSort],
-  )
-
-  const sortBy = (column: ProviderTokenSort) => {
-    if (column === tokenSort) {
-      setSortDirection((current) => (current === 'descending' ? 'ascending' : 'descending'))
-      return
-    }
-    setTokenSort(column)
-    setSortDirection('descending')
-  }
-
-  const sortableTokenHeader = (label: string, column: ProviderTokenSort) => {
-    const active = tokenSort === column
-    const SortIcon = active && sortDirection === 'ascending' ? ArrowUp : ArrowDown
-    return (
-      <button
-        type="button"
-        onClick={() => sortBy(column)}
-        className="inline-flex min-h-8 items-center gap-1.5 rounded-md px-1.5 text-left hover:bg-white/[0.04] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--acid)]/70"
-        aria-label={`Sort by ${label.toLowerCase()} ${active && sortDirection === 'descending' ? 'ascending' : 'descending'}`}
-      >
-        {label}
-        <SortIcon className={`h-3 w-3 ${active ? 'text-[var(--acid)]' : 'text-[var(--muted)]'}`} />
-      </button>
-    )
-  }
-
-  return (
-    <section className="mt-4 overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--panel)]">
-      <div className="border-b border-[var(--line)] bg-[var(--panel-raised)] px-4 py-3">
-        <h3 className="text-sm font-semibold">Actual upstream providers</h3>
-        <p className="mt-1 text-xs text-[var(--muted)]">
-          Trusted aggregate accounting from every attributed proxy request, including terminal
-          failures and recoveries. Failed means one Platform request exhausted its configured
-          provider phases; OpenRouter attempts come from opted-in router metadata when available.
-          Observed output TPS is completion tokens divided by end-to-end provider latency. No
-          prompts, responses, or request bodies are collected here.
-        </p>
-      </div>
-      {rows.length === 0 ? (
-        <p className="px-4 py-6 text-xs text-[var(--muted)]">
-          No upstream-provider telemetry recorded yet.
-        </p>
-      ) : (
-        <>
-          <div className="grid grid-cols-2 divide-x divide-[var(--line)] border-b border-[var(--line)] bg-[var(--panel-soft)]">
-            <div className="px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
-                Total input tokens
-              </p>
-              <p className="mt-1 text-base font-semibold tabular-nums text-white">
-                {totals.prompt.toLocaleString()}
-              </p>
-            </div>
-            <div className="px-4 py-3">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
-                Total output tokens
-              </p>
-              <p className="mt-1 text-base font-semibold tabular-nums text-white">
-                {totals.completion.toLocaleString()}
-              </p>
-            </div>
-          </div>
-          <div className="scrollbar-thin overflow-x-auto">
-            <table className="min-w-[92rem] w-full border-collapse text-left">
-              <thead className="text-[10px] font-semibold text-[var(--muted-strong)]">
-                <tr>
-                  <th className="px-4 py-3">Provider</th>
-                  <th className="px-3 py-3">Requests</th>
-                  <th className="px-3 py-3">Completed</th>
-                  <th className="px-3 py-3">Failed</th>
-                  <th className="px-3 py-3">In flight</th>
-                  <th className="px-3 py-3">Timeouts</th>
-                  <th className="px-3 py-3">Upstream attempts</th>
-                  <th className="px-3 py-3">OpenRouter attempts</th>
-                  <th className="px-3 py-3">Recovered</th>
-                  <th className="px-3 py-3">Terminal</th>
-                  <th
-                    className="px-1.5 py-1.5"
-                    aria-sort={tokenSort === 'prompt_tokens' ? sortDirection : 'none'}
-                  >
-                    {sortableTokenHeader('Input tokens', 'prompt_tokens')}
-                  </th>
-                  <th
-                    className="px-1.5 py-1.5"
-                    aria-sort={tokenSort === 'completion_tokens' ? sortDirection : 'none'}
-                  >
-                    {sortableTokenHeader('Output tokens', 'completion_tokens')}
-                  </th>
-                  <th className="px-3 py-3">Average latency</th>
-                  <th className="px-3 py-3">Observed output TPS</th>
-                  <th className="px-4 py-3 text-right">Observed cost</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[var(--line)]">
-                {sortedRows.map((row) => (
-                  <tr key={row.provider} className="text-xs tabular-nums">
-                    <td className="px-4 py-3 font-semibold text-white">{row.provider}</td>
-                    <td className="px-3 py-3">{row.request_count.toLocaleString()}</td>
-                    <td className="px-3 py-3">
-                      {row.completed_count.toLocaleString()}
-                      <span className="ml-1 text-[10px] text-[var(--muted)]">
-                        (
-                        {row.request_count === 0
-                          ? '—'
-                          : percent(row.completed_count / row.request_count)}
-                        )
-                      </span>
-                    </td>
-                    <td
-                      className={`px-3 py-3 ${row.failed_count > 0 ? 'font-semibold text-[var(--red)]' : ''}`}
-                    >
-                      {row.failed_count.toLocaleString()}
-                      <span className="ml-1 text-[10px] text-[var(--muted)]">
-                        (
-                        {row.request_count === 0
-                          ? '—'
-                          : percent(row.failed_count / row.request_count)}
-                        )
-                      </span>
-                    </td>
-                    <td className="px-3 py-3">{row.inflight_count.toLocaleString()}</td>
-                    <td className="px-3 py-3">{row.timeout_count.toLocaleString()}</td>
-                    <td className="px-3 py-3">{row.upstream_attempt_count.toLocaleString()}</td>
-                    <td className="px-3 py-3">{row.openrouter_attempt_count.toLocaleString()}</td>
-                    <td className="px-3 py-3">{row.recovered_after_fallback_count.toLocaleString()}</td>
-                    <td
-                      className={`px-3 py-3 ${row.terminal_failure_count > 0 ? 'font-semibold text-[var(--red)]' : ''}`}
-                    >
-                      {row.terminal_failure_count.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-3">{row.prompt_tokens.toLocaleString()}</td>
-                    <td className="px-3 py-3 text-[var(--muted-strong)]">
-                      {row.completion_tokens.toLocaleString()}
-                    </td>
-                    <td className="px-3 py-3">
-                      {row.average_latency_ms === null
-                        ? '—'
-                        : `${row.average_latency_ms.toFixed(0)} ms`}
-                    </td>
-                    <td className="px-3 py-3 font-medium text-white">
-                      {row.observed_output_tps === null
-                        ? '—'
-                        : `${row.observed_output_tps.toFixed(1)} tok/s`}
-                    </td>
-                    <td className="px-4 py-3 text-right font-medium text-white">
-                      {providerCost(row.cost_microusd)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
-    </section>
   )
 }
 

@@ -277,7 +277,12 @@ export async function updateSubmissionDepositAddress(actor: string, rawInput: un
 }
 
 export async function fetchInferenceRoutes() {
-  const payload = await platformAdminRequest('/api/v1/admin/inference-routes')
+  const payload = await platformAdminRequest('/api/v1/admin/inference-routes', {
+    // Inventory is small. Keep a longer budget so a cold Platform still
+    // renders if listing ever grows past the default 20s client abort.
+    timeoutMs: 60_000,
+    retries: 1,
+  })
   return inferenceRoutingInventorySchema.parse(payload)
 }
 
