@@ -87,13 +87,25 @@ resource "google_compute_instance_iam_member" "debug_operator_osadmin" {
   member        = each.value.member
 }
 
-resource "google_iap_tunnel_instance_iam_member" "debug_operator_iap" {
-  for_each   = local.debug_ssh_grants
-  project    = var.project
-  zone       = each.value.zone
-  instance   = each.value.vm
-  role       = "roles/iap.tunnelResourceAccessor"
-  member     = each.value.member
+# Instance-level IAP IAM 403s for the gcp-platform apply SA. Project-level
+# IAP with a hostname prefix already applied for the fleet, so use that path
+# for the named leftover VMs too. ditto-pg-platform is excluded.
+resource "google_project_iam_member" "debug_operator_iap" {
+  for_each = local.debug_operators
+  project  = var.project
+  role     = "roles/iap.tunnelResourceAccessor"
+  member   = each.value
+
+  condition {
+    title       = "subnet_debug_and_leftover_vms"
+    description = "IAP only to platform, screener, validator, and leftover fleet instances. Not postgres."
+    expression  = <<-EOT
+      resource.name.extract('/instances/{name}').startsWith('ditto-platform-')
+      || resource.name.extract('/instances/{name}').startsWith('ditto-screener-')
+      || resource.name.extract('/instances/{name}').startsWith('ditto-validator-')
+    EOT
+  }
+
   depends_on = [google_project_service.iap]
 }
 
