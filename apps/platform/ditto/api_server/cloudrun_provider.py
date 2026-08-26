@@ -211,7 +211,13 @@ class CloudRunComputeProvider:
                 status = await self._service_status(name)
         except CloudRunAPIError:
             return ProvisionObservation(status="")
-        return ProvisionObservation(status=status)
+        message = ""
+        if kind == "job" and status == "error":
+            try:
+                message = await self._job_error_message(name)
+            except Exception:
+                message = ""
+        return ProvisionObservation(status=status, message=message)
 
     async def wait_until_running(self, resource_id: str, timeout_seconds: float) -> str:
         loop = asyncio.get_running_loop()
@@ -278,6 +284,26 @@ class CloudRunComputeProvider:
         except httpx.HTTPError:
             return False
         return 200 <= response.status_code < 300
+
+    async def _job_error_message(self, job_id: str) -> str:
+        job = await self._client.get_job(job_id)
+        execution = _job_execution_ref(job)
+        name = str(execution.get("name", "")) if execution is not None else ""
+        if not name:
+            return ""
+        detail = await self._client.get_execution(name)
+        status = _execution_status(detail)
+        conditions = status.get("conditions", detail.get("conditions"))
+        if not isinstance(conditions, list):
+            return ""
+        parts: list[str] = []
+        for row in conditions:
+            if not isinstance(row, dict):
+                continue
+            message = str(row.get("message") or "").strip()
+            if message:
+                parts.append(message)
+        return " ".join(parts)
 
     async def _job_status(self, job_id: str) -> str:
         job = await self._client.get_job(job_id)

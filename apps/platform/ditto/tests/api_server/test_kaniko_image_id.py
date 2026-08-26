@@ -270,9 +270,14 @@ async def test_bind_fails_closed_without_tar_config_digest(
         assert agent.screened_image_id is None
 
 
+@pytest.mark.parametrize(
+    "error_code",
+    ("TARGON_SUBMISSION_KANIKO_FAILED", "CLOUDRUN_SUBMISSION_KANIKO_FAILED"),
+)
 @pytest.mark.asyncio
 async def test_finalize_rejects_kaniko_exit_as_docker_build(
     session_maker: async_sessionmaker[AsyncSession],
+    error_code: str,
 ) -> None:
     agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
     attempt_id = uuid4()
@@ -302,7 +307,7 @@ async def test_finalize_rejects_kaniko_exit_as_docker_build(
                 output_key=f"{agent_id}/builds/{attempt_id}.tar",
                 status="fallback_required",
                 provider="targon",
-                error_code="TARGON_SUBMISSION_KANIKO_FAILED",
+                error_code=error_code,
                 runtime_status="pending",
                 attempt_count=1,
                 created_at=now - timedelta(minutes=3),
