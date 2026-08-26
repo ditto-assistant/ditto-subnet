@@ -150,6 +150,7 @@ describe('Backroom MCP tools', () => {
         'rescreen_rejected_submission',
         'retry_failed_screening_now',
         'expire_running_screening',
+        'reject_screening_submission',
         'retry_validator_evaluation',
         'replace_validator_score',
         'queue_validator_score_retests',
@@ -179,13 +180,13 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 90_000 whole-payload includes the L1 model/timeout fields on the
+    // 96_000 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, the validator fleet/assignment
-    // read schemas, and the three inference-trace archive tools (partitioned
-    // listing, presigned download, bounded peek). Keep modest headroom for
-    // schema evolution; tighten the description budgets, not this
-    // whole-payload backstop, to push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(92_000)
+    // read schemas, the three inference-trace archive tools, and the operator
+    // screening-reject tool. Keep modest headroom for schema evolution;
+    // tighten the description budgets, not this whole-payload backstop, to
+    // push back on tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(96_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Grew by the two rollout-control catalog lines (start/read tutorials
     // live in get_backroom_tool_help, not here).
@@ -4329,6 +4330,67 @@ describe('Backroom MCP tools', () => {
           expected_sha256: expectedSha256,
           expected_score_count: 0,
           expected_attempt_id: attemptId,
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('rejects a screening submission with explicit guards and confirmation', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const agentId = 'd47bd70b-f0d4-46ad-a5ec-6f2fc392c406'
+    const attemptId = 'd83ae76a-ba23-4a5e-9874-2dce1e41da3d'
+    const buildId = '016cbf75-2f76-4ddc-ad52-fb2c305d1c9e'
+    const expectedSha256 = 'ab'.repeat(32)
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({
+        agent_id: agentId,
+        attempt_id: attemptId,
+        agent_status: 'rejected',
+        expired_build_ids: [buildId],
+        idempotent: false,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+    const response = await client.callTool({
+      name: 'reject_screening_submission',
+      arguments: {
+        agentId,
+        reason: 'Miner requested removal of a compile-fail screening crate',
+        expectedSha256,
+        expectedScoreCount: 0,
+        expectedAttemptId: attemptId,
+        confirmation: 'REJECT SCREENING SUBMISSION',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      agent_id: agentId,
+      attempt_id: attemptId,
+      agent_status: 'rejected',
+      idempotent: false,
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}/reject`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+        body: JSON.stringify({
+          reason: 'Miner requested removal of a compile-fail screening crate',
+          expected_sha256: expectedSha256,
+          expected_score_count: 0,
+          expected_attempt_id: attemptId,
+          confirmation: 'REJECT SCREENING SUBMISSION',
         }),
       }),
     )

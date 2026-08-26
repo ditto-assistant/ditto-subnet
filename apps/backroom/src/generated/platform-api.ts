@@ -1483,6 +1483,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/screening-submissions/{agent_id}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Screening Submission
+         * @description Terminally reject one screening submission so it leaves the pipeline.
+         */
+        post: operations["reject_screening_submission_api_v1_admin_screening_submissions__agent_id__reject_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/screening-submissions/{agent_id}/rescreen": {
         parameters: {
             query?: never;
@@ -6642,6 +6662,53 @@ export interface components {
             max_operator_recoveries: number | null;
             /** Operator Recoveries */
             operator_recoveries: number;
+        };
+        /**
+         * AdminRejectScreeningRequest
+         * @description Compare-and-swap guards for a terminal operator screening reject.
+         */
+        AdminRejectScreeningRequest: {
+            /**
+             * Confirmation
+             * @constant
+             */
+            confirmation: "REJECT SCREENING SUBMISSION";
+            /**
+             * Expected Attempt Id
+             * Format: uuid
+             */
+            expected_attempt_id: string;
+            /** Expected Score Count */
+            expected_score_count: number;
+            /** Expected Sha256 */
+            expected_sha256: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminRejectScreeningResponse */
+        AdminRejectScreeningResponse: {
+            /**
+             * Agent Id
+             * Format: uuid
+             */
+            agent_id: string;
+            /** Agent Status */
+            agent_status: string;
+            /**
+             * Attempt Id
+             * Format: uuid
+             */
+            attempt_id: string;
+            /**
+             * Expired Build Ids
+             * @default []
+             */
+            expired_build_ids: string[];
+            /**
+             * Idempotent
+             * @default false
+             */
+            idempotent: boolean;
         };
         /** AdminRetirementBatchItem */
         AdminRetirementBatchItem: {
@@ -22877,6 +22944,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AdminBenchmarkContractRefreshResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_screening_submission_api_v1_admin_screening_submissions__agent_id__reject_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminRejectScreeningRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminRejectScreeningResponse"];
                 };
             };
             /** @description Validation Error */

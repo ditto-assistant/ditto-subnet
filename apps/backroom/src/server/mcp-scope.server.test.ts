@@ -134,6 +134,33 @@ describe('MCP scope challenges', () => {
     ])
   })
 
+  it('recognizes screening rejects as write-scoped', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'reject_screening_submission',
+          arguments: {
+            agentId: 'd47bd70b-f0d4-46ad-a5ec-6f2fc392c406',
+            reason: 'Miner requested removal of a compile-fail screening crate',
+            expectedSha256: 'ab'.repeat(32),
+            expectedScoreCount: 0,
+            expectedAttemptId: 'd83ae76a-ba23-4a5e-9874-2dce1e41da3d',
+            confirmation: 'REJECT SCREENING SUBMISSION',
+          },
+        },
+      }),
+    })
+
+    expect(await callsWriteTool(request)).toBe(true)
+    expect(await requiredScopesForRequest(request)).toEqual([
+      BACKROOM_WRITE_SCOPE,
+    ])
+  })
+
   it('recognizes scored rollout qualification as write-scoped', async () => {
     const request = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',
