@@ -28,6 +28,8 @@ import {
   rescreenRejectedSubmissionResponseSchema,
   retryFailedScreeningNowInputSchema,
   retryFailedScreeningNowResponseSchema,
+  expireRunningScreeningInputSchema,
+  expireRunningScreeningResponseSchema,
   resolveScreeningQuarantineInputSchema,
   resolveScreeningQuarantineResponseSchema,
   resolveScreeningDisputeInputSchema,
@@ -1507,6 +1509,24 @@ export async function retryFailedScreeningNow(rawInput: unknown, actor: string) 
     },
   )
   return retryFailedScreeningNowResponseSchema.parse(payload)
+}
+
+export async function expireRunningScreening(rawInput: unknown, actor: string) {
+  const input = expireRunningScreeningInputSchema.parse(rawInput)
+  const payload = await platformAdminRequest(
+    `/api/v1/admin/screening-submissions/${encodeURIComponent(input.agentId)}/expire-running`,
+    {
+      method: 'POST',
+      actor,
+      body: {
+        reason: input.reason,
+        expected_sha256: input.expectedSha256,
+        expected_score_count: input.expectedScoreCount,
+        expected_attempt_id: input.expectedAttemptId,
+      },
+    },
+  )
+  return expireRunningScreeningResponseSchema.parse(payload)
 }
 
 export async function fetchScreeningArtifact(rawInput: unknown, actor: string) {

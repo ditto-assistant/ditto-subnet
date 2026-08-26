@@ -686,6 +686,7 @@ describe('screening submission admin service', () => {
     await expect(fetchScreeningSubmission({ agentId })).resolves.toEqual({
       ...submission,
       miner_coldkey: null,
+      image_builds: [],
     })
     expect(fetchMock).toHaveBeenCalledWith(
       `https://platform-api.heyditto.ai/api/v1/admin/screening-submissions/${agentId}`,

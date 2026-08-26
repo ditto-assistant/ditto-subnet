@@ -79,6 +79,7 @@ import {
   updateSubmissionSettingsInputSchema,
   updateArtifactReleaseSettingsInputSchema,
   retryFailedScreeningNowInputSchema,
+  expireRunningScreeningInputSchema,
   summarizeScreeningFailuresInputSchema,
   confirmationBundleStateSchema,
   confirmationBundleDetailInputSchema,
@@ -113,6 +114,7 @@ import {
   resolveScreeningDispute,
   rescreenRejectedSubmission,
   retryFailedScreeningNow,
+  expireRunningScreening,
   fetchValidationRetry,
   fetchStuckSubmissions,
   fetchLeaseRevocations,
@@ -197,6 +199,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'resolve_screening_dispute',
   'rescreen_rejected_submission',
   'retry_failed_screening_now',
+  'expire_running_screening',
   'open_ath_review',
   'resolve_ath_review',
   'execute_screening_quarantine_batch',
@@ -907,6 +910,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       result(
         compacted(await fetchScreeningSubmission(input), {
           attempts: { pin: ['attempt_id'] },
+          image_builds: { pin: ['build_id'] },
         }),
       ),
   )
@@ -2021,6 +2025,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => retryFailedScreeningNow(input, props.session.email)),
+  )
+
+  registerTool(
+    'expire_running_screening',
+    {
+      title: 'Expire running screening',
+      description:
+        'Expire one live screening attempt after an operator verifies it is stuck, so the platform can admit a replacement attempt. Supply the current artifact SHA-256, score count, and running attempt ID as concurrency guards. This fails the attempt, marks inflight Kaniko/source-review rows operator-expired, and returns the submission to screening_failed. It does not rewrite attempt history, accept the submission, or release a quarantine. Requires backroom:write.',
+      inputSchema: expireRunningScreeningInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => expireRunningScreening(input, props.session.email)),
   )
 
   registerTool(

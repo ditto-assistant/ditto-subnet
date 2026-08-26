@@ -227,6 +227,7 @@ const submission: ScreeningSubmission = {
   screening_policy_version: 6,
   screening_reason: 'Build did not pass screening',
   submitted_at: '2026-07-14T14:00:00Z',
+  image_builds: [],
   attempts: [
     {
       attempt_id: quarantine.attempt_id,

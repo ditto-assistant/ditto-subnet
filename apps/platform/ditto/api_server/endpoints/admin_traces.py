@@ -112,8 +112,12 @@ async def list_trace_objects(
     request: Request,
     _admin: AdminDep,
     scope: Annotated[Literal["traces", "ledger"], Query()] = "traces",
-    lane: Annotated[Literal["inference", "confirmation"] | None, Query()] = None,
-    kind: Annotated[Literal["chat", "embedding"] | None, Query()] = None,
+    lane: Annotated[
+        Literal["inference", "confirmation", "screening"] | None, Query()
+    ] = None,
+    kind: Annotated[
+        Literal["chat", "embedding", "kaniko", "smoke", "review"] | None, Query()
+    ] = None,
     dt: Annotated[str | None, Query(pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
     hour: Annotated[str | None, Query(pattern=r"^\d{2}$")] = None,
     prefix: Annotated[str | None, Query(max_length=512)] = None,

@@ -39,6 +39,8 @@ class TargonRentals(Protocol):
 
     async def state(self, uid: str) -> dict[str, Any]: ...
 
+    async def logs(self, uid: str, *, tail: int = 400) -> str: ...
+
     async def delete(self, uid: str) -> None: ...
 
 
@@ -119,6 +121,12 @@ class TargonComputeProvider:
             status=str(state.get("status", "")).casefold(),
             message=str(state.get("message", "") or ""),
         )
+
+    async def replica_logs(self, resource_id: str, *, tail: int = 400) -> str:
+        try:
+            return await self._targon.logs(resource_id, tail=tail)
+        except TargonAPIError:
+            return ""
 
     async def wait_until_running(self, resource_id: str, timeout_seconds: float) -> str:
         loop = asyncio.get_running_loop()

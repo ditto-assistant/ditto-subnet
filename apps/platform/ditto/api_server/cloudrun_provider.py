@@ -260,6 +260,10 @@ class CloudRunComputeProvider:
             return False
         return True
 
+    async def replica_logs(self, resource_id: str, *, tail: int = 400) -> str:
+        del resource_id, tail
+        return ""
+
     async def _healthy(self, uri: str) -> bool:
         try:
             token = await self._client.identity_token(uri)
