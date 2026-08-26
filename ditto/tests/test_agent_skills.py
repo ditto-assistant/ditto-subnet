@@ -39,6 +39,12 @@ def lookup(query: str, maximum: int = 3) -> list[dict[str, object]]:
     return json.loads(completed.stdout)
 
 
+def topic_list(topic: dict[str, object], key: str) -> list[str]:
+    values = topic.get(key, [])
+    assert isinstance(values, list)
+    return [str(value) for value in values]
+
+
 def test_context_index_paths_exist() -> None:
     subprocess.run(
         [sys.executable, str(LOOKUP), "--check"],
@@ -382,7 +388,7 @@ def test_bench_version_bump_query_selects_the_bump_skill() -> None:
         topics = lookup(query)
         topic_ids = [str(topic["id"]) for topic in topics]
         assert topic_ids[0] == "bench-version-bump", query
-        assert "ditto-subnet-bench-version-bump" in topics[0].get("skills", [])
+        assert "ditto-subnet-bench-version-bump" in topic_list(topics[0], "skills")
 
 
 def test_longmem_confirmation_rollout_query_selects_the_rollout_skill() -> None:
@@ -405,7 +411,7 @@ def test_production_postgres_explain_routes_to_gcloud_readonly() -> None:
     topics = lookup("query production postgres EXPLAIN ANALYZE")
     topic_ids = [str(topic["id"]) for topic in topics]
     assert topic_ids[0] == "prod-readonly"
-    assert "gcloud-ditto-readonly" in topics[0].get("skills", [])
+    assert "gcloud-ditto-readonly" in topic_list(topics[0], "skills")
 
 
 def test_targon_kaniko_log_query_prefers_readonly_skill_over_capacity() -> None:
@@ -438,8 +444,8 @@ def test_dashboard_profile_query_does_not_select_runtime_profiling() -> None:
 def test_workers_screener_query_owns_the_worker_tree() -> None:
     topics = lookup("workers/screener policy gate")
     assert str(topics[0]["id"]) == "screener-worker"
-    assert "workers/screener" in topics[0].get("owns", [])
-    reads = [str(path) for path in topics[0].get("read", [])]
+    assert "workers/screener" in topic_list(topics[0], "owns")
+    reads = topic_list(topics[0], "read")
     assert any(path.startswith("workers/screener/") for path in reads)
     assert not any("screener-orchestrator" in path for path in reads)
 
@@ -454,7 +460,7 @@ def test_quarantine_false_positive_stays_on_backroom_review() -> None:
 
 def test_selected_topics_name_specialized_skills() -> None:
     topics = lookup("Platform API migration changes Backroom admin behavior")
-    named = {str(name) for topic in topics for name in topic.get("skills", [])}
+    named = {name for topic in topics for name in topic_list(topic, "skills")}
     assert "ditto-subnet-platform" in named
 
 
