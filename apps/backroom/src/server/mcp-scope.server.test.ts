@@ -162,6 +162,31 @@ describe('MCP scope challenges', () => {
     ])
   })
 
+  it('recognizes benchmark rollout start as write-scoped', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'start_benchmark_rollout',
+          arguments: {
+            desiredVersion: 12,
+            expectedActiveVersion: 11,
+            reason: 'v12 fleet advertises 12; unseat the v11 king',
+            confirmation: 'START BENCHMARK V12',
+          },
+        },
+      }),
+    })
+
+    expect(await callsWriteTool(request)).toBe(true)
+    expect(await requiredScopesForRequest(request)).toEqual([
+      BACKROOM_WRITE_SCOPE,
+    ])
+  })
+
   it('recognizes validator infrastructure retry as write-scoped', async () => {
     const request = new Request('https://backroom.dittobench.ai/mcp', {
       method: 'POST',

@@ -55,6 +55,7 @@ import {
   benchmarkRolloutQualificationLookupInputSchema,
   qualifyBenchmarkRolloutInputSchema,
   expandBenchmarkRolloutInputSchema,
+  startBenchmarkRolloutInputSchema,
   validationRetryLookupInputSchema,
   listStuckSubmissionsInputSchema,
   listLeaseRevocationsInputSchema,
@@ -126,6 +127,8 @@ import {
   fetchBenchmarkRolloutQualification,
   qualifyBenchmarkRollout,
   expandBenchmarkRollout,
+  fetchBenchmarkRolloutControl,
+  startBenchmarkRollout,
   retryValidation,
   withdrawValidation,
   evictValidation,
@@ -209,6 +212,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'migrate_zero_score_benchmark_contract',
   'qualify_scored_benchmark_rollout',
   'expand_benchmark_rollout_cohort',
+  'start_benchmark_rollout',
   'set_efficiency_bonus_settings',
   'set_continual_retest_settings',
   'set_queue_policy_settings',
@@ -495,6 +499,10 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Diagnose LongMem issuance vs execution: counts, failure histograms, lease age, and likely_cause. Read-only.',
   get_confirmation_bundle:
     'Read one complete confirmation root, signature, typed evidence, tickets, and subject projections.',
+  get_benchmark_rollout_control:
+    'Read rollout control: versions, start_ready, cohort, targets. Starts nothing.',
+  start_benchmark_rollout:
+    'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
   authorize_confirmation_bundle_retest:
     'Authorize exactly the next evidence generation with current generation, request UUID, reason, and exact retest phrase. Does not activate rewards.',
   remove_failed_submission_from_queue:
@@ -1898,6 +1906,36 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => migrateBenchmarkContract(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_benchmark_rollout_control',
+    {
+      title: 'Get benchmark rollout control',
+      description:
+        'Read the SN118 operator rollout console: active and desired bench versions, open-rollout status, frozen cohort members with score counts, shipped contracts with capable_validator_count / start_ready / start_blockers, available_target_versions, and active_contract_candidates. A contract is start_ready only when at least one validator advertises it and inference-proxy start blockers are empty. This never opens, expands, supersedes, or activates a rollout. Read it before start_benchmark_rollout. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () =>
+      result(
+        compacted(await fetchBenchmarkRolloutControl(), {
+          members: { pin: ['agent_id'] },
+          contracts: { pin: ['version'] },
+          active_contract_candidates: { pin: ['version'] },
+        }),
+      ),
+  )
+
+  registerTool(
+    'start_benchmark_rollout',
+    {
+      title: 'Start a benchmark rollout',
+      description:
+        'Open one forward-only SN118 benchmark rollout. Supply desiredVersion, expectedActiveVersion (CAS against the live active version), an auditable reason of 8+ characters, and exact confirmation "START BENCHMARK V{desiredVersion}". The platform freezes the current queue-policy rescore_cohort_size and priority_cohort_size onto the rollout, renders and pins a target-version dataset for every frozen member, and returns collecting state. It refuses a target at or below the active version, a retired version below the scoreable floor, missing start capacity, or a cohort smaller than five eligible miners. Re-POSTing an already-open target is idempotent and refreshes qualification. Weights stay on the active version until the frozen priority prefix has quorum and five ranked desired-version families exist; that flip is automatic and is not this tool. Does not supersede or select-active. Requires backroom:write.',
+      inputSchema: startBenchmarkRolloutInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => startBenchmarkRollout(props.session.email, input)),
   )
 
   registerTool(

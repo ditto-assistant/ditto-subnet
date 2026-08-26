@@ -39,6 +39,11 @@ make localstack-down
 | `localstack-relay` | 11434 | Pins `openai/gpt-oss-20b`, OpenRouter upstream, `/health` accounting |
 | harness | caller-chosen | `GET /health`, `POST /seed`, `POST /run` |
 
+Sessionless `SCORED=1` v9+ **cannot complete** (no broker session). Use
+`SCORED=0` for tool/memory/composite on the v12 dataset, or phase-1
+(`make localstack-phase1` then `make localstack-phase1-handshake`) for scored
+v12 gates. Answer-stuffing stays on penalize.
+
 `dataset_sha256` for `SCORED=1` is:
 
 ```bash
@@ -175,4 +180,5 @@ on-chain composite.
 - `services/dittobench-api/cmd/localstack-relay/`
 - `services/dittobench-api/cmd/localstack-tlsterm`, `cmd/localstack-modelharness`
 - Makefile targets: `localstack-up`, `localstack-down`, `localstack-bench`,
-  `localstack-smoke`, `localstack-relay-check`
+  `localstack-phase1`, `localstack-phase1-handshake`, `localstack-smoke`,
+  `localstack-relay-check`

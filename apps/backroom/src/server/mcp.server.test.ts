@@ -75,6 +75,7 @@ describe('Backroom MCP tools', () => {
         'search_ath_precedents',
         'get_benchmark_contract_refresh',
         'get_benchmark_contract_migration',
+        'get_benchmark_rollout_control',
         'get_benchmark_rollout_qualification',
         'get_burn_settings',
         'get_copy_review_source_diff',
@@ -142,6 +143,7 @@ describe('Backroom MCP tools', () => {
         'evict_live_validator_leases',
         'reinstate_evicted_submission_to_queue',
         'qualify_scored_benchmark_rollout',
+        'start_benchmark_rollout',
         'resolve_screening_quarantine',
         'resolve_screening_dispute',
         'resolve_ath_review',
@@ -184,10 +186,10 @@ describe('Backroom MCP tools', () => {
     // whole-payload backstop, to push back on tutorials.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(90_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
-    // Grew by the three inference-trace archive catalog lines (their
-    // tutorials live in get_backroom_tool_help, not here).
+    // Grew by the two rollout-control catalog lines (start/read tutorials
+    // live in get_backroom_tool_help, not here).
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      20_850,
+      20_950,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(
@@ -202,7 +204,9 @@ describe('Backroom MCP tools', () => {
       response.tools.find((tool) => tool.name === 'get_screening_artifact')?.annotations
         ?.readOnlyHint,
     ).toBe(true)
-    expect(response.tools.some((tool) => tool.name.includes('start_benchmark'))).toBe(false)
+    const startRollout = response.tools.find((tool) => tool.name === 'start_benchmark_rollout')
+    expect(startRollout?.annotations?.readOnlyHint).toBe(false)
+    expect(startRollout?.annotations?.destructiveHint).toBe(true)
     expect(response.tools.some((tool) => tool.name.includes('supersede_benchmark'))).toBe(false)
     // Subnet scoring policy is a production mutation, never a read hint, and it
     // must stay separable from the product entitlement flags in its description.
@@ -1487,6 +1491,142 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/8/expand',
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          Authorization: 'Bearer platform-admin-token',
+          'X-Admin-Actor': 'peyton@omniaura.ai',
+        }),
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('reads rollout control without starting a transition', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      Response.json({
+        active_version: 11,
+        desired_version: 11,
+        status: 'activated',
+        blocked_reason: null,
+        capability_bench_version: 12,
+        canary_capable_validator_count: 5,
+        v3_capable_validator_count: 5,
+        current_hybrid_top_five: ['11111111-1111-4111-8111-111111111111'],
+        qualification_converged: true,
+        members: [
+          {
+            agent_id: '11111111-1111-4111-8111-111111111111',
+            position: 1,
+            score_count: 3,
+            currently_top_five: true,
+          },
+        ],
+        contracts: [
+          {
+            version: 11,
+            minimum_screening_policy_version: 9,
+            requires_screened_image: true,
+            capable_validator_count: 5,
+            start_ready: false,
+            start_blockers: [],
+          },
+          {
+            version: 12,
+            minimum_screening_policy_version: 9,
+            requires_screened_image: true,
+            capable_validator_count: 5,
+            start_ready: true,
+            start_blockers: [],
+          },
+        ],
+        available_target_versions: [12],
+        active_contract_candidates: [],
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+
+    const response = await client.callTool({
+      name: 'get_benchmark_rollout_control',
+      arguments: {},
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      active_version: 11,
+      desired_version: 11,
+      available_target_versions: [12],
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout',
+      expect.objectContaining({
+        method: 'GET',
+      }),
+    )
+
+    await client.close()
+    await server.close()
+  })
+
+  it('starts a selected rollout with CAS, reason, and confirmation', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ status: 'collecting' }))
+      .mockResolvedValueOnce(
+        Response.json({
+          active_version: 11,
+          desired_version: 12,
+          status: 'collecting',
+          blocked_reason: null,
+          capability_bench_version: 12,
+          canary_capable_validator_count: 5,
+          v3_capable_validator_count: 5,
+          current_hybrid_top_five: [],
+          qualification_converged: false,
+          members: [],
+          contracts: [
+            {
+              version: 12,
+              minimum_screening_policy_version: 9,
+              requires_screened_image: true,
+              capable_validator_count: 5,
+              start_ready: true,
+              start_blockers: [],
+            },
+          ],
+          available_target_versions: [12],
+          active_contract_candidates: [],
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([
+      BACKROOM_READ_SCOPE,
+      BACKROOM_WRITE_SCOPE,
+    ])
+
+    const response = await client.callTool({
+      name: 'start_benchmark_rollout',
+      arguments: {
+        desiredVersion: 12,
+        expectedActiveVersion: 11,
+        reason: 'v12 fleet advertises 12; unseat the v11 king',
+        confirmation: 'START BENCHMARK V12',
+      },
+    })
+
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      active_version: 11,
+      desired_version: 12,
+      status: 'collecting',
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/benchmark-rollout/12',
       expect.objectContaining({
         method: 'POST',
         headers: expect.objectContaining({
