@@ -275,6 +275,31 @@ class AdminExpireRunningScreeningResponse(BaseModel):
     idempotent: bool = False
 
 
+REJECT_SCREENING_CONFIRMATION = "REJECT SCREENING SUBMISSION"
+
+
+class AdminRejectScreeningRequest(BaseModel):
+    """Compare-and-swap guards for a terminal operator screening reject."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    reason: Annotated[str, Field(min_length=8)]
+    expected_sha256: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    expected_score_count: Annotated[int, Field(ge=0)]
+    expected_attempt_id: UUID
+    confirmation: Literal["REJECT SCREENING SUBMISSION"]
+
+
+class AdminRejectScreeningResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    agent_id: UUID
+    attempt_id: UUID
+    agent_status: str
+    expired_build_ids: list[UUID] = []
+    idempotent: bool = False
+
+
 class AdminBenchmarkContractRefreshRequest(BaseModel):
     """Compare-and-swap guard for rebuilding one stale benchmark contract."""
 

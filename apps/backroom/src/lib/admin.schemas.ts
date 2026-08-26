@@ -3649,6 +3649,25 @@ export const expireRunningScreeningResponseSchema = z.object({
   idempotent: z.boolean(),
 })
 
+export const REJECT_SCREENING_CONFIRMATION = 'REJECT SCREENING SUBMISSION'
+
+export const rejectScreeningSubmissionInputSchema = z.object({
+  agentId: z.string().uuid(),
+  reason: auditReasonSchema(8),
+  expectedSha256: z.string().regex(/^[0-9a-f]{64}$/),
+  expectedScoreCount: z.number().int().nonnegative(),
+  expectedAttemptId: z.string().uuid(),
+  confirmation: z.literal(REJECT_SCREENING_CONFIRMATION),
+})
+
+export const rejectScreeningSubmissionResponseSchema = z.object({
+  agent_id: z.string().uuid(),
+  attempt_id: z.string().uuid(),
+  agent_status: z.string(),
+  expired_build_ids: z.array(z.string().uuid()).optional().default([]),
+  idempotent: z.boolean(),
+})
+
 export const quarantineAgentContextSchema = z.object({
   agent_id: z.string().uuid(),
   miner_hotkey: z.string(),

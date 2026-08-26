@@ -5065,6 +5065,142 @@ class TestQuarantineAdmin:
         assert builds[0]["error_code"] == "OPERATOR_SCREENING_EXPIRED"
         assert builds[0]["provider"] == "targon"
 
+    async def test_operator_rejects_running_screening_submission(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        _install_db(app, session_maker)
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.SCREENING,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        build_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="running",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=70),
+                )
+            )
+            session.add(
+                SubmissionImageBuild(
+                    build_id=build_id,
+                    agent_id=agent_id,
+                    attempt_id=attempt_id,
+                    environment="prod",
+                    artifact_sha256=_SHA256,
+                    image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                    output_key=f"remote-builds/{build_id}/image.tar",
+                    status="running",
+                    provider="gcp",
+                    provider_resource_id="job:ditto-miner-build-test",
+                )
+            )
+        reason = "Miner requested removal; artifact does not compile"
+        payload = {
+            "reason": reason,
+            "expected_sha256": _SHA256,
+            "expected_score_count": 0,
+            "expected_attempt_id": str(attempt_id),
+            "confirmation": "REJECT SCREENING SUBMISSION",
+        }
+        headers = {
+            "Authorization": "Bearer test-admin-token-at-least-32-characters",
+            "X-Admin-Actor": "backroom:test-user",
+        }
+        response = await client.post(
+            f"/api/v1/admin/screening-submissions/{agent_id}/reject",
+            headers=headers,
+            json=payload,
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["agent_status"] == AgentStatus.REJECTED
+        assert body["expired_build_ids"] == [str(build_id)]
+        assert body["idempotent"] is False
+        repeated = await client.post(
+            f"/api/v1/admin/screening-submissions/{agent_id}/reject",
+            headers=headers,
+            json=payload,
+        )
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()["idempotent"] is True
+        async with session_maker() as session:
+            agent = await session.get(Agent, agent_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            build = await session.get(SubmissionImageBuild, build_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.REJECTED
+        assert agent.screening_reason == reason
+        assert agent.screening_reason_code == "operator-rejected-screening"
+        assert attempt is not None
+        assert attempt.status == "rejected"
+        assert attempt.reason_code == "operator-rejected-screening"
+        assert build is not None
+        assert build.error_code == "OPERATOR_SCREENING_REJECTED"
+
+    async def test_operator_reject_screening_refuses_evaluating(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        app.state.config = replace(
+            app.state.config,
+            admin_api_token="test-admin-token-at-least-32-characters",
+        )
+        _install_db(app, session_maker)
+        agent_id = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            screening_policy_version=SCREENING_POLICY_VERSION,
+        )
+        attempt_id = uuid4()
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=attempt_id,
+                    agent_id=agent_id,
+                    screener_hotkey=_SCREENER_HOTKEY,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="passed",
+                    started_at=now,
+                    deadline=now + timedelta(minutes=70),
+                    finished_at=now,
+                )
+            )
+        response = await client.post(
+            f"/api/v1/admin/screening-submissions/{agent_id}/reject",
+            headers={
+                "Authorization": "Bearer test-admin-token-at-least-32-characters",
+                "X-Admin-Actor": "backroom:test-user",
+            },
+            json={
+                "reason": "Miner requested on-chain removal",
+                "expected_sha256": _SHA256,
+                "expected_score_count": 0,
+                "expected_attempt_id": str(attempt_id),
+                "confirmation": "REJECT SCREENING SUBMISSION",
+            },
+        )
+        assert response.status_code == 409, response.text
+        assert "not in screening" in response.text
+
     async def test_operator_rebuilds_only_the_screened_image_build_only(
         self,
         app: FastAPI,

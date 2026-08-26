@@ -53,6 +53,8 @@ from ditto.api_models.admin_quarantine import (
     AdminQuarantineResolutionEvent,
     AdminQuarantineResolveRequest,
     AdminQuarantineResolveResponse,
+    AdminRejectScreeningRequest,
+    AdminRejectScreeningResponse,
     AdminScreenedImageRebuildDetail,
     AdminScreenedImageRebuildRequest,
     AdminScreenedImageRebuildResponse,
@@ -1923,6 +1925,62 @@ async def retry_failed_screening_now(
     )
 
 
+_REJECTABLE_SCREENING_STATUSES = frozenset(
+    {
+        AgentStatus.UPLOADED,
+        AgentStatus.SCREENING,
+        AgentStatus.SCREENING_FAILED,
+        AgentStatus.SCREENING_PASSED,
+    }
+)
+_OPERATOR_REJECT_REASON_CODE = "operator-rejected-screening"
+_OPERATOR_REJECT_BUILD_ERROR = "OPERATOR_SCREENING_REJECTED"
+
+
+async def _stop_inflight_screening_work(
+    session: AsyncSession,
+    *,
+    attempt_id: UUID,
+    error_code: str,
+    now: datetime,
+) -> list[UUID]:
+    expired_build_ids: list[UUID] = []
+    builds = list(
+        await session.scalars(
+            select(SubmissionImageBuild)
+            .where(
+                SubmissionImageBuild.attempt_id == attempt_id,
+                SubmissionImageBuild.status.in_(("queued", "leased", "running")),
+            )
+            .with_for_update()
+        )
+    )
+    for build in builds:
+        build.status = "fallback_required"
+        build.error_code = error_code
+        build.completed_at = now
+        build.updated_at = now
+        build.lease_expires_at = None
+        expired_build_ids.append(build.build_id)
+    reviews = list(
+        await session.scalars(
+            select(SubmissionSourceReview)
+            .where(
+                SubmissionSourceReview.attempt_id == attempt_id,
+                SubmissionSourceReview.status.in_(("queued", "leased", "running")),
+            )
+            .with_for_update()
+        )
+    )
+    for review in reviews:
+        review.status = "fallback_required"
+        review.error_code = error_code
+        review.completed_at = now
+        review.updated_at = now
+        review.lease_expires_at = None
+    return expired_build_ids
+
+
 @router.post(
     "/screening-submissions/{agent_id}/expire-running",
     response_model=AdminExpireRunningScreeningResponse,
@@ -1988,39 +2046,12 @@ async def expire_running_screening(
         attempt.finished_at = now
         attempt.public_reason = payload.reason
         attempt.reason_code = "operator-expired-running-screening"
-        builds = list(
-            await session.scalars(
-                select(SubmissionImageBuild)
-                .where(
-                    SubmissionImageBuild.attempt_id == attempt.attempt_id,
-                    SubmissionImageBuild.status.in_(("queued", "leased", "running")),
-                )
-                .with_for_update()
-            )
+        expired_build_ids = await _stop_inflight_screening_work(
+            session,
+            attempt_id=attempt.attempt_id,
+            error_code="OPERATOR_SCREENING_EXPIRED",
+            now=now,
         )
-        for build in builds:
-            build.status = "fallback_required"
-            build.error_code = "OPERATOR_SCREENING_EXPIRED"
-            build.completed_at = now
-            build.updated_at = now
-            build.lease_expires_at = None
-            expired_build_ids.append(build.build_id)
-        reviews = list(
-            await session.scalars(
-                select(SubmissionSourceReview)
-                .where(
-                    SubmissionSourceReview.attempt_id == attempt.attempt_id,
-                    SubmissionSourceReview.status.in_(("queued", "leased", "running")),
-                )
-                .with_for_update()
-            )
-        )
-        for review in reviews:
-            review.status = "fallback_required"
-            review.error_code = "OPERATOR_SCREENING_EXPIRED"
-            review.completed_at = now
-            review.updated_at = now
-            review.lease_expires_at = None
         agent.status = AgentStatus.SCREENING_FAILED
         agent.screening_reason = payload.reason
         agent.screening_reason_code = "operator-expired-running-screening"
@@ -2037,6 +2068,129 @@ async def expire_running_screening(
         agent_id=agent_id,
         attempt_id=attempt.attempt_id,
         agent_status=AgentStatus.SCREENING_FAILED,
+        expired_build_ids=expired_build_ids,
+        idempotent=False,
+    )
+
+
+def _reject_screening_blocked_detail(status: AgentStatus) -> str:
+    if status == AgentStatus.QUARANTINED:
+        return "submission is quarantined; use resolve_screening_quarantine"
+    if status in {
+        AgentStatus.EVALUATING,
+        AgentStatus.SCORED,
+        AgentStatus.LIVE,
+        AgentStatus.ATH_PENDING_REVIEW,
+    }:
+        return "submission is not in screening; use validator-queue or retirement tools"
+    if status == AgentStatus.BANNED:
+        return "submission is already banned"
+    if status == AgentStatus.REJECTED:
+        return "submission is already rejected"
+    return "submission is not in screening"
+
+
+@router.post(
+    "/screening-submissions/{agent_id}/reject",
+    response_model=AdminRejectScreeningResponse,
+)
+async def reject_screening_submission(
+    agent_id: UUID,
+    payload: AdminRejectScreeningRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> AdminRejectScreeningResponse:
+    """Terminally reject one screening submission so it leaves the pipeline."""
+    if x_admin_actor is None or not 1 <= len(x_admin_actor) <= 120:
+        raise HTTPException(status_code=422, detail="X-Admin-Actor is required")
+    now = datetime.now(UTC)
+    expired_build_ids: list[UUID] = []
+    async with session.begin():
+        agent = await session.scalar(
+            select(Agent).where(Agent.agent_id == agent_id).with_for_update()
+        )
+        if agent is None:
+            raise HTTPException(status_code=404, detail="agent not found")
+        if agent.sha256 != payload.expected_sha256:
+            raise HTTPException(status_code=409, detail="artifact identity changed")
+        score_count = int(
+            await session.scalar(
+                select(func.count())
+                .select_from(Score)
+                .where(Score.agent_id == agent_id)
+            )
+            or 0
+        )
+        if score_count != payload.expected_score_count:
+            raise HTTPException(status_code=409, detail="score count changed")
+        attempt = await session.scalar(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.attempt_id == payload.expected_attempt_id,
+                ScreeningAttempt.agent_id == agent_id,
+            )
+            .with_for_update()
+        )
+        if attempt is None:
+            raise HTTPException(status_code=409, detail="screening attempt changed")
+        if (
+            agent.status == AgentStatus.REJECTED
+            and agent.screening_reason_code == _OPERATOR_REJECT_REASON_CODE
+        ):
+            return AdminRejectScreeningResponse(
+                agent_id=agent_id,
+                attempt_id=attempt.attempt_id,
+                agent_status=agent.status,
+                expired_build_ids=[],
+                idempotent=True,
+            )
+        if agent.status not in _REJECTABLE_SCREENING_STATUSES:
+            raise HTTPException(
+                status_code=409,
+                detail=_reject_screening_blocked_detail(agent.status),
+            )
+        running_attempt = await session.scalar(
+            select(ScreeningAttempt)
+            .where(
+                ScreeningAttempt.agent_id == agent_id,
+                ScreeningAttempt.status == "running",
+            )
+            .with_for_update()
+        )
+        if (
+            running_attempt is not None
+            and running_attempt.attempt_id != attempt.attempt_id
+        ):
+            raise HTTPException(status_code=409, detail="screening attempt is active")
+        if attempt.status == "running":
+            expired_build_ids = await _stop_inflight_screening_work(
+                session,
+                attempt_id=attempt.attempt_id,
+                error_code=_OPERATOR_REJECT_BUILD_ERROR,
+                now=now,
+            )
+            attempt.status = "rejected"
+            attempt.finished_at = now
+            attempt.public_reason = payload.reason
+            attempt.reason_code = _OPERATOR_REJECT_REASON_CODE
+        agent.status = AgentStatus.REJECTED
+        agent.screening_reason = payload.reason
+        agent.screening_reason_code = _OPERATOR_REJECT_REASON_CODE
+        agent.screening_policy_version = SCREENING_POLICY_VERSION
+    logger.info(
+        "admin_actor=%s rejected screening agent_id=%s attempt_id=%s "
+        "builds=%s reason=%s",
+        x_admin_actor,
+        agent_id,
+        attempt.attempt_id,
+        expired_build_ids,
+        payload.reason,
+    )
+    return AdminRejectScreeningResponse(
+        agent_id=agent_id,
+        attempt_id=attempt.attempt_id,
+        agent_status=AgentStatus.REJECTED,
         expired_build_ids=expired_build_ids,
         idempotent=False,
     )

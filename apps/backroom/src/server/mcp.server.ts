@@ -80,6 +80,7 @@ import {
   updateArtifactReleaseSettingsInputSchema,
   retryFailedScreeningNowInputSchema,
   expireRunningScreeningInputSchema,
+  rejectScreeningSubmissionInputSchema,
   summarizeScreeningFailuresInputSchema,
   confirmationBundleStateSchema,
   confirmationBundleDetailInputSchema,
@@ -115,6 +116,7 @@ import {
   rescreenRejectedSubmission,
   retryFailedScreeningNow,
   expireRunningScreening,
+  rejectScreeningSubmission,
   fetchValidationRetry,
   fetchStuckSubmissions,
   fetchLeaseRevocations,
@@ -200,6 +202,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'rescreen_rejected_submission',
   'retry_failed_screening_now',
   'expire_running_screening',
+  'reject_screening_submission',
   'open_ath_review',
   'resolve_ath_review',
   'execute_screening_quarantine_batch',
@@ -454,6 +457,8 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
     'Page the compact platform triage order for stuck submissions. Returns ticket-state counts and silent_expiry_count; use get_validation_retry for one submission\'s complete ticket history, including infra_retry_grants. This urgency queue is intentionally not newest-first.',
   summarize_screening_failures:
     'Group live screening / screening_failed agents by reason_code. Use get_screening_submission for one row.',
+  reject_screening_submission:
+    'Reject a screening row. Confirmation: REJECT SCREENING SUBMISSION. Requires backroom:write.',
   get_queue_policy_settings:
     'Read effective queue policy, rollout-locked fields, defaults, and optionally paged newest-first revision history. Open-rollout targets are snapshots: settings do not resize an in-flight rollout. historyLimit defaults to 0.',
   get_continual_retest_settings:
@@ -2038,6 +2043,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => expireRunningScreening(input, props.session.email)),
+  )
+
+  registerTool(
+    'reject_screening_submission',
+    {
+      title: 'Reject screening submission',
+      description:
+        'Terminally reject one SN118 submission that is still in screening, screening_failed, screening_passed, or uploaded. Supply the current artifact SHA-256, score count, and attempt ID as concurrency guards, plus confirmation "REJECT SCREENING SUBMISSION". A matching running attempt is expired (Kaniko/source-review rows marked OPERATOR_SCREENING_REJECTED) and the attempt is rejected so it cannot auto-retry. Miner-visible screening_reason is the operator reason. This is not a validator-queue withdrawal and not previous-generation retirement: evaluating rows must use those tools instead, and quarantined rows must use resolve_screening_quarantine. Requires backroom:write.',
+      inputSchema: rejectScreeningSubmissionInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => rejectScreeningSubmission(input, props.session.email)),
   )
 
   registerTool(
