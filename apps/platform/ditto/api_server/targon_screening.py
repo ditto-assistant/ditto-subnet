@@ -52,7 +52,7 @@ logger = logging.getLogger(__name__)
 _LEASE_TTL = timedelta(minutes=70)
 _SCREENED_IMAGE_TTL = timedelta(days=1)
 _PLATFORM_COPY_PREFIX = "platform-targon-copy:"
-_KANIKO_FAILED = "TARGON_SUBMISSION_KANIKO_FAILED"
+_KANIKO_FAILED_SUFFIX = "_SUBMISSION_KANIKO_FAILED"
 
 
 def _targon_first(providers: tuple[str, ...]) -> bool:
@@ -172,7 +172,7 @@ async def maybe_finalize_targon_screen(
     )
     if build is None or build.status not in {"succeeded", "consumed"}:
         if build is not None and build.status == "fallback_required":
-            if build.error_code == _KANIKO_FAILED:
+            if (build.error_code or "").endswith(_KANIKO_FAILED_SUFFIX):
                 await _reject_build(
                     session,
                     attempt,

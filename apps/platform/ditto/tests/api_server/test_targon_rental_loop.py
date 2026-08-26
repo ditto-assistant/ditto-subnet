@@ -84,7 +84,16 @@ def test_inflight_failure_code_maps_kaniko_exit() -> None:
         )
         == "TARGON_SUBMISSION_KANIKO_FAILED"
     )
+    assert (
+        inflight_failure_code(
+            "gcp",
+            "error",
+            "Container called exit(72).",
+        )
+        == "CLOUDRUN_SUBMISSION_KANIKO_FAILED"
+    )
     assert inflight_failure_code("targon", "error", "") == "TARGON_PROVISION_ERROR"
+    assert inflight_failure_code("gcp", "error", "") == "CLOUDRUN_PROVISION_ERROR"
     assert inflight_failure_code("targon", "timeout") == "TARGON_PROVISION_TIMEOUT"
 
 

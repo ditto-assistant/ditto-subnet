@@ -11,7 +11,9 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
-_SUBMISSION_EXIT_CODE = re.compile(r"(?:^|\D)exit code (71|72|73|74|75|76)(?:\D|$)")
+_SUBMISSION_EXIT_CODE = re.compile(
+    r"(?:^|\D)exit(?: code)?[:\s(]+(71|72|73|74|75|76)(?:\D|$)"
+)
 _SUBMISSION_STAGE_BY_EXIT_CODE = {
     "71": "SOURCE",
     "72": "KANIKO",
@@ -114,10 +116,10 @@ def inflight_failure_code(stored_provider: str, status: str, message: str = "") 
     those codes stays ``TARGON_PROVISION_ERROR``.
     """
     if status in _PROVIDER_TERMINAL:
-        if stored_provider == "targon":
-            match = _SUBMISSION_EXIT_CODE.search(message)
-            if match is not None:
-                stage = _SUBMISSION_STAGE_BY_EXIT_CODE[match.group(1)]
-                return f"TARGON_SUBMISSION_{stage}_FAILED"
+        match = _SUBMISSION_EXIT_CODE.search(message)
+        if match is not None:
+            prefix = "TARGON" if stored_provider == "targon" else "CLOUDRUN"
+            stage = _SUBMISSION_STAGE_BY_EXIT_CODE[match.group(1)]
+            return f"{prefix}_SUBMISSION_{stage}_FAILED"
         return provision_error_code(stored_provider, "error")
     return provision_error_code(stored_provider, "timeout")

@@ -11,7 +11,7 @@ from ditto.api_server.cloudrun_client import (
 )
 from ditto.api_server.cloudrun_provider import CloudRunComputeProvider
 from ditto.api_server.config import CloudRunScreeningConfig, TargonRentalConfig
-from ditto.api_server.screening_provider import SmokeSpec
+from ditto.api_server.screening_provider import SmokeSpec, inflight_failure_code
 
 
 class _FakeCloudRunClient:
@@ -134,6 +134,35 @@ async def test_job_status_reads_v2_nested_execution_failed() -> None:
     }
     provider = _provider({}, job=job, fail_get_execution=True)
     assert await provider.provision_status("job:ditto-miner-build-test") == "error"
+
+
+@pytest.mark.asyncio
+async def test_observe_failed_job_maps_kaniko_exit() -> None:
+    job = {
+        "status": {
+            "latestCreatedExecution": {
+                "name": "projects/p/locations/us-central1/jobs/job/executions/ex",
+                "completionStatus": "EXECUTION_FAILED",
+            }
+        }
+    }
+    execution = {
+        "status": {
+            "conditions": [
+                {
+                    "type": "Completed",
+                    "message": "Container called exit(72).",
+                }
+            ]
+        }
+    }
+    provider = _provider(execution, job=job)
+    observation = await provider.observe_provision("job:ditto-miner-build-test")
+    assert observation.status == "error"
+    assert (
+        inflight_failure_code("gcp", observation.status, observation.message)
+        == "CLOUDRUN_SUBMISSION_KANIKO_FAILED"
+    )
 
 
 @pytest.mark.asyncio
