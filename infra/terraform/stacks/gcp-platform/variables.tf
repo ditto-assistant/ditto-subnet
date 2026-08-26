@@ -181,7 +181,7 @@ variable "ssh_users" {
 }
 
 variable "debug_operators" {
-  description = "Operators granted the minimum GCP IAM used by repo debug skills: IAP sudo SSH on ditto-platform-prod only (query_prod_db.sh, py-spy, pprofctl) and secretAccessor on TARGON_API_KEY (query_targon.sh). Not project Editor, not postgres/dev SSH, not other secrets. Prod SSH already covered by ssh_users is not duplicated."
+  description = "Operators granted the minimum GCP IAM used by repo debug skills: IAP sudo SSH on platform-dev/prod plus leftover screener/validator/fleet VMs (query_prod_db.sh, py-spy, pprofctl) and secretAccessor on TARGON_API_KEY (query_targon.sh). Not project Editor, not postgres SSH, not other secrets. Platform SSH already covered by ssh_users is not duplicated."
   type        = list(string)
   default = [
     "user:brian@omniaura.ai",
