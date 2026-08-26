@@ -1960,7 +1960,7 @@ export const confirmationBundleSettingsSchema = z
     top_n: z.number().int().min(1).max(10),
     min_base_score_micros: confirmationScoreMicrosSchema,
     daily_bundle_cap: z.number().int().min(0).max(1_000),
-    daily_dollar_cap_microusd: z.number().int().min(0).max(1_000_000_000),
+    daily_dollar_cap_microusd: z.number().int().min(0).max(2_000_000_000),
     per_bundle_request_cap: z.number().int().min(0).max(100_000),
     per_bundle_token_cap: z.number().int().min(0).max(100_000_000),
     profile_revision: z.string().min(1).max(128).nullable(),
@@ -2026,7 +2026,7 @@ export const effectiveConfirmationBundleSettingsSchema = z.strictObject({
   issuance_active: z.boolean(),
   max_top_n: z.literal(10),
   max_daily_bundle_cap: z.literal(1_000),
-  max_daily_dollar_microusd: z.literal(1_000_000_000),
+  max_daily_dollar_microusd: z.literal(2_000_000_000),
   max_bundle_request_cap: z.literal(100_000),
   max_bundle_token_cap: z.literal(100_000_000),
 })

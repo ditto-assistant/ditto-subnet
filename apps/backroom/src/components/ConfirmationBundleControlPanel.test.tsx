@@ -81,7 +81,7 @@ function control(): ConfirmationBundleSettingsControl {
       issuance_active: true,
       max_top_n: 10,
       max_daily_bundle_cap: 1_000,
-      max_daily_dollar_microusd: 1_000_000_000,
+      max_daily_dollar_microusd: 2_000_000_000,
       max_bundle_request_cap: 100_000,
       max_bundle_token_cap: 100_000_000,
     },
