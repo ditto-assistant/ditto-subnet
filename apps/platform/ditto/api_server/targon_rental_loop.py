@@ -424,9 +424,7 @@ class TargonRentalLoop:
             artifact_sha256 = row.artifact_sha256
             skip_targon = (row.error_code or "").startswith("TARGON_")
         if not skip_targon:
-            skip_targon = await self._targon_kaniko_exhausted(
-                agent_id, artifact_sha256
-            )
+            skip_targon = await self._targon_kaniko_exhausted(agent_id, artifact_sha256)
         spec = BuildSpec(
             name=f"ditto-miner-build-{str(build_id).replace('-', '')[:12]}"[:32],
             image=image,
