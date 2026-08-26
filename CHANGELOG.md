@@ -2,6 +2,21 @@
 
 <!-- version list -->
 
+## v0.111.0 (2026-08-26)
+
+### Bug Fixes
+
+- **infra**: Allow targeted gcp-platform plans
+  ([#1159](https://github.com/ditto-assistant/ditto-subnet/pull/1159),
+  [`f0eb8ae`](https://github.com/ditto-assistant/ditto-subnet/commit/f0eb8aeafe0d6ad7de1d25dd06e7030dcb25a70e))
+
+### Features
+
+- **backroom**: Expose benchmark rollout start on MCP
+  ([#1160](https://github.com/ditto-assistant/ditto-subnet/pull/1160),
+  [`36fdef1`](https://github.com/ditto-assistant/ditto-subnet/commit/36fdef1f2299dce00ac51adee28f0f4fb0bb71a6))
+
+
 ## v0.110.7 (2026-08-25)
 
 ### Bug Fixes
