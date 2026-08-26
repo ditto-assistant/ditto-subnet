@@ -32,6 +32,8 @@ from ditto.api_models.admin_quarantine import (
     AdminBenchmarkQualificationRequest,
     AdminBenchmarkQualificationResponse,
     AdminDuplicateSummary,
+    AdminExpireRunningScreeningRequest,
+    AdminExpireRunningScreeningResponse,
     AdminMinerContext,
     AdminMinerQuarantineSummary,
     AdminQuarantineAgentContext,
@@ -62,8 +64,6 @@ from ditto.api_models.admin_quarantine import (
     AdminScreeningFailureExample,
     AdminScreeningFailureGroup,
     AdminScreeningFailureSummary,
-    AdminExpireRunningScreeningRequest,
-    AdminExpireRunningScreeningResponse,
     AdminScreeningImageBuild,
     AdminScreeningRescreenRequest,
     AdminScreeningRescreenResponse,
@@ -1979,7 +1979,9 @@ async def expire_running_screening(
                 idempotent=True,
             )
         if attempt.status != "running":
-            raise HTTPException(status_code=409, detail="screening attempt is not running")
+            raise HTTPException(
+                status_code=409, detail="screening attempt is not running"
+            )
         if agent.status != AgentStatus.SCREENING:
             raise HTTPException(status_code=409, detail="submission is not screening")
         attempt.status = "failed"

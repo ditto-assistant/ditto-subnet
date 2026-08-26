@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from uuid import UUID
 from typing import Any
+from uuid import UUID
 
 import zstandard
 
