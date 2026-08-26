@@ -382,9 +382,7 @@ async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
                             chain=chain,
                         )
 
-                async def traces_put(
-                    key: str, body: bytes, content_type: str
-                ) -> str:
+                async def traces_put(key: str, body: bytes, content_type: str) -> str:
                     if traces_hippius is None:
                         return ""
                     return await traces_hippius.put_object(
