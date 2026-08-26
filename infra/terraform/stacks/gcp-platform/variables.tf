@@ -177,6 +177,7 @@ variable "ssh_users" {
     "user:nickanderson@omniaura.ai",
     "user:peyton@omniaura.ai",
     "user:omar@omniaura.ai",
+    "user:brian@omniaura.ai",
   ]
 }
 
