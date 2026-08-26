@@ -149,63 +149,19 @@ describe('InferenceRoutingPanel', () => {
     expect(screen.getByText('No calibration manifest')).toBeTruthy()
     expect(screen.getByText(/operator@omniaura.ai/).textContent).toContain('UTC')
     expect(screen.queryByText('must-not-render')).toBeNull()
-    expect(screen.getByText('Actual upstream providers')).toBeTruthy()
-    expect(screen.getByText('Groq')).toBeTruthy()
-    expect(screen.getByText('Total input tokens')).toBeTruthy()
-    expect(screen.getAllByText('125,000')).toHaveLength(2)
-    expect(screen.getByText('Total output tokens')).toBeTruthy()
-    expect(screen.getAllByText('8,000')).toHaveLength(2)
-    expect(screen.getByText('$0.2500')).toBeTruthy()
-    expect(screen.getByText('38.1 tok/s')).toBeTruthy()
-    expect(screen.getByText('OpenRouter attempts')).toBeTruthy()
-    expect(screen.getByText('Recovered')).toBeTruthy()
-    expect(screen.getByText('Benchmark relay abort tickets')).toBeTruthy()
-    expect(screen.getByText('Broker recovery exhausted tickets')).toBeTruthy()
+    expect(screen.queryByText('Actual upstream providers')).toBeNull()
+    expect(screen.queryByText('Benchmark relay abort tickets')).toBeNull()
+    expect(screen.queryByText('Broker recovery exhausted tickets')).toBeNull()
   })
 
-  it('totals provider tokens and sorts independently by input or output usage', () => {
-    render(
-      <InferenceRoutingPanel
-        initialInventory={{
-          ...inventory,
-          provider_telemetry: [
-            ...inventory.provider_telemetry,
-            {
-              provider: 'Fireworks',
-              request_count: 4,
-              completed_count: 4,
-              failed_count: 0,
-              inflight_count: 0,
-              timeout_count: 0,
-              upstream_attempt_count: 4,
-              openrouter_attempt_count: 4,
-              recovered_after_fallback_count: 0,
-              terminal_failure_count: 0,
-              prompt_tokens: 25_000,
-              completion_tokens: 12_000,
-              cost_microusd: 75_000,
-              average_latency_ms: 340,
-              observed_output_tps: 35.3,
-            },
-          ],
-        }}
-        readOnly={false}
-      />,
-    )
+  it('hides ledger telemetry even when the inventory still carries those fields', () => {
+    render(<InferenceRoutingPanel initialInventory={inventory} readOnly={false} />)
 
-    expect(screen.getByText('150,000')).toBeTruthy()
-    expect(screen.getByText('20,000')).toBeTruthy()
-
-    const providers = () =>
-      Array.from(screen.getByText('Groq').closest('tbody')!.querySelectorAll('tr')).map(
-        (row) => row.firstElementChild?.textContent,
-      )
-
-    expect(providers()).toEqual(['Groq', 'Fireworks'])
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by output tokens descending' }))
-    expect(providers()).toEqual(['Fireworks', 'Groq'])
-    fireEvent.click(screen.getByRole('button', { name: 'Sort by output tokens ascending' }))
-    expect(providers()).toEqual(['Groq', 'Fireworks'])
+    expect(screen.queryByText('Actual upstream providers')).toBeNull()
+    expect(screen.queryByText('Total input tokens')).toBeNull()
+    expect(screen.queryByText('Total output tokens')).toBeNull()
+    expect(screen.queryByText('125,000')).toBeNull()
+    expect(screen.queryByText('Benchmark relay abort tickets')).toBeNull()
   })
 
   it('requires reviewed metrics and exact profile confirmation before admission', async () => {
@@ -297,8 +253,7 @@ describe('InferenceRoutingPanel', () => {
         /Primary: fastest throughput · recovery: DeepInfra → Groq · excluded: CoreWeave · fallback enabled/,
       ),
     ).toBeTruthy()
-    expect(screen.getByText('Actual upstream providers')).toBeTruthy()
-    expect(screen.getByText('Groq')).toBeTruthy()
+    expect(screen.queryByText('Actual upstream providers')).toBeNull()
     const policyAction = screen.getByRole('button', { name: 'Locked in aggregate mode' })
     expect((policyAction as HTMLButtonElement).disabled).toBe(true)
     expect(screen.getByText('Individual admission locked')).toBeTruthy()

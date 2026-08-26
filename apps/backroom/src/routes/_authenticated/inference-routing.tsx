@@ -52,7 +52,9 @@ function InferenceRoutingError({ error }: { error: Error }) {
       <h2 className="mt-4 text-lg font-semibold">Inference routing is unavailable</h2>
       <p className="mt-2 text-sm leading-6 text-[var(--muted-strong)]">{error.message}</p>
       <p className="mt-3 text-xs text-[var(--muted)]">
-        Confirm platform #298 is deployed dark and Backroom has the platform admin token.
+        This page times out when Platform aggregates the inference_requests
+        ledger. Confirm the listing that omits those totals is deployed, then
+        retry. A missing admin token fails immediately, not after 20s.
       </p>
     </div>
   )

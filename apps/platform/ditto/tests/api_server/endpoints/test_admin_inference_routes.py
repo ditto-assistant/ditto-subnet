@@ -306,25 +306,11 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
         "ignored_providers": ["CoreWeave"],
         "allow_fallbacks": True,
     }
-    assert listing.json()["provider_telemetry"] == [
-        {
-            "provider": "WandB",
-            "request_count": 1,
-            "completed_count": 1,
-            "failed_count": 0,
-            "inflight_count": 0,
-            "timeout_count": 0,
-            "upstream_attempt_count": 1,
-            "openrouter_attempt_count": 0,
-            "recovered_after_fallback_count": 0,
-            "terminal_failure_count": 0,
-            "prompt_tokens": 80,
-            "completion_tokens": 20,
-            "cost_microusd": 123,
-            "average_latency_ms": 250.0,
-            "observed_output_tps": 80.0,
-        }
-    ]
+    assert listing.json()["provider_telemetry"] == []
+    assert listing.json()["relay_recovery_telemetry"] == {
+        "benchmark_relay_abort_ticket_count": 0,
+        "broker_recovery_exhausted_ticket_count": 0,
+    }
     blocked = await client.put(
         f"/api/v1/admin/inference-routes/policy/{_MODEL}",
         headers=_HEADERS,
@@ -383,158 +369,40 @@ async def test_aggregate_mode_blocks_adaptive_controls_but_allows_logical_route(
     assert admitted_v9.status_code == 200, admitted_v9.text
 
 
-async def test_provider_telemetry_aggregates_are_json_numbers_not_strings(
+async def test_list_inference_routes_omits_ledger_aggregates(
     app: FastAPI,
     client: httpx.AsyncClient,
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:
-    """Every aggregate leaves this endpoint as a JSON number.
+    """The operator console must not SUM ``inference_requests``.
 
-    Regression test for the production bug #446 found. ``func.sum()`` over a
-    ``BigInteger`` is ``numeric`` in Postgres -- not ``bigint`` -- and
-    ``func.avg()`` is ``numeric`` too, so asyncpg returns both as ``Decimal``;
-    the handler's old ``-> dict[str, object]`` annotation then had Pydantic v2
-    render each ``Decimal`` as a *string*. Backroom parses this array with
-    ``z.number()`` (``admin.schemas.ts``), so the string form failed its parse
-    outright.
-
-    Type assertions rather than value equality, because ``250 == 250.0`` in
-    Python: a plain ``==`` comparison against the expected dict cannot tell an
-    int from a float, and would not notice the aggregates drifting back.
+    That table is tens of millions of rows. Scanning it (lifetime or a 24h
+    window) times out Backroom. Keep the wire fields so OpenAPI stays put,
+    but return empty/zero telemetry even when ledger rows exist.
     """
     await _install(app, session_maker)
     now = datetime.now(UTC)
     async with session_maker() as session, session.begin():
         grant_id = await _seed_grant(session)
-        for (
-            provider,
-            latency,
-            status,
-            timed_out,
-            attempts,
-            router_attempts,
-            fallback_phase,
-            terminal_error,
-        ) in (
-            ("Groq", 200, "completed", False, 1, 1, 0, None),
-            ("Groq", 300, "completed", False, 1, 2, 1, None),
-            (None, 400, "failed", False, 1, 1, 1, "provider_unavailable"),
-            ("WandB", None, "failed", True, 2, 0, 1, "provider_timeout"),
-        ):
-            session.add(
-                InferenceRequest(
-                    grant_id=grant_id,
-                    nonce=uuid4(),
-                    generation=1,
-                    status=status,
-                    model=_MODEL,
-                    reserved_tokens=100,
-                    prompt_tokens=80,
-                    completion_tokens=20,
-                    cost_microusd=123,
-                    upstream_provider=provider,
-                    upstream_attempts=attempts,
-                    openrouter_attempts=router_attempts,
-                    fallback_phase=fallback_phase,
-                    terminal_error_code=terminal_error,
-                    timed_out=timed_out,
-                    latency_ms=latency,
-                    started_at=now,
-                    completed_at=now,
-                )
+        session.add(
+            InferenceRequest(
+                grant_id=grant_id,
+                nonce=uuid4(),
+                generation=1,
+                status="completed",
+                model=_MODEL,
+                reserved_tokens=100,
+                prompt_tokens=80,
+                completion_tokens=20,
+                cost_microusd=123,
+                upstream_provider="Groq",
+                upstream_attempts=1,
+                timed_out=False,
+                latency_ms=250,
+                started_at=now,
+                completed_at=now,
             )
-
-    listing = await client.get("/api/v1/admin/inference-routes", headers=_HEADERS)
-    assert listing.status_code == 200, listing.text
-    telemetry = listing.json()["provider_telemetry"]
-    assert telemetry == [
-        {
-            "provider": "Groq",
-            "request_count": 2,
-            "completed_count": 2,
-            "failed_count": 0,
-            "inflight_count": 0,
-            "timeout_count": 0,
-            "upstream_attempt_count": 2,
-            "openrouter_attempt_count": 3,
-            "recovered_after_fallback_count": 1,
-            "terminal_failure_count": 0,
-            "prompt_tokens": 160,
-            "completion_tokens": 40,
-            "cost_microusd": 246,
-            "average_latency_ms": 250.0,
-            "observed_output_tps": 80.0,
-        },
-        {
-            "provider": "Unknown upstream",
-            "request_count": 1,
-            "completed_count": 0,
-            "failed_count": 1,
-            "inflight_count": 0,
-            "timeout_count": 0,
-            "upstream_attempt_count": 1,
-            "openrouter_attempt_count": 1,
-            "recovered_after_fallback_count": 0,
-            "terminal_failure_count": 1,
-            "prompt_tokens": 80,
-            "completion_tokens": 20,
-            "cost_microusd": 123,
-            "average_latency_ms": 400.0,
-            "observed_output_tps": None,
-        },
-        {
-            "provider": "WandB",
-            "request_count": 1,
-            "completed_count": 0,
-            "failed_count": 1,
-            "inflight_count": 0,
-            "timeout_count": 1,
-            "upstream_attempt_count": 2,
-            "openrouter_attempt_count": 0,
-            "recovered_after_fallback_count": 0,
-            "terminal_failure_count": 1,
-            "prompt_tokens": 80,
-            "completion_tokens": 20,
-            "cost_microusd": 123,
-            # `latency_ms` is nullable, so avg() over an all-null group is
-            # NULL. Null, not 0: "not measured" is not "instant".
-            "average_latency_ms": None,
-            "observed_output_tps": None,
-        },
-    ]
-    groq, unknown, wandb = telemetry
-    for field in (
-        "request_count",
-        "completed_count",
-        "failed_count",
-        "inflight_count",
-        "timeout_count",
-        "upstream_attempt_count",
-        "openrouter_attempt_count",
-        "recovered_after_fallback_count",
-        "terminal_failure_count",
-        "prompt_tokens",
-        "completion_tokens",
-        "cost_microusd",
-    ):
-        assert isinstance(groq[field], int), (field, groq[field])
-    assert isinstance(groq["average_latency_ms"], float)
-    assert isinstance(groq["observed_output_tps"], float)
-    assert unknown["provider"] == "Unknown upstream"
-    assert wandb["average_latency_ms"] is None
-    # Nothing numeric arrives quoted, whatever the column type behind it.
-    assert '"160"' not in listing.text
-    assert "250.0000000000000000" not in listing.text
-
-
-async def test_relay_recovery_telemetry_distinguishes_broker_exhaustion(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    session_maker: async_sessionmaker[AsyncSession],
-) -> None:
-    await _install(app, session_maker)
-    async with session_maker() as session, session.begin():
-        await _seed_grant(session)
+        )
         ticket = await session.scalar(select(ValidatorTicket))
         assert ticket is not None
         ticket.failure_reason = "infrastructure"
@@ -542,7 +410,15 @@ async def test_relay_recovery_telemetry_distinguishes_broker_exhaustion(
 
     listing = await client.get("/api/v1/admin/inference-routes", headers=_HEADERS)
     assert listing.status_code == 200, listing.text
-    assert listing.json()["relay_recovery_telemetry"] == {
-        "benchmark_relay_abort_ticket_count": 1,
-        "broker_recovery_exhausted_ticket_count": 1,
+    body = listing.json()
+    assert body["provider_telemetry"] == []
+    assert body["relay_recovery_telemetry"] == {
+        "benchmark_relay_abort_ticket_count": 0,
+        "broker_recovery_exhausted_ticket_count": 0,
     }
+    assert isinstance(
+        body["relay_recovery_telemetry"]["benchmark_relay_abort_ticket_count"], int
+    )
+    assert isinstance(
+        body["relay_recovery_telemetry"]["broker_recovery_exhausted_ticket_count"], int
+    )
