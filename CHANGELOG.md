@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.112.2 (2026-08-26)
+
+### Bug Fixes
+
+- **dittobench**: Advertise scored-path tool_endpoint on LongMem
+  ([#1158](https://github.com/ditto-assistant/ditto-subnet/pull/1158),
+  [`3f4f378`](https://github.com/ditto-assistant/ditto-subnet/commit/3f4f378eea2efabfb576b4f359a2f4bb6e22a54b))
+
+
 ## v0.112.1 (2026-08-26)
 
 ### Bug Fixes
