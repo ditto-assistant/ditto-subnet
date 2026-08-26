@@ -13,9 +13,12 @@
 | Deterministic datagen | `research/dittobench-datagen/` |
 | Miner reference harness | `miners/dittobench-starter-kit/` |
 | Screening wire protocol | `packages/ditto-screening-protocol/` |
+| Screening worker policy/gates | `workers/screener/` |
 | Third-party adapters | `services/dittobench-api/integrations/` |
 | Local simulator (sessionless + phase-1) | `localstack/`, `.agents/skills/ditto-subnet-preview/references/localstack.md` |
 | Foundry overlay / fault proxy | `ditto/preview/`, `preview/`, `.agents/skills/ditto-subnet-preview/references/cheatcodes.md` |
+| New or stranded `bench_version` | `.agents/skills/ditto-subnet-bench-version-bump/SKILL.md` |
+| LongMem confirmation rollout | `.agents/skills/longmem-confirmation-rollout/SKILL.md` |
 
 ## Start with these contracts
 

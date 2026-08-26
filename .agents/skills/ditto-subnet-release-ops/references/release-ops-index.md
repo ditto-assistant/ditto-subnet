@@ -10,6 +10,8 @@
 | Screener controller deployment | `.github/workflows/screener-controller-deploy.yml` |
 | Hosted DittoBench checks/build | `.github/workflows/dittobench.yml` |
 | Capacity controller | `services/screener-orchestrator/` |
+| Screening worker runtime | `workers/screener/` |
+| Production DB / Targon logs | `.agents/skills/gcloud-ditto-readonly/` |
 | GCP and Cloudflare state | `infra/terraform/stacks/` |
 | Host convergence | `infra/ansible/` |
 | Validator updater | `scripts/validator-stack-auto-update.sh` |
