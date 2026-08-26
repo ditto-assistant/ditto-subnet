@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.112.1 (2026-08-26)
+
+### Bug Fixes
+
+- **platform**: Omit ledger metrics from inference-routes console
+  ([#1161](https://github.com/ditto-assistant/ditto-subnet/pull/1161),
+  [`d0580a8`](https://github.com/ditto-assistant/ditto-subnet/commit/d0580a8ccfabde1836736fde078f38236e279dd0))
+
+- **platform**: Reject Cloud Run Kaniko compile failures as docker-build
+  ([#1169](https://github.com/ditto-assistant/ditto-subnet/pull/1169),
+  [`703c300`](https://github.com/ditto-assistant/ditto-subnet/commit/703c30087bb7a112552b2528c53abab565199ad4))
+
+
 ## v0.112.0 (2026-08-26)
 
 ### Bug Fixes
