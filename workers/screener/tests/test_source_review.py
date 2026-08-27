@@ -4096,3 +4096,170 @@ async def test_a_dropped_comment_does_not_reapply_the_two_location_bar(
     assert observation.categories == ("benchmark_emulation",)
     parsed = SourceReviewFinding.model_validate(observation.finding)
     assert [item.line for item in parsed.evidence] == [4]
+
+
+async def test_provider_error_body_is_retried_within_one_turn(
+    tmp_path: Path,
+) -> None:
+    """A 200 whose body is an error object is a provider fault, not a verdict."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    final = {
+        "risk_level": "low",
+        "confidence": 0.9,
+        "categories": ["none"],
+        "evidence": [],
+        "summary": "General model-backed request path.",
+    }
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                200, json={"error": {"message": "provider overloaded"}}
+            )
+        if calls == 2:
+            tool_calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 400},
+                ),
+                _tool("search-1", "search", {"query": "call_model"}),
+            ]
+        else:
+            tool_calls = [_tool("submit-1", "submit_review", final)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    assert calls >= 3
+
+
+async def test_toolless_prose_turn_is_nudged_back_to_tools(
+    tmp_path: Path,
+) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    final = {
+        "risk_level": "low",
+        "confidence": 0.9,
+        "categories": ["none"],
+        "evidence": [],
+        "summary": "General model-backed request path.",
+    }
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        seen.append(json.loads(request.content))
+        calls += 1
+        if calls == 1:
+            return httpx.Response(
+                200,
+                json={
+                    "choices": [
+                        {
+                            "message": {
+                                "role": "assistant",
+                                "content": "Let me start by reading the code.",
+                            }
+                        }
+                    ]
+                },
+            )
+        if calls == 2:
+            tool_calls = [
+                _tool(
+                    "read-1",
+                    "read_file",
+                    {"path": "src/main.rs", "start_line": 1, "end_line": 400},
+                ),
+                _tool("search-1", "search", {"query": "call_model"}),
+            ]
+        else:
+            tool_calls = [_tool("submit-1", "submit_review", final)]
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": tool_calls,
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok and observation.risk_level == "low"
+    nudged = [
+        message
+        for request in seen
+        for message in request["messages"]
+        if message.get("role") == "user"
+        and "Respond only with a tool call" in str(message.get("content"))
+    ]
+    assert nudged
+
+
+async def test_persistent_toolless_model_still_fails_retryable(
+    tmp_path: Path,
+) -> None:
+    """The nudge budget is bounded; a stuck model stays a hard, retryable fail."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "I would rather describe my findings.",
+                        }
+                    }
+                ]
+            },
+        )
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.error_code == "source-review-model-response-invalid"
+    assert observation.failure_disposition == "retryable_infra"

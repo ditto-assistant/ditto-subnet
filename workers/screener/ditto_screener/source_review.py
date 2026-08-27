@@ -150,6 +150,15 @@ _MULTI_LOCATION_CATEGORIES = frozenset(
     {"benchmark_emulation", "scorer_contract_manipulation"}
 )
 _RETRY_DELAYS_SECONDS = (0.5, 1.0)
+# A reasoning model occasionally answers in prose instead of the tool
+# contract; one corrective turn recovers most of them. The budget keeps a
+# model that will not follow the contract a hard failure instead of a
+# silent step-burner.
+_MAX_TOOLLESS_TURNS = 2
+_TOOLLESS_NUDGE = (
+    "Respond only with a tool call: inspect the archive with the provided "
+    "tools, or call submit_review with your completed verdict."
+)
 _OPENROUTER_ATTRIBUTION_HEADERS = {
     # https://openrouter.ai/docs/app-attribution
     "HTTP-Referer": "https://heyditto.ai",
@@ -2413,6 +2422,7 @@ class OpenRouterSourceReviewAgent:
         ]
         delivered = 0
         inspection_calls = 0
+        toolless_turns = 0
         read_files: set[str] = set()
         runtime_source_read = False
         if progress is not None:
@@ -2431,15 +2441,19 @@ class OpenRouterSourceReviewAgent:
                     if remaining <= 0:
                         raise ValueError("source reviewer exceeded lease budget")
                     request_timeout = min(request_timeout, remaining)
-                response = await self._post_completion(
+                message = await self._completion_message(
                     client, api_key, messages, timeout=request_timeout
                 )
-                payload = response.json()
-                message = _assistant_message(payload)
                 messages.append(message)
                 tool_calls = message.get("tool_calls")
                 if not isinstance(tool_calls, list) or not tool_calls:
-                    raise ValueError("source reviewer returned no tool call")
+                    if toolless_turns >= _MAX_TOOLLESS_TURNS:
+                        raise ValueError("source reviewer returned no tool call")
+                    toolless_turns += 1
+                    messages.append(
+                        {"role": "user", "content": _TOOLLESS_NUDGE}
+                    )
+                    continue
                 for call in tool_calls:
                     call_id, name, arguments = _tool_call(call)
                     if name == "submit_review":
@@ -2480,6 +2494,40 @@ class OpenRouterSourceReviewAgent:
             read_files_used=len(read_files),
             max_read_bytes=self._max_read_bytes,
         )
+
+    async def _completion_message(
+        self,
+        client: httpx.AsyncClient,
+        api_key: str,
+        messages: list[dict[str, object]],
+        *,
+        timeout: float | None = None,
+    ) -> dict[str, object]:
+        """One model turn, retrying provider error bodies like transport faults.
+
+        The router can return HTTP 200 whose body is an error object with no
+        ``choices``. That is a provider fault, not a verdict, so it gets the
+        same bounded retry budget as a 5xx before the review is failed.
+        """
+        last_error: ValueError | None = None
+        for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
+            response = await self._post_completion(
+                client, api_key, messages, timeout=timeout
+            )
+            try:
+                return _assistant_message(response.json())
+            except ValueError as error:
+                last_error = error
+                if attempt >= len(_RETRY_DELAYS_SECONDS):
+                    break
+                logger.warning(
+                    "source review model response was malformed; "
+                    "retrying attempt=%d",
+                    attempt + 2,
+                )
+                await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt])
+        assert last_error is not None
+        raise last_error
 
     async def _post_completion(
         self,
