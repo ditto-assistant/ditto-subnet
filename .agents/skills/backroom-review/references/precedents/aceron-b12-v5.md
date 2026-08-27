@@ -53,7 +53,7 @@ Search terms for the renamed pattern: `prepared_state_worksheet`,
 `requested_answer_components`, `decisive_worksheet_excerpt`,
 `MONETARY RESPONSE CONTRACT`, `worksheet fallback applied`.
 
-Inverse: [hogwarts-v17.md](hogwarts-v17.md) and live aceron_b12_v1
-(06772876), where resolved/grounded are hardcoded None on the deciding
-turn, `final_text = result.text`, and no fallback writer exists — cleared
-regardless of how family-shaped the offline helpers look.
+Inverse: [hogwarts-v17.md](hogwarts-v17.md), where the model authors the
+slot from raw records plus a request-agnostic calculator. Do not cite
+aceron_b12_v1 as that inverse: [aceron-b12-v1.md](aceron-b12-v1.md)
+rejected the same worksheets without a fallback writer.

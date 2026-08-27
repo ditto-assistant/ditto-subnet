@@ -21,11 +21,14 @@ v10_open_program|phrase|Role::PHRASES|for attempt in
 REPLY WITH EXACTLY|WJFAST|reject.until
 prepared_state_worksheet|_reply_needs_review|_needs_correction|_fallback
 requested_answer_components|decisive_worksheet_excerpt|Reply exactly
+FINAL ANSWER TARGET|calculated_money_answer|prepare_linked_balance
+LINKED_RUNNING_QUANTITY|LINKED_SCOPED|_NET_CHANGE_QUERY_RE
 ```
 
-Zero hits on the first block is not a pass: aceron_b12-v5 rebuilt the
-family compilers and the overwrite under the fourth-line names. Grep the
-new names, then trace every writer of the served text field.
+Zero hits on banned identifiers is not a pass. Restacks rename the
+compiler (`final_source` → `calculated_money_answer`, `SIGN_AUDIT` →
+`RUNNING_QUANTITY`, remainder recipes as worksheets). Grep the new
+names, then trace every writer of the served text field.
 
 Then `read_screening_source_file` only at the hit. For same-owner resubmits,
 `get_copy_review_source_diff` then `read_copy_review_source_diff_file` shows
@@ -53,6 +56,9 @@ authorized.
 | Family compiler | closed `Program` / `try_solve` / phrase table | production-engine |
 | Character-match ladder | 5× Levenshtein / token corrections onto a bench phrase | production-engine |
 | Worksheet fallback overwrite | `*_reply_needs_review` value gate + `result.text =` fallback after the review budget (aceron-b12-v5) | Class D, limb (b) |
+| Family worksheet + answer target | `FINAL ANSWER TARGET`, `decisive_worksheet_excerpt`, host-computed remaining/net fields (aceron_b12_v1) | production-engine |
+| Renamed host overwrite | `calculated_money_answer` writing `result.result.text` (unione v16) | Class D, limb (b) |
+| Renamed remainder coach | `LINKED_RUNNING_QUANTITY_DRAFT_PROMPT` ships as the slot (lets_v602) | production-engine |
 | Scored-family decline gate | `Reply exactly: "I don't have that information"` + do-not-attempt on an answerable family | Class A, production-engine |
 
 Agent-returned tool traces are not proof the tool ran. Follow the code that
@@ -67,3 +73,6 @@ builds `RunResponse`.
   They are new reviews, not the ban rolling back.
 - Same-owner lexical near-duplicates of a rejected artifact auto-hold.
   Diff them; a real remediation clears (Hogwarts v17).
+- Never-reviewed emission recipient or scored ≥0.70 successor of a banned
+  row: inspect this SHA even if an ancestor was cleared this hour.
+- A prior keep of this UUID is not a skip if the cited path is still served.
