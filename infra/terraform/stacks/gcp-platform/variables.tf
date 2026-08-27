@@ -52,7 +52,7 @@ variable "vm_service_account_email" {
 # --- App VMs ---
 
 variable "app_boot_disk_gb" {
-  description = "Boot disk size in GB for the app VMs (checkout, uv cache, Docker, pm2 logs, relay trace spool). 30G filled production; keep at least 100G."
+  description = "Boot disk size in GB for the app VMs (checkout, uv cache, Docker, pm2 logs, relay trace spool). 30G filled production; keep at least 100G. google provider 6.x treats inline boot-disk size as ForceNew — grow live disks first, then pin this value."
   type        = number
   default     = 100
 }

@@ -53,15 +53,30 @@ uv cache returns ~3G on the next `uv sync`, traces and unbounded pm2 logs keep
 growing. Target is **100G**, pinned in `prod.auto.tfvars` and the variable
 default. Screener prod is already 160G for the same class of growth.
 
-Terraform always uses protected plan/apply. A size increase must show an
-**in-place disk grow**, never instance replacement (`deletion_protection` will
-fail a recreate). After apply, grow the filesystem if `df` still shows 30G:
+On google provider 6.50 (`~> 6.0`),
+`boot_disk.initialize_params.size` is **ForceNew**. A Terraform size change
+plans replacement of both app VMs; `lifecycle.prevent_destroy` and
+`deletion_protection` fail that apply. Grow **live first**, then let Terraform
+refresh to 100G as a no-op pin for new VMs.
 
 ```bash
+gcloud compute disks resize ditto-platform-prod --size=100GB \
+  --zone=us-central1-a --project=ditto-app-dev
+gcloud compute disks resize ditto-platform-dev --size=100GB \
+  --zone=us-central1-a --project=ditto-app-dev
+```
+
+Then IAP to each host, confirm the layout, grow the partition and ext4 (do not
+assume `/dev/sda1` without `lsblk`):
+
+```bash
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINT
+findmnt -n -o SOURCE,FSTYPE /
+# Debian needs cloud-guest-utils for growpart
 sudo growpart /dev/sda 1
 sudo resize2fs /dev/sda1
 df -h /
 ```
 
-Do not `gcloud compute disks resize` out of band unless the plan would replace
-the VM; then abort the apply and treat live grow as an incident exception.
+Protected plan/apply after the live size already matches. If a plan still
+shows instance replacement, abort.

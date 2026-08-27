@@ -115,7 +115,7 @@
       "read": [".agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md", ".agents/skills/gcloud-ditto-readonly/SKILL.md", "infra/terraform/stacks/gcp-platform/variables.tf"],
       "search": ["rg -n 'app_boot_disk_gb|No space left on device' infra .github/workflows/platform-deploy.yml .agents/skills"],
       "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh", "bash -n .agents/skills/ditto-subnet-release-ops/scripts/reclaim_platform_disk_caches.sh", "terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check"],
-      "invariants": ["Do not delete relay traces, Postgres, or .env to free space.", "Boot-disk growth is protected Terraform plan/apply and must not replace the VM.", "Cache reclaim requires the exact confirmation RECLAIM PLATFORM DISK CACHES."],
+      "invariants": ["Do not delete relay traces, Postgres, or .env to free space.", "On google provider 6.x, grow the boot disk with gcloud then filesystem grow; Terraform size is ForceNew and must not replace the VM.", "Cache reclaim requires the exact confirmation RECLAIM PLATFORM DISK CACHES."],
       "related": ["prod-readonly", "release-delivery", "infra-cloud"]
     },
     {

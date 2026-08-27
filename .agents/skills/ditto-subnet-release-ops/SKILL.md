@@ -49,9 +49,9 @@ only with confirmation, then grow via Terraform. Playbook:
 ```
 
 Do not delete `/opt/ditto-platform-relay/traces`. A 30G boot disk is too small;
-`app_boot_disk_gb` is 100. Protected plan/apply must show an in-place disk grow,
-never instance replacement. Grow the filesystem after apply if `df` still shows
-the old size.
+`app_boot_disk_gb` is 100. Provider 6.50 treats boot-disk size as ForceNew —
+grow with `gcloud compute disks resize` then `growpart`/`resize2fs` **before**
+Terraform. Protected apply must not replace the VMs.
 
 ## Capacity invariants
 
