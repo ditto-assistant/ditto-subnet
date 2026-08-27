@@ -1,6 +1,7 @@
 import { For, Show } from "solid-js";
 import type { JSX } from "solid-js";
 
+import { reconciledList } from "../../data/reconciled";
 import { agentName, agentVersionLabel, monoDisplay, relTime } from "../../lib/format";
 import { entityHref } from "../../lib/router";
 import type {
@@ -64,7 +65,10 @@ export function SubmissionBuildLane(props: {
   unavailable?: boolean;
   loading?: boolean;
 }): JSX.Element {
-  const builds = () => props.snapshot?.builds ?? [];
+  // Reconciled on agent_id: the wrap around this table is a horizontal scroll
+  // container, and replacing every row on the 5s operations tick narrowed the
+  // table for an instant and clamped the reader's scrollLeft back to 0.
+  const builds = reconciledList(() => props.snapshot?.builds ?? [], "agent_id");
 
   return (
     <section class="submission-builds" aria-labelledby="submission-builds-title">

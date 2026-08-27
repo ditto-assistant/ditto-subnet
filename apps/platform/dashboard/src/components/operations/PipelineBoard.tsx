@@ -2,9 +2,10 @@
 // markup 2761–2800, renderPipelineBoard 7976–8106, renderPolicyRescreenNotice
 // 6808–6832). Data comes from ONE shared /public/operations snapshot; the
 // screener feed only decorates Screening cards with live stages.
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Index, Show, createMemo, createSignal } from "solid-js";
 import type { JSX } from "solid-js";
 
+import { reconciledList } from "../../data/reconciled";
 import { agentName, agentVersionLabel, fx, relTime } from "../../lib/format";
 import { entityHref } from "../../lib/router";
 import { pushEntityRoute } from "../../stores/routeStore";
@@ -315,80 +316,94 @@ export function PipelineBoard(props: PipelineBoardProps): JSX.Element {
   );
   return (
     <div class="pipeline-overview" id="pipeline-overview" aria-label="Live submission queues">
-      <For each={columns()}>
-        {(column) => (
-          <section
-            class="pipeline-column"
-            data-pipeline-stage={column.def.status}
-            aria-labelledby={column.def.titleId}
-            data-active={
-              props.unavailable || props.loading ? undefined : column.active ? "true" : "false"
-            }
-          >
-            <div class="pipeline-node" aria-hidden="true">
-              {column.def.node}
-            </div>
-            <div class="pipeline-column-head">
-              <h3 id={column.def.titleId}>{column.def.title}</h3>
-              <span class="pipeline-count" id={column.def.countId}>
-                <Show when={!props.unavailable && !props.loading} fallback={"–"}>
-                  {String(column.displayedCount)}
-                  <Show when={column.stuckCount > 0}>
-                    <button
-                      type="button"
-                      class="pipeline-stuck-count"
-                      data-pipeline-stuck-filter
-                      aria-pressed={showStuck() ? "true" : "false"}
-                      title={
-                        (showStuck() ? "Show actionable queue. " : "Show stuck submissions. ") +
-                        column.stuckCount +
-                        " submission" +
-                        (column.stuckCount === 1 ? "" : "s") +
-                        " exhausted the validator retry budget and need an operator retry grant."
-                      }
-                      onClick={() => setShowStuck((value) => !value)}
-                    >
-                      {column.stuckCount} stuck
-                    </button>
+      {/* Index, not For: the board is the four fixed pipeline stages and what
+          changes every 5s tick is each stage's contents, not the set of
+          stages. Keyed by reference, <For> saw a wholly new view object per
+          column on every /public/operations poll and rebuilt all four
+          <section>s — which threw away the .pipeline-items scroll container
+          itself, so a reader looking down a queue was returned to the top
+          every few seconds. */}
+      <Index each={columns()}>
+        {(column) => {
+          // Reconciled per lane so a poll that re-reports the same submission
+          // keeps that card's node — otherwise the lane's <For> replaces
+          // every card each tick, which clamps the container's scrollTop back
+          // to the top even though the container itself now survives.
+          const items = reconciledList(() => column().items, "key");
+          return (
+            <section
+              class="pipeline-column"
+              data-pipeline-stage={column().def.status}
+              aria-labelledby={column().def.titleId}
+              data-active={
+                props.unavailable || props.loading ? undefined : column().active ? "true" : "false"
+              }
+            >
+              <div class="pipeline-node" aria-hidden="true">
+                {column().def.node}
+              </div>
+              <div class="pipeline-column-head">
+                <h3 id={column().def.titleId}>{column().def.title}</h3>
+                <span class="pipeline-count" id={column().def.countId}>
+                  <Show when={!props.unavailable && !props.loading} fallback={"–"}>
+                    {String(column().displayedCount)}
+                    <Show when={column().stuckCount > 0}>
+                      <button
+                        type="button"
+                        class="pipeline-stuck-count"
+                        data-pipeline-stuck-filter
+                        aria-pressed={showStuck() ? "true" : "false"}
+                        title={
+                          (showStuck() ? "Show actionable queue. " : "Show stuck submissions. ") +
+                          column().stuckCount +
+                          " submission" +
+                          (column().stuckCount === 1 ? "" : "s") +
+                          " exhausted the validator retry budget and need an operator retry grant."
+                        }
+                        onClick={() => setShowStuck((value) => !value)}
+                      >
+                        {column().stuckCount} stuck
+                      </button>
+                    </Show>
                   </Show>
-                </Show>
-              </span>
-            </div>
-            <div class="pipeline-items" id={column.def.bodyId}>
-              <Show
-                when={!props.unavailable}
-                fallback={<div class="pipeline-empty">Queue unavailable.</div>}
-              >
-                <Show when={!props.loading} fallback={<div class="pipeline-empty">Loading…</div>}>
-                  <Show
-                    when={column.items.length}
-                    fallback={<div class="pipeline-empty">{column.def.empty}</div>}
-                  >
-                    <For each={column.items}>
-                      {(item) => (
-                        <PipelineCard
-                          item={item}
-                          column={column.def.status}
-                          screeners={props.screeners}
-                          activeVersion={props.activeVersion}
-                        />
-                      )}
-                    </For>
-                    <Show when={column.hiddenCount > 0}>
-                      <div class="pipeline-more">
-                        {column.hiddenCount +
-                          " older " +
-                          (column.hiddenCount === 1 ? "submission" : "submissions") +
-                          " in Activity"}
-                      </div>
+                </span>
+              </div>
+              <div class="pipeline-items" id={column().def.bodyId}>
+                <Show
+                  when={!props.unavailable}
+                  fallback={<div class="pipeline-empty">Queue unavailable.</div>}
+                >
+                  <Show when={!props.loading} fallback={<div class="pipeline-empty">Loading…</div>}>
+                    <Show
+                      when={items().length}
+                      fallback={<div class="pipeline-empty">{column().def.empty}</div>}
+                    >
+                      <For each={items()}>
+                        {(item) => (
+                          <PipelineCard
+                            item={item}
+                            column={column().def.status}
+                            screeners={props.screeners}
+                            activeVersion={props.activeVersion}
+                          />
+                        )}
+                      </For>
+                      <Show when={column().hiddenCount > 0}>
+                        <div class="pipeline-more">
+                          {column().hiddenCount +
+                            " older " +
+                            (column().hiddenCount === 1 ? "submission" : "submissions") +
+                            " in Activity"}
+                        </div>
+                      </Show>
                     </Show>
                   </Show>
                 </Show>
-              </Show>
-            </div>
-          </section>
-        )}
-      </For>
+              </div>
+            </section>
+          );
+        }}
+      </Index>
     </div>
   );
 }
