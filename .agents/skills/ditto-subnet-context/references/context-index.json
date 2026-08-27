@@ -101,9 +101,22 @@
       "owns": [".agents/skills/gcloud-ditto-readonly"],
       "read": [".agents/skills/gcloud-ditto-readonly/SKILL.md"],
       "search": ["rg -n 'def logs|TARGON_API_KEY|targon_cli' services/screener-orchestrator apps/platform"],
-      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/gcloud-ditto-readonly", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/query_targon.sh", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/query_prod_db.sh", "uv run --project services/screener-orchestrator pytest services/screener-orchestrator/tests/test_targon_cli.py services/screener-orchestrator/tests/test_targon_client.py -q"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "test -L .claude/skills/gcloud-ditto-readonly", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/query_targon.sh", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/query_prod_db.sh", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh", "uv run --project services/screener-orchestrator pytest services/screener-orchestrator/tests/test_targon_cli.py services/screener-orchestrator/tests/test_targon_client.py -q"],
       "invariants": ["Never print or inspect TARGON_API_KEY; stream it from Secret Manager into --api-key-stdin.", "This workflow is read-only; do not create, probe, suspend, or delete rentals from it."],
-      "related": ["screener-capacity", "platform-api", "infra-cloud"]
+      "related": ["screener-capacity", "platform-api", "infra-cloud", "platform-host-disk"]
+    },
+    {
+      "id": "platform-host-disk",
+      "title": "Platform app VM disk inspect, cache reclaim, and boot size",
+      "keywords": ["no space left on device", "platform host disk", "app_boot_disk", "ditto-platform-prod disk", "platform disk full", "unable to write loose object"],
+      "summary": "A full 30G Platform boot disk blocks git fetch during platform-deploy. Inspect via IAP, reclaim caches with confirmation, then grow app_boot_disk_gb through protected Terraform.",
+      "skills": ["gcloud-ditto-readonly", "ditto-subnet-release-ops"],
+      "owns": [".agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh", ".agents/skills/ditto-subnet-release-ops/scripts/reclaim_platform_disk_caches.sh", ".agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md"],
+      "read": [".agents/skills/ditto-subnet-release-ops/references/platform-host-disk.md", ".agents/skills/gcloud-ditto-readonly/SKILL.md", "infra/terraform/stacks/gcp-platform/variables.tf"],
+      "search": ["rg -n 'app_boot_disk_gb|No space left on device' infra .github/workflows/platform-deploy.yml .agents/skills"],
+      "validate": ["python3 .agents/skills/ditto-subnet-context/scripts/lookup-context.py --check", "bash -n .agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh", "bash -n .agents/skills/ditto-subnet-release-ops/scripts/reclaim_platform_disk_caches.sh", "terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check"],
+      "invariants": ["Do not delete relay traces, Postgres, or .env to free space.", "Boot-disk growth is protected Terraform plan/apply and must not replace the VM.", "Cache reclaim requires the exact confirmation RECLAIM PLATFORM DISK CACHES."],
+      "related": ["prod-readonly", "release-delivery", "infra-cloud"]
     },
     {
       "id": "runtime-profiling",
@@ -285,7 +298,7 @@
       "search": ["rg -n 'needs\\.|uses:|environment:|if:' .github/workflows/release.yml", "rg -n '^\\[component\\.|depends_on|paths' release/components.toml"],
       "validate": ["uv run pytest ditto/tests/test_release_plan.py ditto/tests/test_release_workflow.py -q", "git diff --check"],
       "invariants": ["A fix releases every affected component; infra changes remain protected plan/apply.", "API changes affect Backroom, dashboard-only changes do not."],
-      "related": ["infra-cloud", "screener-capacity", "backroom"]
+      "related": ["infra-cloud", "screener-capacity", "backroom", "platform-host-disk"]
     },
     {
       "id": "infra-cloud",
@@ -298,7 +311,7 @@
       "search": ["rg -n 'workload_identity|service_account|secret|cloudflare' infra/terraform", "rg -n 'deploy|systemd|pm2|worker' infra/ansible .github/workflows"],
       "validate": ["terraform -chdir=infra/terraform/stacks/gcp-platform fmt -check", "terraform -chdir=infra/terraform/stacks/gcp-platform validate", "terraform -chdir=infra/terraform/stacks/cloudflare-dittobench validate"],
       "invariants": ["Never read, print, or persist provider secret values while testing integrations.", "Automatic app deploys and protected infrastructure apply are separate authority boundaries."],
-      "related": ["release-delivery", "screener-capacity", "backroom", "preview-channels"]
+      "related": ["release-delivery", "screener-capacity", "backroom", "preview-channels", "platform-host-disk"]
     },
     {
       "id": "preview-channels",

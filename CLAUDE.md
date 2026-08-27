@@ -25,8 +25,8 @@ Load only the returned anchors and the relevant specialized skill:
 - `.agents/skills/ditto-subnet-preview` for preview plan validation, Foundry-style
   cheatcodes, the localstack/phase-1 scorer, and `.github/workflows/preview.yml`;
 - `.agents/skills/wandb-ops` for live W&B run, metric, and table diagnosis;
-- `.agents/skills/gcloud-ditto-readonly` for production DB reads and Targon
-  rental logs;
+- `.agents/skills/gcloud-ditto-readonly` for production DB reads, Targon
+  rental logs, and Platform app-VM disk inventory;
 - `.agents/skills/ditto-subnet-worktree` plus `.agents/skills/github` for
   isolation and stacked PRs;
 - `.agents/skills/ditto-subnet-dependabot-review` for Dependabot and other

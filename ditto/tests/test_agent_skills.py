@@ -420,6 +420,15 @@ def test_targon_kaniko_log_query_prefers_readonly_skill_over_capacity() -> None:
     assert "screener-capacity" in topic_ids or len(topic_ids) == 1
 
 
+def test_platform_disk_full_routes_to_host_disk_topic() -> None:
+    topics = lookup("platform deploy no space left on device")
+    topic_ids = [str(topic["id"]) for topic in topics]
+    assert topic_ids[0] == "platform-host-disk"
+    named = {name for topic in topics for name in topic_list(topic, "skills")}
+    assert "gcloud-ditto-readonly" in named
+    assert "ditto-subnet-release-ops" in named
+
+
 def test_preview_compose_stack_does_not_route_to_worktrees() -> None:
     topic_ids = {
         str(topic["id"]) for topic in lookup("preview compose stack attach-prod-api")

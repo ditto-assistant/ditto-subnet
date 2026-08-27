@@ -1,4 +1,4 @@
 interface:
   display_name: "Ditto gcloud readonly debug"
-  short_description: "Read prod Postgres and Targon rental logs via gcloud"
-  default_prompt: "Use $gcloud-ditto-readonly to answer from the production ditto-platform database or Targon rental logs without printing credentials."
+  short_description: "Read prod Postgres, Targon logs, and Platform host disk"
+  default_prompt: "Use $gcloud-ditto-readonly to answer from the production ditto-platform database, Targon rental logs, or app-VM disk inventory without printing credentials."

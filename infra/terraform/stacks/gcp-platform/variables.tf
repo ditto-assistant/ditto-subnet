@@ -52,9 +52,9 @@ variable "vm_service_account_email" {
 # --- App VMs ---
 
 variable "app_boot_disk_gb" {
-  description = "Boot disk size in GB for the app VMs (holds the repo checkout, uv venv, Docker images)."
+  description = "Boot disk size in GB for the app VMs (checkout, uv cache, Docker, pm2 logs, relay trace spool). 30G filled production; keep at least 100G."
   type        = number
-  default     = 30
+  default     = 100
 }
 
 variable "run_service_account_email" {
