@@ -8,7 +8,9 @@
 import { batch, createSignal } from "solid-js";
 import type { Accessor } from "solid-js";
 
+import { reconciledList } from "../../data/reconciled";
 import { getJSON } from "../../lib/api";
+import { rememberScroll } from "../../lib/scroll";
 import {
   ENTITY_PAGES,
   currentPageName,
@@ -67,7 +69,11 @@ export function createActivityStore(): ActivityStore {
   const [total, setTotal] = createSignal<number | null>(null);
   const [statusCounts, setStatusCounts] = createSignal<Record<string, number>>({});
   const [downloadableCount, setDownloadableCount] = createSignal(0);
-  const [entries, setEntries] = createSignal<ActivityStatusEntry[]>([]);
+  // The silent 30s tick replaces the whole page of rows; reconciled on
+  // agent_id an unchanged submission keeps its DOM node, so the tick no
+  // longer discards focus, an open evidence row, or a selection.
+  const [rawEntries, setEntries] = createSignal<ActivityStatusEntry[]>([]);
+  const entries = reconciledList(rawEntries, "agent_id");
   const [unavailable, setUnavailable] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [loaded, setLoaded] = createSignal(false);
@@ -145,6 +151,9 @@ export function createActivityStore(): ActivityStore {
     }
     const entity = readEntityRoute();
     if (entity && !entity.full) urlQuery.set(entity.kind, entity.id);
+    // A pushed filter/page mints a history entry; the offset the reader is
+    // leaving has to be filed before the URL changes under it.
+    if (push) rememberScroll();
     const pageName =
       currentPageName() || (entity && !entity.full ? ENTITY_PAGES[entity.kind] : "overview");
     history[push ? "pushState" : "replaceState"]({}, "", spaHref(pageName || "overview", urlQuery));

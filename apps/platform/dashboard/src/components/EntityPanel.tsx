@@ -51,6 +51,7 @@ import {
   unrankedKind,
 } from "../lib/scoring";
 import type { ContinualAggregate } from "../lib/scoring";
+import { scrollRestoreOwnsEntry } from "../lib/scroll";
 import { closeEntityRoute, currentPage, entityRoute, syncFromLocation } from "../stores/routeStore";
 import type {
   FleetEntry,
@@ -419,7 +420,10 @@ export function EntityPanel(props: EntityPanelProps): JSX.Element {
       document.body.classList.toggle("entity-page", fullPage);
       if (!lastFocused) lastFocused = document.activeElement;
       if (wrap) wrap.inert = !fullPage;
-      if (fullPage) {
+      // Opening the full-page route starts at the top — unless the reader got
+      // here by reloading or going Back, in which case the scroll module is
+      // already restoring the offset they left and must win.
+      if (fullPage && !scrollRestoreOwnsEntry()) {
         try {
           window.scrollTo(0, 0);
         } catch {

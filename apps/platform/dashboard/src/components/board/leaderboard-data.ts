@@ -13,6 +13,7 @@
 import { createMemo, createRoot } from "solid-js";
 import type { Accessor } from "solid-js";
 
+import { reconciledList } from "../../data/reconciled";
 import { useEndpoint } from "../../data/useEndpoint";
 import { weightsResource } from "../../data/weights";
 import { REFRESH_MS } from "../../lib/config";
@@ -99,11 +100,16 @@ function buildStore(): LeaderboardStore {
     const d = payload();
     return d ? rolloutSettledView(d) : false;
   });
-  const entries = createMemo<BoardEntry[]>(() => {
+  // rankEntries spreads every wire entry into a fresh object, so a plain memo
+  // handed <For> a wholly new array on every poll and the table was rebuilt
+  // from scratch each tick — losing keyboard focus, open rows, and selection.
+  // Reconciled on agent_id, an unchanged row keeps its identity and its DOM.
+  const ranked = createMemo<BoardEntry[]>(() => {
     const d = payload();
     if (!d) return [];
     return rankEntries((d.entries ?? []) as BoardEntry[], settledView());
   });
+  const entries = reconciledList(ranked, "agent_id");
   const emissions = createMemo<EmissionsFold | null>(() => payload()?.emissions ?? null);
   const efficiency = createMemo<EfficiencyBoardState | null>(() => payload()?.efficiency ?? null);
   const champion = createMemo<BoardEntry | null>(() => {
