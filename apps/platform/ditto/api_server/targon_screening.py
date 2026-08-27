@@ -75,6 +75,30 @@ def _certified_low_risk(observation: SourceReviewObservationPayload | None) -> b
     )
 
 
+def _review_failed_retryable(
+    observation: SourceReviewObservationPayload | None,
+) -> bool:
+    """Whether the reviewer reported a pre-verdict infrastructure failure.
+
+    The worker marks transport and model-output failures (for example
+    ``source-review-model-response-invalid``) as ``retryable_infra`` expecting
+    the attempt to burn and rescreen. Quarantining them instead held miners
+    under an anti-cheat label for what the reviewer itself called an outage.
+    Only the explicit self-report with no finding qualifies: there is no
+    evidence to weigh, so retrying cannot release anything the court derived.
+    Every other non-certified observation — a finding, an elevated risk, an
+    inconclusive budget outcome, or an unparseable payload — stays fail-closed
+    in quarantine.
+    """
+    return bool(
+        observation is not None
+        and not observation.ok
+        and observation.finding is None
+        and observation.finding_digest is None
+        and observation.failure_disposition == "retryable_infra"
+    )
+
+
 async def admit_targon_screening_work(
     session: AsyncSession,
     *,
@@ -314,6 +338,15 @@ async def maybe_finalize_targon_screen(
             except ValueError:
                 observation = None
         if not _certified_low_risk(observation):
+            if _review_failed_retryable(observation):
+                await _fail_retryable(
+                    session,
+                    attempt,
+                    reason="Agentic source review failed before reaching a verdict",
+                    code="source-review-retryable-infra",
+                    now=now,
+                )
+                return True
             await _quarantine(
                 session,
                 attempt=attempt,
