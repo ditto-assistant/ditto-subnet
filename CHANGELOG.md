@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.115.3 (2026-08-27)
+
+### Bug Fixes
+
+- **platform**: Honor retryable_infra source-review dispositions
+  ([#1191](https://github.com/ditto-assistant/ditto-subnet/pull/1191),
+  [`66443bb`](https://github.com/ditto-assistant/ditto-subnet/commit/66443bb4def2b95718b9dc97029f42c32f69f425))
+
+- **screener**: Recover provider error bodies and toolless model turns
+  ([#1192](https://github.com/ditto-assistant/ditto-subnet/pull/1192),
+  [`01b00ac`](https://github.com/ditto-assistant/ditto-subnet/commit/01b00ac1cc66eb7d9ce626cde1bae52291501a11))
+
+- **validator**: Keep canonical slots polling during retests
+  ([#1195](https://github.com/ditto-assistant/ditto-subnet/pull/1195),
+  [`afd3120`](https://github.com/ditto-assistant/ditto-subnet/commit/afd31205233948e6e6712e0e8518948ef322692d))
+
+
 ## v0.115.2 (2026-08-27)
 
 ### Bug Fixes
