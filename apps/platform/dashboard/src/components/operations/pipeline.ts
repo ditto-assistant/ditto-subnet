@@ -14,6 +14,19 @@ export interface PipelineEntryExt extends PipelineEntry {
 export interface IndexedEntry {
   entry: PipelineEntryExt;
   index: number;
+  /** Stable across polls, so the lane's <For> can keep a card's DOM node when
+   * the 5s snapshot re-reports the same submission. `index` is the position
+   * in the snapshot and shifts whenever anything is admitted ahead of it, so
+   * it cannot be the identity — the submission id is. */
+  key: string;
+}
+
+/** A lane row's identity. One agent_id appears at most once per lane, so it
+ * keys the row; a snapshot row without one falls back to its position, which
+ * is no worse than the positional identity <For> had before. */
+function entryKey(entry: PipelineEntryExt, index: number): string {
+  const id = entry.agent_id;
+  return id == null || id === "" ? "i:" + index : "a:" + String(id);
 }
 
 /** Waiting-lane order: validator queue rank ascending, unranked last
@@ -255,7 +268,7 @@ export function pipelineColumnViews(
           ? String(entry.status || "")
           : pipelineBoardStage(entry, activeVersion);
       if (def.statuses.indexOf(stage) >= 0) {
-        indexed.push({ entry, index });
+        indexed.push({ entry, index, key: entryKey(entry, index) });
       }
     });
     if (def.status === "scored") {
@@ -346,7 +359,9 @@ export function integrityReviewView(
 ): IntegrityReviewView {
   const indexed: IndexedEntry[] = [];
   entries.forEach((entry, index) => {
-    if (entry.status === "under_review") indexed.push({ entry, index });
+    if (entry.status === "under_review") {
+      indexed.push({ entry, index, key: entryKey(entry, index) });
+    }
   });
   return {
     count: Number(statusCounts.under_review || indexed.length),
