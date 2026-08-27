@@ -19,3 +19,8 @@ enable_screener_capacity_controller = true
 screener_fleet_min_replicas         = 0
 screener_fleet_max_replicas         = 6
 screener_fleet_backlog_per_instance = 6
+
+# App VMs share one boot disk size. 30G filled ditto-platform-prod during
+# git fetch (uv cache + unbounded pm2 logs + relay trace spool). Provider 6.x
+# ForceNew on size: grow the live disks, then pin 100G here.
+app_boot_disk_gb = 100

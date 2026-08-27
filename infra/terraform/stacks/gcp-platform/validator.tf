@@ -34,7 +34,7 @@ variable "enable_validator" {
 }
 
 variable "validator_boot_disk_gb" {
-  description = "Boot disk for the validator VM. Holds the repo checkouts, the uv venv, Go build cache, Docker images, and cargo target dirs for miner builds — so larger than the app VMs."
+  description = "Boot disk for the validator VM. Holds the repo checkouts, the uv venv, Go build cache, Docker images, and cargo target dirs for miner builds."
   type        = number
   default     = 80
 }

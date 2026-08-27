@@ -52,7 +52,7 @@ Load a skill named in the lookup `Skills:` list. The usual owners:
 - LongMem confirmation bring-up or live canary: `$longmem-confirmation-rollout`
 - Python py-spy, Go pprof, live hot spots, or performance comparisons: `$ditto-subnet-runtime-profiling`
 - Semantic release, deployments, screeners, Targon/GCE, GCP, Cloudflare, Terraform, or Ansible: `$ditto-subnet-release-ops`
-- Production Postgres or Targon rental logs: `$gcloud-ditto-readonly`
+- Production Postgres, Targon rental logs, or Platform host disk inspect: `$gcloud-ditto-readonly`
 - Miner rehearsal, local scoring, pre-submit review: `$mine`
 - Miner Discord / DM replies: `$miner-comms`
 - W&B run history: `$wandb-ops`

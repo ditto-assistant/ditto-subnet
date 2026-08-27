@@ -35,6 +35,24 @@ Read [`references/release-ops-index.md`](references/release-ops-index.md), then 
 - Never place cloud, GitHub, Platform, or provider credentials in untrusted build/runtime environments.
 - Do not create service accounts or IAM bindings out of band merely to bypass an unapplied Terraform bootstrap.
 
+## Platform app VM disk
+
+`deploy_platform` `No space left on device` during `git fetch` is a full boot
+disk on `ditto-platform-prod`, not a bad release SHA. Inspect, reclaim caches
+only with confirmation, then grow via Terraform. Playbook:
+[`references/platform-host-disk.md`](references/platform-host-disk.md).
+
+```bash
+.agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh
+.agents/skills/ditto-subnet-release-ops/scripts/reclaim_platform_disk_caches.sh \
+  "RECLAIM PLATFORM DISK CACHES"
+```
+
+Do not delete `/opt/ditto-platform-relay/traces`. A 30G boot disk is too small;
+`app_boot_disk_gb` is 100. Provider 6.50 treats boot-disk size as ForceNew —
+grow with `gcloud compute disks resize` then `growpart`/`resize2fs` **before**
+Terraform. Protected apply must not replace the VMs.
+
 ## Capacity invariants
 
 Targon is primary. GCE normally targets zero and is a bounded residual/failure fallback. The controller must be fenced and count pending workers; an independently fenced GCP watchdog may add fallback capacity only when backlog exists and the primary heartbeat is stale. Fail closed when provider isolation cannot be proven.

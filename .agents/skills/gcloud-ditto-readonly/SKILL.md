@@ -1,6 +1,6 @@
 ---
 name: gcloud-ditto-readonly
-description: Safely read SN118 production Platform Postgres and Targon rental logs/state via gcloud. Use for prod DB lookups, counts, audits, EXPLAIN ANALYZE, Targon rental logs, Kaniko/builder logs, wrk- workloads, Targon API state, or live screening-build diagnosis. Never prints credentials.
+description: Safely read SN118 production Platform Postgres, Targon rental logs/state, and Platform app-VM disk inventory via gcloud. Use for prod DB lookups, counts, audits, EXPLAIN ANALYZE, Targon rental logs, Kaniko/builder logs, wrk- workloads, Targon API state, live screening-build diagnosis, or a host disk-full during platform-deploy. Never prints credentials.
 ---
 
 # Read-only SN118 production debug
@@ -38,6 +38,20 @@ Stream `TARGON_API_KEY` only through `scripts/query_targon.sh` into `targon_cli 
 ```
 
 Read-only `logs` / `state` / `list` only. Stop for creates, deploys, probes, suspends, or deletes. Resolve `wrk-` uids from Platform `resource_id` or `list`. Fetch logs while the replica is `running`; after `error` or delete, `GET .../logs` often 404s. Targon `exit code 2` after a successful complete is often teardown, not ARCHIVE. Kaniko compiles are long; start `--tail` at 400. `TARGON_TIMEOUT_SECONDS` at most 120. Org slug `ditto`.
+
+## Host disk
+
+Read-only inventory when `platform-deploy` fails with `No space left on device`
+during `git fetch`. `/tmp` is tmpfs and does not free `/`.
+
+```bash
+.agents/skills/gcloud-ditto-readonly/scripts/inspect_platform_disk.sh
+```
+
+Cache reclaim and boot-disk growth are `$ditto-subnet-release-ops`
+([`platform-host-disk.md`](../ditto-subnet-release-ops/references/platform-host-disk.md)).
+Do not truncate live logs, delete relay traces, or resize the disk from this
+skill.
 
 ## Failures
 
