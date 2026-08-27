@@ -884,6 +884,158 @@ async def test_agent_still_claimed_below_the_cap(session: AsyncSession):
     assert quarantine is None
 
 
+async def _add_provider_backoff_attempts(
+    session: AsyncSession,
+    agent: Agent,
+    count: int,
+    *,
+    base: datetime,
+    reason_code: str = "targon-runtime-unavailable",
+) -> None:
+    """Seed terminal ``failed`` provider-backoff attempts, one per lease cycle."""
+    async with session.begin():
+        for index in range(count):
+            started = base + timedelta(minutes=70 * index)
+            session.add(
+                ScreeningAttempt(
+                    attempt_id=uuid4(),
+                    agent_id=agent.agent_id,
+                    screener_hotkey=_SCREENER,
+                    policy_version=SCREENING_POLICY_VERSION,
+                    status="failed",
+                    started_at=started,
+                    deadline=started + timedelta(minutes=70),
+                    finished_at=started + timedelta(minutes=13),
+                    public_reason=("Targon runtime smoke did not admit this archive"),
+                    reason_code=reason_code,
+                )
+            )
+
+
+async def _add_peer_pass(session: AsyncSession, *, finished_at: datetime) -> None:
+    """Seed a different agent whose attempt PASSED at ``finished_at``."""
+    peer = Agent(
+        agent_id=uuid4(),
+        miner_hotkey=f"5HK-peer-{uuid4().hex[:8]}",
+        name=f"peer-{uuid4().hex[:8]}",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.SCORED,
+    )
+    peer.screening_policy_version = SCREENING_POLICY_VERSION
+    async with session.begin():
+        session.add(peer)
+        session.add(
+            ScreeningAttempt(
+                attempt_id=uuid4(),
+                agent_id=peer.agent_id,
+                screener_hotkey=_SCREENER,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="passed",
+                started_at=finished_at - timedelta(minutes=12),
+                deadline=finished_at + timedelta(minutes=58),
+                finished_at=finished_at,
+            )
+        )
+
+
+async def test_agent_parked_after_repeated_provider_backoff_with_peer_evidence(
+    session: AsyncSession,
+):
+    """A deterministic per-artifact runtime failure parks after the cap.
+
+    Regression for aceron_b12-v4 (2026-08-26): its image built on both
+    providers but the runtime smoke replica never came up, so every attempt
+    failed ``targon-runtime-unavailable`` while sibling submissions kept
+    passing. Only ``expired`` attempts counted toward the park cap, so the
+    agent rebuilt Kaniko every 70-minute lease forever and the miner saw
+    "waiting for admission" indefinitely. Failed provider-backoff attempts
+    with peer evidence (another agent passed inside the same lease window)
+    must consume the same budget and park for operator review.
+    """
+    agent = await _seed_failed_agent(session)
+    base = datetime.now(UTC) - timedelta(hours=8)
+    await _add_provider_backoff_attempts(
+        session, agent, MAX_SCREENING_EXPIRIES, base=base
+    )
+    for index in range(MAX_SCREENING_EXPIRIES):
+        await _add_peer_pass(
+            session, finished_at=base + timedelta(minutes=70 * index + 30)
+        )
+
+    claimed = await _claim(session)
+
+    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
+    assert agent.agent_id not in claimed_ids
+    refreshed = await session.get(Agent, agent.agent_id)
+    assert refreshed is not None
+    assert refreshed.status == AgentStatus.QUARANTINED
+    assert refreshed.screening_reason_code == "repeatedly-inconclusive"
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine).where(
+            ScreeningQuarantine.agent_id == agent.agent_id
+        )
+    )
+    assert quarantine is not None
+    assert quarantine.status == "active"
+
+
+async def test_provider_backoff_without_peer_evidence_does_not_park(
+    session: AsyncSession,
+):
+    """A fleet-wide provider outage must not mass-park in-flight agents.
+
+    With no peer passing inside any of the failed lease windows there is no
+    evidence against the artifact -- the same failures could be a Targon /
+    Cloud Run outage -- so the agent stays claimable once its backoff ends.
+    """
+    agent = await _seed_failed_agent(session)
+    base = datetime.now(UTC) - timedelta(hours=8)
+    await _add_provider_backoff_attempts(
+        session, agent, MAX_SCREENING_EXPIRIES, base=base
+    )
+
+    claimed = await _claim(session)
+
+    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
+    assert agent.agent_id in claimed_ids
+    refreshed = await session.get(Agent, agent.agent_id)
+    assert refreshed is not None
+    assert refreshed.status == AgentStatus.SCREENING
+    quarantine = await session.scalar(
+        select(ScreeningQuarantine).where(
+            ScreeningQuarantine.agent_id == agent.agent_id
+        )
+    )
+    assert quarantine is None
+
+
+async def test_peer_pass_outside_the_lease_window_is_not_evidence(
+    session: AsyncSession,
+):
+    """Peer passes before or after a failed lease window do not count.
+
+    A pass that predates the failure says nothing about the lane's health at
+    failure time (an outage may have begun in between), so each backoff
+    failure needs a peer pass inside its own ``started_at``..``deadline``.
+    """
+    agent = await _seed_failed_agent(session)
+    base = datetime.now(UTC) - timedelta(hours=8)
+    await _add_provider_backoff_attempts(
+        session, agent, MAX_SCREENING_EXPIRIES, base=base
+    )
+    # One peer pass long before the first attempt, one long after the last.
+    await _add_peer_pass(session, finished_at=base - timedelta(hours=1))
+    await _add_peer_pass(
+        session,
+        finished_at=base + timedelta(minutes=70 * MAX_SCREENING_EXPIRIES + 30),
+    )
+
+    claimed = await _claim(session)
+
+    claimed_ids = {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
+    assert agent.agent_id in claimed_ids
+
+
 async def test_fresh_agent_runs_before_older_retry(session: AsyncSession):
     retry = await _seed_failed_agent_with_age(
         session, name="older-retry", age=timedelta(days=2)
