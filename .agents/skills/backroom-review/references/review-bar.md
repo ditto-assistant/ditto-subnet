@@ -3,6 +3,11 @@
 Apply this bar to every scored or live high-rank agent. A high score is a
 reason to inspect, not evidence of cheating.
 
+Use the screening policy recorded on the exact submission. Policy v9 and
+earlier retain the historical holdings below. Policy v10 adds the independent
+I4/I5/I7 court; do not silently reinterpret historical clears without an
+explicit v10 rescreen.
+
 ## Two-limb refusal test
 
 After any derived value is computed or injected:
@@ -38,6 +43,26 @@ it. Missing old identifiers (`try_solve` gone, `SIGN_AUDIT` renamed
 `RUNNING_QUANTITY`, `final_source` renamed `calculated_money_answer`) is a
 search lead, not a keep.
 
+## Policy-v10 independent invariants
+
+- **I4 — derived-value authority.** Passing both limbs is not a defense when an
+  engine-derived value is labelled worked out, verified, exact, or
+  do-not-recompute. The pass is an explicitly untrusted candidate beside
+  complete records, with disagreement accepted and no correctness gate.
+- **I5 — production engine.** Closed answer-family or operand-recipe routers,
+  semantic sheets, phrase tables, generator-fitted typo ladders, and
+  family-specific instruction compilers fail independently of the two limbs.
+  Product-surface routing and runtime-described generic engines pass.
+- **I7 — model tool planning.** Policy/safety/authorization filtering and a
+  natural singleton capability class pass. Request-keyed rules or trained
+  heads that preselect the exact tool count/set/order inside a multi-tool class,
+  replace the request catalog with that plan, or expose only the host-selected
+  next tool fail.
+
+For each invariant, record the matching published pass clause and why it does
+or does not causally displace the breach. A model call alone never displaces
+I4, I5, or I7.
+
 ## Class labels (search aids, not independent tests)
 
 - **Class A — model bypass.** Pre-model `RunResponse`, `prompt_tokens: 0`,
@@ -64,8 +89,9 @@ avoid citing the limbs.
 
 ## Usually legitimate
 
-- Prompt grounding that still sends records and serves the model reply
-  (Hogwarts v17 glossary-as-context; JJJ derive-as-prompt).
+- Policy-v9 prompt grounding that still sends records and serves the model
+  reply. Under v10, derived context must satisfy the I4 untrusted-candidate
+  pass rather than relying on two-limb status alone.
 - Schema-derived tool arguments and live endpoint execution.
 - Overlapping scored `/run` on the process-wide inference URL; missing
   `inference_base_url` or unused `case_scoped_inference_v1`.

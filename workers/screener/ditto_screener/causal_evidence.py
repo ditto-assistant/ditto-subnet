@@ -19,6 +19,9 @@ _TRANSITIONS_BY_CATEGORY = {
             SourceReviewAuthorityTransition.TOOL_EXECUTION_BYPASSED,
             SourceReviewAuthorityTransition.TOOL_TRAJECTORY_FABRICATED,
             SourceReviewAuthorityTransition.SELECTIVE_MODEL_DISABLEMENT,
+            SourceReviewAuthorityTransition.DERIVED_VALUE_AUTHORITATIVE,
+            SourceReviewAuthorityTransition.FAMILY_COMPILER_AUTHORITATIVE,
+            SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED,
         }
     ),
     "scorer_contract_manipulation": frozenset(
@@ -74,6 +77,29 @@ _EFFECTS_BY_TRANSITION = {
             SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
         }
     ),
+    SourceReviewAuthorityTransition.DERIVED_VALUE_AUTHORITATIVE: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.FAMILY_COMPILER_AUTHORITATIVE: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.TOOL_CALLS,
+            SourceReviewScorerVisibleEffect.VALIDATOR_OBSERVED_TRAJECTORY,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
 }
 _EFFECT_LABELS = {
     SourceReviewScorerVisibleEffect.FINAL_TEXT: "the `final_text` field",
@@ -101,6 +127,15 @@ _TRANSITION_PHRASES = {
     ),
     SourceReviewAuthorityTransition.SCORER_FIELD_REWRITTEN: (
         "used score-driven logic to rewrite"
+    ),
+    SourceReviewAuthorityTransition.DERIVED_VALUE_AUTHORITATIVE: (
+        "made an engine-derived value authoritative in"
+    ),
+    SourceReviewAuthorityTransition.FAMILY_COMPILER_AUTHORITATIVE: (
+        "made a closed benchmark-family compiler authoritative in"
+    ),
+    SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED: (
+        "predetermined the model's scored tool selection and changed"
     ),
 }
 

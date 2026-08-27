@@ -16,6 +16,10 @@ type GeneratedConfirmationBundleList =
   PlatformComponents['schemas']['AdminConfirmationBundleListResponse']
 type GeneratedSourceReviewCausalEvidence =
   PlatformComponents['schemas']['SourceReviewCausalEvidence']
+type GeneratedSourceReviewInvariantAssessment =
+  PlatformComponents['schemas']['SourceReviewInvariantAssessment']
+type GeneratedSourceReviewInvariantDecision =
+  PlatformComponents['schemas']['SourceReviewInvariantDecision']
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
 
@@ -3405,6 +3409,8 @@ const sourceReviewEvidenceRoleSchema = z.enum([
 const sourceReviewAuthorityTransitionSchema = z.enum([
   'model_skipped', 'model_output_overwritten', 'tool_execution_bypassed',
   'tool_trajectory_fabricated', 'selective_model_disablement', 'scorer_field_rewritten',
+  'derived_value_authoritative', 'family_compiler_authoritative',
+  'tool_selection_predetermined',
 ])
 const sourceReviewScorerVisibleEffectSchema = z.enum([
   'final_text', 'answer', 'abstain', 'tool_calls', 'validator_observed_trajectory',
@@ -3420,6 +3426,11 @@ const scorerEffectsByTransition: Record<
   tool_trajectory_fabricated: new Set(['tool_calls', 'graded_outcome']),
   selective_model_disablement: new Set(['final_text', 'answer', 'abstain', 'graded_outcome']),
   scorer_field_rewritten: new Set(['final_text', 'answer', 'abstain', 'tool_calls', 'graded_outcome']),
+  derived_value_authoritative: new Set(['final_text', 'answer', 'abstain', 'graded_outcome']),
+  family_compiler_authoritative: new Set(['final_text', 'answer', 'abstain', 'graded_outcome']),
+  tool_selection_predetermined: new Set([
+    'tool_calls', 'validator_observed_trajectory', 'graded_outcome',
+  ]),
 }
 const sourceReviewCausalRoleBindingSchema = z.strictObject({
   path: z.string().min(1).max(240),
@@ -3448,6 +3459,107 @@ export const sourceReviewCausalEvidenceSchema = z
     }
   })
 
+const sourceReviewInvariantSchema = z.enum([
+  'i1_model_invocation',
+  'i2_evidence_retention',
+  'i3_model_dissent',
+  'i4_derived_value_authority',
+  'i5_production_engine',
+  'i6_tool_execution_fidelity',
+  'i7_model_tool_planning',
+])
+const sourceReviewInvariantDispositionSchema = z.enum([
+  'pass', 'breach', 'inconclusive',
+])
+const sourceReviewPassClauseSchema = z.enum([
+  'genuine_model_result',
+  'no_premodel_response',
+  'full_records_on_deciding_turn',
+  'non_authoritative_preliminary_pass',
+  'shape_only_validation',
+  'model_dissent_preserved',
+  'no_derived_value',
+  'untrusted_candidate_channel',
+  'runtime_described_generic_engine',
+  'no_family_compiler',
+  'model_selected_executed_tool',
+  'no_reported_tool_calls',
+  'no_tool_planning',
+  'policy_capability_filter_only',
+  'natural_singleton_class',
+  'unreachable_nonruntime_code',
+])
+const passClausesByInvariant: Record<
+  z.infer<typeof sourceReviewInvariantSchema>,
+  ReadonlySet<z.infer<typeof sourceReviewPassClauseSchema>>
+> = {
+  i1_model_invocation: new Set([
+    'genuine_model_result', 'no_premodel_response', 'unreachable_nonruntime_code',
+  ]),
+  i2_evidence_retention: new Set([
+    'full_records_on_deciding_turn', 'non_authoritative_preliminary_pass',
+    'unreachable_nonruntime_code',
+  ]),
+  i3_model_dissent: new Set([
+    'shape_only_validation', 'model_dissent_preserved', 'unreachable_nonruntime_code',
+  ]),
+  i4_derived_value_authority: new Set([
+    'no_derived_value', 'untrusted_candidate_channel', 'unreachable_nonruntime_code',
+  ]),
+  i5_production_engine: new Set([
+    'runtime_described_generic_engine', 'no_family_compiler',
+    'unreachable_nonruntime_code',
+  ]),
+  i6_tool_execution_fidelity: new Set([
+    'model_selected_executed_tool', 'no_reported_tool_calls',
+    'unreachable_nonruntime_code',
+  ]),
+  i7_model_tool_planning: new Set([
+    'no_tool_planning', 'policy_capability_filter_only', 'natural_singleton_class',
+    'unreachable_nonruntime_code',
+  ]),
+}
+const sourceReviewInvariantDecisionSchema = z
+  .strictObject({
+    disposition: sourceReviewInvariantDispositionSchema,
+    evidence_indices: z.array(z.number().int().min(0).max(15)).max(16).default([]),
+    invariant: sourceReviewInvariantSchema,
+    pass_clause: sourceReviewPassClauseSchema.nullish(),
+    summary: z.string().min(1).max(240),
+  } satisfies PlatformResponseShape<GeneratedSourceReviewInvariantDecision>)
+  .superRefine((decision, context) => {
+    if (decision.disposition === 'pass') {
+      if (!decision.pass_clause || !passClausesByInvariant[decision.invariant].has(decision.pass_clause)) {
+        context.addIssue({ code: 'custom', message: 'invariant pass clause is missing or incompatible' })
+      }
+      if (decision.evidence_indices.length) {
+        context.addIssue({ code: 'custom', message: 'passing invariant cannot carry violation evidence' })
+      }
+      return
+    }
+    if (decision.pass_clause) {
+      context.addIssue({ code: 'custom', message: 'only a passing invariant may name a pass clause' })
+    }
+    if (decision.disposition === 'breach' && !decision.evidence_indices.length) {
+      context.addIssue({ code: 'custom', message: 'invariant breach requires source evidence' })
+    }
+    if (new Set(decision.evidence_indices).size !== decision.evidence_indices.length) {
+      context.addIssue({ code: 'custom', message: 'invariant evidence indices must be unique' })
+    }
+  })
+
+export const sourceReviewInvariantAssessmentSchema = z
+  .strictObject({
+    schema_version: z.literal(1),
+    decisions: z.array(sourceReviewInvariantDecisionSchema).length(7),
+  } satisfies PlatformResponseShape<GeneratedSourceReviewInvariantAssessment>)
+  .superRefine((assessment, context) => {
+    const invariants = assessment.decisions.map((decision) => decision.invariant)
+    if (new Set(invariants).size !== 7) {
+      context.addIssue({ code: 'custom', message: 'source review must decide every policy-v10 invariant' })
+    }
+  })
+
 export const sourceReviewFindingSchema = z
   .strictObject({
     artifact_sha256: z.string().regex(/^[0-9a-f]{64}$/),
@@ -3458,20 +3570,45 @@ export const sourceReviewFindingSchema = z
     evidence: z.array(sourceReviewEvidenceItemSchema).max(16).default([]),
     summary: z.string().min(1).max(240),
     causal_evidence: sourceReviewCausalEvidenceSchema.nullish(),
+    invariant_assessment: sourceReviewInvariantAssessmentSchema.nullish(),
   } satisfies PlatformResponseShape<GeneratedSourceReviewFinding>)
   .superRefine((finding, context) => {
-    if (!finding.causal_evidence) return
     const categories = new Set(finding.categories)
     const locations = new Set(finding.evidence.map((item) =>
       [item.path, item.line, item.category].join('\u0000')))
-    for (const binding of finding.causal_evidence.role_bindings) {
-      if (!categories.has(binding.category)) {
-        context.addIssue({ code: 'custom', message: 'causal role binding category is not in finding' })
+    if (finding.causal_evidence) {
+      for (const binding of finding.causal_evidence.role_bindings) {
+        if (!categories.has(binding.category)) {
+          context.addIssue({ code: 'custom', message: 'causal role binding category is not in finding' })
+        }
+        if (!locations.has([binding.path, binding.line, binding.category].join('\u0000'))) {
+          context.addIssue({
+            code: 'custom', message: 'causal role binding does not reference finding evidence',
+          })
+        }
       }
-      if (!locations.has([binding.path, binding.line, binding.category].join('\u0000'))) {
-        context.addIssue({
-          code: 'custom', message: 'causal role binding does not reference finding evidence',
-        })
+    }
+    if (finding.invariant_assessment) {
+      const elevated = finding.invariant_assessment.decisions.some(
+        (decision) => decision.disposition === 'breach' || decision.disposition === 'inconclusive')
+      const strictCategories = new Set([
+        'benchmark_emulation', 'scorer_contract_manipulation', 'fabricated_tool_trajectory',
+      ])
+      if (finding.risk_level === 'low' && elevated) {
+        context.addIssue({ code: 'custom', message: 'low-risk finding has unresolved policy-v10 invariant' })
+      }
+      if (finding.categories.some((category) => strictCategories.has(category)) && !elevated) {
+        context.addIssue({ code: 'custom', message: 'strict source category lacks a policy-v10 breach' })
+      }
+      if (finding.categories.includes('none') && elevated) {
+        context.addIssue({ code: 'custom', message: 'none category cannot carry an elevated invariant' })
+      }
+      for (const decision of finding.invariant_assessment.decisions) {
+        if (decision.evidence_indices.some((index) => index >= finding.evidence.length)) {
+          context.addIssue({
+            code: 'custom', message: 'invariant decision evidence index is out of range',
+          })
+        }
       }
     }
   })

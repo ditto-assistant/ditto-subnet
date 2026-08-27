@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.queue_policy_settings import DeferredSourceReviewSettings
+from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_server.deferred_source_review import (
     DeferredReviewDecision,
     evaluate_deferred_review,
@@ -140,7 +141,7 @@ async def test_other_agent_replacement_rechecks_promoted_deferred_peer(
         name="promoted-peer",
         sha256=ledger[4].sha256,
         status=AgentStatus.SCORED,
-        screening_policy_version=9,
+        screening_policy_version=SCREENING_POLICY_VERSION,
     )
     updated = Agent(
         agent_id=ledger[5].agent_id,
@@ -148,13 +149,13 @@ async def test_other_agent_replacement_rechecks_promoted_deferred_peer(
         name="updated-row",
         sha256=ledger[5].sha256,
         status=AgentStatus.SCORED,
-        screening_policy_version=9,
+        screening_policy_version=SCREENING_POLICY_VERSION,
     )
     admission = ScreeningAttempt(
         attempt_id=uuid4(),
         agent_id=promoted.agent_id,
         screener_hotkey="screener",
-        policy_version=9,
+        policy_version=SCREENING_POLICY_VERSION,
         status="passed",
         started_at=now - timedelta(hours=1),
         deadline=now - timedelta(minutes=30),

@@ -186,6 +186,18 @@ const causalQuarantine: ScreeningQuarantine = {
         { path: 'src/score.ts', line: 87, category: 'benchmark_emulation', role: 'reachability_link' },
       ],
     },
+    invariant_assessment: {
+      schema_version: 1,
+      decisions: [
+        { invariant: 'i1_model_invocation', disposition: 'pass', pass_clause: 'genuine_model_result', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+        { invariant: 'i2_evidence_retention', disposition: 'pass', pass_clause: 'full_records_on_deciding_turn', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+        { invariant: 'i3_model_dissent', disposition: 'pass', pass_clause: 'model_dissent_preserved', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+        { invariant: 'i4_derived_value_authority', disposition: 'pass', pass_clause: 'no_derived_value', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+        { invariant: 'i5_production_engine', disposition: 'breach', pass_clause: null, summary: 'A closed family compiler controls the deciding prompt.', evidence_indices: [0] },
+        { invariant: 'i6_tool_execution_fidelity', disposition: 'pass', pass_clause: 'model_selected_executed_tool', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+        { invariant: 'i7_model_tool_planning', disposition: 'pass', pass_clause: 'no_tool_planning', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+      ],
+    },
   },
 }
 
@@ -789,6 +801,10 @@ describe('ScreeningQuarantinePanel', () => {
     for (const role of ['served trigger', 'authority bypass', 'scorer visible effect', 'reachability link']) {
       expect(causal.textContent).toContain(role)
     }
+    const invariants = screen.getByRole('region', { name: 'Policy v10 invariant assessment' })
+    expect(invariants.textContent).toContain('i5 production engine')
+    expect(invariants.textContent).toContain('breach')
+    expect(invariants.textContent).toContain('pass: genuine_model_result')
     expect(screen.getAllByTitle(`${longCausalPath}:42`)).toHaveLength(2)
     expect(screen.getByRole('button', { name: new RegExp(`${longCausalPath}:42`) })).toBeTruthy()
   })

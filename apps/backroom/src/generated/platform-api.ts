@@ -16825,7 +16825,7 @@ export interface components {
          * @example {
          *       "detail": "",
          *       "passed": true,
-         *       "policy_version": 9,
+         *       "policy_version": 10,
          *       "screener_hotkey": "5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY",
          *       "signature": "abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab"
          *     }
@@ -18039,7 +18039,7 @@ export interface components {
          * @description Bounded ways served code can make genuine model/tool output non-authoritative.
          * @enum {string}
          */
-        SourceReviewAuthorityTransition: "model_skipped" | "model_output_overwritten" | "tool_execution_bypassed" | "tool_trajectory_fabricated" | "selective_model_disablement" | "scorer_field_rewritten";
+        SourceReviewAuthorityTransition: "model_skipped" | "model_output_overwritten" | "tool_execution_bypassed" | "tool_trajectory_fabricated" | "selective_model_disablement" | "scorer_field_rewritten" | "derived_value_authoritative" | "family_compiler_authoritative" | "tool_selection_predetermined";
         /**
          * SourceReviewCausalEvidence
          * @description Opt-in v2 causal evidence carried alongside the legacy location list.
@@ -18106,6 +18106,8 @@ export interface components {
             confidence: number;
             /** Evidence */
             evidence?: components["schemas"]["SourceReviewEvidenceItem"][];
+            /** @description Optional complete policy-v10 invariant sweep. Historical findings remain byte-identical when absent. */
+            invariant_assessment?: components["schemas"]["SourceReviewInvariantAssessment"] | null;
             /** Prompt Revision */
             prompt_revision: string;
             /**
@@ -18116,6 +18118,45 @@ export interface components {
             /** Summary */
             summary: string;
         };
+        /**
+         * SourceReviewInvariant
+         * @description Policy-v10 source-review invariants, evaluated independently.
+         * @enum {string}
+         */
+        SourceReviewInvariant: "i1_model_invocation" | "i2_evidence_retention" | "i3_model_dissent" | "i4_derived_value_authority" | "i5_production_engine" | "i6_tool_execution_fidelity" | "i7_model_tool_planning";
+        /**
+         * SourceReviewInvariantAssessment
+         * @description Complete policy-v10 sweep; omission cannot silently clear an invariant.
+         */
+        SourceReviewInvariantAssessment: {
+            /** Decisions */
+            decisions: components["schemas"]["SourceReviewInvariantDecision"][];
+            /**
+             * Schema Version
+             * @default 1
+             * @constant
+             */
+            schema_version: 1;
+        };
+        /**
+         * SourceReviewInvariantDecision
+         * @description One policy-v10 invariant decision and its false-positive valve.
+         */
+        SourceReviewInvariantDecision: {
+            disposition: components["schemas"]["SourceReviewInvariantDisposition"];
+            /** Evidence Indices */
+            evidence_indices?: number[];
+            invariant: components["schemas"]["SourceReviewInvariant"];
+            pass_clause?: components["schemas"]["SourceReviewPassClause"] | null;
+            /** Summary */
+            summary: string;
+        };
+        /**
+         * SourceReviewInvariantDisposition
+         * @description One invariant's bounded conclusion.
+         * @enum {string}
+         */
+        SourceReviewInvariantDisposition: "pass" | "breach" | "inconclusive";
         /**
          * SourceReviewObservationPayload
          * @description Bounded source-review observation safe to cross provider boundaries.
@@ -18145,6 +18186,12 @@ export interface components {
             /** Risk Level */
             risk_level?: ("low" | "medium" | "high") | null;
         };
+        /**
+         * SourceReviewPassClause
+         * @description Published false-positive clauses that can refute a matching breach.
+         * @enum {string}
+         */
+        SourceReviewPassClause: "genuine_model_result" | "no_premodel_response" | "full_records_on_deciding_turn" | "non_authoritative_preliminary_pass" | "shape_only_validation" | "model_dissent_preserved" | "no_derived_value" | "untrusted_candidate_channel" | "runtime_described_generic_engine" | "no_family_compiler" | "model_selected_executed_tool" | "no_reported_tool_calls" | "no_tool_planning" | "policy_capability_filter_only" | "natural_singleton_class" | "unreachable_nonruntime_code";
         /**
          * SourceReviewScorerVisibleEffect
          * @description Concrete graded field or validator-owned outcome changed by a transition.

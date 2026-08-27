@@ -14,6 +14,11 @@ from ditto_screening_protocol import (
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
+    SourceReviewInvariant,
+    SourceReviewInvariantAssessment,
+    SourceReviewInvariantDecision,
+    SourceReviewInvariantDisposition,
+    SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
 )
 
@@ -29,6 +34,22 @@ _LEGACY_CANONICAL = (
 )
 _LEGACY_DIGEST = "1f9d7843b2f259e101bd3064a650d7d7434afd61ea3fb4566d033ec3d18998fb"
 _V2_DIGEST = "f70a63e97fe18ea8443a103628cade8a978788c2c2371bdbfbafe7161fb29a80"
+
+_PASS_CLAUSES = {
+    SourceReviewInvariant.MODEL_INVOCATION: SourceReviewPassClause.GENUINE_MODEL_RESULT,
+    SourceReviewInvariant.EVIDENCE_RETENTION: (
+        SourceReviewPassClause.FULL_RECORDS_ON_DECIDING_TURN
+    ),
+    SourceReviewInvariant.MODEL_DISSENT: SourceReviewPassClause.MODEL_DISSENT_PRESERVED,
+    SourceReviewInvariant.DERIVED_VALUE_AUTHORITY: (
+        SourceReviewPassClause.NO_DERIVED_VALUE
+    ),
+    SourceReviewInvariant.PRODUCTION_ENGINE: SourceReviewPassClause.NO_FAMILY_COMPILER,
+    SourceReviewInvariant.TOOL_EXECUTION_FIDELITY: (
+        SourceReviewPassClause.MODEL_SELECTED_EXECUTED_TOOL
+    ),
+    SourceReviewInvariant.MODEL_TOOL_PLANNING: SourceReviewPassClause.NO_TOOL_PLANNING,
+}
 
 
 def test_distribution_requires_pydantic_with_exclude_if_support() -> None:
@@ -95,6 +116,34 @@ def _role_bindings(
             role=SourceReviewEvidenceRole.REACHABILITY_LINK,
         ),
     ]
+
+
+def _policy_v10_assessment(
+    *,
+    breach: SourceReviewInvariant | None = None,
+    evidence_indices: list[int] | None = None,
+) -> SourceReviewInvariantAssessment:
+    decisions = []
+    for invariant in SourceReviewInvariant:
+        if invariant == breach:
+            decisions.append(
+                SourceReviewInvariantDecision(
+                    invariant=invariant,
+                    disposition=SourceReviewInvariantDisposition.BREACH,
+                    summary="Served code retains the strict-policy breach.",
+                    evidence_indices=evidence_indices or [],
+                )
+            )
+        else:
+            decisions.append(
+                SourceReviewInvariantDecision(
+                    invariant=invariant,
+                    disposition=SourceReviewInvariantDisposition.PASS,
+                    pass_clause=_PASS_CLAUSES[invariant],
+                    summary="The reviewed path satisfies the published pass clause.",
+                )
+            )
+    return SourceReviewInvariantAssessment(decisions=decisions)
 
 
 def _v2_finding(
@@ -184,6 +233,7 @@ def test_serialization_schema_retains_typed_v1_and_v2_fields() -> None:
         "evidence",
         "summary",
         "causal_evidence",
+        "invariant_assessment",
     }
     causal_schema = schema["properties"]["causal_evidence"]
     assert causal_schema["anyOf"] == [
@@ -398,7 +448,10 @@ def test_v2_canonicalization_binds_every_authority_transition() -> None:
                 if transition == SourceReviewAuthorityTransition.TOOL_EXECUTION_BYPASSED
                 else SourceReviewScorerVisibleEffect.TOOL_CALLS
                 if transition
-                == SourceReviewAuthorityTransition.TOOL_TRAJECTORY_FABRICATED
+                in {
+                    SourceReviewAuthorityTransition.TOOL_TRAJECTORY_FABRICATED,
+                    SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED,
+                }
                 else SourceReviewScorerVisibleEffect.ANSWER
             ),
         ).canonical_digest()
@@ -622,3 +675,130 @@ def test_v2_canonical_payload_contains_no_unbounded_or_private_fields() -> None:
     )
     assert "source" not in payload
     assert "prompt" not in payload["causal_evidence"]
+
+
+def test_policy_v10_requires_all_invariants_exactly_once() -> None:
+    complete = _policy_v10_assessment()
+    raw = complete.model_dump(mode="json")
+    raw["decisions"].pop()
+
+    with pytest.raises(ValidationError, match="at least 7 items"):
+        SourceReviewInvariantAssessment.model_validate(raw)
+
+    raw = complete.model_dump(mode="json")
+    raw["decisions"][-1] = raw["decisions"][0]
+    with pytest.raises(ValidationError, match="unique"):
+        SourceReviewInvariantAssessment.model_validate(raw)
+
+    raw = complete.model_dump(mode="json")
+    raw["decisions"][0]["disposition"] = "not_applicable"
+    with pytest.raises(ValidationError, match="Input should be"):
+        SourceReviewInvariantAssessment.model_validate(raw)
+
+
+def test_policy_v10_pass_clause_is_invariant_specific() -> None:
+    with pytest.raises(ValidationError, match="incompatible"):
+        SourceReviewInvariantDecision(
+            invariant=SourceReviewInvariant.MODEL_TOOL_PLANNING,
+            disposition=SourceReviewInvariantDisposition.PASS,
+            pass_clause=SourceReviewPassClause.GENUINE_MODEL_RESULT,
+            summary="Wrong false-positive valve.",
+        )
+
+
+def test_policy_v10_breach_is_bound_into_finding_digest() -> None:
+    evidence = [
+        SourceReviewEvidenceItem(
+            path="src/router.rs", line=7, category="benchmark_emulation"
+        ),
+        SourceReviewEvidenceItem(
+            path="src/run.rs", line=19, category="benchmark_emulation"
+        ),
+    ]
+    finding = _legacy_finding(
+        prompt_revision="source-review-v21-policy-v10",
+        categories=["benchmark_emulation"],
+        evidence=evidence,
+        invariant_assessment=_policy_v10_assessment(
+            breach=SourceReviewInvariant.MODEL_TOOL_PLANNING,
+            evidence_indices=[0, 1],
+        ),
+    )
+
+    assert finding.require_policy_v10_invariants() is finding
+    assert finding.evidence_schema_version == 3
+    payload = json.loads(finding.canonical_bytes())
+    assert len(payload["invariant_assessment"]["decisions"]) == 7
+    assert any(
+        decision["invariant"] == "i7_model_tool_planning"
+        and decision["disposition"] == "breach"
+        for decision in payload["invariant_assessment"]["decisions"]
+    )
+    changed = finding.model_copy(
+        update={"invariant_assessment": _policy_v10_assessment()}
+    )
+    assert changed.canonical_digest() != finding.canonical_digest()
+
+
+def test_policy_v10_invariant_evidence_index_must_reference_finding() -> None:
+    with pytest.raises(ValidationError, match="out of range"):
+        _legacy_finding(
+            prompt_revision="source-review-v21-policy-v10",
+            categories=["benchmark_emulation"],
+            invariant_assessment=_policy_v10_assessment(
+                breach=SourceReviewInvariant.PRODUCTION_ENGINE,
+                evidence_indices=[15],
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "transition",
+    [
+        SourceReviewAuthorityTransition.DERIVED_VALUE_AUTHORITATIVE,
+        SourceReviewAuthorityTransition.FAMILY_COMPILER_AUTHORITATIVE,
+        SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED,
+    ],
+)
+def test_policy_v10_authority_transitions_are_closed_domain(
+    transition: SourceReviewAuthorityTransition,
+) -> None:
+    effect = (
+        SourceReviewScorerVisibleEffect.TOOL_CALLS
+        if transition == SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED
+        else SourceReviewScorerVisibleEffect.ANSWER
+    )
+    finding = _v2_finding(transition=transition, effect=effect)
+    assert finding.require_role_complete_causal_evidence() is finding
+
+
+def test_policy_v10_maximum_invariant_projection_fits_worker_bound() -> None:
+    evidence = [
+        SourceReviewEvidenceItem(
+            path="p" * 240,
+            line=index + 1,
+            category="benchmark_emulation",
+        )
+        for index in range(16)
+    ]
+    assessment = SourceReviewInvariantAssessment(
+        decisions=[
+            SourceReviewInvariantDecision(
+                invariant=invariant,
+                disposition=SourceReviewInvariantDisposition.BREACH,
+                summary="s" * 240,
+                evidence_indices=list(range(16)),
+            )
+            for invariant in SourceReviewInvariant
+        ]
+    )
+    finding = _legacy_finding(
+        prompt_revision="p" * 64,
+        categories=["benchmark_emulation"],
+        evidence=evidence,
+        summary="s" * 240,
+        invariant_assessment=assessment,
+    )
+
+    assert len(finding.canonical_bytes()) <= 8 * 1024
+    assert len(finding.model_dump_json()) <= 8 * 1024

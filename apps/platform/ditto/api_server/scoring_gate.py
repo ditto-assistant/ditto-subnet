@@ -1345,7 +1345,7 @@ def evaluate_rejected_resubmission(
     version of the rule.** It was a real catch and it is not recoverable here,
     because holding a 0.809 pair means holding every remediation any miner ever
     submits. An artifact whose engine was rewritten to evade a citation is a
-    source-review finding — screening policy v9's job — and leaning on a
+    source-review finding — the active screening policy's job — and leaning on a
     duplicate-detection rule to catch it, at ~6 false holds per true one, buys
     that catch with the throughput of every honest miner recovering from a
     rejection.

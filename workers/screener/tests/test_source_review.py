@@ -27,9 +27,98 @@ from ditto_screener.source_signals import (
     find_decisive_malicious_source,
     find_source_review_leads,
 )
-from ditto_screening_protocol import SourceReviewFinding
+from ditto_screening_protocol import (
+    SourceReviewFinding,
+    SourceReviewInvariant,
+    SourceReviewInvariantDisposition,
+)
 
 _SHA = "ab" * 32
+
+_PASS_CLAUSES = {
+    "i1_model_invocation": "genuine_model_result",
+    "i2_evidence_retention": "full_records_on_deciding_turn",
+    "i3_model_dissent": "model_dissent_preserved",
+    "i4_derived_value_authority": "no_derived_value",
+    "i5_production_engine": "no_family_compiler",
+    "i6_tool_execution_fidelity": "no_reported_tool_calls",
+    "i7_model_tool_planning": "no_tool_planning",
+}
+_INVARIANT_FOR_CATEGORY = {
+    "benchmark_emulation": "i5_production_engine",
+    "scorer_contract_manipulation": "i3_model_dissent",
+    "fabricated_tool_trajectory": "i6_tool_execution_fidelity",
+}
+
+
+def test_static_policy_v10_assessment_retains_each_independent_breach() -> None:
+    assessment = source_review_module.policy_v10_static_assessment(
+        breaches={
+            SourceReviewInvariant.PRODUCTION_ENGINE: [0, 1],
+            SourceReviewInvariant.TOOL_EXECUTION_FIDELITY: [2],
+        }
+    )
+    decisions = {decision.invariant: decision for decision in assessment.decisions}
+
+    assert decisions[SourceReviewInvariant.PRODUCTION_ENGINE].disposition == (
+        SourceReviewInvariantDisposition.BREACH
+    )
+    assert decisions[SourceReviewInvariant.PRODUCTION_ENGINE].evidence_indices == [
+        0,
+        1,
+    ]
+    assert (
+        decisions[SourceReviewInvariant.TOOL_EXECUTION_FIDELITY].disposition
+        == SourceReviewInvariantDisposition.BREACH
+    )
+    assert decisions[
+        SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
+    ].evidence_indices == [2]
+
+
+def _with_policy_v10_invariants(
+    review: dict[str, object],
+) -> dict[str, object]:
+    if "invariants" in review:
+        return review
+    categories = set(review.get("categories", []))
+    evidence = review.get("evidence", [])
+    assert isinstance(evidence, list)
+    breaches = {
+        invariant: category
+        for category, invariant in _INVARIANT_FOR_CATEGORY.items()
+        if category in categories
+    }
+    decisions: list[dict[str, object]] = []
+    for invariant, pass_clause in _PASS_CLAUSES.items():
+        category = breaches.get(invariant)
+        if category is None:
+            decisions.append(
+                {
+                    "invariant": invariant,
+                    "disposition": "pass",
+                    "pass_clause": pass_clause,
+                    "summary": "The reviewed path satisfies the published pass clause.",
+                    "evidence_indices": [],
+                }
+            )
+            continue
+        decisions.append(
+            {
+                "invariant": invariant,
+                "disposition": "breach",
+                "pass_clause": None,
+                "summary": (
+                    "The reviewed path retains a reachable strict-policy breach."
+                ),
+                "evidence_indices": [
+                    index
+                    for index, item in enumerate(evidence)
+                    if isinstance(item, dict) and item.get("category") == category
+                ],
+            }
+        )
+    return {**review, "invariants": decisions}
 
 
 def _archive(tmp_path: Path, source: str) -> Path:
@@ -58,6 +147,8 @@ def _archive_files(tmp_path: Path, files: dict[str, bytes]) -> Path:
 
 
 def _tool(call_id: str, name: str, arguments: dict[str, object]) -> dict[str, object]:
+    if name == "submit_review":
+        arguments = _with_policy_v10_invariants(arguments)
     return {
         "id": call_id,
         "type": "function",
@@ -606,30 +697,32 @@ fn run() -> String {
     assert "text" not in json.dumps(analysis)
 
     observation = source_review_module._parse_review(
-        {
-            "risk_level": "high",
-            "confidence": 0.96,
-            "categories": ["benchmark_emulation"],
-            "evidence": [
-                {
-                    "path": "src/memory_solver.rs",
-                    "line": line,
-                    "category": "benchmark_emulation",
-                }
-                for line in (1, 4, 8, 13, 21, 22)
-            ],
-            "summary": (
-                "Coordinated public-generator mirror returns deterministic answers "
-                "before inference."
-            ),
-        },
+        _with_policy_v10_invariants(
+            {
+                "risk_level": "high",
+                "confidence": 0.96,
+                "categories": ["benchmark_emulation"],
+                "evidence": [
+                    {
+                        "path": "src/memory_solver.rs",
+                        "line": line,
+                        "category": "benchmark_emulation",
+                    }
+                    for line in (1, 4, 8, 13, 21, 22)
+                ],
+                "summary": (
+                    "Coordinated public-generator mirror returns deterministic answers "
+                    "before inference."
+                ),
+            }
+        ),
         artifact_sha256=_SHA,
         repository=repo,
     )
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "source-review-v20"
+    assert observation.finding["prompt_revision"] == "source-review-v21-policy-v10"
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -1868,16 +1961,21 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert "scorer_contract_manipulation" in prompt
     assert "genuine model generation" in prompt
     assert "Current-user facts remain legitimate agent context" in prompt
-    assert "behavioral-\noracle failures" in prompt
+    assert "behavioral-oracle failures" in prompt
     assert "user_isolation_correctness" in prompt
     assert "external_build_dependency" in prompt
     assert 'location-only "review_leads"' in prompt
     assert "coordinated constellation" in prompt
     assert "literal expected answers or hidden values" in prompt
+    assert "I4 DERIVED-VALUE AUTHORITY" in prompt
+    assert "I5 PRODUCTION ENGINE" in prompt
+    assert "I7 MODEL TOOL PLANNING" in prompt
+    assert "pass wins only when it causally removes the breach" in prompt
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == "source-review-v20"
+    assert observation.finding["prompt_revision"] == "source-review-v21-policy-v10"
+    assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
         .split("\nExact-file trusted provenance:\n", 1)[0]
@@ -2626,7 +2724,7 @@ def test_dittobench_preflight_prompt_keeps_the_false_positive_boundary_narrow() 
     assert all(marker in _SYSTEM_PROMPT for marker in required)
 
 
-def test_policy_v9_prompt_separates_replacement_retry_and_legitimate_controls() -> None:
+def test_policy_v10_prompt_separates_replacement_retry_and_strict_controls() -> None:
     from ditto_screener.source_review import _SYSTEM_PROMPT
 
     required = {
@@ -2636,62 +2734,55 @@ def test_policy_v9_prompt_separates_replacement_retry_and_legitimate_controls() 
         "manual-review lead, not direct",
         "planned-tool-call-self-report",
         "finite-family-world-compiler",
-        "fresh model call still authors",
-        "Live schema-driven routing",
-        "runtime-described",
-        "generic state reconstruction",
+        "model call does not launder",
+        "I4/I5/I7 pass clauses",
+        "Runtime-described semantics",
+        "reconstruction may pass",
     }
 
     assert all(fragment in _SYSTEM_PROMPT for fragment in required)
 
 
-def test_v12_prompt_teaches_two_limb_and_production_engine_bar() -> None:
+def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
     from ditto_screener.source_review import _PROMPT_REVISION, _SYSTEM_PROMPT
 
-    assert _PROMPT_REVISION == "source-review-v20"
+    assert _PROMPT_REVISION == "source-review-v21-policy-v10"
     required = {
-        "two-limb refusal test",
-        "current user's records",
-        "model draft served",
-        "Fail either limb",
-        "necessary and not sufficient",
-        "production-engine",
-        "finite bench-family compiler",
-        "family-router.json",
-        "fn family_of",
-        "try_solve",
-        "Do not recompute",
-        "Copy its value exactly",
-        "closed family pool",
+        "I1 MODEL INVOCATION",
+        "I2 EVIDENCE RETENTION",
+        "I3 MODEL DISSENT",
+        "I4 DERIVED-VALUE AUTHORITY",
+        "I5 PRODUCTION ENGINE",
+        "I6 TOOL EXECUTION FIDELITY",
+        "I7 MODEL TOOL PLANNING",
+        "current user",
+        "untrusted candidate",
+        "disagreement",
+        "closed answer-family or operand-recipe router",
+        "trained head",
+        "classic two-limb test",
+        "pass wins only when it causally removes the breach",
         "c13-bench-family-fingerprint",
         "never automatic bans",
-        "VERIFIED RESULT",
-        "glossary_block",
-        "established_for_prompt",
-        "WJFAST",
-        "REPLY WITH EXACTLY",
-        "asks_outstanding",
         "StoryArc remainder",
-        "LedgerEventKind",
-        "required_money",
-        "world_shape_rule",
-        "rubber-stamping that old identifiers are gone",
-        "compile_notes",
-        "CompactToolModel closer",
-        "Copy that exact money value",
-        "A helper named format_round is not this tell",
+        "LINKED family audit",
+        "BalanceFinal/BalanceMid/BudgetDelta/OutcomeSummary",
+        "exact-deck planners",
     }
 
     assert all(fragment in _SYSTEM_PROMPT for fragment in required)
 
 
-def test_v12_prompt_keeps_calibration_contrasts_from_over_rejecting() -> None:
+def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
     from ditto_screener.source_review import _SYSTEM_PROMPT
 
     required = {
-        "Derive-as-prompt is allowed",
-        "records remain on the",
-        "model's own draft",
+        "untrusted_candidate_channel pass",
+        "complete records remain",
+        "disagreement is accepted",
+        "no correctness gate",
+        "policy-forbidden capabilities",
+        "natural_singleton_class",
         "Lexical near-duplicate of a same-owner rejected ancestor",
         "not an automatic reject",
         "Ban is per agent UUID",
@@ -2701,23 +2792,25 @@ def test_v12_prompt_keeps_calibration_contrasts_from_over_rejecting() -> None:
     assert all(fragment in _SYSTEM_PROMPT for fragment in required)
 
 
-def test_v12_written_policy_makes_two_limb_and_engine_bar_implementable() -> None:
+def test_written_policy_makes_policy_v10_invariants_implementable() -> None:
     policy = (
         Path(__file__).resolve().parents[1] / "docs" / "source-review-policy.md"
     ).read_text()
 
     required = {
-        "Two-limb refusal test",
-        "Retention.",
-        "Dissent.",
-        "Fail either limb",
-        "Production-engine test",
-        "necessary and not sufficient",
-        "finite bench-family compiler",
-        "family-router.json",
-        "try_solve",
+        "Policy-v10 strict invariants",
+        "I1 — model invocation",
+        "I2 — evidence retention",
+        "I3 — model dissent",
+        "I4 — derived-value authority",
+        "I5 — production engine",
+        "I6 — tool execution fidelity",
+        "I7 — model tool planning",
+        "pass wins only when it causally removes the breach",
+        "untrusted candidate",
+        "answer-family",
+        "natural singleton classes",
         "Calibration contrasts",
-        "derive-as-prompt",
         "not an automatic reject",
         "Honest-and-bad",
         "Ban is per agent UUID",
@@ -2730,6 +2823,8 @@ def test_v12_written_policy_makes_two_limb_and_engine_bar_implementable() -> Non
         "world_shape_rule",
         "asks_outstanding",
         "reply_restates_story_ingredient_money",
+        "LINKED_CALCULATION_AUDIT_PROMPT",
+        "planned_deck",
     }
 
     assert all(fragment in policy for fragment in required)
@@ -2915,6 +3010,7 @@ async def test_sanitized_shortcut_fixture_produces_bounded_risk_digest(
         "confidence",
         "categories",
         "evidence",
+        "invariant_assessment",
         "summary",
     }
 

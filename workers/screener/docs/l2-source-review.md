@@ -76,15 +76,18 @@ when the provider omits cost. A stable instructions/tool/dossier prefix,
 `prompt_cache_key`, and artifact-scoped `session_id` maximize provider cache
 reuse without enabling response replay caching. The result-cache key includes
 all budgets, model/fallback/critic routing, reasoning settings, artifact/L1
-digests, prompt revisions `l2-kimi-source-review-v33`,
-`l3-sol-adversarial-critic-v18`, `l3-sol-violation-cause-v24`,
-`l3-sol-cause-disagreement-v5`, `l3-sol-safety-adjudicator-v21`, and
+digests, prompt revisions `l2-kimi-source-review-v34-policy-v10`,
+`l3-sol-adversarial-critic-v19-policy-v10`,
+`l3-sol-violation-cause-v25-policy-v10`,
+`l3-sol-cause-disagreement-v6-policy-v10`,
+`l3-sol-safety-adjudicator-v22-policy-v10`, and
 `l2-integrity-static-hold-v3`, dossier revision
 `l1-compressed-dossier-v10`, harness revision
 `l2-isolated-coding-harness-v19`, and the supported canonical-starter revision
 set. The compressed L1 dossier now also surfaces C13 bench-family fingerprint
 leads; they remain search prompts, never auto-bans. L1 and this L2 prompt apply
-the two-limb refusal test and the production-engine test. The inert analyzer chooses the canonical v2 or v3 baseline with the fewest
+all seven policy-v10 invariants. I4, independent I5, and I7 are not cleared by
+a real model call or a historical two-limb pass. The inert analyzer chooses the canonical v2 or v3 baseline with the fewest
 file-digest deltas and reports the selected exact revision in the dossier; this
 keeps historical artifacts and current v3 starter submissions comparable
 without trusting submission metadata.
@@ -274,7 +277,8 @@ A bounded rollout is: merge without activation; deploy with `off`; durably set
 one idle fleet worker to `shadow`; review false positives, inconclusive rate,
 p95 latency, tokens, and cost; then enable `enforce` on one worker before
 expanding. Do not mix enforcement manifests unintentionally across workers.
-The screened-image path and policy 9 are already deployed. DittoBench v4 is
+The screened-image path and policy 9 are already deployed. Policy v10 requires
+the protocol/platform pin before v10 workers claim attempts. DittoBench v4 is
 activated, while one of four online validators still reports legacy-v2-only
 scorer capability. Rollout must preserve both versioned starter baselines and
 current per-agent benchmark authority until that skew is resolved. Existing

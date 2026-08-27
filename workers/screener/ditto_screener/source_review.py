@@ -42,9 +42,14 @@ from ditto_screening_protocol import (
     ScreenReviewAudit,
     SourceReviewEvidenceItem,
     SourceReviewFinding,
+    SourceReviewInvariant,
+    SourceReviewInvariantAssessment,
+    SourceReviewInvariantDecision,
+    SourceReviewInvariantDisposition,
+    SourceReviewPassClause,
 )
 
-_PROMPT_REVISION = "source-review-v20"
+_PROMPT_REVISION = "source-review-v21-policy-v10"
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
@@ -60,6 +65,21 @@ _MAX_LEAD_SCAN_BYTES = 64 * 1024 * 1024
 _MAX_LEAD_SCAN_FILES = 20_000
 _MAX_SOURCE_ARCHIVE_MEMBERS = 20_000
 _AFFIRMATIVE_SAFE_STATIC_BASES = frozenset({"loopback-only-sink"})
+_DEFAULT_POLICY_V10_PASS_CLAUSES = {
+    SourceReviewInvariant.MODEL_INVOCATION: SourceReviewPassClause.GENUINE_MODEL_RESULT,
+    SourceReviewInvariant.EVIDENCE_RETENTION: (
+        SourceReviewPassClause.FULL_RECORDS_ON_DECIDING_TURN
+    ),
+    SourceReviewInvariant.MODEL_DISSENT: SourceReviewPassClause.MODEL_DISSENT_PRESERVED,
+    SourceReviewInvariant.DERIVED_VALUE_AUTHORITY: (
+        SourceReviewPassClause.NO_DERIVED_VALUE
+    ),
+    SourceReviewInvariant.PRODUCTION_ENGINE: SourceReviewPassClause.NO_FAMILY_COMPILER,
+    SourceReviewInvariant.TOOL_EXECUTION_FIDELITY: (
+        SourceReviewPassClause.NO_REPORTED_TOOL_CALLS
+    ),
+    SourceReviewInvariant.MODEL_TOOL_PLANNING: SourceReviewPassClause.NO_TOOL_PLANNING,
+}
 # Every ``ValueError`` raised inside :meth:`OpenRouterSourceReviewAgent.review`
 # carries a static, non-miner-controlled message, so mapping it to a stable code
 # leaks nothing. Without this table all ~30 of them collapsed into the single
@@ -183,6 +203,38 @@ class SourceReviewBudgetExhausted(ValueError):
             max_read_bytes=self.max_read_bytes,
             read_bytes_used=self.read_bytes_used,
         )
+
+
+def policy_v10_static_assessment(
+    *,
+    breaches: Mapping[SourceReviewInvariant, list[int]],
+) -> SourceReviewInvariantAssessment:
+    """Build a complete host-authored sweep for a deterministic static hold."""
+
+    decisions = []
+    for invariant in SourceReviewInvariant:
+        evidence_indices = breaches.get(invariant)
+        if evidence_indices:
+            decisions.append(
+                SourceReviewInvariantDecision(
+                    invariant=invariant,
+                    disposition=SourceReviewInvariantDisposition.BREACH,
+                    summary="Deterministic static evidence establishes this breach.",
+                    evidence_indices=evidence_indices,
+                )
+            )
+        else:
+            decisions.append(
+                SourceReviewInvariantDecision(
+                    invariant=invariant,
+                    disposition=SourceReviewInvariantDisposition.PASS,
+                    pass_clause=_DEFAULT_POLICY_V10_PASS_CLAUSES[invariant],
+                    summary=(
+                        "No deterministic static breach remains for this invariant."
+                    ),
+                )
+            )
+    return SourceReviewInvariantAssessment(decisions=decisions)
 
 
 # Public-generator vocabulary is weak evidence in isolation.  These families
@@ -519,36 +571,69 @@ but grounding plus a real authoritative model call is legitimate. Risk should
 be medium/high only after exact path:line evidence connects multiple mirrored
 dimensions to both the served trigger and the model-bypassing answer effect.
 
-Apply the two-limb refusal test after a derived value is injected into the
-deciding turn:
-(a) Retention: does the model still receive the current user's records on that
-same turn?
-(b) Dissent: if the model disagrees with the draft, is that model draft served
-as the graded answer at the agent's own score cost?
-Fail either limb = benchmark_emulation. Withheld-evidence compact prompts,
-emptied notes, established_for_prompt = "", and reject-until-match loops fail
-(a) or (b) even when a real model call appears in the trace. Derive-as-prompt
-that keeps records on the deciding turn and forwards the accepted model draft
-is allowed and is not replacement.
+Policy v10 requires an independent sweep of all seven invariants below. Refute
+each suspected breach before recording it. When a construct satisfies a breach
+description and a pass clause for the SAME invariant and SAME served path, the
+pass wins only when it causally removes the breach; a comment or self-description
+never does. Submit exactly one decision for every invariant.
 
-Limbs (a) and (b) are necessary and not sufficient. Apply the production-engine
-test: an allowed engine must be shippable in Ditto production against arbitrary
-user records and paraphrased requests. A finite bench-family compiler is still
-benchmark_emulation even when records stay on the first harness turn and the
-graded slot is not overwritten. family-router.json, fn family_of, closed
-Program/try_solve trees, phrase tables, character-match ladders, and prompts
-such as "Do not recompute", "State this exact resolved value", or
-"Copy its value exactly" on a compiled decimal are production-engine fails.
-StoryArc remainder compilers, LedgerEventKind validators, required_money
-formatters, and world_shape_rule injection on served /run are the same fail.
-Absence of asks_outstanding, DOLLAR=, family-router.json, or coach formula
-sentences is not a pass if those compilers remain reachable. Trace
-compile_notes, world_hint, CompactToolModel closer, and soft-retry miss gates
-rather than rubber-stamping that old identifiers are gone.
-Ask: if this
-user renamed every field and asked the same question in production tomorrow,
-would this code still be a general assistant? If it only works because the
-public bench is a closed family pool, report benchmark_emulation.
+I1 MODEL INVOCATION. A scored answer, substantive abstention, or normal-success
+response must be downstream of genuine model inference. A pre-model answer or a
+host decision that an answerable family must abstain breaches I1. Structural
+recovery from empty, malformed, or unparseable model output passes as
+shape_only_validation under I3; it is not content-based abstention. Pass clauses:
+genuine_model_result or no_premodel_response.
+
+I2 EVIDENCE RETENTION. Every deciding completion must receive the current user's
+records needed to disagree. A clearly labelled non-authoritative preliminary
+pass may see a ranked subset only when the final deciding turn receives the
+complete applicable records and the preliminary candidate is not authority.
+Pass clauses: full_records_on_deciding_turn or
+non_authoritative_preliminary_pass.
+
+I3 MODEL DISSENT. Host code may validate syntax, schema, empty output, or protocol
+shape. It may not reject, retry, suppress, or overwrite a parseable model answer
+because a local deriver believes the substantive value is wrong. Pass clauses:
+shape_only_validation or model_dissent_preserved.
+
+I4 DERIVED-VALUE AUTHORITY. A locally computed value may be shown only as an
+explicitly untrusted candidate beside the complete records, with instructions
+to prefer the records on disagreement and no accept-until-match gate. Labelling a
+derived value WORKED OUT, VERIFIED, authoritative, exact, or do-not-recompute,
+or otherwise reducing the model to copying it, breaches I4 even when both
+two-limb questions pass. Pass clauses: no_derived_value or
+untrusted_candidate_channel.
+
+I5 PRODUCTION ENGINE. An allowed engine must work against arbitrary renamed user
+fields and paraphrased requests. A closed answer-family or operand-recipe router,
+semantic A-E sheet, finite phrase table, generator-fitted typo ladder, or
+family-specific instruction compiler breaches I5 even when raw records remain
+and the model authors the final string. A product-surface router (memory versus
+image versus settings) is not an answer-family router. The decisive question is
+whether the host selects a CLOSED ANSWER FAMILY OR OPERAND RECIPE. Pass clauses:
+runtime_described_generic_engine or no_family_compiler.
+
+I6 TOOL EXECUTION FIDELITY. Every reported call must correspond to a genuine
+model/planner selection and one real request endpoint or harness-owned Tool
+execution. Request-local deduplication after a genuine first execution is
+allowed. Invented, deleted, materially rewritten, or report-only calls breach
+I6. Pass clauses: model_selected_executed_tool or no_reported_tool_calls.
+
+I7 MODEL TOOL PLANNING. The host may remove unavailable, unauthorized, unsafe,
+or policy-forbidden capabilities and may naturally retain a class containing
+one tool. It may validate schemas after a genuine model decision. It may not use
+request-keyed rules or a trained head to preselect the exact tool count, set, or
+order inside a multi-tool class, replace the request catalog with that plan,
+clear alternatives because a value exists, or expose only the host-selected
+next tool so the model merely copies arguments. Pass clauses: no_tool_planning,
+policy_capability_filter_only, or natural_singleton_class.
+
+The classic two-limb test remains part of I2/I3, but passing both limbs does not
+clear I4, I5, or I7. StoryArc remainder compilers, LedgerEventKind validators,
+required_money formatters, world_shape_rule injection, LINKED family audit
+prompts, BalanceFinal/BalanceMid/BudgetDelta/OutcomeSummary sheets, and trained
+exact-deck planners are review leads. Trace trigger, authority transition,
+served effect, and reachability; names alone never decide policy.
 
 C13 fingerprints are location-only search leads, never automatic bans. Search
 the served /run path for: prompt_tokens: 0, VERIFIED RESULT, glossary_block,
@@ -562,9 +647,10 @@ read the served path and apply the two-limb and production-engine tests. Do
 not reject from a fingerprint, a score, or a lexical near-duplicate alone.
 
 Calibration contrasts. Do not over-reject:
-- Derive-as-prompt is allowed when the current user's records remain on the
-  deciding turn and the served answer is the model's own draft, even if a
-  local expected-value helper grounded the prompt.
+- A candidate derived from user records is allowed only through the I4
+  untrusted_candidate_channel pass: complete records remain, the candidate is
+  labelled non-authoritative, disagreement is accepted, and no correctness gate
+  selects the model draft.
 - Lexical near-duplicate of a same-owner rejected ancestor is a hold/lead,
   not an automatic reject. Ban is per agent UUID, not per SHA or hotkey. Diff
   the
@@ -663,15 +749,16 @@ be promoted merely because it was surfaced.
 The inventory may surface additional v7 overfit routing leads. Each is a
 location-only co-occurrence hint, never a finding. Apply these discriminators
 and the two-location evidence bar before citing anything:
-- precomputed-answer-slot-injection: distinguish supplying computed
-  temporal/count/ordering CONTEXT derived from REQUEST-USER retrieval to a real
-  model (allowed) from injecting a PRE-COMPUTED ANSWER value whose provenance is
+- precomputed-answer-slot-injection: distinguish an explicitly UNTRUSTED
+  temporal/count/ordering CANDIDATE derived from REQUEST-USER retrieval, supplied
+  beside complete records with disagreement accepted (I4 pass), from injecting
+  a PRE-COMPUTED ANSWER value whose provenance is
   a static table, recognized challenge template, or generator mirror (NOT
   request-user retrieval) into the exact slot a faithful extractor lifts
   verbatim (benchmark_emulation + scorer_contract_manipulation). The tell is the
-  injected value's provenance and the forced verbatim lift, not the presence of
-  an answer slot. Lifting the model's OWN trailing answer line, or letting a
-  genuine model override the supplied context, is allowed.
+  injected value's provenance and authority, not the presence of an answer slot.
+  Lifting the model's OWN trailing answer line passes only when no authoritative
+  derived value or accept gate controls that model output.
 - post-model-answer-replacement: trace the completed model result, the
   omission/disagreement branch, the engine-composed replacement value, and the
   exact returned field. If harness code writes an answer, final_text, or response
@@ -695,8 +782,9 @@ and the two-location evidence bar before citing anything:
   grader-mirroring logic and whether repeated checks force model drafts toward
   that locally derived value. Fail retention or dissent is benchmark_emulation.
   When both limbs pass, still apply the production-engine test. Do not claim
-  engine-authored output or scorer-field manipulation when a
-  fresh model call still authors the served response. Clear bounded retries
+  mechanical overwrite when a fresh model call still authors the served
+  response, but independently apply I4/I5: a model call does not launder an
+  authoritative derived value or closed family compiler. Clear bounded retries
   that validate live
   runtime schemas, genuine tool results, or generic request-user state without
   a fixed benchmark-family compiler.
@@ -704,15 +792,16 @@ and the two-location evidence bar before citing anything:
   endpoint or harness Tool execution, and the response's reported trajectory.
   Report fabricated_tool_trajectory only when a call is emitted as observed
   without corresponding execution, or when its name/arguments are materially
-  rewritten after execution. Planning plus faithful execution and reporting is
-  allowed; the location-only lead cannot prove missing execution by itself.
+  rewritten after execution. Faithful execution/reporting passes I6 but not I7;
+  separately trace whether the host predetermined the exact tool count, set, or
+  order. The location-only lead cannot prove either violation by itself.
 - finite-family-world-compiler: inspect the registry/parser and every served
   caller. A fixed family ontology, template registry, finite answer compiler,
   or grader-derived checker that controls the served result is a
   production-engine fail even without literal answers and even when both
-  two-limb tests pass. Live schema-driven routing, runtime-described
-  semantics, generic state reconstruction, and prompt specialization remain
-  allowed when retrieval/model/tool execution stays authoritative.
+  two-limb tests pass. Runtime-described semantics and generic state
+  reconstruction may pass; schema validation, prompt specialization, and tool
+  routing still require their applicable I4/I5/I7 pass clauses.
 - c13-bench-family-fingerprint: a distinctive compiler token on the served
   /run path is a search lead, never a finding. Read the hit and apply the
   two-limb and production-engine tests. Do not promote a fingerprint, a
@@ -819,22 +908,28 @@ serve/run entrypoint, and apply the same two-location causal bar before citing.
 For every medium/high category, cite at least one exact reachable path:line for
 that category. For benchmark_emulation or scorer_contract_manipulation, cite at
 least two distinct reachable locations covering the input/decision trigger and
-the resulting model bypass, authoritative-field change, or fabricated tool
-effect. Retrieval or prompt construction followed by an authoritative real
-model call does not satisfy the effect requirement. Reserve medium/high risk for
-causally established prohibited behavior; ambiguous intent, terminology,
-prompt-level awareness, local-only constants, and infrastructure or behavioral-
-oracle failures must be low risk with none or an advisory category. Low risk
-may use only none or the advisory categories above. Never return none alongside
-another category.
+the resulting authority transition or scored effect. For I4/I5/I7, a real model
+call is not itself a pass: cite the reachable derived-value, family-compiler, or
+predetermined-tool decision and the model input, tool offer, or scored sink it
+controls. Reserve medium/high risk for causally established prohibited behavior;
+ambiguous intent, terminology, prompt-level awareness, local-only constants,
+and infrastructure or behavioral-oracle failures must be low risk with none or
+an advisory category. Low risk may use only none or the advisory categories
+above. Never return none alongside another category.
 
 Source-review findings are quarantine triage, never an automatic rejection.
 Before a low-risk result, perform at least two bounded inspection tool calls,
 including a read_file call against runtime source. Inventory or provenance
 metadata alone is not a safety certificate. Before finishing, inspect enough
-primary files to support the result. Submit
-exactly one structured result using submit_review. Keep the summary generic and
-do not reproduce source, prompts, fixtures, secrets, or benchmark cases.
+primary files to support the result. Submit exactly one structured result using
+submit_review. Keep the summary generic and do not reproduce source, prompts,
+fixtures, secrets, or benchmark cases. The invariants array must contain exactly
+one decision for each I1 through I7. A passing invariant must select one
+compatible published pass_clause and carry no violation evidence. A breach must
+reference one or more zero-based evidence_indices from the finding's top-level
+evidence array.
+Use inconclusive only when the bounded static review cannot decide; it routes
+deeper review and cannot silently clear.
 """
 
 
@@ -1736,6 +1831,22 @@ class TarSourceRepository:
                     break
             if len(evidence) >= 16:
                 break
+        breach_by_category = {
+            "benchmark_emulation": SourceReviewInvariant.PRODUCTION_ENGINE,
+            "scorer_contract_manipulation": SourceReviewInvariant.MODEL_DISSENT,
+            "fabricated_tool_trajectory": (
+                SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
+            ),
+        }
+        breaches = {
+            invariant: [
+                index
+                for index, item in enumerate(evidence)
+                if item.category == category
+            ]
+            for category, invariant in breach_by_category.items()
+            if category in categories
+        }
         finding = SourceReviewFinding(
             artifact_sha256=artifact_sha256,
             prompt_revision=detector_revision,
@@ -1755,7 +1866,10 @@ class TarSourceRepository:
                 + ", ".join(sorted({str(item["kind"]) for item in matches}))
                 + "; execution was not started."
             )[:240],
-        )
+            invariant_assessment=policy_v10_static_assessment(
+                breaches=breaches,
+            ),
+        ).require_policy_v10_invariants()
         payload = finding.model_dump(mode="json")
         return SourceReviewObservation(
             ok=True,
@@ -2412,6 +2526,8 @@ def _source_review_failure_code(error: BaseException) -> str:
     suffix = _SOURCE_REVIEW_FAILURE_CODES.get(message)
     if suffix is None and message.startswith("source review category "):
         suffix = "inconsistent-verdict"
+    if suffix is None and ("policy v10" in message or "invariant" in message):
+        suffix = "inconsistent-verdict"
     if suffix is None:
         return f"source-review-{type(error).__name__.lower()}"
     return f"source-review-{suffix}"
@@ -2478,6 +2594,67 @@ def _execute_tool(
     raise ValueError("source reviewer requested an unsupported tool")
 
 
+def _validated_invariant_assessment(
+    value: object,
+    *,
+    submitted_evidence: list[dict[str, object]],
+    finding_evidence: list[dict[str, object]],
+    demoted_to_low: bool,
+) -> SourceReviewInvariantAssessment:
+    """Filter invariant citations through the host evidence boundary."""
+
+    parsed = SourceReviewInvariantAssessment.model_validate({"decisions": value})
+    final_indices: dict[tuple[str, int, str], int] = {}
+    for index, item in enumerate(finding_evidence):
+        line = item["line"]
+        assert isinstance(line, int)
+        final_indices[(str(item["path"]), line, str(item["category"]))] = index
+    decisions: list[SourceReviewInvariantDecision] = []
+    for decision in parsed.decisions:
+        evidence_indices = []
+        for submitted_index in decision.evidence_indices:
+            if submitted_index >= len(submitted_evidence):
+                continue
+            item = submitted_evidence[submitted_index]
+            line = item["line"]
+            assert isinstance(line, int)
+            final_index = final_indices.get(
+                (str(item["path"]), line, str(item["category"]))
+            )
+            if final_index is not None and final_index not in evidence_indices:
+                evidence_indices.append(final_index)
+        if (
+            decision.disposition == SourceReviewInvariantDisposition.BREACH
+            and not evidence_indices
+        ):
+            decisions.append(
+                SourceReviewInvariantDecision(
+                    invariant=decision.invariant,
+                    disposition=(
+                        SourceReviewInvariantDisposition.PASS
+                        if demoted_to_low
+                        else SourceReviewInvariantDisposition.INCONCLUSIVE
+                    ),
+                    pass_clause=(
+                        SourceReviewPassClause.UNREACHABLE_NONRUNTIME_CODE
+                        if demoted_to_low
+                        else None
+                    ),
+                    summary=(
+                        "The alleged breach cited no admissible runtime location."
+                        if demoted_to_low
+                        else "The bounded review did not retain causal breach evidence."
+                    ),
+                    evidence_indices=[],
+                )
+            )
+            continue
+        decisions.append(
+            decision.model_copy(update={"evidence_indices": evidence_indices})
+        )
+    return SourceReviewInvariantAssessment(decisions=decisions)
+
+
 def _parse_review(
     value: object, *, artifact_sha256: str, repository: TarSourceRepository
 ) -> SourceReviewObservation:
@@ -2486,13 +2663,16 @@ def _parse_review(
         "confidence",
         "categories",
         "evidence",
+        "invariants",
         "summary",
     }:
         raise ValueError("source review has unexpected fields")
     risk = value["risk_level"]
+    submitted_risk = risk
     confidence = value["confidence"]
     categories = value["categories"]
     evidence = value["evidence"]
+    invariants = value["invariants"]
     summary = value["summary"]
     if (
         risk not in {"low", "medium", "high"}
@@ -2523,6 +2703,7 @@ def _parse_review(
         ):
             raise ValueError("source review evidence fields are invalid")
         normalized_evidence.append({"path": path, "line": line, "category": category})
+    submitted_evidence = list(normalized_evidence)
     # The reviewer model is untrusted output: a citation must point at a real
     # archive member, and at a real line when the member is readable text.
     # Hallucinated locations are dropped BEFORE the finding is digest-bound so
@@ -2667,7 +2848,13 @@ def _parse_review(
             for item in normalized_evidence
         ],
         summary=summary,
-    )
+        invariant_assessment=_validated_invariant_assessment(
+            invariants,
+            submitted_evidence=submitted_evidence,
+            finding_evidence=normalized_evidence,
+            demoted_to_low=risk == "low" and submitted_risk != "low",
+        ),
+    ).require_policy_v10_invariants()
     return SourceReviewObservation(
         ok=True,
         risk_level=risk,
@@ -2849,6 +3036,66 @@ _TOOLS: list[dict[str, object]] = [
                             "additionalProperties": False,
                         },
                     },
+                    "invariants": {
+                        "type": "array",
+                        "minItems": 7,
+                        "maxItems": 7,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "invariant": {
+                                    "type": "string",
+                                    "enum": sorted(
+                                        invariant.value
+                                        for invariant in SourceReviewInvariant
+                                    ),
+                                },
+                                "disposition": {
+                                    "type": "string",
+                                    "enum": sorted(
+                                        disposition.value
+                                        for disposition in (
+                                            SourceReviewInvariantDisposition
+                                        )
+                                    ),
+                                },
+                                "pass_clause": {
+                                    "anyOf": [
+                                        {"type": "null"},
+                                        {
+                                            "type": "string",
+                                            "enum": sorted(
+                                                clause.value
+                                                for clause in SourceReviewPassClause
+                                            ),
+                                        },
+                                    ]
+                                },
+                                "summary": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 240,
+                                },
+                                "evidence_indices": {
+                                    "type": "array",
+                                    "maxItems": 16,
+                                    "items": {
+                                        "type": "integer",
+                                        "minimum": 0,
+                                        "maximum": 15,
+                                    },
+                                },
+                            },
+                            "required": [
+                                "invariant",
+                                "disposition",
+                                "pass_clause",
+                                "summary",
+                                "evidence_indices",
+                            ],
+                            "additionalProperties": False,
+                        },
+                    },
                     "summary": {"type": "string", "minLength": 1, "maxLength": 240},
                 },
                 "required": [
@@ -2856,6 +3103,7 @@ _TOOLS: list[dict[str, object]] = [
                     "confidence",
                     "categories",
                     "evidence",
+                    "invariants",
                     "summary",
                 ],
                 "additionalProperties": False,

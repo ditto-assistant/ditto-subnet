@@ -18,7 +18,9 @@ category, or authority-transition change produces a different digest.
 
 The authority transition is one of `model_skipped`, `model_output_overwritten`,
 `tool_execution_bypassed`, `tool_trajectory_fabricated`,
-`selective_model_disablement`, or `scorer_field_rewritten`. Unknown transition
+`selective_model_disablement`, `scorer_field_rewritten`,
+`derived_value_authoritative`, `family_compiler_authoritative`, or
+`tool_selection_predetermined`. Unknown transition
 or role names, duplicate bindings, and over-budget collections fail validation.
 Every v2 object also names the concrete `scorer_visible_effect`: `final_text`,
 `answer`, `abstain`, `tool_calls`, `validator_observed_trajectory`, or

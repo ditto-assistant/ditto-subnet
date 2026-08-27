@@ -11,11 +11,18 @@
 
 ## Release boundary
 
-Release when suspicious code still uses the current request, current user's
-memories, live schemas, a real model, and real endpoint execution. Public-bench
-prompt specialization, broad family classifiers, reranking, schema-derived
-arguments, context expansion, and replacement harnesses are not violations by
-themselves. Bugs should score poorly; they are not anti-cheat findings.
+For policy v9 and earlier, release when suspicious code still uses the current
+request, current user's memories, live schemas, a real model, and real endpoint
+execution under the historical two-limb plus production-engine bar.
+
+For policy v10, those facts are necessary and not sufficient. Independently
+apply I4 derived-value authority, I5 production generality, and I7 model tool
+planning. An explicitly untrusted candidate beside complete records may pass;
+an authoritative derived value, closed family/operand recipe, or host-predicted
+exact tool count/set/order does not. Reranking, schema validation, context
+expansion, safety/authorization filtering, and natural singleton capability
+classes remain legitimate. Bugs should score poorly; they are not anti-cheat
+findings.
 
 Exact or near-identical source is not automatically theft. Check payment-time
 owner/coldkey lineage and attestations first. Same-owner revisions and shared
@@ -35,6 +42,11 @@ Reject when a reachable scored path:
 - embeds stolen credentials, private challenge material, or another unrelated
   miner's distinctive artifact; or
 - loads opaque executable data proven to contain one of those bypasses.
+
+Policy-v10 rejection additionally includes a causally proved I4, I5, or I7
+breach, even when a real model call occurs and the historical two limbs pass.
+The finding must name the policy-v10 invariant and the applicable pass clause it
+considered and refuted.
 
 For static logic, ask whether it generalizes to renamed/paraphrased requests,
 whether the real model makes the substantive choice, and whether a live tool is

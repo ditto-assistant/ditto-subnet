@@ -138,10 +138,12 @@ so.
    A same-hotkey ancestor keep, or a prior keep of this UUID, is not a skip.
    Re-apply the same bar to every new high-score row. Fairness is identical
    criteria, not identical outcome.
-3. Fail either limb in the review bar, or fail the production-engine test,
-   and the row is emulation. Prompt grounding, schema-derived args, and a
-   model that still authors the graded slot at its own score cost are not
-   violations.
+3. Apply the exact submission's policy version. Fail either historical limb or
+   the production-engine test and the row is emulation. For policy v10, also
+   apply independent I4 derived-value authority, I5 production generality, and
+   I7 model tool planning; a real model call or two-limb pass does not clear
+   them. Schema validation and the published invariant pass clauses remain
+   legitimate.
 4. Leave unchanged when source is missing, evidence is mixed, or the agent
    is not yet scored. Do not turn uncertainty into a reject.
 5. Re-fetch `get_screening_submission` immediately before writing.

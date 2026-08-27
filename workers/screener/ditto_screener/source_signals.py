@@ -1043,6 +1043,118 @@ _EMULATION_FINGERPRINTS = (
         scan="raw",
     ),
     _Fingerprint(
+        # Policy-v10 I4: a locally derived candidate plus an instruction that
+        # makes it authoritative. Either role alone is common and remains only
+        # prompt/retrieval code; the co-occurrence routes causal review.
+        kind="authoritative-derived-candidate",
+        severity="high",
+        roles=(
+            _Role(
+                "derived-value-marker",
+                re.compile(
+                    r"\b(?:worked[ _-]?out|derived|computed|resolved|authorized)"
+                    r"[ _-]?(?:value|answer|result|amount|balance|records?)\b"
+                    r"|\bderived[_ ]?candidate\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "authoritative-copy-directive",
+                re.compile(
+                    r"\bdo not recompute\b"
+                    r"|\b(?:state|copy|return|reply with)\b.{0,60}\bexact(?:ly)?\b"
+                    r"|\bmust\s+(?:state|report|use)\b.{0,60}\b(?:value|answer|result)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=16,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # Policy-v10 I5: a closed semantic worksheet is still a family compiler
+        # when pushed into model-facing prompt/context. Names are leads only;
+        # the reviewer must prove served reachability and family-specific use.
+        kind="closed-semantic-sheet-prompt",
+        severity="high",
+        roles=(
+            _Role(
+                "closed-sheet-label",
+                re.compile(
+                    r"\b(?:BalanceFinal|BalanceMid|BudgetDelta|OutcomeSummary|"
+                    r"NetChange|FINAL ANSWER TARGET|PREPARED RECORD WORKSHEET)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "model-context-sink",
+                re.compile(
+                    r"\b(?:system[_ ]?prompt|prompt|context|messages?)\b"
+                    r"|\.\s*(?:push_str|append|insert)\s*\(",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=20,
+        scan="raw",
+    ),
+    _Fingerprint(
+        # Policy-v10 I7: a trained/static head predicts the exact tool count/set
+        # rather than merely ranking an unchanged capability class.
+        kind="predetermined-tool-plan",
+        severity="high",
+        roles=(
+            _Role(
+                "tool-plan-head",
+                re.compile(
+                    r"\b(?:planned_calls|planned_deck|predict_relevant_tools|"
+                    r"tool[_ -]?affinity|call[_ -]?budget)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "exact-plan-construction",
+                re.compile(
+                    r"\b(?:planned_deck|required_tool_names?|contract_lineup)\b"
+                    r"|\.take\s*\(\s*(?:planned_calls|take)\s*\)"
+                    r"|\bexact\s+(?:deck|tool\s+(?:set|count|order))\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=48,
+        scan="code",
+    ),
+    _Fingerprint(
+        # Policy-v10 I7 continuation seam: host-selected required tool plus an
+        # exact provider/tool offer. Schema validation without preselection does
+        # not contain both roles and stays clear.
+        kind="forced-single-tool-turn",
+        severity="medium",
+        roles=(
+            _Role(
+                "host-selected-tool",
+                re.compile(
+                    r"\b(?:required_tool_names?|required_tool_name|pending_tool|"
+                    r"selected_tool)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "single-tool-enforcement",
+                re.compile(
+                    r"\btool_choice\b"
+                    r"|\bnext_required\b"
+                    r"|\bcall only\b.{0,80}\btool\b"
+                    r"|\btools?\b.{0,40}\b(?:only|single)\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=32,
+        scan="code",
+    ),
+    _Fingerprint(
         # do-not-recompute-directive (Hogwarts v19 guidance, Aceron_v4): a prompt
         # directive ordering the model to emit a precomputed value verbatim rather
         # than reason. An honest agent never tells the model to copy a value
