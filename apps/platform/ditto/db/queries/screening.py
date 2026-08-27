@@ -97,6 +97,7 @@ PROVIDER_BACKOFF_REASON_CODES = (
     "targon-runtime-unavailable",
     "targon-source-review-unavailable",
     "cloudrun-build-unavailable",
+    "cloudrun-runtime-unavailable",
 )
 # Active workers report at least every two minutes. Wait through two complete
 # heartbeat intervals before inferring an orphan, and only act on heartbeat

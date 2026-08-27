@@ -1157,6 +1157,92 @@ async def test_tick_finalizes_succeeded_build_after_runtime_fallback(
 
 
 @pytest.mark.asyncio
+async def test_runtime_cloudrun_provision_failure_reuses_kaniko_archive(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING_FAILED)
+    prior_attempt_id = uuid4()
+    prior_build_id = uuid4()
+    now = datetime.now(UTC)
+    archive_key = f"remote-builds/{prior_build_id}/image.tar"
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=prior_attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="failed",
+                started_at=now - timedelta(hours=2),
+                deadline=now - timedelta(minutes=50),
+                finished_at=now - timedelta(minutes=50),
+                reason_code="cloudrun-runtime-unavailable",
+                build_only=True,
+            )
+        )
+        session.add(
+            SubmissionImageBuild(
+                build_id=prior_build_id,
+                agent_id=agent_id,
+                attempt_id=prior_attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{prior_attempt_id}:latest",
+                output_key=archive_key,
+                status="succeeded",
+                provider="targon",
+                output_sha256="12" * 32,
+                output_size_bytes=123,
+                output_image_id="sha256:" + "ab" * 32,
+                runtime_status="fallback_required",
+                runtime_error_code="CLOUDRUN_PROVISION_ERROR",
+                attempt_count=1,
+                completed_at=now - timedelta(minutes=50),
+            )
+        )
+    targon = _FakeTargon()
+    cloudrun = _FakeCloudRun()
+    promoted: list[str] = []
+
+    async def promote(key: str, destination: str, _writer: str) -> str:
+        del destination
+        promoted.append(key)
+        return (
+            "us-central1-docker.pkg.dev/ditto-app-dev/"
+            "ditto-screening-candidates/miner@sha256:" + "cd" * 32
+        )
+
+    async def mint(_sa: str) -> str:
+        return "token-" + "x" * 120
+
+    config = _config()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=config,
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        promote_archive=promote,
+        mint_token=mint,
+        providers=[TargonComputeProvider(targon, config), cloudrun],
+        interval_seconds=60,
+    )
+    assert await loop.tick() is True
+    async with session_maker() as session:
+        current = await session.scalar(
+            select(SubmissionImageBuild)
+            .where(SubmissionImageBuild.build_id != prior_build_id)
+            .limit(1)
+        )
+        assert current is not None
+        assert current.status == "succeeded"
+        assert current.output_key == archive_key
+        assert current.output_sha256 == "12" * 32
+        assert current.provider == "targon"
+    assert cloudrun.builds == []
+    assert promoted == [archive_key]
+
+
+@pytest.mark.asyncio
 async def test_kaniko_uses_resolved_builder_image(
     session_maker: async_sessionmaker[AsyncSession],
 ) -> None:

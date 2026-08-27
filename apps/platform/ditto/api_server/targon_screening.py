@@ -53,6 +53,13 @@ _LEASE_TTL = timedelta(minutes=70)
 _SCREENED_IMAGE_TTL = timedelta(days=1)
 _PLATFORM_COPY_PREFIX = "platform-targon-copy:"
 _KANIKO_FAILED_SUFFIX = "_SUBMISSION_KANIKO_FAILED"
+_CLOUDRUN_RUNTIME_PROVISION_CODES = frozenset(
+    {
+        "CLOUDRUN_PROVISION_ERROR",
+        "CLOUDRUN_PROVISION_TIMEOUT",
+        "CLOUDRUN_PROVIDER_ERROR",
+    }
+)
 
 
 def _targon_first(providers: tuple[str, ...]) -> bool:
@@ -126,11 +133,54 @@ async def _queue_kaniko(
     runtime_enabled: bool,
 ) -> None:
     build_id = uuid4()
+    artifact_sha256 = agent.sha256.lower()
+    prior_archive = await session.scalar(
+        select(SubmissionImageBuild)
+        .where(
+            SubmissionImageBuild.agent_id == agent.agent_id,
+            SubmissionImageBuild.artifact_sha256 == artifact_sha256,
+            SubmissionImageBuild.environment == environment,
+            SubmissionImageBuild.status.in_(("succeeded", "consumed")),
+            SubmissionImageBuild.runtime_status == "fallback_required",
+            SubmissionImageBuild.output_sha256.is_not(None),
+            SubmissionImageBuild.output_size_bytes.is_not(None),
+            SubmissionImageBuild.output_key.is_not(None),
+            SubmissionImageBuild.output_image_id.is_not(None),
+        )
+        .order_by(SubmissionImageBuild.completed_at.desc())
+        .limit(1)
+    )
+    if prior_archive is not None:
+        now = datetime.now(UTC)
+        await session.execute(
+            pg_insert(SubmissionImageBuild)
+            .values(
+                build_id=build_id,
+                agent_id=agent.agent_id,
+                attempt_id=attempt.attempt_id,
+                environment=environment,
+                artifact_sha256=artifact_sha256,
+                image_ref=f"ditto-screen/{agent.agent_id}-{attempt.attempt_id}:latest",
+                output_key=prior_archive.output_key,
+                status="succeeded",
+                provider=prior_archive.provider,
+                output_sha256=prior_archive.output_sha256,
+                output_size_bytes=prior_archive.output_size_bytes,
+                output_image_id=prior_archive.output_image_id,
+                runtime_status="pending" if runtime_enabled else "skipped",
+                runtime_error_code=(
+                    None if runtime_enabled else "TARGON_RUNTIME_DISABLED_BY_POLICY"
+                ),
+                completed_at=now,
+            )
+            .on_conflict_do_nothing(constraint="submission_image_builds_attempt_key")
+        )
+        return
     prior_gcp_infra_failure = await session.scalar(
         select(SubmissionImageBuild.build_id)
         .where(
             SubmissionImageBuild.agent_id == agent.agent_id,
-            SubmissionImageBuild.artifact_sha256 == agent.sha256.lower(),
+            SubmissionImageBuild.artifact_sha256 == artifact_sha256,
             SubmissionImageBuild.environment == environment,
             SubmissionImageBuild.provider == "gcp",
             SubmissionImageBuild.status == "fallback_required",
@@ -147,7 +197,7 @@ async def _queue_kaniko(
             agent_id=agent.agent_id,
             attempt_id=attempt.attempt_id,
             environment=environment,
-            artifact_sha256=agent.sha256.lower(),
+            artifact_sha256=artifact_sha256,
             image_ref=f"ditto-screen/{agent.agent_id}-{attempt.attempt_id}:latest",
             output_key=f"remote-builds/{build_id}/image.tar",
             status="queued",
@@ -215,11 +265,22 @@ async def maybe_finalize_targon_screen(
             return True
         return False
     if build.runtime_status == "fallback_required":
+        cloudrun_runtime = (
+            build.runtime_error_code or ""
+        ) in _CLOUDRUN_RUNTIME_PROVISION_CODES
         await _fail_retryable(
             session,
             attempt,
-            reason="Targon runtime smoke did not admit this archive",
-            code="targon-runtime-unavailable",
+            reason=(
+                "Cloud Run runtime smoke was unavailable"
+                if cloudrun_runtime
+                else "Targon runtime smoke did not admit this archive"
+            ),
+            code=(
+                "cloudrun-runtime-unavailable"
+                if cloudrun_runtime
+                else "targon-runtime-unavailable"
+            ),
             now=now,
         )
         return True
