@@ -40,16 +40,19 @@ from ditto.db.queries.scores import SCORING_QUORUM
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# Expired attempts under the current policy after which an agent is parked for
-# operator review instead of re-queued forever. An inconclusive screen is
+# Inconclusive attempts under the current policy after which an agent is parked
+# for operator review instead of re-queued forever. An inconclusive screen is
 # completed as an early-expired lease and remains in backoff until its original
 # deadline; legacy workers still express the same state by letting the running
 # lease expire naturally. A permanently-inconclusive agent would otherwise
-# re-attempt every lease indefinitely. Only "expired" attempts count --
-# infrastructure "failed" attempts are usually screener-side, so a screener
-# outage must not mass-park every in-flight agent. Provider-routing failures
-# stay in backoff until that original deadline so a Targon/Cloud Run blip
-# cannot re-lease every few minutes. Heartbeat-proven orphans stay immediate.
+# re-attempt every lease indefinitely. "Expired" attempts always count.
+# Infrastructure "failed" attempts are usually screener-side, so a screener
+# outage must not mass-park every in-flight agent: a provider-backoff failure
+# counts only with peer evidence -- another agent passed screening inside that
+# attempt's lease window, so the lane demonstrably worked while refusing this
+# artifact (see _inconclusive_attempt_count). Provider-routing failures stay in
+# backoff until that original deadline so a Targon/Cloud Run blip cannot
+# re-lease every few minutes. Heartbeat-proven orphans stay immediate.
 MAX_SCREENING_EXPIRIES = 5
 
 # Duplicate-owner statuses. A later cross-miner submission of the SAME bytes is
@@ -494,9 +497,25 @@ async def _shared_hotkey_claim_budget(
     return max(0, fresh_instances - running)
 
 
-async def _expired_attempt_count(session: AsyncSession, *, agent_id: UUID) -> int:
-    """Count expired screening leases under the current policy **since the
+async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) -> int:
+    """Count inconclusive screening turns under the current policy **since the
     agent's most recent operator clear**.
+
+    Two shapes consume a turn without concluding. An ``expired`` lease always
+    counts. A ``failed`` provider-backoff attempt (its reason code is in
+    ``PROVIDER_BACKOFF_REASON_CODES``) counts only with peer evidence: some
+    OTHER agent's attempt passed inside this attempt's lease window
+    (``started_at``..``deadline``), so the screening lane demonstrably worked
+    for a peer while repeatedly refusing this artifact. During a genuine
+    Targon/Cloud Run outage nothing passes, no failure gains peer evidence,
+    and a fleet-wide blip still cannot mass-park every in-flight agent.
+
+    Without the failed-attempt branch, an archive whose image builds but whose
+    runtime never comes up (the smoke replica dies on both providers, reported
+    as e.g. ``CLOUDRUN_PROVISION_ERROR``) failed ``targon-runtime-unavailable``
+    every 70-minute lease forever: the cap counted only expiries, so the agent
+    rebuilt Kaniko each cycle and the miner saw "waiting for admission"
+    indefinitely instead of an operator-visible hold.
 
     Resolving a quarantine with ``release`` or ``rescreen`` explicitly lets the
     submission move forward and therefore grants a fresh attempt budget.
@@ -514,13 +533,30 @@ async def _expired_attempt_count(session: AsyncSession, *, agent_id: UUID) -> in
         )
         .scalar_subquery()
     )
+    peer = aliased(ScreeningAttempt)
+    peer_passed_in_window = exists(
+        select(peer.attempt_id).where(
+            peer.agent_id != agent_id,
+            peer.policy_version == SCREENING_POLICY_VERSION,
+            peer.status == "passed",
+            peer.finished_at >= ScreeningAttempt.started_at,
+            peer.finished_at <= ScreeningAttempt.deadline,
+        )
+    )
     count = await session.scalar(
         select(func.count())
         .select_from(ScreeningAttempt)
         .where(
             ScreeningAttempt.agent_id == agent_id,
             ScreeningAttempt.policy_version == SCREENING_POLICY_VERSION,
-            ScreeningAttempt.status == "expired",
+            or_(
+                ScreeningAttempt.status == "expired",
+                and_(
+                    ScreeningAttempt.status == "failed",
+                    ScreeningAttempt.reason_code.in_(PROVIDER_BACKOFF_REASON_CODES),
+                    peer_passed_in_window,
+                ),
+            ),
             ScreeningAttempt.started_at
             > func.coalesce(last_operator_clear, datetime(1970, 1, 1, tzinfo=UTC)),
         )
@@ -804,11 +840,11 @@ async def claim_screening_attempts(
     )
     claimed: list[tuple[Agent, ScreeningAttempt, UUID | None]] = []
     for agent in agents:
-        # An agent that keeps coming back inconclusive expires its lease every
+        # An agent that keeps coming back inconclusive burns a lease every
         # cycle; after the cap, park it for operator review instead of leasing
         # it out again to loop forever.
         if (
-            await _expired_attempt_count(session, agent_id=agent.agent_id)
+            await _inconclusive_attempt_count(session, agent_id=agent.agent_id)
             >= MAX_SCREENING_EXPIRIES
         ):
             await _park_repeatedly_inconclusive(
