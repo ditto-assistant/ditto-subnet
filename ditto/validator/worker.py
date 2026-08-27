@@ -780,19 +780,20 @@ class ValidatorWorker:
             claimed = 0
             running = 0
             pending_claims = 0
+            retest_dispatching = False
+            retest_work_claimed = False
+            retests_dispatched = False
             # Set whenever a claim resolves or a slot finishes a lease, so a
             # waiting slot re-polls the instant the pool changes instead of
             # sitting out the interval. Cleared and read under ``budget_lock``
-            # together with ``running`` and ``pending_claims``, which makes the
-            # wakeup impossible to miss.
+            # together with ``running``, ``pending_claims``, and the retest
+            # dispatch state, which makes the wakeup impossible to miss.
             lease_state_changed = asyncio.Event()
-            # Only one idle slot needs to fan out the ordinary shared-seed
-            # retest lane. LongMemEval has a physically separate worker pool
-            # and is never dispatched from canonical slots.
-            idle_retest_dispatch = asyncio.Lock()
 
             async def run_slot(slot_id: str) -> tuple[list[ScoredAgentStat], int, int]:
-                nonlocal claimed, pending_claims, running
+                nonlocal claimed, pending_claims, retest_dispatching
+                nonlocal retest_work_claimed
+                nonlocal retests_dispatched, running
                 slot_scored: list[ScoredAgentStat] = []
                 slot_failed = 0
                 slot_claimed = 0
@@ -823,8 +824,24 @@ class ValidatorWorker:
                                 claimed -= 1
                                 pending_claims -= 1
                                 siblings_running = bool(running)
+                                dispatch_retests = bool(
+                                    not retests_dispatched
+                                    and not retest_dispatching
+                                    and (siblings_running or pending_claims == 0)
+                                )
+                                if dispatch_retests:
+                                    # Elect the one host-level dispatcher while
+                                    # every sibling still agrees this sweep has
+                                    # work that may keep the queue changing.
+                                    # Without publishing the election under the
+                                    # same lock, all empty slots can retire
+                                    # before the retest claim resolves.
+                                    retest_dispatching = True
+                                    retests_dispatched = True
                                 sibling_work_possible = bool(
-                                    siblings_running or pending_claims
+                                    siblings_running
+                                    or pending_claims
+                                    or retest_dispatching
                                 )
                                 if sibling_work_possible:
                                     lease_state_changed.clear()
@@ -832,28 +849,42 @@ class ValidatorWorker:
                                     # Wake empty siblings that were waiting for
                                     # this last outstanding claim to settle.
                                     lease_state_changed.set()
-                            if not sibling_work_possible:
-                                # Nothing of this worker's is in flight, so an
-                                # empty poll really is an empty queue. End the
-                                # sweep and let the ordinary sweep cadence bring
-                                # the whole pool back at once.
-                                break
                             # Canonical work was checked first for this slot.
-                            # Use the otherwise-idle gap for continual retests
-                            # now, rather than waiting for every sibling's
-                            # (potentially ninety-minute) ordinary lease to
-                            # finish before reaching the post-gather lane.
-                            #
-                            # The lane itself asks the platform for durable,
-                            # per-slot leases.  A single host-level dispatcher
-                            # is therefore enough to fan out across all free
-                            # slots without duplicate local fanouts.
-                            if siblings_running and not idle_retest_dispatch.locked():
-                                async with idle_retest_dispatch:
-                                    await self._run_top5_confirmation_lane(
-                                        stop_requested=stop_requested,
-                                        drain_requested=drain_requested,
+                            # Give the shared-seed lane one bounded dispatch per
+                            # sweep. Keep every other idle slot re-polling while
+                            # those retests run: a submission can become
+                            # canonical-eligible after this empty poll, and a
+                            # maintenance lease on one slot must not strand the
+                            # rest of the host until its three-hour deadline.
+                            if dispatch_retests:
+                                retest_claimed = False
+                                try:
+                                    retest_claimed = (
+                                        await self._run_top5_confirmation_lane(
+                                            stop_requested=stop_requested,
+                                            drain_requested=drain_requested,
+                                        )
+                                    ) is True
+                                finally:
+                                    async with budget_lock:
+                                        retest_work_claimed = retest_claimed
+                                        retest_dispatching = False
+                                        lease_state_changed.set()
+                                if retest_claimed:
+                                    # The dispatcher itself becomes free only
+                                    # after its retest work settles. Ask for
+                                    # ordinary work immediately before this
+                                    # sweep is allowed to end.
+                                    continue
+                                async with budget_lock:
+                                    sibling_work_possible = bool(
+                                        running or pending_claims
                                     )
+                            if not sibling_work_possible:
+                                # Nothing of this worker's is in flight and the
+                                # one retest dispatch found no work. End the
+                                # sweep and let the ordinary cadence restart it.
+                                break
                             # A sibling still holds a lease, and ``asyncio.gather``
                             # below does not return until it does -- up to the
                             # full ninety-minute lease. Breaking here would retire
@@ -871,6 +902,16 @@ class ValidatorWorker:
                                 drain_requested,
                                 lease_state_changed,
                             )
+                            async with budget_lock:
+                                no_retest_work = bool(
+                                    retests_dispatched
+                                    and not retest_dispatching
+                                    and not retest_work_claimed
+                                    and not running
+                                    and not pending_claims
+                                )
+                            if no_retest_work:
+                                break
                             continue
                         async with budget_lock:
                             pending_claims -= 1
@@ -1024,24 +1065,6 @@ class ValidatorWorker:
                 scored.extend(slot_scored)
                 failed += slot_failed
                 queue_depth += slot_claimed
-        # Score production is platform-lease-bound. In particular, do not infer
-        # autonomous re-score work from the public ledger: the score endpoint
-        # requires the exact live ticket deadline. The only autonomous-looking
-        # follow-up below is also platform-leased through the dedicated top-five
-        # claim endpoint and appends evidence without replacing canonical scores.
-        # The shared-seed top-five lane remains ordinary idle-capacity work.
-        # LongMemEval does not appear here: its independent loop and dedicated
-        # slots run concurrently with this whole scoring sweep.
-        if (
-            scoring_available
-            and self._admission == "accepting"
-            and not self._new_work_blocked(stop_requested, drain_requested)
-        ):
-            await self._run_top5_confirmation_lane(
-                stop_requested=stop_requested,
-                drain_requested=drain_requested,
-            )
-
         outcome = _WeightOutcome()
         weights_ran = False
         onchain_last_update_block: int | None = None
@@ -2182,7 +2205,7 @@ class ValidatorWorker:
         drain_requested: asyncio.Event | None = None,
         _slot_id: str | None = None,
         _claim_resolved: asyncio.Event | None = None,
-    ) -> None:
+    ) -> bool:
         """Fill locally healthy slots with Platform-routed continual retests.
 
         Platform chooses the member and seed in the lease transaction. The
@@ -2190,9 +2213,12 @@ class ValidatorWorker:
         fetched scoring ledger, which may reflect a different completed fold.
         Claims are staged until each HTTP transaction resolves; accepted jobs
         continue concurrently while the next slot asks for remaining work.
+        The return value reports whether any slot accepted a lease, including
+        one whose execution later failed, so the canonical sweep knows to poll
+        once more after that slot is released.
         """
         if _slot_id is None:
-            tasks: list[asyncio.Task[None]] = []
+            tasks: list[asyncio.Task[bool]] = []
             for slot_id in sorted(self._healthy_slots):
                 if self._new_work_blocked(stop_requested, drain_requested):
                     break
@@ -2208,13 +2234,13 @@ class ValidatorWorker:
                 tasks.append(task)
                 await claim_resolved.wait()
             if tasks:
-                await asyncio.gather(*tasks)
-            return
+                return any(await asyncio.gather(*tasks))
+            return False
 
         if self._new_work_blocked(stop_requested, drain_requested):
             if _claim_resolved is not None:
                 _claim_resolved.set()
-            return
+            return False
         job = None
         slot_token = None
         ticket_claimed = False
@@ -2227,7 +2253,7 @@ class ValidatorWorker:
                 if _claim_resolved is not None:
                     _claim_resolved.set()
             if job is None:
-                return
+                return False
             # Mirrors the canonical path's slot-mismatch guard: binding an
             # unserved slot below would raise KeyError out of the lane and take
             # the rest of the sweep's confirmations with it.
@@ -2242,7 +2268,7 @@ class ValidatorWorker:
                 await self._report_ticket_failed(
                     job, "infrastructure", "confirmation_slot_not_served"
                 )
-                return
+                return False
             # This lane runs in the sweep body, outside the per-slot context
             # ``run_slot`` establishes, so bind every state write to the slot
             # Platform actually returned.
@@ -2260,7 +2286,7 @@ class ValidatorWorker:
                 await self._report_ticket_failed(
                     job, "infrastructure", "unsupported_bench_version"
                 )
-                return
+                return False
             if not received_seeds:
                 logger.warning(
                     "top-five confirmation dataset contract missing pins agent=%s",
@@ -2269,7 +2295,7 @@ class ValidatorWorker:
                 await self._report_ticket_failed(
                     job, "infrastructure", "confirmation_dataset_pins_missing"
                 )
-                return
+                return False
             if len(received_seeds) != len(set(received_seeds)):
                 logger.warning(
                     "top-five confirmation dataset contract contains duplicate "
@@ -2280,7 +2306,7 @@ class ValidatorWorker:
                 await self._report_ticket_failed(
                     job, "infrastructure", "confirmation_dataset_pins_duplicated"
                 )
-                return
+                return False
             datasets = job.confirmation_datasets
             # Set before the claim, not after: ``_begin_active_ticket`` occupies
             # the slot first, so a partial failure must still clear it below.
@@ -2318,7 +2344,7 @@ class ValidatorWorker:
                 await self._report_ticket_failed(
                     job, "scoring_error", "confirmation_run_produced_no_report"
                 )
-                return
+                return True
             await self._platform.submit_top5_confirmation_score(
                 job.agent_id,
                 report=report,
@@ -2392,6 +2418,7 @@ class ValidatorWorker:
                 await self._report_heartbeat("polling")
             if slot_token is not None:
                 _CURRENT_SLOT.reset(slot_token)
+        return ticket_claimed
 
     async def _evaluate_confirmation_report(
         self,
