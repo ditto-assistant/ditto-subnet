@@ -382,6 +382,7 @@ function BundleRow({ bundle, readOnly, onChanged }: { bundle: ConfirmationBundle
   const detailsId = `confirmation-bundle-${bundle.bundle_id}`
   const root = bundle.evidence_root
   const hasCompletedEvidence = root !== null && bundle.completed_at !== null
+  const canAuthorizeRetest = bundle.state === 'failed' || (bundle.state === 'completed' && hasCompletedEvidence)
   const lanes = root?.longmemeval.evidence.provider_evidence ?? []
   const ablations = useMemo(
     () => root ? [root.inference_ablation, root.embedding_ablation] : [],
@@ -483,9 +484,9 @@ function BundleRow({ bundle, readOnly, onChanged }: { bundle: ConfirmationBundle
             </table>
           </div>
 
-          {!readOnly && hasCompletedEvidence && (bundle.state === 'completed' || bundle.state === 'superseded') && (
+          {!readOnly && canAuthorizeRetest && (
             <div className="mt-4 rounded-lg border border-[var(--amber)]/25 bg-[var(--amber)]/5 p-4">
-              <div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--amber)]" /><div><p className="text-sm font-medium">Authorize a new evidence generation</p><p className="mt-1 text-xs leading-5 text-[var(--muted)]">This supersedes the current bundle and clears every subject projection until new evidence completes. It does not activate v9 or rewards.</p></div></div>
+              <div className="flex items-start gap-3"><ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--amber)]" /><div><p className="text-sm font-medium">Authorize one manual retest</p><p className="mt-1 text-xs leading-5 text-[var(--muted)]">This creates exactly one audited generation for a completed or failed bundle. Automatic retries stay disabled. It does not activate v9 or rewards.</p></div></div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2"><Field label="Audit reason"><input value={reason} onChange={(event) => setReason(event.target.value)} /></Field><Field label="Exact confirmation"><input value={confirmation} placeholder={CONFIRMATION_BUNDLE_RETEST_CONFIRMATION} onChange={(event) => setConfirmation(event.target.value)} /></Field></div>
               {error && <p role="alert" className="mt-3 text-xs text-[var(--red)]">{error}</p>}
               <div className="mt-3 flex justify-end"><button type="button" disabled={busy || reason.length < 8 || confirmation !== CONFIRMATION_BUNDLE_RETEST_CONFIRMATION} onClick={authorizeRetest} className="rounded-lg border border-[var(--amber)]/40 px-3 py-2 text-xs font-semibold text-[var(--amber)] hover:bg-[var(--amber-dim)] active:translate-y-px disabled:opacity-40 disabled:hover:bg-transparent">Authorize retest</button></div>

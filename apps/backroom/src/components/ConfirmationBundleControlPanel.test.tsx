@@ -138,6 +138,31 @@ function pendingBundle(): ConfirmationBundleView {
   }
 }
 
+function failedBundle(): ConfirmationBundleView {
+  return {
+    ...pendingBundle(),
+    state: 'failed',
+    updated_at: '2026-08-08T12:03:00Z',
+    tickets: [
+      {
+        ticket_id: '77777777-7777-4777-8777-777777777777',
+        validator_hotkey: '5ValidatorAlice',
+        slot_id: 'longmem-0',
+        status: 'expired',
+        attempt: 1,
+        issued_at: '2026-08-08T12:01:00Z',
+        deadline: '2026-08-08T13:31:00Z',
+        failure_reason: 'confirmation_execution_failed',
+        failure_class: 'dittobench',
+        failure_stage: 'running_confirmation',
+        failed_at: '2026-08-08T12:03:00Z',
+        prepare_rejection: null,
+        prepare_rejected_at: null,
+      },
+    ],
+  }
+}
+
 function providerLane(lane: 'reader' | 'judge', cost: number) {
   return {
     lane,
@@ -502,6 +527,29 @@ describe('ConfirmationBundleControlPanel', () => {
         requestId: '55555555-5555-4555-8555-555555555555',
         expectedGeneration: 0,
         reason: 'replace the completed evidence with a fresh audited generation',
+        confirmation: CONFIRMATION_BUNDLE_RETEST_CONFIRMATION,
+      },
+    })
+  })
+
+  it('offers a single audited manual retest for a failed bundle', async () => {
+    vi.spyOn(globalThis.crypto, 'randomUUID').mockReturnValue('88888888-8888-4888-8888-888888888888')
+    render(<ConfirmationBundleControlPanel initialSettings={control()} initialBundles={listing([failedBundle()])} readOnly={false} />)
+
+    fireEvent.click(screen.getByText(/generation 0/).closest('button')!)
+    expect(screen.getByText('Authorize one manual retest')).toBeTruthy()
+    expect(screen.getByText(/Automatic retries stay disabled/)).toBeTruthy()
+    fireEvent.change(screen.getAllByLabelText('Audit reason').at(-1)!, { target: { value: 'operator confirmed the provider incident is resolved' } })
+    fireEvent.change(screen.getAllByLabelText('Exact confirmation').at(-1)!, { target: { value: CONFIRMATION_BUNDLE_RETEST_CONFIRMATION } })
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize retest' }))
+
+    await waitFor(() => expect(authorizeConfirmationBundleRetest).toHaveBeenCalledTimes(1))
+    expect(authorizeConfirmationBundleRetest).toHaveBeenCalledWith({
+      data: {
+        bundleId: '11111111-1111-4111-8111-111111111111',
+        requestId: '88888888-8888-4888-8888-888888888888',
+        expectedGeneration: 0,
+        reason: 'operator confirmed the provider incident is resolved',
         confirmation: CONFIRMATION_BUNDLE_RETEST_CONFIRMATION,
       },
     })

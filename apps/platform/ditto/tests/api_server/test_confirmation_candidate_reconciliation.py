@@ -30,6 +30,7 @@ from ditto.api_server.confirmation_candidate_reconciliation import (
 )
 from ditto.db.models import (
     Agent,
+    ConfirmationBudgetDay,
     ConfirmationBudgetReservation,
     ConfirmationBundle,
     ConfirmationBundleSettingsRevision,
@@ -660,8 +661,10 @@ async def test_settings_change_supersedes_only_zero_spend_pending_generation(
     assert bundle_count == 2
 
 
-async def test_settings_change_recovers_failed_spent_generation(
+@pytest.mark.parametrize("terminal_state", ("failed", "blocked_budget"))
+async def test_settings_change_does_not_retry_spent_generation(
     session: AsyncSession,
+    terminal_state: str,
 ) -> None:
     registry = _registry()
     async with session.begin():
@@ -702,8 +705,9 @@ async def test_settings_change_recovers_failed_spent_generation(
             settled_at=_NOW + timedelta(minutes=1),
         )
         assert source.state == "failed"
+        source.state = terminal_state
 
-        enforce_revision, _ = await _settings(
+        await _settings(
             session,
             mode=ConfirmationBundleMode.ENFORCE,
             top_n=1,
@@ -715,19 +719,18 @@ async def test_settings_change_recovers_failed_spent_generation(
 
     refreshed = await session.get(ConfirmationBundleSubject, (agent.agent_id, 9))
     assert refreshed is not None and refreshed.bundle_id is not None
-    replacement = await session.get(ConfirmationBundle, refreshed.bundle_id)
-    assert replacement is not None
-    assert source.state == "superseded"
-    assert replacement.source_bundle_id == source.bundle_id
-    assert replacement.generation_reason == "settings_supersession"
-    assert replacement.settings_revision == enforce_revision.revision
-    assert replacement.state == "pending"
+    assert refreshed.bundle_id == source.bundle_id
+    assert source.state == terminal_state
     assert decision.reservation.state == "settled"
     assert decision.reservation.actual_microusd == 42_000
     assert ticket.status == "expired"
+    bundle_count = await session.scalar(
+        select(func.count()).select_from(ConfirmationBundle)
+    )
+    assert bundle_count == 1
 
 
-async def test_settings_change_recovers_budget_blocked_spent_generation(
+async def test_settings_change_recovers_unspent_budget_blocked_generation(
     session: AsyncSession,
 ) -> None:
     registry = _registry()
@@ -741,39 +744,22 @@ async def test_settings_change_recovers_budget_blocked_spent_generation(
         assert subject is not None and subject.bundle_id is not None
         source = await session.get(ConfirmationBundle, subject.bundle_id)
         assert source is not None
-        first = await reserve_confirmation_bundle_budget(
+        session.add(
+            ConfirmationBudgetDay(
+                utc_day=_NOW.date(),
+                revision=0,
+                issued_attempts=1,
+                outstanding_reserved_microusd=0,
+                settled_microusd=0,
+            )
+        )
+        await session.flush()
+        blocked = await reserve_confirmation_bundle_budget(
             session,
             bundle_id=source.bundle_id,
             reservation_id=uuid4(),
             now=_NOW,
             expected_revision=0,
-            settings_revision=shadow_revision.revision,
-            settings=shadow,
-            reserve_microusd=50_000,
-        )
-        assert first.reservation is not None
-        await issue_confirmation_bundle_ticket(
-            session,
-            bundle_id=source.bundle_id,
-            reservation_id=first.reservation.reservation_id,
-            validator_hotkey=VALIDATOR_KEYPAIR.ss58_address,
-            slot_id="longmem-1",
-            now=_NOW,
-        )
-        await settle_confirmation_bundle_budget(
-            session,
-            reservation_id=first.reservation.reservation_id,
-            expected_revision=1,
-            actual_microusd=50_000,
-            failed_attempt=True,
-            settled_at=_NOW + timedelta(minutes=1),
-        )
-        blocked = await reserve_confirmation_bundle_budget(
-            session,
-            bundle_id=source.bundle_id,
-            reservation_id=uuid4(),
-            now=_NOW + timedelta(minutes=2),
-            expected_revision=2,
             settings_revision=shadow_revision.revision,
             settings=shadow,
             reserve_microusd=50_000,
@@ -801,8 +787,10 @@ async def test_settings_change_recovers_budget_blocked_spent_generation(
     assert replacement.source_bundle_id == source.bundle_id
     assert replacement.settings_revision == enforce_revision.revision
     assert replacement.state == "pending"
-    assert first.reservation.state == "settled"
-    assert first.reservation.actual_microusd == 50_000
+    reservation_count = await session.scalar(
+        select(func.count()).select_from(ConfirmationBudgetReservation)
+    )
+    assert reservation_count == 0
 
 
 async def test_reserved_pending_generation_requires_operator_recovery(

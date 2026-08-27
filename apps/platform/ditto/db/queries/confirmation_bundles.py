@@ -633,16 +633,14 @@ async def _supersede_unspent_bundle_for_settings(
 ) -> ConfirmationBundle:
     """Replace a stale-policy generation only when no work remains live.
 
-    Untouched pending work remains the narrowest case. Failed work and a
-    budget-blocked retry may also advance after a settings revision once every
-    reservation is settled and every ticket is closed. Their append-only spend
-    and lease history stays attached to the superseded source row; the new
-    generation receives the latest frozen settings without rewriting history.
+    Untouched pending work and budget-blocked work with no issued attempt may
+    advance after a settings revision. A failed bundle consumed its one
+    automatic attempt and can advance only through an operator-authorized
+    retest generation.
     """
     if source.state not in {
         ConfirmationBundleState.PENDING.value,
         ConfirmationBundleState.BLOCKED_BUDGET.value,
-        ConfirmationBundleState.FAILED.value,
     }:
         return source
     evidence_count = int(
@@ -655,51 +653,24 @@ async def _supersede_unspent_bundle_for_settings(
     )
     if evidence_count:
         return source
-    if source.state == ConfirmationBundleState.PENDING.value:
-        ticket_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(ConfirmationBundleTicket)
-                .where(ConfirmationBundleTicket.bundle_id == source.bundle_id)
-            )
-            or 0
+    ticket_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ConfirmationBundleTicket)
+            .where(ConfirmationBundleTicket.bundle_id == source.bundle_id)
         )
-        reservation_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(ConfirmationBudgetReservation)
-                .where(ConfirmationBudgetReservation.bundle_id == source.bundle_id)
-            )
-            or 0
+        or 0
+    )
+    reservation_count = int(
+        await session.scalar(
+            select(func.count())
+            .select_from(ConfirmationBudgetReservation)
+            .where(ConfirmationBudgetReservation.bundle_id == source.bundle_id)
         )
-        if ticket_count or reservation_count:
-            return source
-    else:
-        live_ticket_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(ConfirmationBundleTicket)
-                .where(
-                    ConfirmationBundleTicket.bundle_id == source.bundle_id,
-                    ConfirmationBundleTicket.status == "issued",
-                )
-            )
-            or 0
-        )
-        open_reservation_count = int(
-            await session.scalar(
-                select(func.count())
-                .select_from(ConfirmationBudgetReservation)
-                .where(
-                    ConfirmationBudgetReservation.bundle_id == source.bundle_id,
-                    ConfirmationBudgetReservation.state
-                    == ConfirmationReservationState.RESERVED.value,
-                )
-            )
-            or 0
-        )
-        if live_ticket_count or open_reservation_count:
-            return source
+        or 0
+    )
+    if ticket_count or reservation_count:
+        return source
     source.state = ConfirmationBundleState.SUPERSEDED.value
     replacement = ConfirmationBundle(
         artifact_sha256=source.artifact_sha256,
@@ -941,24 +912,23 @@ async def reserve_confirmation_bundle_budget(
         )
     if bundle.state not in {
         ConfirmationBundleState.PENDING.value,
-        ConfirmationBundleState.FAILED.value,
         ConfirmationBundleState.BLOCKED_BUDGET.value,
     }:
         raise ConfirmationBundlePersistenceError(
             f"bundle in {bundle.state} cannot reserve a new attempt"
         )
-    open_reservation = await session.scalar(
+    prior_reservation = await session.scalar(
         select(ConfirmationBudgetReservation)
         .where(
             ConfirmationBudgetReservation.bundle_id == bundle_id,
-            ConfirmationBudgetReservation.state
-            == ConfirmationReservationState.RESERVED.value,
         )
+        .limit(1)
         .with_for_update()
     )
-    if open_reservation is not None:
+    if prior_reservation is not None:
         raise ConfirmationBundlePersistenceError(
-            "bundle already has an unsettled reservation"
+            "confirmation bundle already consumed its automatic attempt; "
+            "authorize a retest generation"
         )
     blocked_reason: str | None = None
     if budget.issued_attempts + 1 > settings.daily_bundle_cap:
@@ -1359,7 +1329,7 @@ async def authorize_confirmation_bundle_retest(
     actor: str,
     reason: str,
 ) -> RetestAuthorizationResult:
-    """Supersede completed evidence with one audited next generation."""
+    """Supersede one terminal bundle with an audited next generation."""
     existing_auth = await session.get(ConfirmationRetestAuthorization, authorization_id)
     if existing_auth is not None:
         if (
@@ -1392,9 +1362,31 @@ async def authorize_confirmation_bundle_retest(
     )
     if source is None:
         raise ConfirmationBundlePersistenceError("source bundle does not exist")
-    if source.state != ConfirmationBundleState.COMPLETED.value:
+    if source.state not in {
+        ConfirmationBundleState.COMPLETED.value,
+        ConfirmationBundleState.FAILED.value,
+    }:
         raise ConfirmationBundlePersistenceError(
-            "only completed confirmation evidence can be retested"
+            "only completed or failed confirmation bundles can be retested"
+        )
+    latest_settings = await latest_confirmation_bundle_settings_revision(session)
+    if latest_settings is None:
+        raise ConfirmationBundlePersistenceError(
+            "confirmation settings are unconfigured"
+        )
+    active_settings = ConfirmationBundleSettings.model_validate(
+        latest_settings.settings
+    )
+    if active_settings.mode == ConfirmationBundleMode.OFF:
+        raise ConfirmationBundlePersistenceError(
+            "confirmation policy is off; enable issuance before authorizing a retest"
+        )
+    if (
+        active_settings.profile_revision != source.profile_revision
+        or active_settings.profile_checksum != source.profile_checksum
+    ):
+        raise ConfirmationBundlePersistenceError(
+            "active confirmation profile does not match the source bundle"
         )
     latest_generation = await session.scalar(
         select(func.max(ConfirmationBundle.retest_generation)).where(
@@ -1432,8 +1424,8 @@ async def authorize_confirmation_bundle_retest(
         retest_authorization_id=authorization_id,
         generation_reason="operator_retest",
         source_bundle_id=source.bundle_id,
-        settings_revision=source.settings_revision,
-        settings_checksum=source.settings_checksum,
+        settings_revision=latest_settings.revision,
+        settings_checksum=latest_settings.checksum,
         state=ConfirmationBundleState.PENDING.value,
     )
     session.add(new_bundle)
