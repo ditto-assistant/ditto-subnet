@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.113.2 (2026-08-27)
+
+### Bug Fixes
+
+- **platform**: Park repeated provider-backoff screening failures with peer evidence
+  ([#1183](https://github.com/ditto-assistant/ditto-subnet/pull/1183),
+  [`c87ab8b`](https://github.com/ditto-assistant/ditto-subnet/commit/c87ab8bf14c48906929b3e388b6385a8eea95079))
+
+
 ## v0.113.1 (2026-08-27)
 
 ### Bug Fixes
