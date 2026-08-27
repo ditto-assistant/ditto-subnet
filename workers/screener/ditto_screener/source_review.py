@@ -44,7 +44,7 @@ from ditto_screening_protocol import (
     SourceReviewFinding,
 )
 
-_PROMPT_REVISION = "source-review-v19"
+_PROMPT_REVISION = "source-review-v20"
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
@@ -571,6 +571,14 @@ Calibration contrasts. Do not over-reject:
   served path. A real remediation that removed the bypass and lets the model
   author the slot is allowed.
 - Honest-and-bad or post-remediation low score is not a cheat signal.
+- Compiler-shaped modules with dead served routes are not findings. When the
+  deciding turn hard-codes resolved/grounded to None, the served final_text is
+  taken from the model's own reply, and no reachable fallback writes the text
+  field, the harness is clear regardless of how family-shaped its offline
+  helpers look (live aceron_b12_v1 is the canonical clear). Cite a family
+  compiler only after tracing an actual reachable writer or route selector on
+  served /run — the mistake to avoid in both directions is arguing from the
+  presence or absence of module names instead of the served data flow.
 
 Apply the same causal standard to source-safety categories:
 - An ordinary locked build is allowed to use checksum-pinned public dependencies,
@@ -670,6 +678,17 @@ and the two-location evidence bar before citing anything:
   text after the model omitted or contradicted it, this is answer replacement
   even when the value came from genuine retrieval or a real tool. A fresh model
   correction pass whose output is forwarded unchanged is not replacement.
+  Comments and doc-strings are inadmissible here: aceron_b12-v5 carried
+  "Rust never substitutes text into the answer" beside review gates whose
+  worksheet fallback did exactly that thousands of lines later. Trace every
+  writer of the served text field to its trigger before accepting any prose
+  claim of non-substitution, and treat a bounded review loop whose trigger is
+  a reply-vs-worksheet value comparison as reject-until-match regardless of
+  its advertised bound: two coerced reviews plus an engine-serialized fallback
+  is the same limb-(b) fail as an unbounded loop. A model-authored program
+  (expression tree the model wrote, mechanically executed) does not launder
+  the fallback: whoever authored the worksheet, serving it over the deciding
+  turn's dissent is replacement.
 - expected-value-model-retry-loop: this is a manual-review lead, not direct
   answer-replacement proof. Apply the two-limb refusal test. Determine whether
   the checker comes from a stable benchmark case/template/world registry or
@@ -778,6 +797,24 @@ serve/run entrypoint, and apply the same two-location causal bar before citing.
   {amount} without that family join or remainder compiler is not this tell.
 - trip-day-family-retry: reply_misses_days_change_application plus
   days_focus_coach_line / changed-leg vs whole-trip is a days-family miss gate.
+- worksheet-fallback-overwrite: a reply-vs-worksheet mismatch gate
+  (*_reply_needs_review / *_needs_correction) co-located with a fallback that
+  writes the served text field (result.text/final_text = engine-serialized
+  worksheet values, "grounded worksheet fallback"). Confirm the writer is
+  reachable after the model's review budget; a provider/endpoint failover
+  fallback that still lets a model author the text is the honest look-alike.
+  Renamed carriers to trace when old tokens are absent: prepared_state_worksheet,
+  state_resolver/story/duration_state compilers, requested_answer_components,
+  decisive_worksheet_excerpt, MONETARY RESPONSE CONTRACT closers.
+- scored-family-decline-gate: a harness family/absence classifier that scripts
+  the exact decline the model must emit ("Reply exactly: 'I don't have that
+  information'") with a do-not-attempt directive is benchmark_emulation when it
+  reaches answerable scored families: the harness, not the model, decides the
+  graded outcome, and a family predicate that exists to dodge a hard scored
+  family (e.g. open-program) is a production-engine fail. Allowed contrasts:
+  model-decided abstention after seeing the selected records; unknowable-case
+  honesty that asks for a brief unscripted acknowledgement; a clarifying
+  question for a genuinely underspecified action.
 
 For every medium/high category, cite at least one exact reachable path:line for
 that category. For benchmark_emulation or scorer_contract_manipulation, cite at

@@ -52,3 +52,25 @@ lane working, not stuck seeding.
 After attesting, do **not** tell the miner they must resubmit on another
 hotkey. Attest binds two existing hotkeys. A new hotkey without a direct
 link to the matched hotkey will copy-hold again.
+
+## "Agents dodge open-program / hard families"
+
+When a miner reports that top agents "aren't solving" or "hardcode not to
+answer" a question family (open-program, reconcile twins), treat it as a
+board lead, not a comms-only complaint. Investigate before replying:
+
+- Grep the named agents' served source for a **scored-family decline
+  gate**: a scripted exact decline (`Reply exactly: "I don't have that
+  information"`) plus a do-not-attempt directive driven by a harness
+  family/absence classifier. That shape fails the review bar (see
+  `backroom-review/references/review-bar.md`, Class A) and earns its own
+  ATH fire.
+- Distinguish the legitimate shapes before promising anything: the bench
+  includes genuinely unanswerable cases where a decline is the *correct*
+  answer, and model-decided abstention after reading the records is
+  allowed. A 0.333 slice or a queued LongMem lane is not by itself proof
+  of dodging.
+
+In the paste: acknowledge the report, say the pattern is reviewable and
+that reviews attach per agent UUID, and do not name which agents are or
+are not under review, promise a ban, or state a review timeline.
