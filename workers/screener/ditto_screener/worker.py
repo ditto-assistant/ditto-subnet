@@ -33,6 +33,7 @@ from ditto_screener.heartbeat import (
 from ditto_screener.policy import (
     ScreeningOutcome,
     SourceReviewObservation,
+    builtin_policy_manifest,
     core_decision,
 )
 from ditto_screener.review_settings import (
@@ -63,7 +64,7 @@ logger = logging.getLogger(__name__)
 
 EXACT_CROSS_MINER_DUPLICATE = "exact-cross-miner-duplicate"
 
-_HEARTBEAT_PROTOCOL_VERSION = 4
+_HEARTBEAT_PROTOCOL_VERSION = 5
 
 
 def _resolve_instance_id() -> str:
@@ -112,12 +113,19 @@ class ScreenerWorker:
         self._last_heartbeat_state: ScreenerRuntimeState | None = None
         self._progress_heartbeat_tasks: set[asyncio.Task[None]] = set()
         bootstrap = bootstrap_review_settings(config)
+        bootstrap_manifest = builtin_policy_manifest(
+            bootstrap.settings.policy_manifest_profile,
+            bootstrap.settings.policy_manifest_rotation_id,
+        )
         self._review_settings_status = ReviewSettingsStatus(
             revision=bootstrap.revision,
             scope=bootstrap.scope,
             mode=bootstrap.settings.mode,
             checksum=bootstrap.checksum,
             source="bootstrap",
+            policy_manifest_profile=bootstrap.settings.policy_manifest_profile,
+            policy_manifest_rotation_id=bootstrap.settings.policy_manifest_rotation_id,
+            policy_manifest_digest=bootstrap_manifest.digest,
         )
 
     def _set_progress(self, stage: ScreenerProgressStage) -> None:
@@ -250,12 +258,19 @@ class ScreenerWorker:
         """Lease and screen the next eligible agent; return how many were done."""
         review_settings = await self._platform.get_review_settings(self._instance_id)
         self._gate.apply_review_settings(review_settings)
+        manifest = builtin_policy_manifest(
+            review_settings.settings.policy_manifest_profile,
+            review_settings.settings.policy_manifest_rotation_id,
+        )
         self._review_settings_status = ReviewSettingsStatus(
             revision=review_settings.revision,
             scope=review_settings.scope,
             mode=review_settings.settings.mode,
             checksum=review_settings.checksum,
             source=self._platform.review_settings_source,
+            policy_manifest_profile=review_settings.settings.policy_manifest_profile,
+            policy_manifest_rotation_id=review_settings.settings.policy_manifest_rotation_id,
+            policy_manifest_digest=manifest.digest,
         )
         required_policy = await self._platform.get_required_policy_version()
         if required_policy != SCREENING_POLICY_VERSION:

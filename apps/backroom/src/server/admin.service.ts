@@ -118,6 +118,7 @@ import {
   supersedeBenchmarkRolloutInputSchema,
   selectActiveBenchmarkInputSchema,
   applyScreenerReviewSettingsInputSchema,
+  rotateScreenerPolicyManifestInputSchema,
   efficiencyBonusSettingsControlSchema,
   efficiencyBonusSettingsRevisionSchema,
   setEfficiencyBonusSettingsInputSchema,
@@ -147,6 +148,7 @@ import {
   submissionSettingsControlSchema,
   screenerReviewControlSchema,
   screenerReviewRevisionSchema,
+  screenerPolicyManifestControlSchema,
   screenerCapacityViewSchema,
   screenerProviderSettingsControlSchema,
   setScreenerProviderSettingsInputSchema,
@@ -427,6 +429,16 @@ export async function fetchScreenerReviewControl() {
   return screenerReviewControlSchema.parse(payload)
 }
 
+export async function fetchScreenerPolicyManifestControl() {
+  const control = await fetchScreenerReviewControl()
+  const currentRevisions = new Set(control.current.map((revision) => revision.revision))
+  return screenerPolicyManifestControlSchema.parse({
+    current: control.policy_manifests.filter((manifest) => currentRevisions.has(manifest.revision)),
+    history: control.policy_manifests,
+    applied_instances: control.applied_instances,
+  })
+}
+
 export async function fetchScreenerCapacity() {
   const payload = await platformAdminRequest('/api/v1/admin/screener-capacity')
   return screenerCapacityViewSchema.parse(payload)
@@ -517,6 +529,32 @@ export async function applyScreenerReviewSettings(actor: string, rawInput: unkno
     },
   })
   return screenerReviewRevisionSchema.parse(payload)
+}
+
+export async function rotateScreenerPolicyManifest(actor: string, rawInput: unknown) {
+  const input = rotateScreenerPolicyManifestInputSchema.parse(rawInput)
+  const control = await fetchScreenerReviewControl()
+  const current = control.current.find((revision) => revision.scope === input.scope)
+  if (!current) {
+    throw new Error(`No screener review settings revision exists for scope ${input.scope}; create one before rotating its policy manifest.`)
+  }
+  await platformAdminRequest('/api/v1/admin/screener-review-settings', {
+    method: 'POST',
+    actor,
+    body: {
+      scope: input.scope,
+      expected_revision: input.expectedRevision,
+      settings: {
+        ...current.settings,
+        policy_manifest_profile: input.profile,
+        policy_manifest_rotation_id: input.rotationId,
+      },
+      reason: input.reason,
+      actor,
+      confirmation: input.confirmation,
+    },
+  })
+  return fetchScreenerPolicyManifestControl()
 }
 
 const EFFICIENCY_BONUS_SETTINGS_PATH = '/api/v1/admin/efficiency-bonus-settings'

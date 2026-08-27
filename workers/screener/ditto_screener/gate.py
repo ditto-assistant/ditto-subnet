@@ -582,7 +582,10 @@ class BuildGate:
             return False
         runtime = effective.apply_to(self._config)
         self._policy = load_policy_engine(
-            runtime.policy_manifest_file, l2_mode=runtime.l2_review_mode
+            runtime.policy_manifest_file,
+            l2_mode=runtime.l2_review_mode,
+            manifest_profile=effective.settings.policy_manifest_profile,
+            rotation_id=effective.settings.policy_manifest_rotation_id,
         )
         self._configure_source_reviewer(runtime)
         self._review_settings_key = key

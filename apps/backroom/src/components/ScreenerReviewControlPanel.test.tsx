@@ -38,6 +38,8 @@ const settings = {
   critic_reasoning_effort: 'medium' as const,
   cache_ttl_seconds: 604_800,
   audit_retention_days: 30,
+  policy_manifest_profile: 'l1' as const,
+  policy_manifest_rotation_id: 'v8-luna-source-review-behavioral-oracle',
 }
 
 const state: ScreenerReviewControl = {
@@ -69,9 +71,14 @@ const state: ScreenerReviewControl = {
       expected_revision: 7,
       expected_scope: '*',
       expected_checksum: 'a'.repeat(64),
+      policy_manifest_profile: 'l1',
+      policy_manifest_rotation_id: 'v8-luna-source-review-behavioral-oracle',
+      policy_manifest_digest: 'b'.repeat(64),
+      expected_policy_manifest_digest: 'b'.repeat(64),
     },
   ],
   shadow_observations: [],
+  policy_manifests: [],
 }
 
 const queueSettings = {

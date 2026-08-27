@@ -112,6 +112,11 @@ class ReviewSettingsStatus(BaseModel):
     mode: Literal["off", "shadow", "enforce"]
     checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     source: Literal["platform", "cache", "bootstrap"]
+    policy_manifest_profile: Literal["core", "l1", "l1_l2"] = "l1"
+    policy_manifest_rotation_id: Annotated[
+        str, Field(pattern=r"^[a-zA-Z0-9._-]{1,80}$")
+    ] = "policy-v10-l1"
+    policy_manifest_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] = "0" * 64
 
 
 class ScreenerHeartbeatRequest(BaseModel):
@@ -161,18 +166,27 @@ class ScreenerHeartbeatRequest(BaseModel):
         return self
 
 
-def review_settings_signing_token(settings: ReviewSettingsStatus | None) -> str:
+def review_settings_signing_token(
+    settings: ReviewSettingsStatus | None, *, protocol_version: int = 4
+) -> str:
     if settings is None:
         return "-"
-    return ",".join(
-        (
-            str(settings.revision),
-            settings.scope,
-            settings.mode,
-            settings.checksum,
-            settings.source,
+    fields = [
+        str(settings.revision),
+        settings.scope,
+        settings.mode,
+        settings.checksum,
+        settings.source,
+    ]
+    if protocol_version >= 5:
+        fields.extend(
+            (
+                settings.policy_manifest_profile,
+                settings.policy_manifest_rotation_id,
+                settings.policy_manifest_digest,
+            )
         )
-    )
+    return ",".join(fields)
 
 
 class ScreenerHeartbeatResponse(BaseModel):

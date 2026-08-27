@@ -160,6 +160,49 @@ async def test_enforce_is_activatable_but_global_inherit_is_not(
     assert "exact worker scope" in inherit.text
 
 
+async def test_manifest_rotation_preserves_policy_and_requires_exact_confirmation(
+    app: FastAPI,
+    client: httpx.AsyncClient,
+    settings_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    _install(app, settings_maker)
+    initial = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=_payload("*", "enforce"),
+    )
+    assert initial.status_code == 200, initial.text
+    rotation = initial.json()
+    rotation["settings"]["policy_manifest_profile"] = "core"
+    rotation["settings"]["policy_manifest_rotation_id"] = "incident-2026-08-27"
+    payload = {
+        "scope": "*",
+        "expected_revision": rotation["revision"],
+        "settings": rotation["settings"],
+        "reason": "disable private reviewers during incident response",
+        "actor": "backroom:test",
+        "confirmation": "ROTATE SCREENER POLICY * incident-2026-08-27",
+    }
+    written = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=payload,
+    )
+    assert written.status_code == 200, written.text
+    assert written.json()["settings"]["mode"] == "enforce"
+    assert written.json()["settings"]["policy_manifest_profile"] == "core"
+
+    unsafe = dict(payload)
+    unsafe["expected_revision"] = written.json()["revision"]
+    unsafe["settings"] = dict(written.json()["settings"], max_cost_usd=1.5)
+    denied = await client.post(
+        "/api/v1/admin/screener-review-settings",
+        headers=_ADMIN_HEADERS,
+        json=unsafe,
+    )
+    assert denied.status_code == 409
+
+
 async def test_l3_can_be_disabled_without_disabling_l2(
     app: FastAPI,
     client: httpx.AsyncClient,

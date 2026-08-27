@@ -362,6 +362,15 @@ def _heartbeat_payload(
             str(review_settings[key])
             for key in ("revision", "scope", "mode", "checksum", "source")
         )
+        if protocol_version >= 5:
+            review_token += "," + ",".join(
+                str(review_settings[key])
+                for key in (
+                    "policy_manifest_profile",
+                    "policy_manifest_rotation_id",
+                    "policy_manifest_digest",
+                )
+            )
         message = (
             "ditto-screener-heartbeat:v4:"
             f"{_SCREENER_HOTKEY}:0.4.2:{protocol_version}:"
@@ -2460,6 +2469,40 @@ class TestHeartbeat:
             "/api/v1/screener/heartbeat",
             json=_heartbeat_payload(
                 protocol_version=4,
+                instance_id="ditto-screener-prod",
+                review_settings=review,
+            ),
+        )
+        assert response.status_code == 200, response.text
+        async with session_maker() as session:
+            heartbeat = await session.get(
+                ScreenerHeartbeat, (_SCREENER_HOTKEY, "ditto-screener-prod")
+            )
+            assert heartbeat is not None
+            assert heartbeat.system_metrics is not None
+            assert heartbeat.system_metrics["review_settings"] == review
+
+    async def test_v5_persists_signed_policy_manifest_identity(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        _install_db(app, session_maker)
+        review = {
+            "revision": 43,
+            "scope": "*",
+            "mode": "enforce",
+            "checksum": "cd" * 32,
+            "source": "platform",
+            "policy_manifest_profile": "l1_l2",
+            "policy_manifest_rotation_id": "incident-2026-08-27",
+            "policy_manifest_digest": "ef" * 32,
+        }
+        response = await client.post(
+            "/api/v1/screener/heartbeat",
+            json=_heartbeat_payload(
+                protocol_version=5,
                 instance_id="ditto-screener-prod",
                 review_settings=review,
             ),

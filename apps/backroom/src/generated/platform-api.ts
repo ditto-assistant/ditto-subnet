@@ -7102,6 +7102,8 @@ export interface components {
             history: components["schemas"]["ScreenerReviewSettingsRevision"][];
             /** Known Instances */
             known_instances: string[];
+            /** Policy Manifests */
+            policy_manifests: components["schemas"]["ScreenerPolicyManifestView"][];
             /** Shadow Observations */
             shadow_observations: components["schemas"]["AdminShadowReviewObservation"][];
         };
@@ -8772,6 +8774,8 @@ export interface components {
             checksum: string;
             /** Expected Checksum */
             expected_checksum: string;
+            /** Expected Policy Manifest Digest */
+            expected_policy_manifest_digest: string;
             /** Expected Revision */
             expected_revision: number;
             /** Expected Scope */
@@ -8787,6 +8791,15 @@ export interface components {
              * @enum {string}
              */
             mode: "off" | "shadow" | "enforce" | "inherit";
+            /** Policy Manifest Digest */
+            policy_manifest_digest: string;
+            /**
+             * Policy Manifest Profile
+             * @enum {string}
+             */
+            policy_manifest_profile: "core" | "l1" | "l1_l2";
+            /** Policy Manifest Rotation Id */
+            policy_manifest_rotation_id: string;
             /** Revision */
             revision: number;
             /** Scope */
@@ -17538,6 +17551,33 @@ export interface components {
              */
             token_expires_at: string;
         };
+        /** ScreenerPolicyManifestView */
+        ScreenerPolicyManifestView: {
+            /** Actor */
+            actor: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Digest */
+            digest: string;
+            /** Policy Version */
+            policy_version: number;
+            /**
+             * Profile
+             * @enum {string}
+             */
+            profile: "core" | "l1" | "l1_l2";
+            /** Reason */
+            reason: string;
+            /** Revision */
+            revision: number;
+            /** Rotation Id */
+            rotation_id: string;
+            /** Scope */
+            scope: string;
+        };
         /**
          * ScreenerProgress
          * @description Signed, public-safe progress for one active screening job.
@@ -17838,6 +17878,17 @@ export interface components {
              */
             mode: "off" | "shadow" | "enforce" | "inherit";
             /**
+             * Policy Manifest Profile
+             * @default l1
+             * @enum {string}
+             */
+            policy_manifest_profile: "core" | "l1" | "l1_l2";
+            /**
+             * Policy Manifest Rotation Id
+             * @default v8-luna-source-review-behavioral-oracle
+             */
+            policy_manifest_rotation_id: string;
+            /**
              * Source Review Max Read Bytes
              * @default 8000000
              */
@@ -17900,6 +17951,22 @@ export interface components {
              * @enum {string}
              */
             mode: "off" | "shadow" | "enforce";
+            /**
+             * Policy Manifest Digest
+             * @default 0000000000000000000000000000000000000000000000000000000000000000
+             */
+            policy_manifest_digest: string;
+            /**
+             * Policy Manifest Profile
+             * @default l1
+             * @enum {string}
+             */
+            policy_manifest_profile: "core" | "l1" | "l1_l2";
+            /**
+             * Policy Manifest Rotation Id
+             * @default v8-luna-source-review-behavioral-oracle
+             */
+            policy_manifest_rotation_id: string;
             /** Revision */
             revision: number;
             /** Scope */

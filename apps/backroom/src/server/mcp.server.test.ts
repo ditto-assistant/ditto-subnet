@@ -93,6 +93,8 @@ describe('Backroom MCP tools', () => {
         'get_queue_policy_settings',
         'get_screener_review_settings',
         'apply_screener_review_settings',
+        'get_screener_policy_manifest',
+        'rotate_screener_policy_manifest',
         'get_validator_fleet',
         'get_validator_slot_settings',
         'list_validator_assignments',
@@ -188,10 +190,10 @@ describe('Backroom MCP tools', () => {
     // push back on tutorials.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(96_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
-    // Grew by the two rollout-control catalog lines (start/read tutorials
-    // live in get_backroom_tool_help, not here).
+    // Includes concise rollout and protected-policy controls; tutorials live
+    // in get_backroom_tool_help, not here.
     expect(descriptions.reduce((total, value) => total + value.length, 0)).toBeLessThanOrEqual(
-      21_500,
+      21_700,
     )
     expect(Math.max(...descriptions.map((value) => value.length))).toBeLessThanOrEqual(600)
     expect(

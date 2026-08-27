@@ -18,7 +18,9 @@ from ditto.api_models.screener_review_settings import (
     AdminScreenerReviewSettingsRequest,
     AdminScreenerReviewSettingsResponse,
     AppliedScreenerReviewSettings,
+    ScreenerPolicyManifestView,
     ScreenerReviewSettings,
+    policy_manifest_digest,
 )
 from ditto.api_models.screener_review_settings import (
     ScreenerReviewSettingsRevision as RevisionModel,
@@ -31,6 +33,7 @@ from ditto.db.models import (
     ScreenerReviewSettingsRevision,
     ScreenerShadowReview,
 )
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 router = APIRouter(prefix="/admin/screener-review-settings", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -56,6 +59,26 @@ def _revision(row: ScreenerReviewSettingsRevision) -> RevisionModel:
         actor=row.actor,
         created_at=row.created_at,
         checksum=row.checksum,
+    )
+
+
+def _policy_manifest(
+    row: ScreenerReviewSettingsRevision,
+) -> ScreenerPolicyManifestView:
+    settings = ScreenerReviewSettings.model_validate(row.settings)
+    return ScreenerPolicyManifestView(
+        revision=row.revision,
+        scope=row.scope,
+        policy_version=SCREENING_POLICY_VERSION,
+        profile=settings.policy_manifest_profile,
+        rotation_id=settings.policy_manifest_rotation_id,
+        digest=policy_manifest_digest(
+            settings.policy_manifest_profile,
+            settings.policy_manifest_rotation_id,
+        ),
+        reason=row.reason,
+        actor=row.actor,
+        created_at=row.created_at,
     )
 
 
@@ -115,6 +138,11 @@ async def get_settings(
             expected_scope = expected.scope
             expected_checksum = expected.checksum
             scope_matches = status.scope == expected_scope
+        expected_settings = (
+            ScreenerReviewSettings.model_validate(expected.settings)
+            if expected is not None
+            else default_settings
+        )
         seen_at = heartbeat.seen_at
         if seen_at.tzinfo is None:
             seen_at = seen_at.replace(tzinfo=UTC)
@@ -133,10 +161,22 @@ async def get_settings(
                     status.revision == expected_revision
                     and scope_matches
                     and status.checksum == expected_checksum
+                    and status.policy_manifest_digest
+                    == policy_manifest_digest(
+                        expected_settings.policy_manifest_profile,
+                        expected_settings.policy_manifest_rotation_id,
+                    )
                 ),
                 expected_revision=expected_revision,
                 expected_scope=expected_scope,
                 expected_checksum=expected_checksum,
+                policy_manifest_profile=status.policy_manifest_profile,
+                policy_manifest_rotation_id=status.policy_manifest_rotation_id,
+                policy_manifest_digest=status.policy_manifest_digest,
+                expected_policy_manifest_digest=policy_manifest_digest(
+                    expected_settings.policy_manifest_profile,
+                    expected_settings.policy_manifest_rotation_id,
+                ),
             )
         )
     shadow_rows = list(
@@ -152,6 +192,7 @@ async def get_settings(
         known_instances=instances,
         applied_instances=sorted(applied, key=lambda item: item.instance_id),
         shadow_observations=[shadow_review_observation(row) for row in shadow_rows],
+        policy_manifests=[_policy_manifest(row) for row in rows[:200]],
     )
 
 
@@ -169,14 +210,9 @@ async def create_settings_revision(
             status_code=409,
             detail="inherit is only valid for an exact worker scope",
         )
-    expected_confirmation = (
+    apply_confirmation = (
         f"APPLY SCREENER REVIEW {payload.scope} {payload.settings.mode.upper()}"
     )
-    if payload.confirmation != expected_confirmation:
-        raise HTTPException(
-            status_code=409,
-            detail=f"confirmation must be exactly {expected_confirmation}",
-        )
     latest = await session.scalar(
         select(ScreenerReviewSettingsRevision)
         .where(ScreenerReviewSettingsRevision.scope == payload.scope)
@@ -184,6 +220,30 @@ async def create_settings_revision(
         .limit(1)
     )
     actual_revision = latest.revision if latest is not None else 0
+    rotate_confirmation = (
+        f"ROTATE SCREENER POLICY {payload.scope} "
+        f"{payload.settings.policy_manifest_rotation_id}"
+    )
+    rotate_only = False
+    if latest is not None:
+        previous = ScreenerReviewSettings.model_validate(latest.settings)
+        proposed_without_manifest = payload.settings.model_copy(
+            update={
+                "policy_manifest_profile": previous.policy_manifest_profile,
+                "policy_manifest_rotation_id": previous.policy_manifest_rotation_id,
+            }
+        )
+        rotate_only = proposed_without_manifest == previous
+    if payload.confirmation != apply_confirmation and not (
+        rotate_only and payload.confirmation == rotate_confirmation
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"confirmation must be exactly {apply_confirmation}; manifest-only "
+                f"rotations may use {rotate_confirmation}"
+            ),
+        )
     if payload.expected_revision != actual_revision:
         raise HTTPException(
             status_code=409,

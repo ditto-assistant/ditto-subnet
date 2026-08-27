@@ -255,3 +255,30 @@ def test_v4_heartbeat_binds_applied_review_settings() -> None:
             f"42,ditto-screener-prod,shadow,{'ab' * 32},platform:456"
         ).encode()
     )
+
+
+def test_v5_heartbeat_binds_policy_manifest_identity() -> None:
+    review = ReviewSettingsStatus(
+        revision=43,
+        scope="*",
+        mode="enforce",
+        checksum="ab" * 32,
+        source="platform",
+        policy_manifest_profile="l1_l2",
+        policy_manifest_rotation_id="incident-2026-08-27",
+        policy_manifest_digest="cd" * 32,
+    )
+    message = heartbeat_signing_message(
+        screener_hotkey=_HOTKEY,
+        software_version="0.15.0",
+        protocol_version=5,
+        policy_version=10,
+        state="polling",
+        active_agent_id=None,
+        instance_id="ditto-screener-prod",
+        progress=None,
+        system_metrics=None,
+        review_settings=review,
+        timestamp=456,
+    )
+    assert f",l1_l2,incident-2026-08-27,{'cd' * 32}:456".encode() in message

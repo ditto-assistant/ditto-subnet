@@ -305,6 +305,21 @@ DEFAULT_L2_MANIFEST = PolicyManifest(
 )
 
 
+def builtin_policy_manifest(profile: str, rotation_id: str) -> PolicyManifest:
+    """Resolve a secret-free, platform-selected built-in manifest profile."""
+    if profile == "core":
+        return PolicyManifest(rotation_id=rotation_id)
+    if profile == "l1":
+        return PolicyManifest(
+            rotation_id=rotation_id, module_specs=DEFAULT_V8_MANIFEST.module_specs
+        )
+    if profile == "l1_l2":
+        return PolicyManifest(
+            rotation_id=rotation_id, module_specs=DEFAULT_L2_MANIFEST.module_specs
+        )
+    raise ValueError("unknown policy manifest profile")
+
+
 def core_decision(
     outcome: ScreeningOutcome,
     *,
@@ -1126,19 +1141,31 @@ class PolicyEngine:
 
 
 def load_policy_engine(
-    manifest_path: str | None, *, l2_mode: str = "off"
+    manifest_path: str | None,
+    *,
+    l2_mode: str = "off",
+    manifest_profile: str | None = None,
+    rotation_id: str | None = None,
 ) -> PolicyEngine:
     """Load a strict private manifest, or production v8 Luna source review."""
     if manifest_path is None:
-        manifest = DEFAULT_L2_MANIFEST if l2_mode == "enforce" else DEFAULT_V8_MANIFEST
+        profile = manifest_profile or ("l1_l2" if l2_mode == "enforce" else "l1")
+        if profile == "core":
+            manifest = builtin_policy_manifest(
+                profile, rotation_id or CORE_ONLY_MANIFEST.rotation_id
+            )
+            return PolicyEngine(manifest, ())
+        if profile not in {"l1", "l1_l2"}:
+            raise ValueError("unknown policy manifest profile")
+        l2_profile = profile == "l1_l2"
+        base = DEFAULT_L2_MANIFEST if l2_profile else DEFAULT_V8_MANIFEST
+        manifest = builtin_policy_manifest(profile, rotation_id or base.rotation_id)
         return PolicyEngine(
             manifest,
             (
                 AgenticSourceReviewModule(
                     module_id=(
-                        "luna-sol-source-review"
-                        if l2_mode == "enforce"
-                        else "luna-source-review"
+                        "luna-sol-source-review" if l2_profile else "luna-source-review"
                     )
                 ),
                 BehavioralOracleModule(module_id="v8-behavioral-oracle"),

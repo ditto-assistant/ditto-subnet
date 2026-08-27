@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 ReviewMode = Literal["off", "shadow", "enforce", "inherit"]
 ReviewModel = Literal[
@@ -16,6 +20,31 @@ ReviewModel = Literal[
 ]
 ReasoningEffort = Literal["low", "medium", "high"]
 SourceReviewModel = Literal["openai/gpt-5.6-luna"]
+PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
+
+_POLICY_MANIFEST_MODULES: dict[PolicyManifestProfile, list[dict[str, str]]] = {
+    "core": [],
+    "l1": [
+        {"kind": "agentic_source_review", "id": "luna-source-review"},
+        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
+    ],
+    "l1_l2": [
+        {"kind": "agentic_source_review", "id": "luna-sol-source-review"},
+        {"kind": "behavioral_oracle", "id": "v8-behavioral-oracle"},
+    ],
+}
+
+
+def policy_manifest_digest(profile: PolicyManifestProfile, rotation_id: str) -> str:
+    payload = {
+        "policy_version": SCREENING_POLICY_VERSION,
+        "rotation_id": rotation_id,
+        "modules": _POLICY_MANIFEST_MODULES[profile],
+    }
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 class ScreenerReviewSettings(BaseModel):
@@ -49,6 +78,27 @@ class ScreenerReviewSettings(BaseModel):
     critic_reasoning_effort: ReasoningEffort = "medium"
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     audit_retention_days: Annotated[int, Field(ge=1, le=365)] = 30
+    policy_manifest_profile: PolicyManifestProfile = "l1"
+    policy_manifest_rotation_id: Annotated[
+        str, Field(pattern=r"^[a-zA-Z0-9._-]{1,80}$")
+    ] = "v8-luna-source-review-behavioral-oracle"
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_manifest_profile_for_legacy_revision(cls, value: object) -> object:
+        if isinstance(value, dict) and "policy_manifest_profile" not in value:
+            value = dict(value)
+            value["policy_manifest_profile"] = (
+                "l1_l2" if value.get("mode") == "enforce" else "l1"
+            )
+        if isinstance(value, dict) and "policy_manifest_rotation_id" not in value:
+            value = dict(value)
+            value["policy_manifest_rotation_id"] = (
+                "v8-luna-sol-l2-source-review-behavioral-oracle"
+                if value.get("mode") == "enforce"
+                else "v8-luna-source-review-behavioral-oracle"
+            )
+        return value
 
     @field_validator("l2_fallback_models", mode="before")
     @classmethod
@@ -117,6 +167,10 @@ class AppliedScreenerReviewSettings(BaseModel):
     expected_revision: int
     expected_scope: str
     expected_checksum: str
+    policy_manifest_profile: PolicyManifestProfile
+    policy_manifest_rotation_id: str
+    policy_manifest_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    expected_policy_manifest_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 
 
 class AdminShadowReviewObservation(BaseModel):
@@ -141,6 +195,20 @@ class AdminShadowReviewObservation(BaseModel):
     created_at: datetime
 
 
+class ScreenerPolicyManifestView(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    revision: int
+    scope: str
+    policy_version: int
+    profile: PolicyManifestProfile
+    rotation_id: str
+    digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
+    reason: str
+    actor: str
+    created_at: datetime
+
+
 class AdminScreenerReviewSettingsResponse(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -149,3 +217,4 @@ class AdminScreenerReviewSettingsResponse(BaseModel):
     known_instances: list[str]
     applied_instances: list[AppliedScreenerReviewSettings]
     shadow_observations: list[AdminShadowReviewObservation]
+    policy_manifests: list[ScreenerPolicyManifestView]
