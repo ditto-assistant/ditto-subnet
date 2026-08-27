@@ -2,6 +2,27 @@
 
 <!-- version list -->
 
+## v0.114.0 (2026-08-27)
+
+### Bug Fixes
+
+- **infra**: Size platform app boot disks to 100G
+  ([#1185](https://github.com/ditto-assistant/ditto-subnet/pull/1185),
+  [`f1a986c`](https://github.com/ditto-assistant/ditto-subnet/commit/f1a986c7a3bddcc726d532f6e14eeac862b4dc0e))
+
+### Documentation
+
+- **backroom-review**: Pin renamed-compiler ATH holdings
+  ([#1184](https://github.com/ditto-assistant/ditto-subnet/pull/1184),
+  [`4bfb2dd`](https://github.com/ditto-assistant/ditto-subnet/commit/4bfb2ddd4ff73d32e8815b930fac81a3ad7d172f))
+
+### Features
+
+- **screener**: Enforce policy v10 invariants
+  ([#1186](https://github.com/ditto-assistant/ditto-subnet/pull/1186),
+  [`26b3fe2`](https://github.com/ditto-assistant/ditto-subnet/commit/26b3fe2e58c00a26b271da23e50b9823d8cef38c))
+
+
 ## v0.113.4 (2026-08-27)
 
 ### Bug Fixes
