@@ -98,6 +98,10 @@ PROVIDER_BACKOFF_REASON_CODES = (
     "targon-source-review-unavailable",
     "cloudrun-build-unavailable",
     "cloudrun-runtime-unavailable",
+    # The agentic reviewer reported a pre-verdict failure it marked
+    # retryable_infra; immediate reclaim would hot-loop against the same
+    # broken court, so hold the retry behind the attempt deadline.
+    "source-review-retryable-infra",
 )
 # Active workers report at least every two minutes. Wait through two complete
 # heartbeat intervals before inferring an orphan, and only act on heartbeat

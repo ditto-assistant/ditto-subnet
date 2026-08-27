@@ -5,6 +5,7 @@ from typing import cast
 from uuid import UUID, uuid4
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from ditto.api_models.agent_status import AgentStatus
@@ -18,7 +19,9 @@ from ditto.db.models import (
     Agent,
     ScreenedImageUpload,
     ScreeningAttempt,
+    ScreeningQuarantine,
     SubmissionImageBuild,
+    SubmissionSourceReview,
 )
 from ditto.tests.api_server.endpoints.test_screener import (
     _SCREENER_HOTKEY,
@@ -514,3 +517,156 @@ async def test_finalize_keeps_targon_label_for_runtime_timeout(
         attempt = await session.get(ScreeningAttempt, attempt_id)
         assert attempt is not None
         assert attempt.reason_code == "targon-runtime-unavailable"
+
+
+async def _seed_completed_review(
+    session_maker: async_sessionmaker[AsyncSession],
+    *,
+    observation: dict,
+) -> UUID:
+    """A full-depth attempt whose lanes finished and whose review reported."""
+    agent_id = await _seed_agent(session_maker, status=AgentStatus.SCREENING)
+    attempt_id = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        session.add(
+            ScreeningAttempt(
+                attempt_id=attempt_id,
+                agent_id=agent_id,
+                screener_hotkey=_SCREENER_HOTKEY,
+                policy_version=SCREENING_POLICY_VERSION,
+                status="running",
+                build_only=False,
+                started_at=now - timedelta(minutes=30),
+                deadline=now + timedelta(minutes=40),
+            )
+        )
+        await session.flush()
+        session.add(
+            SubmissionImageBuild(
+                build_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                image_ref=f"ditto-screen/{agent_id}-{attempt_id}:latest",
+                output_key=f"{agent_id}/builds/{attempt_id}.tar",
+                status="succeeded",
+                provider="gcp",
+                output_sha256="12" * 32,
+                output_size_bytes=123,
+                output_image_id=_CONFIG_DIGEST,
+                runtime_status="succeeded",
+                runtime_image_reference=_RUNTIME_REF,
+                attempt_count=1,
+                created_at=now - timedelta(minutes=30),
+                completed_at=now - timedelta(minutes=20),
+                updated_at=now - timedelta(minutes=20),
+            )
+        )
+        session.add(
+            SubmissionSourceReview(
+                review_id=uuid4(),
+                agent_id=agent_id,
+                attempt_id=attempt_id,
+                environment="prod",
+                artifact_sha256=_SHA256,
+                status="succeeded",
+                provider="gcp",
+                observation=observation,
+                created_at=now - timedelta(minutes=20),
+                completed_at=now - timedelta(minutes=1),
+                updated_at=now - timedelta(minutes=1),
+            )
+        )
+    return attempt_id
+
+
+@pytest.mark.asyncio
+async def test_finalize_retries_review_reported_retryable_infra(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    """A reviewer's own retryable_infra self-report is a retry, not a hold.
+
+    The v10 court's model responses can fail validation
+    (``source-review-model-response-invalid``); the worker marks those
+    ``retryable_infra`` expecting the attempt to burn and rescreen.
+    Quarantining them held miners under an anti-cheat label for an outage.
+    """
+    attempt_id = await _seed_completed_review(
+        session_maker,
+        observation={
+            "ok": False,
+            "categories": [],
+            "error_code": "source-review-model-response-invalid",
+            "failure_disposition": "retryable_infra",
+            "clearance_certified": False,
+        },
+    )
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, _FakeStorage()),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "failed"
+        assert attempt.reason_code == "source-review-retryable-infra"
+        agent = await session.get(Agent, attempt.agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.SCREENING_FAILED
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine).where(
+                ScreeningQuarantine.attempt_id == attempt_id
+            )
+        )
+        assert quarantine is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disposition", ["inconclusive", "pass_inconclusive"])
+async def test_finalize_still_holds_inconclusive_review_outcomes(
+    session_maker: async_sessionmaker[AsyncSession],
+    disposition: str,
+) -> None:
+    """Budget-exhausted review outcomes remain operator-review holds."""
+    attempt_id = await _seed_completed_review(
+        session_maker,
+        observation={
+            "ok": False,
+            "categories": [],
+            "error_code": "source-review-read-budget-exhausted",
+            "failure_disposition": disposition,
+            "clearance_certified": False,
+        },
+    )
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        finalized = await maybe_finalize_targon_screen(
+            session,
+            storage=cast(S3StorageClient, _FakeStorage()),
+            screener_hotkey=_SCREENER_HOTKEY,
+            attempt_id=attempt_id,
+            now=now,
+        )
+    assert finalized is True
+    async with session_maker() as session:
+        attempt = await session.get(ScreeningAttempt, attempt_id)
+        assert attempt is not None
+        assert attempt.status == "quarantined"
+        assert attempt.reason_code == "agentic-source-review-tripwire"
+        agent = await session.get(Agent, attempt.agent_id)
+        assert agent is not None
+        assert agent.status == AgentStatus.QUARANTINED
+        quarantine = await session.scalar(
+            select(ScreeningQuarantine).where(
+                ScreeningQuarantine.attempt_id == attempt_id
+            )
+        )
+        assert quarantine is not None
