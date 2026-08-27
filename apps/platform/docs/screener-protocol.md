@@ -32,6 +32,15 @@ the platform migration and policy-9 pin, and finally the policy-9 screener. The
 old screener halts safely when the platform requires the new policy; old
 evaluating records continue through the build fallback.
 
+Policy 10 retains that image contract and versions the strict source-review
+court. Every Luna and escalated L2/SOL finding carries one signed decision for
+I1-I7; I4 derived authority, I5 production generality, and I7 model tool
+planning remain independent of the historical two limbs. Deploy the shared
+protocol and Platform requirement, reissue the protected policy manifest with
+version 10, then deploy policy-10 workers. Existing policy-9
+scores and findings are historical evidence, not silently migrated verdicts;
+only new or explicitly rescreened attempts attest policy 10.
+
 ## Provider-routed screening jobs
 
 Build, runtime smoke, and source review have independent revisioned provider

@@ -4,8 +4,12 @@ The source reviewer identifies submissions that replace a general agent with
 benchmark-, scorer-, or audit-specific behavior. Its findings select operator
 quarantine; they never create an automatic terminal rejection.
 
-These source-review refinements run within screening policy v9. They do not
-change the policy version, benchmark activation, or operator decision authority.
+Screening policy v10 makes the seven strict integrity invariants below part of
+the signed source-review contract. It changes neither benchmark activation nor
+operator decision authority: model review may select quarantine, but only an
+operator may reject a submission. Historical v9 findings retain their original
+wire identity and are not silently reinterpreted; v10 applies to new or
+explicitly rescreened attempts.
 
 A deterministic source-review step, read, token, or cost budget exhaustion is
 not infrastructure failure and must not retry forever. After archive, build,
@@ -18,7 +22,8 @@ authoritative; only the exhausted deep review is deferred.
 ## Allowed optimization
 
 Miners may tune candidate profiles, prompts, model settings, retrieval and
-reranking, context construction, memory lifecycle behavior, and tool routing.
+reranking, context construction, memory lifecycle behavior, and policy- or
+capability-level tool filtering.
 They may use documented protocol fields, including answer and abstain fields,
 when those fields faithfully serialize a genuine model or tool result. Generic
 lexical search and defensive handling of untrusted content are also allowed.
@@ -26,8 +31,10 @@ lexical search and defensive handling of untrusted content are also allowed.
 Prompt-level awareness of benchmark-shaped injection or override envelopes is
 allowed when request-user retrieval, genuine model generation, and live tool
 execution remain authoritative. General temporal, count, ordering, and list
-facts may be computed from current user-scoped memories and supplied as context
-to that model. Fixed user constants confined to local helpers are not cross-user
+candidates may be computed from current user-scoped memories and supplied as
+explicitly untrusted context beside the complete applicable records. They must
+not be labelled authoritative, verified, exact, or do-not-recompute, and model
+disagreement must remain valid. Fixed user constants confined to local helpers are not cross-user
 leakage when the served path uses the request user and no foreign content reaches
 a substantive sink.
 
@@ -67,6 +74,59 @@ Likewise, an external or pinned input may be recorded as
 malicious behavior. Only an effective build that reads or leaks credentials,
 executes mutable unreviewed logic, installs a backdoor, or replaces the reviewed
 runtime qualifies as `malicious_build`.
+
+## Policy-v10 strict invariants
+
+Every v10 Luna and L2/SOL result carries one signed decision for each invariant.
+Each suspected breach must be refuted before it is recorded. If a construct
+matches a breach description and a published pass clause for the same invariant
+and served path, the pass wins only when it causally removes the breach. Source
+comments, names, or claims never displace executable evidence.
+
+1. **I1 — model invocation.** Normal scored answers and substantive abstention
+   must be downstream of genuine model inference. Pass clauses:
+   `genuine_model_result`, `no_premodel_response`.
+2. **I2 — evidence retention.** The deciding completion receives every
+   applicable current-user record needed to disagree. A focused preliminary
+   pass is allowed only when it is non-authoritative and the deciding turn has
+   the complete evidence. Pass clauses: `full_records_on_deciding_turn`,
+   `non_authoritative_preliminary_pass`.
+3. **I3 — model dissent.** Syntax, schema, empty-output, and protocol-shape
+   validation are allowed. Content-based reject-until-match, suppression, or
+   overwrite of a parseable model answer is not. Pass clauses:
+   `shape_only_validation`, `model_dissent_preserved`.
+4. **I4 — derived-value authority.** A local value may appear only as an
+   explicitly untrusted candidate beside complete records, with records
+   preferred on disagreement and no acceptance gate. `WORKED OUT`, `VERIFIED`,
+   exact, do-not-recompute, and equivalent copy-authority channels breach I4.
+   Pass clauses: `no_derived_value`, `untrusted_candidate_channel`.
+5. **I5 — production engine.** The agent must remain useful against arbitrary
+   renamed fields and paraphrased requests. Closed answer-family or operand
+   recipe routers, semantic worksheets, phrase tables, generator-fitted typo
+   ladders, and family-specific instruction compilers breach I5. Product-surface
+   routing and runtime-described generic engines pass. Pass clauses:
+   `runtime_described_generic_engine`, `no_family_compiler`.
+6. **I6 — tool execution fidelity.** Every reported tool call corresponds to a
+   genuine model/planner selection and one real request endpoint or
+   harness-owned Tool execution. Pass clauses: `model_selected_executed_tool`,
+   `no_reported_tool_calls`.
+7. **I7 — model tool planning.** Policy, authorization, safety, availability,
+   and natural singleton classes may narrow capabilities. Request-keyed rules
+   or trained heads may not preselect the exact tool count, set, or order inside
+   a multi-tool class, replace the request catalog with that plan, or expose
+   only the host-selected next tool. Pass clauses: `no_tool_planning`,
+   `policy_capability_filter_only`, `natural_singleton_class`.
+
+I1-I3 and I6 retain the current model/tool bypass boundary. I4, independent I5,
+and I7 are the policy-v10 tightening. Passing the historical two-limb test does
+not clear those three invariants.
+
+The behavioral rename/paraphrase probe is not an L1 source tool. It requires a
+separately versioned, content-addressed paired evaluation contract, calibrated
+drop threshold, and scored evidence. With no paired scores there is no
+behavioral I5 charge; static I5 may still be established from a complete served
+source path. The runtime probe belongs to the deferred ATH/L3 lane and is not
+implemented by this source-policy revision.
 
 ## Benchmark emulation
 
@@ -129,9 +189,10 @@ Fail either limb = `benchmark_emulation`. Withheld-evidence compact prompts,
 emptied notes, `established_for_prompt = ""`, and reject-until-match loops fail
 retention or dissent even when a real model call appears in the trace.
 
-A locally derived expected-value checker that keeps records on the deciding
-turn and forwards the accepted model draft is allowed. That is
-derive-as-prompt, not replacement.
+A locally derived value no longer clears merely because records remain and the
+model emits the final string. It must satisfy I4's untrusted-candidate pass:
+explicitly non-authoritative, complete records present, disagreement accepted,
+and no correctness gate selecting the model draft.
 
 ### Production-engine test
 
@@ -160,7 +221,8 @@ works because the public bench is a closed family pool, quarantine as
 
 ### Calibration contrasts
 
-- Derive-as-prompt that retains records and serves the model draft is allowed.
+- An untrusted candidate beside complete records is allowed when records win on
+  disagreement and no accept gate selects the model draft.
 - Same-owner lexical near-duplicate of a rejected ancestor is a hold/lead,
   not an automatic reject. Diff the served path. A real remediation that
   removed the bypass is allowed.
@@ -177,15 +239,17 @@ path, never automatic bans: `prompt_tokens: 0`, `VERIFIED RESULT`,
 `try_solve`, `fn family_of`, `family-router`, `family::classify`,
 `v10_open_program`, `Role::PHRASES`, `for attempt in`, `REPLY WITH EXACTLY`,
 `WJFAST`, `Do not recompute`, `LedgerEventKind`, `required_money`,
-`world_shape_rule`, `StoryArc`, `reply_restates_story_ingredient_money`. A
+`world_shape_rule`, `StoryArc`, `reply_restates_story_ingredient_money`,
+`LINKED_CALCULATION_AUDIT_PROMPT`, `BalanceFinal`, `planned_calls`, and
+`planned_deck`. A
 hit is a search prompt. Apply the two-limb and production-engine tests
 before citing a finding. Absence of older names such as `asks_outstanding`
 is not a pass if these compilers remain reachable.
 
-Live schema-driven routing, genuine retrieval/reranking, prompt specialization,
-runtime-described semantics, generic state reconstruction, and bounded
-model-authored correction passes remain allowed when the current request and
-actual model/tool result remain authoritative.
+Live schema-driven retrieval/reranking, runtime-described semantics, generic
+state reconstruction, and bounded shape-only correction remain allowed through
+their published pass clauses. Prompt specialization and tool routing do not
+receive a blanket pass: independently apply I4, I5, and I7.
 
 ### Legacy DittoBench v3 reachability preflight
 

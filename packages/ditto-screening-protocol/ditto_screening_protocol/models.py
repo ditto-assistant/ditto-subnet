@@ -16,7 +16,8 @@ from pydantic import (
     model_validator,
 )
 
-SCREENING_POLICY_VERSION = 9
+SCREENING_POLICY_VERSION = 10
+TYPED_OUTCOME_POLICY_VERSION = 9
 
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
@@ -424,6 +425,9 @@ class SourceReviewAuthorityTransition(StrEnum):
     TOOL_TRAJECTORY_FABRICATED = "tool_trajectory_fabricated"
     SELECTIVE_MODEL_DISABLEMENT = "selective_model_disablement"
     SCORER_FIELD_REWRITTEN = "scorer_field_rewritten"
+    DERIVED_VALUE_AUTHORITATIVE = "derived_value_authoritative"
+    FAMILY_COMPILER_AUTHORITATIVE = "family_compiler_authoritative"
+    TOOL_SELECTION_PREDETERMINED = "tool_selection_predetermined"
 
 
 class SourceReviewScorerVisibleEffect(StrEnum):
@@ -483,7 +487,175 @@ _SCORER_VISIBLE_EFFECTS_BY_TRANSITION = {
             SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
         }
     ),
+    SourceReviewAuthorityTransition.DERIVED_VALUE_AUTHORITATIVE: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.FAMILY_COMPILER_AUTHORITATIVE: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+            SourceReviewScorerVisibleEffect.ANSWER,
+            SourceReviewScorerVisibleEffect.ABSTAIN,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
+    SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED: frozenset(
+        {
+            SourceReviewScorerVisibleEffect.TOOL_CALLS,
+            SourceReviewScorerVisibleEffect.VALIDATOR_OBSERVED_TRAJECTORY,
+            SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        }
+    ),
 }
+
+
+class SourceReviewInvariant(StrEnum):
+    """Policy-v10 source-review invariants, evaluated independently."""
+
+    MODEL_INVOCATION = "i1_model_invocation"
+    EVIDENCE_RETENTION = "i2_evidence_retention"
+    MODEL_DISSENT = "i3_model_dissent"
+    DERIVED_VALUE_AUTHORITY = "i4_derived_value_authority"
+    PRODUCTION_ENGINE = "i5_production_engine"
+    TOOL_EXECUTION_FIDELITY = "i6_tool_execution_fidelity"
+    MODEL_TOOL_PLANNING = "i7_model_tool_planning"
+
+
+class SourceReviewInvariantDisposition(StrEnum):
+    """One invariant's bounded conclusion."""
+
+    PASS = "pass"
+    BREACH = "breach"
+    INCONCLUSIVE = "inconclusive"
+
+
+class SourceReviewPassClause(StrEnum):
+    """Published false-positive clauses that can refute a matching breach."""
+
+    GENUINE_MODEL_RESULT = "genuine_model_result"
+    NO_PREMODEL_RESPONSE = "no_premodel_response"
+    FULL_RECORDS_ON_DECIDING_TURN = "full_records_on_deciding_turn"
+    NON_AUTHORITATIVE_PRELIMINARY_PASS = "non_authoritative_preliminary_pass"
+    SHAPE_ONLY_VALIDATION = "shape_only_validation"
+    MODEL_DISSENT_PRESERVED = "model_dissent_preserved"
+    NO_DERIVED_VALUE = "no_derived_value"
+    UNTRUSTED_CANDIDATE_CHANNEL = "untrusted_candidate_channel"
+    RUNTIME_DESCRIBED_GENERIC_ENGINE = "runtime_described_generic_engine"
+    NO_FAMILY_COMPILER = "no_family_compiler"
+    MODEL_SELECTED_EXECUTED_TOOL = "model_selected_executed_tool"
+    NO_REPORTED_TOOL_CALLS = "no_reported_tool_calls"
+    NO_TOOL_PLANNING = "no_tool_planning"
+    POLICY_CAPABILITY_FILTER_ONLY = "policy_capability_filter_only"
+    NATURAL_SINGLETON_CLASS = "natural_singleton_class"
+    UNREACHABLE_NONRUNTIME_CODE = "unreachable_nonruntime_code"
+
+
+_PASS_CLAUSES_BY_INVARIANT = {
+    SourceReviewInvariant.MODEL_INVOCATION: frozenset(
+        {
+            SourceReviewPassClause.GENUINE_MODEL_RESULT,
+            SourceReviewPassClause.NO_PREMODEL_RESPONSE,
+        }
+    ),
+    SourceReviewInvariant.EVIDENCE_RETENTION: frozenset(
+        {
+            SourceReviewPassClause.FULL_RECORDS_ON_DECIDING_TURN,
+            SourceReviewPassClause.NON_AUTHORITATIVE_PRELIMINARY_PASS,
+        }
+    ),
+    SourceReviewInvariant.MODEL_DISSENT: frozenset(
+        {
+            SourceReviewPassClause.SHAPE_ONLY_VALIDATION,
+            SourceReviewPassClause.MODEL_DISSENT_PRESERVED,
+        }
+    ),
+    SourceReviewInvariant.DERIVED_VALUE_AUTHORITY: frozenset(
+        {
+            SourceReviewPassClause.NO_DERIVED_VALUE,
+            SourceReviewPassClause.UNTRUSTED_CANDIDATE_CHANNEL,
+        }
+    ),
+    SourceReviewInvariant.PRODUCTION_ENGINE: frozenset(
+        {
+            SourceReviewPassClause.RUNTIME_DESCRIBED_GENERIC_ENGINE,
+            SourceReviewPassClause.NO_FAMILY_COMPILER,
+        }
+    ),
+    SourceReviewInvariant.TOOL_EXECUTION_FIDELITY: frozenset(
+        {
+            SourceReviewPassClause.MODEL_SELECTED_EXECUTED_TOOL,
+            SourceReviewPassClause.NO_REPORTED_TOOL_CALLS,
+        }
+    ),
+    SourceReviewInvariant.MODEL_TOOL_PLANNING: frozenset(
+        {
+            SourceReviewPassClause.NO_TOOL_PLANNING,
+            SourceReviewPassClause.POLICY_CAPABILITY_FILTER_ONLY,
+            SourceReviewPassClause.NATURAL_SINGLETON_CLASS,
+        }
+    ),
+}
+for _invariant in SourceReviewInvariant:
+    _PASS_CLAUSES_BY_INVARIANT[_invariant] = _PASS_CLAUSES_BY_INVARIANT[_invariant] | {
+        SourceReviewPassClause.UNREACHABLE_NONRUNTIME_CODE
+    }
+
+
+class SourceReviewInvariantDecision(BaseModel):
+    """One policy-v10 invariant decision and its false-positive valve."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    invariant: SourceReviewInvariant
+    disposition: SourceReviewInvariantDisposition
+    pass_clause: SourceReviewPassClause | None = None
+    summary: Annotated[str, Field(min_length=1, max_length=240)]
+    evidence_indices: Annotated[
+        list[Annotated[int, Field(ge=0, le=15)]],
+        Field(default_factory=list, max_length=16),
+    ]
+
+    @model_validator(mode="after")
+    def validate_pass_clause(self) -> Self:
+        if self.disposition == SourceReviewInvariantDisposition.PASS:
+            if self.pass_clause not in _PASS_CLAUSES_BY_INVARIANT[self.invariant]:
+                raise ValueError("invariant pass clause is missing or incompatible")
+            if self.evidence_indices:
+                raise ValueError("passing invariant cannot carry violation evidence")
+        elif self.pass_clause is not None:
+            raise ValueError("only a passing invariant may name a pass clause")
+        if (
+            self.disposition == SourceReviewInvariantDisposition.BREACH
+            and not self.evidence_indices
+        ):
+            raise ValueError("invariant breach requires source evidence")
+        if len(self.evidence_indices) != len(set(self.evidence_indices)):
+            raise ValueError("invariant evidence indices must be unique")
+        return self
+
+
+class SourceReviewInvariantAssessment(BaseModel):
+    """Complete policy-v10 sweep; omission cannot silently clear an invariant."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    schema_version: Literal[1] = 1
+    decisions: Annotated[
+        list[SourceReviewInvariantDecision], Field(min_length=7, max_length=7)
+    ]
+
+    @model_validator(mode="after")
+    def validate_complete_sweep(self) -> Self:
+        invariants = [decision.invariant for decision in self.decisions]
+        if len(invariants) != len(set(invariants)):
+            raise ValueError("invariant decisions must be unique")
+        if set(invariants) != set(SourceReviewInvariant):
+            raise ValueError("source review must decide every policy-v10 invariant")
+        return self
 
 
 class SourceReviewCausalRoleBinding(BaseModel):
@@ -563,28 +735,78 @@ class SourceReviewFinding(BaseModel):
             "retains its exact canonical payload."
         ),
     )
+    invariant_assessment: SourceReviewInvariantAssessment | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Optional complete policy-v10 invariant sweep. Historical findings "
+            "remain byte-identical when absent."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_causal_binding_locations(self) -> Self:
-        if self.causal_evidence is None:
-            return self
         categories = set(self.categories)
         evidence_locations = {
             (item.path, item.line, item.category) for item in self.evidence
         }
-        for binding in self.causal_evidence.role_bindings:
-            if binding.category not in categories:
-                raise ValueError("causal role binding category is not in finding")
-            if (binding.path, binding.line, binding.category) not in evidence_locations:
-                raise ValueError(
-                    "causal role binding does not reference finding evidence"
-                )
+        if self.causal_evidence is not None:
+            for binding in self.causal_evidence.role_bindings:
+                if binding.category not in categories:
+                    raise ValueError("causal role binding category is not in finding")
+                if (
+                    binding.path,
+                    binding.line,
+                    binding.category,
+                ) not in evidence_locations:
+                    raise ValueError(
+                        "causal role binding does not reference finding evidence"
+                    )
+        if self.invariant_assessment is not None:
+            for decision in self.invariant_assessment.decisions:
+                if any(
+                    index >= len(self.evidence) for index in decision.evidence_indices
+                ):
+                    raise ValueError(
+                        "invariant decision evidence index is out of range"
+                    )
         return self
 
     @property
-    def evidence_schema_version(self) -> Literal[1, 2]:
+    def evidence_schema_version(self) -> Literal[1, 2, 3]:
         """Return the effective evidence schema without changing v1 wire JSON."""
+        if self.invariant_assessment is not None:
+            return 3
         return 2 if self.causal_evidence is not None else 1
+
+    def require_policy_v10_invariants(self) -> Self:
+        """Require a complete, self-consistent strict invariant sweep."""
+
+        if self.invariant_assessment is None:
+            raise ValueError("policy v10 finding requires invariant assessment")
+        dispositions = {
+            decision.disposition for decision in self.invariant_assessment.decisions
+        }
+        elevated = bool(
+            dispositions
+            & {
+                SourceReviewInvariantDisposition.BREACH,
+                SourceReviewInvariantDisposition.INCONCLUSIVE,
+            }
+        )
+        categories = set(self.categories)
+        strict_categories = categories & {
+            "benchmark_emulation",
+            "scorer_contract_manipulation",
+            "fabricated_tool_trajectory",
+        }
+        if self.risk_level == "low" and elevated:
+            raise ValueError("low-risk finding has unresolved policy-v10 invariant")
+        if strict_categories and not elevated:
+            raise ValueError("strict source category lacks a policy-v10 breach")
+        if "none" in categories and elevated:
+            raise ValueError("none category cannot carry an elevated invariant")
+        return self
 
     def require_role_complete_causal_evidence(self) -> Self:
         """Require v2 role completeness for elevated causal categories.
@@ -661,6 +883,27 @@ class SourceReviewFinding(BaseModel):
                             binding.line,
                             binding.category,
                         ),
+                    )
+                ],
+            }
+        if self.invariant_assessment is not None:
+            payload["invariant_assessment"] = {
+                "schema_version": self.invariant_assessment.schema_version,
+                "decisions": [
+                    {
+                        "invariant": decision.invariant.value,
+                        "disposition": decision.disposition.value,
+                        **(
+                            {"pass_clause": decision.pass_clause.value}
+                            if decision.pass_clause is not None
+                            else {}
+                        ),
+                        "summary": decision.summary,
+                        "evidence_indices": sorted(decision.evidence_indices),
+                    }
+                    for decision in sorted(
+                        self.invariant_assessment.decisions,
+                        key=lambda decision: decision.invariant.value,
                     )
                 ],
             }
@@ -927,8 +1170,8 @@ class ScreenResultRequest(BaseModel):
     @model_validator(mode="after")
     def validate_typed_outcome(self) -> ScreenResultRequest:
         if self.outcome is None:
-            if self.policy_version >= SCREENING_POLICY_VERSION:
-                raise ValueError("policy-v9 result requires typed outcome")
+            if self.policy_version >= TYPED_OUTCOME_POLICY_VERSION:
+                raise ValueError("policy v9+ result requires typed outcome")
             if any(
                 value is not None
                 for value in (

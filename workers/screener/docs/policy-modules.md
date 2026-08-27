@@ -26,7 +26,12 @@ floors remain quarantine/escalation evidence; none is sole terminal proof.
 ## Manifest boundary
 
 The strict manifest contains exactly `policy_version`, `rotation_id`, and
-`modules`. Supported module kinds are:
+`modules`. At policy-v10 rollout, reissue the protected manifest with
+`policy_version: 10` and a fresh rotation/digest before a v10 worker starts.
+The worker intentionally refuses a v9 manifest; silently accepting it would
+sign v10 verdicts under an unbound private-policy snapshot.
+
+Supported module kinds are:
 
 - `timing_relay_risk`: reads a bounded private aggregate feed and emits only a
   tripwire or retryable infrastructure outcome.
@@ -51,6 +56,11 @@ The strict manifest contains exactly `policy_version`, `rotation_id`, and
   external build inputs, and C13 bench-family compiler fingerprints. Leads
   never decide policy or expose matched source; the reviewer must validate
   reachability and causal effect. C13 hits are search leads, never auto-bans.
+  Policy v10 requires one signed decision for each I1-I7 invariant. I4 derived
+  authority, I5 production generality, and I7 model tool planning remain
+  independent even when a real model call occurs and the historical two limbs
+  pass. Medium/high findings still select quarantine only; L2/L3 and the
+  operator retain adjudication authority.
 - `behavioral_challenge_pack`: runs bounded private `/run` requests only after a
   selector trips. It records response digests, elapsed time, and JSON keys, not
   private prompts or response bodies. An anomaly becomes quarantine and an

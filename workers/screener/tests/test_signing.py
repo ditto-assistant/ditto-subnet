@@ -140,12 +140,16 @@ def test_deferred_source_review_is_signed_only_when_true() -> None:
     assert deferred != legacy
 
 
-def test_policy_v9_signature_requires_typed_outcome() -> None:
+@pytest.mark.parametrize("policy_version", [9, SCREENING_POLICY_VERSION])
+def test_policy_v9_and_later_signature_requires_typed_outcome(
+    policy_version: int,
+) -> None:
     with pytest.raises(ValueError, match="requires typed outcome"):
         verdict_signing_message(
             screener_hotkey=_HOTKEY,
             agent_id=_AGENT,
             passed=True,
+            policy_version=policy_version,
         )
 
 

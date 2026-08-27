@@ -115,17 +115,35 @@ def test_review_payloads_require_review_outcome() -> None:
         )
 
 
-def test_policy_v9_rejects_legacy_untyped_outcome() -> None:
+@pytest.mark.parametrize("policy_version", [9, SCREENING_POLICY_VERSION])
+def test_policy_v9_and_later_reject_legacy_untyped_outcome(
+    policy_version: int,
+) -> None:
     with pytest.raises(ValidationError, match="requires typed outcome"):
         _request(
             passed=False,
             outcome=None,
+            policy_version=policy_version,
             manifest_digest=None,
             finding_digest=None,
             reason_code=None,
             evidence=None,
             finding=None,
         )
+
+
+def test_policy_v8_retains_legacy_untyped_outcome() -> None:
+    request = _request(
+        passed=True,
+        outcome=None,
+        policy_version=8,
+        manifest_digest=None,
+        finding_digest=None,
+        reason_code=None,
+        evidence=None,
+        finding=None,
+    )
+    assert request.outcome is None
 
 
 def test_legacy_outcome_rejects_image_metadata() -> None:

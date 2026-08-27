@@ -96,6 +96,8 @@ type GeneratedConfirmationBundleView = PlatformComponents['schemas']['Confirmati
 type GeneratedConfirmationBundleList =
   PlatformComponents['schemas']['AdminConfirmationBundleListResponse']
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
+type GeneratedSourceReviewInvariantAssessment =
+  PlatformComponents['schemas']['SourceReviewInvariantAssessment']
 
 const INFERENCE_RPM = {
   chat_per_ticket_requests_per_minute: 1920,
@@ -1530,6 +1532,18 @@ describe('Bench v9 confirmation bundle schemas', () => {
 })
 
 describe('source review causal evidence schema', () => {
+  const invariantAssessment = {
+    schema_version: 1,
+    decisions: [
+      { invariant: 'i1_model_invocation', disposition: 'pass', pass_clause: 'genuine_model_result', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+      { invariant: 'i2_evidence_retention', disposition: 'pass', pass_clause: 'full_records_on_deciding_turn', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+      { invariant: 'i3_model_dissent', disposition: 'pass', pass_clause: 'model_dissent_preserved', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+      { invariant: 'i4_derived_value_authority', disposition: 'pass', pass_clause: 'no_derived_value', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+      { invariant: 'i5_production_engine', disposition: 'breach', pass_clause: null, summary: 'A closed family compiler controls the served answer.', evidence_indices: [0] },
+      { invariant: 'i6_tool_execution_fidelity', disposition: 'pass', pass_clause: 'no_reported_tool_calls', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+      { invariant: 'i7_model_tool_planning', disposition: 'pass', pass_clause: 'no_tool_planning', summary: 'The reviewed path satisfies the published pass clause.', evidence_indices: [] },
+    ],
+  } satisfies GeneratedSourceReviewInvariantAssessment
   const generatedFinding = {
     artifact_sha256: 'a'.repeat(64),
     prompt_revision: 'source-review-v2',
@@ -1564,6 +1578,52 @@ describe('source review causal evidence schema', () => {
   it('parses the generated v2 finding shape without stripping causal proof', () => {
     const parsed = sourceReviewFindingSchema.parse(generatedFinding)
     expect(parsed.causal_evidence).toEqual(generatedFinding.causal_evidence)
+  })
+
+  it('parses and retains the complete policy-v10 invariant sweep', () => {
+    const parsed = sourceReviewFindingSchema.parse({
+      ...generatedFinding,
+      invariant_assessment: invariantAssessment,
+    })
+    expect(parsed.invariant_assessment).toEqual(invariantAssessment)
+  })
+
+  it('rejects duplicate, incompatible, and unbound invariant decisions', () => {
+    expect(() => sourceReviewFindingSchema.parse({
+      ...generatedFinding,
+      invariant_assessment: {
+        ...invariantAssessment,
+        decisions: [
+          ...invariantAssessment.decisions.slice(0, 6),
+          invariantAssessment.decisions[0],
+        ],
+      },
+    })).toThrow(/every policy-v10 invariant/)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...generatedFinding,
+      invariant_assessment: {
+        ...invariantAssessment,
+        decisions: invariantAssessment.decisions.map((decision) =>
+          decision.invariant === 'i7_model_tool_planning'
+            ? { ...decision, pass_clause: 'genuine_model_result' }
+            : decision),
+      },
+    })).toThrow(/incompatible/)
+    expect(() => sourceReviewFindingSchema.parse({
+      ...generatedFinding,
+      invariant_assessment: {
+        ...invariantAssessment,
+        decisions: invariantAssessment.decisions.map((decision) =>
+          decision.invariant === 'i5_production_engine'
+            ? {
+                ...decision,
+                disposition: 'breach',
+                pass_clause: null,
+                evidence_indices: [15],
+              }
+            : decision),
+      },
+    })).toThrow(/out of range/)
   })
 
   it('accepts the generated legacy shape when optional finding fields are absent', () => {

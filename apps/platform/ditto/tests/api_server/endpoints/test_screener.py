@@ -217,9 +217,11 @@ def _result_payload(
         and policy_version == SCREENING_POLICY_VERSION
         and "outcome" not in overrides
     ):
-        # Legacy no-attempt fixtures exercise the rolling compatibility path;
-        # policy 9 itself requires an attempt-bound typed outcome.
-        policy_version = SCREENING_POLICY_VERSION - 1
+        # Legacy no-attempt fixtures exercise the pre-policy-9 compatibility
+        # path. Policy 9 and later require an attempt-bound typed outcome, so a
+        # v10 bump must not accidentally turn the fixture into an invalid v9
+        # verdict.
+        policy_version = 8
     if passed and isinstance(attempt_id, UUID):
         overrides.setdefault("outcome", ScreenResultOutcome.PASS)
         overrides.setdefault("image_sha256", "12" * 32)
@@ -3361,7 +3363,7 @@ class TestClaim:
                 agent_id,
                 attempt_id=attempt_id,
                 passed=False,
-                policy_version=SCREENING_POLICY_VERSION - 1,
+                policy_version=8,
             ),
         )
 

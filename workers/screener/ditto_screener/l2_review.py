@@ -35,6 +35,7 @@ from ditto_screener.source_review import (
     _OPENROUTER_ATTRIBUTION_HEADERS,
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
+    policy_v10_static_assessment,
 )
 from ditto_screening_protocol import (
     ScreenReviewAudit,
@@ -44,6 +45,10 @@ from ditto_screening_protocol import (
     SourceReviewEvidenceItem,
     SourceReviewEvidenceRole,
     SourceReviewFinding,
+    SourceReviewInvariant,
+    SourceReviewInvariantAssessment,
+    SourceReviewInvariantDisposition,
+    SourceReviewPassClause,
     SourceReviewScorerVisibleEffect,
 )
 
@@ -53,11 +58,11 @@ L2_MODEL = "moonshotai/kimi-k3"
 L2_FALLBACK_MODELS = ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
 L3_MODEL = "openai/gpt-5.6-sol"
 L3_PROVIDER = "openrouter"
-L2_PROMPT_REVISION = "l2-kimi-source-review-v33"
-L2_CRITIC_PROMPT_REVISION = "l3-sol-adversarial-critic-v18"
-L2_CAUSE_PROMPT_REVISION = "l3-sol-violation-cause-v24"
-L2_CAUSE_TIEBREAKER_PROMPT_REVISION = "l3-sol-cause-disagreement-v5"
-L2_SAFETY_PROMPT_REVISION = "l3-sol-safety-adjudicator-v21"
+L2_PROMPT_REVISION = "l2-kimi-source-review-v34-policy-v10"
+L2_CRITIC_PROMPT_REVISION = "l3-sol-adversarial-critic-v19-policy-v10"
+L2_CAUSE_PROMPT_REVISION = "l3-sol-violation-cause-v25-policy-v10"
+L2_CAUSE_TIEBREAKER_PROMPT_REVISION = "l3-sol-cause-disagreement-v6-policy-v10"
+L2_SAFETY_PROMPT_REVISION = "l3-sol-safety-adjudicator-v22-policy-v10"
 L2_STATIC_HOLD_REVISION = "l2-integrity-static-hold-v3"
 L2_DOSSIER_REVISION = "l1-compressed-dossier-v10"
 L2_CAUSE_REASONING_EFFORT = "medium"
@@ -148,6 +153,7 @@ _RESOLUTION_BASES = frozenset(
         "benchmark_answer_replacement",
         "scorer_field_manipulation",
         "fabricated_tool_trajectory",
+        "model_tool_planning_bypass",
         "generator_mirroring",
         "hidden_model_bypass",
         "credential_exfiltration",
@@ -174,6 +180,7 @@ _BASIS_CATEGORIES = {
     ),
     "scorer_field_manipulation": frozenset({"scorer_contract_manipulation"}),
     "fabricated_tool_trajectory": frozenset({"fabricated_tool_trajectory"}),
+    "model_tool_planning_bypass": frozenset({"benchmark_emulation"}),
     "generator_mirroring": frozenset(
         {"benchmark_emulation", "embedded_evaluator_logic"}
     ),
@@ -190,6 +197,43 @@ _BASIS_CATEGORIES = {
     ),
     "cross_user_data_flow": frozenset({"cross_user_access"}),
     "duplicate_artifact": frozenset({"duplicate_submission"}),
+}
+_INVARIANT_BY_RESOLUTION_BASIS = {
+    "benchmark_answer_replacement": SourceReviewInvariant.PRODUCTION_ENGINE,
+    "generator_mirroring": SourceReviewInvariant.PRODUCTION_ENGINE,
+    "scorer_field_manipulation": SourceReviewInvariant.MODEL_DISSENT,
+    "fabricated_tool_trajectory": (SourceReviewInvariant.TOOL_EXECUTION_FIDELITY),
+    "model_tool_planning_bypass": SourceReviewInvariant.MODEL_TOOL_PLANNING,
+    "hidden_model_bypass": SourceReviewInvariant.MODEL_INVOCATION,
+}
+_INVARIANT_BY_AUTHORITY_TRANSITION = {
+    SourceReviewAuthorityTransition.MODEL_SKIPPED: (
+        SourceReviewInvariant.MODEL_INVOCATION
+    ),
+    SourceReviewAuthorityTransition.MODEL_OUTPUT_OVERWRITTEN: (
+        SourceReviewInvariant.MODEL_DISSENT
+    ),
+    SourceReviewAuthorityTransition.TOOL_EXECUTION_BYPASSED: (
+        SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
+    ),
+    SourceReviewAuthorityTransition.TOOL_TRAJECTORY_FABRICATED: (
+        SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
+    ),
+    SourceReviewAuthorityTransition.SELECTIVE_MODEL_DISABLEMENT: (
+        SourceReviewInvariant.MODEL_INVOCATION
+    ),
+    SourceReviewAuthorityTransition.SCORER_FIELD_REWRITTEN: (
+        SourceReviewInvariant.MODEL_DISSENT
+    ),
+    SourceReviewAuthorityTransition.DERIVED_VALUE_AUTHORITATIVE: (
+        SourceReviewInvariant.DERIVED_VALUE_AUTHORITY
+    ),
+    SourceReviewAuthorityTransition.FAMILY_COMPILER_AUTHORITATIVE: (
+        SourceReviewInvariant.PRODUCTION_ENGINE
+    ),
+    SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED: (
+        SourceReviewInvariant.MODEL_TOOL_PLANNING
+    ),
 }
 _CAUSAL_CATEGORY_FAMILIES = (
     frozenset(
@@ -468,35 +512,38 @@ scorer_field_flow contains any score controls together with field populations
 or clears, inspect the relevant changed functions even if L1 alleges scope,
 credentials, tools, benchmark emulation, or another mechanism. Clearing L1's
 named lead does not clear an independent response-authority path.
-Also separate a locally derived expected-value checker from direct replacement.
-If harness code assigns the check value into a served answer/text slot after a
-model omission or disagreement, model authority is bypassed. If each rejected
-draft instead causes a fresh model generation and that model output is forwarded
-unchanged, do not label it answer replacement or scorer-field manipulation.
-Still inspect whether a reachable finite answer-family compiler remains after
-both limbs pass; that is a production-engine fail, not a two-limb pass.
-Apply the two-limb refusal test after a derived value is injected: (a) does the
-model still receive the current user's records on that turn, and (b) if the
-model disagrees, is that model draft served as the graded answer at the agent's
-own score cost? Fail either limb is benchmark_emulation. Limbs (a) and (b) are
-necessary and not sufficient.
-A finite bench-family compiler — closed Program/try_solve trees,
-phrase tables, character-match ladders, baked family-router.json, fn family_of,
-or "Do not recompute" / "Copy its value exactly" on a compiled decimal — is
-still a production-engine fail even when both limbs pass. StoryArc remainder
-compilers, LedgerEventKind validators, required_money formatters, and
-world_shape_rule injection on served /run are the same fail. Absence of
-asks_outstanding, DOLLAR=, family-router.json, or coach formula sentences is
-not a pass if those compilers remain reachable. Trace compile_notes,
-world_hint, CompactToolModel closer, and soft-retry miss gates rather than
-rubber-stamping that old identifiers are gone. Derive-as-prompt that
-retains records and serves the model draft is allowed. Lexical near-duplicate
-of a same-owner rejected ancestor is a hold/lead, not an automatic reject.
-Honest-and-bad or post-remediation low score is not a cheat signal. Clear
-live schema-driven routing, genuine retrieval/reranking, prompt specialization,
-runtime-described semantics, generic state reconstruction, and bounded
-model-authored correction passes when the current request and actual
-model/tool path remain authoritative.
+Policy v10 requires a separately reported decision for every I1-I7 invariant.
+Refute before recording. A published pass clause wins only when it causally
+removes the matching breach on the same served path; comments and labels do not.
+I1 requires genuine model invocation for normal scored answers and substantive
+abstention. I2 requires complete applicable current-user records on the deciding
+turn, while allowing a clearly non-authoritative focused preliminary pass. I3
+allows syntax/schema/empty-output validation but forbids correctness-based
+reject-until-match or overwrite of a parseable model answer.
+
+I4 is stricter than the legacy derive-as-prompt allowance. A local value passes
+only as an explicitly untrusted candidate beside complete records, with records
+preferred on disagreement and no accept gate. WORKED OUT, VERIFIED, exact,
+do-not-recompute, or equivalent engine-authority labels breach I4 even when both
+limbs pass. I5 independently rejects closed answer-family or operand-recipe
+routers, semantic sheets, phrase tables, generator-fitted typo ladders, and
+family-specific instruction compilers. A product-surface router and a generic
+runtime-described calculator remain allowed. Ask whether renamed fields and
+paraphrased requests would still work.
+
+I6 is the executed-versus-reported tool fidelity rule below. I7 separately
+protects model planning: policy, authorization, safety, availability, and a
+natural singleton class may narrow tools, but request-keyed rules or trained
+heads may not preselect the exact tool count/set/order inside a multi-tool class,
+replace the request catalog with that plan, clear alternatives because a value
+exists, or expose only the host-selected next tool so the model copies arguments.
+StoryArc/BalanceFinal family sheets, LINKED family audit prompts, and exact-deck
+planners are leads; trace their served trigger and effect before deciding.
+
+Lexical near-duplicate of a same-owner rejected ancestor is a hold/lead, not an
+automatic reject. Honest-and-bad or post-remediation low score is not a cheat
+signal. Live schema-driven retrieval/reranking and bounded model-authored
+correction remain allowed only through their applicable v10 pass clauses.
 2. Tool fidelity: every reported tool call must be selected through the genuine
 planner/model path and correspond to a call actually executed by either a
 request-supplied tool endpoint or a genuine harness-owned Tool implementation.
@@ -545,6 +592,8 @@ unreachable_nonruntime_code for suspicious code excluded from the shipped or
 served path; benchmark_answer_replacement for a deterministic family solver;
 scorer_field_manipulation for answer/abstain/contract mutation;
 fabricated_tool_trajectory for invented or rewritten calls;
+model_tool_planning_bypass when I7 host logic predetermines the exact scored
+tool count, set, or order without fabricating execution;
 generator_mirroring for coordinated public-generator logic;
 hidden_model_bypass for an alternate path that makes the provider non-authoritative;
 credential_exfiltration for host/secret acquisition or an outbound sink;
@@ -554,9 +603,11 @@ specific basis fits; and insufficient_static_evidence only for inconclusive.
 When several effects coexist, name the most specific proximal scored mechanism:
 use scorer_field_manipulation for direct answer/abstain/response-slot mutation;
 fabricated_tool_trajectory when the reported-versus-executed call mismatch is
-the primary effect; generator_mirroring for logic derived from the challenge
-generator; benchmark_answer_replacement for a deterministic family engine or
-answer registry that supplies the scored answer. Use hidden_model_bypass only
+the primary effect; model_tool_planning_bypass when selected/executed calls are
+real but the host predetermined the model's plan; generator_mirroring for logic
+derived from the challenge generator; benchmark_answer_replacement for a
+deterministic family engine or answer registry that supplies the scored answer.
+Use hidden_model_bypass only
 when the provider is non-authoritative and none of those more specific scored
 mechanisms applies. A model call used only for audit does not by itself make
 hidden_model_bypass primary when a benchmark engine supplies the answer.
@@ -608,7 +659,9 @@ evidence. Each required category needs all four roles across at least two
 locations. Choose exactly one authority_transition describing the proved
 served boundary: model_skipped, model_output_overwritten,
 tool_execution_bypassed, tool_trajectory_fabricated,
-selective_model_disablement, or scorer_field_rewritten. Also name exactly one
+selective_model_disablement, scorer_field_rewritten,
+derived_value_authoritative, family_compiler_authoritative, or
+tool_selection_predetermined. Also name exactly one
 top-level concrete scorer_visible_effect: final_text, answer, abstain, tool_calls,
 validator_observed_trajectory, or graded_outcome. Context construction,
 retrieval, reranking, bounded retry/parsing, genuine model inference, and real
@@ -620,6 +673,11 @@ sanitized transition/effect-specific summary after validating the structured rol
 For a clean safe result use categories=["none"] and evidence=[]; express the
 legitimate traced path through analyzed_files and causal_path. Evidence denotes
 an actual remaining policy finding, not evidence that a suspicion was cleared.
+Always include invariants with exactly one decision for I1 through I7. A pass
+must use a compatible published pass_clause and no violation evidence. A breach
+must bind one or more zero-based evidence_indices from the top-level evidence
+array. Use inconclusive when
+bounded static evidence cannot settle an invariant; it cannot support safe.
 """
 
 _VIOLATION_CAUSE_TASK = """\
@@ -1104,7 +1162,7 @@ _TOOLS: list[dict[str, object]] = [
                         ],
                         "additionalProperties": False,
                     },
-                    "maxItems": 24,
+                    "maxItems": 16,
                 },
                 "causal_path": {
                     "type": "array",
@@ -1198,6 +1256,64 @@ _TOOLS: list[dict[str, object]] = [
                         },
                     ]
                 },
+                "invariants": {
+                    "type": "array",
+                    "minItems": 7,
+                    "maxItems": 7,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "invariant": {
+                                "type": "string",
+                                "enum": sorted(
+                                    invariant.value
+                                    for invariant in SourceReviewInvariant
+                                ),
+                            },
+                            "disposition": {
+                                "type": "string",
+                                "enum": sorted(
+                                    disposition.value
+                                    for disposition in SourceReviewInvariantDisposition
+                                ),
+                            },
+                            "pass_clause": {
+                                "anyOf": [
+                                    {"type": "null"},
+                                    {
+                                        "type": "string",
+                                        "enum": sorted(
+                                            clause.value
+                                            for clause in SourceReviewPassClause
+                                        ),
+                                    },
+                                ]
+                            },
+                            "summary": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 240,
+                            },
+                            "evidence_indices": {
+                                "type": "array",
+                                "maxItems": 16,
+                                "items": {
+                                    "type": "integer",
+                                    "minimum": 0,
+                                    "maximum": 15,
+                                },
+                            },
+                        },
+                        "required": [
+                            "invariant",
+                            "disposition",
+                            "pass_clause",
+                            "summary",
+                            "evidence_indices",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
                 "summary": {"type": "string", "maxLength": 240},
             },
             "required": [
@@ -1211,6 +1327,7 @@ _TOOLS: list[dict[str, object]] = [
                 "causal_path",
                 "generator_components",
                 "causal_evidence",
+                "invariants",
                 "summary",
             ],
             "additionalProperties": False,
@@ -3794,6 +3911,47 @@ def _finding_confidence(finding: Mapping[str, object]) -> float:
     return float(value)
 
 
+def _validate_violation_invariant_binding(
+    *,
+    assessment: SourceReviewInvariantAssessment,
+    resolution_basis: str,
+    causal_evidence: SourceReviewCausalEvidence | None,
+    evidence: list[SourceReviewEvidenceItem],
+) -> None:
+    """Bind a model-authored v10 breach to the host-validated causal mechanism."""
+
+    if causal_evidence is None:
+        return
+    transition_invariant = _INVARIANT_BY_AUTHORITY_TRANSITION[
+        causal_evidence.authority_transition
+    ]
+    expected = {transition_invariant}
+    basis_invariant = _INVARIANT_BY_RESOLUTION_BASIS.get(resolution_basis)
+    if basis_invariant is not None:
+        expected.add(basis_invariant)
+    authority_locations = {
+        (binding.path, binding.line, binding.category)
+        for binding in causal_evidence.role_bindings
+        if binding.role == SourceReviewEvidenceRole.AUTHORITY_BYPASS
+    }
+    authority_indices = {
+        index
+        for index, item in enumerate(evidence)
+        if (item.path, item.line, item.category) in authority_locations
+    }
+    decisions = {item.invariant: item for item in assessment.decisions}
+    if any(
+        decisions[invariant].disposition != SourceReviewInvariantDisposition.BREACH
+        for invariant in expected
+    ):
+        raise ValueError("L2 causal mechanism lacks its required invariant breach")
+    transition_decision = decisions[transition_invariant]
+    if authority_indices and not authority_indices.intersection(
+        transition_decision.evidence_indices
+    ):
+        raise ValueError("L2 invariant breach is not bound to authority evidence")
+
+
 def _parse_l2_review(
     value: object,
     *,
@@ -3816,6 +3974,7 @@ def _parse_l2_review(
         "analyzed_files",
         "evidence",
         "causal_path",
+        "invariants",
         "summary",
     }
     optional = {"generator_components", "causal_evidence"}
@@ -3833,6 +3992,7 @@ def _parse_l2_review(
     evidence = value["evidence"]
     analyzed = value["analyzed_files"]
     causal = value["causal_path"]
+    invariants = value["invariants"]
     generator_components = value.get("generator_components", [])
     causal_evidence_value = value.get("causal_evidence")
     submitted_summary = value["summary"]
@@ -3860,7 +4020,7 @@ def _parse_l2_review(
         raise ValueError("L2 result categories are invalid")
     if not isinstance(analyzed, list) or not 1 <= len(analyzed) <= 48:
         raise ValueError("L2 result analyzed_files are invalid")
-    if not isinstance(evidence, list) or len(evidence) > 24:
+    if not isinstance(evidence, list) or len(evidence) > 16:
         raise ValueError("L2 result evidence collection is invalid")
     if not isinstance(causal, list) or len(causal) > 16:
         raise ValueError("L2 result causal_path is invalid")
@@ -4043,6 +4203,16 @@ def _parse_l2_review(
         )
         for item in normalized_evidence
     ]
+    invariant_assessment = SourceReviewInvariantAssessment.model_validate(
+        {"decisions": invariants}
+    )
+    if disposition == "violation":
+        _validate_violation_invariant_binding(
+            assessment=invariant_assessment,
+            resolution_basis=str(resolution_basis),
+            causal_evidence=causal_evidence,
+            evidence=public_evidence,
+        )
     summary = (
         "Level-2 review found no causally established policy violation."
         if disposition == "safe"
@@ -4064,7 +4234,8 @@ def _parse_l2_review(
         evidence=public_evidence,
         summary=summary,
         causal_evidence=causal_evidence,
-    )
+        invariant_assessment=invariant_assessment,
+    ).require_policy_v10_invariants()
     return (
         SourceReviewObservation(
             ok=True,
@@ -4471,7 +4642,16 @@ def _review_adaptation_hold(
             "reachable model routing is explicitly tied to a review-probe shape; "
             "model agreement cannot self-clear"
         ),
-    )
+        invariant_assessment=policy_v10_static_assessment(
+            breaches={
+                SourceReviewInvariant.MODEL_INVOCATION: [
+                    index
+                    for index, item in enumerate(evidence)
+                    if item.category == "benchmark_emulation"
+                ]
+            },
+        ),
+    ).require_policy_v10_invariants()
     detector_files = tuple(
         {
             str(item["path"]): {
@@ -4609,7 +4789,16 @@ def _served_generator_hold(
             "served generator-shaped request, retrieval, and answer-authority "
             "signals require quarantine; model agreement cannot self-clear"
         ),
-    )
+        invariant_assessment=policy_v10_static_assessment(
+            breaches={
+                SourceReviewInvariant.PRODUCTION_ENGINE: [
+                    index
+                    for index, item in enumerate(deduplicated_evidence)
+                    if item.category == "benchmark_emulation"
+                ]
+            },
+        ),
+    ).require_policy_v10_invariants()
     detector_files = tuple(
         {
             str(item["path"]): {
@@ -4732,12 +4921,14 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 causal evidence has no elevated causal category": "inconsistent-verdict",
     "L2 causal evidence is invalid": "inconsistent-verdict",
     "L2 causal evidence schema version is invalid": "inconsistent-verdict",
+    "L2 causal mechanism lacks its required invariant breach": "inconsistent-verdict",
     "L2 causal path is invalid": "inconsistent-verdict",
     "L2 causal role binding is invalid": "inconsistent-verdict",
     "L2 causal role bindings are invalid": "inconsistent-verdict",
     "L2 evidence is invalid": "inconsistent-verdict",
     "L2 evidence line is invalid": "inconsistent-verdict",
     "L2 generator component is invalid": "inconsistent-verdict",
+    "L2 invariant breach is not bound to authority evidence": "inconsistent-verdict",
     "L2 inconclusive result cannot contain causal evidence": "inconsistent-verdict",
     "L2 none category must be exclusive": "inconsistent-verdict",
     "L2 resolution basis contradicts its categories": "inconsistent-verdict",

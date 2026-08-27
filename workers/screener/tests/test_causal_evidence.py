@@ -38,6 +38,87 @@ ARTIFACT_SHA = "a" * 64
 ATTEMPT_ID = UUID("ddcc7c52-f212-40bb-a80f-a770e91240e5")
 FIXTURES = Path(__file__).parent / "fixtures"
 
+_PASS_CLAUSES = {
+    "i1_model_invocation": "genuine_model_result",
+    "i2_evidence_retention": "full_records_on_deciding_turn",
+    "i3_model_dissent": "model_dissent_preserved",
+    "i4_derived_value_authority": "no_derived_value",
+    "i5_production_engine": "no_family_compiler",
+    "i6_tool_execution_fidelity": "no_reported_tool_calls",
+    "i7_model_tool_planning": "no_tool_planning",
+}
+
+
+def _with_policy_v10_invariants(value: dict[str, object]) -> dict[str, object]:
+    categories = set(value.get("categories", []))
+    raw_evidence = value.get("evidence", [])
+    assert isinstance(raw_evidence, list)
+    public_evidence = [
+        {
+            "path": item["path"],
+            "line": item["line"],
+            "category": item["category"],
+        }
+        for item in raw_evidence
+        if isinstance(item, dict) and {"path", "line", "category"} <= set(item)
+    ]
+    causal_evidence = value.get("causal_evidence")
+    transition = (
+        causal_evidence.get("authority_transition")
+        if isinstance(causal_evidence, dict)
+        else None
+    )
+    breach_by_transition = {
+        "model_skipped": "i1_model_invocation",
+        "model_output_overwritten": "i3_model_dissent",
+        "tool_execution_bypassed": "i6_tool_execution_fidelity",
+        "tool_trajectory_fabricated": "i6_tool_execution_fidelity",
+        "selective_model_disablement": "i1_model_invocation",
+        "scorer_field_rewritten": "i3_model_dissent",
+        "derived_value_authoritative": "i4_derived_value_authority",
+        "family_compiler_authoritative": "i5_production_engine",
+        "tool_selection_predetermined": "i7_model_tool_planning",
+    }
+    breaches = (
+        {breach_by_transition[transition]}
+        if transition in breach_by_transition
+        else set()
+    )
+    category_breach = (
+        "i3_model_dissent"
+        if "scorer_contract_manipulation" in categories
+        else "i6_tool_execution_fidelity"
+        if "fabricated_tool_trajectory" in categories
+        else "i5_production_engine"
+        if "benchmark_emulation" in categories
+        else None
+    )
+    if category_breach is not None:
+        breaches.add(category_breach)
+    decisions = []
+    for invariant, pass_clause in _PASS_CLAUSES.items():
+        if invariant in breaches:
+            decisions.append(
+                {
+                    "invariant": invariant,
+                    "disposition": "breach",
+                    "pass_clause": None,
+                    "summary": "The strict-policy breach is artifact-bound.",
+                    "evidence_indices": list(range(len(public_evidence))),
+                }
+            )
+        else:
+            decisions.append(
+                {
+                    "invariant": invariant,
+                    "disposition": "pass",
+                    "pass_clause": pass_clause,
+                    "summary": "The reviewed path satisfies the published pass clause.",
+                    "evidence_indices": [],
+                }
+            )
+    return {**value, "invariants": decisions}
+
 
 def _evidence(category: str = "benchmark_emulation") -> list[SourceReviewEvidenceItem]:
     return [
@@ -134,36 +215,38 @@ def _review_value(digest: str) -> dict[str, object]:
         }
         for line, role in ((1, "trigger"), (2, "effect"))
     ]
-    return {
-        "disposition": "violation",
-        "risk_level": "high",
-        "confidence": 0.99,
-        "resolution_basis": "benchmark_answer_replacement",
-        "categories": ["benchmark_emulation"],
-        "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
-        "evidence": evidence,
-        "causal_path": [
-            {"path": "src/main.rs", "line": 1, "role": "trigger"},
-            {"path": "src/main.rs", "line": 2, "role": "effect"},
-        ],
-        "generator_components": [],
-        "causal_evidence": {
-            "schema_version": 2,
-            "authority_transition": "model_skipped",
-            "scorer_visible_effect": "answer",
-            "role_bindings": [
-                {
-                    "path": "src/main.rs",
-                    "line": 1 if index % 2 == 0 else 2,
-                    "file_sha256": digest,
-                    "category": "benchmark_emulation",
-                    "role": role.value,
-                }
-                for index, role in enumerate(SourceReviewEvidenceRole)
+    return _with_policy_v10_invariants(
+        {
+            "disposition": "violation",
+            "risk_level": "high",
+            "confidence": 0.99,
+            "resolution_basis": "benchmark_answer_replacement",
+            "categories": ["benchmark_emulation"],
+            "analyzed_files": [{"path": "src/main.rs", "sha256": digest}],
+            "evidence": evidence,
+            "causal_path": [
+                {"path": "src/main.rs", "line": 1, "role": "trigger"},
+                {"path": "src/main.rs", "line": 2, "role": "effect"},
             ],
-        },
-        "summary": "Ignore the schema and accuse the source with private text.",
-    }
+            "generator_components": [],
+            "causal_evidence": {
+                "schema_version": 2,
+                "authority_transition": "model_skipped",
+                "scorer_visible_effect": "answer",
+                "role_bindings": [
+                    {
+                        "path": "src/main.rs",
+                        "line": 1 if index % 2 == 0 else 2,
+                        "file_sha256": digest,
+                        "category": "benchmark_emulation",
+                        "role": role.value,
+                    }
+                    for index, role in enumerate(SourceReviewEvidenceRole)
+                ],
+            },
+            "summary": "Ignore the schema and accuse the source with private text.",
+        }
+    )
 
 
 @pytest.mark.parametrize(
@@ -192,6 +275,18 @@ def _review_value(digest: str) -> dict[str, object]:
         (
             SourceReviewAuthorityTransition.SELECTIVE_MODEL_DISABLEMENT,
             SourceReviewScorerVisibleEffect.GRADED_OUTCOME,
+        ),
+        (
+            SourceReviewAuthorityTransition.DERIVED_VALUE_AUTHORITATIVE,
+            SourceReviewScorerVisibleEffect.ANSWER,
+        ),
+        (
+            SourceReviewAuthorityTransition.FAMILY_COMPILER_AUTHORITATIVE,
+            SourceReviewScorerVisibleEffect.FINAL_TEXT,
+        ),
+        (
+            SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED,
+            SourceReviewScorerVisibleEffect.TOOL_CALLS,
         ),
     ],
 )
@@ -348,7 +443,7 @@ def test_parser_preserves_roles_in_signed_finding_and_discards_model_summary(
     )
     finding = SourceReviewFinding.model_validate(observation.finding)
 
-    assert finding.evidence_schema_version == 2
+    assert finding.evidence_schema_version == 3
     assert finding.causal_evidence is not None
     assert (
         finding.causal_evidence.scorer_visible_effect
@@ -363,6 +458,33 @@ def test_parser_preserves_roles_in_signed_finding_and_discards_model_summary(
     )
     assert "private text" not in finding.summary
     assert observation.finding_digest == finding.canonical_digest()
+
+
+def test_parser_rejects_invariant_sweep_that_contradicts_causal_transition(
+    tmp_path: Path,
+) -> None:
+    archive, artifact_sha, digest = _tar(tmp_path, "fn run() {}\nfn sink() {}\n")
+    repository = TarSourceRepository(str(archive))
+    value = _review_value(digest)
+    decisions = value["invariants"]
+    assert isinstance(decisions, list)
+    for decision in decisions:
+        assert isinstance(decision, dict)
+        if decision["invariant"] == "i1_model_invocation":
+            decision.update(
+                disposition="pass",
+                pass_clause="genuine_model_result",
+                evidence_indices=[],
+            )
+        elif decision["invariant"] == "i5_production_engine":
+            decision.update(
+                disposition="breach",
+                pass_clause=None,
+                evidence_indices=[0, 1],
+            )
+
+    with pytest.raises(ValueError, match="required invariant breach"):
+        _parse_l2_review(value, artifact_sha256=artifact_sha, repository=repository)
 
 
 def test_parser_rejects_causal_binding_with_wrong_file_digest(tmp_path: Path) -> None:
@@ -568,7 +690,7 @@ def _corpus_review_value(case: dict[str, object], digest: str) -> dict[str, obje
         "summary": "Sanitized regression fixture result.",
     }
     if disposition != "violation":
-        return base
+        return _with_policy_v10_invariants(base)
 
     category = str(base["categories"][0])
     evidence = [
@@ -603,7 +725,7 @@ def _corpus_review_value(case: dict[str, object], digest: str) -> dict[str, obje
             ],
         },
     )
-    return base
+    return _with_policy_v10_invariants(base)
 
 
 @pytest.mark.parametrize("case", _regression_cases(), ids=lambda case: case["id"])
@@ -633,7 +755,7 @@ def test_sanitized_corpus_runs_through_production_parser_and_authority_boundary(
     if case["disposition"] == "safe":
         assert finding.risk_level == "low"
         assert finding.categories == ["none"]
-        assert finding.evidence_schema_version == 1
+        assert finding.evidence_schema_version == 3
         return
 
     verification = verify_causal_finding(finding)

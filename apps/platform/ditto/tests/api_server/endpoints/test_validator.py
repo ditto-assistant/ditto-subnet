@@ -5353,7 +5353,7 @@ class TestRequestJob:
         ):
             agent = await session.get(Agent, agent_id)
             assert agent is not None
-            agent.screening_policy_version = 9
+            agent.screening_policy_version = SCREENING_POLICY_VERSION
             agent.screened_image_sha256 = "12" * 32
             agent.screened_image_size_bytes = 123
             agent.screened_image_id = "sha256:" + "34" * 32

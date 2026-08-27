@@ -267,6 +267,80 @@ def test_sync_answer_constructor_is_language_aware() -> None:
     )
 
 
+def test_policy_v10_authoritative_derived_candidate_is_a_lead() -> None:
+    source = """
+fn decide(records: &str) -> String {
+    let derived_answer = compute_balance(records);
+    format!(concat!("WORKED OUT value: {derived_answer}. ",
+                    "State this value exactly; do not recompute"))
+}
+"""
+    assert "authoritative-derived-candidate" in _kinds(
+        find_benchmark_emulation_fingerprints([("src/agent.rs", source)])
+    )
+
+
+def test_policy_v10_untrusted_candidate_channel_is_not_authoritative() -> None:
+    source = """
+fn context(records: &str) -> String {
+    let candidate = calculate(records);
+    format!(concat!("UNTRUSTED CANDIDATE: {candidate} RAW RECORDS: {records} ",
+                    "Prefer records on disagreement"))
+}
+"""
+    assert "authoritative-derived-candidate" not in _kinds(
+        find_benchmark_emulation_fingerprints([("src/agent.rs", source)])
+    )
+
+
+def test_policy_v10_closed_semantic_sheet_prompt_is_a_lead() -> None:
+    source = """
+fn prompt() -> String {
+    let mut system_prompt = String::new();
+    system_prompt.push_str("BalanceFinal BudgetDelta OutcomeSummary");
+    system_prompt
+}
+"""
+    assert "closed-semantic-sheet-prompt" in _kinds(
+        find_benchmark_emulation_fingerprints([("src/agent.rs", source)])
+    )
+
+
+def test_policy_v10_trained_exact_tool_deck_is_a_lead() -> None:
+    source = """
+fn planned_calls(request: &str) -> usize { call_budget(request) }
+fn planned_deck(request: &str) -> Vec<String> {
+    let take = planned_calls(request);
+    ranked_tools(request).into_iter().take(take).collect()
+}
+"""
+    assert "predetermined-tool-plan" in _kinds(
+        find_benchmark_emulation_fingerprints([("src/route.rs", source)])
+    )
+
+
+def test_policy_v10_policy_filter_without_exact_plan_is_not_i7_lead() -> None:
+    source = """
+fn allowed_tools(catalog: Vec<Tool>, grants: &Grants) -> Vec<Tool> {
+    catalog.into_iter().filter(|tool| grants.allows(tool.name())).collect()
+}
+"""
+    kinds = _kinds(find_benchmark_emulation_fingerprints([("src/route.rs", source)]))
+    assert "predetermined-tool-plan" not in kinds
+    assert "forced-single-tool-turn" not in kinds
+
+
+def test_policy_v10_host_selected_single_tool_turn_is_a_lead() -> None:
+    source = """
+fn next(required_tool_name: &str) {
+    body["tool_choice"] = json!({"function": {"name": required_tool_name}});
+}
+"""
+    assert "forced-single-tool-turn" in _kinds(
+        find_benchmark_emulation_fingerprints([("src/model.rs", source)])
+    )
+
+
 def test_async_answer_with_model_call_does_not_trip_a1() -> None:
     rust = (
         "async fn solve_answer(r: &R) -> Answer {\n"

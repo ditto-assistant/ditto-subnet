@@ -533,7 +533,7 @@ release = [{ name = "python-semantic-release", specifier = "==10.6.1" }]
 
 [[package]]
 name = "ditto-screening-protocol"
-version = "0.17.0"
+version = "0.18.0"
 source = { directory = "packages/ditto-screening-protocol" }
 dependencies = [
     { name = "pydantic" },

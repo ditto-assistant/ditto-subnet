@@ -608,6 +608,57 @@ export function QuarantineEvidencePanel({
               </span>
             ))}
           </div>
+          {finding.invariant_assessment ? (
+            <section aria-label="Policy v10 invariant assessment" className="mt-4 rounded-lg border border-[var(--line)] bg-black/10 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="inline-flex items-center gap-1.5 text-[11px] font-medium text-white">
+                  <ShieldCheck className="h-3.5 w-3.5 text-[var(--acid)]" />
+                  Policy v10 invariant sweep
+                </p>
+                <span className="rounded-full bg-white/[0.06] px-2 py-0.5 font-mono text-[10px] text-[var(--muted)]">
+                  schema v{finding.invariant_assessment.schema_version}
+                </span>
+              </div>
+              <ul className="mt-3 grid gap-2 lg:grid-cols-2">
+                {finding.invariant_assessment.decisions.map((decision) => (
+                  <li
+                    key={decision.invariant}
+                    className="min-w-0 rounded-lg border border-[var(--line)] px-3 py-2"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-[11px] font-medium capitalize text-[var(--muted-strong)]">
+                        {humanize(decision.invariant)}
+                      </span>
+                      <span
+                        className={`rounded-full px-2 py-0.5 text-[10px] capitalize ${
+                          decision.disposition === 'breach'
+                            ? 'bg-[var(--red-dim)] text-[var(--red)]'
+                            : decision.disposition === 'inconclusive'
+                              ? 'bg-[var(--amber-dim)] text-[var(--amber)]'
+                              : 'bg-[var(--acid-dim)] text-[var(--acid)]'
+                        }`}
+                      >
+                        {humanize(decision.disposition)}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-[10px] leading-4 text-[var(--muted)]">
+                      {decision.summary}
+                    </p>
+                    {decision.pass_clause ? (
+                      <p className="mt-1 font-mono text-[10px] text-[var(--muted-strong)]">
+                        pass: {decision.pass_clause}
+                      </p>
+                    ) : null}
+                    {decision.evidence_indices.length ? (
+                      <p className="mt-1 text-[10px] text-[var(--muted)]">
+                        {decision.evidence_indices.length} bound source location{decision.evidence_indices.length === 1 ? '' : 's'}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
           {finding.causal_evidence ? (
             <section aria-label="Causal authority evidence" className="mt-4 rounded-lg border border-[var(--line)] bg-black/10 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
