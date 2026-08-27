@@ -2952,6 +2952,7 @@ async def queue(
                             )
                         )
                         & (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+                        & prerequisite_admitted
                     ),
                     (
                         Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))

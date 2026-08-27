@@ -39,7 +39,11 @@ planning remain independent of the historical two limbs. Deploy the shared
 protocol and Platform requirement, reissue the protected policy manifest with
 version 10, then deploy policy-10 workers. Existing policy-9
 scores and findings are historical evidence, not silently migrated verdicts;
-only new or explicitly rescreened attempts attest policy 10.
+only new or explicitly rescreened attempts attest policy 10. A policy bump
+re-queues only submissions admitted to the active benchmark era; a historical
+submission the validator allocator no longer leases is never rescreened for a
+bump alone and projects as `not_queued`, keeping the `waiting_screening`
+backlog the capacity controller scales on honest.
 
 ## Provider-routed screening jobs
 

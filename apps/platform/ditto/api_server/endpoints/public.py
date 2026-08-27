@@ -4630,6 +4630,9 @@ def _public_activity_status(
             AgentStatus.REJECTED,
         )
         and screening_policy_version < SCREENING_POLICY_VERSION
+        # Mirrors the claim path: a policy bump only re-queues agents admitted
+        # to the active benchmark era, so non-admitted ones stay ``not_queued``.
+        and benchmark_admitted
     )
     if has_active_attempt or status == AgentStatus.SCREENING:
         return AgentStatus.SCREENING.value

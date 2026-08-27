@@ -750,9 +750,13 @@ async def claim_screening_attempts(
     eligible = or_(
         Agent.status == AgentStatus.UPLOADED,
         Agent.status == AgentStatus.SCREENING_FAILED,
+        # A policy bump only returns agents admitted to the active benchmark
+        # era. Historical submissions the validator allocator already skips
+        # must not consume screener capacity on a rescreen they can never use.
         (
             (Agent.status == AgentStatus.EVALUATING)
             & (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+            & prerequisite_admitted
         ),
         (
             Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
