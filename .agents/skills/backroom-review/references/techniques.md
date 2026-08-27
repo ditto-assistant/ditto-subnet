@@ -23,6 +23,10 @@ prepared_state_worksheet|_reply_needs_review|_needs_correction|_fallback
 requested_answer_components|decisive_worksheet_excerpt|Reply exactly
 FINAL ANSWER TARGET|calculated_money_answer|prepare_linked_balance
 LINKED_RUNNING_QUANTITY|LINKED_SCOPED|_NET_CHANGE_QUERY_RE
+WORKED OUT FROM THIS USER|these lines win|say it exactly
+asks_to_reconcile|the one right call|next_required
+required_tool_names|predict_relevant_tools|host_tools
+_keep_better|ValueKind|_VALUE_KINDS|EXPRESSION_REQUEST
 ```
 
 Zero hits on banned identifiers is not a pass. Restacks rename the
@@ -60,6 +64,10 @@ authorized.
 | Renamed host overwrite | `calculated_money_answer` writing `result.result.text` (unione v16) | Class D, limb (b) |
 | Renamed remainder coach | `LINKED_RUNNING_QUANTITY_DRAFT_PROMPT` ships as the slot (lets_v602) | production-engine |
 | Scored-family decline gate | `Reply exactly: "I don't have that information"` + do-not-attempt on an answerable family | Class A, production-engine |
+| Copy-authority grounding | `WORKED OUT FROM THIS USER'S OWN RECORDS` + “these lines win” / “say it exactly” (alexandros-v12-19) | I4 |
+| Value-kind / operand sheet | closed `_VALUE_KINDS` registry + `EXPRESSION_REQUEST` sign/unit recipes; model still writes the string (rick01) | I5 |
+| One-pinned next tool | `next_required` / `required_tool_names` / trained `host_tools` catalog swap (recall-v1) | I7 |
+| Content-based review suppress | `_keep_better` on parseable refusals, or discard later review and serve the earlier draft | I3 |
 
 Agent-returned tool traces are not proof the tool ran. Follow the code that
 builds `RunResponse`.
@@ -76,3 +84,10 @@ builds `RunResponse`.
 - Never-reviewed emission recipient or scored ≥0.70 successor of a banned
   row: inspect this SHA even if an ancestor was cleared this hour.
 - A prior keep of this UUID is not a skip if the cited path is still served.
+- `screening_policy_version=10` plus `deferred-mechanical-admission` is not a
+  v10 source review. Inspect the served path anyway.
+- Zero hits on `WORKED OUT` / remainder-sheet names is not an I5 pass. Look
+  for value-kind registries and operand/sign/unit instruction sheets.
+- `cfg(measure)` off / Program solver excluded is a credit. Trace I4/I5/I7 on
+  the default binary.
+- Do not park as mixed because I4 or I7 passed. Score each invariant.

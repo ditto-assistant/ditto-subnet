@@ -139,13 +139,16 @@ so.
    Re-apply the same bar to every new high-score row. Fairness is identical
    criteria, not identical outcome.
 3. Apply the exact submission's policy version. Fail either historical limb or
-   the production-engine test and the row is emulation. For policy v10, also
-   apply independent I4 derived-value authority, I5 production generality, and
-   I7 model tool planning; a real model call or two-limb pass does not clear
-   them. Schema validation and the published invariant pass clauses remain
+   the production-engine test and the row is emulation. For policy v10, score
+   I1–I7 independently (I3 dissent, I4 derived-value authority, I5 production
+   engine, I7 tool planning). A real model call, two-limb pass, I4/I7 pass,
+   `cfg(measure)` off, or `screening_policy_version=10` stamp does not clear
+   another invariant. `deferred-mechanical-admission` is not a Luna/L2 review.
+   Schema validation and the published invariant pass clauses remain
    legitimate.
 4. Leave unchanged when source is missing, evidence is mixed, or the agent
-   is not yet scored. Do not turn uncertainty into a reject.
+   is not yet scored. Do not turn uncertainty into a reject. Do not call a
+   row mixed because I4 or I7 passed while I3 or I5 still fails.
 5. Re-fetch `get_screening_submission` immediately before writing.
 6. `open_ath_review` with the exact SHA-256 and score count, then
    `resolve_ath_review` `clear` or `reject`.

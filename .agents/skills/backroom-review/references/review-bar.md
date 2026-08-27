@@ -4,9 +4,9 @@ Apply this bar to every scored or live high-rank agent. A high score is a
 reason to inspect, not evidence of cheating.
 
 Use the screening policy recorded on the exact submission. Policy v9 and
-earlier retain the historical holdings below. Policy v10 adds the independent
-I4/I5/I7 court; do not silently reinterpret historical clears without an
-explicit v10 rescreen.
+earlier retain the historical holdings below. Policy v10 scores I1–I7
+independently; I3/I4/I5/I7 are each fatal. Do not silently reinterpret
+historical clears without an explicit v10 rescreen.
 
 ## Two-limb refusal test
 
@@ -45,23 +45,46 @@ search lead, not a keep.
 
 ## Policy-v10 independent invariants
 
+Score I1–I7 independently. One pass does not park another breach. Do not
+average a mixed-looking I4/I7 into a keep when I3 or I5 still fails.
+
+`screening_policy_version=10` is a wire stamp. `deferred-mechanical-admission`
+with L2 off / deferred_source_review bypass means Luna/L2 never reviewed the
+source. ATH still inspects this SHA.
+
+Excluding an optional `measure` / `Program` solver (`cfg(measure)` off,
+`--no-default-features`) is a credit, not a keep. Trace the default shipped
+path for I4/I5/I7.
+
+- **I3 — model dissent.** Syntax, schema, empty-output, and protocol-shape
+  validation pass. Content-based retry, suppress, or overwrite of a parseable
+  model answer fails: `_keep_better` on refusals, discard a later review and
+  serve the earlier draft, reject-until-match on value. Pass clauses:
+  `shape_only_validation`, `model_dissent_preserved`.
 - **I4 — derived-value authority.** Passing both limbs is not a defense when an
-  engine-derived value is labelled worked out, verified, exact, or
-  do-not-recompute. The pass is an explicitly untrusted candidate beside
-  complete records, with disagreement accepted and no correctness gate.
+  engine-derived value is labelled worked out, verified, exact,
+  do-not-recompute, or “these lines win.” “Say it exactly as it is written”
+  is copy authority even when `final_text` is the model’s prose. The pass is
+  an explicitly untrusted candidate beside complete records, with disagreement
+  accepted and no correctness gate.
 - **I5 — production engine.** Closed answer-family or operand-recipe routers,
-  semantic sheets, phrase tables, generator-fitted typo ladders, and
-  family-specific instruction compilers fail independently of the two limbs.
-  Product-surface routing and runtime-described generic engines pass.
+  value-kind registries (address/amount/saying/duration), semantic sheets,
+  phrase tables, generator-fitted typo ladders, and family-specific instruction
+  compilers fail independently of the two limbs and independently of I4/I7.
+  The model writing the final string does not pass I5. Product-surface routing
+  and runtime-described generic engines pass. Zero hits on `WORKED OUT` or
+  remainder-sheet names is a search lead, not an I5 keep.
 - **I7 — model tool planning.** Policy/safety/authorization filtering and a
   natural singleton capability class pass. Request-keyed rules or trained
   heads that preselect the exact tool count/set/order inside a multi-tool class,
   replace the request catalog with that plan, or expose only the host-selected
-  next tool fail.
+  next tool (`next_required`, `required_tool_names`, `the one right call`)
+  fail. An I7 pass on product-surface routing does not park an I5 family
+  compiler.
 
 For each invariant, record the matching published pass clause and why it does
 or does not causally displace the breach. A model call alone never displaces
-I4, I5, or I7.
+I3, I4, I5, or I7.
 
 ## Class labels (search aids, not independent tests)
 
