@@ -36,11 +36,22 @@ honest answer is "only because we know the v10/v11 families," reject.
 
 - **Class A — model bypass.** Pre-model `RunResponse`, `prompt_tokens: 0`,
   glossary/verified-result early returns, WJFAST zero-token paths. The
-  model never authors the graded slot.
+  model never authors the graded slot. A **scored-family decline gate** is
+  the same class: a harness classifier predeclares an answerable family
+  unanswerable and scripts the exact decline ("Reply exactly: 'I don't
+  have that information'", do-not-attempt) — the harness, not the model,
+  decides the graded outcome. Model-decided abstention after seeing the
+  records, and unscripted unknowable-case honesty, remain legitimate.
 - **Class D — post-model coercion.** `settled_without_operation` /
   `author_reconciled_value` / `EXACT_VALUE_PROMPT`, reject-until-match
   (`for attempt in 1..=N`), compact replace (`system_prompt = compact.clone()`)
-  that strips the records the model would need.
+  that strips the records the model would need. A **worksheet fallback
+  overwrite** is reject-until-match however small the bound: reviews
+  triggered by a reply-vs-worksheet value comparison, then an engine
+  serialization written into the served text field once the model has
+  dissented through the budget (aceron-b12-v5). A model-authored program
+  does not launder it, and comments claiming no substitution are
+  inadmissible — trace the writers of the served text field.
 
 A Class A or D hit is a two-limb failure. Do not invent a new class to
 avoid citing the limbs.

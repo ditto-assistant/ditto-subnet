@@ -820,3 +820,104 @@ def test_rev8_findings_never_leak_matched_source_text() -> None:
         assert finding["category"] == "benchmark_emulation"
         for location in finding["locations"]:
             assert set(location) == {"path", "line", "role"}
+
+
+# --------------------------------------------------------------------------- #
+# Rev9 (2026-08-27) worksheet-fallback / decline-gate fingerprints             #
+# (aceron_b12-v5 board reject; open-program avoidance reports).               #
+# --------------------------------------------------------------------------- #
+
+_RUST_WORKSHEET_FALLBACK_OVERWRITE = """\
+fn finish(result: &mut RunResult, worksheet: &str) {
+    let fallback = Some(worksheet)
+        .filter(|w| program_reply_needs_review(w, &result.text))
+        .and_then(grounded_program_fallback);
+    if let Some(text) = fallback {
+        result.text = text;
+    }
+}
+"""
+
+_RUST_PROVIDER_FAILOVER_IS_HONEST = """\
+fn finish(result: &mut RunResult, draft: &str) {
+    if answer_reply_needs_review(draft, &result.text) {
+        let text = provider_fallback(draft);
+        result.text = text;
+    }
+}
+"""
+
+_RUST_SCRIPTED_DECLINE_GATE = """\
+fn absent_note(notes: &mut String) {
+    notes.push_str(
+        "The stored record has no answer for this attribute. Reply exactly: \\
+\\"I don't have that information.\\" Do not call any tool and do not guess.",
+    );
+}
+"""
+
+_RUST_HONEST_UNKNOWABLE_NOTE = """\
+fn unknowable_note(notes: &mut String) {
+    notes.push_str(
+        "This asks about something no record can know. Say briefly and \\
+honestly, in your own words, that it can't be known.",
+    );
+}
+"""
+
+
+def test_worksheet_fallback_overwrite_trips_on_aceron_b12_v5_shape() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/baseline.rs", _RUST_WORKSHEET_FALLBACK_OVERWRITE)]
+        )
+    )
+    assert "worksheet-fallback-overwrite" in kinds
+
+
+def test_provider_failover_fallback_is_not_the_overwrite_tell() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/baseline.rs", _RUST_PROVIDER_FAILOVER_IS_HONEST)]
+        )
+    )
+    assert "worksheet-fallback-overwrite" not in kinds
+
+
+def test_scored_family_decline_gate_trips_on_scripted_decline() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/baseline.rs", _RUST_SCRIPTED_DECLINE_GATE)]
+        )
+    )
+    assert "scored-family-decline-gate" in kinds
+
+
+def test_honest_unknowable_note_is_not_the_decline_gate() -> None:
+    kinds = _kinds(
+        find_benchmark_emulation_fingerprints(
+            [("src/baseline.rs", _RUST_HONEST_UNKNOWABLE_NOTE)]
+        )
+    )
+    assert "scored-family-decline-gate" not in kinds
+
+
+def test_rev9_findings_never_leak_matched_source_text() -> None:
+    findings = find_benchmark_emulation_fingerprints(
+        [
+            ("src/baseline.rs", _RUST_WORKSHEET_FALLBACK_OVERWRITE),
+            ("src/notes.rs", _RUST_SCRIPTED_DECLINE_GATE),
+        ]
+    )
+    encoded = json.dumps(findings)
+    for secret in (
+        "program_reply_needs_review",
+        "grounded_program_fallback",
+        "Reply exactly",
+        "don't have that information",
+    ):
+        assert secret not in encoded
+    for finding in findings:
+        assert finding["category"] == "benchmark_emulation"
+        for location in finding["locations"]:
+            assert set(location) == {"path", "line", "role"}

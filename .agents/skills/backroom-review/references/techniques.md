@@ -19,7 +19,13 @@ established_for_prompt|settled_without_operation|author_reconciled_value
 EXACT_VALUE_PROMPT|system_prompt = compact|try_solve|fn family_of
 v10_open_program|phrase|Role::PHRASES|for attempt in
 REPLY WITH EXACTLY|WJFAST|reject.until
+prepared_state_worksheet|_reply_needs_review|_needs_correction|_fallback
+requested_answer_components|decisive_worksheet_excerpt|Reply exactly
 ```
+
+Zero hits on the first block is not a pass: aceron_b12-v5 rebuilt the
+family compilers and the overwrite under the fourth-line names. Grep the
+new names, then trace every writer of the served text field.
 
 Then `read_screening_source_file` only at the hit. For same-owner resubmits,
 `get_copy_review_source_diff` then `read_copy_review_source_diff_file` shows
@@ -46,6 +52,8 @@ authorized.
 | Author-reconciled value | `settled_without_operation` overwrites the model | Class D, both limbs |
 | Family compiler | closed `Program` / `try_solve` / phrase table | production-engine |
 | Character-match ladder | 5× Levenshtein / token corrections onto a bench phrase | production-engine |
+| Worksheet fallback overwrite | `*_reply_needs_review` value gate + `result.text =` fallback after the review budget (aceron-b12-v5) | Class D, limb (b) |
+| Scored-family decline gate | `Reply exactly: "I don't have that information"` + do-not-attempt on an answerable family | Class A, production-engine |
 
 Agent-returned tool traces are not proof the tool ran. Follow the code that
 builds `RunResponse`.

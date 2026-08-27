@@ -1364,6 +1364,85 @@ _EMULATION_FINGERPRINTS = (
         window=16,
         scan="code",
     ),
+    _Fingerprint(
+        # worksheet-fallback-overwrite (aceron_b12-v5, 2026-08-27): a
+        # reply-vs-worksheet mismatch gate that, after the model's review budget
+        # is exhausted, writes an engine-serialized worksheet value into the
+        # served text field. The mismatch comparator and the fallback writer
+        # co-occur at the application site; comments beside them typically deny
+        # the substitution, so the code path is the only admissible witness.
+        kind="worksheet-fallback-overwrite",
+        severity="high",
+        roles=(
+            _Role(
+                "reply-worksheet-mismatch-gate",
+                re.compile(
+                    r"\b[a-z0-9_]*(?:reply|draft|answer)_needs_"
+                    r"(?:review|correction|repair)\b"
+                    r"|\bneeds_review\s*\(",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "engine-text-fallback-writer",
+                re.compile(
+                    r"\b(?:result\.text|final_text|response_text)\s*=\s*"
+                    r"(?:text|fallback)\b"
+                    r"|\b[a-z0-9_]+_fallback\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=14,
+        suppressors=(
+            # Provider/transport failover is the honest look-alike: falling back
+            # to another model or endpoint still leaves the model authoring the
+            # served text.
+            _Role(
+                "provider-transport-fallback",
+                re.compile(
+                    r"\b(?:model|provider|inference|endpoint|gateway|llm|"
+                    r"transport)[a-z0-9_]*_fallback\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        scan="code",
+    ),
+    _Fingerprint(
+        # scored-family-decline-gate: a harness classifier predeclares a scored
+        # question family unanswerable and scripts the exact decline the model
+        # must emit ("Reply exactly: 'I don't have that information'"), with a
+        # do-not-attempt directive. The model never attempts the family from
+        # the user's records. Genuine unknowable-case honesty ("say briefly it
+        # can't be known", no scripted verbatim text) does not carry the
+        # scripted-decline role and stays clear.
+        kind="scored-family-decline-gate",
+        severity="medium",
+        roles=(
+            _Role(
+                "scripted-decline-literal",
+                re.compile(
+                    r"\b(?:reply|respond|say|answer)\s+exactly\b"
+                    r"|don'?t have that information"
+                    r"|no information about (?:it|that)",
+                    re.IGNORECASE,
+                ),
+            ),
+            _Role(
+                "no-attempt-directive",
+                re.compile(
+                    r"\bdo not (?:call|attempt|guess|search|answer)\b"
+                    r"|\bwithout (?:calling|searching|attempting)\b"
+                    r"|\babsent_personal_fact\b"
+                    r"|\bunanswerable\b",
+                    re.IGNORECASE,
+                ),
+            ),
+        ),
+        window=8,
+        scan="raw",
+    ),
 )
 
 
