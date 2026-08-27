@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from ditto_screener.config import ScreenerConfig
 
@@ -103,6 +103,34 @@ class ReviewSettings(BaseModel):
     critic_reasoning_effort: Literal["low", "medium"]
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)]
     audit_retention_days: Annotated[int, Field(ge=1, le=365)]
+    policy_manifest_profile: Literal["core", "l1", "l1_l2"] = "l1"
+    policy_manifest_rotation_id: Annotated[
+        str, Field(pattern=r"^[a-zA-Z0-9._-]{1,80}$")
+    ] = "v8-luna-source-review-behavioral-oracle"
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_manifest_profile_for_legacy_revision(cls, value: object) -> object:
+        if isinstance(value, dict) and "policy_manifest_profile" not in value:
+            value = dict(value)
+            value["policy_manifest_profile"] = (
+                "l1_l2" if value.get("mode") == "enforce" else "l1"
+            )
+        if isinstance(value, dict) and "policy_manifest_rotation_id" not in value:
+            value = dict(value)
+            value["policy_manifest_rotation_id"] = (
+                "v8-luna-sol-l2-source-review-behavioral-oracle"
+                if value.get("mode") == "enforce"
+                else "v8-luna-source-review-behavioral-oracle"
+            )
+        return value
+
+    @field_validator("l2_fallback_models", mode="before")
+    @classmethod
+    def accept_json_model_chain(cls, value: object) -> object:
+        if isinstance(value, list):
+            return tuple(value)
+        return value
 
     @model_validator(mode="after")
     def validate_chain(self) -> ReviewSettings:
@@ -144,20 +172,36 @@ class EffectiveReviewSettings(BaseModel):
         payload = json.dumps(current, sort_keys=True, separators=(",", ":")).encode()
         if hashlib.sha256(payload).hexdigest() == self.checksum:
             return self
+
         # A revision minted before a control existed cannot carry that key in
         # the canonical JSON its immutable checksum was taken over, so replay
         # the payload as it stood when each field was introduced, newest first.
         # A field is only droppable while it still holds its default.
+        def matches_legacy(legacy: dict[str, object]) -> bool:
+            for name in reversed(_POST_CHECKSUM_FIELDS):
+                if getattr(self.settings, name) != _DEFAULTS[name]:
+                    break
+                legacy.pop(name, None)
+                candidate = json.dumps(
+                    legacy, sort_keys=True, separators=(",", ":")
+                ).encode()
+                if hashlib.sha256(candidate).hexdigest() == self.checksum:
+                    return True
+            return False
+
+        if matches_legacy(dict(current)):
+            return self
+        # Manifest selectors postdate every legacy revision. Their inferred
+        # values intentionally depend on mode, so they cannot use the static
+        # default-only replay below.
         legacy = dict(current)
-        for name in reversed(_POST_CHECKSUM_FIELDS):
-            if getattr(self.settings, name) != _DEFAULTS[name]:
-                break
-            legacy.pop(name, None)
-            candidate = json.dumps(
-                legacy, sort_keys=True, separators=(",", ":")
-            ).encode()
-            if hashlib.sha256(candidate).hexdigest() == self.checksum:
-                return self
+        legacy.pop("policy_manifest_profile", None)
+        legacy.pop("policy_manifest_rotation_id", None)
+        candidate = json.dumps(legacy, sort_keys=True, separators=(",", ":")).encode()
+        if hashlib.sha256(candidate).hexdigest() == self.checksum:
+            return self
+        if matches_legacy(legacy):
+            return self
         raise ValueError("review settings checksum mismatch")
 
     def apply_to(self, config: ScreenerConfig) -> ScreenerConfig:
@@ -248,6 +292,10 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "critic_reasoning_effort": config.l2_critic_reasoning_effort,
             "cache_ttl_seconds": int(config.l2_cache_ttl_seconds),
             "audit_retention_days": config.l2_audit_retention_days,
+            "policy_manifest_profile": (
+                "l1_l2" if config.l2_review_mode == "enforce" else "l1"
+            ),
+            "policy_manifest_rotation_id": "policy-v10-bootstrap",
         }
     )
     payload = json.dumps(

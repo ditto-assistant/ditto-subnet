@@ -34,6 +34,8 @@ const defaults: ScreenerReviewSettings = {
   critic_reasoning_effort: 'medium',
   cache_ttl_seconds: 604_800,
   audit_retention_days: 30,
+  policy_manifest_profile: 'l1',
+  policy_manifest_rotation_id: 'v8-luna-source-review-behavioral-oracle',
 }
 
 function withDefaults(settings?: Partial<ScreenerReviewSettings>): ScreenerReviewSettings {

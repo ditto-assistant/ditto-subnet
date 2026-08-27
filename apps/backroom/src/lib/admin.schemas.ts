@@ -245,6 +245,7 @@ export const screenerReviewModelSchema = z.enum([
   'openai/gpt-5.6-sol',
 ])
 export const sourceReviewModelSchema = z.enum(['openai/gpt-5.6-luna'])
+export const policyManifestProfileSchema = z.enum(['core', 'l1', 'l1_l2'])
 export const screenerReviewSettingsSchema = z
   .object({
     mode: screenerReviewModeSchema,
@@ -266,6 +267,8 @@ export const screenerReviewSettingsSchema = z
     critic_reasoning_effort: z.enum(['low', 'medium', 'high']),
     cache_ttl_seconds: z.number().int().min(60).max(2_592_000),
     audit_retention_days: z.number().int().min(1).max(365),
+    policy_manifest_profile: policyManifestProfileSchema.default('l1'),
+    policy_manifest_rotation_id: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/).default('v8-luna-source-review-behavioral-oracle'),
   })
   .superRefine((value, context) => {
     const chain = [value.l2_model, ...value.l2_fallback_models]
@@ -305,6 +308,22 @@ export const appliedScreenerReviewSettingsSchema = z.object({
   expected_revision: z.number().int().nonnegative(),
   expected_scope: z.string(),
   expected_checksum: z.string().regex(/^[0-9a-f]{64}$/),
+  policy_manifest_profile: policyManifestProfileSchema.default('l1'),
+  policy_manifest_rotation_id: z.string().default('v8-luna-source-review-behavioral-oracle'),
+  policy_manifest_digest: z.string().regex(/^[0-9a-f]{64}$/).default('0'.repeat(64)),
+  expected_policy_manifest_digest: z.string().regex(/^[0-9a-f]{64}$/).default('0'.repeat(64)),
+})
+
+export const screenerPolicyManifestSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  scope: z.string(),
+  policy_version: z.number().int().positive(),
+  profile: policyManifestProfileSchema,
+  rotation_id: z.string(),
+  digest: z.string().regex(/^[0-9a-f]{64}$/),
+  reason: z.string(),
+  actor: z.string(),
+  created_at: z.string(),
 })
 
 export const shadowReviewObservationSchema = z.object({
@@ -333,6 +352,7 @@ export const screenerReviewControlSchema = z.object({
   known_instances: z.array(z.string()),
   applied_instances: z.array(appliedScreenerReviewSettingsSchema),
   shadow_observations: z.array(shadowReviewObservationSchema),
+  policy_manifests: z.array(screenerPolicyManifestSchema).default([]),
 })
 
 export const applyScreenerReviewSettingsInputSchema = z.object({
@@ -341,6 +361,32 @@ export const applyScreenerReviewSettingsInputSchema = z.object({
   settings: screenerReviewSettingsSchema,
   reason: auditReasonSchema(8),
   confirmation: z.string(),
+})
+
+export const rotateScreenerPolicyManifestInputSchema = z.object({
+  scope: z.string().regex(/^(?:\*|[a-zA-Z0-9._-]{1,63})$/).default('*'),
+  expectedRevision: z.number().int().nonnegative(),
+  profile: policyManifestProfileSchema,
+  rotationId: z.string().regex(/^[a-zA-Z0-9._-]{1,80}$/),
+  reason: auditReasonSchema(8),
+  confirmation: z.string(),
+})
+
+export const screenerPolicyManifestControlSchema = z.object({
+  current: z.array(screenerPolicyManifestSchema),
+  history: z.array(screenerPolicyManifestSchema),
+  applied_instances: z.array(appliedScreenerReviewSettingsSchema.pick({
+    instance_id: true,
+    revision: true,
+    scope: true,
+    seen_at: true,
+    fresh: true,
+    matches_effective: true,
+    policy_manifest_profile: true,
+    policy_manifest_rotation_id: true,
+    policy_manifest_digest: true,
+    expected_policy_manifest_digest: true,
+  })),
 })
 
 export type ScreenerReviewControl = z.infer<typeof screenerReviewControlSchema>

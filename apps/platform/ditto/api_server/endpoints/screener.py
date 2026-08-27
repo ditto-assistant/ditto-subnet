@@ -2769,15 +2769,22 @@ def _heartbeat_signing_message(payload: ScreenerHeartbeatRequest) -> bytes:
     if payload.protocol_version >= 4:
         assert payload.review_settings is not None
         review = payload.review_settings
-        review_token = ",".join(
-            (
-                str(review.revision),
-                review.scope,
-                review.mode,
-                review.checksum,
-                review.source,
+        review_fields = [
+            str(review.revision),
+            review.scope,
+            review.mode,
+            review.checksum,
+            review.source,
+        ]
+        if payload.protocol_version >= 5:
+            review_fields.extend(
+                (
+                    review.policy_manifest_profile,
+                    review.policy_manifest_rotation_id,
+                    review.policy_manifest_digest,
+                )
             )
-        )
+        review_token = ",".join(review_fields)
         return (
             "ditto-screener-heartbeat:v4:"
             f"{payload.screener_hotkey}:{payload.software_version}:"
@@ -2881,7 +2888,18 @@ async def heartbeat(
                 else None
             ),
             review_settings=(
-                request_body.review_settings.model_dump(mode="json")
+                request_body.review_settings.model_dump(
+                    mode="json",
+                    exclude=(
+                        {
+                            "policy_manifest_profile",
+                            "policy_manifest_rotation_id",
+                            "policy_manifest_digest",
+                        }
+                        if request_body.protocol_version < 5
+                        else None
+                    ),
+                )
                 if request_body.review_settings is not None
                 else None
             ),

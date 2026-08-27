@@ -93,6 +93,29 @@ class ScreenerReviewSettingsStatus(BaseModel):
     mode: Literal["off", "shadow", "enforce"]
     checksum: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     source: Literal["platform", "cache", "bootstrap"]
+    policy_manifest_profile: Literal["core", "l1", "l1_l2"] = "l1"
+    policy_manifest_rotation_id: Annotated[
+        str, Field(pattern=r"^[a-zA-Z0-9._-]{1,80}$")
+    ] = "v8-luna-source-review-behavioral-oracle"
+    policy_manifest_digest: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] = "0" * 64
+
+    @model_validator(mode="before")
+    @classmethod
+    def preserve_legacy_manifest_identity(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        legacy = dict(value)
+        if "policy_manifest_profile" not in legacy:
+            legacy["policy_manifest_profile"] = (
+                "l1_l2" if legacy.get("mode") == "enforce" else "l1"
+            )
+        if "policy_manifest_rotation_id" not in legacy:
+            legacy["policy_manifest_rotation_id"] = (
+                "v8-luna-sol-l2-source-review-behavioral-oracle"
+                if legacy.get("mode") == "enforce"
+                else "v8-luna-source-review-behavioral-oracle"
+            )
+        return legacy
 
 
 class ScreenerHeartbeatRequest(BaseModel):
@@ -140,6 +163,12 @@ class ScreenerHeartbeatRequest(BaseModel):
             raise ValueError("heartbeat protocol v4 requires review settings status")
         if self.protocol_version < 4 and self.review_settings is not None:
             raise ValueError("review settings status requires heartbeat protocol v4")
+        if (
+            self.protocol_version >= 5
+            and self.review_settings is not None
+            and self.review_settings.policy_manifest_digest == "0" * 64
+        ):
+            raise ValueError("heartbeat protocol v5 requires a policy manifest digest")
         return self
 
 

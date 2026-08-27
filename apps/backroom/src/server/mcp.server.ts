@@ -74,6 +74,7 @@ import {
   traceDownloadUrlInputSchema,
   peekInferenceTraceInputSchema,
   applyScreenerReviewSettingsInputSchema,
+  rotateScreenerPolicyManifestInputSchema,
   setQueuePolicySettingsInputSchema,
   setValidatorSlotSettingsInputSchema,
   updateSubmissionSettingsInputSchema,
@@ -159,6 +160,8 @@ import {
   fetchQueuePolicySettings,
   fetchScreenerReviewControl,
   applyScreenerReviewSettings,
+  fetchScreenerPolicyManifestControl,
+  rotateScreenerPolicyManifest,
   setInferenceConcurrencySettings,
   setQueuePolicySettings,
   fetchValidatorSlotSettings,
@@ -223,6 +226,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'set_continual_retest_settings',
   'set_queue_policy_settings',
   'apply_screener_review_settings',
+  'rotate_screener_policy_manifest',
   'set_validator_slot_settings',
   'set_inference_concurrency_settings',
   'start_runtime_profile',
@@ -1424,6 +1428,28 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => applyScreenerReviewSettings(props.session.email, input)),
+  )
+
+  registerTool(
+    'get_screener_policy_manifest',
+    {
+      title: 'Get screener policy manifest',
+      description: 'Read manifest identity and adoption. Requires backroom:read.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchScreenerPolicyManifestControl()),
+  )
+
+  registerTool(
+    'rotate_screener_policy_manifest',
+    {
+      title: 'Rotate screener policy manifest',
+      description:
+        'Rotate profile and ID. Confirmation: ROTATE SCREENER POLICY {scope} {rotationId}. Requires backroom:write.',
+      inputSchema: rotateScreenerPolicyManifestInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) => write(() => rotateScreenerPolicyManifest(props.session.email, input)),
   )
 
   registerTool(

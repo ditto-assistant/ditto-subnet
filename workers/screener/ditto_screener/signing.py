@@ -138,13 +138,17 @@ def heartbeat_signing_message(
             raise ValueError(
                 "heartbeat protocol v4 requires instance_id and review settings"
             )
+        review_settings_token = review_settings_signing_token(
+            review_settings, protocol_version=protocol_version
+        )
         return (
             "ditto-screener-heartbeat:v4:"
             f"{screener_hotkey}:{software_version}:{protocol_version}:{policy_version}:"
             f"{state}:{active_agent_id or ''}:{instance_id}:"
             f"{screener_progress_signing_token(progress)}:"
             f"{system_metrics_signing_token(system_metrics)}:"
-            f"{review_settings_signing_token(review_settings)}:{timestamp}"
+            f"{review_settings_token}:"
+            f"{timestamp}"
         ).encode()
     if protocol_version >= 3:
         # v3 adds the per-instance identity so the fleet's shared hotkey no

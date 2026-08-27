@@ -167,6 +167,18 @@ def test_pre_l1_model_checksum_remains_valid(make_config) -> None:
     assert compatible.settings.source_review_timeout_seconds == 1_800
 
 
+@pytest.mark.parametrize(("mode", "profile"), (("shadow", "l1"), ("enforce", "l1_l2")))
+def test_pre_manifest_checksum_infers_legacy_profile(
+    make_config, mode, profile
+) -> None:
+    config = make_config(l2_review_mode=mode, source_review_timeout_seconds=1_800)
+    payload = _legacy_payload(
+        config, ("policy_manifest_profile", "policy_manifest_rotation_id")
+    )
+    compatible = EffectiveReviewSettings.model_validate(payload)
+    assert compatible.settings.policy_manifest_profile == profile
+
+
 def test_explicit_budget_is_never_dropped_from_the_checksum(make_config) -> None:
     config = make_config(source_review_timeout_seconds=1_800)
     payload = _legacy_payload(
