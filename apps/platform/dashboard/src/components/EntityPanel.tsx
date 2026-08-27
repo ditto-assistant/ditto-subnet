@@ -1100,9 +1100,7 @@ function MinerSummary(props: { entry: RankedEntry; settled: boolean; total: numb
           {(rows) => (
             <div class="stat-group">
               <div class="stat-head">{compositeCalculationHeading(e())}</div>
-              {rows().map((row) => (
-                <Stat k={row.k} v={row.v} />
-              ))}
+              <For each={rows()}>{(row) => <Stat k={row.k} v={row.v} />}</For>
               {/* The rows are the answer; this paragraph is the derivation
                   behind them, and printing it in full over every miner is
                   most of what made the panel a wall. It stays one click
