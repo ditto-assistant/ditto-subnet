@@ -2450,9 +2450,7 @@ class OpenRouterSourceReviewAgent:
                     if toolless_turns >= _MAX_TOOLLESS_TURNS:
                         raise ValueError("source reviewer returned no tool call")
                     toolless_turns += 1
-                    messages.append(
-                        {"role": "user", "content": _TOOLLESS_NUDGE}
-                    )
+                    messages.append({"role": "user", "content": _TOOLLESS_NUDGE})
                     continue
                 for call in tool_calls:
                     call_id, name, arguments = _tool_call(call)
@@ -2521,8 +2519,7 @@ class OpenRouterSourceReviewAgent:
                 if attempt >= len(_RETRY_DELAYS_SECONDS):
                     break
                 logger.warning(
-                    "source review model response was malformed; "
-                    "retrying attempt=%d",
+                    "source review model response was malformed; retrying attempt=%d",
                     attempt + 2,
                 )
                 await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt])
