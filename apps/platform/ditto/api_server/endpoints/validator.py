@@ -261,6 +261,7 @@ from ditto.db.queries.inference import (
     ensure_inference_grant,
     get_lease_model_usage,
     revoke_ticket_inference,
+    ticket_inference_grant_spent_allowance,
     ticket_inference_revoked_mid_lease,
 )
 from ditto.db.queries.king_reign import (
@@ -5432,6 +5433,21 @@ async def fail_job(
                 validator_hotkey=payload.validator_hotkey,
                 ticket_deadline=payload.ticket_deadline,
             )
+            # The inverse of platform_revoked: the grant row proves the harness
+            # spent its own request or token wall, but the scorer reported
+            # retryable infrastructure because it could not independently arm
+            # budget evidence (Go /exchange omitted those fields). Re-leasing
+            # cannot repair that — Crown-v12-Final looped on
+            # budget_evidence_absent while every grant sat at 75M tokens.
+            grant_spent_allowance = False
+            if not platform_revoked:
+                grant_spent_allowance = await ticket_inference_grant_spent_allowance(
+                    session,
+                    agent_id=ticket.agent_id,
+                    bench_version=ticket.bench_version,
+                    validator_hotkey=payload.validator_hotkey,
+                    ticket_deadline=payload.ticket_deadline,
+                )
             # Read before the ticket is mutated below, so the total is the
             # fleet's spend on this agent *before* this failure is priced in.
             fleet_infra_grants = await agent_infra_retry_grants(
@@ -5443,8 +5459,24 @@ async def fail_job(
             # next request_job mints a fresh lease instead of resuming this one.
             ticket.status = TicketStatus.EXPIRED
             ticket.deadline = now
-            ticket.failure_reason = payload.reason
-            ticket.failure_detail = payload.failure_detail
+            if grant_spent_allowance and payload.reason == "infrastructure":
+                # Correct both billing and diagnosis. The stuck-list withdraws
+                # only on named agent codes; leaving budget_evidence_absent
+                # would keep recommending a retry grant of the same image.
+                ticket.failure_reason = "scoring_error"
+                ticket.failure_detail = "inference_allowance_exhausted"
+                logger.warning(
+                    "spent inference grant reported as infrastructure; "
+                    "billing the miner agent=%s validator=%s "
+                    "reported_reason=%s reported_detail=%s",
+                    payload.agent_id,
+                    payload.validator_hotkey,
+                    payload.reason,
+                    payload.failure_detail,
+                )
+            else:
+                ticket.failure_reason = payload.reason
+                ticket.failure_detail = payload.failure_detail
             # Written and cleared with failure_reason, exactly as failure_detail
             # is, so the three are always read as one report. A validator that
             # predates the field sends None and this stays NULL.
@@ -5453,7 +5485,7 @@ async def fail_job(
                 ticket.attempt_count if payload.container_log_tail is not None else None
             )
             ticket.failed_at = now
-            if payload.reason == "infrastructure" or platform_revoked:
+            if ticket.failure_reason == "infrastructure" or platform_revoked:
                 # Not the agent's fault: bump the (bounded) infra grant that
                 # offsets the coming attempt_count++, so an outage never spends
                 # the agent's genuine per-version budget. Then apply an

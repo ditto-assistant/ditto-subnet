@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -696,12 +697,17 @@ func TestExchangeFullFlowAndNonceReplay(t *testing.T) {
 		t.Fatalf("exchange must be no-store")
 	}
 	var resp struct {
-		GrantID    string `json:"grant_id"`
-		Bearer     string `json:"bearer"`
-		ProxyURL   string `json:"proxy_url"`
-		Generation int    `json:"generation"`
-		Provider   string `json:"provider"`
-		Model      string `json:"model"`
+		GrantID                string `json:"grant_id"`
+		Bearer                 string `json:"bearer"`
+		ProxyURL               string `json:"proxy_url"`
+		Generation             int    `json:"generation"`
+		Provider               string `json:"provider"`
+		Model                  string `json:"model"`
+		RequestBudget          int    `json:"request_budget"`
+		TokenBudget            int64  `json:"token_budget"`
+		EmbeddingRequestBudget int    `json:"embedding_request_budget"`
+		EmbeddingTokenBudget   int64  `json:"embedding_token_budget"`
+		MaxOutputTokens        int    `json:"max_output_tokens"`
 	}
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -714,6 +720,18 @@ func TestExchangeFullFlowAndNonceReplay(t *testing.T) {
 	}
 	if resp.Provider != "openrouter" || resp.Model != pgTestModel {
 		t.Fatalf("bench>=7 fields: %+v", resp)
+	}
+	if resp.RequestBudget < 1 || resp.TokenBudget < 1 ||
+		resp.EmbeddingRequestBudget < 1 || resp.EmbeddingTokenBudget < 1 ||
+		resp.MaxOutputTokens < 1 {
+		t.Fatalf("exchange omitted budget evidence: %+v", resp)
+	}
+	if w.Header().Get("X-Ditto-Request-Budget") != strconv.Itoa(resp.RequestBudget) ||
+		w.Header().Get("X-Ditto-Token-Budget") != strconv.FormatInt(resp.TokenBudget, 10) ||
+		w.Header().Get("X-Ditto-Embedding-Request-Budget") != strconv.Itoa(resp.EmbeddingRequestBudget) ||
+		w.Header().Get("X-Ditto-Embedding-Token-Budget") != strconv.FormatInt(resp.EmbeddingTokenBudget, 10) ||
+		w.Header().Get("X-Ditto-Max-Output-Tokens") != strconv.Itoa(resp.MaxOutputTokens) {
+		t.Fatalf("exchange budget headers: %v", w.Header())
 	}
 	var nonceRows int
 	if err := f.pool.QueryRow(t.Context(),

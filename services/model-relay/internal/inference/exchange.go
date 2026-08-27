@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -99,15 +100,25 @@ func pydanticDatetime(t time.Time) string {
 
 // exchangeResponse mirrors InferenceExchangeResponse field-for-field
 // (provider/profile_revision/model omitted entirely when nil).
+// Budget evidence is required on every successful exchange: JSON is
+// authoritative, and X-Ditto-* headers are a fallback overlay for validators
+// that predate the body fields. Omitting them disarms the scorer's 4102/4104
+// attribution and re-leases a harness that already spent its grant
+// (Crown-v12-Final).
 type exchangeResponse struct {
-	GrantID         string  `json:"grant_id"`
-	Bearer          string  `json:"bearer"`
-	ProxyURL        string  `json:"proxy_url"`
-	ExpiresAt       string  `json:"expires_at"`
-	Generation      int32   `json:"generation"`
-	Provider        *string `json:"provider,omitempty"`
-	ProfileRevision *string `json:"profile_revision,omitempty"`
-	Model           *string `json:"model,omitempty"`
+	GrantID                string  `json:"grant_id"`
+	Bearer                 string  `json:"bearer"`
+	ProxyURL               string  `json:"proxy_url"`
+	ExpiresAt              string  `json:"expires_at"`
+	Generation             int32   `json:"generation"`
+	Provider               *string `json:"provider,omitempty"`
+	ProfileRevision        *string `json:"profile_revision,omitempty"`
+	Model                  *string `json:"model,omitempty"`
+	RequestBudget          int32   `json:"request_budget"`
+	TokenBudget            int64   `json:"token_budget"`
+	EmbeddingRequestBudget int32   `json:"embedding_request_budget"`
+	EmbeddingTokenBudget   int64   `json:"embedding_token_budget"`
+	MaxOutputTokens        int     `json:"max_output_tokens"`
 }
 
 // devBypassPermit mirrors _dev_bypass_permit: only when the flag is truthy
@@ -231,11 +242,16 @@ func (d *Deps) handleExchange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := exchangeResponse{
-		GrantID:    uuid.UUID(activated.GrantID.Bytes).String(),
-		Bearer:     bearer,
-		ProxyURL:   d.Cfg.Inference.PublicBaseURL + "/api/v1/inference/chat/completions",
-		ExpiresAt:  pydanticDatetime(activated.ExpiresAt.Time),
-		Generation: activated.Generation,
+		GrantID:                uuid.UUID(activated.GrantID.Bytes).String(),
+		Bearer:                 bearer,
+		ProxyURL:               d.Cfg.Inference.PublicBaseURL + "/api/v1/inference/chat/completions",
+		ExpiresAt:              pydanticDatetime(activated.ExpiresAt.Time),
+		Generation:             activated.Generation,
+		RequestBudget:          activated.RequestBudget,
+		TokenBudget:            activated.TokenBudget,
+		EmbeddingRequestBudget: activated.EmbeddingRequestBudget,
+		EmbeddingTokenBudget:   activated.EmbeddingTokenBudget,
+		MaxOutputTokens:        d.Cfg.Inference.MaxOutputTokens,
 	}
 	if activated.BenchVersion >= 7 {
 		if activated.RouteProvider.Valid {
@@ -261,6 +277,13 @@ func (d *Deps) handleExchange(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	// JSON is the authoritative copy. Headers remain a fallback overlay for
+	// validators that predate the body fields; Cloudflare may drop them.
+	w.Header().Set("X-Ditto-Request-Budget", strconv.FormatInt(int64(resp.RequestBudget), 10))
+	w.Header().Set("X-Ditto-Token-Budget", strconv.FormatInt(resp.TokenBudget, 10))
+	w.Header().Set("X-Ditto-Embedding-Request-Budget", strconv.FormatInt(int64(resp.EmbeddingRequestBudget), 10))
+	w.Header().Set("X-Ditto-Embedding-Token-Budget", strconv.FormatInt(resp.EmbeddingTokenBudget, 10))
+	w.Header().Set("X-Ditto-Max-Output-Tokens", strconv.Itoa(resp.MaxOutputTokens))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(out)
 }

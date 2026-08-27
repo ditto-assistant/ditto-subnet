@@ -54,7 +54,7 @@ func TestParseConcurrencySettingsChatRequestCeiling(t *testing.T) {
 func TestParseConcurrencySettingsChatTokenCeiling(t *testing.T) {
 	payload := []byte(`{
 		"chat_request_budget": 8192,
-		"chat_token_budget": 100000000,
+		"chat_token_budget": 200000000,
 		"embedding_per_ticket_concurrency": 8,
 		"embedding_per_validator_concurrency": 24,
 		"embedding_global_concurrency": 32
@@ -63,13 +63,13 @@ func TestParseConcurrencySettingsChatTokenCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatalf("100M hard ceiling must parse: %v", err)
 	}
-	if settings.ChatTokenBudget != 100_000_000 {
-		t.Fatalf("chat token budget = %d, want 100000000", settings.ChatTokenBudget)
+	if settings.ChatTokenBudget != 200_000_000 {
+		t.Fatalf("chat token budget = %d, want 200000000", settings.ChatTokenBudget)
 	}
 
 	payload = []byte(`{
 		"chat_request_budget": 8192,
-		"chat_token_budget": 100000001,
+		"chat_token_budget": 200000001,
 		"embedding_per_ticket_concurrency": 8,
 		"embedding_per_validator_concurrency": 24,
 		"embedding_global_concurrency": 32

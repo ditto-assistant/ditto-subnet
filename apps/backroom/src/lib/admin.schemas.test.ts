@@ -151,12 +151,12 @@ describe('admin API schemas', () => {
         relay_delay_fingerprint_max_ms: 250,
       },
     }
-    expect(MAX_CHAT_TOKEN_BUDGET).toBe(100_000_000)
+    expect(MAX_CHAT_TOKEN_BUDGET).toBe(200_000_000)
     expect(inferenceConcurrencySettingsSchema.parse(settings)).toEqual(settings)
     expect(() => inferenceConcurrencySettingsSchema.parse({
       ...settings,
       chat_token_budget: MAX_CHAT_TOKEN_BUDGET + 1,
-    })).toThrow(/100000000/)
+    })).toThrow(/200000000/)
   })
 
   it('mirrors the shared Platform and relay concurrency ceiling', () => {

@@ -10233,7 +10233,7 @@ export interface components {
             max_daily_bundle_cap: number;
             /**
              * Max Daily Dollar Microusd
-             * @default 1000000000
+             * @default 2000000000
              */
             max_daily_dollar_microusd: number;
             /**

@@ -25,7 +25,7 @@ const (
 	defaultChatRequestBudget                = 16384
 	maxChatRequestBudget                    = 32768
 	defaultChatTokenBudget                  = 25_000_000
-	maxChatTokenBudget                      = 100_000_000
+	maxChatTokenBudget                      = 200_000_000
 	defaultChatPerTicketConcurrency         = 16
 	defaultChatPerValidatorConcurrency      = 48
 	defaultChatGlobalConcurrency            = 96

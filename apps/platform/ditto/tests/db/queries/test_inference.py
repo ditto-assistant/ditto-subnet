@@ -31,6 +31,7 @@ from ditto.db.queries.inference import (
     finish_inference_request,
     get_lease_model_usage,
     revoke_ticket_inference,
+    ticket_inference_grant_spent_allowance,
 )
 
 # The era every ticket below is leased for. Nothing in this file is about a
@@ -1338,6 +1339,45 @@ async def test_new_grants_record_which_meter_booked_them(
         _ticket, grant, _bearer, _now = await _live_grant(session)
         assert grant.usage_accounting_version == USAGE_ACCOUNTING_VERSION
         assert USAGE_ACCOUNTING_VERSION == 2
+
+
+@pytest.mark.asyncio
+async def test_spent_allowance_is_settled_wall_not_exhausted_status(
+    session: AsyncSession,
+) -> None:
+    """An exhausted row is not enough. Crown-v11 sat at a few percent of 75M.
+
+    Only receipted tokens or request-count at the stamped budget, under the
+    v2 meter, may reclassify a broker's budget_evidence_absent report.
+    """
+    async with session.begin():
+        ticket, grant, _bearer, _now = await _live_grant(session)
+        identity = {
+            "agent_id": ticket.agent_id,
+            "bench_version": ticket.bench_version,
+            "validator_hotkey": ticket.validator_hotkey,
+            "ticket_deadline": ticket.deadline,
+        }
+        grant.status = "exhausted"
+        grant.prompt_tokens = 3
+        grant.completion_tokens = 1
+        await session.flush()
+        assert (
+            await ticket_inference_grant_spent_allowance(session, **identity) is False
+        )
+        grant.prompt_tokens = grant.token_budget
+        grant.completion_tokens = 0
+        await session.flush()
+        assert await ticket_inference_grant_spent_allowance(session, **identity) is True
+        grant.prompt_tokens = 0
+        grant.request_count = grant.request_budget
+        await session.flush()
+        assert await ticket_inference_grant_spent_allowance(session, **identity) is True
+        grant.usage_accounting_version = 1
+        await session.flush()
+        assert (
+            await ticket_inference_grant_spent_allowance(session, **identity) is False
+        )
 
 
 def _at_capacity_count(lane: str, scope: str) -> float:

@@ -110,6 +110,12 @@ the pipeline still marks them deferred — but they must be published so the
 dashboard can say "Inference lane saturated" instead of a generic
 "Validator infrastructure failure". Validators store those as
 `model_relay_unavailable:{cause}`; the public field publishes the cause.
+`fail_job` additionally consults the lease's own inference grant: if that
+grant is exhausted under v2 accounting with settled tokens or request-count
+at the ticket wall, an incoming `infrastructure` / `budget_evidence_absent`
+report is rewritten to `inference_allowance_exhausted`. Missing broker
+evidence cannot mint a no-fault retry of an image that already spent the
+grant (Crown-v12-Final).
 
 ## When is a submission "stuck"?
 

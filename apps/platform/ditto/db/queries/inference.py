@@ -10,7 +10,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ditto.api_models.ticket_status import TicketStatus
@@ -1003,6 +1003,48 @@ async def ticket_inference_revoked_mid_lease(
     return bool(revoked)
 
 
+async def ticket_inference_grant_spent_allowance(
+    session: AsyncSession,
+    *,
+    agent_id: UUID,
+    bench_version: int,
+    validator_hotkey: str,
+    ticket_deadline: datetime,
+) -> bool:
+    """Did this lease's grant hit its request or token wall on settled spend?
+
+    Distinct from :func:`ticket_inference_revoked_mid_lease`. ``exhausted``
+    with receipted tokens or request-count at the ticket budget is the harness
+    spending the allowance it was granted. A broker that could not
+    independently confirm a 4102/4104 still reports
+    ``budget_evidence_absent`` (retryable infrastructure), which re-leases the
+    same image forever — Crown-v12-Final. The grant row is the authoritative
+    meter; when it shows the wall was hit under v2 accounting, a fresh lease
+    cannot repair that.
+
+    v1 grants are excluded: they booked reservation estimates as
+    ``prompt_tokens``, so an ``exhausted`` row is not proof of receipted spend.
+    """
+    spent = await session.scalar(
+        select(func.count())
+        .select_from(InferenceGrant)
+        .where(
+            InferenceGrant.agent_id == agent_id,
+            InferenceGrant.bench_version == bench_version,
+            InferenceGrant.validator_hotkey == validator_hotkey,
+            InferenceGrant.ticket_deadline == ticket_deadline,
+            InferenceGrant.status == "exhausted",
+            InferenceGrant.usage_accounting_version >= USAGE_ACCOUNTING_VERSION,
+            or_(
+                (InferenceGrant.prompt_tokens + InferenceGrant.completion_tokens)
+                >= InferenceGrant.token_budget,
+                InferenceGrant.request_count >= InferenceGrant.request_budget,
+            ),
+        )
+    )
+    return bool(spent)
+
+
 __all__ = [
     "USAGE_ACCOUNTING_VERSION",
     "activate_inference_grant",
@@ -1012,5 +1054,6 @@ __all__ = [
     "ensure_inference_grant",
     "finish_inference_request",
     "revoke_ticket_inference",
+    "ticket_inference_grant_spent_allowance",
     "ticket_inference_revoked_mid_lease",
 ]
