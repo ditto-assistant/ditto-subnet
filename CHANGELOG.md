@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.115.1 (2026-08-27)
+
+### Bug Fixes
+
+- **platform**: Preserve dashboard scroll and row identity
+  ([`aa47df6`](https://github.com/ditto-assistant/ditto-subnet/commit/aa47df669cfd2c71312cca59fefbbe5898beba4a))
+
+### Refactoring
+
+- **platform**: Render lists through For/Index, not .map
+  ([`8c3bf91`](https://github.com/ditto-assistant/ditto-subnet/commit/8c3bf91a695d5acdc0ba0a306500fd1efa29d28a))
+
+
 ## v0.115.0 (2026-08-27)
 
 ### Features
