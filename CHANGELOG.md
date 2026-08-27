@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.115.2 (2026-08-27)
+
+### Bug Fixes
+
+- **platform**: Keep the pipeline lanes' scroll containers alive across polls
+  ([#1194](https://github.com/ditto-assistant/ditto-subnet/pull/1194),
+  [`3bb122c`](https://github.com/ditto-assistant/ditto-subnet/commit/3bb122cc9624ef52fbf8e6523082d7bff5e44407))
+
+- **platform**: Require manual confirmation retries
+  ([#1193](https://github.com/ditto-assistant/ditto-subnet/pull/1193),
+  [`9533e0a`](https://github.com/ditto-assistant/ditto-subnet/commit/9533e0af10485f40852114ffd0c90af3cd689b80))
+
+
 ## v0.115.1 (2026-08-27)
 
 ### Bug Fixes
