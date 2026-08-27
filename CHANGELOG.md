@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.113.4 (2026-08-27)
+
+### Bug Fixes
+
+- **platform**: Retry runtime smoke without rebuilding kaniko
+  ([#1181](https://github.com/ditto-assistant/ditto-subnet/pull/1181),
+  [`70d9225`](https://github.com/ditto-assistant/ditto-subnet/commit/70d92256d711b8d910c3bb783cf9d4c94a2d0f2d))
+
+
 ## v0.113.3 (2026-08-27)
 
 ### Bug Fixes
