@@ -74,6 +74,40 @@ def test_static_policy_v10_assessment_retains_each_independent_breach() -> None:
     assert decisions[
         SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
     ].evidence_indices == [2]
+    assert decisions[SourceReviewInvariant.MODEL_INVOCATION].disposition == (
+        SourceReviewInvariantDisposition.INCONCLUSIVE
+    )
+    assert decisions[SourceReviewInvariant.MODEL_INVOCATION].pass_clause is None
+
+
+@pytest.mark.parametrize(
+    ("match", "expected"),
+    [
+        (
+            {
+                "kind": "authoritative-derived-candidate",
+                "category": "benchmark_emulation",
+            },
+            SourceReviewInvariant.DERIVED_VALUE_AUTHORITY,
+        ),
+        (
+            {"kind": "predetermined-tool-plan", "category": "benchmark_emulation"},
+            SourceReviewInvariant.MODEL_TOOL_PLANNING,
+        ),
+        (
+            {
+                "kind": "any",
+                "category": "benchmark_emulation",
+                "resolution_basis": "benchmark_answer_replacement",
+            },
+            SourceReviewInvariant.PRODUCTION_ENGINE,
+        ),
+    ],
+)
+def test_static_match_maps_to_the_invariant_it_actually_assesses(
+    match: dict[str, object], expected: SourceReviewInvariant
+) -> None:
+    assert source_review_module._static_match_invariant(match) == expected
 
 
 def _with_policy_v10_invariants(

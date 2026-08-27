@@ -198,6 +198,43 @@ _BASIS_CATEGORIES = {
     "cross_user_data_flow": frozenset({"cross_user_access"}),
     "duplicate_artifact": frozenset({"duplicate_submission"}),
 }
+_INVARIANT_BY_RESOLUTION_BASIS = {
+    "benchmark_answer_replacement": SourceReviewInvariant.PRODUCTION_ENGINE,
+    "generator_mirroring": SourceReviewInvariant.PRODUCTION_ENGINE,
+    "scorer_field_manipulation": SourceReviewInvariant.MODEL_DISSENT,
+    "fabricated_tool_trajectory": (SourceReviewInvariant.TOOL_EXECUTION_FIDELITY),
+    "model_tool_planning_bypass": SourceReviewInvariant.MODEL_TOOL_PLANNING,
+    "hidden_model_bypass": SourceReviewInvariant.MODEL_INVOCATION,
+}
+_INVARIANT_BY_AUTHORITY_TRANSITION = {
+    SourceReviewAuthorityTransition.MODEL_SKIPPED: (
+        SourceReviewInvariant.MODEL_INVOCATION
+    ),
+    SourceReviewAuthorityTransition.MODEL_OUTPUT_OVERWRITTEN: (
+        SourceReviewInvariant.MODEL_DISSENT
+    ),
+    SourceReviewAuthorityTransition.TOOL_EXECUTION_BYPASSED: (
+        SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
+    ),
+    SourceReviewAuthorityTransition.TOOL_TRAJECTORY_FABRICATED: (
+        SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
+    ),
+    SourceReviewAuthorityTransition.SELECTIVE_MODEL_DISABLEMENT: (
+        SourceReviewInvariant.MODEL_INVOCATION
+    ),
+    SourceReviewAuthorityTransition.SCORER_FIELD_REWRITTEN: (
+        SourceReviewInvariant.MODEL_DISSENT
+    ),
+    SourceReviewAuthorityTransition.DERIVED_VALUE_AUTHORITATIVE: (
+        SourceReviewInvariant.DERIVED_VALUE_AUTHORITY
+    ),
+    SourceReviewAuthorityTransition.FAMILY_COMPILER_AUTHORITATIVE: (
+        SourceReviewInvariant.PRODUCTION_ENGINE
+    ),
+    SourceReviewAuthorityTransition.TOOL_SELECTION_PREDETERMINED: (
+        SourceReviewInvariant.MODEL_TOOL_PLANNING
+    ),
+}
 _CAUSAL_CATEGORY_FAMILIES = (
     frozenset(
         {
@@ -3874,6 +3911,47 @@ def _finding_confidence(finding: Mapping[str, object]) -> float:
     return float(value)
 
 
+def _validate_violation_invariant_binding(
+    *,
+    assessment: SourceReviewInvariantAssessment,
+    resolution_basis: str,
+    causal_evidence: SourceReviewCausalEvidence | None,
+    evidence: list[SourceReviewEvidenceItem],
+) -> None:
+    """Bind a model-authored v10 breach to the host-validated causal mechanism."""
+
+    if causal_evidence is None:
+        return
+    transition_invariant = _INVARIANT_BY_AUTHORITY_TRANSITION[
+        causal_evidence.authority_transition
+    ]
+    expected = {transition_invariant}
+    basis_invariant = _INVARIANT_BY_RESOLUTION_BASIS.get(resolution_basis)
+    if basis_invariant is not None:
+        expected.add(basis_invariant)
+    authority_locations = {
+        (binding.path, binding.line, binding.category)
+        for binding in causal_evidence.role_bindings
+        if binding.role == SourceReviewEvidenceRole.AUTHORITY_BYPASS
+    }
+    authority_indices = {
+        index
+        for index, item in enumerate(evidence)
+        if (item.path, item.line, item.category) in authority_locations
+    }
+    decisions = {item.invariant: item for item in assessment.decisions}
+    if any(
+        decisions[invariant].disposition != SourceReviewInvariantDisposition.BREACH
+        for invariant in expected
+    ):
+        raise ValueError("L2 causal mechanism lacks its required invariant breach")
+    transition_decision = decisions[transition_invariant]
+    if authority_indices and not authority_indices.intersection(
+        transition_decision.evidence_indices
+    ):
+        raise ValueError("L2 invariant breach is not bound to authority evidence")
+
+
 def _parse_l2_review(
     value: object,
     *,
@@ -4125,6 +4203,16 @@ def _parse_l2_review(
         )
         for item in normalized_evidence
     ]
+    invariant_assessment = SourceReviewInvariantAssessment.model_validate(
+        {"decisions": invariants}
+    )
+    if disposition == "violation":
+        _validate_violation_invariant_binding(
+            assessment=invariant_assessment,
+            resolution_basis=str(resolution_basis),
+            causal_evidence=causal_evidence,
+            evidence=public_evidence,
+        )
     summary = (
         "Level-2 review found no causally established policy violation."
         if disposition == "safe"
@@ -4146,9 +4234,7 @@ def _parse_l2_review(
         evidence=public_evidence,
         summary=summary,
         causal_evidence=causal_evidence,
-        invariant_assessment=SourceReviewInvariantAssessment.model_validate(
-            {"decisions": invariants}
-        ),
+        invariant_assessment=invariant_assessment,
     ).require_policy_v10_invariants()
     return (
         SourceReviewObservation(
@@ -4835,12 +4921,14 @@ _L2_FAILURE_CODES: Mapping[str, str] = {
     "L2 causal evidence has no elevated causal category": "inconsistent-verdict",
     "L2 causal evidence is invalid": "inconsistent-verdict",
     "L2 causal evidence schema version is invalid": "inconsistent-verdict",
+    "L2 causal mechanism lacks its required invariant breach": "inconsistent-verdict",
     "L2 causal path is invalid": "inconsistent-verdict",
     "L2 causal role binding is invalid": "inconsistent-verdict",
     "L2 causal role bindings are invalid": "inconsistent-verdict",
     "L2 evidence is invalid": "inconsistent-verdict",
     "L2 evidence line is invalid": "inconsistent-verdict",
     "L2 generator component is invalid": "inconsistent-verdict",
+    "L2 invariant breach is not bound to authority evidence": "inconsistent-verdict",
     "L2 inconclusive result cannot contain causal evidence": "inconsistent-verdict",
     "L2 none category must be exclusive": "inconsistent-verdict",
     "L2 resolution basis contradicts its categories": "inconsistent-verdict",

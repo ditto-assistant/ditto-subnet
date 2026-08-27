@@ -8,6 +8,7 @@ from ditto_screening_protocol.confirmation_progress import (
 )
 from ditto_screening_protocol.models import (
     SCREENING_POLICY_VERSION,
+    TYPED_OUTCOME_POLICY_VERSION,
     AgentStatus,
     ArtifactResponse,
     ScreenedImageCompletedPart,
@@ -51,6 +52,7 @@ from ditto_screening_protocol.signing import verdict_signing_message
 __all__ = [
     "MAX_CONFIRMATION_SLOTS",
     "SCREENING_POLICY_VERSION",
+    "TYPED_OUTCOME_POLICY_VERSION",
     "AgentStatus",
     "ArtifactResponse",
     "ConfirmationProgress",

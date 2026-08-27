@@ -7,6 +7,7 @@ from uuid import UUID
 
 from ditto_screening_protocol.models import (
     SCREENING_POLICY_VERSION,
+    TYPED_OUTCOME_POLICY_VERSION,
     ScreenResultOutcome,
 )
 
@@ -76,8 +77,8 @@ def verdict_signing_message(
             separators=(",", ":"),
         )
         return f"ditto-screen-result:v5:{payload}".encode()
-    if policy_version >= SCREENING_POLICY_VERSION:
-        raise ValueError("policy-v9 verdict requires typed outcome")
+    if policy_version >= TYPED_OUTCOME_POLICY_VERSION:
+        raise ValueError("policy v9+ verdict requires typed outcome")
     if any(
         value is not None
         for value in (

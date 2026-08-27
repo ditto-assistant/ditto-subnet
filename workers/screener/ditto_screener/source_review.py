@@ -65,21 +65,6 @@ _MAX_LEAD_SCAN_BYTES = 64 * 1024 * 1024
 _MAX_LEAD_SCAN_FILES = 20_000
 _MAX_SOURCE_ARCHIVE_MEMBERS = 20_000
 _AFFIRMATIVE_SAFE_STATIC_BASES = frozenset({"loopback-only-sink"})
-_DEFAULT_POLICY_V10_PASS_CLAUSES = {
-    SourceReviewInvariant.MODEL_INVOCATION: SourceReviewPassClause.GENUINE_MODEL_RESULT,
-    SourceReviewInvariant.EVIDENCE_RETENTION: (
-        SourceReviewPassClause.FULL_RECORDS_ON_DECIDING_TURN
-    ),
-    SourceReviewInvariant.MODEL_DISSENT: SourceReviewPassClause.MODEL_DISSENT_PRESERVED,
-    SourceReviewInvariant.DERIVED_VALUE_AUTHORITY: (
-        SourceReviewPassClause.NO_DERIVED_VALUE
-    ),
-    SourceReviewInvariant.PRODUCTION_ENGINE: SourceReviewPassClause.NO_FAMILY_COMPILER,
-    SourceReviewInvariant.TOOL_EXECUTION_FIDELITY: (
-        SourceReviewPassClause.NO_REPORTED_TOOL_CALLS
-    ),
-    SourceReviewInvariant.MODEL_TOOL_PLANNING: SourceReviewPassClause.NO_TOOL_PLANNING,
-}
 # Every ``ValueError`` raised inside :meth:`OpenRouterSourceReviewAgent.review`
 # carries a static, non-miner-controlled message, so mapping it to a stable code
 # leaks nothing. Without this table all ~30 of them collapsed into the single
@@ -227,14 +212,47 @@ def policy_v10_static_assessment(
             decisions.append(
                 SourceReviewInvariantDecision(
                     invariant=invariant,
-                    disposition=SourceReviewInvariantDisposition.PASS,
-                    pass_clause=_DEFAULT_POLICY_V10_PASS_CLAUSES[invariant],
+                    disposition=SourceReviewInvariantDisposition.INCONCLUSIVE,
                     summary=(
-                        "No deterministic static breach remains for this invariant."
+                        "This deterministic detector did not assess the invariant."
                     ),
                 )
             )
     return SourceReviewInvariantAssessment(decisions=decisions)
+
+
+_STATIC_INVARIANT_BY_KIND = {
+    "authoritative-derived-candidate": SourceReviewInvariant.DERIVED_VALUE_AUTHORITY,
+    "do-not-recompute-directive": SourceReviewInvariant.DERIVED_VALUE_AUTHORITY,
+    "compiled-totals-as-notes": SourceReviewInvariant.DERIVED_VALUE_AUTHORITY,
+    "required-money-formatter": SourceReviewInvariant.DERIVED_VALUE_AUTHORITY,
+    "worksheet-fallback-overwrite": SourceReviewInvariant.DERIVED_VALUE_AUTHORITY,
+    "predetermined-tool-plan": SourceReviewInvariant.MODEL_TOOL_PLANNING,
+    "forced-single-tool-turn": SourceReviewInvariant.MODEL_TOOL_PLANNING,
+}
+_STATIC_INVARIANT_BY_BASIS = {
+    "scorer_field_manipulation": SourceReviewInvariant.MODEL_DISSENT,
+    "fabricated_tool_trajectory": SourceReviewInvariant.TOOL_EXECUTION_FIDELITY,
+    "model_tool_planning_bypass": SourceReviewInvariant.MODEL_TOOL_PLANNING,
+    "hidden_model_bypass": SourceReviewInvariant.MODEL_INVOCATION,
+    "benchmark_answer_replacement": SourceReviewInvariant.PRODUCTION_ENGINE,
+    "generator_mirroring": SourceReviewInvariant.PRODUCTION_ENGINE,
+}
+
+
+def _static_match_invariant(match: Mapping[str, object]) -> SourceReviewInvariant:
+    basis = str(match.get("resolution_basis", ""))
+    if basis in _STATIC_INVARIANT_BY_BASIS:
+        return _STATIC_INVARIANT_BY_BASIS[basis]
+    kind = str(match.get("kind", ""))
+    if kind in _STATIC_INVARIANT_BY_KIND:
+        return _STATIC_INVARIANT_BY_KIND[kind]
+    category = str(match["category"])
+    if category == "scorer_contract_manipulation":
+        return SourceReviewInvariant.MODEL_DISSENT
+    if category == "fabricated_tool_trajectory":
+        return SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
+    return SourceReviewInvariant.PRODUCTION_ENGINE
 
 
 # Public-generator vocabulary is weak evidence in isolation.  These families
@@ -1831,21 +1849,27 @@ class TarSourceRepository:
                     break
             if len(evidence) >= 16:
                 break
-        breach_by_category = {
-            "benchmark_emulation": SourceReviewInvariant.PRODUCTION_ENGINE,
-            "scorer_contract_manipulation": SourceReviewInvariant.MODEL_DISSENT,
-            "fabricated_tool_trajectory": (
-                SourceReviewInvariant.TOOL_EXECUTION_FIDELITY
-            ),
-        }
+        breach_locations: dict[SourceReviewInvariant, set[tuple[str, int, str]]] = {}
+        for match in matches:
+            invariant = _static_match_invariant(match)
+            locations = match["locations"]
+            assert isinstance(locations, list)
+            for location in locations:
+                assert isinstance(location, dict)
+                breach_locations.setdefault(invariant, set()).add(
+                    (
+                        str(location["path"]),
+                        int(location["line"]),
+                        str(match["category"]),
+                    )
+                )
         breaches = {
             invariant: [
                 index
                 for index, item in enumerate(evidence)
-                if item.category == category
+                if (item.path, item.line, item.category) in locations
             ]
-            for category, invariant in breach_by_category.items()
-            if category in categories
+            for invariant, locations in breach_locations.items()
         }
         finding = SourceReviewFinding(
             artifact_sha256=artifact_sha256,

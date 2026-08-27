@@ -17,6 +17,7 @@ from pydantic import (
 )
 
 SCREENING_POLICY_VERSION = 10
+TYPED_OUTCOME_POLICY_VERSION = 9
 
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
 _SIGNATURE_HEX_PATTERN = r"^[0-9a-fA-F]{128}$"
@@ -1169,8 +1170,8 @@ class ScreenResultRequest(BaseModel):
     @model_validator(mode="after")
     def validate_typed_outcome(self) -> ScreenResultRequest:
         if self.outcome is None:
-            if self.policy_version >= SCREENING_POLICY_VERSION:
-                raise ValueError("policy-v9 result requires typed outcome")
+            if self.policy_version >= TYPED_OUTCOME_POLICY_VERSION:
+                raise ValueError("policy v9+ result requires typed outcome")
             if any(
                 value is not None
                 for value in (
