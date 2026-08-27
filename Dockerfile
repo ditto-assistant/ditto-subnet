@@ -11,6 +11,7 @@ LABEL org.opencontainers.image.source="https://github.com/ditto-assistant/ditto-
       io.heyditto.validator-service="true" \
       io.heyditto.validator.compatibility-epoch="$VALIDATOR_COMPATIBILITY_EPOCH" \
       io.heyditto.validator.heartbeat-protocol="$VALIDATOR_HEARTBEAT_PROTOCOL" \
+      io.heyditto.validator.bootstrap-resume-ready-state="true" \
       io.heyditto.validator.update-protocol="1" \
       io.heyditto.validator.compose-schema="1"
 

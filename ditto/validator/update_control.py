@@ -67,6 +67,7 @@ def write_update_state(
     state: ValidatorUpdateState,
     *,
     platform_accepted: bool = False,
+    resume_ready: bool = False,
     path: Path = VALIDATOR_UPDATE_STATE_PATH,
 ) -> None:
     """Atomically publish the worker's local update state.
@@ -80,6 +81,7 @@ def write_update_state(
         "heartbeat_protocol": HEARTBEAT_PROTOCOL_VERSION,
         "pid": os.getpid(),
         "platform_accepted": platform_accepted,
+        "resume_ready": resume_ready,
         "state": state,
         "update_protocol": VALIDATOR_UPDATE_PROTOCOL,
     }

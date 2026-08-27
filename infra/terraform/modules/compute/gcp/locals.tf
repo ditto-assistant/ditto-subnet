@@ -30,6 +30,10 @@ locals {
     # cargo builds are RAM/CPU-hungry, so 4 vCPU / 16 GB (not app-small).
     "validator" = "e2-standard-4" # 4 vCPU / 16 GB
 
+    # Production validator: eight advertised slots with enough CPU/RAM for
+    # concurrent full runs. Disk is configured separately by the caller.
+    "validator-prod" = "e2-standard-8" # 8 vCPU / 32 GB
+
     # Temporary SN118 screener class for policy-wide rescreen backlogs. The
     # steady-state screener can return to `validator` after horizontal worker
     # scaling is implemented.

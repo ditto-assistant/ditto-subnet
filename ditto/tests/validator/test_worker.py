@@ -2434,12 +2434,16 @@ class TestRunOnce:
             chain=chain,
             keypair=MagicMock(sign=MagicMock(return_value=b"\x01" * 64)),
         )
-        states: list[tuple[str, bool]] = []
+        states: list[tuple[str, bool, bool]] = []
         monkeypatch.setattr(
             worker_mod,
             "write_update_state",
             lambda state, **kwargs: states.append(
-                (state, bool(kwargs.get("platform_accepted")))
+                (
+                    state,
+                    bool(kwargs.get("platform_accepted")),
+                    bool(kwargs.get("resume_ready")),
+                )
             ),
         )
         stop = asyncio.Event()
@@ -2448,10 +2452,10 @@ class TestRunOnce:
         task = asyncio.create_task(worker.run_forever(stop, drain_requested=drain))
 
         for _ in range(100):
-            if ("drained", True) in states:
+            if ("drained", True, False) in states:
                 break
             await asyncio.sleep(0.001)
-        assert ("drained", True) in states
+        assert ("drained", True, False) in states
         platform.submit_heartbeat.assert_awaited()
         platform.request_job.assert_not_awaited()
 
@@ -2463,6 +2467,45 @@ class TestRunOnce:
         stop.set()
         await asyncio.wait_for(task, timeout=1)
         platform.request_job.assert_awaited_once()
+
+    async def test_drain_publishes_functional_resume_readiness(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        worker = ValidatorWorker(
+            config=_config(),
+            platform=MagicMock(),
+            dittobench=MagicMock(),
+            chain=MagicMock(),
+            keypair=MagicMock(),
+        )
+        worker._platform_accepted = True
+        worker._bootstrap_resume_ready = True
+        worker._report_heartbeat = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        states: list[tuple[str, bool, bool]] = []
+        monkeypatch.setattr(
+            worker_mod,
+            "write_update_state",
+            lambda state, **kwargs: states.append(
+                (
+                    state,
+                    bool(kwargs.get("platform_accepted")),
+                    bool(kwargs.get("resume_ready")),
+                )
+            ),
+        )
+        stop = asyncio.Event()
+        drain = asyncio.Event()
+        drain.set()
+
+        task = asyncio.create_task(worker._acknowledge_drain(stop, drain))
+        for _ in range(100):
+            if ("drained", True, True) in states:
+                break
+            await asyncio.sleep(0.001)
+        stop.set()
+        await asyncio.wait_for(task, timeout=1)
+
+        assert ("drained", True, True) in states
 
     async def test_drained_worker_keeps_accepted_heartbeat_fresh(
         self, monkeypatch: pytest.MonkeyPatch

@@ -759,7 +759,11 @@ class ValidatorWorker:
         # platform receives already says why this validator is about to sit out.
         self._refresh_resource_admission(self._collect_system_metrics())
         await self._report_heartbeat("polling")
-        write_update_state("working", platform_accepted=self._platform_accepted)
+        write_update_state(
+            "working",
+            platform_accepted=self._platform_accepted,
+            resume_ready=self._bootstrap_resume_ready,
+        )
         scored: list[ScoredAgentStat] = []
         failed = 0
         queue_depth = 0
@@ -3642,7 +3646,11 @@ class ValidatorWorker:
         cooperative updater drain stops both loops from starting new work and
         is acknowledged only after their current work has completed.
         """
-        write_update_state("ready", platform_accepted=self._platform_accepted)
+        write_update_state(
+            "ready",
+            platform_accepted=self._platform_accepted,
+            resume_ready=self._bootstrap_resume_ready,
+        )
         weight_task = asyncio.create_task(
             self._run_weights_forever(stop, drain_requested=drain_requested),
             name="validator-weights",
@@ -3689,7 +3697,9 @@ class ValidatorWorker:
                     # A failed heartbeat may have cleared platform acceptance;
                     # never leave an earlier accepted state on disk.
                     write_update_state(
-                        "working", platform_accepted=self._platform_accepted
+                        "working",
+                        platform_accepted=self._platform_accepted,
+                        resume_ready=self._bootstrap_resume_ready,
                     )
                 finally:
                     self._scoring_active = False
@@ -3911,7 +3921,11 @@ class ValidatorWorker:
             return
         self._admission = "draining"
         await self._report_heartbeat("idle")
-        write_update_state("drained", platform_accepted=self._platform_accepted)
+        write_update_state(
+            "drained",
+            platform_accepted=self._platform_accepted,
+            resume_ready=self._bootstrap_resume_ready,
+        )
         await self._wait_for_resume_or_stop(
             stop,
             drain_requested,
@@ -3919,7 +3933,11 @@ class ValidatorWorker:
         )
         if not stop.is_set():
             self._admission = "accepting"
-            write_update_state("ready", platform_accepted=self._platform_accepted)
+            write_update_state(
+                "ready",
+                platform_accepted=self._platform_accepted,
+                resume_ready=self._bootstrap_resume_ready,
+            )
 
     @staticmethod
     def _new_work_blocked(*events: asyncio.Event | None) -> bool:
@@ -3948,7 +3966,11 @@ class ValidatorWorker:
             now = time.monotonic()
             if now >= next_drain_heartbeat:
                 await self._report_heartbeat("idle")
-                write_update_state("drained", platform_accepted=self._platform_accepted)
+                write_update_state(
+                    "drained",
+                    platform_accepted=self._platform_accepted,
+                    resume_ready=self._bootstrap_resume_ready,
+                )
                 now = time.monotonic()
                 next_drain_heartbeat = now + _DRAIN_HEARTBEAT_SECONDS
                 if self._bootstrap_resume_ready:

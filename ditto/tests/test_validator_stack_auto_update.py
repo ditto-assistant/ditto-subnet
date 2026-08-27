@@ -385,6 +385,8 @@ def _run_stack_compose_wrapper(
     descriptor_ref: str = STACK_DIGEST,
     managed_ref: str | None = None,
     transaction_ref: str | None = None,
+    bootstrap_ref: str | None = None,
+    write_managed: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     state_dir = tmp_path / "state"
     release_dir = state_dir / "current"
@@ -394,14 +396,19 @@ def _run_stack_compose_wrapper(
     shutil.copy2(rendered / "compose.yml", release_dir / "compose.yml")
     if descriptor_ref:
         (release_dir / ".descriptor-ref").write_text(descriptor_ref + "\n")
-    (state_dir / "managed-release.env").write_text(
-        f"STACK_RELEASE={managed_ref or descriptor_ref}\n"
-    )
+    if write_managed:
+        (state_dir / "managed-release.env").write_text(
+            f"STACK_RELEASE={managed_ref or descriptor_ref}\n"
+        )
     if transaction_ref:
         (state_dir / "transaction.env").write_text(
             "PHASE=committed\n"
             f"PREVIOUS_RELEASE={managed_ref or OLD_STACK_DIGEST}\n"
             f"CANDIDATE_RELEASE={transaction_ref}\n"
+        )
+    if bootstrap_ref:
+        (state_dir / "bootstrap-transaction.env").write_text(
+            f"BOOTSTRAP_PHASE=installing\nBOOTSTRAP_RELEASE={bootstrap_ref}\n"
         )
     env_file = tmp_path / ".env"
     env_file.write_text(
@@ -460,6 +467,33 @@ def test_stack_wrapper_accepts_committed_verified_candidate_before_recording(
 
     assert result.returncode == 0, result.stderr
     assert json.loads(capture.read_text())["descriptor"] == STACK_DIGEST
+
+
+def test_stack_wrapper_accepts_journaled_greenfield_bootstrap_before_managed(
+    tmp_path: Path,
+) -> None:
+    result, capture = _run_stack_compose_wrapper(
+        tmp_path,
+        bootstrap_ref=STACK_DIGEST,
+        write_managed=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(capture.read_text())["descriptor"] == STACK_DIGEST
+
+
+def test_stack_wrapper_never_lets_bootstrap_journal_override_managed_state(
+    tmp_path: Path,
+) -> None:
+    result, capture = _run_stack_compose_wrapper(
+        tmp_path,
+        managed_ref=OLD_STACK_DIGEST,
+        bootstrap_ref=STACK_DIGEST,
+    )
+
+    assert result.returncode != 0
+    assert "does not match installed state" in result.stderr
+    assert not capture.exists()
 
 
 def test_stack_wrapper_rejects_unverified_release_directory(tmp_path: Path) -> None:
@@ -654,8 +688,16 @@ if not descriptor_ref.startswith(
 ):
     raise SystemExit("validated release descriptor reference is malformed")
 if args[:2] == ["ps", "-q"]:
-    print(args[2] + "-container")
+    container_name = args[2] + "-container"
+    if container_name in state["containers"]:
+        print(container_name)
 elif args[:1] == ["up"]:
+    state.setdefault("compose_up_environments", []).append({
+        "VALIDATOR_START_DRAINED": os.environ.get("VALIDATOR_START_DRAINED"),
+        "VALIDATOR_BOOTSTRAP_TOKEN_PRESENT": bool(
+            os.environ.get("VALIDATOR_BOOTSTRAP_TOKEN")
+        ),
+    })
     manifest = {}
     with open(os.path.join(release_dir, "manifest.env")) as handle:
         for line in handle:
@@ -669,7 +711,10 @@ elif args[:1] == ["up"]:
     services = [value for value in args if value in mapping]
     start_failures = state.get("compose_start_failures_remaining", 0)
     for service in services:
-        container = state["containers"][service + "-container"]
+        container = state["containers"].setdefault(
+            service + "-container",
+            {"image": "", "running": False, "health": "none"},
+        )
         container["image"] = state["images"][manifest[mapping[service]]]
         container["running"] = True
         is_candidate = manifest["STACK_VERSION"] == "0.10.1"
@@ -681,9 +726,19 @@ elif args[:1] == ["up"]:
         if start_failures and service == state.get("transient_health_service"):
             container["health"] = "unhealthy"
     if "ditto-subnet" in services:
-        state["runtime_state"]["state"] = "drained"
+        start_drained = (
+            os.environ.get("VALIDATOR_START_DRAINED") == "true"
+            and bool(os.environ.get("VALIDATOR_BOOTSTRAP_TOKEN"))
+        )
+        state["runtime_state"]["state"] = (
+            "drained" if start_drained else "working"
+        )
         state["runtime_state"]["platform_accepted"] = not (
             is_candidate and state.get("fail_validator_acceptance", False)
+        )
+        state["runtime_state"]["resume_ready"] = (
+            state["runtime_state"]["platform_accepted"]
+            and not state.get("fail_validator_resume_ready", False)
         )
         state["current_install_version"] = manifest["STACK_VERSION"]
     if start_failures:
@@ -793,6 +848,15 @@ if state.get("fail_stage_move") and args and args[-1].endswith("/staged"):
     with open(path, "w") as handle:
         json.dump(state, handle)
     raise SystemExit("injected staged move failure")
+if (
+    state.get("fail_managed_record_once")
+    and args
+    and args[-1].endswith("/managed-release.env")
+):
+    state["fail_managed_record_once"] = False
+    with open(path, "w") as handle:
+        json.dump(state, handle)
+    raise SystemExit("injected managed record failure")
 os.execv("/bin/mv", ["mv", *args])
 """
 
@@ -899,6 +963,9 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
             }
             if key == "VALIDATOR_IMAGE":
                 labels[images[key]]["io.heyditto.validator.heartbeat-protocol"] = "6"
+                labels[images[key]][
+                    "io.heyditto.validator.bootstrap-resume-ready-state"
+                ] = "true"
                 labels[image_ids[images[key]]] = labels[images[key]]
     state = {
         "calls": [],
@@ -922,6 +989,7 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
             "compatibility_epoch": 2,
             "heartbeat_protocol": 6,
             "platform_accepted": True,
+            "resume_ready": True,
             "state": "working",
             "update_protocol": 1,
         },
@@ -1212,6 +1280,235 @@ def test_supervised_adoption_binds_every_running_service(
     ]
     assert set(_images().values()).issubset(inspected)
     assert not any(call[0] in {"kill", "stop"} for call in state["calls"])
+
+
+def test_update_protocol_v1_adoption_does_not_require_resume_ready_field(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["runtime_state"].pop("resume_ready")
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+
+    assert result.returncode == 0, result.stderr
+    assert (state_dir / "managed-release.env").is_file()
+
+
+def test_greenfield_prepare_pulls_exact_stack_without_starting_services(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["containers"] = {}
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "prepare", OLD_STACK_DIGEST)
+
+    assert result.returncode == 0, result.stderr
+    assert _manifest(state_dir / "prepared-release.env") == {
+        "PREPARED_RELEASE": OLD_STACK_DIGEST,
+        "PREPARED_VERSION": "0.10.0",
+    }
+    assert (state_dir / "staged/.descriptor-ref").read_text().strip() == (
+        OLD_STACK_DIGEST
+    )
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
+
+
+def test_greenfield_prepare_rejects_release_without_resume_readiness_contract(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["containers"] = {}
+    validator_image = _images()["VALIDATOR_IMAGE"]
+    state["descriptor_labels"][validator_image].pop(
+        "io.heyditto.validator.bootstrap-resume-ready-state"
+    )
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "prepare", OLD_STACK_DIGEST)
+
+    assert result.returncode != 0
+    assert "predates the fail-closed bootstrap readiness contract" in result.stderr
+    assert not (state_dir / "prepared-release.env").exists()
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+
+
+def test_greenfield_bootstrap_requires_functionally_ready_drain_before_resuming(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["containers"] = {}
+    state_path.write_text(json.dumps(state))
+    prepared = _run_updater(env, "prepare", OLD_STACK_DIGEST)
+    assert prepared.returncode == 0, prepared.stderr
+
+    result = _run_updater(env, "bootstrap", OLD_STACK_DIGEST)
+
+    assert result.returncode == 0, result.stderr
+    assert (state_dir / "managed-release.env").read_text() == (
+        f"STACK_RELEASE={OLD_STACK_DIGEST}\n"
+    )
+    assert (state_dir / "current/.descriptor-ref").read_text().strip() == (
+        OLD_STACK_DIGEST
+    )
+    assert not (state_dir / "staged").exists()
+    assert not (state_dir / "prepared-release.env").exists()
+    final = json.loads(state_path.read_text())
+    signals = [call[1] for call in final["calls"] if call[:1] == ["kill"]]
+    assert signals == ["--signal=USR2"]
+    assert final["runtime_state"]["state"] == "working"
+    assert final["compose_up_environments"]
+    assert all(
+        item
+        == {
+            "VALIDATOR_START_DRAINED": "true",
+            "VALIDATOR_BOOTSTRAP_TOKEN_PRESENT": True,
+        }
+        for item in final["compose_up_environments"]
+    )
+
+
+def test_greenfield_bootstrap_stays_unmanaged_when_platform_rejects_hotkey(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["containers"] = {}
+    state["fail_validator_acceptance"] = True
+    state_path.write_text(json.dumps(state))
+    prepared = _run_updater(env, "prepare", STACK_DIGEST)
+    assert prepared.returncode == 0, prepared.stderr
+
+    rejected = _run_updater(env, "bootstrap", STACK_DIGEST)
+
+    assert rejected.returncode != 0
+    assert "did not become functionally ready and safely drained" in rejected.stderr
+    assert not (state_dir / "managed-release.env").exists()
+    assert (state_dir / "staged/.descriptor-ref").is_file()
+    final = json.loads(state_path.read_text())
+    assert final["runtime_state"]["state"] == "drained"
+    assert not final["runtime_state"]["platform_accepted"]
+
+    final["fail_validator_acceptance"] = False
+    final["runtime_state"]["platform_accepted"] = True
+    final["runtime_state"]["resume_ready"] = True
+    state_path.write_text(json.dumps(final))
+    retried = _run_updater(env, "bootstrap", STACK_DIGEST)
+    assert retried.returncode == 0, retried.stderr
+    assert (state_dir / "managed-release.env").is_file()
+
+
+def test_greenfield_bootstrap_refuses_a_different_prepared_digest(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["containers"] = {}
+    state_path.write_text(json.dumps(state))
+    prepared = _run_updater(env, "prepare", OLD_STACK_DIGEST)
+    assert prepared.returncode == 0, prepared.stderr
+
+    result = _run_updater(env, "bootstrap", STACK_DIGEST)
+
+    assert result.returncode != 0
+    assert "does not match the prepared release" in result.stderr
+    assert not (state_dir / "managed-release.env").exists()
+
+
+def test_greenfield_bootstrap_requires_a_prepared_release(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["containers"] = {}
+    state_path.write_text(json.dumps(state))
+
+    result = _run_updater(env, "bootstrap", OLD_STACK_DIGEST)
+
+    assert result.returncode != 0
+    assert "requires a valid prepared release" in result.stderr
+    assert not (state_dir / "managed-release.env").exists()
+    final = json.loads(state_path.read_text())
+    assert not any("up" in call for call in final["compose_calls"])
+    assert not any(call[0] == "kill" for call in final["calls"])
+
+
+def test_greenfield_bootstrap_requires_functional_resume_readiness(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["containers"] = {}
+    state["fail_validator_resume_ready"] = True
+    state_path.write_text(json.dumps(state))
+    prepared = _run_updater(env, "prepare", OLD_STACK_DIGEST)
+    assert prepared.returncode == 0, prepared.stderr
+
+    result = _run_updater(env, "bootstrap", OLD_STACK_DIGEST)
+
+    assert result.returncode != 0
+    assert "did not become functionally ready and safely drained" in result.stderr
+    assert not (state_dir / "managed-release.env").exists()
+    final = json.loads(state_path.read_text())
+    assert final["runtime_state"]["platform_accepted"] is True
+    assert final["runtime_state"]["resume_ready"] is False
+    assert not any(call[0] == "kill" for call in final["calls"])
+
+
+def test_greenfield_bootstrap_recovers_after_current_install_is_interrupted(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, _ = stack_updater_env
+    state = json.loads(state_path.read_text())
+    state["containers"] = {}
+    state["fail_managed_record_once"] = True
+    state_path.write_text(json.dumps(state))
+    prepared = _run_updater(env, "prepare", OLD_STACK_DIGEST)
+    assert prepared.returncode == 0, prepared.stderr
+
+    interrupted = _run_updater(env, "bootstrap", OLD_STACK_DIGEST)
+
+    assert interrupted.returncode != 0
+    assert not (state_dir / "managed-release.env").exists()
+    assert (state_dir / "current/.descriptor-ref").read_text().strip() == (
+        OLD_STACK_DIGEST
+    )
+    assert _manifest(state_dir / "bootstrap-transaction.env") == {
+        "BOOTSTRAP_PHASE": "installing",
+        "BOOTSTRAP_RELEASE": OLD_STACK_DIGEST,
+    }
+    after_interruption = json.loads(state_path.read_text())
+    assert not any(call[0] == "kill" for call in after_interruption["calls"])
+
+    recovered = _run_updater(env, "bootstrap", OLD_STACK_DIGEST)
+
+    assert recovered.returncode == 0, recovered.stderr
+    assert (state_dir / "managed-release.env").is_file()
+    assert not (state_dir / "bootstrap-transaction.env").exists()
+    final = json.loads(state_path.read_text())
+    assert [call[1] for call in final["calls"] if call[:1] == ["kill"]] == [
+        "--signal=USR2"
+    ]
+
+
+def test_greenfield_prepare_refuses_an_existing_validator_stack(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, _, state_dir, _ = stack_updater_env
+
+    result = _run_updater(env, "prepare", OLD_STACK_DIGEST)
+
+    assert result.returncode != 0
+    assert "validator services already exist" in result.stderr
+    assert not (state_dir / "prepared-release.env").exists()
 
 
 def test_supervised_migration_stages_validated_descriptor_before_drain(

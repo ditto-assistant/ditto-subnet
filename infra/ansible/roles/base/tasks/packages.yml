@@ -15,4 +15,5 @@
       - postgresql
       - postgresql-common
     state: present
+  when: base_install_postgres_packages | default(true) | bool
   # Actual tuning + pgvector + DB creation is the `postgres` role's job.

@@ -16,10 +16,7 @@
     port: "{{ item.port }}"
     proto: tcp
     comment: "{{ item.comment }}"
-  loop:
-    - { port: "22",  comment: SSH }
-    - { port: "80",  comment: HTTP }
-    - { port: "443", comment: HTTPS }
+  loop: "{{ base_ufw_open_ports }}"
 
 # Per-host extra rules (e.g. the platform Postgres VM opening 5432 to the VPC
 # subnet so the app VMs can reach it — the GCP firewall allows it, but UFW would

@@ -65,6 +65,6 @@ jobs:
 
       - name: Syntax-check subnet playbooks
         run: |
-          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-validator.yml; do
+          for playbook in playbooks/gcp-platform-pg.yml playbooks/gcp-platform-app.yml playbooks/gcp-screener.yml playbooks/gcp-screener-capacity.yml playbooks/gcp-validator.yml playbooks/gcp-validator-prod.yml; do
             uvx --from ansible-core==2.21.2 ansible-playbook --syntax-check -i inventory/validator-static.yml "$playbook"
           done
