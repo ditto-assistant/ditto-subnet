@@ -133,8 +133,11 @@ live and local disagree, the live holding wins for that exact pattern; say
 so.
 
 1. Call `get_leaderboard` (current bench) and `get_screening_review_queue`.
-2. Resolve every target. Re-apply the same bar to every new high-score row.
-   Fairness is identical criteria, not identical outcome.
+2. Resolve every target. Include every emission recipient and every scored
+   row at about composite ≥ 0.70 that has no resolved ATH on this UUID.
+   A same-hotkey ancestor keep, or a prior keep of this UUID, is not a skip.
+   Re-apply the same bar to every new high-score row. Fairness is identical
+   criteria, not identical outcome.
 3. Fail either limb in the review bar, or fail the production-engine test,
    and the row is emulation. Prompt grounding, schema-derived args, and a
    model that still authors the graded slot at its own score cost are not

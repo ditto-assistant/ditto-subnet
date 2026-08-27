@@ -15,4 +15,5 @@ Its SHA `4124379e…` matches banned lets_4.1, and the hotkey is the same
 After a ban, an older same-hotkey upload can pop back onto the KOTH board
 (Athena treadmill). That is not the ban rolling back and it is not a
 reason to un-ban. Review the visible UUID on its own source if it is
-scored and high-rank.
+scored and high-rank. A prior keep of this UUID is also not a skip if
+the cited path is still served.

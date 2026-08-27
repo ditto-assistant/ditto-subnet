@@ -30,7 +30,13 @@ pool are emulation.
 
 Ask: if this user renamed every field and asked the same question in
 production tomorrow, would this code still be a general assistant? If the
-honest answer is "only because we know the v10/v11 families," reject.
+honest answer is "only because we know the v10/v11/v12 families," reject.
+
+Relabeling that compiler as NOTES, coach, worksheet, `FINAL ANSWER TARGET`,
+or a "non-authoritative draft" does not pass when `/run` copies or ships
+it. Missing old identifiers (`try_solve` gone, `SIGN_AUDIT` renamed
+`RUNNING_QUANTITY`, `final_source` renamed `calculated_money_answer`) is a
+search lead, not a keep.
 
 ## Class labels (search aids, not independent tests)
 
@@ -72,6 +78,10 @@ avoid citing the limbs.
 ATH and bans attach to one agent UUID. Same artifact SHA, same hotkey, or
 an older upload popping after a ban is a different row. Review it on its
 own source if it is scored and high-rank.
+
+A prior keep of this UUID, or a keep of a same-hotkey ancestor, is not a
+skip. Never-reviewed emission recipients and scored successors of a banned
+row are new reviews. Inspect this SHA.
 
 ## Reason quality
 
