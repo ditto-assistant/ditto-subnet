@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.114.1 (2026-08-27)
+
+### Bug Fixes
+
+- **platform**: Bound policy-bump rescreens to the active benchmark era
+  ([#1187](https://github.com/ditto-assistant/ditto-subnet/pull/1187),
+  [`be209fb`](https://github.com/ditto-assistant/ditto-subnet/commit/be209fb5e04b3f7f50b4dfc398ac55fb82a423e0))
+
+
 ## v0.114.0 (2026-08-27)
 
 ### Bug Fixes
