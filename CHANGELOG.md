@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.113.3 (2026-08-27)
+
+### Bug Fixes
+
+- **inference**: Stop token-wall retries and allow a 150M cap
+  ([#1180](https://github.com/ditto-assistant/ditto-subnet/pull/1180),
+  [`52f6e85`](https://github.com/ditto-assistant/ditto-subnet/commit/52f6e852f2ecadf268dbbc4ed791a8d6b69bf4f1))
+
+
 ## v0.113.2 (2026-08-27)
 
 ### Bug Fixes
