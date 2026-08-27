@@ -2629,6 +2629,49 @@ class TestQueue:
             UUID(item["agent_id"]) for item in response.json()["items"]
         }
 
+    async def test_policy_bump_excludes_stale_agent_without_era_admission(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A policy bump must not re-list month-old unadmitted submissions."""
+        now = datetime.now(UTC)
+        stale_historical = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            name="stale-historical",
+            created_at=now - timedelta(days=30),
+            screening_policy_version=SCREENING_POLICY_VERSION - 1,
+        )
+        stale_current_era = await _seed_agent(
+            session_maker,
+            status=AgentStatus.EVALUATING,
+            name="stale-current-era",
+            created_at=now - timedelta(minutes=30),
+            screening_policy_version=SCREENING_POLICY_VERSION - 1,
+        )
+        async with session_maker() as session, session.begin():
+            session.add(
+                BenchmarkRollout(
+                    rollout_id=uuid4(),
+                    from_version=_TARGET_VERSION - 1,
+                    desired_version=_TARGET_VERSION,
+                    status="activated",
+                    cohort_size=5,
+                    created_at=now - timedelta(hours=1),
+                    activated_at=now,
+                )
+            )
+        _install_db(app, session_maker)
+
+        response = await client.get("/api/v1/screener/queue")
+
+        assert response.status_code == 200, response.text
+        listed = {UUID(item["agent_id"]) for item in response.json()["items"]}
+        assert stale_historical not in listed
+        assert stale_current_era in listed
+
     async def test_lists_only_uploaded_oldest_first(
         self,
         app: FastAPI,

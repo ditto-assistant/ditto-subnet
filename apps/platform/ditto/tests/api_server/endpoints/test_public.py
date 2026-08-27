@@ -6840,6 +6840,43 @@ class TestPublicActivity:
         assert entry["status"] == "waiting_screening"
         assert entry["screening_reason"] is None
 
+    async def test_policy_bump_projects_unadmitted_stale_agent_as_not_queued(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        """A stale policy version alone is not a rescreen ticket.
+
+        Only era-admitted agents return to ``waiting_screening`` on a policy
+        bump; a historical submission outside the active benchmark era stays
+        ``not_queued``. The waiting_screening count drives screener
+        autoscaling, so projecting the whole stale backlog there also bought
+        capacity for work no screener would ever be allowed to claim.
+        """
+        historical = await _seed_agent(
+            session_maker,
+            miner=_MINER_A,
+            name="stale-historical",
+            status=AgentStatus.EVALUATING,
+            created_at=datetime(2026, 5, 1, tzinfo=UTC),
+            screening_policy_version=SCREENING_POLICY_VERSION - 1,
+        )
+        current_era = await _seed_agent(
+            session_maker,
+            miner=_MINER_B,
+            name="stale-current-era",
+            status=AgentStatus.EVALUATING,
+            screening_policy_version=SCREENING_POLICY_VERSION - 1,
+        )
+        await _activate_era(session_maker)
+        _install_db(app, session_maker)
+
+        body = (await client.get("/api/v1/public/activity")).json()
+        by_id = {entry["agent_id"]: entry["status"] for entry in body["entries"]}
+        assert by_id[historical] == "not_queued"
+        assert by_id[current_era] == "waiting_screening"
+
     async def test_quarantined_attempt_history_is_publicly_serializable(
         self,
         app: FastAPI,

@@ -417,9 +417,16 @@ async def query_public_activity_page(
         if active_assignment_agent_ids
         else false()
     )
-    needs_rescreen = Agent.status.in_(
-        (AgentStatus.EVALUATING, AgentStatus.REJECTED)
-    ) & (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+    # A stale policy version only puts an agent back in the screening queue if
+    # it is admitted to the active benchmark era; the claim path applies the
+    # same boundary. Non-admitted historical agents fall through to
+    # ``not_queued`` instead of inflating the waiting_screening backlog the
+    # capacity controller scales on.
+    needs_rescreen = (
+        Agent.status.in_((AgentStatus.EVALUATING, AgentStatus.REJECTED))
+        & (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+        & admitted
+    )
     below_floor = (
         (Agent.status == AgentStatus.EVALUATING)
         & ~live_assignment

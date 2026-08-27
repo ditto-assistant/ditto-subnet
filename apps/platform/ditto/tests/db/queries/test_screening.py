@@ -1517,6 +1517,64 @@ async def test_historical_unadmitted_agent_is_not_reclaimed_for_prerequisites(
     assert refreshed is not None and refreshed.status == AgentStatus.EVALUATING
 
 
+async def test_policy_bump_does_not_requeue_unadmitted_historical_agent(
+    session: AsyncSession,
+) -> None:
+    """A policy bump only rescreens agents admitted to the active era.
+
+    Bumping ``SCREENING_POLICY_VERSION`` used to return every stale EVALUATING
+    agent to the queue, flooding the screeners with month-old submissions the
+    validator allocator would never lease again anyway.
+    """
+    now = datetime.now(UTC)
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-stale-historical",
+        name="stale-historical",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.EVALUATING,
+        created_at=now - timedelta(days=30),
+    )
+    agent.screening_policy_version = SCREENING_POLICY_VERSION - 1
+    _complete_screened_image(agent)
+    async with session.begin():
+        session.add(agent)
+    await _activate_current_era(session)
+
+    claimed = await _claim(session)
+
+    assert agent.agent_id not in {
+        claimed_agent.agent_id for claimed_agent, _, _ in claimed
+    }
+    refreshed = await session.get(Agent, agent.agent_id)
+    assert refreshed is not None and refreshed.status == AgentStatus.EVALUATING
+
+
+async def test_policy_bump_still_requeues_current_era_agent(
+    session: AsyncSession,
+) -> None:
+    """An agent submitted inside the active era still rescreens after a bump."""
+    await _activate_current_era(session)
+    # created_at defaults to now, after the activated rollout's boundary.
+    agent = Agent(
+        agent_id=uuid4(),
+        miner_hotkey="5HK-stale-current-era",
+        name="stale-current-era",
+        sha256=uuid4().hex * 2,
+        status=AgentStatus.EVALUATING,
+    )
+    agent.screening_policy_version = SCREENING_POLICY_VERSION - 1
+    _complete_screened_image(agent)
+    async with session.begin():
+        session.add(agent)
+
+    claimed = await _claim(session)
+
+    assert agent.agent_id in {claimed_agent.agent_id for claimed_agent, _, _ in claimed}
+    refreshed = await session.get(Agent, agent.agent_id)
+    assert refreshed is not None and refreshed.status == AgentStatus.SCREENING
+
+
 async def test_historical_rollout_member_is_reclaimed_for_prerequisites(
     session: AsyncSession,
 ) -> None:
