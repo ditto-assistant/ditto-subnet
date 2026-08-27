@@ -505,6 +505,11 @@ def test_stack_bootstrap_persists_registry_wallet_and_signature_context() -> Non
     assert "ditto-validator-stack-prefetch.service" in installer
     assert "ditto-validator-stack-prefetch.timer" in installer
     assert "validator-stack-auto-update.sh prefetch" in installer
+    assert "ditto-validator-stack-updater-refresh.service" in installer
+    assert "ditto-validator-stack-updater-refresh.timer" in installer
+    assert "validator-stack-auto-update.sh refresh" in installer
+    assert "OnUnitInactiveSec=15m" in installer
+    assert "ReadWritePaths=$ROOT_DIR $state_dir" in installer
     assert "DITTO_BITTENSOR_WALLETS_DIR" in compose
     assert (
         "managed stack mutation must run through validator-stack-auto-update.sh"
@@ -707,6 +712,67 @@ with open(state_path, "w") as handle:
 
 FAKE_FLOCK = "#!/bin/sh\nexit 0\n"
 
+FAKE_GIT = r"""#!/usr/bin/env python3
+import json
+import os
+import sys
+
+state_path = os.environ["FAKE_STACK_STATE"]
+with open(state_path) as handle:
+    state = json.load(handle)
+args = sys.argv[1:]
+state.setdefault("git_calls", []).append(args)
+try:
+    root_index = args.index("-C")
+except ValueError:
+    raise SystemExit("fake git requires -C")
+command = args[root_index + 2 :]
+
+def save():
+    with open(state_path, "w") as handle:
+        json.dump(state, handle)
+
+if command == ["rev-parse", "--show-toplevel"]:
+    print(os.environ["DITTO_SUBNET_ROOT_DIR"])
+elif command == ["symbolic-ref", "--quiet", "--short", "HEAD"]:
+    branch = state.get("git_branch", "main")
+    if not branch:
+        save()
+        raise SystemExit(1)
+    print(branch)
+elif command == ["remote", "get-url", "origin"]:
+    print(
+        state.get(
+            "git_origin",
+            "https://github.com/ditto-assistant/ditto-subnet.git",
+        )
+    )
+elif command == ["diff", "--quiet", "--ignore-submodules", "--"]:
+    if state.get("git_dirty"):
+        save()
+        raise SystemExit(1)
+elif command == ["diff", "--cached", "--quiet", "--ignore-submodules", "--"]:
+    if state.get("git_staged"):
+        save()
+        raise SystemExit(1)
+elif command == ["rev-parse", "HEAD"]:
+    print(state["git_head"])
+elif command == ["rev-parse", "FETCH_HEAD"]:
+    print(state["git_candidate"])
+elif command == ["fetch", "--no-tags", "origin", "refs/heads/main"]:
+    pass
+elif command[:2] == ["merge-base", "--is-ancestor"]:
+    if state.get("git_divergent"):
+        save()
+        raise SystemExit(1)
+elif command[:3] == ["merge", "--ff-only", "--no-edit"]:
+    state["git_head"] = command[3]
+else:
+    save()
+    raise SystemExit("unhandled fake git call: " + repr(args))
+save()
+"""
+
 FAKE_MV = r"""#!/usr/bin/env python3
 import json
 import os
@@ -782,6 +848,7 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
         "stack-compose": FAKE_COMPOSE,
         "flock": FAKE_FLOCK,
         "cosign": FAKE_COSIGN,
+        "git": FAKE_GIT,
         "mv": FAKE_MV,
     }.items():
         executable = fake_bin / name
@@ -853,12 +920,16 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
             "update_protocol": 1,
         },
         "current_install_version": "0.9.6",
+        "git_head": "1" * 40,
+        "git_candidate": "2" * 40,
     }
     state_path = tmp_path / "state.json"
     state_path.write_text(json.dumps(state))
     state_dir = tmp_path / "updater-state"
     env_file = tmp_path / ".env"
     env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=false\n")
+    checkout_root = tmp_path / "checkout"
+    checkout_root.mkdir()
     env = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
@@ -866,6 +937,7 @@ def stack_updater_env(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]
         "DITTO_VALIDATOR_STACK_COMPOSE": str(fake_bin / "stack-compose"),
         "DITTO_VALIDATOR_STACK_UPDATE_STATE_DIR": str(state_dir),
         "DITTO_SUBNET_ENV_FILE": str(env_file),
+        "DITTO_SUBNET_ROOT_DIR": str(checkout_root),
         "VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS": "1",
         "VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS": "1",
         "VALIDATOR_AUTO_UPDATE_CHECK_SECONDS": "1",
@@ -956,6 +1028,100 @@ def test_disabled_stack_prefetch_does_not_touch_docker(
     state = json.loads(state_path.read_text())
     assert state["calls"] == []
     assert state["compose_calls"] == []
+
+
+def test_updater_refresh_fast_forwards_canonical_main_without_touching_stack(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, state_dir, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["compose_calls"] = []
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "refresh")
+
+    assert result.returncode == 0, result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["git_head"] == "2" * 40
+    assert final["calls"] == []
+    assert final["compose_calls"] == []
+    assert any("fetch" in call for call in final["git_calls"])
+    assert any("merge" in call for call in final["git_calls"])
+    refresh = _manifest(state_dir / "last-updater-refresh.env")
+    assert refresh["UPDATER_PREVIOUS_REVISION"] == "1" * 40
+    assert refresh["UPDATER_CURRENT_REVISION"] == "2" * 40
+
+
+@pytest.mark.parametrize(
+    ("state_key", "message"),
+    [
+        ("git_dirty", "tracked checkout changes"),
+        ("git_staged", "staged checkout changes"),
+        ("git_divergent", "does not fast-forward"),
+    ],
+)
+def test_updater_refresh_fails_closed_without_mutating_the_stack(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    state_key: str,
+    message: str,
+) -> None:
+    env, state_path, _, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["compose_calls"] = []
+    state[state_key] = True
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "refresh")
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["git_head"] == "1" * 40
+    assert final["calls"] == []
+    assert final["compose_calls"] == []
+
+
+@pytest.mark.parametrize(
+    ("state_changes", "message"),
+    [
+        ({"git_branch": "operator-fork"}, "checkout to be on main"),
+        (
+            {"git_origin": "https://github.com/example/ditto-subnet.git"},
+            "origin is not the canonical",
+        ),
+    ],
+)
+def test_updater_refresh_rejects_untrusted_checkout_identity(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+    state_changes: dict[str, str],
+    message: str,
+) -> None:
+    env, state_path, _, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["calls"] = []
+    state["compose_calls"] = []
+    state.update(state_changes)
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "refresh")
+
+    assert result.returncode != 0
+    assert message in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["git_head"] == "1" * 40
+    assert final["calls"] == []
+    assert final["compose_calls"] == []
 
 
 def test_candidate_prefetch_authenticates_and_warms_without_draining(
@@ -1590,6 +1756,38 @@ def test_same_release_digest_is_a_safe_noop(
     final = json.loads(state_path.read_text())
     assert not any(call[0] in {"kill", "stop"} for call in final["calls"])
     assert not any("up" in call for call in final["compose_calls"])
+
+
+def test_same_release_repairs_unhealthy_pylon_after_drain(
+    stack_updater_env: tuple[dict[str, str], Path, Path, Path],
+) -> None:
+    env, state_path, _, env_file = stack_updater_env
+    adopted = _run_updater(env, "adopt", OLD_STACK_DIGEST)
+    assert adopted.returncode == 0, adopted.stderr
+    state = json.loads(state_path.read_text())
+    state["channel_digest"] = OLD_STACK_DIGEST
+    state["containers"]["pylon-container"]["health"] = "unhealthy"
+    state["calls"] = []
+    state["compose_calls"] = []
+    state_path.write_text(json.dumps(state))
+    env_file.write_text("VALIDATOR_STACK_AUTO_UPDATE=true\n")
+
+    result = _run_updater(env, "run")
+
+    assert result.returncode == 0, result.stderr
+    assert "installed Pylon is unhealthy" in result.stderr
+    assert "recreated unhealthy Pylon" in result.stderr
+    final = json.loads(state_path.read_text())
+    assert final["containers"]["pylon-container"]["health"] == "healthy"
+    assert final["runtime_state"]["state"] == "working"
+    assert any(call[0] == "kill" and "--signal=USR1" in call for call in final["calls"])
+    assert any(call[0] == "kill" and "--signal=USR2" in call for call in final["calls"])
+    repair_calls = [call for call in final["compose_calls"] if "up" in call]
+    assert len(repair_calls) == 1
+    assert "--force-recreate" in repair_calls[0]
+    assert "pylon" in repair_calls[0]
+    assert "ditto-subnet" not in repair_calls[0]
+    assert not any(call[0] == "stop" for call in final["calls"])
 
 
 @pytest.mark.parametrize(

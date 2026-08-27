@@ -4,7 +4,7 @@
 # stay on their existing supervised Compose deployment until they migrate.
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="${DITTO_SUBNET_ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 STACK_COMPOSE="${DITTO_VALIDATOR_STACK_COMPOSE:-$ROOT_DIR/scripts/validator-stack-compose.sh}"
 ENV_FILE="${DITTO_SUBNET_ENV_FILE:-$ROOT_DIR/.env}"
 STATE_DIR="${DITTO_VALIDATOR_STACK_UPDATE_STATE_DIR:-$ROOT_DIR/.validator-stack-update}"
@@ -16,6 +16,7 @@ TRANSACTION_FILE="$STATE_DIR/transaction.env"
 FAILED_CANDIDATE_FILE="$STATE_DIR/failed-candidate"
 LAST_UPDATE_FILE="$STATE_DIR/last-update.env"
 PREFETCHED_FILE="$STATE_DIR/prefetched-release.env"
+LAST_REFRESH_FILE="$STATE_DIR/last-updater-refresh.env"
 LOCK_FILE="$STATE_DIR/lock"
 CURRENT_DIR="$STATE_DIR/current"
 PREVIOUS_DIR="$STATE_DIR/previous"
@@ -51,7 +52,8 @@ is_true() { case "$1" in 1|true|TRUE|True|yes|YES|Yes) return 0;; *) return 1;; 
 stack_update_timers_enabled() {
   command -v systemctl >/dev/null 2>&1 || return 1
   systemctl is-enabled --quiet ditto-validator-stack-auto-update.timer 2>/dev/null \
-    || systemctl is-enabled --quiet ditto-validator-stack-prefetch.timer 2>/dev/null
+    || systemctl is-enabled --quiet ditto-validator-stack-prefetch.timer 2>/dev/null \
+    || systemctl is-enabled --quiet ditto-validator-stack-updater-refresh.timer 2>/dev/null
 }
 require_positive_integer() { [[ "$2" =~ ^[1-9][0-9]*$ ]] || die "$1 must be a positive integer"; }
 is_descriptor_digest() { [[ "$1" =~ ^ghcr\.io/ditto-assistant/ditto-subnet-stack@sha256:[0-9a-f]{64}$ ]]; }
@@ -444,6 +446,23 @@ assert_stack_matches() {
   done
 }
 
+assert_stack_matches_except_pylon() {
+  local dir="$1" index service key ref expected actual container services=() image_keys=()
+  while IFS= read -r service; do services+=("$service"); done < <(release_services "$dir")
+  while IFS= read -r key; do image_keys+=("$key"); done < <(release_image_keys "$dir")
+  for index in "${!services[@]}"; do
+    service="${services[$index]}"; key="${image_keys[$index]}"
+    ref="$(manifest_value "$dir/manifest.env" "$key")"
+    expected="$(docker image inspect --format '{{.Id}}' "$ref" 2>/dev/null || true)"
+    [ -n "$expected" ] || return 1
+    container="$(service_container "$dir" "$service")"
+    if [ -z "$container" ] && [ "$service" = pylon ]; then continue; fi
+    [ -n "$container" ] || return 1
+    actual="$(docker inspect --format '{{.Image}}' "$container" 2>/dev/null || true)"
+    [ "$actual" = "$expected" ] || return 1
+  done
+}
+
 stack_services_healthy() {
   local dir="$1" service container running health
   while IFS= read -r service; do
@@ -454,6 +473,55 @@ stack_services_healthy() {
     health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
     case "$health" in healthy|none) ;; *) return 1;; esac
   done < <(release_services "$dir")
+}
+
+pylon_requires_repair() {
+  local dir="$1" container running health
+  container="$(service_container "$dir" pylon)"
+  [ -n "$container" ] || return 0
+  running="$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)"
+  [ "$running" = true ] || return 0
+  health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
+  # Old managed descriptors had no Pylon healthcheck. Preserve their historical
+  # no-op behavior until a release carrying the probe replaces them. A new
+  # container in its startup grace also gets its full retry budget.
+  [ "$health" = unhealthy ]
+}
+
+wait_pylon_healthy() {
+  local dir="$1" timeout="$2" interval="$3" deadline container running health
+  deadline=$((SECONDS+timeout))
+  while ((SECONDS<deadline)); do
+    container="$(service_container "$dir" pylon)"
+    running="$(docker inspect --format '{{.State.Running}}' "$container" 2>/dev/null || true)"
+    health="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$container" 2>/dev/null || true)"
+    if [ "$running" = true ] && [ "$health" = healthy ] && assert_stack_matches "$dir"; then
+      return 0
+    fi
+    sleep "$interval"
+  done
+  return 1
+}
+
+repair_unhealthy_pylon() {
+  local dir="$1" validator state
+  validator="$(service_container "$dir" ditto-subnet)"
+  state="$(runtime_state "$validator")"
+  if ! state_ready "$state" "$validator"; then
+    log "validator is not freshly platform-accepted; deferring unhealthy Pylon repair"
+    return 0
+  fi
+  if ! request_drain "$dir" "$drain_timeout" "$check_seconds"; then
+    log "validator did not drain; deferring unhealthy Pylon repair"
+    return 0
+  fi
+  if ! DITTO_ALLOW_MANAGED_STACK_MUTATION=true compose "$dir" up \
+    -d --no-build --pull never --force-recreate --no-deps pylon; then
+    return 1
+  fi
+  wait_pylon_healthy "$dir" "$ready_timeout" "$check_seconds" || return 1
+  resume_and_verify "$dir" "$ready_timeout" "$check_seconds" || return 1
+  log "recreated unhealthy Pylon from the installed immutable release"
 }
 
 wait_stack_quiescent() {
@@ -761,25 +829,81 @@ show_status() {
   [ ! -f "$LAST_UPDATE_FILE" ] || cat "$LAST_UPDATE_FILE"
   [ ! -f "$PREFETCHED_FILE" ] || cat "$PREFETCHED_FILE"
   [ ! -f "$FAILED_CANDIDATE_FILE" ] || printf 'failed_candidate=%s\n' "$(cat "$FAILED_CANDIDATE_FILE")"
+  [ ! -f "$LAST_REFRESH_FILE" ] || cat "$LAST_REFRESH_FILE"
+}
+
+refresh_updater_checkout() {
+  local checkout_root branch origin current candidate refreshed_at temporary
+  command -v git >/dev/null 2>&1 || die "git is required to refresh the updater checkout"
+  checkout_root="$(git -C "$ROOT_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  [ -n "$checkout_root" ] && [ "$(cd "$checkout_root" && pwd -P)" = "$(cd "$ROOT_DIR" && pwd -P)" ] || \
+    die "updater root is not the Git checkout root: $ROOT_DIR"
+  branch="$(git -C "$ROOT_DIR" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  [ "$branch" = main ] || die "updater self-refresh requires the checkout to be on main, found ${branch:-detached HEAD}"
+  origin="$(git -C "$ROOT_DIR" remote get-url origin 2>/dev/null || true)"
+  case "$origin" in
+    https://github.com/ditto-assistant/ditto-subnet|https://github.com/ditto-assistant/ditto-subnet.git|git@github.com:ditto-assistant/ditto-subnet.git|ssh://git@github.com/ditto-assistant/ditto-subnet.git) ;;
+    *) die "origin is not the canonical ditto-assistant/ditto-subnet repository" ;;
+  esac
+  git -C "$ROOT_DIR" diff --quiet --ignore-submodules -- || die "tracked checkout changes block updater self-refresh"
+  git -C "$ROOT_DIR" diff --cached --quiet --ignore-submodules -- || die "staged checkout changes block updater self-refresh"
+  current="$(git -C "$ROOT_DIR" rev-parse HEAD)"
+  [[ "$current" =~ ^[0-9a-f]{40}$ ]] || die "current checkout revision is invalid"
+  git -c core.hooksPath=/dev/null -c submodule.recurse=false -C "$ROOT_DIR" \
+    fetch --no-tags origin refs/heads/main
+  candidate="$(git -C "$ROOT_DIR" rev-parse FETCH_HEAD)"
+  [[ "$candidate" =~ ^[0-9a-f]{40}$ ]] || die "fetched main revision is invalid"
+  git -C "$ROOT_DIR" merge-base --is-ancestor "$current" "$candidate" || \
+    die "origin/main does not fast-forward the updater checkout"
+  if [ "$candidate" != "$current" ]; then
+    git -c core.hooksPath=/dev/null -c submodule.recurse=false -C "$ROOT_DIR" \
+      merge --ff-only --no-edit "$candidate"
+    [ "$(git -C "$ROOT_DIR" rev-parse HEAD)" = "$candidate" ] || \
+      die "updater checkout did not reach fetched origin/main"
+    log "refreshed updater checkout $current -> $candidate"
+  else
+    log "updater checkout already matches origin/main at $current"
+  fi
+  refreshed_at="$(date +%s)"
+  temporary="$LAST_REFRESH_FILE.tmp"
+  umask 077
+  printf 'UPDATER_PREVIOUS_REVISION=%s\nUPDATER_CURRENT_REVISION=%s\nUPDATER_REFRESHED_AT=%s\n' \
+    "$current" "$candidate" "$refreshed_at" >"$temporary"
+  mv "$temporary" "$LAST_REFRESH_FILE"
 }
 
 mode="${1:-run}"
-case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; run|prefetch|recover|status|budget) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|prefetch|status|recover|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback]";; esac
+case "$mode" in adopt|migrate|rollback) [ "$#" -le 2 ] || die "usage: $0 $mode [descriptor-digest]";; run|prefetch|refresh|recover|status|budget) [ "$#" -eq 1 ] || die "usage: $0 $mode";; *) die "usage: $0 [run|prefetch|refresh|status|recover|adopt <descriptor-digest>|migrate <descriptor-digest>|rollback]";; esac
 if [ "$mode" = budget ]; then printf 'TIMEOUT_START_SECONDS=10800\nTIMEOUT_STOP_SECONDS=600\n'; exit 0; fi
-command -v docker >/dev/null 2>&1 || die "Docker is not installed"
-[ -x "$STACK_COMPOSE" ] || die "stack Compose wrapper is not executable"
 if [ "$mode" = status ]; then show_status; exit 0; fi
 command -v flock >/dev/null 2>&1 || die "flock is not installed"
-command -v cosign >/dev/null 2>&1 || die "cosign is required to authenticate stack descriptors"
 case "$STATE_DIR" in /*) ;; *) die "stack update state directory must be absolute";; esac
 [ "$STATE_DIR" != / ] || die "refusing to use the filesystem root as updater state"
 [ ! -L "$STATE_DIR" ] || die "stack update state directory must not be a symbolic link"
 mkdir -p "$STATE_DIR"; chmod 0700 "$STATE_DIR"; exec 9>>"$LOCK_FILE"
 if ! flock -n 9; then
-  [ "$mode" = prefetch ] && { log "stack update is active; deferring candidate prefetch"; exit 0; }
+  case "$mode" in
+    prefetch) log "stack update is active; deferring candidate prefetch"; exit 0 ;;
+    refresh) log "stack update is active; deferring updater checkout refresh"; exit 0 ;;
+  esac
   die "another stack update is running"
 fi
 LOCK_HELD=true
+if [ "$mode" = refresh ]; then
+  [ -f "$MANAGED_FILE" ] || die "stack updater is not adopted"
+  if ! is_true "$(setting VALIDATOR_STACK_AUTO_UPDATE true)"; then
+    log "disabled (set VALIDATOR_STACK_AUTO_UPDATE=true to opt back in)"
+    exit 0
+  fi
+  refresh_updater_checkout
+  flock -u 9 >/dev/null 2>&1 || true
+  exec 9>&-
+  LOCK_HELD=false
+  exit 0
+fi
+command -v docker >/dev/null 2>&1 || die "Docker is not installed"
+[ -x "$STACK_COMPOSE" ] || die "stack Compose wrapper is not executable"
+command -v cosign >/dev/null 2>&1 || die "cosign is required to authenticate stack descriptors"
 drain_timeout="$(setting VALIDATOR_AUTO_UPDATE_DRAIN_TIMEOUT_SECONDS 14700)"; ready_timeout="$(setting VALIDATOR_AUTO_UPDATE_READY_TIMEOUT_SECONDS 300)"; check_seconds="$(setting VALIDATOR_AUTO_UPDATE_CHECK_SECONDS 5)"
 failure_backoff_seconds="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_BACKOFF_SECONDS 900)"; failure_max_attempts="$(setting VALIDATOR_AUTO_UPDATE_FAILURE_MAX_ATTEMPTS 3)"
 require_positive_integer drain_timeout "$drain_timeout"; require_positive_integer ready_timeout "$ready_timeout"; require_positive_integer check_seconds "$check_seconds"
@@ -855,6 +979,11 @@ candidate="$(resolve_channel_digest "$RELEASE_CHANNEL")"
 verify_descriptor_signature "$candidate" || die "candidate descriptor publisher identity is invalid"
 if failed_candidate_is_suppressed "$candidate"; then exit 0; fi
 if [ "$candidate" = "$(managed_release)" ]; then
+  if validate_descriptor "$candidate" "$CURRENT_DIR" && pylon_requires_repair "$CURRENT_DIR"; then
+    assert_stack_matches_except_pylon "$CURRENT_DIR" || die "running stack has drifted outside the Pylon repair target"
+    log "installed Pylon is unhealthy; draining before same-release repair"
+    repair_unhealthy_pylon "$CURRENT_DIR" || die "unhealthy Pylon could not be repaired; validator resume attempted"
+  fi
   rm -f "$PREFETCHED_FILE"
   prune_obsolete_managed_images
   log "already running stack release $candidate"

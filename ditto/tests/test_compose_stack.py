@@ -58,6 +58,19 @@ def test_sandbox_health_reports_the_isolated_daemon() -> None:
     assert "docker info >/dev/null 2>&1" in probe
 
 
+def test_pylon_must_accept_connections_before_validator_starts() -> None:
+    services = yaml.safe_load(COMPOSE_PATH.read_text())["services"]
+    pylon_probe = services["pylon"]["healthcheck"]["test"]
+
+    assert pylon_probe[0] == "CMD"
+    assert pylon_probe[1] == "/app/pylon_service/.venv/bin/python"
+    assert "socket.create_connection" in pylon_probe[3]
+    assert "127.0.0.1" in pylon_probe[3]
+    assert services["ditto-subnet"]["depends_on"]["pylon"]["condition"] == (
+        "service_healthy"
+    )
+
+
 def test_scorer_health_requires_the_miner_embedding_gateway() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     probe = " ".join(compose["services"]["dittobench-api"]["healthcheck"]["test"])

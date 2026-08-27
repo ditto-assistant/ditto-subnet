@@ -27,11 +27,14 @@ that channel advances only after all release gates pass.
 
 The host-side launcher, systemd unit, Docker Engine, wallet directory, and
 `.env` are deliberately outside the signed bundle so a candidate workload can
-never replace its own trust anchor. Any change to the updater protocol, Compose
-schema, descriptor format, compatibility epoch, or heartbeat protocol is
-therefore a **supervised migration**, never an automatic update. Within those
-gates, compatible patch and minor releases in the same major version update
-automatically.
+never replace its own trust anchor. A separate timer keeps the host checkout's
+launcher current by fast-forwarding a clean `main` checkout from the canonical
+Ditto repository. It shares the transaction lock, rejects detached, dirty, or
+divergent checkouts and noncanonical `origin` URLs, and does not change the
+running descriptor-pinned stack. Any change to the updater protocol, Compose
+schema, descriptor format, compatibility epoch, heartbeat protocol, or systemd
+units is still a **supervised migration**. Within those gates, compatible patch
+and minor releases in the same major version update automatically.
 
 ## First adoption
 
@@ -74,9 +77,10 @@ touched; no managed update ever builds from source.
 
 - `status` is read-only and network-free; `recover` and `rollback` are
   supervised — keep the timer disabled while running them.
-- The one-minute prefetch and stable update timers share a lock. Prefetch
-  defers to an update or interrupted transaction and records no activation
-  state; repeated polls reuse the authenticated warm image cache.
+- The one-minute prefetch and stable update timers and the 15-minute updater
+  checkout refresh share a lock. Prefetch and refresh defer to an update or
+  interrupted transaction. Repeated release polls reuse the authenticated warm
+  image cache.
 - Keep enough free disk for two stacks concurrently, and never prune images
   referenced by the installed, previous, or pending descriptors.
 - Source-built installs are never silently converted, and a registry outage

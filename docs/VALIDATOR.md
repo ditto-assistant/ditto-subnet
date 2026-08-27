@@ -320,6 +320,11 @@ to be visible.
   scorer is not the pinned `dittobench-api` revision. See
   [Stale scorer image](#stale-scorer-image). Restarting the validator does not
   help — the scorer image itself must be rebuilt from the pin.
+- **The fleet view shows `pylon: unreachable`:** scoring can continue, but
+  weight requests cannot. Current releases healthcheck the Pylon listener and
+  the managed updater drains active work before recreating only that sidecar
+  from the installed immutable digest. Restarting only the validator does not
+  repair a failed Pylon service.
 - **v7 tickets fail immediately with `reason=infrastructure`, scorer logs show
   `inference control plane unavailable` (401):** the scorer and the validator
   disagree about the inference control token. The scorer joins
@@ -401,7 +406,8 @@ sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
   ./scripts/install-validator-stack-auto-update.sh
 systemctl list-timers \
   ditto-validator-stack-prefetch.timer \
-  ditto-validator-stack-auto-update.timer
+  ditto-validator-stack-auto-update.timer \
+  ditto-validator-stack-updater-refresh.timer
 ./scripts/validator-stack-auto-update.sh status
 ```
 
@@ -418,16 +424,52 @@ finishes first), replaces all four services as one transaction, and rolls the
 complete previous stack back if the new one fails verification. Major or schema
 changes require supervised migration.
 
+Every 15 minutes, a third timer also fast-forwards a clean checkout on `main`
+from the canonical `ditto-assistant/ditto-subnet` origin. The refresh shares the
+stack transaction lock and never changes running services; the next updater
+invocation uses the refreshed launcher. Detached, locally modified, divergent,
+or noncanonical checkouts fail closed. Re-run the installer manually after a
+reviewed change to its systemd units; the updater cannot grant itself root
+authority to rewrite those units.
+
+Existing managed validators need one manual bootstrap when this refresh timer
+is first introduced. Do this only from the canonical checkout with no tracked
+changes; it does not restart the running stack:
+
+```sh
+git status --short
+git diff --quiet
+git diff --cached --quiet
+git checkout main
+git pull --ff-only origin main
+sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
+  ./scripts/install-validator-stack-auto-update.sh
+sudo systemctl start ditto-validator-stack-updater-refresh.service
+sudo systemctl start ditto-validator-stack-auto-update.service
+systemctl list-timers \
+  ditto-validator-stack-prefetch.timer \
+  ditto-validator-stack-auto-update.timer \
+  ditto-validator-stack-updater-refresh.timer
+./scripts/validator-stack-auto-update.sh status
+```
+
+If the fleet view reported `pylon: unreachable`, confirm after the update that
+`./scripts/validator-compose.sh ps` lists Pylon healthy and that the next
+commit-reveal cycle produces an on-chain weight vector. Do not restart only the
+validator process; it does not repair the Pylon listener.
+
 To disable updates, inspect an interrupted run, or roll back manually:
 
 ```sh
 sed -i 's/^VALIDATOR_STACK_AUTO_UPDATE=.*/VALIDATOR_STACK_AUTO_UPDATE=false/' .env
 sudo systemctl disable --now \
   ditto-validator-stack-prefetch.timer \
-  ditto-validator-stack-auto-update.timer
+  ditto-validator-stack-auto-update.timer \
+  ditto-validator-stack-updater-refresh.timer
 sudo systemctl stop \
   ditto-validator-stack-prefetch.service \
-  ditto-validator-stack-auto-update.service
+  ditto-validator-stack-auto-update.service \
+  ditto-validator-stack-updater-refresh.service
 ./scripts/validator-stack-auto-update.sh status
 ./scripts/validator-stack-auto-update.sh rollback   # manual rollback only
 ```
