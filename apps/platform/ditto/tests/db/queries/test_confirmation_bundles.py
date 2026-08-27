@@ -1239,12 +1239,12 @@ class TestCompletionAndRetest:
         assert bundle.state == "completed"
         assert bundle.completion_mode == "shadow"
 
-    async def test_retest_requires_completed_evidence(
+    async def test_retest_requires_a_terminal_bundle(
         self, session: AsyncSession
     ) -> None:
         async with session.begin():
             _, _, _, bundle = await seed_bundle(session)
-            with pytest.raises(ConfirmationBundlePersistenceError, match="completed"):
+            with pytest.raises(ConfirmationBundlePersistenceError, match="failed"):
                 await authorize_confirmation_bundle_retest(
                     session,
                     source_bundle_id=bundle.bundle_id,
@@ -1252,6 +1252,83 @@ class TestCompletionAndRetest:
                     expected_generation=0,
                     actor="operator@example.com",
                     reason="operator approved a fresh confirmation run",
+                )
+
+    async def test_failed_bundle_retest_creates_one_audited_generation(
+        self, session: AsyncSession
+    ) -> None:
+        async with session.begin():
+            agent_id, revision, policy, bundle = await seed_bundle(session)
+            reservation, _ = await reserve_and_issue(
+                session, bundle=bundle, revision=revision, policy=policy
+            )
+            await settle_confirmation_bundle_budget(
+                session,
+                reservation_id=reservation.reservation_id,
+                expected_revision=1,
+                actual_microusd=15_000,
+                failed_attempt=True,
+                settled_at=_NOW + timedelta(minutes=4),
+            )
+            latest_revision, _ = await seed_settings(
+                session,
+                settings(top_n=6),
+                parent_revision=revision.revision,
+            )
+            request_id = uuid4()
+            result = await authorize_confirmation_bundle_retest(
+                session,
+                source_bundle_id=bundle.bundle_id,
+                authorization_id=request_id,
+                expected_generation=0,
+                actor="operator@example.com",
+                reason="confirmed execution issue; authorize one manual retest",
+            )
+        assert result.bundle.retest_generation == 1
+        assert result.bundle.generation_reason == "operator_retest"
+        assert result.bundle.retest_authorization_id == request_id
+        assert result.bundle.settings_revision == latest_revision.revision
+        assert result.bundle.settings_checksum == latest_revision.checksum
+        assert result.bundle.state == ConfirmationBundleState.PENDING.value
+        assert (
+            result.superseded_bundle.state == ConfirmationBundleState.SUPERSEDED.value
+        )
+        subject = await session.get(ConfirmationBundleSubject, (agent_id, 9))
+        assert subject is not None
+        assert subject.bundle_id == result.bundle.bundle_id
+
+    async def test_spent_bundle_cannot_reserve_an_automatic_retry(
+        self, session: AsyncSession
+    ) -> None:
+        async with session.begin():
+            _, revision, policy, bundle = await seed_bundle(session)
+            reservation, _ = await reserve_and_issue(
+                session, bundle=bundle, revision=revision, policy=policy
+            )
+            settled = await settle_confirmation_bundle_budget(
+                session,
+                reservation_id=reservation.reservation_id,
+                expected_revision=1,
+                actual_microusd=15_000,
+                failed_attempt=True,
+                settled_at=_NOW + timedelta(minutes=4),
+            )
+            # Older deployments could leave a spent failure budget-blocked
+            # after trying to reserve its next automatic attempt.
+            bundle.state = ConfirmationBundleState.BLOCKED_BUDGET.value
+            with pytest.raises(
+                ConfirmationBundlePersistenceError,
+                match="already consumed its automatic attempt",
+            ):
+                await reserve_confirmation_bundle_budget(
+                    session,
+                    bundle_id=bundle.bundle_id,
+                    reservation_id=uuid4(),
+                    now=_NOW + timedelta(minutes=5),
+                    expected_revision=settled.budget.revision,
+                    settings_revision=revision.revision,
+                    settings=policy,
+                    reserve_microusd=40_000,
                 )
 
     async def test_authorized_retest_creates_exact_next_generation(

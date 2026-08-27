@@ -18,7 +18,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import bittensor
@@ -82,6 +82,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.confirmation_attempt_lock import lock_confirmation_attempt
 from ditto.db.queries.confirmation_bundles import (
+    authorize_confirmation_bundle_retest,
     complete_confirmation_bundle,
     get_or_create_confirmation_bundle,
     settle_confirmation_bundle_budget,
@@ -3804,7 +3805,7 @@ class TestV9ConfirmationFailureRecovery:
             0,
         )
 
-    async def test_failed_attempt_releases_slot_and_budget_for_a_bounded_retry(
+    async def test_failed_attempt_requires_an_operator_authorized_retest(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -3827,47 +3828,63 @@ class TestV9ConfirmationFailureRecovery:
         )
         assert failed.status_code == 200, failed.text
 
-        cooling_down = await _claim(client, payload=_claim_payload(slot_id="longmem-0"))
-        assert cooling_down.status_code == 204, cooling_down.text
+        automatic_retry = await _claim(
+            client, payload=_claim_payload(slot_id="longmem-0")
+        )
+        assert automatic_retry.status_code == 204, automatic_retry.text
 
-        with patch.object(
-            confirmation_mod,
-            "CONFIRMATION_FAILED_REISSUE_COOLDOWN",
-            timedelta(0),
-        ):
-            reclaimed = await _claim(
-                client, payload=_claim_payload(slot_id="longmem-0")
+        async with session_maker() as session, session.begin():
+            retest = await authorize_confirmation_bundle_retest(
+                session,
+                source_bundle_id=seeded.bundle_id,
+                authorization_id=uuid4(),
+                expected_generation=0,
+                actor="operator@example.com",
+                reason="confirmed execution issue; authorize one manual retest",
             )
+            retest_bundle_id = retest.bundle.bundle_id
+
+        reclaimed = await _claim(client, payload=_claim_payload(slot_id="longmem-0"))
 
         assert reclaimed.status_code == 200, reclaimed.text
+        assert reclaimed.json()["bundle_id"] == str(retest_bundle_id)
         assert reclaimed.json()["ticket_id"] != str(first_ticket.ticket_id)
         assert reclaimed.json()["slot_id"] == "longmem-0"
         async with session_maker() as session:
             tickets = list(
                 await session.scalars(
                     select(ConfirmationBundleTicket)
-                    .where(ConfirmationBundleTicket.bundle_id == seeded.bundle_id)
+                    .where(
+                        ConfirmationBundleTicket.bundle_id.in_(
+                            (seeded.bundle_id, retest_bundle_id)
+                        )
+                    )
                     .order_by(ConfirmationBundleTicket.attempt)
                 )
             )
             reservations = list(
                 await session.scalars(
                     select(ConfirmationBudgetReservation)
-                    .where(ConfirmationBudgetReservation.bundle_id == seeded.bundle_id)
+                    .where(
+                        ConfirmationBudgetReservation.bundle_id.in_(
+                            (seeded.bundle_id, retest_bundle_id)
+                        )
+                    )
                     .order_by(ConfirmationBudgetReservation.attempt)
                 )
             )
             budget = await session.get(ConfirmationBudgetDay, reservations[0].utc_day)
-        assert [(row.attempt, row.status) for row in tickets] == [
+        assert sorted((row.attempt, row.status) for row in tickets) == [
             (1, "expired"),
-            (2, "issued"),
+            (1, "issued"),
         ]
-        assert [row.state for row in reservations] == ["settled", "reserved"]
+        assert sorted(row.state for row in reservations) == ["reserved", "settled"]
         assert budget is not None
         assert budget.revision == 3
         assert budget.issued_attempts == 2
         assert budget.settled_microusd == first_reservation.reserved_microusd
-        assert budget.outstanding_reserved_microusd == reservations[1].reserved_microusd
+        reserved = next(row for row in reservations if row.state == "reserved")
+        assert budget.outstanding_reserved_microusd == reserved.reserved_microusd
 
     async def test_crash_expiry_is_pessimistic_and_idempotent(
         self,
@@ -4096,10 +4113,7 @@ class TestV9ConfirmationFailureRecovery:
 
         claim = await asyncio.wait_for(claim_task, timeout=5)
         assert claim.status_code == 200, claim.text
-        expected_claimed = (
-            seeded.bundle_id if operation == "recovery" else pending.bundle_id
-        )
-        assert claim.json()["bundle_id"] == str(expected_claimed)
+        assert claim.json()["bundle_id"] == str(pending.bundle_id)
 
         async with session_maker() as session:
             reservations = list(
@@ -4126,7 +4140,7 @@ class TestV9ConfirmationFailureRecovery:
             assert stored_source.state == "leased"
             assert budget.settled_microusd == 0
         elif operation == "recovery":
-            assert stored_source.state == "leased"
+            assert stored_source.state == "failed"
             assert settled[0].failed_attempt is True
             assert budget.settled_microusd == settled[0].reserved_microusd
         else:

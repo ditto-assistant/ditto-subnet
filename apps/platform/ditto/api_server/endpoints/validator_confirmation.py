@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
 from uuid import UUID, uuid4
 
@@ -302,43 +302,6 @@ def _execution_profile(
             "checksum": profile.checksum(),
         }
     )
-
-
-# Failed LongMem tickets used to be re-claimed on the next validator poll,
-# which turned an identity-pin or scorer reject into a 16-attempt, $52.50
-# storm in two minutes. A bounded per-bundle cooldown applies only to those
-# immediate execution failures so a 90-minute lease expiry can still retry
-# on the next poll.
-CONFIRMATION_FAILED_REISSUE_COOLDOWN = timedelta(minutes=15)
-_CONFIRMATION_IMMEDIATE_FAIL = timedelta(seconds=30)
-
-
-def _aware(value: datetime) -> datetime:
-    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
-
-
-async def _bundle_reissue_cooling_down(
-    session: AsyncSession, *, bundle_id: UUID, now: datetime
-) -> bool:
-    ticket = await session.scalar(
-        select(ConfirmationBundleTicket)
-        .where(
-            ConfirmationBundleTicket.bundle_id == bundle_id,
-            ConfirmationBundleTicket.failed_at.is_not(None),
-        )
-        .order_by(
-            ConfirmationBundleTicket.failed_at.desc(),
-            ConfirmationBundleTicket.ticket_id.desc(),
-        )
-        .limit(1)
-    )
-    if ticket is None or ticket.failed_at is None:
-        return False
-    failed_at = _aware(ticket.failed_at)
-    issued_at = _aware(ticket.issued_at)
-    if failed_at - issued_at > _CONFIRMATION_IMMEDIATE_FAIL:
-        return False
-    return failed_at + CONFIRMATION_FAILED_REISSUE_COOLDOWN > now
 
 
 async def _subject_agent_id(session: AsyncSession, *, bundle_id: UUID) -> UUID | None:
@@ -655,7 +618,6 @@ async def request_v9_confirmation_job(
                         ConfirmationBundle.state.in_(
                             (
                                 ConfirmationBundleState.PENDING.value,
-                                ConfirmationBundleState.FAILED.value,
                                 ConfirmationBundleState.BLOCKED_BUDGET.value,
                             )
                         ),
@@ -675,10 +637,6 @@ async def request_v9_confirmation_job(
             )
             selected_bundle = None
             for candidate in bundles:
-                if await _bundle_reissue_cooling_down(
-                    session, bundle_id=candidate.bundle_id, now=now
-                ):
-                    continue
                 if (
                     await _subject_agent_id(session, bundle_id=candidate.bundle_id)
                     is not None

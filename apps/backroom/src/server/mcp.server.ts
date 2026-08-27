@@ -516,7 +516,7 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   start_benchmark_rollout:
     'Start a forward-only rollout. Confirmation: START BENCHMARK V{n}.',
   authorize_confirmation_bundle_retest:
-    'Authorize exactly the next evidence generation with current generation, request UUID, reason, and exact retest phrase. Does not activate rewards.',
+    'Authorize one manual retest for a completed or failed bundle. Requires current generation, request UUID, reason, and exact phrase. Automatic retries stay disabled.',
   remove_failed_submission_from_queue:
     'Withdraw an exhausted submission using a fresh snapshot and "REMOVE FROM VALIDATOR QUEUE". Preserves the record, scores, artifact, payment, and history. Use evict_live_validator_leases instead when live leases still consume capacity.',
   get_score_history:
@@ -1535,7 +1535,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'List LongMem confirmation bundles',
       description:
-        'List newest-first LongMem bundles for the live benchmark with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. Filter by state and page bounds. Requires backroom:read. Each ticket carries failure_reason -- the coarse four-value protocol class that drives reissue -- plus failure_class and failure_stage, the allowlisted diagnostic and the last stage the slot published, both bound into the reporter signature. They are null only for a reporter predating that contract, so repeated nulls across fresh attempts mean the fleet has not adopted it yet. prepare_rejection is the allowlisted Go-to-Python prepare-report 409, distinct from the later fail-job class. Null means prepare never ran or succeeded. shadow_calibration counts completed_bundle_count (bundles that actually produced verified evidence) separately from superseded_bundle_count and failed_bundle_count: a lane with zero completions is an execution outage, not a cohort that completed and never promoted, and promotion_rate_bps is null rather than zero in that case.',
+        'List newest-first LongMem bundles for the live benchmark with lifecycle, signed evidence, profile provenance, spend, and shadow-cost measurements. Filter by state and page bounds. Requires backroom:read. Each ticket carries failure_reason -- the coarse protocol class for diagnosis and manual retest -- plus failure_class and failure_stage, the allowlisted diagnostic and last published stage, all reporter-signed. Failed bundles never reissue automatically. Null fields identify an old reporter; repeated nulls mean the fleet has not adopted the contract. prepare_rejection is the allowlisted Go-to-Python prepare-report 409, distinct from the later fail-job class. Null means prepare never ran or succeeded. shadow_calibration counts completed_bundle_count (bundles that actually produced verified evidence) separately from superseded_bundle_count and failed_bundle_count: a lane with zero completions is an execution outage, not a cohort that completed and never promoted, and promotion_rate_bps is null rather than zero in that case.',
       inputSchema: {
         state: confirmationBundleStateSchema.optional(),
         limit: z.number().int().min(1).max(200).default(20),
@@ -1574,7 +1574,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Authorize Bench v9 confirmation retest',
       description:
-        'Create exactly the next evidence generation for one completed or superseded Bench v9 confirmation bundle. Supply a fresh requestId, expectedGeneration from get_confirmation_bundle, an audit reason, and exact confirmation "AUTHORIZE CONFIRMATION BUNDLE RETEST". The source is preserved and superseded, the new bundle starts pending, and every attached subject returns to provisional with no full projection until new evidence verifies. This is not evidence submission, score replacement, benchmark activation, or reward activation. Requires backroom:write.',
+        'Create one manual retest generation for a completed or failed Bench v9 bundle under the active profile. Supply fresh requestId, expectedGeneration from get_confirmation_bundle, an audit reason, and exact confirmation "AUTHORIZE CONFIRMATION BUNDLE RETEST". The source is preserved and superseded; the new bundle starts pending with one attempt; subjects return to provisional until evidence verifies. A failed retest stays failed until another manual authorization. This is not evidence submission, score replacement, benchmark activation, or reward activation. Requires backroom:write.',
       inputSchema: authorizeConfirmationBundleRetestInputSchema,
       annotations: toolAnnotations('write', true),
     },
