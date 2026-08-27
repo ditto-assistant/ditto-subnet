@@ -2,6 +2,25 @@
 
 <!-- version list -->
 
+## v0.113.1 (2026-08-27)
+
+### Bug Fixes
+
+- **screener**: Catch worksheet-fallback overwrite and scored-family decline gates
+  ([#1182](https://github.com/ditto-assistant/ditto-subnet/pull/1182),
+  [`72445d9`](https://github.com/ditto-assistant/ditto-subnet/commit/72445d939db25fd7665cabe66289f0f09fd61bba))
+
+### Chores
+
+- **agents**: Tighten context lookup routing
+  ([#1175](https://github.com/ditto-assistant/ditto-subnet/pull/1175),
+  [`33e3142`](https://github.com/ditto-assistant/ditto-subnet/commit/33e3142ada02c30d7ececd921760c1e3dd86c588))
+
+- **tests**: Wrap confirmation-transport bind-failure signature
+  ([#1178](https://github.com/ditto-assistant/ditto-subnet/pull/1178),
+  [`099f32f`](https://github.com/ditto-assistant/ditto-subnet/commit/099f32f2dad51678d8afcfe0c8c6904ac9c77441))
+
+
 ## v0.113.0 (2026-08-26)
 
 ### Bug Fixes
