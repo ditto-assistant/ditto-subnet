@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.115.0 (2026-08-27)
+
+### Features
+
+- **backroom**: Control screener policy manifests
+  ([#1188](https://github.com/ditto-assistant/ditto-subnet/pull/1188),
+  [`64a8994`](https://github.com/ditto-assistant/ditto-subnet/commit/64a8994df8284b94a47dad1d4d0b8d49b26bb745))
+
+
 ## v0.114.1 (2026-08-27)
 
 ### Bug Fixes
