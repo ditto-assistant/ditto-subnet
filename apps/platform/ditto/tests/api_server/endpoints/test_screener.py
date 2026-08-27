@@ -3363,7 +3363,7 @@ class TestClaim:
                 agent_id,
                 attempt_id=attempt_id,
                 passed=False,
-                policy_version=SCREENING_POLICY_VERSION - 1,
+                policy_version=8,
             ),
         )
 

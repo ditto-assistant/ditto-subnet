@@ -1182,7 +1182,7 @@ class TestIssueTicket:
                         name=str(agent_id),
                         sha256=f"{agent_id.int:064x}",
                         status=AgentStatus.EVALUATING,
-                        screening_policy_version=9,
+                        screening_policy_version=SCREENING_POLICY_VERSION,
                         screened_image_sha256="12" * 32,
                         screened_image_size_bytes=123,
                         screened_image_id="sha256:" + "34" * 32,
