@@ -16,6 +16,7 @@ import {
   spaQuery,
 } from "../lib/router";
 import type { EntityKind, EntityRoute, PageName } from "../lib/router";
+import { rememberScroll, scrollToTop } from "../lib/scroll";
 
 // URL to return to when closing an overlay opened via pushEntityRoute.
 export const entityReturnUrl: { value: string | null } = { value: null };
@@ -83,15 +84,21 @@ export function syncFromLocation(): void {
 export function navigateToPage(page: PageName): void {
   const target = dashboardHref(page);
   if (location.pathname + location.search + location.hash === target) return;
+  rememberScroll();
   history.pushState({}, "", target);
   entityReturnUrl.value = null;
   syncFromLocation();
+  // pushState never scrolls, so without this the reader keeps the offset they
+  // had on the page they just left and lands mid-way down a page they have
+  // not seen — or clamped to its bottom when the new page is shorter.
+  scrollToTop();
 }
 
 export function pushEntityRoute(kind: EntityKind, id: string): void {
   const href = entityHref(kind, id);
   if (location.pathname + location.search + location.hash === href) return;
   entityReturnUrl.value = location.pathname + location.search + location.hash;
+  rememberScroll();
   history.pushState({ entity: true }, "", href);
   syncFromLocation();
 }

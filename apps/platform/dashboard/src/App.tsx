@@ -35,6 +35,7 @@ import type { ResourceState } from "./data/useEndpoint";
 import { OPS_REFRESH_MS, REFRESH_MS } from "./lib/config";
 import { relTime } from "./lib/format";
 import { PAGES } from "./lib/router";
+import { installScrollMemory } from "./lib/scroll";
 import { benchmarkDisplayVersion, leaderboardBenchState } from "./lib/bench-state";
 import { isFinalized, isOlderRun, rankEntries, rolloutSettledView } from "./lib/scoring";
 import { currentPage, initRouteListeners, syncFromLocation } from "./stores/routeStore";
@@ -68,6 +69,9 @@ export default function App(): JSX.Element {
     syncFromLocation();
     initRouteListeners(() => undefined);
     onCleanup(installTooltips());
+    // Native scroll restoration fires before the async reads paint, so it
+    // always clamped to the top; this restores once the rows exist.
+    onCleanup(installScrollMemory());
   });
 
   // ── App-level endpoint resources ──────────────────────────────────────────

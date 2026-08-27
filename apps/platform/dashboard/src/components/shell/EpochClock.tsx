@@ -8,7 +8,7 @@
 // this far along and resets — which is the actual mechanic. Validators commit
 // weights on their own staggered schedules; the epoch tick is the one moment
 // that is the same for every miner, and it is what the question means.
-import { Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
+import { Index, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
 import type { JSX } from "solid-js";
 
 import { countdownClock, epochCountdown } from "../../lib/scoring";
@@ -94,10 +94,14 @@ export function EpochClock(props: {
             </div>
             <div class="epoch-clock-time">{countdownClock(c().secondsRemaining)}</div>
             <div class="epoch-clock-gauge" aria-hidden="true">
-              {/* Decorative: the same reading is in the region's aria-label. */}
-              {TICKS.map((index) => (
-                <i classList={{ on: index < filled(), head: index === filled() - 1 }} />
-              ))}
+              {/* Decorative: the same reading is in the region's aria-label.
+                  Index, not For: the gauge is a fixed 24 segments and what
+                  changes is each one's state, not the set of them. */}
+              <Index each={TICKS}>
+                {(tick) => (
+                  <i classList={{ on: tick() < filled(), head: tick() === filled() - 1 }} />
+                )}
+              </Index>
             </div>
             <div class="epoch-clock-foot">
               <Show when={c().nextEpochBlock != null}>
