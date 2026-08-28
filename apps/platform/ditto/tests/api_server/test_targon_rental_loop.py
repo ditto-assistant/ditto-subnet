@@ -256,20 +256,11 @@ async def test_reaps_terminal_source_review_rental(
     )
     await loop.tick()
     async with session_maker() as session, session.begin():
-        build = await session.scalar(select(SubmissionImageBuild).limit(1))
-        assert build is not None
-        session.add(
-            SubmissionSourceReview(
-                review_id=uuid4(),
-                agent_id=build.agent_id,
-                attempt_id=build.attempt_id,
-                environment="prod",
-                artifact_sha256=build.artifact_sha256,
-                status="succeeded",
-                provider="targon",
-                provider_resource_id="wrk-source-leftover",
-            )
-        )
+        review = await session.scalar(select(SubmissionSourceReview).limit(1))
+        assert review is not None
+        review.status = "succeeded"
+        review.provider = "targon"
+        review.provider_resource_id = "wrk-source-leftover"
     targon.deleted.clear()
     assert await loop.tick() is True
     assert "wrk-source-leftover" in targon.deleted
