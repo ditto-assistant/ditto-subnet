@@ -19,6 +19,7 @@ validator_stack_repo: https://github.com/ditto-assistant/ditto-subnet.git
 validator_stack_revision: ""
 validator_stack_hotkey: ""
 validator_stack_hotkey_secret: validator-prod-hotkey-mnemonic
+validator_stack_hotkey_secret_version: ""
 validator_stack_benchmark_capacity: 8
 validator_stack_longmem_capacity: 4
 

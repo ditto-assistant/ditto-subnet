@@ -5,8 +5,9 @@ This runbook moves the operator-owned SN118 validator to the private
 
 1. Terraform creates the host, dedicated runtime identity, IAP/OS Login policy,
    and an empty Secret Manager container.
-2. Peyton or Omar generates one hotkey and streams only its mnemonic into that
-   container. Terraform and GitHub never see the value.
+2. Peyton or Omar uses a two-phase disposable GCE admin to generate one hotkey
+   and stream only its mnemonic into that container. Terraform, GitHub, and the
+   operator's development machine never see the value.
 3. The offline coldkey workstation submits the SN118-only hotkey swap. The
    coldkey, its mnemonic, and its password never enter GCP or this repository.
 4. The GCP host runs only a Cosign-authenticated, digest-pinned managed stack.
@@ -26,6 +27,9 @@ plan. It must create, not replace:
 - its dedicated `10.31.0.0/24` subnet and an egress deny to the Platform subnet;
 - `ditto-validator-prod@ditto-app-dev.iam.gserviceaccount.com`;
 - the empty `validator-prod-hotkey-mnemonic` secret;
+- the inert firewall/custom-role definition for a disposable hotkey generator,
+  with no generator VM, disk, service account, or IAM binding while its phase
+  remains `absent`;
 - only logging/monitoring and VM secret-accessor grants;
 - Peyton/Omar host access and secret-scoped lifecycle management without
   permission to read or destroy the secret payload.
@@ -44,24 +48,89 @@ Secure Boot/vTPM/integrity monitoring is not enabled. From the validator host,
 also prove that a TCP connection to `ditto-pg-platform` on 5432 is rejected;
 do not proceed if the validator can reach the production database network.
 
-## 2. Generate the GCP-held hotkey
+## 2. Generate the GCP-held hotkey on a disposable admin
 
-One named custodian, witnessed by the other, must use the exact merged checkout
-and its locked Bittensor dependency. The helper refuses any secret that already
-has a version and prints only the public SS58 address plus the Secret Manager
-version name. It never prints the mnemonic.
+Do not run the generator on an everyday development machine or on the coldkey
+workstation. The reviewed Terraform is the reusable template: it creates one
+private, Shielded, IAP-only admin and auto-delete boot disk for this ceremony,
+then removes the VM, disk, service account, and IAM bindings. There is no idle
+generator compute or disk after teardown.
+
+Generation has two protected applies so an internet-connected dependency
+bootstrap never overlaps Secret Manager write authority:
+
+1. Run `infra-plan-apply.yml` for `gcp-platform` with
+   `validator_hotkey_admin_phase=bootstrap` and an empty revision input. Record
+   the plan SHA as `HOTKEY_ADMIN_REVISION`, review the complete plan, and apply
+   its saved binary plan. The VM has NAT egress for the exact canonical-main
+   checkout and frozen dependencies, but no permission on the mnemonic secret.
+2. Wait for `/var/lib/ditto-hotkey-admin/ready`, then run another protected plan
+   with `validator_hotkey_admin_phase=armed` and
+   `validator_hotkey_admin_revision=HOTKEY_ADMIN_REVISION`. The arm plan must
+   update the existing instance in place: remove only the bootstrap network tag,
+   add the armed tag, and attach the exact-secret add-only IAM binding. Stop if
+   it replaces the VM, disk, template, service account, or source revision. If
+   `main` advanced after bootstrap, tear down and restart the ceremony instead
+   of arming an older checkout.
+
+After the arm apply, require a private IP, no access config, the armed tag, and
+no bootstrap tag:
 
 ```sh
-uv run --frozen python infra/ansible/scripts/generate_validator_hotkey.py \
-  --project ditto-app-dev \
-  --secret validator-prod-hotkey-mnemonic \
-  --confirm 'CREATE GCP VALIDATOR HOTKEY'
+gcloud compute instances describe ditto-validator-hotkey-admin \
+  --project ditto-app-dev --zone us-central1-a \
+  --format='yaml(name,status,tags,networkInterfaces)'
+gcloud compute ssh ditto-validator-hotkey-admin \
+  --project ditto-app-dev --zone us-central1-a --tunnel-through-iap
 ```
 
-Record `validator_hotkey` as `NEW_HOTKEY` and the numeric tail of
-`secret_version` as `HOTKEY_SECRET_VERSION`. Do not copy the mnemonic to a
-password manager, shell variable, ticket, chat, or local file; Secret Manager
-is the recovery copy. Do not destroy the version.
+On the disposable admin, confirm arbitrary internet egress is denied while
+Secret Manager metadata calls still work, then generate exactly once with both
+custodians watching:
+
+```sh
+sudo test -f /var/lib/ditto-hotkey-admin/ready
+if curl --fail --silent --max-time 5 https://github.com >/dev/null; then
+  echo 'ERROR: armed generator still has general internet egress' >&2
+  exit 1
+fi
+sudo gcloud secrets describe validator-prod-hotkey-mnemonic \
+  --project ditto-app-dev --format='value(name)'
+sudo /usr/local/sbin/generate-validator-hotkey
+sudo cat /var/lib/ditto-hotkey-admin/result.env
+```
+
+The helper is locally locked, refuses any secret with an existing version, and
+persists only the public SS58 address and numeric version ID so an SSH
+disconnect does not require revealing the mnemonic. Record `validator_hotkey`
+as `NEW_HOTKEY` and `secret_version` as `HOTKEY_SECRET_VERSION`. Do not copy the
+mnemonic to a password manager, shell variable, ticket, chat, or local file;
+Secret Manager is the recovery copy.
+
+Power off the admin, then immediately run and apply a reviewed `gcp-platform`
+plan with `validator_hotkey_admin_phase=absent` and an empty revision input.
+Require the plan to delete the VM, auto-delete boot disk, instance template,
+service account, secret binding, and per-instance human access. Verify teardown
+and exactly one recovery version before continuing:
+
+```sh
+sudo poweroff
+```
+
+After SSH disconnects, run and apply the reviewed absent-phase plan from the
+protected workflow. Then verify from the authenticated operator terminal:
+
+```sh
+! gcloud compute instances describe ditto-validator-hotkey-admin \
+  --project ditto-app-dev --zone us-central1-a
+! gcloud iam service-accounts describe \
+  validator-hotkey-admin@ditto-app-dev.iam.gserviceaccount.com \
+  --project ditto-app-dev
+gcloud secrets versions list --secret validator-prod-hotkey-mnemonic \
+  --project ditto-app-dev --format='value(name,state)'
+```
+
+Do not destroy the Secret Manager version.
 
 ## 3. Converge and verify without activation
 
@@ -71,6 +140,7 @@ Use the merge SHA, never a branch or tag:
 export GCP_OSLOGIN_USER=YOUR_OS_LOGIN_USER
 export VALIDATOR_STACK_REVISION=MERGED_MAIN_SHA
 export VALIDATOR_PROD_HOTKEY=NEW_HOTKEY
+export VALIDATOR_PROD_HOTKEY_SECRET_VERSION=HOTKEY_SECRET_VERSION
 ansible-playbook -i infra/ansible/inventory/gcp.yml \
   infra/ansible/playbooks/gcp-validator-prod.yml \
   --limit ditto-validator-prod
@@ -129,16 +199,26 @@ Record `STACK_DIGEST` in the cutover record. Do not substitute the mutable
 
 ## 5. Prepare the coldkey workstation
 
-Use an isolated workstation holding the new owner's coldkey. Seby's old
-validator hotkey is compromised because he may retain its file or seed. Never
-copy it to GCP, and do not treat coldkey ownership as revoking its signing
-authority. The destination is the raw `NEW_HOTKEY` SS58 address printed by the
-GCP generator; its mnemonic never leaves Secret Manager.
+Use a separate isolated workstation holding the new owner's coldkey. The
+previous operator's validator hotkey is compromised because another party may
+retain its file or seed. Never copy it to GCP, and do not treat coldkey
+ownership as revoking its signing authority. The destination is the raw
+`NEW_HOTKEY` SS58 address printed by the GCP generator; its mnemonic never
+appears in operator output and is retained only in Secret Manager.
 
 Do not assume the repository's pinned CLI implements the documented command.
-On the isolated coldkey workstation, require all of the following to succeed
-before scheduling any drain, and record the version and executable checksum in
-the cutover record:
+The deprecated Homebrew `btcli` formula currently lacks the `tx` command; a
+routine `brew upgrade btcli` does not fix that product-line mismatch. On the
+dedicated coldkey workstation, replace it with Homebrew's `bittensor` formula
+before restoring or importing the coldkey when possible:
+
+```sh
+brew uninstall btcli
+brew install bittensor
+```
+
+Then require all of the following to succeed before scheduling any drain, and
+record the version and executable checksum in the cutover record:
 
 ```sh
 command -v btcli
@@ -155,7 +235,8 @@ Before continuing, query Finney and record evidence that:
 - the old hotkey owns the expected SN118 UID and validator permit;
 - `NEW_HOTKEY` is not registered on SN118 or another subnet being swapped;
 - the coldkey has enough free balance for the displayed fee;
-- Seby's old validator process is identified and ready to stop at cutover;
+- the previous operator's validator process is identified and ready to stop at
+  cutover;
 - no other live process intentionally depends on the old hotkey.
 
 Before draining anything, preview the SN118-only swap:
@@ -178,10 +259,10 @@ the recorded dry-run evidence before the maintenance window starts.
 
 ## 6. Drain, swap SN118, and bootstrap GCP
 
-Drain Seby's old validator and wait for a fresh Platform-accepted `drained`
-state. Do not interrupt any ordinary or confirmation benchmark. Stop the old
-validator process only after every active lease and weight update is finished,
-and verify it remains offline throughout the swap and GCP bootstrap.
+Drain the previous operator's validator and wait for a fresh Platform-accepted
+`drained` state. Do not interrupt any ordinary or confirmation benchmark. Stop
+the old validator process only after every active lease and weight update is
+finished, and verify it remains offline throughout the swap and GCP bootstrap.
 
 On the coldkey workstation, submit the command that both custodians previewed,
 with only `--dry-run` removed:
@@ -231,12 +312,11 @@ Require all of the following before decommissioning the old host:
 
 Before the on-chain swap, rollback is simply to keep GCP inert; only the old
 validator may be resumed, after confirming that doing so is still acceptable
-despite the compromised hotkey. After the swap, never restart Seby's old
-hotkey process: it no longer owns the SN118 registration and remains
+despite the compromised hotkey. After the swap, never restart the previous
+operator's hotkey process: it no longer owns the SN118 registration and remains
 compromised. Prefer repairing the safely drained GCP stack. A reverse hotkey
 swap is a second coldkey-signed on-chain transaction subject to the cooldown.
-It must target another newly generated clean hotkey—never Seby's compromised
-old hotkey. Verify its live availability, scope, and recycle amount before
-treating it as a rollback. Never destroy the Secret Manager version or the old
-host until the GCP canary and an operator-agreed observation window are
-complete.
+It must target another newly generated clean hotkey—never the compromised old
+hotkey. Verify its live availability, scope, and recycle amount before treating
+it as a rollback. Never destroy the Secret Manager version or the old host
+until the GCP canary and an operator-agreed observation window are complete.

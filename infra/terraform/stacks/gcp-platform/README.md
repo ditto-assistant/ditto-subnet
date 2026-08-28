@@ -24,6 +24,7 @@ boot are handled by the `platform_app` Ansible role.
 | Hosted deploy identities (`identity.tf`, `trusted-builds.tf`) | exact protected `dev`/`prod` environment principals for `ditto-subnet` |
 | Public builder/runtime registries | reviewed Kaniko executor and immutable screener release images |
 | `ditto-validator-prod` (optional production GCP validator) | private Shielded VM, dedicated runtime SA, isolated hotkey secret container; activated only through `infra/docs/validator-gcp-production.md` |
+| disposable validator hotkey admin | Terraform phases `absent` → `bootstrap` → `armed` → `absent`; no generator VM, disk, principal, or binding exists while idle |
 
 **Self-contained:** the two platform SAs are created by this stack (`identity.tf`),
 referencing the already-existing `github` WIF pool by name. Nothing in

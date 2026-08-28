@@ -6,6 +6,7 @@
     that:
       - validator_stack_revision is match('^[0-9a-f]{40}$')
       - validator_stack_hotkey is match('^5[1-9A-HJ-NP-Za-km-z]{47}$')
+      - validator_stack_hotkey_secret_version is match('^[1-9][0-9]*$')
       - validator_stack_benchmark_capacity | int >= 1
       - validator_stack_benchmark_capacity | int <= 8
       - validator_stack_longmem_capacity | int >= 0
@@ -13,7 +14,8 @@
       - validator_stack_longmem_capacity | int <= ((validator_stack_benchmark_capacity | int) + 1) // 2
     fail_msg: >-
       Set VALIDATOR_STACK_REVISION to the reviewed 40-character main SHA and
-      VALIDATOR_PROD_HOTKEY to the generated public SS58 address.
+      VALIDATOR_PROD_HOTKEY plus VALIDATOR_PROD_HOTKEY_SECRET_VERSION to the
+      generated public SS58 address and its recorded numeric secret version.
 
 - name: Require the production amd64 host profile
   ansible.builtin.assert:
@@ -215,7 +217,7 @@
           - secrets
           - versions
           - access
-          - latest
+          - "{{ validator_stack_hotkey_secret_version }}"
           - "--secret={{ validator_stack_hotkey_secret }}"
           - "--project={{ validator_stack_project }}"
       register: validator_stack_hotkey_mnemonic

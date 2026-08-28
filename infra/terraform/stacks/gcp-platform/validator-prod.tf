@@ -122,9 +122,9 @@ module "validator_prod_vm" {
   }
 }
 
-# Terraform owns only the container and access policy. The seed is generated
-# with infra/ansible/scripts/generate_validator_hotkey.py and streamed to a new
-# version over stdin, so it never enters configuration, a plan, or state.
+# Terraform owns only the container and access policy. The seed is generated on
+# the separately armed disposable admin and streamed to a new version over
+# stdin, so it never enters configuration, a plan, state, or an operator host.
 resource "google_secret_manager_secret" "validator_prod_hotkey_mnemonic" {
   count     = local.validator_prod_count
   project   = var.project
@@ -147,18 +147,18 @@ resource "google_secret_manager_secret_iam_member" "validator_prod_hotkey_access
   member    = "serviceAccount:${google_service_account.validator_prod[0].email}"
 }
 
-# Custodians can create and lifecycle-manage the one recovery version without
-# reading its payload or destroying it. Payload access remains exclusive to the
-# VM service account while the version is enabled for materialization.
+# Custodians can lifecycle-manage the one recovery version without reading its
+# payload, adding a replacement, or destroying it. Only the armed disposable
+# generator can add the first version. Payload access remains exclusive to the
+# validator VM service account while that numeric version is enabled.
 resource "google_project_iam_custom_role" "validator_prod_hotkey_custodian" {
   count       = local.validator_prod_count
   project     = var.project
   role_id     = "validatorProdHotkeyCustodian"
   title       = "Validator production hotkey custodian"
-  description = "Manage validator hotkey secret versions without reading or destroying payloads."
+  description = "Lifecycle-manage the validator hotkey version without adding, reading, or destroying payloads."
   permissions = [
     "secretmanager.secrets.get",
-    "secretmanager.versions.add",
     "secretmanager.versions.disable",
     "secretmanager.versions.enable",
     "secretmanager.versions.get",
