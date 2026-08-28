@@ -43,6 +43,7 @@ import { StatusChip } from "../ui/StatusChip";
 import { BenchmarkProgressView } from "../operations/progress";
 import type { ArtifactRelease } from "../pipeline/artifact-release";
 import {
+  admissionRetryLine,
   benchmarkVersionKey,
   benchmarkVersionLabel,
   duplicateComparisonLabel,
@@ -1018,6 +1019,9 @@ export function AgentEvidence(props: AgentEvidenceProps): JSX.Element {
             <p class="pipeline-current-message">
               {validationDetail(current() as ActivityStatusEntry)}
             </p>
+            <Show when={admissionRetryLine(loadedPipeline()?.admission_retry)}>
+              {(line) => <p class="pipeline-current-message">{line()}</p>}
+            </Show>
             <For each={summaryBenchmarks()}>
               {(progress) => <BenchmarkProgressView progress={progress} />}
             </For>

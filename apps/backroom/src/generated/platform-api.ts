@@ -12621,6 +12621,34 @@ export interface components {
             total_pages: number;
         };
         /**
+         * PublicAdmissionRetry
+         * @description Live admission state for a submission still in build & admission.
+         *
+         *     ``waiting_retry`` is an infrastructure retry the platform scheduled, not
+         *     a verdict against the artifact. ``next_retry_at`` is when the submission
+         *     becomes claimable again; an already-eligible submission reports the
+         *     payload's generation time (it is waiting for a screener slot, not for a
+         *     timer). Without this block the public pipeline showed only the stage
+         *     name, so a between-attempts submission was indistinguishable from a
+         *     stuck queue.
+         */
+        PublicAdmissionRetry: {
+            /** Attempt Count */
+            attempt_count: number;
+            /**
+             * Last Failure Infrastructure
+             * @default false
+             */
+            last_failure_infrastructure: boolean;
+            /** Next Retry At */
+            next_retry_at?: string | null;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "queued" | "running" | "waiting_retry";
+        };
+        /**
          * PublicAgentSummary
          * @description Glance-level state for opening one agent card.
          *
@@ -15566,6 +15594,8 @@ export interface components {
              * @description Benchmark version currently being scored.
              */
             active_bench_version: number;
+            /** @description Live admission-retry state while the submission is still in build & admission; null once admission is terminal. */
+            admission_retry?: components["schemas"]["PublicAdmissionRetry"] | null;
             /**
              * Agent Id
              * Format: uuid

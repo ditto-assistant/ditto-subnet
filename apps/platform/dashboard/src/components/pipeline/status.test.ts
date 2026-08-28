@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   ACTIVITY_FILTER_LABELS,
+  admissionRetryLine,
   ACTIVITY_FILTERS,
   ACTIVITY_STATUSES,
   activityStage,
@@ -266,5 +267,55 @@ describe("score-floor attribution (row 11)", () => {
     expect(STATUS_SOURCE).not.toContain("fifth-place score of");
     expect(STATUS_SOURCE).not.toContain("the current fifth-place score");
     expect(STATUS_SOURCE).not.toContain("can belong to a different agent");
+  });
+});
+
+describe("admissionRetryLine (#1215)", () => {
+  const now = new Date("2026-08-28T10:00:00Z");
+
+  it("names a running attempt", () => {
+    expect(admissionRetryLine({ state: "running", attempt_count: 3 }, now)).toBe(
+      "Admission attempt 3 is running now.",
+    );
+  });
+
+  it("names the queued state before any attempt", () => {
+    expect(admissionRetryLine({ state: "queued", attempt_count: 0 }, now)).toBe(
+      "Waiting for a screener slot; no attempt has started yet.",
+    );
+  });
+
+  it("counts down to a scheduled infrastructure retry", () => {
+    const line = admissionRetryLine(
+      {
+        state: "waiting_retry",
+        attempt_count: 2,
+        next_retry_at: "2026-08-28T10:07:30Z",
+        last_failure_infrastructure: true,
+      },
+      now,
+    );
+    expect(line).toBe(
+      "The previous attempt hit screening infrastructure, not this submission. " +
+        "Retry scheduled in about 8 min (attempt 3).",
+    );
+  });
+
+  it("reports immediate eligibility when the backoff has passed", () => {
+    const line = admissionRetryLine(
+      {
+        state: "waiting_retry",
+        attempt_count: 1,
+        next_retry_at: "2026-08-28T09:59:00Z",
+        last_failure_infrastructure: false,
+      },
+      now,
+    );
+    expect(line).toBe("Retry is eligible now and waiting for a screener slot (attempt 2).");
+  });
+
+  it("renders nothing without the block or for unknown states", () => {
+    expect(admissionRetryLine(null, now)).toBe("");
+    expect(admissionRetryLine({ state: "finished" }, now)).toBe("");
   });
 });
