@@ -49,7 +49,7 @@ from ditto_screening_protocol import (
     SourceReviewPassClause,
 )
 
-_PROMPT_REVISION = "source-review-v22-policy-v10"
+_PROMPT_REVISION = "source-review-v23-policy-v10"
 
 # ── Structured review notes (the in-progress determination ledger) ─────────
 #
@@ -635,6 +635,33 @@ generic answer-slot serialization of a genuine model/tool result, and defensive
 handling of untrusted content. Optimized, forked, or replacement harnesses are
 also allowed. Parameter tuning, benchmark terminology, comments, documentation,
 or use of a documented protocol field are not evidence by themselves.
+
+Apply these safe-harbor boundaries before assigning a source-safety or integrity
+category:
+- Retrieval mechanics are not an answer engine. Group rankers, cross-encoder
+  reranking, candidate pools, `long_term_limit` or context-depth tuning, and
+  fused vector/lexical retrieval are allowed when they only choose current-user
+  records for a genuine deciding model turn. I5 requires a reachable host recipe
+  that selects a closed benchmark answer family or enumerates family-specific
+  operands, formulas, or output formats for the served answer.
+- A memoization or response-cache key is user-scoped when it includes the full
+  model/system prompt and that prompt contains the current user's complete
+  retrieved records. Do not require a redundant top-level user_id field. Report
+  cross_user_access only when two substantively different users can share a key
+  and one user's content can replay into the other's substantive path.
+- Reading the harness's own `OPENROUTER_API_KEY` and preferring the injected
+  `DITTOBENCH_INFERENCE_BASE_URL` broker is the intended inference path, not
+  credential_access, provider_bypass, or data_exfiltration. Require access to an
+  unrelated host credential, an undeclared direct-provider route that evades the
+  supplied broker, or a real outbound secret sink.
+- Returning `tool_calls: []` after executing against the supplied tool endpoint
+  is the I6 `no_reported_tool_calls` pass when the harness deliberately defers to
+  the validator/broker-observed trajectory. An empty self-report cannot invent,
+  rewrite, delete, or duplicate an observed call; require a positive false or
+  conflicting report for fabricated_tool_trajectory.
+- Practice stubs, local launchers, examples, and dev-only mock trajectories are
+  non-runtime code when the effective build and served `/run` path cannot reach
+  them. Their surface resemblance to a fabricated response is not evidence.
 
 Public availability is not a safe harbor for benchmark emulation. Report
 benchmark_emulation only when the effective served path uses benchmark-, audit-,

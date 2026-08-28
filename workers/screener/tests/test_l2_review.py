@@ -192,9 +192,9 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v34-policy-v10"
+    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v35-policy-v10"
     assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v10"
-    assert L2_CAUSE_PROMPT_REVISION == "l3-sol-violation-cause-v25-policy-v10"
+    assert L2_CAUSE_PROMPT_REVISION == "l3-sol-violation-cause-v26-policy-v10"
     assert L2_CAUSE_TIEBREAKER_PROMPT_REVISION == (
         "l3-sol-cause-disagreement-v6-policy-v10"
     )
@@ -317,12 +317,41 @@ def test_l1_mechanism_narrowed_away_by_kimi_still_requires_sol() -> None:
 
 
 def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
-    assert L2_CRITIC_PROMPT_REVISION == "l3-sol-adversarial-critic-v19-policy-v10"
-    assert L2_SAFETY_PROMPT_REVISION == "l3-sol-safety-adjudicator-v22-policy-v10"
+    assert L2_CRITIC_PROMPT_REVISION == "l3-sol-adversarial-critic-v20-policy-v10"
+    assert L2_SAFETY_PROMPT_REVISION == "l3-sol-safety-adjudicator-v23-policy-v10"
     assert "Request-local memoization of an identical invocation" in _SYSTEM_PROMPT
     assert "deduplication is not fabricated telemetry" in _SYSTEM_PROMPT
     assert "distinguish execution from transport" in _SAFETY_ADJUDICATOR_TASK
     assert "the cache crosses requests" in _SAFETY_ADJUDICATOR_TASK
+
+
+def test_session_safe_harbors_are_shared_by_l2_and_l3() -> None:
+    analyst_fragments = {
+        "Group ranking, cross-encoder reranking",
+        "`long_term_limit` or context-depth tuning",
+        "full model/system prompt",
+        "substantively different",
+        "harness's own `OPENROUTER_API_KEY`",
+        "`DITTOBENCH_INFERENCE_BASE_URL`",
+        "`tool_calls: []`",
+        "`no_reported_tool_calls` pass",
+        "Dev-only practice stubs",
+    }
+    safety_fragments = {
+        "`tool_calls: []`",
+        "validator/broker-observed trajectory",
+        "full system/model prompt cache key",
+        "harness's own `OPENROUTER_API_KEY`",
+        "`DITTOBENCH_INFERENCE_BASE_URL`",
+        "group ranking, cross-encoder reranking",
+        "closed benchmark answer family",
+        "practice stubs and dev-only mocks",
+    }
+
+    assert all(fragment in _SYSTEM_PROMPT for fragment in analyst_fragments)
+    assert all(fragment in _SAFETY_ADJUDICATOR_TASK for fragment in safety_fragments)
+    assert "do not supply a violation cause by themselves" in _VIOLATION_CAUSE_TASK
+    assert "inconclusive rather than manufacturing" in _VIOLATION_CAUSE_TASK
 
 
 def test_dittobench_preflight_clearance_is_exact_and_shared() -> None:

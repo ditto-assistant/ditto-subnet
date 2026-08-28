@@ -756,7 +756,7 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v10"
+    assert observation.finding["prompt_revision"] == "source-review-v23-policy-v10"
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -2015,7 +2015,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v10"
+    assert observation.finding["prompt_revision"] == "source-review-v23-policy-v10"
     assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
@@ -2787,7 +2787,7 @@ def test_policy_v10_prompt_separates_replacement_retry_and_strict_controls() -> 
 def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
     from ditto_screener.source_review import _PROMPT_REVISION, _SYSTEM_PROMPT
 
-    assert _PROMPT_REVISION == "source-review-v22-policy-v10"
+    assert _PROMPT_REVISION == "source-review-v23-policy-v10"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -2828,6 +2828,15 @@ def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
         "not an automatic reject",
         "Ban is per agent UUID",
         "Honest-and-bad or post-remediation low score is not a cheat signal",
+        "Retrieval mechanics are not an answer engine",
+        "`long_term_limit` or context-depth tuning",
+        "model/system prompt",
+        "substantively different users can share a key",
+        "harness's own `OPENROUTER_API_KEY`",
+        "`DITTOBENCH_INFERENCE_BASE_URL` broker",
+        "`tool_calls: []`",
+        "`no_reported_tool_calls` pass",
+        "Practice stubs, local launchers",
     }
 
     assert all(fragment in _SYSTEM_PROMPT for fragment in required)

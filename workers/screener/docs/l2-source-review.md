@@ -76,11 +76,11 @@ when the provider omits cost. A stable instructions/tool/dossier prefix,
 `prompt_cache_key`, and artifact-scoped `session_id` maximize provider cache
 reuse without enabling response replay caching. The result-cache key includes
 all budgets, model/fallback/critic routing, reasoning settings, artifact/L1
-digests, prompt revisions `l2-kimi-source-review-v34-policy-v10`,
-`l3-sol-adversarial-critic-v19-policy-v10`,
-`l3-sol-violation-cause-v25-policy-v10`,
+digests, prompt revisions `l2-kimi-source-review-v35-policy-v10`,
+`l3-sol-adversarial-critic-v20-policy-v10`,
+`l3-sol-violation-cause-v26-policy-v10`,
 `l3-sol-cause-disagreement-v6-policy-v10`,
-`l3-sol-safety-adjudicator-v22-policy-v10`, and
+`l3-sol-safety-adjudicator-v23-policy-v10`, and
 `l2-integrity-static-hold-v3`, dossier revision
 `l1-compressed-dossier-v10`, harness revision
 `l2-isolated-coding-harness-v19`, and the supported canonical-starter revision
@@ -237,7 +237,10 @@ platform contract tracked in issue #224.
 `scripts/run_l2_calibration.py` accepts a protected SHA-bound manifest plus a
 directory of already verified artifacts. It rechecks every tarball digest,
 runs the production reviewer and analyzer image with bounded concurrency, and
-writes a mode-0600 checkpoint after each case. Retryable infrastructure or model
+writes a mode-0600 checkpoint after each case. Each checkpoint binds the exact
+prompt revisions to a violation confusion matrix, precision, recall, and false-
+positive rate so prompt changes can be compared without treating inconclusive
+transport outcomes as findings. Retryable infrastructure or model
 contract failures can get up to two bounded automatic retries; an L3 retry
 resumes from the sanitized Kimi and, when available, SOL-critic stage caches.
 Output contains
@@ -246,7 +249,12 @@ categories, routing/model/provider metadata, attempts, latency, usage, and
 expected-vs-actual matches; it never writes source, prompts, signed URLs, or
 transcripts. Duplicate artifacts use the same revisioned cache/lock path, which
 also exercises horizontal idempotency. Gold manifests, artifacts, and result
-files are operator-private and must never be committed.
+files are operator-private and must never be committed. The public sanitized
+label fixture `tests/fixtures/source-review-court-calibration-2026-08-28.json`
+preserves the three confirmed rejects and three false-positive releases that
+motivated the v22/v35 prompt calibration. It contains source sketches and
+doctrine labels, not artifact digests or miner source; operators bind the
+corresponding exact artifacts only in the protected manifest.
 The analyzer retains its 30-second, 0.5-CPU production defaults; recorded,
 bounded calibration-only overrides up to 300 seconds and 2 CPUs are available
 when unrelated local container load would otherwise invalidate the accuracy
