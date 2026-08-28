@@ -186,3 +186,11 @@ variable "debug_operators" {
     "user:brian@omniaura.ai",
   ]
 }
+
+variable "local_openrouter_secret_users" {
+  description = "Developers granted secretAccessor on LOCAL_OPENROUTER_API_KEY for repo-local real-inference testing. This does not grant access to the production validator-openrouter-key secret."
+  type        = list(string)
+  default = [
+    "user:brian@omniaura.ai",
+  ]
+}
