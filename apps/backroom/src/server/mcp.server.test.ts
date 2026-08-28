@@ -91,6 +91,7 @@ describe('Backroom MCP tools', () => {
         'peek_inference_trace',
         'download_runtime_profile',
         'get_queue_policy_settings',
+        'get_screener_capacity',
         'get_screener_review_settings',
         'apply_screener_review_settings',
         'get_screener_policy_manifest',
@@ -1846,6 +1847,40 @@ describe('Backroom MCP tools', () => {
     })
     expect(fetchMock).toHaveBeenCalledWith(
       'https://platform-api.heyditto.ai/api/v1/admin/screener-review-settings',
+      expect.any(Object),
+    )
+    await client.close()
+    await server.close()
+  })
+
+  it('reads authoritative screener capacity and provider state', async () => {
+    process.env.DITTO_ADMIN_API_TOKEN = 'platform-admin-token'
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ snapshot: null, nodes: [], events: [] }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const { client, server } = await connect([BACKROOM_READ_SCOPE])
+    const response = await client.callTool({
+      name: 'get_screener_capacity',
+      arguments: {},
+    })
+    expect(response.isError).not.toBe(true)
+    expect(readJsonResult(response)).toMatchObject({
+      snapshot: null,
+      nodes: [],
+      provider_control: {
+        current: {
+          revision: 0,
+          settings: {
+            build_provider_priority: ['targon', 'gcp'],
+            runtime_provider_priority: ['targon', 'gcp'],
+            source_review_provider_priority: ['targon', 'gcp'],
+          },
+        },
+      },
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      'https://platform-api.heyditto.ai/api/v1/admin/screener-capacity',
       expect.any(Object),
     )
     await client.close()

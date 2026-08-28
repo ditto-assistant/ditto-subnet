@@ -48,6 +48,7 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "source_review_timeout_seconds": 180.0,
         "source_review_max_steps": 200,
         "source_review_max_read_bytes": 8_000_000,
+        "source_review_max_completion_tokens": 8_000,
         "source_review_reasoning_effort": "high",
         "static_preflight_v2_mode": "off",
         "static_preflight_audit_file": None,

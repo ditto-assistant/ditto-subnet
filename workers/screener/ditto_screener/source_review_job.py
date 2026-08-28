@@ -104,6 +104,9 @@ def _build_reviewer(
         max_read_bytes=int(
             os.environ.get("SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "8000000")
         ),
+        max_completion_tokens=int(
+            os.environ.get("SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS", "8000")
+        ),
         reasoning_effort=os.environ.get(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
         ),

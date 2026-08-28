@@ -131,6 +131,27 @@ def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> Non
             return
 
 
+# Per-turn completion budget for the L1 reviewer.
+#
+# This is shared with reasoning tokens, and the deciding turn has to emit a
+# COMPLETE policy-v10 sweep: seven invariant decisions, each with its own
+# summary and pass clause, plus the finding evidence. At the historical 2200
+# it did not fit. The tool-call arguments were cut mid-string and the review
+# died on ``JSONDecodeError: Unterminated string`` -> ``retryable_infra``,
+# which burns the whole attempt and rescreens from scratch (28 such deaths in
+# the three days to 2026-08-28, truncating at char 127/306/1045/1411/2074/
+# 2530 -- i.e. wherever the budget happened to run out, not at a real bound).
+# Partial sweeps that survived the JSON parse failed
+# ``SourceReviewInvariantAssessment`` validation instead, for the same reason.
+#
+# This budget is not an inspection-depth knob like ``max_steps``: it only has
+# to be wide enough for the verdict the reviewer already decided, so it is
+# sized for the worst-case sweep rather than tuned.
+_DEFAULT_MAX_COMPLETION_TOKENS = 8_000
+# A sweep cannot be expressed below this, so a misconfigured floor would
+# guarantee the truncation this budget exists to prevent.
+_MIN_MAX_COMPLETION_TOKENS = 2_000
+
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
@@ -2585,6 +2606,7 @@ class OpenRouterSourceReviewAgent:
         timeout_seconds: float,
         max_steps: int,
         max_read_bytes: int = _MAX_TOTAL_TOOL_CHARS,
+        max_completion_tokens: int = _DEFAULT_MAX_COMPLETION_TOKENS,
         reasoning_effort: str = "high",
         static_preflight_v2_mode: str = "off",
         provenance_manifest_file: str | None = None,
@@ -2603,6 +2625,9 @@ class OpenRouterSourceReviewAgent:
         self._timeout_seconds = timeout_seconds
         self._max_steps = max_steps
         self._max_read_bytes = max_read_bytes
+        self._max_completion_tokens = max(
+            _MIN_MAX_COMPLETION_TOKENS, int(max_completion_tokens)
+        )
         self._reasoning_effort = reasoning_effort
         self._static_preflight_v2_mode = static_preflight_v2_mode
         self._provenance_manifest_files = (
@@ -2938,7 +2963,7 @@ class OpenRouterSourceReviewAgent:
             "messages": messages,
             "tools": _TOOLS,
             "tool_choice": "auto",
-            "max_completion_tokens": 2200,
+            "max_completion_tokens": self._max_completion_tokens,
             "reasoning": {"effort": reasoning_effort},
             "prompt_cache_key": _L1_PROMPT_CACHE_KEY,
             "provider": {
