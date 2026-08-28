@@ -239,7 +239,7 @@ describe('InferenceRoutingPanel', () => {
             provider_order: [],
             reliability_provider_order: ['DeepInfra', 'Groq'],
             ignored_providers: ['CoreWeave'],
-            allow_fallbacks: true,
+            allow_fallbacks: false,
           },
           routes: [route, aggregateRoute],
         }}
@@ -250,7 +250,7 @@ describe('InferenceRoutingPanel', () => {
     expect(screen.getByText('Throughput-first aggregate route')).toBeTruthy()
     expect(
       screen.getByText(
-        /Primary: fastest throughput · recovery: DeepInfra → Groq · excluded: CoreWeave · fallback enabled/,
+        /Primary: fastest throughput · recovery: disabled · excluded: CoreWeave · fallback disabled/,
       ),
     ).toBeTruthy()
     expect(screen.queryByText('Actual upstream providers')).toBeNull()

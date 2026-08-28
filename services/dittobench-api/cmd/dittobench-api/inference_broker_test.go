@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -88,7 +87,7 @@ type brokerRemoteConn struct {
 
 func (connection brokerRemoteConn) RemoteAddr() net.Addr { return connection.remote }
 
-func TestConfirmationCaseSnapshotAttributesDeliveredEmbeddingToActiveGeneration(t *testing.T) {
+func TestConfirmationCaseSnapshotParksFailedEmbeddingInActiveGeneration(t *testing.T) {
 	attempts := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		attempts++
@@ -137,19 +136,19 @@ func TestConfirmationCaseSnapshotAttributesDeliveredEmbeddingToActiveGeneration(
 	request.RemoteAddr = "127.0.0.1:4321"
 	response := httptest.NewRecorder()
 	broker.handleEmbedding(response, request)
-	if response.Code != http.StatusOK {
+	if response.Code != http.StatusBadGateway {
 		t.Fatalf("response=%d %s", response.Code, response.Body.String())
 	}
 	snapshot, err := broker.endCaseSnapshot(id, generation)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.EmbeddingAttempts != 1 || snapshot.EmbeddingDispatches != 2 || snapshot.EmbeddingDelivered != 1 ||
+	if snapshot.EmbeddingAttempts != 1 || snapshot.EmbeddingDispatches != 1 || snapshot.EmbeddingDelivered != 0 ||
 		snapshot.EmbeddingInFlight != 0 || snapshot.EmbeddingCancellations != 0 {
 		t.Fatalf("embedding case snapshot=%+v", snapshot)
 	}
 	if validEmbeddingOnlyCaseActivityForTest(snapshot) {
-		t.Fatalf("retried embedding was incorrectly complete: %+v", snapshot)
+		t.Fatalf("failed embedding was incorrectly complete: %+v", snapshot)
 	}
 
 	generation, _, err = broker.beginCaseSnapshot(id)
@@ -878,7 +877,7 @@ func TestCaseGenerationKeepsAdmittedUncountedTailOutOfNextCase(t *testing.T) {
 	}
 }
 
-func TestLegacyBrokerRetainsBoundedRelayRetries(t *testing.T) {
+func TestLegacyBrokerParksProviderFailureWithoutRetry(t *testing.T) {
 	requestCount := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requestCount++
@@ -909,15 +908,15 @@ func TestLegacyBrokerRetainsBoundedRelayRetries(t *testing.T) {
 	request.SetPathValue("rest", "chat/completions")
 	recorder := httptest.NewRecorder()
 	broker.handle(recorder, request)
-	if recorder.Code != http.StatusOK || requestCount != 3 {
-		t.Fatalf("legacy retry status=%d attempts=%d body=%s", recorder.Code, requestCount, recorder.Body.String())
+	if recorder.Code != http.StatusBadGateway || requestCount != 1 {
+		t.Fatalf("legacy single-shot status=%d attempts=%d body=%s", recorder.Code, requestCount, recorder.Body.String())
 	}
 	snapshot, err := broker.snapshot(id)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.UpstreamAttempts != 3 || snapshot.InfrastructureFailures != 0 || snapshot.Successes != 1 {
-		t.Fatalf("legacy retry accounting = %+v", snapshot)
+	if snapshot.UpstreamAttempts != 1 || snapshot.InfrastructureFailures != 1 || snapshot.Successes != 0 {
+		t.Fatalf("legacy single-shot accounting = %+v", snapshot)
 	}
 }
 
@@ -1941,14 +1940,9 @@ func TestInferenceBrokerTrustedProbeUsesControlPlaneSession(t *testing.T) {
 	}
 }
 
-// The trusted probe is the first hosted embedding request on a scored lease.
-// It must obey the same provider-backpressure contract as the run it guards:
-// otherwise one rolling-window 429 (translated by Platform to 503 +
-// Retry-After) discards the lease before the benchmark's bounded retry path can
-// ever run. This is deliberately a preflight test rather than another harness
-// embedding test; those already covered the later path while production still
-// failed here.
-func TestInferenceBrokerTrustedProbeWaitsOutPlatformEmbeddingBackpressure(t *testing.T) {
+// The trusted probe is cost-bearing work, so provider backpressure parks the
+// lease after one signed delivery. An operator may retry the enclosing ticket.
+func TestInferenceBrokerTrustedProbeParksPlatformEmbeddingBackpressure(t *testing.T) {
 	var chatCalls atomic.Int64
 	var embeddingCalls atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1979,14 +1973,14 @@ func TestInferenceBrokerTrustedProbeWaitsOutPlatformEmbeddingBackpressure(t *tes
 	activateBrokerSessionFor(t, broker, prepared, proxyURL, "openrouter", llm.V9AggregateProfileRevision, llm.HarnessModelForVersion(protocol.BenchVersionV9))
 	claimAndBindBrokerSession(t, broker, prepared["session_id"], "192.0.2.31", protocol.BenchVersionV9)
 
-	if err := broker.trustedProbe(context.Background(), prepared["session_id"]); err != nil {
-		t.Fatalf("trusted probe discarded a healthy backpressured lease: %v", err)
+	if err := broker.trustedProbe(context.Background(), prepared["session_id"]); err == nil {
+		t.Fatal("trusted probe accepted provider backpressure without parking")
 	}
 	if got := chatCalls.Load(); got != 1 {
 		t.Fatalf("chat probe deliveries=%d, want 1", got)
 	}
-	if got := embeddingCalls.Load(); got != 2 {
-		t.Fatalf("embedding probe deliveries=%d, want one wait then success", got)
+	if got := embeddingCalls.Load(); got != 1 {
+		t.Fatalf("embedding probe deliveries=%d, want one", got)
 	}
 	snapshot, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
@@ -1997,14 +1991,10 @@ func TestInferenceBrokerTrustedProbeWaitsOutPlatformEmbeddingBackpressure(t *tes
 	}
 }
 
-// TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly replaces the
-// single-attempt contract #97 introduced. The platform still owns the first
-// line of provider retry, but one attempt here meant a fault it could not
-// absorb discarded the whole run, so v7 now gets a tiny bounded second line.
-// The bound is the point of the test: the fast window plus the slower recovery
-// window, each delivery independently signed, and the run still fails closed
-// once both are exhausted.
-func TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly(t *testing.T) {
+// TestV7InferenceBrokerParksTransientProviderFaults proves that a transient
+// provider response receives one signed delivery and no automatic recovery
+// phase. The failed evaluation remains available for an operator retry.
+func TestV7InferenceBrokerParksTransientProviderFaults(t *testing.T) {
 	const profile = "openrouter-route-0123456789abcdef-v1"
 	requestCount := 0
 	var nonces []string
@@ -2036,12 +2026,11 @@ func TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly(t *testing.T) 
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("request status = %d, want 502: %s", recorder.Code, recorder.Body.String())
 	}
-	totalAttempts := ticketChatFastMaxAttempts + ticketRecoveryMaxAttempts
-	if requestCount != totalAttempts {
-		t.Fatalf("platform deliveries=%d, want %d", requestCount, totalAttempts)
+	if requestCount != 1 {
+		t.Fatalf("platform deliveries=%d, want 1", requestCount)
 	}
-	if !reflect.DeepEqual(waitEvents, []bool{true, false}) {
-		t.Fatalf("relay wait events = %v, want [true false]", waitEvents)
+	if len(waitEvents) != 0 {
+		t.Fatalf("relay wait events = %v, want none", waitEvents)
 	}
 	seen := map[string]bool{}
 	for _, nonce := range nonces {
@@ -2066,26 +2055,23 @@ func TestV7InferenceBrokerRetriesTransientProviderFaultsBoundedly(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if execution.UpstreamAttempts != uint64(totalAttempts) ||
-		execution.Retries != uint64(totalAttempts-1) || execution.InfrastructureFailures != 1 ||
-		execution.RecoveryWaits != 1 || execution.RecoveryExhaustions != 1 {
+	if execution.UpstreamAttempts != 1 || execution.Retries != 0 || execution.InfrastructureFailures != 1 ||
+		execution.RecoveryWaits != 0 || execution.RecoveryExhaustions != 0 {
 		t.Fatalf("provider execution accounting = %+v", execution)
 	}
-	// One logical request, bounded deliveries, one authoritative outcome: the
-	// retries are visible in the ledger and never inflate the request count or
-	// the failure count.
+	// One logical request, one delivery, one authoritative terminal outcome.
 	if execution.Requests != 1 || execution.GrantDenials != 0 {
-		t.Fatalf("retry must not inflate requests or denials: %+v", execution)
+		t.Fatalf("single-shot failure inflated requests or denials: %+v", execution)
 	}
 	if err := requireCompleteV7Usage(protocol.BenchVersionV8, usage, relayExecutionSummary{}); err == nil {
 		t.Fatal("v7 accepted a run with a provider infrastructure failure")
 	}
 }
 
-func TestV7InferenceBrokerWaitsForRelayThenResumes(t *testing.T) {
+func TestV7InferenceBrokerDoesNotEnterRecoveryWait(t *testing.T) {
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if attempts.Add(1) <= ticketChatFastMaxAttempts {
+		if attempts.Add(1) == 1 {
 			http.Error(w, "transient", http.StatusServiceUnavailable)
 			return
 		}
@@ -2111,25 +2097,26 @@ func TestV7InferenceBrokerWaitsForRelayThenResumes(t *testing.T) {
 	request.SetPathValue("rest", "v1/chat/completions")
 	recorder := httptest.NewRecorder()
 	broker.handle(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("request status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("request status = %d, want 502: %s", recorder.Code, recorder.Body.String())
 	}
-	if !reflect.DeepEqual(waitEvents, []bool{true, false}) {
-		t.Fatalf("relay wait events = %v, want [true false]", waitEvents)
+	if attempts.Load() != 1 || len(waitEvents) != 0 {
+		t.Fatalf("attempts=%d relay wait events=%v, want one attempt and no recovery wait", attempts.Load(), waitEvents)
 	}
 	end, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := relayDegradedSince(start, end); err != nil {
-		t.Fatalf("recovered relay wait failed the run: %v", err)
+	if err := relayDegradedSince(start, end); err == nil {
+		t.Fatal("terminal provider fault did not fail the run closed")
 	}
 	execution, err := relayExecutionSince(start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if execution.RecoveryWaits != 1 || execution.RecoveryExhaustions != 0 || execution.Successes != 1 {
-		t.Fatalf("recovery execution = %+v", execution)
+	if execution.UpstreamAttempts != 1 || execution.RecoveryWaits != 0 || execution.RecoveryExhaustions != 0 ||
+		execution.Successes != 0 || execution.InfrastructureFailures != 1 {
+		t.Fatalf("single-shot execution = %+v", execution)
 	}
 }
 
@@ -2158,9 +2145,8 @@ func TestInferenceBrokerRejectsExhaustedTransientFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snapshot.Requests != 1 || snapshot.Successes != 0 ||
-		snapshot.UpstreamAttempts != ticketChatFastMaxAttempts+ticketRecoveryMaxAttempts ||
-		snapshot.InfrastructureFailures != 1 || snapshot.RecoveryExhaustions != 1 {
+	if snapshot.Requests != 1 || snapshot.Successes != 0 || snapshot.UpstreamAttempts != 1 ||
+		snapshot.InfrastructureFailures != 1 || snapshot.RecoveryExhaustions != 0 {
 		t.Fatalf("exhausted provider accounting = %+v", snapshot)
 	}
 }
@@ -2884,17 +2870,12 @@ func TestV7BrokerServesBYOKShapedRequests(t *testing.T) {
 	}
 }
 
-// --- transient survival vs. integrity fail-closed -------------------------
+// --- transient and integrity failures both fail closed --------------------
 //
-// The two directions this change has to hold apart at once: a run must now
-// SURVIVE a transient provider fault, and must still FAIL CLOSED on an
-// integrity fault or a lost lease. Every test below pins one of those.
+// Both transient provider faults and integrity faults park the run. The
+// accounting must distinguish them without issuing another paid request.
 
-// TestV7ChatSurvivesOneTransientProviderFault is the whole point of the change.
-// A single 503 used to end an 18-minute run at ~1,067 requests deep. It is now
-// absorbed, the run's usage is booked from the successful attempt only, and the
-// retry is visible in the ledger.
-func TestV7ChatSurvivesOneTransientProviderFault(t *testing.T) {
+func TestV7ChatParksOneTransientProviderFault(t *testing.T) {
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if attempts.Add(1) == 1 {
@@ -2924,39 +2905,37 @@ func TestV7ChatSurvivesOneTransientProviderFault(t *testing.T) {
 	request.SetPathValue("rest", "v1/chat/completions")
 	recorder := httptest.NewRecorder()
 	broker.handle(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("transient fault was not absorbed: status=%d body=%s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("transient fault was not parked: status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
-	if attempts.Load() != 2 {
-		t.Fatalf("platform deliveries=%d, want 2", attempts.Load())
+	if attempts.Load() != 1 {
+		t.Fatalf("platform deliveries=%d, want 1", attempts.Load())
 	}
 
 	end, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Fail-closed must NOT fire: nothing was degraded in the end.
-	if err := relayDegradedSince(start, end); err != nil {
-		t.Fatalf("an absorbed transient fault still failed the run closed: %v", err)
+	if err := relayDegradedSince(start, end); err == nil {
+		t.Fatal("transient provider fault did not fail the run closed")
 	}
 	usage, err := relayUsageSince(start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.Status != "complete" || usage.Successes != 1 {
-		t.Fatalf("absorbed fault did not produce complete usage: %+v", usage)
+	if usage.Successes != 0 {
+		t.Fatalf("terminal fault usage was not preserved: %+v", usage)
 	}
-	// The failed attempt booked no tokens: usage is the successful attempt's.
-	if usage.PromptTokens != 11 || usage.CompletionTokens != 7 || usage.TotalTokens != 18 {
+	if usage.PromptTokens != 0 || usage.CompletionTokens != 0 || usage.TotalTokens != 0 {
 		t.Fatalf("failed attempt leaked into observed usage: %+v", usage)
 	}
 	execution, err := relayExecutionSince(start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if execution.Requests != 1 || execution.UpstreamAttempts != 2 || execution.Retries != 1 ||
-		execution.InfrastructureFailures != 0 || execution.GrantDenials != 0 {
-		t.Fatalf("retry ledger = %+v", execution)
+	if execution.Requests != 1 || execution.UpstreamAttempts != 1 || execution.Retries != 0 ||
+		execution.InfrastructureFailures != 1 || execution.GrantDenials != 0 {
+		t.Fatalf("single-shot ledger = %+v", execution)
 	}
 }
 
@@ -2965,8 +2944,8 @@ func TestV7ChatSurvivesOneTransientProviderFault(t *testing.T) {
 // retried run and the clean run see the same provider usage, so every accounted
 // field of their scored TokenUsage must be identical; only the attempt ledger
 // may differ.
-func TestRetriedRunReportsIdenticalObservedUsageToACleanRun(t *testing.T) {
-	const retries = ticketChatFastMaxAttempts + ticketRecoveryMaxAttempts - 1
+func TestSingleShotRunReportsCleanObservedUsage(t *testing.T) {
+	const retries = 0
 	run := func(t *testing.T, faults int, sourceIP string) (protocol.TokenUsage, relayExecutionSummary) {
 		t.Helper()
 		var attempts atomic.Int64
@@ -3046,10 +3025,9 @@ func TestRetriedRunReportsIdenticalObservedUsageToACleanRun(t *testing.T) {
 	}
 }
 
-// TestV7EmbeddingSurvivesOneTransientPlatformFault covers the lane that carries
-// roughly two thirds of a v7 run's inference requests and previously had no
-// retry at all.
-func TestV7EmbeddingSurvivesOneTransientPlatformFault(t *testing.T) {
+// TestV7EmbeddingParksOneTransientPlatformFault covers the lane that carries
+// roughly two thirds of a v7 run's inference requests.
+func TestV7EmbeddingParksOneTransientPlatformFault(t *testing.T) {
 	vector := make([]float64, embeddingDimensions)
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -3081,25 +3059,25 @@ func TestV7EmbeddingSurvivesOneTransientPlatformFault(t *testing.T) {
 	}
 
 	response := callEmbedding(broker, "192.0.2.93", "hosted text")
-	if response.Code != http.StatusOK {
-		t.Fatalf("transient embedding fault was not absorbed: status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("transient embedding fault was not parked: status=%d body=%s", response.Code, response.Body.String())
 	}
-	if attempts.Load() != 2 {
-		t.Fatalf("embedding deliveries=%d, want 2", attempts.Load())
+	if attempts.Load() != 1 {
+		t.Fatalf("embedding deliveries=%d, want 1", attempts.Load())
 	}
 	end, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := relayDegradedSince(start, end); err != nil {
-		t.Fatalf("an absorbed transient embedding fault still failed the run closed: %v", err)
+	if err := relayDegradedSince(start, end); err == nil {
+		t.Fatal("terminal embedding fault did not fail the run closed")
 	}
 	execution, err := relayExecutionSince(start, end)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if execution.EmbeddingRetries != 1 || execution.InfrastructureFailures != 0 {
-		t.Fatalf("embedding retry ledger = %+v", execution)
+	if execution.EmbeddingRetries != 0 || execution.InfrastructureFailures != 1 {
+		t.Fatalf("embedding single-shot ledger = %+v", execution)
 	}
 }
 
@@ -3280,16 +3258,9 @@ func TestPlatformDeclineCodeIsAdvisoryAndFailsSoft(t *testing.T) {
 	}
 }
 
-// TestChatCapacityDeclineIsWaitedOutRatherThanKillingTheRun is the regression
-// test for `banblackycat`, which died to 17 capacity declines against a lease
-// that was still live.
-//
-// The platform now answers a full-but-healthy chat lane with 503 + Retry-After
-// instead of the 429 it reserves for a dead lease. This asserts the broker
-// treats that as backpressure end to end: it comes back, it succeeds, it does
-// NOT record a grant denial, and it does NOT charge the run's transient
-// transient budget for waiting out a queue.
-func TestChatCapacityDeclineIsWaitedOutRatherThanKillingTheRun(t *testing.T) {
+// A full provider lane is an infrastructure failure, but it is still terminal
+// for this attempt. The enclosing ticket is the manual retry boundary.
+func TestChatCapacityDeclineParksTheRun(t *testing.T) {
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if attempts.Add(1) <= 3 {
@@ -3318,13 +3289,11 @@ func TestChatCapacityDeclineIsWaitedOutRatherThanKillingTheRun(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	broker.handle(recorder, request)
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("a healthy-but-full lane failed the request: status=%d", recorder.Code)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("capacity decline did not park the request: status=%d", recorder.Code)
 	}
-	// Three declines waited out, then the real answer. Under the old
-	// status-only classifier the first one ended the run.
-	if attempts.Load() != 4 {
-		t.Fatalf("deliveries=%d, want 4 (three capacity waits then success)", attempts.Load())
+	if attempts.Load() != 1 {
+		t.Fatalf("capacity failure was redispatched: deliveries=%d", attempts.Load())
 	}
 	end, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
@@ -3333,8 +3302,8 @@ func TestChatCapacityDeclineIsWaitedOutRatherThanKillingTheRun(t *testing.T) {
 	if end.GrantDenials != 0 {
 		t.Fatalf("backpressure was miscounted as a lost lease: %+v", end)
 	}
-	if end.InfrastructureFailures != 0 {
-		t.Fatalf("backpressure was miscounted as a provider fault: %+v", end)
+	if end.InfrastructureFailures != 1 || end.CapacityExhaustions != 1 {
+		t.Fatalf("capacity failure was not recorded as terminal infrastructure: %+v", end)
 	}
 }
 
@@ -3368,8 +3337,8 @@ func TestChatCapacityWaitingIsBounded(t *testing.T) {
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("an endlessly-full lane did not fail closed: status=%d", recorder.Code)
 	}
-	if got := attempts.Load(); got > platformChatCapacityMaxWaits+1 {
-		t.Fatalf("capacity waiting was unbounded: deliveries=%d", got)
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("capacity failure was redispatched: deliveries=%d", got)
 	}
 	end, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
@@ -3380,12 +3349,8 @@ func TestChatCapacityWaitingIsBounded(t *testing.T) {
 	}
 }
 
-// TestChatCapacityWaitingCoversAMinuteRateWindow is the 8-wide RPM regression:
-// Platform Retry-After is 1s and the per-ticket rate window is 60s. Twelve
-// waits used to fail-close as inference_lane_saturated while concurrency
-// peaks stayed idle. A call that is refused for a full minute, then admitted,
-// must succeed.
-func TestChatCapacityWaitingCoversAMinuteRateWindow(t *testing.T) {
+// A capacity refusal parks immediately; a later success needs a manual ticket.
+func TestChatCapacityFailureDoesNotWaitOutMinuteRateWindow(t *testing.T) {
 	var attempts atomic.Int64
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if attempts.Add(1) <= 60 {
@@ -3414,18 +3379,18 @@ func TestChatCapacityWaitingCoversAMinuteRateWindow(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	broker.handle(recorder, request)
 
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("a full-minute RPM window failed the request: status=%d", recorder.Code)
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("capacity failure did not park the request: status=%d", recorder.Code)
 	}
-	if attempts.Load() != 61 {
-		t.Fatalf("deliveries=%d, want 61 (60 capacity waits then success)", attempts.Load())
+	if attempts.Load() != 1 {
+		t.Fatalf("deliveries=%d, want one", attempts.Load())
 	}
 	end, err := broker.snapshot(prepared["session_id"])
 	if err != nil {
 		t.Fatal(err)
 	}
-	if end.CapacityExhaustions != 0 {
-		t.Fatalf("a waited-out rate window was counted as saturation: %+v", end)
+	if end.CapacityExhaustions != 1 {
+		t.Fatalf("capacity failure was not classified as saturation: %+v", end)
 	}
 }
 

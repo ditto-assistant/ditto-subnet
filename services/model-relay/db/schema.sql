@@ -2423,7 +2423,7 @@ CREATE TABLE public.trusted_image_builds (
     started_at timestamp with time zone,
     completed_at timestamp with time zone,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT ck_trusted_image_builds_trusted_image_builds_attempt_co_e15b CHECK (((attempt_count >= 0) AND (attempt_count <= 10))),
+    CONSTRAINT ck_trusted_image_builds_trusted_image_builds_attempt_co_e15b CHECK ((attempt_count >= 0)),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_component_check CHECK ((component = 'screener'::text)),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_digest_check CHECK (((image_digest IS NULL) OR (image_digest ~ '^sha256:[0-9a-f]{64}$'::text))),
     CONSTRAINT ck_trusted_image_builds_trusted_image_builds_environment_check CHECK ((environment ~ '^[a-z][a-z0-9-]{0,31}$'::text)),

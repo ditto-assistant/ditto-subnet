@@ -89,6 +89,7 @@ import {
   confirmationBundleDetailInputSchema,
   setConfirmationBundleSettingsInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
+  retryTrustedImageBuildInputSchema,
 } from '../lib/admin.schemas'
 import {
   fetchCopyReviewSourceDiff,
@@ -185,6 +186,7 @@ import {
   fetchConfirmationBundle,
   fetchConfirmationLaneDiagnosis,
   authorizeConfirmationBundleRetest,
+  retryTrustedImageBuild,
 } from './admin.service'
 
 export const BACKROOM_READ_SCOPE = 'backroom:read'
@@ -209,6 +211,7 @@ export const WRITE_TOOL_NAMES = new Set([
   'resolve_screening_dispute',
   'rescreen_rejected_submission',
   'retry_failed_screening_now',
+  'retry_trusted_image_build',
   'expire_running_screening',
   'reject_screening_submission',
   'open_ath_review',
@@ -433,7 +436,7 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   get_screener_capacity:
-    'Read screener capacity and provider priorities.',
+    'Read screener capacity, provider priorities, and recent build, runtime, and source-review jobs before manual retry.',
   get_screener_review_settings:
     'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
   apply_screener_review_settings:
@@ -445,7 +448,9 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   evict_live_validator_leases:
     'REVERSIBLE capacity escape hatch for a submission holding a live 90-minute lease. Unlike remove_failed_submission_from_queue, this handles rows that can still reach quorum automatically; it is NOT deletion, NOT rejection, and NOT rescreening, and does NOT mint a no-fault retry grant. Requires a fresh snapshot and "EVICT LIVE VALIDATOR LEASES", never "REMOVE FROM VALIDATOR QUEUE". Use reinstate_evicted_submission_to_queue to reverse it.',
   get_validation_retry:
-    'Read one submission retry ledger and fresh concurrency snapshot before recovery. Returns failure_reason, silently_expired, infra_retry_grants, live_ticket_count, eviction_allowed, eviction_blocking_reason, evicted_validator_hotkeys, reinstatement_allowed, and reinstated_at. Use list_lease_revocations for platform-ended leases.',
+    'Read parked tickets plus snapshot fields: failure_reason, silently_expired, infra_retry_grants, live_ticket_count, eviction_allowed, eviction_blocking_reason, evicted_validator_hotkeys, reinstatement_allowed, and reinstated_at. Use before retry or queue action.',
+  retry_validator_evaluation:
+    'Manually restore exhausted slots for one verified infrastructure failure using a fresh snapshot; preserves scores and history.',
   set_validator_slot_settings:
     'Apply the complete two-field validator-slot policy with expectedRevision and "APPLY VALIDATOR SLOT CAP <n>". It is deliberately not derived from settings, a partial write is rejected, and a lower cap never revokes tickets a validator already holds. This is subnet dispatch policy; Ditto app entitlement flags are not served by this server.',
   reinstate_evicted_submission_to_queue:
@@ -492,7 +497,11 @@ const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
   set_efficiency_bonus_settings:
     'Apply the complete scoring-policy revision with expectedRevision and the ENABLED/DISABLED confirmation matching settings.enabled. Epoch snapshots remain immutable. This is subnet scoring policy; Ditto app entitlement flags are not served by this server.',
   batch_retry_validator_evaluation:
-    'Retry a bounded set of exhausted validator evaluations after verified infrastructure failure. Requires exact decisions and concurrency snapshots; preserves scores, artifacts, payments, and history. Returns independent per-item outcomes for safe retry.',
+    'Manually restore exhausted slots for up to 100 verified infrastructure failures using fresh snapshots; returns per-item outcomes.',
+  retry_trusted_image_build:
+    'Manually retry one terminal trusted-image build with fresh ID/status/attempt guards; preserves history and audits the action.',
+  retry_failed_screening_now:
+    'Manually retry the latest terminal screening attempt with fresh artifact/score-count/attempt guards; preserves history.',
   get_screening_baseline_diff:
     'Compare miner-authored residual source against the platform starter-kit baseline. Stock detection is platform-owned; use the file reader for full sanitized bodies. Requires artifact scope.',
   list_screening_source_files:
@@ -1037,7 +1046,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
         'Also reports what each operator remedy would do right now: withdrawal_allowed/withdrawal_blocking_reason for remove_failed_submission_from_queue, and eviction_allowed/eviction_blocking_reason plus live_ticket_count — the leases evict_live_validator_leases would revoke, i.e. the validator slots it would return to the pool immediately. A past removal reports evicted_validator_hotkeys under withdrawal, which is null for an ordinary withdrawal, [] for an eviction that found nothing live left to take, and the revoked validators for one that did. ' +
         'All four eviction fields read null against a platform deployment that predates ditto-platform #515, which means "this deployment cannot tell you", not "eviction is blocked". ' +
         'Queue removal is reversible: reinstatement_allowed/reinstatement_blocking_reason say whether reinstate_evicted_submission_to_queue would work right now for either an ordinary withdrawal or a live-lease eviction. A reversed removal reports reinstated_at under withdrawal plus the reversal itself under reinstatement. Read reinstated_at before concluding a submission is out of the queue — a non-null withdrawal means a removal was recorded, not that it is still in force. Both reinstatement fields read null on a platform that predates the reinstate route, with the same meaning as above. ' +
-        'Each ticket also carries why it ended: silently_expired (the lease ran out with nothing reported about that attempt), failure_reason and failed_at (history, not current state — a reissue preserves the last report, so a ticket that failed, was re-leased and then scored still carries one), slot_id, purpose (canonical_quorum or continual_retest), first_reported_at (null means the validator never advertised the slot as active), and infra_retry_grants. Read infra_retry_grants before concluding a validator has gone silent: infrastructure is the platform\'s no-fault failure class, so a validator reporting fail_job(reason="infrastructure") mints a grant, raises the attempt cap and gets the submission re-leased indefinitely, which in the ledger is indistinguishable from silence — every attempt lands as an expired ticket with a rewritten deadline either way. A nonzero count means the failures ARE being reported and the loop is the platform re-leasing on them. silently_expired reads null against a platform that predates #515. If a lease was ended by the platform rather than by a validator report, list_lease_revocations carries the verdict and its evidence. Requires backroom:read and exposes no miner source.',
+        'Each ticket also carries why it ended: silently_expired (the lease ran out with nothing reported about that attempt), failure_reason and failed_at (history, not current state — a manual reissue preserves the last report), slot_id, purpose (canonical_quorum or continual_retest), first_reported_at (null means the validator never advertised the slot as active), and infra_retry_grants. infra_retry_grants is historical evidence from deployments that minted automatic infrastructure grants; it no longer authorizes a lease. Every current failure parks after one attempt until retry_validator_evaluation or retry_validator_evaluations is issued manually. silently_expired reads null against a platform that predates #515. If a lease was ended by the platform rather than by a validator report, list_lease_revocations carries the verdict and its evidence. Requires backroom:read and exposes no miner source.',
       inputSchema: validationRetryLookupInputSchema,
       annotations: toolAnnotations('read'),
     },
@@ -1473,6 +1482,19 @@ export function createBackroomMcpServer(props: McpGrantProps) {
       annotations: toolAnnotations('read'),
     },
     async () => result(await fetchScreenerReviewControl()),
+  )
+
+  registerTool(
+    'retry_trusted_image_build',
+    {
+      title: 'Retry trusted screener image build',
+      description:
+        'Requeue one exact terminal trusted image build. Supply its current ID, status, and attempt count from get_screener_capacity as guards. Preserves attempts and appends an audit event. Requires backroom:write.',
+      inputSchema: retryTrustedImageBuildInputSchema,
+      annotations: toolAnnotations('write', true),
+    },
+    async (input) =>
+      write(() => retryTrustedImageBuild(input, props.session.email)),
   )
 
   registerTool(
@@ -2108,7 +2130,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Retry failed screening now',
       description:
-        "Waive the remaining automatic backoff for one exact expired screening attempt after an operator verifies that retrying immediately is safe. This does not rewrite attempt history, reset the expiry cap, release a quarantine, or accept a rejected submission. Supply the current artifact SHA-256, score count, and expired attempt ID as concurrency guards. The platform refuses the action if screening is active, the submission is not screening_failed, the attempt is not the exact active backoff, or any guard moved. Requires backroom:write.",
+        'Retry the exact latest terminal screening attempt; failures never retry automatically. Preserves history and does not release quarantine or accept rejection. Supply artifact SHA-256, score count, and attempt ID guards. Requires backroom:write.',
       inputSchema: retryFailedScreeningNowInputSchema,
       annotations: toolAnnotations('write', true),
     },
@@ -2121,7 +2143,7 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     {
       title: 'Expire running screening',
       description:
-        'Expire one live screening attempt after an operator verifies it is stuck, so the platform can admit a replacement attempt. Supply the current artifact SHA-256, score count, and running attempt ID as concurrency guards. This fails the attempt, marks inflight Kaniko/source-review rows operator-expired, and returns the submission to screening_failed. It does not rewrite attempt history, accept the submission, or release a quarantine. Requires backroom:write.',
+        'Expire and park one stuck screening attempt without starting replacement work. Supply artifact SHA-256, score count, and attempt ID guards. Call retry_failed_screening_now separately to retry. Requires backroom:write.',
       inputSchema: expireRunningScreeningInputSchema,
       annotations: toolAnnotations('write', true),
     },

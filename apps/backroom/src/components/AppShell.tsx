@@ -96,7 +96,7 @@ const navigation = [
   {
     to: '/screener-capacity' as const,
     label: 'Screener capacity',
-    description: 'One-shot Targon lanes & GCE fallback',
+    description: 'Single-shot screening lanes & parked failures',
     icon: ServerCog,
   },
   {

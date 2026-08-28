@@ -245,10 +245,9 @@ class TargonClientTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "invalid Targon organization slug"):
             TargonClient(api_key="x" * 40, org_slug="Not / Safe")
 
-    @patch("screener_capacity.targon.time.sleep", return_value=None)
     @patch("screener_capacity.targon.urllib.request.urlopen")
-    def test_transient_error_retries_without_echoing_body(
-        self, urlopen: object, _sleep: object
+    def test_transient_error_is_terminal_without_echoing_body(
+        self, urlopen: object
     ) -> None:
         error = urllib.error.HTTPError(
             "https://api.targon.com/tha/v3/orgs/ditto/workloads",
@@ -257,13 +256,13 @@ class TargonClientTests(unittest.TestCase):
             {},
             io.BytesIO(b'{"reason":"leaked-secret-value"}'),
         )
-        urlopen.side_effect = [error, error, error]  # type: ignore[attr-defined]
+        urlopen.side_effect = error  # type: ignore[attr-defined]
         client = TargonClient(api_key="x" * 40, org_slug="ditto")
 
         with self.assertRaises(TargonAPIError) as raised:
             client.list_workloads()
 
-        self.assertEqual(urlopen.call_count, 3)  # type: ignore[attr-defined]
+        self.assertEqual(urlopen.call_count, 1)  # type: ignore[attr-defined]
         self.assertNotIn("leaked-secret-value", str(raised.exception))
         self.assertIn("rate limited", str(raised.exception))
 
@@ -293,10 +292,9 @@ class TargonClientTests(unittest.TestCase):
 
         self.assertEqual(urlopen.call_count, 2)  # type: ignore[attr-defined]
 
-    @patch("screener_capacity.targon.time.sleep", return_value=None)
     @patch("screener_capacity.targon.urllib.request.urlopen")
-    def test_deploy_retries_transient_provider_failure(
-        self, urlopen: object, _sleep: object
+    def test_deploy_failure_reconciles_once_without_redispatch(
+        self, urlopen: object
     ) -> None:
         error = urllib.error.HTTPError(
             "https://api.targon.com/tha/v3/orgs/ditto/workloads/rental-1/deploy",
@@ -308,14 +306,14 @@ class TargonClientTests(unittest.TestCase):
         urlopen.side_effect = [error, _Response({"uid": "rental-1"})]  # type: ignore[attr-defined]
         client = TargonClient(api_key="x" * 40, org_slug="ditto")
 
-        client.deploy("rental-1")
+        with self.assertRaises(TargonAPIError):
+            client.deploy("rental-1")
 
         self.assertEqual(urlopen.call_count, 2)  # type: ignore[attr-defined]
 
-    @patch("screener_capacity.targon.time.sleep", return_value=None)
     @patch("screener_capacity.targon.urllib.request.urlopen")
     def test_deploy_reconciles_lost_response_from_provider(
-        self, urlopen: object, _sleep: object
+        self, urlopen: object
     ) -> None:
         error = urllib.error.HTTPError(
             "https://api.targon.com/tha/v3/orgs/ditto/workloads/rental-1/deploy",
@@ -326,8 +324,6 @@ class TargonClientTests(unittest.TestCase):
         )
         urlopen.side_effect = [  # type: ignore[attr-defined]
             error,
-            error,
-            error,
             _Response({"status": "provisioning"}),
         ]
         client = TargonClient(api_key="x" * 40, org_slug="ditto")
@@ -335,7 +331,7 @@ class TargonClientTests(unittest.TestCase):
         state = client.deploy("rental-1")
 
         self.assertEqual(state, {"status": "provisioning"})
-        self.assertEqual(urlopen.call_count, 4)  # type: ignore[attr-defined]
+        self.assertEqual(urlopen.call_count, 2)  # type: ignore[attr-defined]
 
 
 if __name__ == "__main__":

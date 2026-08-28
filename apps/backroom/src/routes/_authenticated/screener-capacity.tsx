@@ -19,7 +19,7 @@ function ScreenerCapacityPage() {
       <PageHeader
         label="SN118 screening"
         title="Screener capacity"
-        description="Audited one-shot Targon routing, trusted builds, leftover worker drain, and GCE fallback for screening."
+        description="Audited single-shot screening providers, trusted builds, and parked failures with manual retry control."
         aside={
           <div className="flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--panel)] px-3 py-2 text-xs text-[var(--muted-strong)]">
             <ServerCog className="h-3.5 w-3.5 text-[var(--cyan)]" />

@@ -677,7 +677,7 @@ def _confirmation_chat_request(
                 {
                     "sort": "throughput",
                     "ignore": ["coreweave"],
-                    "allow_fallbacks": True,
+                    "allow_fallbacks": False,
                     "data_collection": "deny",
                 }
                 if offer.get("lane") == "reader"
@@ -803,7 +803,7 @@ class TestV9ConfirmationEmbeddingProxy:
 
 
 class TestV9ConfirmationChatProxy:
-    async def test_reader_retries_backpressure_without_widening_frozen_route(
+    async def test_reader_parks_backpressure_without_widening_frozen_route(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -867,7 +867,7 @@ class TestV9ConfirmationChatProxy:
             assert payload["provider"] == {
                 "sort": "throughput",
                 "ignore": ["coreweave"],
-                "allow_fallbacks": True,
+                "allow_fallbacks": False,
                 "data_collection": "deny",
                 "zdr": True,
             }
@@ -920,10 +920,10 @@ class TestV9ConfirmationChatProxy:
                 headers=headers,
             )
 
-        assert response.status_code == 200, response.text
-        assert upstream_calls == 7
+        assert response.status_code == 502, response.text
+        assert upstream_calls == 1
         assert all(item == upstream_bodies[0] for item in upstream_bodies)
-        assert sleeps == [60.0, 10.0, 1.0, 1.0, 1.0, 1.0]
+        assert sleeps == []
         assert retry_backpressure_values == [True]
         async with session_maker() as session:
             request_rows = list(
@@ -938,16 +938,16 @@ class TestV9ConfirmationChatProxy:
             )
             assert len(request_rows) == 1
             request_row = request_rows[0]
-            assert request_row.status == "completed"
-            assert request_row.prompt_tokens == 5
-            assert request_row.completion_tokens == 1
-            assert request_row.cost_microusd == 10
+            assert request_row.status == "failed"
+            assert request_row.prompt_tokens == 0
+            assert request_row.completion_tokens == 0
+            assert request_row.cost_microusd == 0
             assert grant is not None
             assert grant.request_count == 1
             assert grant.active_requests == 0
-            assert grant.prompt_tokens == 5
-            assert grant.completion_tokens == 1
-            assert grant.cost_microusd == 10
+            assert grant.prompt_tokens == 0
+            assert grant.completion_tokens == 0
+            assert grant.cost_microusd == 0
 
     async def test_reader_backpressure_exhaustion_settles_one_failed_request(
         self,
@@ -1021,7 +1021,7 @@ class TestV9ConfirmationChatProxy:
             )
 
         assert response.status_code == 502, response.text
-        assert upstream_calls == 7
+        assert upstream_calls == 1
         async with session_maker() as session:
             request_rows = list(
                 await session.scalars(
@@ -1124,7 +1124,7 @@ class TestV9ConfirmationChatProxy:
             assert grant.completion_tokens == 0
             assert grant.cost_microusd == 0
 
-    async def test_reader_retries_only_documented_pre_provider_route_miss(
+    async def test_reader_parks_documented_pre_provider_route_miss(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
@@ -1183,7 +1183,7 @@ class TestV9ConfirmationChatProxy:
             assert payload["provider"] == {
                 "sort": "throughput",
                 "ignore": ["coreweave"],
-                "allow_fallbacks": True,
+                "allow_fallbacks": False,
                 "data_collection": "deny",
                 "zdr": True,
             }
@@ -1252,10 +1252,9 @@ class TestV9ConfirmationChatProxy:
                 headers=headers,
             )
 
-        assert response.status_code == 200, response.text
-        assert len(attempts) == 2
-        assert attempts[0] == attempts[1]
-        assert sleeps == [0.25]
+        assert response.status_code == 502, response.text
+        assert len(attempts) == 1
+        assert sleeps == []
         async with session_maker() as session:
             request_rows = list(
                 await session.scalars(
@@ -1269,16 +1268,16 @@ class TestV9ConfirmationChatProxy:
             )
             assert len(request_rows) == 1
             request_row = request_rows[0]
-            assert request_row.status == "completed"
-            assert request_row.prompt_tokens == 5
-            assert request_row.completion_tokens == 1
-            assert request_row.cost_microusd == 10
+            assert request_row.status == "failed"
+            assert request_row.prompt_tokens == 0
+            assert request_row.completion_tokens == 0
+            assert request_row.cost_microusd == 0
             assert grant is not None
             assert grant.request_count == 1
             assert grant.active_requests == 0
-            assert grant.prompt_tokens == 5
-            assert grant.completion_tokens == 1
-            assert grant.cost_microusd == 10
+            assert grant.prompt_tokens == 0
+            assert grant.completion_tokens == 0
+            assert grant.cost_microusd == 0
 
     async def test_pre_provider_route_miss_classifier_fails_closed(self) -> None:
         model = "openai/gpt-oss-20b"
@@ -1568,7 +1567,7 @@ class TestV9ConfirmationChatProxy:
         )
         assert inference_mod._confirmation_reader_backpressure_delay(duplicate) == 10.0
 
-    async def test_judge_and_503_keep_ordinary_retry_cap(self) -> None:
+    async def test_judge_and_503_are_single_shot(self) -> None:
         async def no_sleep(_: float) -> None:
             return None
 
@@ -1606,8 +1605,8 @@ class TestV9ConfirmationChatProxy:
                     sleep=no_sleep,
                 )
             assert result.response.status_code == status
-            assert result.attempts == 3
-            assert calls == 3
+            assert result.attempts == 1
+            assert calls == 1
 
     async def test_receipt_bearing_429_is_never_retried(self) -> None:
         calls = 0
@@ -1642,7 +1641,7 @@ class TestV9ConfirmationChatProxy:
         assert result.attempts == 1
         assert calls == 1
 
-    async def test_reader_backpressure_respects_hard_elapsed_deadline(self) -> None:
+    async def test_reader_backpressure_returns_without_retry_delay(self) -> None:
         calls = 0
         sleeps: list[float] = []
 
@@ -1661,22 +1660,22 @@ class TestV9ConfirmationChatProxy:
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(provider)
         ) as provider_client:
-            with pytest.raises(inference_mod._ProviderCallError) as exc_info:
-                await inference_mod._post_provider_with_retry(
-                    provider_client,
-                    "https://provider.invalid/chat",
-                    payload={"model": "fixed/model"},
-                    headers={"Authorization": "redacted"},
-                    backpressure_max_attempts=7,
-                    require_receipt_free_backpressure=True,
-                    max_elapsed_seconds=1.0,
-                    sleep=record_sleep,
-                )
-        assert exc_info.value.timed_out is True
+            result = await inference_mod._post_provider_with_retry(
+                provider_client,
+                "https://provider.invalid/chat",
+                payload={"model": "fixed/model"},
+                headers={"Authorization": "redacted"},
+                backpressure_max_attempts=7,
+                require_receipt_free_backpressure=True,
+                max_elapsed_seconds=1.0,
+                sleep=record_sleep,
+            )
+        assert result.response.status_code == 429
+        assert result.attempts == 1
         assert calls == 1
         assert sleeps == []
 
-    async def test_reader_backpressure_propagates_parent_cancellation(self) -> None:
+    async def test_reader_backpressure_never_enters_retry_sleep(self) -> None:
         calls = 0
         sleeping = asyncio.Event()
 
@@ -1696,22 +1695,18 @@ class TestV9ConfirmationChatProxy:
         async with httpx.AsyncClient(
             transport=httpx.MockTransport(provider)
         ) as provider_client:
-            task = asyncio.create_task(
-                inference_mod._post_provider_with_retry(
-                    provider_client,
-                    "https://provider.invalid/chat",
-                    payload={"model": "fixed/model"},
-                    headers={"Authorization": "redacted"},
-                    backpressure_max_attempts=7,
-                    require_receipt_free_backpressure=True,
-                    max_elapsed_seconds=80.0,
-                    sleep=blocked_sleep,
-                )
+            result = await inference_mod._post_provider_with_retry(
+                provider_client,
+                "https://provider.invalid/chat",
+                payload={"model": "fixed/model"},
+                headers={"Authorization": "redacted"},
+                backpressure_max_attempts=7,
+                require_receipt_free_backpressure=True,
+                max_elapsed_seconds=80.0,
+                sleep=blocked_sleep,
             )
-            await sleeping.wait()
-            task.cancel()
-            with pytest.raises(asyncio.CancelledError):
-                await task
+        assert result.response.status_code == 429
+        assert not sleeping.is_set()
         assert calls == 1
 
     async def test_installed_judge_profile_reaches_zdr_azure_route(
@@ -1810,7 +1805,7 @@ class TestV9ConfirmationChatProxy:
             assert payload["provider"] == {
                 "sort": "throughput",
                 "ignore": ["coreweave"],
-                "allow_fallbacks": True,
+                "allow_fallbacks": False,
                 "data_collection": "deny",
                 "zdr": True,
             }

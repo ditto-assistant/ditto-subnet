@@ -408,31 +408,20 @@ func TestRunCaseSendsPublicHarnessBenchVersion(t *testing.T) {
 	}
 }
 
-func TestRunCaseRetriesTransientThenSucceeds(t *testing.T) {
+func TestRunCaseParksTransientFailureWithoutRetry(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&calls, 1)
-		if n < 3 { // first two attempts: transient failures (429 then 503)
-			if n == 1 {
-				w.WriteHeader(http.StatusTooManyRequests)
-			} else {
-				w.WriteHeader(http.StatusServiceUnavailable)
-			}
-			return
-		}
-		json.NewEncoder(w).Encode(protocol.RunResponse{FinalText: "recovered"})
+		atomic.AddInt32(&calls, 1)
+		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer srv.Close()
 
-	out, err := RunCase(sandboxContext(), srv.URL, "c1", "hi", nil, CaseOptions{})
-	if err != nil {
-		t.Fatalf("RunCase should have recovered after retries: %v", err)
+	_, err := RunCase(sandboxContext(), srv.URL, "c1", "hi", nil, CaseOptions{})
+	if err == nil {
+		t.Fatal("RunCase unexpectedly recovered without an operator retry")
 	}
-	if out.FinalText != "recovered" {
-		t.Fatalf("unexpected response: %+v", out)
-	}
-	if got := atomic.LoadInt32(&calls); got != 3 {
-		t.Fatalf("expected 3 attempts (2 transient + 1 success), got %d", got)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("expected one attempt, got %d", got)
 	}
 }
 
@@ -448,20 +437,14 @@ func TestRunCaseTelemetryRecordsTrustedAttempts(t *testing.T) {
 	defer srv.Close()
 
 	resp, execution, err := RunCaseWithTelemetry(sandboxContext(), srv.URL, "c1", "hi", nil, CaseOptions{})
-	if err != nil {
-		t.Fatalf("RunCaseWithTelemetry error: %v", err)
-	}
-	if resp.FinalText != "recovered" || execution.TerminalOutcome != "success" {
+	if err == nil || execution.TerminalOutcome != "rate_limited" {
 		t.Fatalf("unexpected result: response=%+v execution=%+v", resp, execution)
 	}
-	if len(execution.Attempts) != 2 {
-		t.Fatalf("attempts = %d, want 2", len(execution.Attempts))
+	if len(execution.Attempts) != 1 {
+		t.Fatalf("attempts = %d, want 1", len(execution.Attempts))
 	}
 	if execution.Attempts[0].Outcome != "rate_limited" || execution.Attempts[0].HTTPStatus != http.StatusTooManyRequests {
 		t.Fatalf("first attempt = %+v", execution.Attempts[0])
-	}
-	if execution.Attempts[1].Outcome != "success" || execution.Attempts[1].HTTPStatus != http.StatusOK {
-		t.Fatalf("second attempt = %+v", execution.Attempts[1])
 	}
 	if execution.TimedOut || execution.Cancelled || execution.TotalDurationMs < 0 {
 		t.Fatalf("unexpected execution flags: %+v", execution)
@@ -505,7 +488,7 @@ func TestRunCaseDoesNotRetryClientError(t *testing.T) {
 	}
 }
 
-func TestRunCaseGivesUpAfterAttempts(t *testing.T) {
+func TestRunCaseParksAfterOneAttempt(t *testing.T) {
 	var calls int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -516,8 +499,8 @@ func TestRunCaseGivesUpAfterAttempts(t *testing.T) {
 	if _, err := RunCase(sandboxContext(), srv.URL, "c1", "hi", nil, CaseOptions{}); err == nil {
 		t.Fatal("expected an error after exhausting attempts")
 	}
-	if got := atomic.LoadInt32(&calls); got != int32(runAttempts) {
-		t.Fatalf("expected %d attempts, got %d", runAttempts, got)
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Fatalf("provider failure was redispatched: got %d attempts", got)
 	}
 }
 

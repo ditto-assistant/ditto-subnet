@@ -5,19 +5,16 @@ from __future__ import annotations
 
 import json
 import os
-import time
 import urllib.error
 import urllib.request
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-
 READER_MODEL = "openai/gpt-4.1"
 PROFILE_REVISION = "longmemeval-openrouter-gpt41-reader-v1"
 UPSTREAM = "https://openrouter.ai/api/v1/chat/completions"
 MAX_BODY_BYTES = 4 * 1024 * 1024
-MAX_ATTEMPTS = 4
 
 
 def rewrite_request(value: Any) -> dict[str, Any]:
@@ -72,7 +69,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         length = int(self.headers.get("Content-Length", "0"))
         if length < 1 or length > MAX_BODY_BYTES:
-            self.write_json(HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid request size"})
+            self.write_json(
+                HTTPStatus.REQUEST_ENTITY_TOO_LARGE, {"error": "invalid request size"}
+            )
             return
         try:
             request_value = json.loads(self.rfile.read(length))
@@ -81,47 +80,37 @@ class Handler(BaseHTTPRequestHandler):
             self.write_json(HTTPStatus.BAD_REQUEST, {"error": str(exc)})
             return
 
-        for attempt in range(1, MAX_ATTEMPTS + 1):
-            upstream = urllib.request.Request(
-                UPSTREAM,
-                data=body,
-                method="POST",
-                headers={
-                    "Authorization": f"Bearer {self.server.api_key}",  # type: ignore[attr-defined]
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/ditto-assistant/dittobench-api",
-                    "X-Title": "Ditto top-five LongMemEval reader",
-                },
-            )
-            try:
-                with urllib.request.urlopen(upstream, timeout=300) as response:
-                    response_body = response.read()
-                    self.send_response(response.status)
-                    self.send_header("Content-Type", "application/json")
-                    self.send_header("Content-Length", str(len(response_body)))
-                    self.end_headers()
-                    self.wfile.write(response_body)
-                    return
-            except urllib.error.HTTPError as exc:
-                detail = exc.read()
-                if attempt < MAX_ATTEMPTS and (exc.code in {408, 429} or exc.code >= 500):
-                    time.sleep(min(2 ** (attempt - 1), 4))
-                    continue
-                self.send_response(exc.code)
-                self.send_header("Content-Type", exc.headers.get_content_type())
-                self.send_header("Content-Length", str(len(detail)))
+        upstream = urllib.request.Request(
+            UPSTREAM,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {self.server.api_key}",  # type: ignore[attr-defined]
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/ditto-assistant/dittobench-api",
+                "X-Title": "Ditto top-five LongMemEval reader",
+            },
+        )
+        try:
+            with urllib.request.urlopen(upstream, timeout=300) as response:
+                response_body = response.read()
+                self.send_response(response.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(response_body)))
                 self.end_headers()
-                self.wfile.write(detail)
-                return
-            except urllib.error.URLError as exc:
-                if attempt < MAX_ATTEMPTS:
-                    time.sleep(min(2 ** (attempt - 1), 4))
-                    continue
-                self.write_json(
-                    HTTPStatus.SERVICE_UNAVAILABLE,
-                    {"error": f"reader upstream unavailable: {exc.reason}"},
-                )
-                return
+                self.wfile.write(response_body)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read()
+            self.send_response(exc.code)
+            self.send_header("Content-Type", exc.headers.get_content_type())
+            self.send_header("Content-Length", str(len(detail)))
+            self.end_headers()
+            self.wfile.write(detail)
+        except urllib.error.URLError as exc:
+            self.write_json(
+                HTTPStatus.SERVICE_UNAVAILABLE,
+                {"error": f"reader upstream unavailable: {exc.reason}"},
+            )
 
 
 def main() -> None:
@@ -131,7 +120,10 @@ def main() -> None:
     port = int(os.environ.get("PORT", "18437"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.api_key = api_key  # type: ignore[attr-defined]
-    print(f"LongMemEval reader proxy on :{port}; model pinned to {READER_MODEL}", flush=True)
+    print(
+        f"LongMemEval reader proxy on :{port}; model pinned to {READER_MODEL}",
+        flush=True,
+    )
     server.serve_forever()
 
 

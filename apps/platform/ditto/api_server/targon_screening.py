@@ -320,20 +320,6 @@ async def _queue_kaniko(
             .on_conflict_do_nothing(constraint="submission_image_builds_attempt_key")
         )
         return
-    prior_gcp_infra_failure = await session.scalar(
-        select(SubmissionImageBuild.build_id)
-        .where(
-            SubmissionImageBuild.agent_id == agent.agent_id,
-            SubmissionImageBuild.artifact_sha256 == artifact_sha256,
-            SubmissionImageBuild.environment == environment,
-            SubmissionImageBuild.provider == "gcp",
-            SubmissionImageBuild.status == "fallback_required",
-            SubmissionImageBuild.error_code.in_(
-                ("CLOUDRUN_PROVISION_ERROR", "CLOUDRUN_PROVISION_TIMEOUT")
-            ),
-        )
-        .limit(1)
-    )
     await session.execute(
         pg_insert(SubmissionImageBuild)
         .values(
@@ -345,7 +331,7 @@ async def _queue_kaniko(
             image_ref=f"ditto-screen/{agent.agent_id}-{attempt.attempt_id}:latest",
             output_key=f"remote-builds/{build_id}/image.tar",
             status="queued",
-            provider="gcp" if prior_gcp_infra_failure is not None else None,
+            provider=None,
             runtime_status="pending" if runtime_enabled else "skipped",
             runtime_error_code=(
                 None if runtime_enabled else "TARGON_RUNTIME_DISABLED_BY_POLICY"
@@ -686,7 +672,9 @@ async def _fail_retryable(
     attempt.reason_code = code
     if agent is not None:
         agent.status = AgentStatus.SCREENING_FAILED
-        agent.screening_reason = "Screening was interrupted; retry scheduled"
+        agent.screening_reason = (
+            "Screening failed and is parked; an operator may retry it in Backroom"
+        )
         agent.screening_reason_code = code
 
 

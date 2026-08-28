@@ -18,7 +18,7 @@ import (
 const (
 	maximumEligibleCases   = 100_000
 	maximumPairedCases     = 512
-	maximumAttemptsPerCase = 5
+	maximumAttemptsPerCase = 1
 	maximumCoordinatorRuns = 4096
 	maximumRequestTimeout  = 5 * time.Minute
 	maximumTotalTimeout    = 30 * time.Minute
@@ -116,7 +116,8 @@ type retryableError struct{ error }
 
 func (retryableError) Retryable() bool { return true }
 
-// MarkRetryable explicitly opts an attempt failure into bounded retry.
+// MarkRetryable preserves the historical failure classification. The
+// coordinator is single-shot and never dispatches the case again.
 func MarkRetryable(err error) error {
 	if err == nil {
 		return nil
@@ -244,8 +245,8 @@ func NewCoordinator(config CoordinatorConfig) (*Coordinator, error) {
 	if config.SampleSize <= 0 || config.SampleSize > maximumPairedCases {
 		return nil, fmt.Errorf("invalid paired sample size")
 	}
-	if config.MaxAttempts <= 0 || config.MaxAttempts > maximumAttemptsPerCase {
-		return nil, fmt.Errorf("invalid maximum attempts")
+	if config.MaxAttempts != 1 {
+		return nil, fmt.Errorf("maximum attempts must be one")
 	}
 	minimumRequests := config.SampleSize * 3
 	maximumUsefulRequests := minimumRequests * config.MaxAttempts
@@ -526,32 +527,27 @@ func (c *Coordinator) runOne(
 	request RunRequest,
 	requests *requestCounter,
 ) (CaseRunResult, int, UnavailableReason) {
-	for attempt := 1; attempt <= c.config.MaxAttempts; attempt++ {
-		if err := ctx.Err(); err != nil {
-			return CaseRunResult{}, attempt - 1, reasonForContext(err)
-		}
-		if !requests.reserve() {
-			return CaseRunResult{}, attempt - 1, UnavailableRequestLimit
-		}
-		request.Responder = newScopedResponderFromCapability(request.Responder)
-		result, err := runAttempt(ctx, c.config.RequestTimeout, runner, request)
-		if err == nil {
-			if math.IsNaN(result.Score) || math.IsInf(result.Score, 0) || result.Score < 0 || result.Score > 1 {
-				return CaseRunResult{}, attempt, UnavailableCaseFailure
-			}
-			return result, attempt, UnavailableNone
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return CaseRunResult{}, attempt, reasonForContext(err)
-		}
-		if !canRetry(err) {
-			return CaseRunResult{}, attempt, UnavailableCaseFailure
-		}
-		if attempt == c.config.MaxAttempts {
-			return CaseRunResult{}, attempt, UnavailableRetryExhausted
-		}
+	if err := ctx.Err(); err != nil {
+		return CaseRunResult{}, 0, reasonForContext(err)
 	}
-	panic("bounded retry loop terminated unexpectedly")
+	if !requests.reserve() {
+		return CaseRunResult{}, 0, UnavailableRequestLimit
+	}
+	request.Responder = newScopedResponderFromCapability(request.Responder)
+	result, err := runAttempt(ctx, c.config.RequestTimeout, runner, request)
+	if err == nil {
+		if math.IsNaN(result.Score) || math.IsInf(result.Score, 0) || result.Score < 0 || result.Score > 1 {
+			return CaseRunResult{}, 1, UnavailableCaseFailure
+		}
+		return result, 1, UnavailableNone
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return CaseRunResult{}, 1, reasonForContext(err)
+	}
+	if canRetry(err) {
+		return CaseRunResult{}, 1, UnavailableRetryExhausted
+	}
+	return CaseRunResult{}, 1, UnavailableCaseFailure
 }
 
 func newScopedResponderFromCapability(capability SyntheticResponder) SyntheticResponder {

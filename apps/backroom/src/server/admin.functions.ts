@@ -51,6 +51,7 @@ import {
   inferenceRoutingPolicyInputSchema,
   setConfirmationBundleSettingsInputSchema,
   setScreenerProviderSettingsInputSchema,
+  retryTrustedImageBuildInputSchema,
   confirmationBundleListInputSchema,
   confirmationBundleDetailInputSchema,
   authorizeConfirmationBundleRetestInputSchema,
@@ -103,6 +104,7 @@ import {
   releaseValidatorScoreRetest,
   fetchScreenerReviewControl,
   fetchScreenerCapacity,
+  retryTrustedImageBuild as retryTrustedImageBuildService,
   updateScreenerProviderSettings as updateScreenerProviderSettingsService,
   applyScreenerReviewSettings as applyScreenerReviewSettingsService,
   fetchArtifactReleaseControl,
@@ -298,6 +300,15 @@ export const getScreenerCapacity = createServerFn({ method: 'GET' })
     setResponseHeader('Cache-Control', 'no-store')
     setResponseHeader('Vary', 'Cookie, Authorization')
     return fetchScreenerCapacity()
+  })
+
+export const retryTrustedImageBuild = createServerFn({ method: 'POST' })
+  .middleware([writeAuthMiddleware, sameOriginMiddleware])
+  .validator(retryTrustedImageBuildInputSchema)
+  .handler(({ context, data }) => {
+    setResponseHeader('Cache-Control', 'no-store')
+    setResponseHeader('Vary', 'Cookie, Authorization')
+    return retryTrustedImageBuildService(data, context.session.email)
   })
 
 export const updateScreenerProviderSettings = createServerFn({ method: 'POST' })

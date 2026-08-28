@@ -207,6 +207,14 @@ class TrustedImageBuildCreateRequest(BaseModel):
     reason: Annotated[str, Field(min_length=8)]
 
 
+class TrustedImageBuildRetryRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    expected_status: Literal["failed", "fallback_required", "canceled"]
+    expected_attempt_count: Annotated[int, Field(ge=1)]
+    reason: Annotated[str, Field(min_length=8)]
+
+
 class TrustedImageBuildView(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 

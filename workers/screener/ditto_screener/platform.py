@@ -73,14 +73,6 @@ logger = logging.getLogger(__name__)
 
 _PREFIX = "/api/v1/screener"
 _IMAGE_REQUEST_TIMEOUT = httpx.Timeout(300.0, connect=30.0, pool=30.0)
-_IMAGE_UPLOAD_ATTEMPTS = 3
-# A screened image can take many minutes to build, while a Platform rollout is
-# normally a sub-minute interruption. Keep the already-computed signed verdict
-# in memory across that window instead of abandoning the 70-minute lease after
-# 3.5 seconds. These sleeps spend no model-call budget and do not rerun the
-# build; they only replay the same idempotent attempt-bound payload.
-_VERDICT_RETRY_DELAYS_SECONDS = (0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 30.0)
-_TRANSIENT_VERDICT_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 _REMOTE_BUILD_POLL_SECONDS = 5.0
 
 
@@ -92,6 +84,10 @@ class RemoteImageArchive:
     size_bytes: int
     runtime_status: str = "skipped"
     runtime_image_reference: str | None = None
+
+
+class LocalScreeningProviderSelected(RuntimeError):
+    """Backroom selected the GCP/local lane as primary for this operation."""
 
 
 class PlatformClient:
@@ -155,44 +151,25 @@ class PlatformClient:
                 )
             ).hex()
             url = f"{self._base}{_PREFIX}/nodes/refresh"
-            response: httpx.Response | None = None
             try:
-                for attempt in range(3):
-                    try:
-                        response = await self._client.post(
-                            url,
-                            json={
-                                "node_id": credential.node_id,
-                                "screener_hotkey": credential.screener_hotkey,
-                                "timestamp": timestamp,
-                                "signature": signature,
-                                "refresh_id": str(refresh_id),
-                            },
-                            headers={
-                                "Authorization": f"Bearer {credential.api_token}",
-                                "X-Screener-Hotkey": credential.screener_hotkey,
-                            },
-                        )
-                    except httpx.HTTPError:
-                        if attempt == 2:
-                            raise
-                        continue
-                    if response.status_code not in {
-                        408,
-                        425,
-                        429,
-                        500,
-                        502,
-                        503,
-                        504,
-                    }:
-                        break
+                response = await self._client.post(
+                    url,
+                    json={
+                        "node_id": credential.node_id,
+                        "screener_hotkey": credential.screener_hotkey,
+                        "timestamp": timestamp,
+                        "signature": signature,
+                        "refresh_id": str(refresh_id),
+                    },
+                    headers={
+                        "Authorization": f"Bearer {credential.api_token}",
+                        "X-Screener-Hotkey": credential.screener_hotkey,
+                    },
+                )
             except httpx.HTTPError as error:
                 raise PlatformError(
                     "screener node credential refresh failed"
                 ) from error
-            if response is None:
-                raise PlatformError("screener node credential refresh failed")
             if response.status_code != 200:
                 raise PlatformError(
                     "screener node credential refresh rejected "
@@ -376,7 +353,7 @@ class PlatformClient:
         attempt_id: UUID,
         timeout: float,
     ) -> RemoteImageArchive | None:
-        """Prefer one verified Targon Kaniko archive, otherwise authorize local."""
+        """Return one verified Targon archive or a terminal remote failure."""
         base_url = f"{self._base}{_PREFIX}/agent/{agent_id}/submission-image-builds"
         try:
             response = await self._client.post(
@@ -388,15 +365,13 @@ class PlatformClient:
             )
             if response.status_code != 200:
                 logger.warning(
-                    "remote build queue unavailable status=%d; using local builder",
+                    "remote build queue unavailable status=%d",
                     response.status_code,
                 )
                 return None
             build = SubmissionImageBuildResponse.model_validate(response.json())
         except (httpx.HTTPError, ValueError) as error:
-            logger.warning(
-                "remote build queue unavailable; using local builder: %s", error
-            )
+            logger.warning("remote build queue unavailable: %s", error)
             return None
         deadline = asyncio.get_running_loop().time() + max(1.0, timeout)
         try:
@@ -407,8 +382,14 @@ class PlatformClient:
                         return archive
                     break
                 if build.status in {"fallback_required", "canceled", "consumed"}:
+                    if (
+                        build.status == "fallback_required"
+                        and build.error_code
+                        == "TARGON_SUBMISSION_BUILD_DISABLED_BY_POLICY"
+                    ):
+                        raise LocalScreeningProviderSelected("GCP build lane selected")
                     logger.warning(
-                        "remote build unavailable code=%s; using local builder",
+                        "remote build unavailable code=%s",
                         build.error_code or "TARGON_SUBMISSION_BUILD_UNAVAILABLE",
                     )
                     return None
@@ -429,7 +410,7 @@ class PlatformClient:
                     )
                 build = SubmissionImageBuildResponse.model_validate(response.json())
         except (httpx.HTTPError, ValueError, PlatformError) as error:
-            logger.warning("remote build failed; using local builder: %s", error)
+            logger.warning("remote build failed: %s", error)
         await self.discard_submission_image_build(
             agent_id, attempt_id=attempt_id, build_id=build.build_id
         )
@@ -513,7 +494,7 @@ class PlatformClient:
         attempt_id: UUID,
         timeout: float,
     ) -> SourceReviewObservationPayload | None:
-        """Prefer one bounded Targon review and return None for local fallback."""
+        """Return one bounded remote review or a terminal remote failure."""
         base_url = f"{self._base}{_PREFIX}/agent/{agent_id}/submission-source-reviews"
         review: SubmissionSourceReviewResponse | None = None
         try:
@@ -527,7 +508,7 @@ class PlatformClient:
             if response.status_code != 200:
                 logger.warning(
                     "remote source-review queue unavailable status=%d; "
-                    "using local reviewer",
+                    "parking remote-selected screening attempt",
                     response.status_code,
                 )
                 return None
@@ -544,14 +525,21 @@ class PlatformClient:
                         and observation.clearance_certified
                     ):
                         return observation
-                    # Elevated or uncertified L1 still has a typed finding.
-                    # Prefer-mode callers fall back to local L2; require-mode
-                    # screening uses this observation without nested Docker.
+                    # The completed remote observation is authoritative; no
+                    # second provider is dispatched.
                     return observation
                 if review.status in {"fallback_required", "canceled", "consumed"}:
+                    if (
+                        review.status == "fallback_required"
+                        and review.error_code
+                        == "TARGON_SOURCE_REVIEW_DISABLED_BY_POLICY"
+                    ):
+                        raise LocalScreeningProviderSelected(
+                            "GCP source-review lane selected"
+                        )
                     logger.warning(
                         "remote source review unavailable code=%s; "
-                        "using local reviewer",
+                        "parking remote-selected screening attempt",
                         review.error_code or "TARGON_SOURCE_REVIEW_UNAVAILABLE",
                     )
                     return None
@@ -573,7 +561,9 @@ class PlatformClient:
                 review = SubmissionSourceReviewResponse.model_validate(response.json())
         except (httpx.HTTPError, ValueError, PlatformError) as error:
             logger.warning(
-                "remote source review failed; using local reviewer: %s", error
+                "remote source review failed; parking remote-selected screening "
+                "attempt: %s",
+                error,
             )
         finally:
             if review is not None:
@@ -651,37 +641,15 @@ class PlatformClient:
             deferred_source_review=deferred_source_review,
         )
         body = payload.model_dump(mode="json")
-        for attempt in range(len(_VERDICT_RETRY_DELAYS_SECONDS) + 1):
-            try:
-                resp = await self._client.post(
-                    url, json=body, headers=await self._auth_headers()
-                )
-            except httpx.HTTPError as error:
-                if attempt >= len(_VERDICT_RETRY_DELAYS_SECONDS):
-                    raise PlatformError(f"verdict submit failed: {error}") from error
-                logger.warning(
-                    "verdict submit transport failure; retrying attempt=%d: %s",
-                    attempt + 2,
-                    error,
-                )
-            else:
-                if resp.status_code == 200:
-                    return ScreenResultResponse.model_validate(resp.json())
-                if (
-                    resp.status_code not in _TRANSIENT_VERDICT_STATUSES
-                    or attempt >= len(_VERDICT_RETRY_DELAYS_SECONDS)
-                ):
-                    raise PlatformError(
-                        f"verdict rejected ({resp.status_code}): {resp.text[:200]}"
-                    )
-                logger.warning(
-                    "verdict submit transiently rejected status=%d; retrying "
-                    "attempt=%d",
-                    resp.status_code,
-                    attempt + 2,
-                )
-            await asyncio.sleep(_VERDICT_RETRY_DELAYS_SECONDS[attempt])
-        raise RuntimeError("unreachable")
+        try:
+            resp = await self._client.post(
+                url, json=body, headers=await self._auth_headers()
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"verdict submit failed: {error}") from error
+        if resp.status_code == 200:
+            return ScreenResultResponse.model_validate(resp.json())
+        raise PlatformError(f"verdict rejected ({resp.status_code}): {resp.text[:200]}")
 
     async def upload_screened_image(
         self,
@@ -808,33 +776,21 @@ class PlatformClient:
         accepted: frozenset[int] = frozenset({200}),
         **kwargs: Any,
     ) -> httpx.Response:
-        """Issue one finite image request, retrying transport and server failures."""
-        for attempt in range(1, _IMAGE_UPLOAD_ATTEMPTS + 1):
-            try:
-                response = await self._client.request(
-                    method,
-                    url,
-                    timeout=_IMAGE_REQUEST_TIMEOUT,
-                    **kwargs,
-                )
-            except httpx.HTTPError as error:
-                if attempt == _IMAGE_UPLOAD_ATTEMPTS:
-                    raise PlatformError(f"{operation} failed: {error}") from error
-            else:
-                if response.status_code in accepted:
-                    return response
-                if response.status_code not in {429, 500, 502, 503, 504}:
-                    raise PlatformError(
-                        f"{operation} rejected ({response.status_code}): "
-                        f"{response.text[:200]}"
-                    )
-                if attempt == _IMAGE_UPLOAD_ATTEMPTS:
-                    raise PlatformError(
-                        f"{operation} failed after retries ({response.status_code}): "
-                        f"{response.text[:200]}"
-                    )
-            await asyncio.sleep(0.5 * attempt)
-        raise AssertionError("image request retry loop exhausted")
+        """Issue exactly one image request; the operator retries parked work."""
+        try:
+            response = await self._client.request(
+                method,
+                url,
+                timeout=_IMAGE_REQUEST_TIMEOUT,
+                **kwargs,
+            )
+        except httpx.HTTPError as error:
+            raise PlatformError(f"{operation} failed: {error}") from error
+        if response.status_code in accepted:
+            return response
+        raise PlatformError(
+            f"{operation} rejected ({response.status_code}): {response.text[:200]}"
+        )
 
     async def _abort_screened_image_upload(
         self,

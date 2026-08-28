@@ -25,7 +25,7 @@ func main() {
 	inventoryOnly := flag.Bool("inventory-only", false, "print current endpoint inventory without making paid requests")
 	flag.Parse()
 
-	client := &providercert.Client{APIKey: os.Getenv("OPENROUTER_API_KEY"), MaxAttempts: 3}
+	client := &providercert.Client{APIKey: os.Getenv("OPENROUTER_API_KEY"), MaxAttempts: 1}
 	ctx, cancel := context.WithTimeout(context.Background(), *timeout)
 	defer cancel()
 	out := os.Stdout

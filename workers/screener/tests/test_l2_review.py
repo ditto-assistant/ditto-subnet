@@ -2006,16 +2006,12 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     }
     assert requests[0]["model"] == L2_MODEL
     assert requests[0]["provider"] == {
-        "allow_fallbacks": True,
+        "allow_fallbacks": False,
         "require_parameters": False,
         "zdr": True,
         "data_collection": "deny",
     }
-    assert requests[0]["models"] == [
-        L2_MODEL,
-        "z-ai/glm-5.2",
-        "openai/gpt-5.6-sol",
-    ]
+    assert "models" not in requests[0]
     assert "reasoning" not in requests[0]
     assert requests[1]["model"] == "openai/gpt-5.6-sol"
     assert requests[2]["model"] == "openai/gpt-5.6-sol"
@@ -2068,10 +2064,7 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
     assert {record["cache_hit"] for record in records} == {False, True}
     assert all(record["attempt_id"] == str(ATTEMPT) for record in records)
     assert all(record["analyst_model"] == L2_MODEL for record in records)
-    assert all(
-        record["analyst_fallback_models"] == ["z-ai/glm-5.2", "openai/gpt-5.6-sol"]
-        for record in records
-    )
+    assert all(record["analyst_fallback_models"] == [] for record in records)
     assert all(record["critic_model"] == "openai/gpt-5.6-sol" for record in records)
     assert all(record["prompt_revision"] == L2_PROMPT_REVISION for record in records)
     assert all(
@@ -2360,7 +2353,9 @@ fn run() -> Answer {
     assert result.adjudicator_disposition == "uphold_violation"
 
 
-async def test_reasoning_only_turn_gets_one_bounded_tool_retry(tmp_path: Path) -> None:
+async def test_reasoning_only_turn_is_single_shot_contract_failure(
+    tmp_path: Path,
+) -> None:
     archive, artifact_sha = _tar(tmp_path, "fn main() { serve(); }\nfn serve() {}")
     source_digest = hashlib.sha256(b"fn main() { serve(); }\nfn serve() {}").hexdigest()
     requests: list[dict[str, object]] = []
@@ -2401,11 +2396,9 @@ async def test_reasoning_only_turn_gets_one_bounded_tool_retry(tmp_path: Path) -
         deadline=None,
     )
 
-    assert result.observation.risk_level == "low"
-    assert len(requests) == 5
-    retry = requests[1]["input"][-1]  # type: ignore[index]
-    assert retry["role"] == "user"  # type: ignore[index]
-    assert "Call exactly one" in retry["content"][0]["text"]  # type: ignore[index]
+    assert not result.observation.ok
+    assert result.observation.error_code == "l2-model-tool-contract"
+    assert len(requests) == 1
 
 
 async def test_model_contract_failure_retains_usage_and_never_clears(
@@ -2427,12 +2420,9 @@ async def test_model_contract_failure_retains_usage_and_never_clears(
     assert not result.observation.ok
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.observation.error_code == "l2-model-tool-contract"
-    assert result.usage.input_tokens == 2_000
-    assert result.usage.output_tokens == 400
-    assert result.response_models == (
-        "moonshotai/kimi-k3-20260715",
-        "moonshotai/kimi-k3-20260715",
-    )
+    assert result.usage.input_tokens == 1_000
+    assert result.usage.output_tokens == 200
+    assert result.response_models == ("moonshotai/kimi-k3-20260715",)
 
 
 async def test_parallel_model_tool_calls_cannot_exceed_trajectory_cap(
@@ -2712,7 +2702,7 @@ async def test_violation_adjudicator_retry_reuses_kimi_stage(tmp_path: Path) -> 
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal requests
         requests += 1
-        if requests in {2, 3}:
+        if requests == 2:
             return _response([])
         return _response(
             [_tool_call(str(requests), "submit_l2_review", violation)],
@@ -2743,7 +2733,7 @@ async def test_violation_adjudicator_retry_reuses_kimi_stage(tmp_path: Path) -> 
     assert second.observation.risk_level == "high"
     assert second.analyst_cache_hit
     assert second.adjudicator_disposition == "confirm_violation_cause"
-    assert requests == 4, "the retry must rerun only the SOL cause adjudicator"
+    assert requests == 3, "the manual retry must rerun only the SOL cause adjudicator"
 
 
 async def test_incomplete_main_graph_allows_violation_but_never_clear(
@@ -2909,16 +2899,10 @@ async def test_partial_exploratory_tool_is_withheld_and_safety_still_runs(
         deadline=None,
     )
 
-    assert requests == 4
-    assert result.observation.risk_level == "high"
-    assert result.critic_disposition == "confirm_safe"
-    assert result.adjudicator_disposition == "uphold_violation"
-    assert result.clearance_path == "l3_adjudicated_violation"
+    assert requests == 2
+    assert not result.observation.ok
+    assert result.observation.error_code == "l3-critic-analyzer-contract"
     assert result.dossier_complete
-    assert any(
-        "partial-analysis-not-admissible" in json.dumps(payload)
-        for payload in request_payloads
-    )
 
 
 async def test_critic_challenge_keeps_quarantine(tmp_path: Path) -> None:
@@ -3192,7 +3176,7 @@ async def test_critic_failure_cannot_clear_or_reject(tmp_path: Path) -> None:
         deadline=None,
     )
 
-    assert requests == 3
+    assert requests == 2
     assert not result.observation.ok
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.critic_disposition == "retryable_infra"
@@ -3220,11 +3204,11 @@ async def test_critic_retry_reuses_sanitized_analyst_stage_cache(
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal requests
         requests += 1
-        if requests in {2, 3}:
+        if requests == 2:
             return _response([])
-        if requests == 5:
-            return _response([_tool_call("5", "read_file", {"path": "src/main.rs"})])
-        result = _clearance_certificate(safe) if requests == 6 else safe
+        if requests == 4:
+            return _response([_tool_call("4", "read_file", {"path": "src/main.rs"})])
+        result = _clearance_certificate(safe) if requests == 5 else safe
         return _response([_tool_call(str(requests), "submit_l2_review", result)])
 
     agent = _sol_agent(tmp_path, _FakeHarness(), handler)
@@ -3246,7 +3230,9 @@ async def test_critic_retry_reuses_sanitized_analyst_stage_cache(
     assert first.observation.failure_disposition == "retryable_infra"
     assert second.observation.risk_level == "low"
     assert second.analyst_cache_hit
-    assert requests == 6, "the retry must resume at SOL instead of rerunning Kimi"
+    assert requests == 5, (
+        "the manual retry must resume at SOL instead of rerunning Kimi"
+    )
 
 
 async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
@@ -3305,17 +3291,17 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
             return _response([_tool_call("1", "submit_l2_review", safe)])
         if requests == 2:
             return _response([_tool_call("2", "submit_l2_review", challenge)])
-        if requests in {3, 4}:
+        if requests == 3:
             return _response([])
-        if requests == 5:
+        if requests == 4:
             return _response(
-                [_tool_call("5", "read_file", {"path": "src/main.rs"})],
+                [_tool_call("4", "read_file", {"path": "src/main.rs"})],
                 input_tokens=0,
                 output_tokens=0,
                 reasoning_tokens=0,
                 cost=0,
             )
-        return _response([_tool_call("6", "submit_l2_review", adjudicated_safe)])
+        return _response([_tool_call("5", "submit_l2_review", adjudicated_safe)])
 
     agent = _sol_agent(tmp_path, _FakeHarness(), handler)
     first = await agent.review(
@@ -3338,11 +3324,11 @@ async def test_adjudicator_retry_reuses_analyst_and_critic_stage_caches(
     assert second.analyst_cache_hit
     assert second.critic_cache_hit
     assert second.adjudicator_disposition == "overturn_to_safe"
-    assert requests == 6, "the retry must rerun only the SOL adjudicator"
+    assert requests == 5, "the manual retry must rerun only the SOL adjudicator"
     assert second.usage.input_tokens == 1_000, "only adjudicator usage is new"
 
 
-async def test_invalid_final_tool_result_gets_compact_correction_turn(
+async def test_invalid_final_tool_result_is_single_shot_contract_failure(
     tmp_path: Path,
 ) -> None:
     source = "fn main() {}"
@@ -3404,13 +3390,9 @@ async def test_invalid_final_tool_result_gets_compact_correction_turn(
         deadline=None,
     )
 
-    assert result.observation.risk_level == "low"
-    assert result.critic_disposition == "confirm_safe"
-    assert len(requests) == 5
-    correction_items = requests[1]["input"]  # type: ignore[index]
-    correction = correction_items[-1]  # type: ignore[index]
-    assert correction["type"] == "function_call_output"
-    assert "safe result contains contradictory evidence" in correction["output"]
+    assert not result.observation.ok
+    assert result.observation.error_code == "l2-model-tool-contract"
+    assert len(requests) == 1
 
 
 async def test_late_l2_result_is_not_accepted(tmp_path: Path) -> None:
@@ -3448,7 +3430,7 @@ async def test_late_l2_result_is_not_accepted(tmp_path: Path) -> None:
     assert not list((tmp_path / "cache").glob("*.json"))
 
 
-async def test_http_retry_stops_when_backoff_would_exceed_deadline(
+async def test_http_failure_is_single_shot_before_deadline(
     tmp_path: Path,
 ) -> None:
     requests = 0
@@ -3474,7 +3456,7 @@ async def test_http_retry_stops_when_backoff_would_exceed_deadline(
         transport=httpx.MockTransport(handler),
     )
     async with httpx.AsyncClient(transport=agent._transport) as client:
-        with pytest.raises(ValueError, match="lease budget"):
+        with pytest.raises(httpx.HTTPStatusError, match="500"):
             await agent._post(
                 client,
                 "test-key",
@@ -3840,34 +3822,22 @@ async def test_real_analyzer_container_isolated_and_canonical_starter_clean(
     await cleanup.wait()
 
 
-async def test_relayed_rate_limit_is_retried_not_a_contract_failure(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A 200 body carrying ``status: failed / rate_limit_exceeded`` retries.
-
-    OpenRouter relays provider rate limits inside successful HTTP responses;
-    failing the stage on the first one burned entire reviews during sustained
-    rate limiting.
-    """
-    import ditto_screener.l2_review as l2_module
-
-    monkeypatch.setattr(l2_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+async def test_relayed_rate_limit_parks_after_one_post(tmp_path: Path) -> None:
+    """A relayed provider fault is terminal evidence for the current attempt."""
     archive, artifact_sha = _tar(tmp_path, "fn main() {}")
     requests: list[dict[str, object]] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(json.loads(request.content))
-        if len(requests) == 1:
-            return httpx.Response(
-                200,
-                json={
-                    "status": "failed",
-                    "error_type": "rate_limit_exceeded",
-                    "error": "rate_limit_exceeded",
-                    "output": [],
-                },
-            )
-        return _response([], model="moonshotai/kimi-k3-20260715")
+        return httpx.Response(
+            200,
+            json={
+                "status": "failed",
+                "error_type": "rate_limit_exceeded",
+                "error": "rate_limit_exceeded",
+                "output": [],
+            },
+        )
 
     result = await _sol_agent(tmp_path, _FakeHarness(), handler).review(
         str(archive),
@@ -3877,20 +3847,12 @@ async def test_relayed_rate_limit_is_retried_not_a_contract_failure(
         deadline=None,
     )
 
-    # The rate-limited turn was retried: the next payload was consumed
-    # normally and the review then failed on the ordinary tool contract,
-    # not on the relayed rate limit.
-    assert result.observation.error_code == "l2-model-tool-contract"
+    assert result.observation.error_code == "l2-model-response-contract"
     assert result.observation.failure_disposition == "retryable_infra"
-    assert len(requests) >= 3
+    assert len(requests) == 1
 
 
-async def test_relayed_rate_limit_retries_are_bounded(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    import ditto_screener.l2_review as l2_module
-
-    monkeypatch.setattr(l2_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0))
+async def test_persistent_relayed_rate_limit_still_posts_once(tmp_path: Path) -> None:
     archive, artifact_sha = _tar(tmp_path, "fn main() {}")
     requests: list[dict[str, object]] = []
 
@@ -3917,7 +3879,7 @@ async def test_relayed_rate_limit_retries_are_bounded(
     assert not result.observation.ok
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.observation.error_code == "l2-model-response-contract"
-    assert len(requests) == 4
+    assert len(requests) == 1
 
 
 async def test_exhausted_l2_does_not_claim_coverage_it_lacks() -> None:

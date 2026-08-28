@@ -13,7 +13,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/ditto-assistant/dittobench-datagen/protocol"
 	"github.com/google/uuid"
@@ -354,7 +353,6 @@ func TestHTTPHarnessRejectsInvalidConstructionAndResponses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			harness.seedRetryDelay = [seedMaxAttempts - 1]time.Duration{}
 			_, err = harness.Run(context.Background(), protocol.RunRequest{Tools: []protocol.ToolDefinition{}})
 			var failure *HarnessCaseFailure
 			if !errors.As(err, &failure) {
@@ -402,44 +400,31 @@ func TestHTTPHarnessSeedReceivedFailuresRemainFatal(t *testing.T) {
 	}
 }
 
-func TestHTTPHarnessSeedRetriesTransientFailureWithIdenticalIdempotentBody(t *testing.T) {
+func TestHTTPHarnessSeedParksTransientFailureWithoutRetry(t *testing.T) {
 	var requests [][]byte
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		raw, _ := io.ReadAll(request.Body)
 		requests = append(requests, raw)
-		if len(requests) < seedMaxAttempts {
-			writer.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = writer.Write([]byte(`{"error":"private transient detail"}`))
-			return
-		}
-		_, _ = writer.Write([]byte(`{"pairs":1,"subjects":0,"links":0}`))
+		writer.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = writer.Write([]byte(`{"error":"private transient detail"}`))
 	}))
 	defer server.Close()
 	harness, err := NewHTTPHarness(server.URL, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness.seedRetryDelay = [seedMaxAttempts - 1]time.Duration{}
 	seed := protocol.SeedRequest{
 		UserID: uuid.NewString(), Pairs: []protocol.MemoryPair{{
 			PairID: uuid.NewString(), SessionID: uuid.NewString(), Prompt: "opaque prompt", Response: "opaque response",
 		}}, Subjects: []protocol.Subject{}, Links: []protocol.SubjectLink{},
 	}
-	response, err := harness.Seed(context.Background(), seed)
-	if err != nil || response.Pairs != 1 {
-		t.Fatalf("response=%+v err=%v", response, err)
-	}
-	if len(requests) != seedMaxAttempts {
-		t.Fatalf("requests=%d", len(requests))
-	}
-	for index := 1; index < len(requests); index++ {
-		if !bytes.Equal(requests[0], requests[index]) {
-			t.Fatalf("retry %d changed the idempotent seed body", index+1)
-		}
+	_, err = harness.Seed(context.Background(), seed)
+	if err == nil || len(requests) != 1 {
+		t.Fatalf("requests=%d err=%v", len(requests), err)
 	}
 }
 
-func TestHTTPHarnessSeedRetriesTransportAndMalformedResponseWithFreshDecode(t *testing.T) {
+func TestHTTPHarnessSeedTransportFailureIsSingleShot(t *testing.T) {
 	var requests [][]byte
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		raw, _ := io.ReadAll(request.Body)
@@ -467,22 +452,13 @@ func TestHTTPHarnessSeedRetriesTransportAndMalformedResponseWithFreshDecode(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness.seedRetryDelay = [seedMaxAttempts - 1]time.Duration{}
 	seed := protocol.SeedRequest{
 		Pairs:    []protocol.MemoryPair{{PairID: uuid.NewString(), SessionID: uuid.NewString()}},
 		Subjects: []protocol.Subject{}, Links: []protocol.SubjectLink{},
 	}
-	response, err := harness.Seed(context.Background(), seed)
-	if err != nil || response.Pairs != 1 {
-		t.Fatalf("response=%+v err=%v", response, err)
-	}
-	if len(requests) != seedMaxAttempts {
-		t.Fatalf("requests=%d", len(requests))
-	}
-	for index := 1; index < len(requests); index++ {
-		if !bytes.Equal(requests[0], requests[index]) {
-			t.Fatalf("retry %d changed the idempotent seed body", index+1)
-		}
+	_, err = harness.Seed(context.Background(), seed)
+	if err == nil || len(requests) != 1 {
+		t.Fatalf("requests=%d err=%v", len(requests), err)
 	}
 }
 
@@ -491,12 +467,12 @@ func TestHTTPHarnessSeedRetryIsBoundedAndFailClosed(t *testing.T) {
 		status       int
 		wantRequests int
 	}{
-		"request timeout":            {status: http.StatusRequestTimeout, wantRequests: seedMaxAttempts},
-		"too many requests":          {status: http.StatusTooManyRequests, wantRequests: seedMaxAttempts},
-		"internal server error":      {status: http.StatusInternalServerError, wantRequests: seedMaxAttempts},
-		"bad gateway":                {status: http.StatusBadGateway, wantRequests: seedMaxAttempts},
-		"service unavailable":        {status: http.StatusServiceUnavailable, wantRequests: seedMaxAttempts},
-		"gateway timeout":            {status: http.StatusGatewayTimeout, wantRequests: seedMaxAttempts},
+		"request timeout":            {status: http.StatusRequestTimeout, wantRequests: 1},
+		"too many requests":          {status: http.StatusTooManyRequests, wantRequests: 1},
+		"internal server error":      {status: http.StatusInternalServerError, wantRequests: 1},
+		"bad gateway":                {status: http.StatusBadGateway, wantRequests: 1},
+		"service unavailable":        {status: http.StatusServiceUnavailable, wantRequests: 1},
+		"gateway timeout":            {status: http.StatusGatewayTimeout, wantRequests: 1},
 		"submitted contract failure": {status: http.StatusBadRequest, wantRequests: 1},
 	}
 	for name, testCase := range tests {
@@ -511,7 +487,6 @@ func TestHTTPHarnessSeedRetryIsBoundedAndFailClosed(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			harness.seedRetryDelay = [seedMaxAttempts - 1]time.Duration{}
 			_, err = harness.Seed(context.Background(), protocol.SeedRequest{
 				Pairs: []protocol.MemoryPair{}, Subjects: []protocol.Subject{}, Links: []protocol.SubjectLink{},
 			})
@@ -526,7 +501,7 @@ func TestHTTPHarnessSeedRetryIsBoundedAndFailClosed(t *testing.T) {
 	}
 }
 
-func TestHTTPHarnessSeedRetriesResponseBodyReadFailure(t *testing.T) {
+func TestHTTPHarnessSeedParksResponseBodyReadFailure(t *testing.T) {
 	requests := 0
 	client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		requests++
@@ -545,11 +520,10 @@ func TestHTTPHarnessSeedRetriesResponseBodyReadFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness.seedRetryDelay = [seedMaxAttempts - 1]time.Duration{}
 	response, err := harness.Seed(context.Background(), protocol.SeedRequest{
 		Pairs: []protocol.MemoryPair{}, Subjects: []protocol.Subject{}, Links: []protocol.SubjectLink{},
 	})
-	if err != nil || requests != 2 || response.Pairs != 0 {
+	if err == nil || requests != 1 || response.Pairs != 0 {
 		t.Fatalf("requests=%d response=%+v err=%v", requests, response, err)
 	}
 }
@@ -569,7 +543,6 @@ func TestHTTPHarnessSeedDoesNotRetryTerminalStatusBodyReadFailure(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness.seedRetryDelay = [seedMaxAttempts - 1]time.Duration{}
 	_, err = harness.Seed(context.Background(), protocol.SeedRequest{
 		Pairs: []protocol.MemoryPair{}, Subjects: []protocol.Subject{}, Links: []protocol.SubjectLink{},
 	})
@@ -590,7 +563,6 @@ func TestHTTPHarnessSeedDoesNotRetryContextSentinelFromTransport(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			harness.seedRetryDelay = [seedMaxAttempts - 1]time.Duration{}
 			_, err = harness.Seed(context.Background(), protocol.SeedRequest{
 				Pairs: []protocol.MemoryPair{}, Subjects: []protocol.Subject{}, Links: []protocol.SubjectLink{},
 			})
@@ -601,7 +573,7 @@ func TestHTTPHarnessSeedDoesNotRetryContextSentinelFromTransport(t *testing.T) {
 	}
 }
 
-func TestHTTPHarnessSeedRetryRespectsCancellation(t *testing.T) {
+func TestHTTPHarnessSeedFailureIsSingleShot(t *testing.T) {
 	requests := 0
 	first := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
@@ -616,18 +588,15 @@ func TestHTTPHarnessSeedRetryRespectsCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness.seedRetryDelay = [seedMaxAttempts - 1]time.Duration{time.Hour, time.Hour}
-	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() {
-		_, operationErr := harness.Seed(ctx, protocol.SeedRequest{
+		_, operationErr := harness.Seed(context.Background(), protocol.SeedRequest{
 			Pairs: []protocol.MemoryPair{}, Subjects: []protocol.Subject{}, Links: []protocol.SubjectLink{},
 		})
 		done <- operationErr
 	}()
 	<-first
-	cancel()
-	if err := <-done; !errors.Is(err, context.Canceled) || requests != 1 {
+	if err := <-done; err == nil || requests != 1 {
 		t.Fatalf("requests=%d err=%v", requests, err)
 	}
 }

@@ -4,7 +4,7 @@ The worker in the private ``ditto-screener`` repository drains freshly uploaded 
 does a lint + compile + build check on each tarball, and reports a verdict.
 A pass promotes the agent ``uploaded -> evaluating`` so the validator queue
 picks it up. A deterministic submission failure becomes ``rejected``; a
-retryable infrastructure failure becomes ``screening_failed``.
+    infrastructure failure becomes parked ``screening_failed`` work.
 
 The platform stays thin: it owns the state machine + the queue only. The build
 check lives in the worker. These endpoints mirror ``/validator/*`` so the two
@@ -12,13 +12,13 @@ workers look identical to an operator.
 
 Lifecycle + scope decisions (documented so they're easy to revisit):
 
-- **Queue = new uploads, retryable failures, and stale-policy results.**
+- **Queue = new uploads and explicitly authorized manual retries.**
   Two-score provisional contenders drain by score so likely winners can reach
   quorum; other submissions drain by fewest accepted scores, then arrival order.
 - **Verdict is a direct promotion.** A pass sets ``evaluating`` (not
   ``screening_passed``). A deterministic fail sets ``rejected``; an
-  infrastructure fail remains retryable as ``screening_failed``. Re-reporting
-  the same verdict is idempotent; a conflicting or late verdict is a 409.
+  infrastructure fail parks as ``screening_failed``. Re-reporting the same
+  verdict is idempotent; a conflicting or late verdict is a 409.
 - **Dedicated auth.** Every request carries a bearer token and the configured
   screener hotkey. Result POSTs additionally verify the hotkey's sr25519
   signature over the verdict and its policy version.
@@ -213,8 +213,7 @@ _SCREENED_IMAGE_UPLOAD_TTL = timedelta(minutes=15)
 _SCREENED_IMAGE_PART_SIZE = 64 * 1024**2
 # One screening attempt: download + Docker build + serve/health + bounded source
 # review + image export + multipart upload. Must exceed the worker's build cap
-# (SCREENER_BUILD_TIMEOUT_SECONDS, 45m) plus those finalization stages, or a
-# slow-but-legitimate crate outlives the lease and requeues in a loop. Keep this
+# (SCREENER_BUILD_TIMEOUT_SECONDS, 45m) plus those finalization stages. Keep this
 # in step with the screener's build and upload deadlines when either moves.
 _SCREENING_LEASE_TTL = timedelta(minutes=70)
 _HEARTBEAT_MAX_SKEW_SECONDS = 300
@@ -1115,15 +1114,15 @@ async def claim_trusted_image_build(
                 )
             )
             return TrustedImageBuildClaimResponse(build=None)
-        # A repeatedly abandoned lease must become an explicit Platform-issued
-        # fallback decision instead of remaining leased forever.
+        # A single abandoned lease is terminal. A new claim requires an
+        # explicit operator action that creates new work.
         await session.execute(
             update(TrustedImageBuild)
             .where(
                 TrustedImageBuild.environment == payload.environment,
                 TrustedImageBuild.status.in_(("leased", "running")),
                 TrustedImageBuild.lease_expires_at < now,
-                TrustedImageBuild.attempt_count >= 3,
+                TrustedImageBuild.attempt_count >= 1,
             )
             .values(
                 status="fallback_required",
@@ -1138,14 +1137,7 @@ async def claim_trusted_image_build(
             select(TrustedImageBuild)
             .where(
                 TrustedImageBuild.environment == payload.environment,
-                or_(
-                    TrustedImageBuild.status == "queued",
-                    (
-                        TrustedImageBuild.status.in_(("leased", "running"))
-                        & (TrustedImageBuild.lease_expires_at < now)
-                        & (TrustedImageBuild.attempt_count < 3)
-                    ),
-                ),
+                TrustedImageBuild.status == "queued",
             )
             .order_by(TrustedImageBuild.created_at)
             .with_for_update(skip_locked=True)
@@ -1495,7 +1487,7 @@ async def claim_submission_image_build(
                 SubmissionImageBuild.environment == payload.environment,
                 SubmissionImageBuild.status.in_(("leased", "running")),
                 SubmissionImageBuild.lease_expires_at < now,
-                SubmissionImageBuild.attempt_count >= 3,
+                SubmissionImageBuild.attempt_count >= 1,
             )
             .values(
                 status="fallback_required",
@@ -1540,14 +1532,7 @@ async def claim_submission_image_build(
                 SubmissionImageBuild.environment == payload.environment,
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.deadline > now,
-                or_(
-                    SubmissionImageBuild.status == "queued",
-                    (
-                        SubmissionImageBuild.status.in_(("leased", "running"))
-                        & (SubmissionImageBuild.lease_expires_at < now)
-                        & (SubmissionImageBuild.attempt_count < 3)
-                    ),
-                ),
+                SubmissionImageBuild.status == "queued",
             )
             .order_by(SubmissionImageBuild.created_at)
             .with_for_update(skip_locked=True)
@@ -2243,7 +2228,7 @@ async def claim_submission_source_review(
                 SubmissionSourceReview.environment == payload.environment,
                 SubmissionSourceReview.status.in_(("leased", "running")),
                 SubmissionSourceReview.lease_expires_at < now,
-                SubmissionSourceReview.attempt_count >= 3,
+                SubmissionSourceReview.attempt_count >= 1,
             )
             .values(
                 status="fallback_required",
@@ -2294,14 +2279,7 @@ async def claim_submission_source_review(
                 SubmissionSourceReview.environment == payload.environment,
                 ScreeningAttempt.status == "running",
                 ScreeningAttempt.deadline > now,
-                or_(
-                    SubmissionSourceReview.status == "queued",
-                    (
-                        SubmissionSourceReview.status.in_(("leased", "running"))
-                        & (SubmissionSourceReview.lease_expires_at < now)
-                        & (SubmissionSourceReview.attempt_count < 3)
-                    ),
-                ),
+                SubmissionSourceReview.status == "queued",
             )
             .order_by(SubmissionSourceReview.created_at)
             .limit(1)
@@ -3752,7 +3730,7 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
     if reason_code == "docker-build-infrastructure":
         return (
             "Docker build infrastructure failed before screening completed. This "
-            "is an operator-owned, retryable failure."
+            "is operator-owned and requires a manual retry."
         )
     if reason_code == "docker-build" or normalized.startswith("build failed"):
         if (
@@ -3825,7 +3803,7 @@ def _public_screening_reason(detail: str, reason_code: str | None = None) -> str
 
 
 def _failed_screening_target(detail: str) -> AgentStatus:
-    """Separate submission rejection from retryable screening infrastructure."""
+    """Separate submission rejection from parked screening infrastructure."""
     normalized = detail.strip().casefold()
     infrastructure_markers = (
         "artifact download",
@@ -4118,7 +4096,7 @@ async def submit_result(
         deferred_deep_attempt and payload.outcome == ScreenResultOutcome.RETRYABLE_INFRA
     ):
         target = AgentStatus.ATH_PENDING_REVIEW
-        public_reason = "Deferred source review was interrupted; retry scheduled"
+        public_reason = "Deferred source review was interrupted; manual retry required"
     elif (
         deferred_deep_attempt
         and payload.outcome == ScreenResultOutcome.DETERMINISTIC_REJECT
@@ -4129,13 +4107,12 @@ async def submit_result(
         # source-only review. A later container-health miss on a different
         # screener host is useful operator evidence, but cannot honestly undo
         # those retained proofs or turn a pending source review into a miner
-        # rejection. Keep the reward hold, mark this attempt retryable, and let
-        # the ordinary bounded retry/expiry policy decide whether another host
-        # can complete the deep review.
+        # rejection. Keep the reward hold and park until an operator authorizes
+        # another exact attempt.
         target = AgentStatus.ATH_PENDING_REVIEW
         public_reason = (
             "Deferred source review runtime verification was interrupted; "
-            "retry scheduled"
+            "manual retry required"
         )
     elif outcome_value == "pass_inconclusive":
         target = AgentStatus.EVALUATING
@@ -4147,13 +4124,10 @@ async def submit_result(
         )
     elif payload.outcome == ScreenResultOutcome.INCONCLUSIVE:
         # Inconclusive remains a NON-verdict: it neither passes nor rejects the
-        # submission. Persist the completed attempt as an early-expired lease
-        # so operators do not see work that finished minutes ago as still
-        # running. Claim selection keeps the agent in backoff until the
-        # original deadline, and the existing expiry cap still bounds repeated
-        # ambiguous results before operator review.
+        # submission. Persist the completed attempt and park it for an exact
+        # operator-issued retry.
         target = AgentStatus.SCREENING_FAILED
-        public_reason = "Screening was inconclusive; retry scheduled"
+        public_reason = "Screening was inconclusive; manual retry required"
     elif payload.outcome == ScreenResultOutcome.QUARANTINE:
         # A build-only attempt rebuilds an already-adjudicated submission's
         # prerequisites and runs no source review, so it must not be able to
@@ -4170,15 +4144,11 @@ async def submit_result(
         target = AgentStatus.QUARANTINED
         public_reason = "Submission held for anti-cheat review"
     elif payload.outcome == ScreenResultOutcome.RETRYABLE_INFRA:
-        # Retryable means exactly that: the attempt is re-queued and normally
-        # succeeds on the next pass. Saying "Screening infrastructure error"
-        # and nothing else told the miner the subnet was broken and left them
-        # with no reason to expect it to resolve itself — which it then did,
-        # a minute later, making the subnet look flaky rather than merely
-        # interrupted. Same status and same retry as before; only the sentence
-        # is honest now, and it matches the INCONCLUSIVE wording above.
+        # The wire value is retained for worker compatibility. Policy is now
+        # fail-closed: the terminal attempt parks until an operator authorizes
+        # one exact retry through Backroom.
         target = AgentStatus.SCREENING_FAILED
-        public_reason = "Screening was interrupted; retry scheduled"
+        public_reason = "Screening was interrupted; manual retry required"
     elif payload.outcome == ScreenResultOutcome.DETERMINISTIC_REJECT:
         target = AgentStatus.REJECTED
         public_reason = _public_screening_reason(payload.detail, payload.reason_code)
@@ -4458,9 +4428,8 @@ async def submit_result(
             agent.duplicate_of = attempt.duplicate_of
         elif payload.passed:
             agent.duplicate_of = None
-        # Persist the policy that produced either terminal verdict. Rejected
-        # submissions retry only after a policy bump; infrastructure failures
-        # remain retryable under the same policy.
+        # Persist the policy that produced either terminal verdict. Any later
+        # screening run requires an explicit operator authorization.
         if (
             not late_deferred_result
             and payload.policy_version == SCREENING_POLICY_VERSION

@@ -600,7 +600,7 @@ describe("superseded validator failures stay history (row 21, #459)", () => {
     expect(view.tone).toBe("warn");
     expect(view.metaRest).toContain("hosted inference rail was full");
     expect(view.retryTip).toContain("not the agent's fault");
-    expect(view.retryTip).toContain("retries automatically");
+    expect(view.retryTip).toContain("parked until an operator retries it");
   });
 
   it("keeps a clean first-attempt score plainly worded", () => {

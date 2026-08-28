@@ -2218,7 +2218,7 @@ class TrustedImageBuild(Base):
             name="trusted_image_builds_digest_check",
         ),
         CheckConstraint(
-            "attempt_count BETWEEN 0 AND 10",
+            "attempt_count >= 0",
             name="trusted_image_builds_attempt_count_check",
         ),
         UniqueConstraint(
@@ -2885,26 +2885,17 @@ class ValidatorTicket(Base):
         Integer, nullable=False, default=0, server_default=text("0")
     )
     """Audited operator grants that each allow one additional lease after the
-    automatic same-version retry budget is exhausted. Grants never reduce or
+    single base attempt is exhausted. Grants never reduce or
     rewrite :attr:`attempt_count`; the append-only recovery row records why the
     extra eligibility was created."""
 
     infra_retry_grants: Mapped[int] = mapped_column(
         Integer, nullable=False, default=0, server_default=text("0")
     )
-    """Automatic cap extensions earned when this lease ended for reasons that
-    were not the agent's fault. Two things qualify: a validator-side
-    infrastructure failure (a signed ``fail_job`` with reason
-    ``infrastructure``), and the platform force-expiring a live lease itself --
-    the latter being the case ditto-platform#460 named but did not reach, since
-    a revoked lease can no longer be resolved by ``fail_job``.
+    """Historical automatic-era cap extensions, retained as audit evidence.
 
-    Each one offsets the :attr:`attempt_count` increment the reissue will add, so
-    neither an outage nor a platform revocation spends the agent's genuine
-    attempt budget. Like :attr:`manual_retry_grants` it only raises the cap; it
-    never rewrites :attr:`attempt_count`, so the ledger keeps saying how many
-    leases were really consumed while the grant says how many the miner should
-    not be billed for."""
+    Current issuance deliberately ignores this value. Only
+    :attr:`manual_retry_grants` can extend the attempt cap."""
 
     retry_after: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True

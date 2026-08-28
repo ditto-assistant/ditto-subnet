@@ -158,7 +158,7 @@ export const inferenceRouteIdentitySchema = z.object({
   provider_order: z.array(z.string().min(1)),
   reliability_provider_order: z.array(z.string().min(1)).nullish().transform((value) => value ?? []),
   ignored_providers: z.array(z.string().min(1)),
-  allow_fallbacks: z.literal(true),
+  allow_fallbacks: z.literal(false),
 })
 
 export const relayRecoveryTelemetrySchema = z.object({
@@ -412,9 +412,6 @@ const providerPrioritySchema = z.array(capacityProviderSchema).min(1).max(2).sup
   if (new Set(value).size !== value.length) {
     context.addIssue({ code: z.ZodIssueCode.custom, message: 'Provider priorities must be unique.' })
   }
-  if (!value.includes('gcp')) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: 'GCP must remain as the safety fallback.' })
-  }
 })
 
 export const screenerProviderSettingsSchema = z.object({
@@ -542,6 +539,13 @@ export const trustedImageBuildSchema = z.object({
   updated_at: z.string(),
 })
 
+export const retryTrustedImageBuildInputSchema = z.object({
+  buildId: z.string().uuid(),
+  expectedStatus: z.enum(['failed', 'fallback_required', 'canceled']),
+  expectedAttemptCount: z.number().int().min(1),
+  reason: auditReasonSchema(8),
+})
+
 export const screenerCapacityViewSchema = z.object({
   snapshot: screenerCapacitySnapshotSchema.nullable(),
   nodes: z.array(screenerCapacityNodeSchema),
@@ -564,11 +568,11 @@ export const screenerCapacityViewSchema = z.object({
       revision: 0,
       parent_revision: 0,
       settings: {
-        build_provider_priority: ['targon', 'gcp'],
-        runtime_provider_priority: ['targon', 'gcp'],
-        source_review_provider_priority: ['targon', 'gcp'],
+        build_provider_priority: ['targon'],
+        runtime_provider_priority: ['targon'],
+        source_review_provider_priority: ['targon'],
       },
-      reason: 'Built-in Targon-first settings with GCP safety fallback',
+      reason: 'Built-in single-shot Targon settings',
       actor: 'platform',
       created_at: null,
     },

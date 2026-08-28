@@ -57,28 +57,21 @@ func TestDecodeStreamReassemblesToolCall(t *testing.T) {
 	}
 }
 
-func TestChatRetriesRateLimit(t *testing.T) {
+func TestChatParksRateLimitWithoutRetry(t *testing.T) {
 	var calls atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-key" {
 			t.Fatalf("authorization header was not set")
 		}
 		assertAttributionHeaders(t, r)
-		if calls.Add(1) == 1 {
-			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":{"code":429,"message":"bounded retry"}}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"model":"qwen/qwen3-32b","provider":"DeepInfra","choices":[{"finish_reason":"stop","native_finish_reason":"stop","message":{"role":"assistant","content":"CERT_TEXT_OK"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		calls.Add(1)
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"manual retry required"}}`))
 	}))
 	defer server.Close()
-	c := Client{APIURL: server.URL, APIKey: "test-key", HTTPClient: server.Client(), MaxAttempts: 2}
+	c := Client{APIURL: server.URL, APIKey: "test-key", HTTPClient: server.Client(), MaxAttempts: 1}
 	out, status, attempts, _, _, err := c.chat(context.Background(), map[string]any{"messages": []any{}}, false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if status != http.StatusOK || attempts != 2 || out.Usage.TotalTokens != 2 {
+	if err == nil || status != http.StatusTooManyRequests || attempts != 1 || calls.Load() != 1 {
 		t.Fatalf("status=%d attempts=%d out=%#v", status, attempts, out)
 	}
 }

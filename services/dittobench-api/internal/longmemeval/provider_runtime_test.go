@@ -214,7 +214,7 @@ func TestReaderRelayPinsFrozenIdentityAndRecordsAuthoritativeReceipt(t *testing.
 		t.Fatalf("reader retained fallback model list: %#v", body)
 	}
 	routing, ok := body["provider"].(map[string]any)
-	if !ok || routing["allow_fallbacks"] != true || routing["data_collection"] != "deny" ||
+	if !ok || routing["allow_fallbacks"] != false || routing["data_collection"] != "deny" ||
 		routing["sort"] != "throughput" || !reflect.DeepEqual(routing["ignore"], []any{"coreweave"}) {
 		t.Fatalf("reader routing=%#v", routing)
 	}

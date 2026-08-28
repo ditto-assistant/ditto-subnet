@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from typing import Annotated, Literal, cast
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy import desc, select
@@ -20,6 +20,7 @@ from ditto.api_models.screener_nodes import (
     ScreenerProvider,
     ScreenerProviderJobView,
     TrustedImageBuildCreateRequest,
+    TrustedImageBuildRetryRequest,
     TrustedImageBuildStatus,
     TrustedImageBuildView,
 )
@@ -113,7 +114,7 @@ def _default_provider_revision(environment: str) -> ProviderSettingsRevisionMode
         revision=0,
         parent_revision=0,
         settings=DEFAULT_SCREENER_PROVIDER_SETTINGS,
-        reason="Built-in Targon-first settings with GCP safety fallback",
+        reason="Built-in single-shot Targon settings",
         actor="platform",
         created_at=None,
     )
@@ -235,6 +236,67 @@ async def create_trusted_image_build(
             reason=payload.reason,
         )
         session.add(row)
+    await session.refresh(row)
+    return _build_view(row)
+
+
+@router.post(
+    "/trusted-image-builds/{build_id}/retry",
+    response_model=TrustedImageBuildView,
+)
+async def retry_trusted_image_build(
+    build_id: UUID,
+    payload: TrustedImageBuildRetryRequest,
+    _admin: AdminDep,
+    session: SessionDep,
+    x_admin_actor: Annotated[str | None, Header()] = None,
+) -> TrustedImageBuildView:
+    """Manually requeue one exact terminal trusted build without erasing attempts."""
+    actor = x_admin_actor.strip() if x_admin_actor else ""
+    if not 1 <= len(actor) <= 120:
+        raise HTTPException(status_code=400, detail="X-Admin-Actor is required")
+    now = datetime.now(UTC)
+    async with session.begin():
+        row = await session.scalar(
+            select(TrustedImageBuild)
+            .where(TrustedImageBuild.build_id == build_id)
+            .with_for_update()
+        )
+        if row is None:
+            raise HTTPException(status_code=404, detail="trusted image build not found")
+        if row.status != payload.expected_status:
+            raise HTTPException(
+                status_code=409, detail="trusted image build status changed"
+            )
+        if row.attempt_count != payload.expected_attempt_count:
+            raise HTTPException(
+                status_code=409, detail="trusted image build attempts changed"
+            )
+        row.status = "queued"
+        row.provider = None
+        row.provider_resource_id = None
+        row.image_digest = None
+        row.error_code = None
+        row.controller_epoch = None
+        row.lease_expires_at = None
+        row.started_at = None
+        row.completed_at = None
+        row.updated_at = now
+        session.add(
+            ScreenerCapacityEvent(
+                event_id=uuid4(),
+                environment=row.environment,
+                event_type="trusted_build_manual_retry",
+                provider=None,
+                node_id=None,
+                detail=(
+                    f"build_id={build_id} attempts={row.attempt_count} "
+                    f"actor={actor} reason={payload.reason.strip()}"
+                )[:500],
+                controller_epoch="backroom-manual-retry",
+                created_at=now,
+            )
+        )
     await session.refresh(row)
     return _build_view(row)
 

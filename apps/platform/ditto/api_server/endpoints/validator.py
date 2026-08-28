@@ -283,9 +283,6 @@ from ditto.db.queries.provider_outages import (
 from ditto.db.queries.queue_order import miner_has_newer_canonical_work
 from ditto.db.queries.retry_budget import (
     INFRA_RETRY_BACKOFF_CAP,
-    agent_infra_retry_grants,
-    grant_no_fault_retry,
-    infra_retry_backoff,
 )
 from ditto.db.queries.rollout_dispatch import try_lock_rollout_dispatch
 from ditto.db.queries.score_ranking import (
@@ -1842,17 +1839,12 @@ class RetiredBenchVersionError(Exception):
     that. 409 was available and deliberately not used -- it reads as a
     conflict, and a conflict invites a retry.
 
-    It must never be reported back as ``fail_job(reason="infrastructure")``.
-    Infrastructure is NO-FAULT: it mints a compensating grant, raises the
-    attempt cap and re-leases, forever. That is the exact loop that burned
-    4.5 validator-hours per attempt on the ``mnemo*`` family, and a retired
-    era would feed it indefinitely because the condition never clears. The
-    correct hand-back is ``scoring_error`` (consumes the attempt, no grant),
-    which is what the canonical lane already does for a ``PlatformError`` out
-    of ``submit_score``.
+    It must never be reported back as ``fail_job(reason="infrastructure")``;
+    preserving the exact diagnosis is still important even though neither
+    failure class creates automatic retry authority.
 
-    Belt and braces, though: even a misclassified ``infrastructure`` report
-    cannot loop, because the reissue it asks for has to insert a sub-v7
+    Belt and braces, though: even a manually retried misclassification cannot
+    revive this era, because issuing it would have to insert a sub-v7
     ``validator_tickets`` row and the
     ``validator_tickets_bench_version_floor`` trigger refuses it. The lease
     dies either way. That is the difference between closing this in policy and
@@ -5379,16 +5371,14 @@ async def fail_job(
     session: SessionDep,
     x_validator_hotkey: Annotated[str | None, Header()] = None,
 ) -> FailJobResponse:
-    """Resolve a failed but still-leased ticket with reason-specific retry policy.
+    """Resolve a failed live ticket and park it with reason-specific evidence.
 
     A validator whose scoring attempt failed calls this so the platform closes
     the live ticket now instead of leaving the lease idle until its own deadline.
-    Canonical scoring errors are immediately eligible for another bounded
-    attempt; infrastructure, sandbox OOM, and continual-retest failures apply
-    their dedicated cooldowns. Any later issue mints a **fresh** lease rather
-    than resuming the failed one. Additive and best-effort: an old validator
-    that never calls this behaves exactly as today (the ticket expires on its
-    own via the overdue sweep).
+    Every reason consumes this ticket's single base attempt. Any later issue
+    requires an audited Backroom grant and mints a **fresh** lease rather than
+    resuming the failed one. An old validator that never calls this is parked by
+    the overdue sweep instead.
 
     Auth mirrors the job claim: the header must match the signed hotkey, the
     signature proves possession, ``requested_at`` is freshness-bounded, the
@@ -5486,15 +5476,8 @@ async def fail_job(
                     validator_hotkey=payload.validator_hotkey,
                     ticket_deadline=payload.ticket_deadline,
                 )
-            # Read before the ticket is mutated below, so the total is the
-            # fleet's spend on this agent *before* this failure is priced in.
-            fleet_infra_grants = await agent_infra_retry_grants(
-                session,
-                agent_id=ticket.agent_id,
-                bench_version=ticket.bench_version,
-            )
-            # Close for reissue without the 6h agent-failure cooldown so the
-            # next request_job mints a fresh lease instead of resuming this one.
+            # Close and park this exact ticket. A Backroom grant is the only
+            # operation that can extend its attempt cap.
             ticket.status = TicketStatus.EXPIRED
             ticket.deadline = now
             if grant_spent_allowance and payload.reason == "infrastructure":
@@ -5524,57 +5507,20 @@ async def fail_job(
             )
             ticket.failed_at = now
             if ticket.failure_reason == "infrastructure" or platform_revoked:
-                # Not the agent's fault: bump the (bounded) infra grant that
-                # offsets the coming attempt_count++, so an outage never spends
-                # the agent's genuine per-version budget. Then apply an
-                # escalating cooldown so a *sustained* outage isn't hammered by
-                # immediate back-to-back re-leases of the same agent.
-                #
-                # The same compensation covers a platform-revoked lease however
-                # the validator labelled it. The grant is still bounded, so a
-                # persistently broken lease cannot mint attempts forever, and
-                # failure_reason still records what was actually reported --
-                # this corrects the billing, not the diagnosis.
-                #
-                # A *reported* infrastructure verdict additionally answers to the
-                # per-agent bound: eight grants per validator across a validator
-                # pool of any size is unbounded per agent, which is how one
-                # artifact held quorum slots for a day in ditto-subnet#279. A
-                # platform-revoked lease deliberately does not (see
-                # grant_no_fault_retry): repetition there is the platform's fault,
-                # and billing the miner for it is the rule #460/#497 settled.
-                granted = grant_no_fault_retry(
-                    ticket,
-                    agent_infra_grants=(
-                        fleet_infra_grants
-                        if payload.reason == "infrastructure"
-                        else None
-                    ),
+                # Keep the historical cooldown timestamp as evidence/UI context;
+                # it cannot make the exhausted ticket claimable.
+                ticket.retry_after = now + INFRA_RETRY_BACKOFF_CAP
+                logger.warning(
+                    "scoring infrastructure failure parked for manual retry "
+                    "agent=%s validator=%s reason=%s detail=%s",
+                    payload.agent_id,
+                    payload.validator_hotkey,
+                    payload.reason,
+                    payload.failure_detail,
                 )
-                # Refused means the next lease is billed to the miner. Cool all
-                # the way down rather than off this ticket's own (possibly small)
-                # count: the fleet has already spent its whole no-fault allowance
-                # on this artifact, so nothing about it deserves a fast retry.
-                ticket.retry_after = now + (
-                    infra_retry_backoff(ticket.infra_retry_grants)
-                    if granted
-                    else INFRA_RETRY_BACKOFF_CAP
-                )
-                if not granted:
-                    logger.warning(
-                        "no-fault retry refused; this failure bills the miner "
-                        "agent=%s validator=%s reason=%s detail=%s "
-                        "ticket_grants=%s fleet_grants=%s",
-                        payload.agent_id,
-                        payload.validator_hotkey,
-                        payload.reason,
-                        payload.failure_detail,
-                        ticket.infra_retry_grants,
-                        fleet_infra_grants,
-                    )
                 if platform_revoked and payload.reason != "infrastructure":
                     logger.warning(
-                        "platform-revoked lease reported as %s; compensating "
+                        "platform-revoked lease reported as %s; preserving evidence "
                         "agent=%s validator=%s deadline=%s",
                         payload.reason,
                         payload.agent_id,
@@ -5588,17 +5534,12 @@ async def fail_job(
                 # to another eligible harness instead of reclaiming it.
                 ticket.retry_after = now + RETRY_COOLDOWN
             elif ticket.purpose == TicketPurpose.CONTINUAL_RETEST:
-                # Canonical scoring errors are bounded by the validator's
-                # attempt budget, so another validator may retry immediately.
-                # Continual retests deliberately reuse the same mutable ticket
-                # beyond that budget; treating their scoring errors the same
-                # way creates an unbounded hot loop for one validator/agent
-                # pair. Cool only this pair down. Other validators remain free
-                # to produce the shared confirmation seed.
+                # This pair stays parked. Other validators may still take their
+                # own first assignment for the shared confirmation seed.
                 ticket.retry_after = now + RETRY_COOLDOWN
             else:
-                # A scoring_error is the agent's own failure: consume the budget
-                # and reissue immediately for another validator/attempt.
+                # This ticket consumed its one base attempt. Other validators
+                # remain eligible only for their own first assignment.
                 ticket.retry_after = now
             await session.flush()
             await revoke_ticket_inference(session, ticket=ticket, now=now)

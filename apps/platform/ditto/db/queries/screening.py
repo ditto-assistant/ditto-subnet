@@ -40,21 +40,9 @@ from ditto.db.queries.scores import SCORING_QUORUM
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
 
-# Inconclusive attempts under the current policy after which an agent is parked
-# for operator review instead of re-queued forever. An inconclusive screen is
-# completed as an early-expired lease and remains in backoff until its original
-# deadline; legacy workers still express the same state by letting the running
-# lease expire naturally. A permanently-inconclusive agent would otherwise
-# re-attempt every lease indefinitely. "Expired" attempts always count.
-# Infrastructure "failed" attempts are usually screener-side, so a screener
-# outage must not mass-park every in-flight agent: a provider-backoff failure
-# counts only with peer evidence -- another agent passed screening inside that
-# attempt's lease window, so the lane demonstrably worked while refusing this
-# artifact (see _inconclusive_attempt_count). Provider-routing failures back
-# off FAILED_ATTEMPT_RETRY_BACKOFF from their failure time (capped by the
-# lease deadline) so a Targon/Cloud Run blip cannot re-lease every few
-# minutes without stranding the agent for the rest of a 70-minute lease.
-# Heartbeat-proven orphans stay immediate.
+# Historical cap retained for classifying legacy repeated-inconclusive evidence.
+# Current failures park after their first terminal attempt and require an exact
+# operator-issued ScreeningRetryOverride before claim selection can run them again.
 MAX_SCREENING_EXPIRIES = 5
 
 # Duplicate-owner statuses. A later cross-miner submission of the SAME bytes is
@@ -92,7 +80,7 @@ _EXHAUSTED_PUBLIC_REASON = (
 _DEFERRED_MECHANICAL_REASON = "deferred-mechanical-admission"
 _ORPHANED_ATTEMPT_REASON_CODE = "worker-lease-orphaned"
 _ORPHANED_ATTEMPT_REASON = (
-    "Screening worker stopped reporting this attempt; retry scheduled"
+    "Screening worker stopped reporting this attempt; manual retry required"
 )
 PROVIDER_BACKOFF_REASON_CODES = (
     "targon-build-unavailable",
@@ -531,8 +519,9 @@ async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) 
     rebuilt Kaniko each cycle and the miner saw "waiting for admission"
     indefinitely instead of an operator-visible hold.
 
-    Resolving a quarantine with ``release`` or ``rescreen`` explicitly lets the
-    submission move forward and therefore grants a fresh attempt budget.
+    Resolving a quarantine or authorizing an exact failed-attempt retry
+    explicitly lets the submission move forward and therefore grants a fresh
+    attempt budget.
     Without the lower bound, an agent whose expiries came from a screener-fleet
     outage carries them forever: its next claim is instantly re-parked as
     ``repeatedly-inconclusive`` (started_at == finished_at, no screening ever
@@ -547,6 +536,12 @@ async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) 
         )
         .scalar_subquery()
     )
+    last_manual_retry = (
+        select(func.max(ScreeningRetryOverride.created_at))
+        .where(ScreeningRetryOverride.agent_id == agent_id)
+        .scalar_subquery()
+    )
+    epoch = datetime(1970, 1, 1, tzinfo=UTC)
     peer = aliased(ScreeningAttempt)
     peer_passed_in_window = exists(
         select(peer.attempt_id).where(
@@ -571,8 +566,8 @@ async def _inconclusive_attempt_count(session: AsyncSession, *, agent_id: UUID) 
                     peer_passed_in_window,
                 ),
             ),
-            ScreeningAttempt.started_at
-            > func.coalesce(last_operator_clear, datetime(1970, 1, 1, tzinfo=UTC)),
+            ScreeningAttempt.started_at > func.coalesce(last_operator_clear, epoch),
+            ScreeningAttempt.started_at > func.coalesce(last_manual_retry, epoch),
         )
     )
     return int(count or 0)
@@ -771,12 +766,42 @@ async def claim_screening_attempts(
     # a time by hand. Draining an already-open queue is bounded work that ends;
     # stranding a miner is not. The mode decides whether NEW holds open, never
     # whether existing ones can be settled.
+    latest_attempt_id = (
+        select(ScreeningAttempt.attempt_id)
+        .where(ScreeningAttempt.agent_id == Agent.agent_id)
+        .order_by(
+            ScreeningAttempt.started_at.desc(),
+            ScreeningAttempt.attempt_id.desc(),
+        )
+        .limit(1)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
+    manual_failed_retry = exists(
+        select(ScreeningRetryOverride.override_id).where(
+            ScreeningRetryOverride.attempt_id == latest_attempt_id
+        )
+    )
+    latest_attempt_build_only = (
+        select(ScreeningAttempt.build_only)
+        .where(ScreeningAttempt.attempt_id == latest_attempt_id)
+        .correlate(Agent)
+        .scalar_subquery()
+    )
     deferred_ath_eligible = (
-        Agent.status == AgentStatus.ATH_PENDING_REVIEW
-    ) & pending_deferred_review
+        (Agent.status == AgentStatus.ATH_PENDING_REVIEW)
+        & pending_deferred_review
+        & (
+            latest_attempt_id.is_(None)
+            | latest_attempt_build_only.is_(True)
+            | manual_failed_retry
+        )
+    )
     eligible = or_(
         Agent.status == AgentStatus.UPLOADED,
-        Agent.status == AgentStatus.SCREENING_FAILED,
+        # A failed attempt is parked forever. Only the append-only Backroom
+        # authorization for that exact latest attempt makes it claimable.
+        (Agent.status == AgentStatus.SCREENING_FAILED) & manual_failed_retry,
         # A policy bump only returns agents admitted to the active benchmark
         # era. Historical submissions the validator allocator already skips
         # must not consume screener capacity on a rescreen they can never use.

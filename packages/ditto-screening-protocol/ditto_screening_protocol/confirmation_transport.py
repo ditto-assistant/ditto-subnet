@@ -129,7 +129,7 @@ class ConfirmationAblationCoordinatorProfile(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, strict=True)
 
     sample_size: Annotated[int, Field(gt=0)]
-    max_attempts: Annotated[int, Field(gt=0)]
+    max_attempts: Literal[1]
     max_requests: Annotated[int, Field(gt=0)]
     request_timeout_milliseconds: Annotated[int, Field(gt=0)]
     total_timeout_milliseconds: Annotated[int, Field(gt=0)]
@@ -167,9 +167,7 @@ def _without_model_serialization(schema: object) -> object:
     """Copy a core schema with the model node's custom serializer removed."""
     if not isinstance(schema, Mapping):
         return schema
-    copied = {
-        key: value for key, value in schema.items() if key != "serialization"
-    }
+    copied = {key: value for key, value in schema.items() if key != "serialization"}
     if "schema" in copied:
         copied["schema"] = _without_model_serialization(copied["schema"])
     return copied

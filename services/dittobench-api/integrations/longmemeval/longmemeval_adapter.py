@@ -346,7 +346,7 @@ def _required_string(value: dict[str, Any], field: str) -> str:
 class HarnessClient:
     base_url: str
     timeout_seconds: float = 180.0
-    attempts: int = 3
+    attempts: int = 1
     bench_version: int = 9
 
     def request(
@@ -363,33 +363,26 @@ class HarnessClient:
             method=method,
             headers={"Content-Type": "application/json"} if body is not None else {},
         )
-        last_error: Exception | None = None
-        for attempt in range(1, self.attempts + 1):
-            try:
-                with urllib.request.urlopen(
-                    request, timeout=self.timeout_seconds
-                ) as response:
-                    raw = response.read()
-                    if not raw:
-                        return None
-                    return json.loads(raw)
-            except urllib.error.HTTPError as exc:
-                detail = exc.read(4096).decode("utf-8", errors="replace").strip()
-                last_error = AdapterError(f"HTTP {exc.code}: {detail or exc.reason}")
-                if attempt < self.attempts:
-                    time.sleep(min(2 ** (attempt - 1), 4))
-            except (
-                urllib.error.URLError,
-                ConnectionError,
-                TimeoutError,
-                json.JSONDecodeError,
-            ) as exc:
-                last_error = exc
-                if attempt < self.attempts:
-                    time.sleep(min(2 ** (attempt - 1), 4))
-        raise AdapterError(
-            f"{method} {path} failed after {self.attempts} attempts: {last_error}"
-        )
+        try:
+            with urllib.request.urlopen(
+                request, timeout=self.timeout_seconds
+            ) as response:
+                raw = response.read()
+                if not raw:
+                    return None
+                return json.loads(raw)
+        except urllib.error.HTTPError as exc:
+            detail = exc.read(4096).decode("utf-8", errors="replace").strip()
+            raise AdapterError(
+                f"{method} {path} failed: HTTP {exc.code}: {detail or exc.reason}"
+            ) from exc
+        except (
+            urllib.error.URLError,
+            ConnectionError,
+            TimeoutError,
+            json.JSONDecodeError,
+        ) as exc:
+            raise AdapterError(f"{method} {path} failed: {exc}") from exc
 
     def health(self) -> None:
         self.request("GET", "/health")
@@ -785,7 +778,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--limit", type=int)
     parser.add_argument("--seed-wave-pairs", type=int, default=64)
     parser.add_argument("--timeout", type=float, default=180.0)
-    parser.add_argument("--attempts", type=int, default=3)
+    parser.add_argument("--attempts", type=int, choices=(1,), default=1)
     parser.add_argument("--resume", action="store_true")
     args = parser.parse_args(argv)
     if args.offset < 0 or (args.limit is not None and args.limit < 1):

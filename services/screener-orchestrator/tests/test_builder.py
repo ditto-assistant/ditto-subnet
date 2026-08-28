@@ -13,7 +13,7 @@ from screener_capacity.builder import (
     SubmissionBuildControl,
     _delete_rental,
     _docker_config,
-    _image_archive_sources,
+    _image_archive_source,
     _kaniko_script,
     _promote_runtime_archive,
     _skopeo_detail,
@@ -58,8 +58,8 @@ def test_image_archive_prefers_oci_layout_then_docker_manifest(tmp_path: Path) -
     docker = tmp_path / "docker.tar"
     _write_tar(oci, ["oci-layout", "index.json", "blobs"])
     _write_tar(docker, ["manifest.json", "sha256:abc"])
-    assert _image_archive_sources(oci)[0].startswith("oci-archive:")
-    assert _image_archive_sources(docker)[0].startswith("docker-archive:")
+    assert _image_archive_source(oci).startswith("oci-archive:")
+    assert _image_archive_source(docker).startswith("docker-archive:")
 
 
 class _Proc:
@@ -77,7 +77,7 @@ class _Proc:
         self.args = args or []
 
 
-def test_promote_retries_oci_when_docker_archive_is_rejected(
+def test_promote_does_not_retry_with_an_alternate_archive_format(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     archive = tmp_path / "image.tar"
@@ -92,13 +92,6 @@ def test_promote_retries_oci_when_docker_archive_is_rejected(
             auths.append(json.loads(Path(authfile).read_text(encoding="utf-8")))
         if argv[1] == "inspect":
             return _Proc(stdout="sha256:" + "d" * 64 + "\n")
-        source = next(
-            part
-            for part in argv
-            if part.startswith(("oci-archive:", "docker-archive:"))
-        )
-        if argv[1] == "copy" and source.startswith("oci-archive:"):
-            return _Proc()
         return _Proc(
             returncode=1,
             stderr="Error parsing image: invalid tar header",
@@ -106,12 +99,12 @@ def test_promote_retries_oci_when_docker_archive_is_rejected(
         )
 
     monkeypatch.setattr("screener_capacity.builder.subprocess.run", _run)
-    reference = _promote_runtime_archive(
-        archive=archive,
-        destination="us-central1-docker.pkg.dev/p/candidates/miner:build-test",
-        access_token="token",
-    )
-    assert reference.endswith("@sha256:" + "d" * 64)
+    with pytest.raises(ControllerError, match="invalid tar header"):
+        _promote_runtime_archive(
+            archive=archive,
+            destination="us-central1-docker.pkg.dev/p/candidates/miner:build-test",
+            access_token="token",
+        )
     copy_cmds = [argv for argv in calls if argv[1] == "copy"]
     assert copy_cmds[0][2] == "--dest-authfile"
     assert auths
@@ -125,10 +118,7 @@ def test_promote_retries_oci_when_docker_archive_is_rejected(
         )
         for argv in copy_cmds
     ]
-    assert copy_sources == [
-        f"docker-archive:{archive}",
-        f"oci-archive:{archive}",
-    ]
+    assert copy_sources == [f"docker-archive:{archive}"]
 
 
 def test_promote_includes_redacted_skopeo_stderr(

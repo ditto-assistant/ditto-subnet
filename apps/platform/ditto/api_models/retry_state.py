@@ -1,7 +1,7 @@
 """The shared validator-retry triage vocabulary (wire + internal).
 
-One below-quorum submission is always in exactly one of these states. Only
-``exhausted`` needs an operator; every other state advances on its own.
+One below-quorum submission is always in exactly one of these states. Failed
+work parks as ``exhausted`` until an operator grants a retry.
 Read ``recommended_action`` on an exhausted row: ``retry`` is a grant after
 verified infrastructure failure, and ``withdraw`` is the documented terminal
 path for named agent-attributable failures.

@@ -616,10 +616,9 @@ export function InferenceRoutingPanel({
               <p className="mt-1 text-xs text-[var(--muted-strong)]">
                 Primary: {inventory.aggregate_route.provider_sort === 'throughput'
                   ? 'fastest throughput'
-                  : inventory.aggregate_route.provider_order.join(' → ')} · recovery:{' '}
-                {inventory.aggregate_route.reliability_provider_order.join(' → ') || 'none'} · excluded:{' '}
+                  : inventory.aggregate_route.provider_order.join(' → ')} · recovery: disabled · excluded:{' '}
                 {inventory.aggregate_route.ignored_providers.join(', ') || 'none'} · fallback{' '}
-                {inventory.aggregate_route.allow_fallbacks ? 'enabled' : 'disabled'}
+                disabled
               </p>
             ) : null}
           </div>

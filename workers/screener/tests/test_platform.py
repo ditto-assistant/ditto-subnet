@@ -13,7 +13,6 @@ from uuid import UUID, uuid4
 import httpx
 import pytest
 
-from ditto_screener import platform as platform_module
 from ditto_screener.config import ScreenerConfig
 from ditto_screener.enrollment import (
     NodeCredential,
@@ -28,11 +27,6 @@ from ditto_screening_protocol import SCREENING_POLICY_VERSION, ScreenResultOutco
 _AGENT = UUID("550e8400-e29b-41d4-a716-446655440000")
 _MINER = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _TOKEN = "test-screener-token-at-least-32-characters"
-
-
-def test_verdict_retry_window_spans_a_normal_platform_rollout() -> None:
-    assert sum(platform_module._VERDICT_RETRY_DELAYS_SECONDS) == 61.5
-    assert len(platform_module._VERDICT_RETRY_DELAYS_SECONDS) + 1 == 8
 
 
 def _assert_auth(request: httpx.Request) -> None:
@@ -105,7 +99,7 @@ async def test_policy_preflight_is_read_only(
     assert required == SCREENING_POLICY_VERSION
 
 
-async def test_enrolled_node_rotates_expiring_authority_atomically(
+async def test_enrolled_node_refresh_failure_is_single_shot(
     make_config: Callable[..., ScreenerConfig], tmp_path: Path
 ) -> None:
     credential_file = tmp_path / "node.json"
@@ -164,15 +158,12 @@ async def test_enrolled_node_rotates_expiring_authority_atomically(
     http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     client = PlatformClient(cfg, http, keypair=Keypair())
     async with http:
-        assert await client.get_required_policy_version() == SCREENING_POLICY_VERSION
-    assert calls == [
-        "/api/v1/screener/nodes/refresh",
-        "/api/v1/screener/nodes/refresh",
-        "/api/v1/screener/queue",
-    ]
+        with pytest.raises(PlatformError, match="credential refresh failed"):
+            await client.get_required_policy_version()
+    assert calls == ["/api/v1/screener/nodes/refresh"]
     stored = load_node_credential(credential_file)
-    assert stored.api_token == new_token
-    assert stored.pending_refresh_id is None
+    assert stored.api_token == old_token
+    assert stored.pending_refresh_id is not None
 
 
 async def test_submit_heartbeat_matches_open_platform_contract(
@@ -412,8 +403,8 @@ async def test_submit_result_posts_signed_verdict(
     assert captured["attempt_id"] == "550e8400-e29b-41d4-a716-446655440001"
 
 
-async def test_submit_result_retries_transient_server_failure(
-    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+async def test_submit_result_parks_transient_server_failure(
+    make_config: Callable[..., ScreenerConfig],
 ) -> None:
     calls = 0
 
@@ -427,24 +418,23 @@ async def test_submit_result_retries_transient_server_failure(
             json={"agent_id": str(_AGENT), "status": "evaluating", "accepted": True},
         )
 
-    monkeypatch.setattr(platform_module, "_VERDICT_RETRY_DELAYS_SECONDS", (0, 0))
     client, http = _make_client(make_config(), handler)
     async with http:
-        response = await client.submit_result(
-            _AGENT,
-            signature="ab" * 64,
-            passed=False,
-            policy_version=SCREENING_POLICY_VERSION,
-            attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
-            outcome=ScreenResultOutcome.RETRYABLE_INFRA,
-        )
+        with pytest.raises(PlatformError, match="502"):
+            await client.submit_result(
+                _AGENT,
+                signature="ab" * 64,
+                passed=False,
+                policy_version=SCREENING_POLICY_VERSION,
+                attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
+                outcome=ScreenResultOutcome.RETRYABLE_INFRA,
+            )
 
-    assert calls == 3
-    assert response.accepted is True
+    assert calls == 1
 
 
 async def test_submit_result_does_not_retry_conflict(
-    make_config: Callable[..., ScreenerConfig], monkeypatch: pytest.MonkeyPatch
+    make_config: Callable[..., ScreenerConfig],
 ) -> None:
     calls = 0
 
@@ -453,7 +443,6 @@ async def test_submit_result_does_not_retry_conflict(
         calls += 1
         return httpx.Response(409, text="attempt already closed")
 
-    monkeypatch.setattr(platform_module, "_VERDICT_RETRY_DELAYS_SECONDS", (0, 0))
     client, http = _make_client(make_config(), handler)
     async with http:
         with pytest.raises(PlatformError, match="409"):
@@ -550,16 +539,17 @@ async def test_non_200_raises_platform_error(
             )
 
 
-async def test_multipart_part_retries_transient_failure(
+async def test_multipart_part_failure_is_single_shot_and_aborted(
     make_config: Callable[..., ScreenerConfig], tmp_path: Path
 ) -> None:
     archive = tmp_path / "image.tar"
     archive.write_bytes(b"retry-me")
     upload_id = UUID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
     put_calls = 0
+    aborted = False
 
     def handler(request: httpx.Request) -> httpx.Response:
-        nonlocal put_calls
+        nonlocal aborted, put_calls
         if request.url.path.endswith("/screened-image-upload"):
             return httpx.Response(
                 200,
@@ -581,16 +571,17 @@ async def test_multipart_part_retries_transient_failure(
             )
         if request.method == "PUT":
             put_calls += 1
-            if put_calls < 3:
-                return httpx.Response(503, text="temporary")
-            return httpx.Response(200, headers={"ETag": '"etag"'})
+            return httpx.Response(503, text="temporary")
+        if request.url.path.endswith("/abort"):
+            aborted = True
+            return httpx.Response(200, json={"aborted": True})
         if request.url.path.endswith("/complete"):
             return httpx.Response(200, json={"verified": True})
         raise AssertionError(request.url)
 
     client, http = _make_client(make_config(), handler)
     async with http:
-        assert (
+        with pytest.raises(PlatformError, match="503"):
             await client.upload_screened_image(
                 _AGENT,
                 attempt_id=UUID("550e8400-e29b-41d4-a716-446655440001"),
@@ -600,9 +591,8 @@ async def test_multipart_part_retries_transient_failure(
                 image_id="sha256:" + "34" * 32,
                 image_ref=f"ditto-screen/{_AGENT}:latest",
             )
-            == upload_id
-        )
-    assert put_calls == 3
+    assert put_calls == 1
+    assert aborted
 
 
 async def test_multipart_failure_aborts_upload(

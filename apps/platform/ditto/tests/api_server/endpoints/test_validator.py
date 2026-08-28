@@ -6873,15 +6873,14 @@ class TestFailJob:
         )
         assert reissued.status_code == 204, reissued.text
 
-    async def test_infrastructure_failure_earns_a_compensating_grant(
+    async def test_infrastructure_failure_does_not_earn_an_automatic_grant(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        # An infrastructure failure is not the agent's fault: it bumps
-        # infra_retry_grants (which offsets the attempt the reissue consumes),
-        # so the agent's genuine per-version budget is never spent.
+        # Failure classification remains evidence only. It must not authorize
+        # another cost-bearing scoring attempt.
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         await _seed_ticket(session_maker, agent_id)
         _install_db(app, session_maker)
@@ -6899,7 +6898,7 @@ class TestFailJob:
                 ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
             )
             assert ticket is not None
-            assert ticket.infra_retry_grants == 1
+            assert ticket.infra_retry_grants == 0
 
     async def test_seed_store_timeout_preserves_retry_budget_and_code(
         self,
@@ -6932,7 +6931,7 @@ class TestFailJob:
             assert ticket.status == TicketStatus.EXPIRED
             assert ticket.failure_reason == "infrastructure"
             assert ticket.failure_detail == "seed_store_lock_timeout"
-            assert ticket.infra_retry_grants == 1
+            assert ticket.infra_retry_grants == 0
             assert ticket.attempt_count == 1
 
     async def test_container_log_tail_lands_on_the_ticket(
@@ -7074,18 +7073,14 @@ class TestFailJob:
             assert ticket.failure_reason == "scoring_error"
             assert ticket.failure_detail == "model_inference_required"
 
-    async def test_platform_revoked_lease_is_not_billed_to_the_agent(
+    async def test_platform_revoked_lease_preserves_evidence_without_retrying(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        # The regression this exists for: the platform revoked the run's
-        # inference grant mid-lease, the run died, and the validator -- which
-        # could only see "the scorer failed" -- reported scoring_error. That
-        # spent one of the agent's finite attempts for an outage it did not
-        # cause. The platform holds the evidence that it revoked the lease, so
-        # it compensates regardless of the label the validator put on it.
+        # The platform still preserves the diagnosis it can correlate, but no
+        # failure classification creates retry authority.
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         await _seed_ticket(session_maker, agent_id)
         await _seed_revoked_grant(session_maker, agent_id)
@@ -7103,8 +7098,7 @@ class TestFailJob:
                 ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
             )
             assert ticket is not None
-            assert ticket.infra_retry_grants == 1
-            # The diagnosis is preserved verbatim; only the billing changed.
+            assert ticket.infra_retry_grants == 0
             assert ticket.failure_reason == "scoring_error"
 
     async def test_scoring_error_without_a_revoked_lease_still_bills_the_agent(
@@ -7180,15 +7174,14 @@ class TestFailJob:
             assert ticket.failure_reason == "scoring_error"
             assert ticket.failure_detail == "inference_allowance_exhausted"
 
-    async def test_unspent_grant_keeps_budget_evidence_absent_as_infra(
+    async def test_unspent_grant_keeps_diagnosis_but_does_not_retry(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        # The Crown-v11 protection: a 4104 the broker could not confirm, while
-        # the grant still sits at a few percent of the wall, must not bill the
-        # miner. Missing activation evidence is a mixed-rollout gap.
+        # Missing activation evidence remains classified as infrastructure for
+        # operators, but the failed scoring run is still parked.
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         await _seed_ticket(session_maker, agent_id)
         await _seed_revoked_grant(
@@ -7217,7 +7210,7 @@ class TestFailJob:
                 ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
             )
             assert ticket is not None
-            assert ticket.infra_retry_grants == 1
+            assert ticket.infra_retry_grants == 0
             assert ticket.failure_reason == "infrastructure"
             assert (
                 ticket.failure_detail
@@ -7516,24 +7509,15 @@ class TestFailJob:
             # The diagnosis is still recorded; only the billing changed.
             assert ticket.failure_detail == "model_relay_unavailable"
 
-    async def test_per_agent_bound_leaves_room_below_it(
+    async def test_infrastructure_failure_never_mints_a_grant(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        # The bound is generous on purpose: an agent's genuine budget at quorum
-        # is 2 x 3 = 6 leases, and this hands one artifact twice that for free
-        # before a single attempt is billed. One short of it still grants.
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         await _seed_ticket(session_maker, agent_id)
         await _seed_ticket(session_maker, agent_id, keypair=_KEYPAIRS[1])
-        async with session_maker() as s, s.begin():
-            first = await s.get(
-                ValidatorTicket, (agent_id, _BENCH_VERSION, _VALIDATOR_HOTKEY)
-            )
-            assert first is not None
-            first.infra_retry_grants = MAX_AGENT_INFRA_RETRY_GRANTS - 1
         _install_db(app, session_maker)
         _install_chain(app)
 
@@ -7551,19 +7535,14 @@ class TestFailJob:
                 ValidatorTicket, (agent_id, _BENCH_VERSION, second_hotkey)
             )
             assert ticket is not None
-            assert ticket.infra_retry_grants == 1
+            assert ticket.infra_retry_grants == 0
 
-    async def test_per_agent_bound_does_not_apply_to_platform_revoked_leases(
+    async def test_platform_revocation_never_mints_a_grant(
         self,
         app: FastAPI,
         client: httpx.AsyncClient,
         session_maker: async_sessionmaker[AsyncSession],
     ) -> None:
-        # The converse guarantee. Repetition on a *reported* infrastructure
-        # verdict is evidence about the artifact, but repetition on a lease the
-        # platform itself revoked is evidence about the platform -- and billing
-        # the miner for that is exactly the rule #460/#497 settled in the other
-        # direction. Only the per-ticket bound governs that path.
         agent_id = await _seed_agent(session_maker, status=AgentStatus.EVALUATING)
         await _seed_ticket(session_maker, agent_id)
         await _seed_ticket(session_maker, agent_id, keypair=_KEYPAIRS[1])
@@ -7591,7 +7570,7 @@ class TestFailJob:
                 ValidatorTicket, (agent_id, _BENCH_VERSION, second_hotkey)
             )
             assert ticket is not None
-            assert ticket.infra_retry_grants == 1
+            assert ticket.infra_retry_grants == 0
 
     async def test_no_live_ticket_is_a_noop(
         self,

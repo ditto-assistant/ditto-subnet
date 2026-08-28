@@ -236,53 +236,33 @@ func (c *Client) chat(ctx context.Context, body map[string]any, stream bool) (ch
 	if err != nil {
 		return chatResponse{}, 0, 0, 0, 0, err
 	}
-	max := c.MaxAttempts
-	if max < 1 {
-		max = 3
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.apiURL(), "/")+"/chat/completions", bytes.NewReader(raw))
+	if err != nil {
+		return chatResponse{}, 0, 1, 0, 0, err
 	}
-	var last error
-	var status int
-	var total time.Duration
-	for attempt := 1; attempt <= max; attempt++ {
-		start := time.Now()
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(c.apiURL(), "/")+"/chat/completions", bytes.NewReader(raw))
-		if err != nil {
-			return chatResponse{}, 0, attempt, total, 0, err
-		}
-		req.Header.Set("Authorization", "Bearer "+c.APIKey)
-		req.Header.Set("Content-Type", "application/json")
-		SetAttributionHeaders(req.Header)
-		resp, err := c.httpClient().Do(req)
-		total += time.Since(start)
-		if err != nil {
-			last = err
-		} else {
-			status = resp.StatusCode
-			out, ttft, decodeErr := decodeResponse(resp, stream, start)
-			_ = resp.Body.Close()
-			if decodeErr == nil && status >= 200 && status < 300 && out.Error == nil {
-				return out, status, attempt, total, ttft, nil
-			}
-			last = decodeErr
-			if out.Error != nil {
-				last = fmt.Errorf("openrouter error %d: %s", out.Error.Code, out.Error.Message)
-			}
-			if last == nil {
-				last = fmt.Errorf("openrouter returned HTTP %d", status)
-			}
-			if status != http.StatusTooManyRequests && status < 500 {
-				return chatResponse{}, status, attempt, total, ttft, last
-			}
-		}
-		if attempt < max {
-			select {
-			case <-ctx.Done():
-				return chatResponse{}, status, attempt, total, 0, ctx.Err()
-			case <-time.After(time.Duration(1<<(attempt-1)) * 250 * time.Millisecond):
-			}
-		}
+	req.Header.Set("Authorization", "Bearer "+c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	SetAttributionHeaders(req.Header)
+	resp, err := c.httpClient().Do(req)
+	total := time.Since(start)
+	if err != nil {
+		return chatResponse{}, 0, 1, total, 0, err
 	}
-	return chatResponse{}, status, max, total, 0, last
+	status := resp.StatusCode
+	out, ttft, decodeErr := decodeResponse(resp, stream, start)
+	_ = resp.Body.Close()
+	if decodeErr == nil && status >= 200 && status < 300 && out.Error == nil {
+		return out, status, 1, total, ttft, nil
+	}
+	last := decodeErr
+	if out.Error != nil {
+		last = fmt.Errorf("openrouter error %d: %s", out.Error.Code, out.Error.Message)
+	}
+	if last == nil {
+		last = fmt.Errorf("openrouter returned HTTP %d", status)
+	}
+	return chatResponse{}, status, 1, total, ttft, last
 }
 
 func decodeResponse(resp *http.Response, stream bool, started time.Time) (chatResponse, time.Duration, error) {

@@ -76,7 +76,6 @@ class TargonClient:
         payload: dict[str, Any] | None = None,
         authenticated: bool = True,
         expect_text: bool = False,
-        retryable: bool = False,
         timeout_seconds: float | None = None,
     ) -> Any:
         if authenticated and self._api_key is None:
@@ -94,33 +93,26 @@ class TargonClient:
             f"{self._base_url}{path}", data=data, headers=headers, method=method
         )
         operation = f"{method} {path.split('?', 1)[0]}"
-        attempts = 3 if retryable else 1
+        # A provider mutation may have landed before its response was lost.
+        # Replaying it can create duplicate paid resources, so reconciliation
+        # observes state and failed work remains operator-owned.
         timeout = self._timeout_seconds if timeout_seconds is None else timeout_seconds
-        for attempt in range(attempts):
-            try:
-                with urllib.request.urlopen(request, timeout=timeout) as response:
-                    body = response.read()
-                break
-            except urllib.error.HTTPError as error:
-                transient = error.code == 429 or error.code >= 500
-                if transient and attempt + 1 < attempts:
-                    time.sleep(0.5 * (2**attempt))
-                    continue
-                # Never copy provider response bodies: they may echo workload
-                # env configuration. Status is enough for operator routing.
-                reason = "rate limited" if error.code == 429 else "HTTP error"
-                raise TargonAPIError(
-                    operation=operation, status=error.code, reason=reason
-                ) from None
-            except (TimeoutError, urllib.error.URLError, OSError) as error:
-                if attempt + 1 < attempts:
-                    time.sleep(0.5 * (2**attempt))
-                    continue
-                raise TargonAPIError(
-                    operation=operation,
-                    status=None,
-                    reason=type(error).__name__,
-                ) from None
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                body = response.read()
+        except urllib.error.HTTPError as error:
+            # Never copy provider response bodies: they may echo workload env
+            # configuration. Status is enough for operator routing.
+            reason = "rate limited" if error.code == 429 else "HTTP error"
+            raise TargonAPIError(
+                operation=operation, status=error.code, reason=reason
+            ) from None
+        except (TimeoutError, urllib.error.URLError, OSError) as error:
+            raise TargonAPIError(
+                operation=operation,
+                status=None,
+                reason=type(error).__name__,
+            ) from None
         if not body:
             return None
         if expect_text:
@@ -139,7 +131,6 @@ class TargonClient:
             "GET",
             "/inventory?type=rental&gpu=false",
             authenticated=False,
-            retryable=True,
         )
         if not isinstance(value, list):
             raise TargonAPIError(
@@ -155,7 +146,7 @@ class TargonClient:
         seen_cursors: set[str] = set()
         while True:
             query = "?" + urllib.parse.urlencode(parameters)
-            value = self._request("GET", self._workload_path(query), retryable=True)
+            value = self._request("GET", self._workload_path(query))
             if not isinstance(value, dict) or not isinstance(value.get("items"), list):
                 raise TargonAPIError(
                     operation="GET /workloads",
@@ -231,7 +222,7 @@ class TargonClient:
     def delete_ssh_key(self, uid: str) -> None:
         slug = urllib.parse.quote(self._org_slug or "", safe="")
         try:
-            self._request("DELETE", f"/orgs/{slug}/ssh-keys/{uid}", retryable=True)
+            self._request("DELETE", f"/orgs/{slug}/ssh-keys/{uid}")
         except TargonAPIError as error:
             if error.status != 404:
                 raise
@@ -266,13 +257,10 @@ class TargonClient:
         return value
 
     def deploy(self, uid: str) -> dict[str, Any]:
-        # Deploying an already-deployed workload is idempotent in the Rentals
-        # API. Retry transient provider failures so a successfully registered
-        # rental is not abandoned before it ever starts.
+        # A lost deploy response is ambiguous. Do not replay the mutation;
+        # reconcile its state once so duplicate paid resources cannot be made.
         try:
-            value = self._request(
-                "POST", self._workload_path(f"/{uid}/deploy"), retryable=True
-            )
+            value = self._request("POST", self._workload_path(f"/{uid}/deploy"))
         except TargonAPIError as error:
             # A lost deploy response is ambiguous. Reconcile the workload
             # before authorizing fallback; any state beyond registration means
@@ -320,14 +308,11 @@ class TargonClient:
             "PATCH",
             self._workload_path(f"/{uid}"),
             payload=payload,
-            retryable=True,
         )
         return value if isinstance(value, dict) else {}
 
     def state(self, uid: str) -> dict[str, Any]:
-        value = self._request(
-            "GET", self._workload_path(f"/{uid}/state"), retryable=True
-        )
+        value = self._request("GET", self._workload_path(f"/{uid}/state"))
         if not isinstance(value, dict):
             raise TargonAPIError(
                 operation="GET /workloads/state",
@@ -349,14 +334,11 @@ class TargonClient:
             "GET",
             self._workload_path(f"/{uid}/logs?{query}"),
             expect_text=True,
-            retryable=True,
         )
         return value if isinstance(value, str) else ""
 
     def suspend(self, uid: str) -> dict[str, Any]:
-        value = self._request(
-            "POST", self._workload_path(f"/{uid}/suspend"), retryable=True
-        )
+        value = self._request("POST", self._workload_path(f"/{uid}/suspend"))
         return value if isinstance(value, dict) else {}
 
     def _gone(self, uid: str) -> bool:

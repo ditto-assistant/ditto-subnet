@@ -5,6 +5,7 @@ import {
   Hammer,
   Route,
   RefreshCw,
+  RotateCcw,
 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import type {
@@ -17,6 +18,7 @@ import type {
 import { screenerProviderSettingsConfirmation } from '../lib/admin.schemas'
 import {
   getScreenerCapacity,
+  retryTrustedImageBuild,
   updateScreenerProviderSettings,
 } from '../server/admin.functions'
 
@@ -52,6 +54,12 @@ function buildTone(status: TrustedImageBuild['status']) {
   return 'bg-[var(--cyan-dim)] text-[var(--cyan)]'
 }
 
+function retryableBuildStatus(
+  status: TrustedImageBuild['status'],
+): status is 'failed' | 'fallback_required' | 'canceled' {
+  return status === 'failed' || status === 'fallback_required' || status === 'canceled'
+}
+
 function providerJobTone(status: string) {
   if (status === 'succeeded' || status === 'consumed') {
     return 'bg-[var(--acid-dim)] text-[var(--acid)]'
@@ -71,7 +79,7 @@ function providerJobTone(status: string) {
 type ProviderMode = 'targon-first' | 'gcp-only'
 type RoutingPosture = 'targon-first' | 'gce-only' | 'mixed'
 
-const TARGON_FIRST_PRIORITY: ('targon' | 'gcp')[] = ['targon', 'gcp']
+const TARGON_FIRST_PRIORITY: ('targon' | 'gcp')[] = ['targon']
 const GCE_ONLY_PRIORITY: ('targon' | 'gcp')[] = ['gcp']
 
 function providerMode(priority: ScreenerProviderSettings['runtime_provider_priority']): ProviderMode {
@@ -97,7 +105,7 @@ function routingPosture(settings: ScreenerProviderSettings): RoutingPosture {
 function postureChip(posture: RoutingPosture) {
   if (posture === 'targon-first') {
     return {
-      label: 'All lanes Targon-first',
+      label: 'All lanes Targon only',
       className: 'bg-[var(--acid-dim)] text-[var(--acid)]',
     }
   }
@@ -198,10 +206,10 @@ function ProviderRoutingControl({
             </span>
           </div>
           <p className="mt-1 max-w-[78ch] text-xs leading-5 text-[var(--muted)]">
-            Builds, runtime smoke, and source review are independent one-shot lanes. Targon is
-            enabled only when a lane starts with Targon. Any other list, including legacy{' '}
-            <code>gcp&gt;targon</code>, is GCE only. Nested-Docker Targon screener workers are
-            retired; these controls do not start persistent Targon slots.
+            Builds, runtime smoke, and source review are independent single-shot lanes. Only the
+            first configured provider runs; failures park the screening attempt without provider
+            failover. Legacy multi-provider lists still parse during rollout, but later entries are
+            ignored. Nested-Docker Targon screener workers are retired.
           </p>
         </div>
       </div>
@@ -216,7 +224,7 @@ function ProviderRoutingControl({
               <legend className="px-1 text-xs font-semibold">{label}</legend>
               <div className="mt-2 grid gap-2 sm:grid-cols-2">
                 {([
-                  ['targon-first', 'Targon first'],
+                  ['targon-first', 'Targon only'],
                   ['gcp-only', 'Targon off (GCE only)'],
                 ] as const).map(([mode, modeLabel]) => (
                   <button
@@ -279,8 +287,11 @@ export function ScreenerCapacityPanel({
   readOnly: boolean
 }) {
   const fetchCapacity = useServerFn(getScreenerCapacity)
+  const retryBuild = useServerFn(retryTrustedImageBuild)
   const [state, setState] = useState(initialState)
   const [loading, setLoading] = useState(false)
+  const [retryingBuildId, setRetryingBuildId] = useState<string | null>(null)
+  const [retryReasons, setRetryReasons] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
   const snapshot = state.snapshot
   const cleanupEvents = state.events.filter(
@@ -303,6 +314,35 @@ export function ScreenerCapacityPanel({
       setError(cause instanceof Error ? cause.message : 'Unable to refresh screener capacity')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function retryTrustedBuild(build: TrustedImageBuild) {
+    if (readOnly || !retryableBuildStatus(build.status)) return
+    const reason = (retryReasons[build.build_id] ?? '').trim()
+    if (reason.length < 8) return
+    setRetryingBuildId(build.build_id)
+    setError('')
+    try {
+      const updated = await retryBuild({
+        data: {
+          buildId: build.build_id,
+          expectedStatus: build.status,
+          expectedAttemptCount: build.attempt_count,
+          reason,
+        },
+      })
+      setState((current) => ({
+        ...current,
+        builds: current.builds.map((candidate) =>
+          candidate.build_id === updated.build_id ? updated : candidate,
+        ),
+      }))
+      setRetryReasons((current) => ({ ...current, [build.build_id]: '' }))
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : 'Unable to retry trusted image build')
+    } finally {
+      setRetryingBuildId(null)
     }
   }
 
@@ -371,7 +411,7 @@ export function ScreenerCapacityPanel({
           <h2 className="text-sm font-semibold">Recent provider jobs</h2>
           <p className="mt-1 text-xs text-[var(--muted)]">
             Redacted build, direct-image runtime, and source-review lifecycle state. A remote
-            runtime result remains advisory until the GCE isolated smoke also passes.
+            provider result is authoritative for its lane; no secondary provider runs on failure.
           </p>
         </div>
         {visibleProviderJobs.length === 0 ? (
@@ -429,8 +469,9 @@ export function ScreenerCapacityPanel({
             </div>
             <p className="mt-1 text-xs leading-5 text-[var(--muted)]">
               Release and miner-image builds follow the independent builder priority above.
-              Targon uses a dedicated credential-minimal Kaniko rental; GCP runs the allowlisted
-              fallback. Hostile miner runtimes never enter this trusted lane.
+              Targon uses a dedicated credential-minimal Kaniko rental; GCP is an operator-selected
+              alternative, never an automatic fallback. Hostile miner runtimes never enter this
+              trusted lane.
             </p>
           </div>
         </div>
@@ -438,7 +479,7 @@ export function ScreenerCapacityPanel({
           <p className="p-5 text-sm text-[var(--muted)]">No trusted screener image build has been queued.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[840px] text-left text-xs">
+            <table className="w-full min-w-[1060px] text-left text-xs">
               <thead className="bg-[var(--panel-soft)] text-[var(--muted)]">
                 <tr>
                   <th className="px-4 py-3 font-medium sm:px-5">Revision</th>
@@ -447,6 +488,7 @@ export function ScreenerCapacityPanel({
                   <th className="px-4 py-3 font-medium">Attempts</th>
                   <th className="px-4 py-3 font-medium">Image</th>
                   <th className="px-4 py-3 font-medium">Updated</th>
+                  <th className="px-4 py-3 font-medium">Manual retry</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[var(--line)]">
@@ -476,6 +518,40 @@ export function ScreenerCapacityPanel({
                     </td>
                     <td className="px-4 py-3.5 text-[var(--muted-strong)]">
                       {formatWhen(build.updated_at)}
+                    </td>
+                    <td className="px-4 py-3.5">
+                      {retryableBuildStatus(build.status) ? (
+                        <div className="flex min-w-64 items-center gap-2">
+                          <input
+                            aria-label={`Retry reason for ${build.source_sha.slice(0, 12)}`}
+                            value={retryReasons[build.build_id] ?? ''}
+                            onChange={(event) =>
+                              setRetryReasons((current) => ({
+                                ...current,
+                                [build.build_id]: event.target.value,
+                              }))
+                            }
+                            disabled={readOnly || retryingBuildId === build.build_id}
+                            placeholder="Audit reason"
+                            className="min-h-10 min-w-0 flex-1 rounded-lg border border-[var(--line)] bg-[var(--panel-soft)] px-3 text-xs text-white disabled:opacity-40"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => void retryTrustedBuild(build)}
+                            disabled={
+                              readOnly ||
+                              retryingBuildId !== null ||
+                              (retryReasons[build.build_id] ?? '').trim().length < 8
+                            }
+                            className="inline-flex min-h-10 items-center gap-1.5 rounded-lg border border-[var(--line)] px-3 font-medium text-[var(--muted-strong)] hover:bg-white/5 disabled:opacity-35"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            Retry
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="text-[var(--muted)]">—</span>
+                      )}
                     </td>
                   </tr>
                 ))}

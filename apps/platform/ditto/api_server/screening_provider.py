@@ -1,8 +1,7 @@
 """Three-lane screening compute providers (Kaniko, runtime smoke, L1).
 
-Targon Rentals is primary. Cloud Run is the GCP fallback so a Targon outage
-does not stall screening: Jobs for one-shot Kaniko and L1, and a short-lived
-internal Service for the miner ``/health`` probe.
+Backroom selects one provider for each lane. A failed provider operation is
+terminal for that screening attempt; Platform never fails over automatically.
 """
 
 from __future__ import annotations

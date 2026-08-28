@@ -6,7 +6,6 @@
 package inference
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
@@ -138,7 +137,7 @@ func confirmationReaderChatBody() string {
 	return `{"model":"` + confirmationTestModel + `",` +
 		`"messages":[{"role":"user","content":"judge this"}],"max_tokens":64,` +
 		`"provider":{"sort":"throughput","ignore":["coreweave"],` +
-		`"allow_fallbacks":true,"data_collection":"deny"}}`
+		`"allow_fallbacks":false,"data_collection":"deny"}}`
 }
 
 func TestLockedConfirmationChatPayloadPreservesLaneTokenField(t *testing.T) {
@@ -604,7 +603,7 @@ func TestConfirmationChatProviderFailureDoesNotChargeReservation(t *testing.T) {
 	}
 }
 
-func TestConfirmationChatRetriesBackpressureOnFrozenRoute(t *testing.T) {
+func TestConfirmationChatParksBackpressureOnFrozenRoute(t *testing.T) {
 	var calls int
 	var sleeps []time.Duration
 	var attempts [][]byte
@@ -620,33 +619,16 @@ func TestConfirmationChatRetriesBackpressureOnFrozenRoute(t *testing.T) {
 			t.Fatalf("decode upstream payload: %v", err)
 		}
 		provider, _ := payload["provider"].(map[string]any)
-		if provider["zdr"] != true || provider["allow_fallbacks"] != true ||
+		if provider["zdr"] != true || provider["allow_fallbacks"] != false ||
 			provider["sort"] != "throughput" {
 			t.Errorf("attempt %d widened frozen route: %v", calls, provider)
 		}
 		if _, found := provider["only"]; found {
 			t.Errorf("attempt %d restored vendor pin: %v", calls, provider)
 		}
-		if calls < confirmationReaderBackpressureMaxAttempts {
-			if calls == 1 {
-				w.Header().Set("Retry-After", "120")
-			} else if calls == 2 {
-				w.Header().Set("Retry-After", "invalid")
-			} else {
-				w.Header().Set("Retry-After", "1")
-			}
-			w.WriteHeader(http.StatusTooManyRequests)
-			_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"}}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"gen-retried","object":"chat.completion","created":1755000000,
-			"model":"` + confirmationTestModel + `","provider":"deepinfra",
-			"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
-				"message":{"role":"assistant","content":"memory"}}],
-			"usage":{"prompt_tokens":12,"completion_tokens":5,"cost":0.0021,"total_tokens":17}
-		}`))
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"code":429,"message":"rate limited"}}`))
 	}))
 	defer upstream.Close()
 	f := newConfirmationFixture(t, chatTestConfig(t, upstream.URL), "reader", confirmationTestModel, "openrouter")
@@ -655,32 +637,9 @@ func TestConfirmationChatRetriesBackpressureOnFrozenRoute(t *testing.T) {
 	nonce := uuid.New()
 	body := []byte(confirmationReaderChatBody())
 	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
-	if w.Code != http.StatusOK {
-		t.Fatalf("retried completion: %d %s", w.Code, w.Body.String())
-	}
-	if calls != confirmationReaderBackpressureMaxAttempts {
-		t.Fatalf("provider attempts: got %d want %d", calls, confirmationReaderBackpressureMaxAttempts)
-	}
-	for index := 1; index < len(attempts); index++ {
-		if !bytes.Equal(attempts[0], attempts[index]) {
-			t.Fatalf("attempt %d changed the exact frozen payload", index+1)
-		}
-	}
-	wantSleeps := []time.Duration{
-		60 * time.Second,
-		10 * time.Second,
-		time.Second,
-		time.Second,
-		time.Second,
-		time.Second,
-	}
-	if len(sleeps) != len(wantSleeps) {
-		t.Fatalf("retry sleeps: got %v want %v", sleeps, wantSleeps)
-	}
-	for index := range wantSleeps {
-		if sleeps[index] != wantSleeps[index] {
-			t.Fatalf("retry sleeps: got %v want %v", sleeps, wantSleeps)
-		}
+	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "confirmation provider unavailable")
+	if calls != 1 || len(attempts) != 1 || len(sleeps) != 0 {
+		t.Fatalf("single-shot backpressure: calls=%d payloads=%d sleeps=%v", calls, len(attempts), sleeps)
 	}
 	var status string
 	var prompt, completion, cost int64
@@ -690,8 +649,8 @@ func TestConfirmationChatRetriesBackpressureOnFrozenRoute(t *testing.T) {
 		f.grantID, nonce).Scan(&status, &prompt, &completion, &cost); err != nil {
 		t.Fatalf("read retried request: %v", err)
 	}
-	if status != "completed" || prompt != 12 || completion != 5 || cost != 2100 {
-		t.Fatalf("retried request settle: %s %d/%d cost=%d", status, prompt, completion, cost)
+	if status != "failed" || prompt != 0 || completion != 0 || cost != 0 {
+		t.Fatalf("parked request settle: %s %d/%d cost=%d", status, prompt, completion, cost)
 	}
 	var requestCount, active, rows int
 	var grantPrompt, grantCompletion, grantCost int64
@@ -703,8 +662,8 @@ func TestConfirmationChatRetriesBackpressureOnFrozenRoute(t *testing.T) {
 		t.Fatalf("read retried grant: %v", err)
 	}
 	if requestCount != 1 || active != 0 || rows != 1 ||
-		grantPrompt != 12 || grantCompletion != 5 || grantCost != 2100 {
-		t.Fatalf("retried grant accounting: count=%d active=%d rows=%d %d/%d cost=%d",
+		grantPrompt != 0 || grantCompletion != 0 || grantCost != 0 {
+		t.Fatalf("parked grant accounting: count=%d active=%d rows=%d %d/%d cost=%d",
 			requestCount, active, rows, grantPrompt, grantCompletion, grantCost)
 	}
 }
@@ -721,7 +680,7 @@ func preProviderNotFoundBody(model string) string {
 	}`
 }
 
-func TestConfirmationChatRetriesOnlyPreProviderRouteMiss(t *testing.T) {
+func TestConfirmationChatParksPreProviderRouteMiss(t *testing.T) {
 	var calls int
 	var attempts [][]byte
 	var sleeps []time.Duration
@@ -737,24 +696,13 @@ func TestConfirmationChatRetriesOnlyPreProviderRouteMiss(t *testing.T) {
 			t.Fatalf("decode upstream payload: %v", err)
 		}
 		provider, _ := payload["provider"].(map[string]any)
-		if provider["zdr"] != true || provider["allow_fallbacks"] != true ||
+		if provider["zdr"] != true || provider["allow_fallbacks"] != false ||
 			provider["sort"] != "throughput" {
 			t.Errorf("attempt %d widened frozen route: %v", calls, provider)
 		}
-		if calls == 1 {
-			w.Header().Set("Retry-After", "120")
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(preProviderNotFoundBody(confirmationTestModel)))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"gen-route-recovered","object":"chat.completion","created":1755000000,
-			"model":"` + confirmationTestModel + `","provider":"deepinfra",
-			"choices":[{"index":0,"finish_reason":"stop","logprobs":null,
-				"message":{"role":"assistant","content":"memory"}}],
-			"usage":{"prompt_tokens":12,"completion_tokens":5,"cost":0.0021,"total_tokens":17}
-		}`))
+		w.Header().Set("Retry-After", "120")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(preProviderNotFoundBody(confirmationTestModel)))
 	}))
 	defer upstream.Close()
 	f := newConfirmationFixture(t, chatTestConfig(t, upstream.URL), "reader", confirmationTestModel, "openrouter")
@@ -763,15 +711,9 @@ func TestConfirmationChatRetriesOnlyPreProviderRouteMiss(t *testing.T) {
 	nonce := uuid.New()
 	body := []byte(confirmationReaderChatBody())
 	w := serve(f.deps, proxyRequest(confirmationChatPath, string(body), f.signedHeaders(1, nonce, body)))
-	if w.Code != http.StatusOK {
-		t.Fatalf("route-miss recovery: %d %s", w.Code, w.Body.String())
-	}
-	if calls != 2 || len(attempts) != 2 || !bytes.Equal(attempts[0], attempts[1]) {
-		t.Fatalf("identical bounded attempts: calls=%d equal=%v", calls,
-			len(attempts) == 2 && bytes.Equal(attempts[0], attempts[1]))
-	}
-	if len(sleeps) != 1 || sleeps[0] != 250*time.Millisecond {
-		t.Fatalf("route-miss sleep ignored fixed backoff: %v", sleeps)
+	expectEnvelope(t, w, 502, relayhttp.CodeHTTPException, "confirmation provider unavailable")
+	if calls != 1 || len(attempts) != 1 || len(sleeps) != 0 {
+		t.Fatalf("single-shot route miss: calls=%d payloads=%d sleeps=%v", calls, len(attempts), sleeps)
 	}
 	var status string
 	var requestCount, active, rows int
@@ -786,8 +728,8 @@ func TestConfirmationChatRetriesOnlyPreProviderRouteMiss(t *testing.T) {
 		Scan(&status, &requestCount, &active, &prompt, &completion, &cost, &rows); err != nil {
 		t.Fatalf("read recovered accounting: %v", err)
 	}
-	if status != "completed" || requestCount != 1 || active != 0 || rows != 1 ||
-		prompt != 12 || completion != 5 || cost != 2100 {
+	if status != "failed" || requestCount != 1 || active != 0 || rows != 1 ||
+		prompt != 0 || completion != 0 || cost != 0 {
 		t.Fatalf("route-miss accounting: status=%s count=%d active=%d rows=%d %d/%d cost=%d",
 			status, requestCount, active, rows, prompt, completion, cost)
 	}

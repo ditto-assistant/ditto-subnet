@@ -216,7 +216,7 @@ def recovery_gate(
     rollout_qualification: bool = False,
     work_available_hotkeys: set[str] | None = None,
 ) -> tuple[bool, bool, str | None, list[ValidatorTicket]]:
-    """Decide whether an automatic or operator retry is possible.
+    """Decide whether an operator retry is possible.
 
     Returns ``(automatic_retry_available, recovery_allowed, blocking_reason,
     tickets_to_grant)``. ``tickets_to_grant`` is the minimum set of expired,
@@ -242,7 +242,9 @@ def recovery_gate(
         and ticket.validator_hotkey not in score_hotkeys
         and ticket.bench_version == bench_version
     ]
-    naturally_retryable = [
+    # A ticket below its cap can only exist after an audited manual grant. It is
+    # already authorized work, not an automatic recovery classification.
+    authorized = [
         ticket
         for ticket in non_scored
         if ticket.status == TicketStatus.EXPIRED
@@ -252,15 +254,15 @@ def recovery_gate(
             or ticket.validator_hotkey in work_available_hotkeys
         )
     ]
-    if naturally_retryable:
+    if authorized:
         available = any(
             ticket.retry_after is None or aware(ticket.retry_after) <= now
-            for ticket in naturally_retryable
+            for ticket in authorized
         )
         reason = (
-            "automatic validator retry is already available"
+            "operator-authorized validator retry is queued"
             if available
-            else "automatic validator retry is still cooling down"
+            else "operator-authorized validator retry is cooling down"
         )
         return available, False, reason, []
 

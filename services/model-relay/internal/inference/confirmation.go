@@ -133,14 +133,14 @@ const confirmationReaderRouteProvider = "throughput"
 // confirmationChatProviderPreferences is the frozen route pin the caller must
 // echo verbatim (dict equality) and the base of what goes upstream. The
 // reader matches the scoring LLM relay: sort by throughput, ignore CoreWeave,
-// allow OpenRouter fallbacks, deny data collection. The official judge stays
-// Azure-pinned. The relay adds zdr=true after the echo check.
+// disable OpenRouter fallbacks, and deny data collection. The official judge
+// stays Azure-pinned. The relay adds zdr=true after the echo check.
 func confirmationChatProviderPreferences(lane, routeProvider string) map[string]any {
 	if lane == "reader" {
 		return map[string]any{
 			"sort":            "throughput",
 			"ignore":          []any{"coreweave"},
-			"allow_fallbacks": true,
+			"allow_fallbacks": false,
 			"data_collection": "deny",
 		}
 	}
@@ -716,12 +716,8 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 	var upstreamErr *providerCallError
 	upstreamStarted := time.Now()
 	providerFailure := func() *httpError {
-		// Retry explicit provider backpressure in place. Every attempt keeps the
-		// same frozen provider route and request payload, so this does not widen
-		// the capability or permit a fallback provider. The shared retry loop is
-		// bounded to seven attempts / 80 seconds for receipt-free reader 429s.
-		// The judge and every other status retain the pre-existing three-attempt
-		// behavior; ambiguous reader responses always fail closed.
+		// Provider execution is single-shot. The policy-shaped arguments remain
+		// for rolling compatibility but cannot authorize another paid dispatch.
 		backpressureMaxAttempts := providerMaxAttempts
 		var maxElapsed time.Duration
 		if grantSnapshot.Lane == "reader" {
