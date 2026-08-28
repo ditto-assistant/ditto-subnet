@@ -28,6 +28,7 @@ from ditto_screener.source_signals import (
     find_source_review_leads,
 )
 from ditto_screening_protocol import (
+    SCREENING_POLICY_VERSION,
     SourceReviewFinding,
     SourceReviewInvariant,
     SourceReviewInvariantDisposition,
@@ -756,7 +757,7 @@ fn run() -> String {
     assert observation.risk_level == "high"
     assert observation.categories == ("benchmark_emulation",)
     assert observation.finding is not None
-    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v10"
+    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v11"
     assert observation.finding["evidence"] == [
         {
             "path": "src/memory_solver.rs",
@@ -2015,7 +2016,7 @@ async def test_benign_control_clears_with_zdr_and_read_only_tools(
     assert observation.finding is not None
     assert "use\nanalyze_binary only when" in prompt
     assert 'compact, precomputed\n"binary_analysis"' in prompt
-    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v10"
+    assert observation.finding["prompt_revision"] == "source-review-v22-policy-v11"
     assert len(observation.finding["invariant_assessment"]["decisions"]) == 7
     initial_inventory = json.loads(
         seen[0]["messages"][1]["content"]
@@ -2736,7 +2737,7 @@ def test_regression_fixture_routes_new_policy_v9_review_leads() -> None:
 
 
 def test_dittobench_preflight_prompt_keeps_the_false_positive_boundary_narrow() -> None:
-    from ditto_screener.source_review import _SYSTEM_PROMPT
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
 
     required = {
         "reserved `preflight:`",
@@ -2762,11 +2763,12 @@ def test_dittobench_preflight_prompt_keeps_the_false_positive_boundary_narrow() 
         "matching self-reported",
     }
 
-    assert all(marker in _SYSTEM_PROMPT for marker in required)
+    prompt = _prompt(SCREENING_POLICY_VERSION)
+    assert all(marker in prompt for marker in required)
 
 
 def test_policy_v10_prompt_separates_replacement_retry_and_strict_controls() -> None:
-    from ditto_screener.source_review import _SYSTEM_PROMPT
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
 
     required = {
         "complete request -> retrieval/routing -> model -> tool execution -> response",
@@ -2781,13 +2783,19 @@ def test_policy_v10_prompt_separates_replacement_retry_and_strict_controls() -> 
         "reconstruction may pass",
     }
 
-    assert all(fragment in _SYSTEM_PROMPT for fragment in required)
+    prompt = _prompt(SCREENING_POLICY_VERSION)
+    assert all(fragment in prompt for fragment in required)
 
 
 def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
-    from ditto_screener.source_review import _PROMPT_REVISION, _SYSTEM_PROMPT
+    from ditto_screener.source_review import (
+        _prompt_revision,
+    )
+    from ditto_screener.source_review import (
+        _source_review_system_prompt as _prompt,
+    )
 
-    assert _PROMPT_REVISION == "source-review-v22-policy-v10"
+    assert _prompt_revision(11) == "source-review-v22-policy-v11"
     required = {
         "I1 MODEL INVOCATION",
         "I2 EVIDENCE RETENTION",
@@ -2811,11 +2819,12 @@ def test_policy_v10_prompt_teaches_independent_strict_invariants() -> None:
         "exact-deck planners",
     }
 
-    assert all(fragment in _SYSTEM_PROMPT for fragment in required)
+    prompt = _prompt(SCREENING_POLICY_VERSION)
+    assert all(fragment in prompt for fragment in required)
 
 
 def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
-    from ditto_screener.source_review import _SYSTEM_PROMPT
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
 
     required = {
         "untrusted_candidate_channel pass",
@@ -2830,7 +2839,48 @@ def test_policy_v10_prompt_keeps_false_positive_valves() -> None:
         "Honest-and-bad or post-remediation low score is not a cheat signal",
     }
 
-    assert all(fragment in _SYSTEM_PROMPT for fragment in required)
+    prompt = _prompt(SCREENING_POLICY_VERSION)
+    assert all(fragment in prompt for fragment in required)
+
+
+def test_policy_v10_prompt_keeps_the_original_i7_text() -> None:
+    from ditto_screener.source_review import _assert_policy_tails_differ
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
+
+    _assert_policy_tails_differ()
+    prompt = _prompt(10)
+
+    # Distinctive pre-planner-forced-executor (v10-only) I7 wording.
+    assert "trained head to preselect the exact tool count" in prompt
+    assert "reply_restates_story_ingredient_money. A hit is a lead:" in prompt
+    # The v11 planner-forced-executor amendment must be absent from v10.
+    assert "Planner authorship does not save a forced executor" not in prompt
+    assert "exact ordered capability plan" not in prompt
+    assert "Deterministic grammar or intent routing" not in prompt
+
+
+def test_policy_v11_prompt_adds_planner_forced_executor_i7() -> None:
+    from ditto_screener.source_review import _source_review_system_prompt as _prompt
+
+    prompt = _prompt(11)
+
+    # Distinctive v11-only I7 / C13 / calibration wording.
+    assert "Planner authorship does not save a\nforced executor" in prompt
+    assert "the deciding turn no longer plans, and I7 breaches" in prompt
+    assert "exact ordered capability plan" in prompt
+    assert "Deterministic grammar or intent routing" in prompt
+    # The v10-only I7 wording must be absent from v11.
+    assert "trained head to preselect the exact tool count" not in prompt
+    assert "reply_restates_story_ingredient_money. A hit is a lead:" not in prompt
+
+
+def test_source_review_prompt_rejects_unimplemented_policy_version() -> None:
+    from ditto_screener.source_review import _source_review_system_prompt
+
+    with pytest.raises(ValueError, match="not implemented by this build"):
+        _source_review_system_prompt(SCREENING_POLICY_VERSION + 1)
+    with pytest.raises(ValueError, match="not implemented by this build"):
+        _source_review_system_prompt(9)
 
 
 def test_written_policy_makes_policy_v10_invariants_implementable() -> None:

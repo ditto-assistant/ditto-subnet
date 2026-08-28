@@ -19,12 +19,13 @@ from ditto_screener.config import parse_screener_config_from_env
 from ditto_screener.enrollment import ensure_node_credentials_from_env
 from ditto_screener.gate import BuildGate
 from ditto_screener.heartbeat import SystemMetricsCollector
-from ditto_screener.l2_review import L2_HARNESS_REVISION, L2_PROMPT_REVISION
+from ditto_screener.l2_review import L2_HARNESS_REVISION, l2_prompt_revision
 from ditto_screener.platform import PlatformClient
 from ditto_screener.policy import ReviewJournal, load_policy_engine
 from ditto_screener.readiness import ReadinessServer
 from ditto_screener.signing import load_screener_keypair
 from ditto_screener.worker import ScreenerWorker
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ async def _amain() -> int:
             config.l3_review_enabled,
             config.l3_review_model,
             config.l3_review_provider,
-            L2_PROMPT_REVISION,
+            l2_prompt_revision(SCREENING_POLICY_VERSION),
             L2_HARNESS_REVISION,
             config.l2_max_steps,
             config.l2_max_input_tokens,

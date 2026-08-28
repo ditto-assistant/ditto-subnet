@@ -22,6 +22,7 @@ from ditto_screener.policy import (
 )
 from ditto_screener.worker import ScreenerWorker
 from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
     SCREENING_POLICY_VERSION,
     AgentStatus,
     ArtifactResponse,
@@ -70,6 +71,7 @@ class _FakeGate:
         self.deadlines: list[float | None] = []
         self.build_only_calls: list[bool] = []
         self.deferred_source_review_calls: list[bool] = []
+        self.policy_versions: list[int] = []
         self.shadow_result: Any = None
 
     def apply_review_settings(self, _settings: Any) -> bool:
@@ -87,12 +89,15 @@ class _FakeGate:
         publish_image: Any = None,
         build_only: bool = False,
         deferred_source_review: bool = False,
+        policy_version: int | None = None,
         **_: Any,
     ) -> ScreeningDecision:
         self.calls.append(agent_id)
         self.deadlines.append(deadline)
         self.build_only_calls.append(build_only)
         self.deferred_source_review_calls.append(deferred_source_review)
+        if policy_version is not None:
+            self.policy_versions.append(policy_version)
         if (
             self.result.outcome
             in {
@@ -121,6 +126,7 @@ class _FakePlatform:
         self.stop_after_queue: asyncio.Event | None = None
         self.required_policy_version = SCREENING_POLICY_VERSION
         self.claim_calls = 0
+        self.claimed_policy_versions: list[int] = []
         self.heartbeats: list[Any] = []
         self.heartbeat_error: Exception | None = None
         self.artifact_calls: list[tuple[UUID, UUID | None]] = []
@@ -153,6 +159,7 @@ class _FakePlatform:
 
     async def claim_next(self, *, policy_version: int) -> ScreenerQueueResponse:
         self.claim_calls += 1
+        self.claimed_policy_versions.append(policy_version)
         items = self._queues.pop(0) if self._queues else []
         # Signal the loop to stop once the queue has drained (first empty sweep),
         # AFTER the item-bearing sweeps have been served + processed.
@@ -641,7 +648,7 @@ async def test_run_forever_exits_immediately_when_stopped(
     await asyncio.wait_for(worker.run_forever(stop), timeout=2.0)
 
 
-async def test_policy_mismatch_does_not_claim(
+async def test_policy_below_floor_does_not_claim(
     make_config: Callable[..., ScreenerConfig],
 ) -> None:
     platform = _FakePlatform([[_item(uuid4())]])
@@ -652,12 +659,46 @@ async def test_policy_mismatch_does_not_claim(
     try:
         await worker._sweep(asyncio.Event())
     except PlatformError as exc:
-        assert "policy mismatch before claim" in str(exc)
+        assert "older than this build supports" in str(exc)
     else:
         raise AssertionError("policy mismatch must stop before claiming")
 
     assert platform.claim_calls == 0
     assert gate.calls == []
+
+
+async def test_policy_newer_than_build_does_not_claim(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[_item(uuid4())]])
+    platform.required_policy_version = SCREENING_POLICY_VERSION + 1
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    try:
+        await worker._sweep(asyncio.Event())
+    except PlatformError as exc:
+        assert "newer than this build" in str(exc)
+        assert "activation" in str(exc)
+    else:
+        raise AssertionError("unimplemented policy must stop before claiming")
+
+    assert platform.claim_calls == 0
+    assert gate.calls == []
+
+
+async def test_floor_policy_claims_and_signs_floor_policy(
+    make_config: Callable[..., ScreenerConfig],
+) -> None:
+    platform = _FakePlatform([[_item(uuid4())]])
+    platform.required_policy_version = SCREENING_FLOOR_POLICY_VERSION
+    gate = _FakeGate(_decision(ScreeningOutcome.PASS))
+    worker = _worker(make_config(), platform, gate)
+
+    assert await worker._sweep(asyncio.Event()) == 1
+    assert platform.claimed_policy_versions == [SCREENING_FLOOR_POLICY_VERSION]
+    assert gate.policy_versions == [SCREENING_FLOOR_POLICY_VERSION]
+    assert platform.verdicts[0]["policy_version"] == SCREENING_FLOOR_POLICY_VERSION
 
 
 async def test_current_policy_claims_and_signs_current_policy(

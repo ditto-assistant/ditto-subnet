@@ -15,16 +15,11 @@ from uuid import UUID
 
 from ditto_screener.causal_evidence import causal_audit_fields
 from ditto_screener.l2_review import (
-    L2_CAUSE_PROMPT_REVISION,
-    L2_CAUSE_TIEBREAKER_PROMPT_REVISION,
-    L2_CRITIC_PROMPT_REVISION,
     L2_DOSSIER_REVISION,
     L2_FALLBACK_MODELS,
     L2_HARNESS_REVISION,
     L2_MODEL,
     L2_PRICING_REVISION,
-    L2_PROMPT_REVISION,
-    L2_SAFETY_PROMPT_REVISION,
     L2_STARTER_MANIFESTS,
     L2_STATIC_HOLD_REVISION,
     L3_MODEL,
@@ -32,8 +27,14 @@ from ditto_screener.l2_review import (
     KimiSolSourceReviewAgent,
     L2AuditJournal,
     L2Usage,
+    l2_cause_prompt_revision,
+    l2_cause_tiebreaker_prompt_revision,
+    l2_critic_prompt_revision,
+    l2_prompt_revision,
+    l2_safety_prompt_revision,
 )
 from ditto_screener.policy import SourceReviewObservation
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 
 
 def _arguments() -> argparse.Namespace:
@@ -136,11 +137,13 @@ async def _main() -> None:
             "critic": L3_MODEL,
         },
         "revisions": {
-            "analyst_prompt": L2_PROMPT_REVISION,
-            "critic_prompt": L2_CRITIC_PROMPT_REVISION,
-            "cause_prompt": L2_CAUSE_PROMPT_REVISION,
-            "cause_tiebreaker_prompt": L2_CAUSE_TIEBREAKER_PROMPT_REVISION,
-            "safety_prompt": L2_SAFETY_PROMPT_REVISION,
+            "analyst_prompt": l2_prompt_revision(SCREENING_POLICY_VERSION),
+            "critic_prompt": l2_critic_prompt_revision(SCREENING_POLICY_VERSION),
+            "cause_prompt": l2_cause_prompt_revision(SCREENING_POLICY_VERSION),
+            "cause_tiebreaker_prompt": l2_cause_tiebreaker_prompt_revision(
+                SCREENING_POLICY_VERSION
+            ),
+            "safety_prompt": l2_safety_prompt_revision(SCREENING_POLICY_VERSION),
             "static_hold": L2_STATIC_HOLD_REVISION,
             "dossier": L2_DOSSIER_REVISION,
             "harness": L2_HARNESS_REVISION,

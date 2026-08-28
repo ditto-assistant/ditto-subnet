@@ -23,18 +23,12 @@ import pytest
 from ditto_screener.l2_review import (
     _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK,
     _SAFETY_ADJUDICATOR_TASK,
-    _SYSTEM_PROMPT,
     _TOOLS,
     _VIOLATION_CAUSE_DISAGREEMENT_TASK,
     _VIOLATION_CAUSE_TASK,
-    L2_CAUSE_PROMPT_REVISION,
-    L2_CAUSE_TIEBREAKER_PROMPT_REVISION,
-    L2_CRITIC_PROMPT_REVISION,
     L2_DOSSIER_REVISION,
     L2_HARNESS_REVISION,
     L2_MODEL,
-    L2_PROMPT_REVISION,
-    L2_SAFETY_PROMPT_REVISION,
     L2_STARTER_MANIFESTS,
     L2_STATIC_HOLD_REVISION,
     InProcessAnalyzerHarness,
@@ -51,6 +45,7 @@ from ditto_screener.l2_review import (
     _finalize_without_l3,
     _graph_covers_l1_slice,
     _has_mixed_causal_families,
+    _l2_review_system_prompt,
     _make_writable,
     _needs_violation_adjudication,
     _parse_l2_review,
@@ -61,10 +56,18 @@ from ditto_screener.l2_review import (
     _safety_clearance_gaps,
     _served_generator_hold,
     _write_all,
+    l2_cause_prompt_revision,
+    l2_cause_tiebreaker_prompt_revision,
+    l2_critic_prompt_revision,
+    l2_prompt_revision,
+    l2_safety_prompt_revision,
 )
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.source_review import TarSourceRepository
+from ditto_screening_protocol import SCREENING_POLICY_VERSION
 from scripts.generate_starter_provenance import _tracked_files
+
+SYSTEM_PROMPT = _l2_review_system_prompt(SCREENING_POLICY_VERSION)
 
 ROOT = Path(__file__).resolve().parents[1]
 ATTEMPT = UUID("96af45fd-65da-4f59-87f8-8ddf5d57f88c")
@@ -192,11 +195,12 @@ def test_starter_provenance_generator_ignores_untracked_build_outputs(
 
 
 def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() -> None:
-    assert L2_PROMPT_REVISION == "l2-kimi-source-review-v34-policy-v10"
+    assert l2_prompt_revision(11) == "l2-kimi-source-review-v34-policy-v11"
+    assert l2_prompt_revision(10) == "l2-kimi-source-review-v34-policy-v10"
     assert L2_DOSSIER_REVISION == "l1-compressed-dossier-v10"
-    assert L2_CAUSE_PROMPT_REVISION == "l3-sol-violation-cause-v25-policy-v10"
-    assert L2_CAUSE_TIEBREAKER_PROMPT_REVISION == (
-        "l3-sol-cause-disagreement-v6-policy-v10"
+    assert l2_cause_prompt_revision(11) == "l3-sol-violation-cause-v25-policy-v11"
+    assert l2_cause_tiebreaker_prompt_revision(11) == (
+        "l3-sol-cause-disagreement-v6-policy-v11"
     )
     assert "Generator mirroring is earlier and therefore" in _VIOLATION_CAUSE_TASK
     assert "without those copied input-construction" in _VIOLATION_CAUSE_TASK
@@ -231,15 +235,15 @@ def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() 
     assert "registry/definition anchor" in _VIOLATION_CAUSE_TASK
     assert "generator_components" in _VIOLATION_CAUSE_TASK
     assert "unused local parser/debug candidate" in _VIOLATION_CAUSE_TASK
-    assert "assigned into the served response contract" in _SYSTEM_PROMPT
-    assert "I4 is stricter than the legacy derive-as-prompt allowance" in _SYSTEM_PROMPT
-    assert "I1 requires genuine model invocation" in _SYSTEM_PROMPT
-    assert "I5 independently rejects closed answer-family" in _SYSTEM_PROMPT
-    assert "I7 separately" in _SYSTEM_PROMPT
-    assert "natural singleton class" in _SYSTEM_PROMPT
-    assert "pass clause wins only when it causally" in _SYSTEM_PROMPT
-    assert "Honest-and-bad or post-remediation low score" in _SYSTEM_PROMPT
-    assert "Live schema-driven retrieval/reranking" in _SYSTEM_PROMPT
+    assert "assigned into the served response contract" in SYSTEM_PROMPT
+    assert "I4 is stricter than the legacy derive-as-prompt allowance" in SYSTEM_PROMPT
+    assert "I1 requires genuine model invocation" in SYSTEM_PROMPT
+    assert "I5 independently rejects closed answer-family" in SYSTEM_PROMPT
+    assert "I7 separately" in SYSTEM_PROMPT
+    assert "natural singleton class" in SYSTEM_PROMPT
+    assert "pass clause wins only when it causally" in SYSTEM_PROMPT
+    assert "Honest-and-bad or post-remediation low score" in SYSTEM_PROMPT
+    assert "Live schema-driven retrieval/reranking" in SYSTEM_PROMPT
     assert "reported prior-population" in _SAFETY_ADJUDICATOR_TASK
     assert "regardless of L1's category" in _SAFETY_ADJUDICATOR_TASK
     assert "Pre-assignment suppression" in _ORDINARY_OPTIONAL_FIELD_SAFETY_TASK
@@ -267,7 +271,7 @@ def test_causal_basis_prefers_reconstructed_generator_over_downstream_effects() 
         "family_compiler_authoritative",
         "tool_selection_predetermined",
     } <= set(causal_object["properties"]["authority_transition"]["enum"])
-    assert "served_trigger" in _SYSTEM_PROMPT
+    assert "served_trigger" in SYSTEM_PROMPT
     assert "authority_bypass" in _VIOLATION_CAUSE_TASK
     assert "genuine model or tool execution" in _SAFETY_ADJUDICATOR_TASK
 
@@ -317,16 +321,59 @@ def test_l1_mechanism_narrowed_away_by_kimi_still_requires_sol() -> None:
 
 
 def test_request_local_identical_tool_memoization_is_not_fabrication() -> None:
-    assert L2_CRITIC_PROMPT_REVISION == "l3-sol-adversarial-critic-v19-policy-v10"
-    assert L2_SAFETY_PROMPT_REVISION == "l3-sol-safety-adjudicator-v22-policy-v10"
-    assert "Request-local memoization of an identical invocation" in _SYSTEM_PROMPT
-    assert "deduplication is not fabricated telemetry" in _SYSTEM_PROMPT
+    assert l2_critic_prompt_revision(11) == "l3-sol-adversarial-critic-v19-policy-v11"
+    assert l2_safety_prompt_revision(11) == "l3-sol-safety-adjudicator-v22-policy-v11"
+    assert "Request-local memoization of an identical invocation" in SYSTEM_PROMPT
+    assert "deduplication is not fabricated telemetry" in SYSTEM_PROMPT
     assert "distinguish execution from transport" in _SAFETY_ADJUDICATOR_TASK
     assert "the cache crosses requests" in _SAFETY_ADJUDICATOR_TASK
 
 
+def test_l2_policy_v10_prompt_keeps_the_original_i7_text() -> None:
+    from ditto_screener.l2_review import _assert_l2_policy_tails_differ
+
+    _assert_l2_policy_tails_differ()
+    prompt = _l2_review_system_prompt(10)
+
+    # Distinctive pre-planner-forced-executor (v10-only) I7 wording.
+    assert (
+        "model_tool_planning_bypass when I7 host logic predetermines the exact scored"
+        in prompt
+    )
+    assert "planners, and planner-forced executors are leads" not in prompt
+    # The v11 planner-forced-executor amendment must be absent from v10.
+    assert "Planner authorship does not save a forced executor" not in prompt
+    assert (
+        "or an enforced plan authored by a separate planner turn may not" not in prompt
+    )
+
+
+def test_l2_policy_v11_prompt_adds_planner_forced_executor_i7() -> None:
+    prompt = _l2_review_system_prompt(11)
+
+    # Distinctive v11-only I7 / resolution-basis wording.
+    assert "Planner authorship does not save a forced executor" in prompt
+    assert "or an enforced plan authored by a separate planner turn may not" in prompt
+    assert "model_tool_planning_bypass when I7 logic — a host rule, a trained head" in (
+        prompt
+    )
+    assert "planners, and planner-forced executors are leads" in prompt
+    # The v10-only I7 wording must be absent from v11.
+    assert (
+        "model_tool_planning_bypass when I7 host logic predetermines the exact scored"
+        not in prompt
+    )
+
+
+def test_l2_prompt_rejects_unimplemented_policy_version() -> None:
+    with pytest.raises(ValueError, match="not implemented by this build"):
+        _l2_review_system_prompt(SCREENING_POLICY_VERSION + 1)
+    with pytest.raises(ValueError, match="not implemented by this build"):
+        _l2_review_system_prompt(9)
+
+
 def test_dittobench_preflight_clearance_is_exact_and_shared() -> None:
-    for prompt in (_SYSTEM_PROMPT, _SAFETY_ADJUDICATOR_TASK):
+    for prompt in (SYSTEM_PROMPT, _SAFETY_ADJUDICATOR_TASK):
         assert "preflight:" in prompt
         assert "search_web" in prompt
         assert "supplied" in prompt
@@ -342,14 +389,14 @@ def test_dittobench_preflight_clearance_is_exact_and_shared() -> None:
         assert "ordinary" in prompt
         assert "scored" in prompt
 
-    assert "absence of a preflight branch is not a finding" in _SYSTEM_PROMPT
-    assert "near-miss prefix" in _SYSTEM_PROMPT
-    assert "wrong tool" in _SYSTEM_PROMPT
-    assert "no actual POST attempt" in _SYSTEM_PROMPT
-    assert "without the matching best-effort POST" in _SYSTEM_PROMPT
-    assert "after the required POST attempt" in _SYSTEM_PROMPT
+    assert "absence of a preflight branch is not a finding" in SYSTEM_PROMPT
+    assert "near-miss prefix" in SYSTEM_PROMPT
+    assert "wrong tool" in SYSTEM_PROMPT
+    assert "no actual POST attempt" in SYSTEM_PROMPT
+    assert "without the matching best-effort POST" in SYSTEM_PROMPT
+    assert "after the required POST attempt" in SYSTEM_PROMPT
     assert (
-        "Acknowledgement or error prose is not an observed tool call" in _SYSTEM_PROMPT
+        "Acknowledgement or error prose is not an observed tool call" in SYSTEM_PROMPT
     )
     assert "empty" in _SAFETY_ADJUDICATOR_TASK
     assert "call list on missing" in _SAFETY_ADJUDICATOR_TASK
@@ -1101,7 +1148,7 @@ def test_safety_adjudicator_safe_result_requires_refutation_path(
             _with_policy_v10_invariants(value),
             artifact_sha256=artifact_sha,
             repository=repository,
-            prompt_revision=L2_SAFETY_PROMPT_REVISION,
+            prompt_revision=l2_safety_prompt_revision(SCREENING_POLICY_VERSION),
         )
     value["causal_path"] = [
         {"path": "src/main.rs", "line": 1, "role": "context"},
@@ -1115,14 +1162,14 @@ def test_safety_adjudicator_safe_result_requires_refutation_path(
             _with_policy_v10_invariants(value),
             artifact_sha256=artifact_sha,
             repository=repository,
-            prompt_revision=L2_SAFETY_PROMPT_REVISION,
+            prompt_revision=l2_safety_prompt_revision(SCREENING_POLICY_VERSION),
         )
     value["confidence"] = 1.0
     observation, _analyzed, causal, basis = _parse_l2_review(
         _with_policy_v10_invariants(value),
         artifact_sha256=artifact_sha,
         repository=repository,
-        prompt_revision=L2_SAFETY_PROMPT_REVISION,
+        prompt_revision=l2_safety_prompt_revision(SCREENING_POLICY_VERSION),
     )
     assert observation.ok is True
     assert observation.risk_level == "low"
@@ -2039,18 +2086,23 @@ async def test_sol_request_is_provider_locked_cached_and_concurrency_safe(
         for record in records
     )
     assert all(record["critic_model"] == "openai/gpt-5.6-sol" for record in records)
-    assert all(record["prompt_revision"] == L2_PROMPT_REVISION for record in records)
     assert all(
-        record["cause_prompt_revision"] == L2_CAUSE_PROMPT_REVISION
+        record["prompt_revision"] == l2_prompt_revision(SCREENING_POLICY_VERSION)
+        for record in records
+    )
+    assert all(
+        record["cause_prompt_revision"]
+        == l2_cause_prompt_revision(SCREENING_POLICY_VERSION)
         for record in records
     )
     assert all(
         record["cause_tiebreaker_prompt_revision"]
-        == L2_CAUSE_TIEBREAKER_PROMPT_REVISION
+        == l2_cause_tiebreaker_prompt_revision(SCREENING_POLICY_VERSION)
         for record in records
     )
     assert all(
-        record["safety_prompt_revision"] == L2_SAFETY_PROMPT_REVISION
+        record["safety_prompt_revision"]
+        == l2_safety_prompt_revision(SCREENING_POLICY_VERSION)
         for record in records
     )
     assert all(

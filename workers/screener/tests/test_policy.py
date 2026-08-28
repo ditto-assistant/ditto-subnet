@@ -793,7 +793,7 @@ def test_manifest_rotation_changes_digest_not_policy_or_signature_contract(
     manifest.write_text(
         json.dumps(
             {
-                "policy_version": 10,
+                "policy_version": 11,
                 "rotation_id": "2026-07-14-private",
                 "modules": [
                     {
@@ -807,7 +807,7 @@ def test_manifest_rotation_changes_digest_not_policy_or_signature_contract(
         )
     )
     engine = load_policy_engine(str(manifest))
-    assert engine.manifest.policy_version == SCREENING_POLICY_VERSION == 10
+    assert engine.manifest.policy_version == SCREENING_POLICY_VERSION == 11
     assert engine.manifest.digest != CORE_ONLY_MANIFEST.digest
 
 
@@ -837,7 +837,7 @@ def test_live_v6_snapshot_is_an_acceptance_fixture() -> None:
     fixture = Path(__file__).parent / "fixtures" / "production-v6-snapshot.json"
     snapshot = json.loads(fixture.read_text())
     assert snapshot["screening_policy_version"] == 6
-    assert SCREENING_POLICY_VERSION == 10
+    assert SCREENING_POLICY_VERSION == 11
     assert snapshot["queue"]["waiting_validator"] == 9
     assert snapshot["queue"]["evaluating"] == 1
     assert len(snapshot["rust_contract_rejections"]) == 6

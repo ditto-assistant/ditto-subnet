@@ -16,7 +16,10 @@ from pydantic import (
     model_validator,
 )
 
-SCREENING_POLICY_VERSION = 10
+SCREENING_POLICY_VERSION = 11
+# The oldest policy version a mixed-fleet platform may require during a
+# scheduled activation window (v10 until v11 activates, then v11).
+SCREENING_FLOOR_POLICY_VERSION = 10
 TYPED_OUTCOME_POLICY_VERSION = 9
 
 _SS58_PATTERN = r"^[1-9A-HJ-NP-Za-km-z]{47,48}$"
@@ -1018,9 +1021,7 @@ class SourceReviewObservationPayload(BaseModel):
     ] = "retryable_infra"
     clearance_certified: bool = False
     review_audit: ScreenReviewAudit | None = None
-    notes: Annotated[
-        list[SourceReviewNote], Field(default_factory=list, max_length=48)
-    ]
+    notes: Annotated[list[SourceReviewNote], Field(default_factory=list, max_length=48)]
 
     @model_validator(mode="after")
     def validate_finding_binding(self) -> SourceReviewObservationPayload:

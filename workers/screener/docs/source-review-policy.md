@@ -4,12 +4,51 @@ The source reviewer identifies submissions that replace a general agent with
 benchmark-, scorer-, or audit-specific behavior. Its findings select operator
 quarantine; they never create an automatic terminal rejection.
 
-Screening policy v10 makes the seven strict integrity invariants below part of
+Screening policy v10 made the seven strict integrity invariants below part of
 the signed source-review contract. It changes neither benchmark activation nor
 operator decision authority: model review may select quarantine, but only an
 operator may reject a submission. Historical v9 findings retain their original
 wire identity and are not silently reinterpreted; v10 applies to new or
 explicitly rescreened attempts.
+
+## Policy v11 (in place, activation scheduled)
+
+Policy v11 is the first scheduled activation under the subnet's bench-scaling
+loop: observe field strategies at the current bench version, codify owner
+rulings, then make the unwanted strategy uncompetitive in the next bench
+version. v11 changes exactly one invariant and adds calibration:
+
+- **I7 — enforced planner plans breach.** A plan authored by a separate
+  planner turn (host rule, trained head, or second model call) breaches I7
+  when it is ENFORCED against the deciding model — the catalog is replaced
+  per step, only the next planned capability is exposed, the step is pinned
+  with an exact `tool_choice`, or unadvertised model guesses are refused. The
+  deciding turn must remain free to deviate, skip, add, or reorder calls.
+  Advisory intent/relevance signals shown to a deciding model that still sees
+  the live catalog pass, as do grammar routing and precursor passes on their
+  own.
+- **Calibration.** `bench_version` branching is a warning sign, never an
+  independent reject; request-scoped duplicate suppression after a genuine
+  first successful execution is production behavior; plain answer
+  normalization is a scorer-fidelity gap, not a violation.
+
+Fairness rules for the activation:
+
+- The version the screening queue REQUIRES is the floor (`v10`) until the
+  scheduled activation time passes; dual-text workers screen under — and stamp
+  outcomes with — the required version, not merely the newest one they ship.
+- The activation is scheduled through `POST /admin/screener-policy-activation`
+  (Backroom MCP: `schedule_screener_policy_activation`) with a timezone-aware
+  `activate_at`, an optimistic-revision guard, and the confirmation phrase
+  `SCHEDULE SCREENER POLICY ACTIVATION`.
+- When an activation is due, agents screened under a stale version re-enter
+  the screening queue on the same criteria. Evaluating/rejected rows always
+  rescreen; scored and live rows rescreen only when the activation row sets
+  `rescreen_scored`, so a version bump cannot silently pull champions off the
+  ledger without an operator decision recorded on the schedule.
+- Agents are held to the policy version that screened them: a v10-screened
+  agent is not retroactively judged by the v11 I7 letter. The scheduled
+  re-screen is the fair mechanism, not retroactive enforcement.
 
 A deterministic source-review step, read, token, or cost budget exhaustion is
 not infrastructure failure and must not retry forever. After archive, build,

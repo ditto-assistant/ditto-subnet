@@ -9,7 +9,10 @@ import httpx
 
 from ditto_screener.config import parse_screener_config_from_env
 from ditto_screener.platform import PlatformClient
-from ditto_screening_protocol import SCREENING_POLICY_VERSION
+from ditto_screening_protocol import (
+    SCREENING_FLOOR_POLICY_VERSION,
+    SCREENING_POLICY_VERSION,
+)
 
 
 async def _check() -> None:
@@ -21,10 +24,10 @@ async def _check() -> None:
     config = parse_screener_config_from_env()
     async with httpx.AsyncClient(timeout=config.http_timeout_seconds) as http:
         required = await PlatformClient(config, http).get_required_policy_version()
-    if required != SCREENING_POLICY_VERSION:
+    if not (SCREENING_FLOOR_POLICY_VERSION <= required <= SCREENING_POLICY_VERSION):
         raise RuntimeError(
             f"platform requires policy {required}; worker supports "
-            f"{SCREENING_POLICY_VERSION}"
+            f"{SCREENING_FLOOR_POLICY_VERSION}-{SCREENING_POLICY_VERSION}"
         )
 
 
