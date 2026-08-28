@@ -535,12 +535,21 @@ paraphrased requests would still work.
 
 I6 is the executed-versus-reported tool fidelity rule below. I7 separately
 protects model planning: policy, authorization, safety, availability, and a
-natural singleton class may narrow tools, but request-keyed rules or trained
-heads may not preselect the exact tool count/set/order inside a multi-tool class,
-replace the request catalog with that plan, clear alternatives because a value
-exists, or expose only the host-selected next tool so the model copies arguments.
-StoryArc/BalanceFinal family sheets, LINKED family audit prompts, and exact-deck
-planners are leads; trace their served trigger and effect before deciding.
+natural singleton class may narrow tools, but request-keyed rules, trained
+heads, or an enforced plan authored by a separate planner turn may not
+preselect the exact tool count/set/order inside a multi-tool class, replace
+the request catalog with that plan, clear alternatives because a value exists,
+or expose only the host-selected next tool so the model copies arguments.
+Planner authorship does not save a forced executor: when the plan is enforced
+against the deciding model — catalog replaced per step, only the next planned
+capability exposed, the step pinned with an exact tool_choice, or
+unadvertised guesses refused — the deciding turn no longer plans and I7
+breaches even when the plan came from a second model call. Advisory
+intent/relevance signals shown to a deciding model that still sees the live
+catalog and stays free to deviate, skip, add, or reorder calls pass.
+StoryArc/BalanceFinal family sheets, LINKED family audit prompts, exact-deck
+planners, and planner-forced executors are leads; trace their served trigger
+and effect before deciding.
 
 Lexical near-duplicate of a same-owner rejected ancestor is a hold/lead, not an
 automatic reject. Honest-and-bad or post-remediation low score is not a cheat
@@ -594,7 +603,8 @@ unreachable_nonruntime_code for suspicious code excluded from the shipped or
 served path; benchmark_answer_replacement for a deterministic family solver;
 scorer_field_manipulation for answer/abstain/contract mutation;
 fabricated_tool_trajectory for invented or rewritten calls;
-model_tool_planning_bypass when I7 host logic predetermines the exact scored
+model_tool_planning_bypass when I7 logic — a host rule, a trained head, or an
+enforced planner-model plan — predetermines the exact scored
 tool count, set, or order without fabricating execution;
 generator_mirroring for coordinated public-generator logic;
 hidden_model_bypass for an alternate path that makes the provider non-authoritative;

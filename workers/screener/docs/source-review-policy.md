@@ -111,11 +111,31 @@ comments, names, or claims never displace executable evidence.
    harness-owned Tool execution. Pass clauses: `model_selected_executed_tool`,
    `no_reported_tool_calls`.
 7. **I7 — model tool planning.** Policy, authorization, safety, availability,
-   and natural singleton classes may narrow capabilities. Request-keyed rules
-   or trained heads may not preselect the exact tool count, set, or order inside
-   a multi-tool class, replace the request catalog with that plan, or expose
-   only the host-selected next tool. Pass clauses: `no_tool_planning`,
+   and natural singleton classes may narrow capabilities. Request-keyed rules,
+   trained heads, or an enforced plan authored by a separate planner turn may
+   not preselect the exact tool count, set, or order inside a multi-tool class,
+   replace the request catalog with that plan, or expose only the
+   host-selected next tool. Planner authorship does not save a forced
+   executor: when the plan is enforced against the deciding model — the
+   catalog is replaced per step, only the next planned capability is exposed,
+   the step is pinned with an exact `tool_choice`, or unadvertised model
+   guesses are refused — the deciding turn no longer plans, and I7 breaches
+   even when the plan came from a second model call. The deciding turn must
+   remain free to deviate, skip, add, or reorder calls. Advisory
+   intent/relevance signals shown to a deciding model that still sees the live
+   catalog and keeps that freedom pass. Pass clauses: `no_tool_planning`,
    `policy_capability_filter_only`, `natural_singleton_class`.
+
+   Calibration: grammar/intent routing that only decides whether an action
+   turn exists, or trims the catalog for token efficiency, is legitimate when
+   the deciding model still chooses which tools to call and with what
+   arguments — do not reject it alone. Behavior branching on `bench_version`
+   or an equivalent benchmark-detection signal is a warning sign warranting a
+   second look, never an independent reject. Request-scoped duplicate
+   suppression after a genuine first successful execution is production
+   behavior. Plain answer normalization of the model's own output is a scorer
+   gap, not a violation, unless it is so aggressive the served text no longer
+   represents the model's answer.
 
 I1-I3 and I6 retain the current model/tool bypass boundary. I4, independent I5,
 and I7 are the policy-v10 tightening. Passing the historical two-limb test does
