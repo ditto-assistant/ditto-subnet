@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.121.4 (2026-08-28)
+
+### Bug Fixes
+
+- **validator**: Accept legacy Bittensor hotkeys in Pylon
+  ([#1255](https://github.com/ditto-assistant/ditto-subnet/pull/1255),
+  [`b7de21a`](https://github.com/ditto-assistant/ditto-subnet/commit/b7de21ac0d237e8e817fb979ada552eed701a1c6))
+
+- **validator**: Verify hotkey checkout as repository owner
+  ([#1254](https://github.com/ditto-assistant/ditto-subnet/pull/1254),
+  [`320a014`](https://github.com/ditto-assistant/ditto-subnet/commit/320a0141a4f305de41ddcd323592bac586d7c14d))
+
+
 ## v0.121.3 (2026-08-28)
 
 ### Bug Fixes
