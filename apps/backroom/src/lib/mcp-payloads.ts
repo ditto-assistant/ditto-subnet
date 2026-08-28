@@ -8,6 +8,7 @@ import type { z } from 'zod'
 import type {
   batchRetryValidationResponseSchema,
   copyReviewListSchema,
+  ownerFootprintDetailSchema,
   screeningQuarantineListSchema,
   screeningSubmissionListSchema,
   stuckSubmissionsListSchema,
@@ -27,6 +28,7 @@ type ScreeningSubmissionList = z.infer<typeof screeningSubmissionListSchema>
 type StuckSubmissionsList = z.infer<typeof stuckSubmissionsListSchema>
 type ValidatorAssignmentList = z.infer<typeof validatorAssignmentListSchema>
 type ValidatorFleetObservability = z.infer<typeof validatorFleetObservabilitySchema>
+type OwnerFootprintDetail = z.infer<typeof ownerFootprintDetailSchema>
 
 const BATCH_RETRY_STATUSES = ['granted', 'idempotent', 'skipped'] as const
 
@@ -286,4 +288,57 @@ export function compactValidatorAssignments(
   return compactListField(response, 'items', {
     pin: ['agent_id', 'validator_hotkey'],
   })
+}
+
+/**
+ * Compact one miner owner footprint.
+ *
+ * The linkage walk is the tool that answers "who else does this operator
+ * control?", so its payload scales with the size of the operator's cluster and
+ * each hotkey row embeds a complete public leaderboard standing. Two forms of
+ * repetition dominate: the standing repeats the row's own `miner_hotkey` (it is
+ * the join key Backroom used to fetch it), and every field the board states
+ * identically for the whole cluster — quorum, bench version, dataset pin,
+ * truncation flags — rides on every row.
+ *
+ * So the nested hotkey is dropped from each standing, the fields identical
+ * across every ranked standing move once into a sibling `standings_shared`
+ * object, and the row-level fields identical across every hotkey are hoisted
+ * into `hotkeys_shared`. Reconstruction is lossless: a row is
+ * `{ ...hotkeys_shared, ...row }`, its standing is
+ * `{ ...standings_shared, ...row.leaderboard }`, and a standing's hotkey is
+ * its row's `miner_hotkey`. Nothing is summarised away and no hotkey, agent,
+ * or standing field disappears.
+ */
+export function compactMinerOwnerFootprint(response: OwnerFootprintDetail) {
+  const rows = response.hotkeys.map((hotkey) => {
+    if (hotkey.leaderboard === null) return hotkey as unknown as ResponseRow
+    const { miner_hotkey: _repeatedRowIdentity, ...standing } = hotkey.leaderboard
+    return { ...hotkey, leaderboard: standing } as unknown as ResponseRow
+  })
+
+  const standings = rows
+    .map((row) => row.leaderboard)
+    .filter((standing): standing is ResponseRow => standing !== null)
+  const { shared: standingsShared } = hoistSharedFields(standings)
+  const standingsSharedKeys = new Set(Object.keys(standingsShared))
+  const stripped = rows.map((row) =>
+    row.leaderboard === null || row.leaderboard === undefined
+      ? row
+      : {
+          ...row,
+          leaderboard: Object.fromEntries(
+            Object.entries(row.leaderboard).filter(
+              ([key]) => !standingsSharedKeys.has(key),
+            ),
+          ),
+        },
+  )
+
+  const compacted = compactListField({ ...response, hotkeys: stripped }, 'hotkeys', {
+    pin: ['miner_hotkey'],
+  })
+  return Object.keys(standingsShared).length > 0
+    ? { ...compacted, standings_shared: standingsShared }
+    : compacted
 }
