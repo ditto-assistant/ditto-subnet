@@ -34,13 +34,18 @@ EOF
 
 command -v gcloud >/dev/null 2>&1 || { echo "error: gcloud is required" >&2; exit 127; }
 
-log_file="ditto-api.out.log"
+# Relay logs live under the relay RELEASE tree, one directory per deployed
+# commit — not under the platform log dir. The $(...) below stays literal
+# locally (single quotes) and is resolved on the VM, so a relay redeploy
+# never silently points this at a stale file.
+log_path="$LOG_DIR/ditto-api.out.log"
 if [[ "${1:-}" == "--file" ]]; then
     case "${2:-}" in
-        api) log_file="ditto-api.out.log" ;;
-        relay-1) log_file="ditto-api-relay-1.out.log" ;;
-        relay-2) log_file="ditto-api-relay-2.out.log" ;;
-        image-cleanup) log_file="ditto-image-cleanup.err.log" ;;
+        api) log_path="$LOG_DIR/ditto-api.out.log" ;;
+        relay-1|relay-2)
+            log_path='$(ls -t /opt/ditto-platform-relay/releases/*/logs/ditto-api-'"${2}"'.out.log 2>/dev/null | head -1)'
+            ;;
+        image-cleanup) log_path="$LOG_DIR/ditto-image-cleanup.err.log" ;;
         *) usage; exit 2 ;;
     esac
     shift 2
@@ -52,7 +57,7 @@ tail)
     lines="${2:-200}"
     [[ "$lines" =~ ^[0-9]+$ ]] && (( lines >= 1 && lines <= 2000 )) || {
         echo "error: tail lines must be 1-2000" >&2; exit 2; }
-    remote_command="sudo -n -u deploy tail -n $lines $LOG_DIR/$log_file"
+    remote_command="sudo -n -u deploy bash -c 'tail -n $lines $log_path'"
     ;;
 grep)
     pattern="${2:-}"
@@ -69,7 +74,7 @@ grep)
     printf -v quoted_pattern '%q' "$pattern"
     # Search only the trailing slice: the log is multi-GB and unrotated, and
     # live diagnosis wants the newest occurrences anyway.
-    remote_command="sudo -n -u deploy bash -c 'tail -c 500000000 $LOG_DIR/$log_file | grep -aE -C $context -- $quoted_pattern | tail -n $max_lines'"
+    remote_command="sudo -n -u deploy bash -c 'tail -c 500000000 $log_path | grep -aE -C $context -- $quoted_pattern | tail -n $max_lines'"
     ;;
 *)
     usage; exit 2 ;;
