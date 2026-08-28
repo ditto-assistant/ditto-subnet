@@ -90,7 +90,6 @@ from ditto.api_models.queue_policy_settings import (
     PrevGenCarryoverSettings,
     QueuePolicySettings,
 )
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.stack_health import (
     ValidatorStackHealth,
     validator_stack_health_signing_token,
@@ -325,6 +324,7 @@ from ditto.metrics import (
     DispatchDeclineReason,
 )
 from ditto.score_order import rank_submissions
+from ditto.screener_policy_state import effective_screening_policy_version
 
 if TYPE_CHECKING:
     from ditto.api_server.config import EfficiencyBonusConfig, InferenceProxyConfig
@@ -542,7 +542,7 @@ async def _deferred_screening_attempts(
             select(ScreeningAttempt.agent_id)
             .where(
                 ScreeningAttempt.agent_id.in_(ids),
-                ScreeningAttempt.policy_version == SCREENING_POLICY_VERSION,
+                ScreeningAttempt.policy_version == effective_screening_policy_version(),
                 ScreeningAttempt.build_only.is_(False),
                 ScreeningAttempt.status.in_(("passed", "quarantined")),
             )
@@ -554,7 +554,7 @@ async def _deferred_screening_attempts(
             select(ScreeningAttempt)
             .where(
                 ScreeningAttempt.agent_id.in_(ids),
-                ScreeningAttempt.policy_version == SCREENING_POLICY_VERSION,
+                ScreeningAttempt.policy_version == effective_screening_policy_version(),
                 ScreeningAttempt.build_only.is_(True),
                 ScreeningAttempt.status == "passed",
                 ScreeningAttempt.reason_code == DEFERRED_MECHANICAL_REASON,
@@ -5963,10 +5963,10 @@ async def submit_score(
             raise AgentNotEvaluatableError(
                 f"agent {agent_id} is {agent.status}, not in {_SCOREABLE_STATUSES}"
             )
-        if agent.screening_policy_version < SCREENING_POLICY_VERSION:
+        if agent.screening_policy_version < effective_screening_policy_version():
             raise AgentNotEvaluatableError(
                 f"agent {agent_id} has not passed screening policy "
-                f"{SCREENING_POLICY_VERSION}"
+                f"{effective_screening_policy_version()}"
             )
         # k=3 gate: a score is only accepted against a live ticket this validator
         # holds for the agent. No ticket (never issued, expired, or already

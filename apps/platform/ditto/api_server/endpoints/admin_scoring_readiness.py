@@ -39,7 +39,6 @@ from ditto.api_models.admin_scoring_readiness import (
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_server.dependencies import get_session
 from ditto.api_server.endpoints.admin_quarantine import require_admin
 from ditto.db.models import Agent, BenchmarkDataset
@@ -50,6 +49,7 @@ from ditto.db.queries.benchmark_rollout import (
     arrival_bench_version,
     open_rollout,
 )
+from ditto.screener_policy_state import effective_screening_policy_version
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -135,10 +135,11 @@ async def scoring_readiness(
             f"agent status is '{agent.status.value}', not {expected} "
             f"(the {lane} lane leases no other status)"
         )
-    if agent.screening_policy_version < SCREENING_POLICY_VERSION:
+    required_version = effective_screening_policy_version()
+    if agent.screening_policy_version < required_version:
         blocking.append(
             f"screening policy v{agent.screening_policy_version} is below the "
-            f"required v{SCREENING_POLICY_VERSION} — needs a re-screen"
+            f"required v{required_version} — needs a re-screen"
         )
     if contract.requires_screened_image and not image_eligible:
         if not image_complete:
@@ -178,7 +179,7 @@ async def scoring_readiness(
             )
         ),
         screening_policy_version=agent.screening_policy_version,
-        required_screening_policy_version=SCREENING_POLICY_VERSION,
+        required_screening_policy_version=effective_screening_policy_version(),
         requires_screened_image=contract.requires_screened_image,
         has_versioned_dataset=has_versioned_dataset,
         screened_image=ScreenedImageReadiness(

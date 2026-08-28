@@ -48,7 +48,6 @@ from ditto.api_models.public import (
     public_validation_failure_code,
 )
 from ditto.api_models.screener import (
-    SCREENING_POLICY_VERSION,
     SourceReviewEvidenceItem,
     SourceReviewFinding,
 )
@@ -129,7 +128,14 @@ from ditto.tests.legacy_era import (
     grandfather_active_era,
     retired_era_writes_allowed,
 )
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
+
+# Every use of SCREENING_POLICY_VERSION in this module means "the version the
+# platform REQUIRES," which — with no scheduled activation written — is the
+# floor, not the newest text the deployed build implements. The runtime reads
+# the effective snapshot, which defaults to the floor.
+SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 
 _MINER_A = "5DhaT8U7LVwnnJNUU8VL1XEipicatoaDVVq7cHo227gogVZm"
 _MINER_B = "5FHneW46xGXgs5mUiveU4sbTyGBzmstUspZC92UhjJM694ty"

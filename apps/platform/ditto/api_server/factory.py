@@ -73,6 +73,7 @@ from ditto.api_server.endpoints import (
     admin_retirement_router,
     admin_scoring_readiness_router,
     admin_screener_capacity_router,
+    admin_screener_policy_activation_router,
     admin_screener_review_settings_router,
     admin_submission_deposit_address_router,
     admin_submission_settings_router,
@@ -113,6 +114,9 @@ from ditto.api_server.payment_verifier import create_payment_verifier
 from ditto.api_server.pricing import create_price_oracle
 from ditto.api_server.queue_policy_settings import QueuePolicySettingsResolver
 from ditto.api_server.runtime_profiles import RuntimeProfileStore
+from ditto.api_server.screener_policy_activation import (
+    ScreenerPolicyActivationResolver,
+)
 from ditto.api_server.storage import create_storage_client
 from ditto.api_server.validator_names import create_validator_names
 from ditto.api_server.validator_nonce_janitor import ValidatorNonceJanitor
@@ -456,6 +460,11 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.state.burn_settings = BurnSettingsResolver()
     app.state.continual_retest_settings = ContinualRetestSettingsResolver()
     app.state.queue_policy_settings = QueuePolicySettingsResolver()
+    # Scheduled screening-policy activation: the required version rises to the
+    # governing schedule's target when its activate_at passes, not at deploy
+    # time, so miners get equal notice. Falls back to the floor version when
+    # no activation is due (or in unit tests without a session maker).
+    app.state.screener_policy_activation = ScreenerPolicyActivationResolver()
     app.state.inference_concurrency_settings = InferenceConcurrencySettingsResolver()
     app.state.runtime_profiles = RuntimeProfileStore()
     # Exact public verification profiles are release assets. Provider
@@ -518,6 +527,7 @@ def create_api_server(config: ApiServerConfig | None = None) -> FastAPI:
     app.include_router(admin_attestation_router, prefix="/api/v1")
     app.include_router(admin_benchmark_rollout_router, prefix="/api/v1")
     app.include_router(admin_queue_policy_settings_router, prefix="/api/v1")
+    app.include_router(admin_screener_policy_activation_router, prefix="/api/v1")
     app.include_router(admin_inference_concurrency_settings_router, prefix="/api/v1")
     app.include_router(admin_inference_observability_router, prefix="/api/v1")
     app.include_router(admin_traces_router, prefix="/api/v1")

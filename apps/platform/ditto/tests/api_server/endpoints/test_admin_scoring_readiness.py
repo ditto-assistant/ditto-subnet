@@ -15,7 +15,12 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
+from ditto.api_models.screener import SCREENING_POLICY_VERSION as _BUILTIN_POLICY_VERSION
+from ditto_screening_protocol import SCREENING_FLOOR_POLICY_VERSION
+
+# Uses below mean "the version the platform REQUIRES" — the floor in the
+# default no-scheduled-activation state, not the newest text the build ships.
+SCREENING_POLICY_VERSION = SCREENING_FLOOR_POLICY_VERSION
 from ditto.api_server.dependencies import get_session
 from ditto.db.models import (
     Agent,

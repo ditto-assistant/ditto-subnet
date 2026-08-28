@@ -4273,6 +4273,65 @@ class QueuePolicySettingsRevision(Base):
     )
 
 
+class ScreenerPolicyActivation(Base):
+    """Append-only schedule for raising the required screening-policy version.
+
+    Screening policy text ships with the deployed Platform/worker build (the
+    build implements every version up to ``SCREENING_POLICY_VERSION``), but the
+    version the queue REQUIRES is a subnet decision with a fairness timeline:
+    miners must get equal notice that the rules are changing, so the newest
+    text activates on a schedule instead of at deploy time. Until a scheduled
+    activation is due, the platform requires ``SCREENING_FLOOR_POLICY_VERSION``
+    and dual-text workers screen under that older version; when ``activate_at``
+    passes, the required version rises to ``target_policy_version`` and every
+    agent screened under a stale version re-enters the screening queue on the
+    same criteria.
+
+    Each revision stores the whole schedule decision (never a diff), so the
+    operator audit trail is complete and immutable. The newest revision whose
+    ``activate_at`` has passed governs; a newer not-yet-due revision never
+    pulls the required version down.
+    """
+
+    __tablename__ = "screener_policy_activations"
+
+    revision: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    parent_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    target_policy_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    activate_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False
+    )
+    rescreen_scored: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        TIMESTAMP(timezone=True), nullable=False, server_default=func.now()
+    )
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_policy_version >= 1",
+            name="screener_policy_activation_target_check",
+        ),
+        CheckConstraint(
+            "parent_revision >= 0",
+            name="screener_policy_activation_parent_revision_check",
+        ),
+        CheckConstraint(
+            "length(trim(reason)) >= 8",
+            name="screener_policy_activation_reason_check",
+        ),
+        CheckConstraint(
+            "length(trim(actor)) BETWEEN 1 AND 120",
+            name="screener_policy_activation_actor_check",
+        ),
+        UniqueConstraint(
+            "parent_revision",
+            name="screener_policy_activation_parent_key",
+        ),
+    )
+
+
 class InferenceConcurrencySettingsRevision(Base):
     """Append-only operator policy for hosted inference admission.
 

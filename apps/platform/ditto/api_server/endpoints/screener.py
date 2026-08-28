@@ -78,7 +78,6 @@ from ditto.api_models import (
 )
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.screener import (
-    SCREENING_POLICY_VERSION,
     ShadowReviewObservationRequest,
     ShadowReviewObservationResponse,
 )
@@ -138,6 +137,10 @@ from ditto.api_server.endpoints.validator import (
 )
 from ditto.api_server.onchain_seed import derive_seed
 from ditto.api_server.queue_policy_settings import resolve_queue_policy_settings
+from ditto.api_server.screener_policy_activation import (
+    EffectiveScreenerPolicy,
+    resolve_screener_policy_activation,
+)
 from ditto.api_server.storage import (
     ObjectDownloadFailedError,
     ObjectNotFoundError,
@@ -201,6 +204,28 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/screener", tags=["screener"])
+
+
+async def _required_policy(
+    session: AsyncSession,
+) -> EffectiveScreenerPolicy:
+    """The screening-policy version the queue requires right now.
+
+    The deployed build implements every version up to its built-in constant,
+    but the required version rises only when a scheduled activation is due
+    (``/admin/screener-policy-activation``): miners get equal notice that the
+    rules changed, and workers screen under — and stamp outcomes with — the
+    required version, not merely the newest one they ship.
+    """
+    caller_transaction = session.in_transaction()
+    policy = await resolve_screener_policy_activation(session)
+    if not caller_transaction:
+        # The read auto-began a transaction; end it so a caller that follows up
+        # with its own explicit ``session.begin()`` is valid. Never roll back a
+        # caller-owned transaction.
+        await session.rollback()
+    return policy
+
 
 # How long a pre-signed artifact URL stays valid (mirrors the validator's).
 _ARTIFACT_URL_TTL = timedelta(minutes=5)
@@ -2569,6 +2594,7 @@ async def list_controller_nodes(
 ) -> ScreenerControllerNodesResponse:
     """Return redacted enrollment readiness for provider reconciliation."""
     now = datetime.now(UTC)
+    required_policy = (await _required_policy(session)).required_policy_version
     nodes = list(
         await session.scalars(
             select(ScreenerNode)
@@ -2600,7 +2626,7 @@ async def list_controller_nodes(
             and heartbeat is not None
             and seen_at is not None
             and now - seen_at <= timedelta(seconds=_CONTROLLER_HEARTBEAT_READY_SECONDS)
-            and heartbeat.policy_version == SCREENING_POLICY_VERSION
+            and heartbeat.policy_version == required_policy
         )
         response.append(
             ScreenerControllerNodeState.model_validate(
@@ -2935,6 +2961,8 @@ async def queue(
 ) -> ScreenerQueueResponse:
     """List completion-lane contenders, then least-scored pending agents."""
     response.headers["Cache-Control"] = "no-store"
+    screener_policy = await _required_policy(session)
+    required_policy = screener_policy.required_policy_version
     rolling_qualified = exists(
         select(BenchmarkRolloutMember.agent_id)
         .join(BenchmarkRollout)
@@ -2944,7 +2972,7 @@ async def queue(
         )
     )
     missing_v3_screen = (
-        (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+        (Agent.screening_policy_version < required_policy)
         | Agent.screened_image_sha256.is_(None)
         | Agent.screened_image_size_bytes.is_(None)
         | Agent.screened_image_id.is_(None)
@@ -2954,6 +2982,15 @@ async def queue(
     )
     missing_dataset, prerequisite_admitted = await prerequisite_screening_predicates(
         session
+    )
+    # A due activation re-queues everything screened under a stale policy on
+    # the same criteria: evaluating/rejected rows always rescreen (the
+    # ``< required_policy`` arm above), and scored/live rows join them only
+    # when the governing activation opted them in, so a routine version bump
+    # cannot silently pull champions off the ledger without an operator
+    # decision recorded on the schedule row.
+    stale_scored_rescreen = (
+        screener_policy.rescreen_stale_agents and screener_policy.rescreen_scored
     )
     agents = (
         await session.scalars(
@@ -2969,8 +3006,13 @@ async def queue(
                                 AgentStatus.REJECTED,
                             )
                         )
-                        & (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+                        & (Agent.screening_policy_version < required_policy)
                         & prerequisite_admitted
+                    ),
+                    (
+                        Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
+                        & stale_scored_rescreen
+                        & (Agent.screening_policy_version < required_policy)
                     ),
                     (
                         Agent.status.in_((AgentStatus.SCORED, AgentStatus.LIVE))
@@ -3003,7 +3045,7 @@ async def queue(
     return ScreenerQueueResponse(
         items=items,
         count=len(items),
-        required_policy_version=SCREENING_POLICY_VERSION,
+        required_policy_version=required_policy,
     )
 
 
@@ -3030,10 +3072,11 @@ async def claim(
         raise AgentNotScreenableError(
             f"screener node is {node_status}; no new work may be claimed"
         )
-    if policy_version != SCREENING_POLICY_VERSION:
+    required_policy = (await _required_policy(session)).required_policy_version
+    if policy_version != required_policy:
         raise AgentNotScreenableError(
             "screening policy mismatch before claim: platform requires "
-            f"{SCREENING_POLICY_VERSION}, worker declared {policy_version}"
+            f"{required_policy}, worker declared {policy_version}"
         )
     now = datetime.now(UTC)
     if session.get_bind().dialect.name == "postgresql":
@@ -3094,7 +3137,7 @@ async def claim(
     return ScreenerQueueResponse(
         items=items,
         count=len(items),
-        required_policy_version=SCREENING_POLICY_VERSION,
+        required_policy_version=required_policy,
     )
 
 
@@ -3219,6 +3262,7 @@ async def screened_image_upload(
     if payload.image_ref != expected_ref:
         raise AgentNotScreenableError("screened image ref does not match agent")
     now = datetime.now(UTC)
+    required_policy = (await _required_policy(session)).required_policy_version
     async with session.begin():
         attempt = await get_screening_attempt(
             session, attempt_id=payload.attempt_id, for_update=True
@@ -3227,7 +3271,7 @@ async def screened_image_upload(
             attempt is None
             or attempt.agent_id != agent_id
             or attempt.screener_hotkey != screener_hotkey
-            or attempt.policy_version != SCREENING_POLICY_VERSION
+            or attempt.policy_version != required_policy
             or attempt.status != "running"
         ):
             raise AgentNotScreenableError(
@@ -3262,7 +3306,7 @@ async def screened_image_upload(
                 attempt is None
                 or attempt.agent_id != agent_id
                 or attempt.screener_hotkey != screener_hotkey
-                or attempt.policy_version != SCREENING_POLICY_VERSION
+                or attempt.policy_version != required_policy
                 or attempt.status != "running"
             ):
                 raise AgentNotScreenableError(
@@ -3332,7 +3376,8 @@ async def _load_active_image_upload(
         or attempt.agent_id != agent_id
         or attempt.screener_hotkey != screener_hotkey
         or attempt.status != "running"
-        or attempt.policy_version != SCREENING_POLICY_VERSION
+        or attempt.policy_version
+        != (await resolve_screener_policy_activation(session)).required_policy_version
     ):
         raise AgentNotScreenableError("screening attempt is no longer active")
     return upload
@@ -3850,6 +3895,8 @@ async def submit_result(
     verdict can be retried — so an evaluating agent always has a scoreable dataset.
     """
     response.headers["Cache-Control"] = "no-store"
+    screener_policy = await _required_policy(session)
+    required_policy = screener_policy.required_policy_version
 
     if payload.screener_hotkey != screener_hotkey:
         raise ScreenerAuthError("payload hotkey does not match authenticated screener")
@@ -3906,10 +3953,12 @@ async def submit_result(
         )
 
     # A legacy worker may still report a failure during a rolling deploy, but it
-    # can never promote a submission without attesting the current policy.
-    if payload.passed and payload.policy_version != SCREENING_POLICY_VERSION:
+    # can never promote a submission without attesting the required policy —
+    # which is the scheduled-activation version, not merely the newest one the
+    # build ships.
+    if payload.passed and payload.policy_version != required_policy:
         raise AgentNotScreenableError(
-            f"passing verdict requires screening policy {SCREENING_POLICY_VERSION}"
+            f"passing verdict requires screening policy {required_policy}"
         )
     if (
         payload.reason_code == "exact-cross-miner-duplicate"
@@ -4316,7 +4365,16 @@ async def submit_result(
                 AgentStatus.SCREENING_FAILED,
                 AgentStatus.REJECTED,
             )
-            and agent.screening_policy_version < SCREENING_POLICY_VERSION
+            and agent.screening_policy_version < required_policy
+        )
+        # A due activation that opted scored/live rows in: the agent is being
+        # rescreened in place while it stays on the ledger (mirrors the
+        # rolling-rollout rescreen below).
+        stale_scored_rescreen = (
+            required_policy > screener_policy.floor_policy_version
+            and screener_policy.rescreen_scored
+            and agent.status in (AgentStatus.SCORED, AgentStatus.LIVE)
+            and agent.screening_policy_version < required_policy
         )
         rolling_rescreen = bool(
             await session.scalar(
@@ -4343,7 +4401,11 @@ async def submit_result(
             agent.status = target
         elif rolling_rescreen and payload.passed:
             pass
-        elif rolling_rescreen or agent.status in _SCREENABLE_STATUSES or rescreening:
+        elif stale_scored_rescreen and payload.passed:
+            pass
+        elif rolling_rescreen or stale_scored_rescreen or agent.status in (
+            _SCREENABLE_STATUSES
+        ) or rescreening:
             agent.status = target
         elif agent.status == target:
             pass  # idempotent re-report of the same verdict
@@ -4376,7 +4438,7 @@ async def submit_result(
         # remain retryable under the same policy.
         if (
             not late_deferred_result
-            and payload.policy_version == SCREENING_POLICY_VERSION
+            and payload.policy_version == required_policy
         ):
             agent.screening_policy_version = payload.policy_version
         if payload.passed and not late_deferred_result:

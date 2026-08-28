@@ -17,7 +17,6 @@ from sqlalchemy.exc import IntegrityError as SAIntegrityError
 from sqlalchemy.orm import undefer_group
 
 from ditto.api_models.agent_status import AgentStatus
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.db.errors import IntegrityError as DbIntegrityError
 from ditto.db.models import (
     Agent,
@@ -32,6 +31,7 @@ from ditto.db.queries.benchmark_admission import (
     benchmark_admission_predicate,
     validator_queue_admission_predicate,
 )
+from ditto.screener_policy_state import effective_screening_policy_version
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -424,7 +424,7 @@ async def query_public_activity_page(
     # capacity controller scales on.
     needs_rescreen = (
         Agent.status.in_((AgentStatus.EVALUATING, AgentStatus.REJECTED))
-        & (Agent.screening_policy_version < SCREENING_POLICY_VERSION)
+        & (Agent.screening_policy_version < effective_screening_policy_version())
         & admitted
     )
     below_floor = (

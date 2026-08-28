@@ -159,7 +159,6 @@ from ditto.api_models.public import (
     ValidatorAssignmentState,
 )
 from ditto.api_models.screener import (
-    SCREENING_POLICY_VERSION,
     ScreenerProgress,
     ScreenerRuntimeState,
     ScreenEvidenceItem,
@@ -358,6 +357,7 @@ from ditto.db.queries.tickets import (
     score_priority_floor_rows_from_resolved_ledger,
 )
 from ditto.score_order import score_order_key
+from ditto.screener_policy_state import effective_screening_policy_version
 from ditto_screening_protocol.bench_v9 import V9EvidenceBenchVersion
 
 logger = logging.getLogger(__name__)
@@ -4633,7 +4633,7 @@ def _public_activity_status(
             AgentStatus.EVALUATING,
             AgentStatus.REJECTED,
         )
-        and screening_policy_version < SCREENING_POLICY_VERSION
+        and screening_policy_version < effective_screening_policy_version()
         # Mirrors the claim path: a policy bump only re-queues agents admitted
         # to the active benchmark era, so non-admitted ones stay ``not_queued``.
         and benchmark_admitted
@@ -5079,7 +5079,7 @@ def _public_activity_response(
                     else None
                 ),
                 screening_policy_version=row.agent.screening_policy_version,
-                required_screening_policy_version=SCREENING_POLICY_VERSION,
+                required_screening_policy_version=effective_screening_policy_version(),
                 screening_attempt_id=(
                     row.screening_attempt.attempt_id
                     if row.screening_attempt is not None

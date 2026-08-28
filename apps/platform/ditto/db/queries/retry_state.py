@@ -18,7 +18,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.retry_state import RecommendedRetryAction, RetryState
-from ditto.api_models.screener import SCREENING_POLICY_VERSION
 from ditto.api_models.ticket_status import TicketStatus
 from ditto.db.models import (
     Agent,
@@ -34,6 +33,7 @@ from ditto.db.queries.benchmark_rollout import active_bench_version, open_rollou
 from ditto.db.queries.queue_removal import is_in_force, removal_in_force
 from ditto.db.queries.scores import SCORING_QUORUM
 from ditto.db.queries.tickets import ticket_attempt_cap
+from ditto.screener_policy_state import effective_screening_policy_version
 
 VALIDATOR_RETRY_ONLINE_WINDOW = timedelta(minutes=5)
 _UNRESOLVED_ROLLOUT = object()
@@ -231,7 +231,7 @@ def recovery_gate(
     )
     if not waiting_for_scores:
         return False, False, "submission is not waiting for validator scores", []
-    if agent.screening_policy_version < SCREENING_POLICY_VERSION:
+    if agent.screening_policy_version < effective_screening_policy_version():
         return False, False, "submission is not on the current screening policy", []
     if score_count >= SCORING_QUORUM:
         return False, False, "submission already reached scoring quorum", []
@@ -301,7 +301,7 @@ def withdrawal_gate(
 
     if agent.status != AgentStatus.EVALUATING:
         return False, "submission is not waiting for validator scores"
-    if agent.screening_policy_version < SCREENING_POLICY_VERSION:
+    if agent.screening_policy_version < effective_screening_policy_version():
         return False, "submission is not on the current screening policy"
     if len(scores) >= SCORING_QUORUM:
         return False, "submission already reached scoring quorum"
@@ -446,7 +446,7 @@ def reinstatement_gate(
         )
     if agent.status != AgentStatus.EVALUATING:
         return False, "submission is not waiting for validator scores"
-    if agent.screening_policy_version < SCREENING_POLICY_VERSION:
+    if agent.screening_policy_version < effective_screening_policy_version():
         return False, "submission is not on the current screening policy"
     if len(scores) >= SCORING_QUORUM:
         return False, "submission already reached scoring quorum"
