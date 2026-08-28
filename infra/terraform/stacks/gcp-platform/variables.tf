@@ -172,8 +172,6 @@ variable "ssh_users" {
   description = "Team members granted sudo SSH (OS Login + IAP) on the platform VMs. Full IAM members. See README.md for how to connect. NOTE: members outside the org domain (e.g. @resilabs.ai) ALSO need org-level roles/compute.osLoginExternalUser (an org-admin grant) before OS Login works for them."
   type        = list(string)
   default = [
-    "user:ethan@omniaura.ai",
-    "user:dan@omniaura.ai",
     "user:nickanderson@omniaura.ai",
     "user:peyton@omniaura.ai",
     "user:omar@omniaura.ai",
