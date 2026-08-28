@@ -3083,6 +3083,8 @@ def _source_review_failure_code(error: BaseException) -> str:
     unrecognized, so an unmapped message degrades to exactly the old behavior
     instead of losing the failure.
     """
+    if isinstance(error, httpx.HTTPStatusError):
+        return f"source-review-http-{error.response.status_code}"
     message = str(error).strip()
     suffix = _SOURCE_REVIEW_FAILURE_CODES.get(message)
     if suffix is None and message.startswith("source review category "):

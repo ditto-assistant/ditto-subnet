@@ -79,6 +79,7 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     EvaluationPayment,
+    ProviderOutageCircuit,
     Score,
     ScoreAuditEntry,
     ScreenedImageUpload,
@@ -759,6 +760,33 @@ class TestFederatedScreenerNodes:
         assert queued.status_code == 200, queued.text
         review_id = queued.json()["review_id"]
         controller_headers = {"Authorization": f"Bearer {_CONTROLLER_TOKEN}"}
+        circuit_now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add(
+                ProviderOutageCircuit(
+                    provider="openrouter",
+                    state="open",
+                    epoch=uuid4(),
+                    opened_at=circuit_now,
+                    retry_at=circuit_now + timedelta(minutes=2),
+                    last_failure_at=circuit_now,
+                    failure_count=1,
+                    last_status=429,
+                    last_error_code="upstream_http_429",
+                    updated_at=circuit_now,
+                )
+            )
+        blocked = await client.post(
+            "/api/v1/screener/controller/submission-source-reviews/claim",
+            headers=controller_headers,
+            json={"environment": "prod", "controller_epoch": "builder:test"},
+        )
+        assert blocked.status_code == 200, blocked.text
+        assert blocked.json()["review"] is None
+        async with session_maker() as session, session.begin():
+            circuit = await session.get(ProviderOutageCircuit, "openrouter")
+            assert circuit is not None
+            circuit.retry_at = circuit_now - timedelta(seconds=1)
         leased = await client.post(
             "/api/v1/screener/controller/submission-source-reviews/claim",
             headers=controller_headers,
@@ -823,16 +851,84 @@ class TestFederatedScreenerNodes:
             assert row.job_token_hash is None
             assert row.status == "succeeded"
             assert row.error_code is None
-            events = list(
-                await session.scalars(
-                    select(ScreenerCapacityEvent).where(
-                        ScreenerCapacityEvent.event_type == "provider_cleanup_required"
-                    )
-                )
+
+    async def test_openrouter_429_completion_parks_review_without_spending_attempt(
+        self,
+        app: FastAPI,
+        client: httpx.AsyncClient,
+        session_maker: async_sessionmaker[AsyncSession],
+    ) -> None:
+        agent_id = await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+        _install_db(app, session_maker)
+        _install_chain(app)
+        _install_storage(app)
+        release_rental = AsyncMock(return_value=True)
+        app.state.targon_rental_loop = SimpleNamespace(release_rental=release_rental)
+        claim = await client.post(_CLAIM_URL, headers=_AUTH_HEADER)
+        attempt_id = UUID(claim.json()["items"][0]["attempt_id"])
+        review_id = uuid4()
+        epoch = uuid4()
+        token = "source-review-job-token"
+        now = datetime.now(UTC)
+        async with session_maker() as session, session.begin():
+            session.add_all(
+                [
+                    SubmissionSourceReview(
+                        review_id=review_id,
+                        agent_id=agent_id,
+                        attempt_id=attempt_id,
+                        environment="prod",
+                        artifact_sha256=_SHA256,
+                        status="running",
+                        provider="targon",
+                        provider_resource_id="wrk-source-overload",
+                        attempt_count=2,
+                        controller_epoch="builder:test",
+                        lease_expires_at=now + timedelta(minutes=30),
+                        job_token_hash=hashlib.sha256(token.encode()).hexdigest(),
+                        job_token_expires_at=now + timedelta(minutes=30),
+                    ),
+                    ProviderOutageCircuit(
+                        provider="openrouter",
+                        state="open",
+                        epoch=epoch,
+                        opened_at=now,
+                        retry_at=now + timedelta(minutes=2),
+                        last_failure_at=now,
+                        failure_count=1,
+                        last_status=429,
+                        last_error_code="source_review_http_429",
+                        updated_at=now,
+                    ),
+                ]
             )
-            assert len(events) == 1
-            assert events[0].provider == "targon"
-            assert "source-review" in events[0].detail
+
+        complete = await client.post(
+            f"/api/v1/screener/submission-source-reviews/{review_id}/complete",
+            headers={"Authorization": f"Bearer {token}"},
+            json={
+                "observation": {
+                    "ok": False,
+                    "risk_level": None,
+                    "categories": [],
+                    "error_code": "source-review-http-429",
+                    "failure_disposition": "retryable_infra",
+                }
+            },
+        )
+        assert complete.status_code == 200, complete.text
+        async with session_maker() as session:
+            review = await session.get(SubmissionSourceReview, review_id)
+            attempt = await session.get(ScreeningAttempt, attempt_id)
+            assert review is not None
+            assert attempt is not None
+            assert review.status == "queued"
+            assert review.attempt_count == 2
+            assert review.provider_outage_epoch == epoch
+            assert review.job_token_hash is None
+            assert review.provider_resource_id is None
+            assert attempt.status == "running"
+        release_rental.assert_awaited_once_with("wrk-source-overload")
 
     async def test_submission_build_is_attempt_bound_and_fully_verified(
         self,

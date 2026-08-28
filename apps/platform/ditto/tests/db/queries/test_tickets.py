@@ -19,6 +19,7 @@ from ditto.db.models import (
     BenchmarkRollout,
     BenchmarkRolloutMember,
     EvaluationPayment,
+    InferenceGrant,
     Score,
     ValidatorHeartbeat,
     ValidatorLeaseAudit,
@@ -419,6 +420,109 @@ async def _seed_scored(session: AsyncSession) -> UUID:
             )
         )
     return aid
+
+
+async def test_provider_outage_reissue_reuses_attempt_number(
+    session: AsyncSession,
+) -> None:
+    agent_id = await _seed_evaluating(session, name="outage-park")
+    async with session.begin():
+        first = await issue_ticket(
+            session,
+            validator_hotkey="5OutageValidator",
+            now=_NOW,
+            ttl=_TTL,
+            bench_version=_BENCH,
+            artifact_mode="screened_only",
+        )
+        assert first is not None
+        session.add(
+            InferenceGrant(
+                grant_id=uuid4(),
+                agent_id=agent_id,
+                bench_version=_BENCH,
+                validator_hotkey="5OutageValidator",
+                slot_id="slot-0",
+                ticket_deadline=first.deadline,
+                status="active",
+                bearer_digest="ab" * 32,
+                broker_public_key="broker",
+                generation=2,
+                allowed_models=["test-model"],
+                request_budget=100,
+                token_budget=1000,
+                embedding_model="test-embedding",
+                embedding_profile="test-profile",
+                embedding_provider="test-provider",
+                embedding_dimensions=768,
+                embedding_request_budget=50,
+                embedding_token_budget=500,
+                embedding_request_count=7,
+                embedding_tokens=70,
+                embedding_cost_microusd=700,
+                request_count=11,
+                prompt_tokens=110,
+                completion_tokens=22,
+                cost_microusd=1320,
+                expires_at=first.deadline,
+            )
+        )
+        first.status = TicketStatus.EXPIRED
+        first.deadline = _NOW
+        first.retry_after = _NOW
+        first.provider_outage_epoch = uuid4()
+
+    async with session.begin():
+        resumed = await issue_ticket(
+            session,
+            validator_hotkey="5OutageValidator",
+            now=_NOW + timedelta(seconds=1),
+            ttl=_TTL,
+            bench_version=_BENCH,
+            artifact_mode="screened_only",
+        )
+        assert resumed is not None
+        assert resumed.agent_id == agent_id
+        assert resumed.attempt_count == 1
+        assert resumed.infra_retry_grants == 0
+        assert resumed.provider_outage_epoch is None
+        assert resumed.provider_outage_attempted_epoch is not None
+
+        grant = await session.scalar(
+            select(InferenceGrant).where(
+                InferenceGrant.agent_id == agent_id,
+                InferenceGrant.validator_hotkey == "5OutageValidator",
+            )
+        )
+        assert grant is not None
+        assert grant.ticket_deadline == resumed.deadline
+        assert grant.expires_at == resumed.deadline
+        assert grant.status == "pending"
+        assert grant.bearer_digest is None
+        assert grant.broker_public_key is None
+        assert grant.generation == 2
+        assert grant.request_count == 11
+        assert grant.prompt_tokens == 110
+        assert grant.completion_tokens == 22
+        assert grant.cost_microusd == 1320
+        assert grant.embedding_request_count == 7
+        assert grant.embedding_tokens == 70
+        assert grant.embedding_cost_microusd == 700
+
+        resumed.status = TicketStatus.EXPIRED
+        resumed.deadline = _NOW
+        resumed.retry_after = _NOW
+
+    async with session.begin():
+        bounded_retry = await issue_ticket(
+            session,
+            validator_hotkey="5OutageValidator",
+            now=_NOW + timedelta(seconds=2),
+            ttl=_TTL,
+            bench_version=_BENCH,
+            artifact_mode="screened_only",
+        )
+        assert bounded_retry is None
 
 
 async def _seed_finalized_top_five(

@@ -3909,6 +3909,16 @@ def test_failure_codes_name_the_cause(error: Exception, expected: str) -> None:
     assert source_review_module._source_review_failure_code(error) == expected
 
 
+def test_failure_code_retains_openrouter_http_status() -> None:
+    request = httpx.Request("POST", "https://openrouter.test/chat/completions")
+    response = httpx.Response(429, request=request)
+    error = httpx.HTTPStatusError("rate limited", request=request, response=response)
+    assert (
+        source_review_module._source_review_failure_code(error)
+        == "source-review-http-429"
+    )
+
+
 @pytest.mark.parametrize(
     "message",
     [

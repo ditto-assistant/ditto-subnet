@@ -27,6 +27,7 @@ from ditto.api_server.targon_rental_loop import (
 from ditto.api_server.targon_screening import _queue_kaniko
 from ditto.db.models import (
     Agent,
+    ProviderOutageCircuit,
     ScreeningAttempt,
     SubmissionImageBuild,
     SubmissionSourceReview,
@@ -326,6 +327,87 @@ async def test_cancels_source_review_when_parent_attempt_is_terminal(
         assert review.job_token_hash is None
         assert review.job_token_expires_at is None
         assert review.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_open_provider_circuit_parks_and_deletes_source_review_rental(
+    session_maker: async_sessionmaker[AsyncSession],
+) -> None:
+    await _seed_agent(session_maker, status=AgentStatus.UPLOADED)
+    targon = _FakeTargon()
+    loop = TargonRentalLoop(
+        session_maker=session_maker,
+        config=_config(),
+        targon=targon,
+        screener_hotkey=_SCREENER_HOTKEY,
+        interval_seconds=60,
+    )
+    await loop.tick()
+    epoch = uuid4()
+    now = datetime.now(UTC)
+    async with session_maker() as session, session.begin():
+        build = await session.scalar(select(SubmissionImageBuild).limit(1))
+        assert build is not None
+        review = await session.scalar(
+            select(SubmissionSourceReview).where(
+                SubmissionSourceReview.attempt_id == build.attempt_id
+            )
+        )
+        assert review is not None
+        review.status = "running"
+        review.provider = "targon"
+        review.provider_resource_id = "wrk-source-overload"
+        review.attempt_count = 2
+        review.lease_expires_at = now + timedelta(minutes=30)
+        review.job_token_hash = "ab" * 32
+        review.job_token_expires_at = now + timedelta(minutes=30)
+        session.add(
+            ProviderOutageCircuit(
+                provider="openrouter",
+                state="open",
+                epoch=epoch,
+                opened_at=now,
+                retry_at=now + timedelta(minutes=2),
+                last_failure_at=now,
+                failure_count=1,
+                last_status=429,
+                last_error_code="upstream_http_429",
+                updated_at=now,
+            )
+        )
+
+    assert await loop._park_source_reviews_for_outage() is True
+    assert "wrk-source-overload" in targon.deleted
+    async with session_maker() as session:
+        review = await session.scalar(
+            select(SubmissionSourceReview).where(
+                SubmissionSourceReview.provider_outage_epoch == epoch
+            )
+        )
+        assert review is not None
+        assert review.status == "queued"
+        assert review.attempt_count == 2
+        assert review.provider_resource_id is None
+        assert review.job_token_hash is None
+
+    async with session_maker() as session, session.begin():
+        review = await session.scalar(
+            select(SubmissionSourceReview).where(
+                SubmissionSourceReview.provider_outage_epoch == epoch
+            )
+        )
+        assert review is not None
+        review.status = "running"
+        review.provider_resource_id = "wrk-source-repeat-overload"
+        review.provider_outage_attempted_epoch = epoch
+        circuit = await session.get(ProviderOutageCircuit, "openrouter")
+        assert circuit is not None
+        circuit.epoch = uuid4()
+    assert await loop._park_source_reviews_for_outage() is True
+    async with session_maker() as session:
+        review = await session.scalar(select(SubmissionSourceReview).limit(1))
+        assert review is not None
+        assert review.provider_outage_epoch is None
 
 
 @pytest.mark.asyncio

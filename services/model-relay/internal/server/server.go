@@ -31,6 +31,7 @@ import (
 //	POST /api/v1/inference/embeddings
 //	POST /api/v1/inference/confirmation/chat/completions
 //	POST /api/v1/inference/confirmation/embeddings
+//	POST /api/v1/inference/source-review/provider-event
 //
 // Handlers are plain http.Handlers; they receive the request-ID context from
 // the middleware stack and are expected to write relayhttp envelopes for
@@ -41,6 +42,7 @@ type InferenceHandlers struct {
 	Embeddings                  http.Handler
 	ConfirmationChatCompletions http.Handler
 	ConfirmationEmbeddings      http.Handler
+	SourceReviewProviderEvent   http.Handler
 }
 
 // UploadHandlers is the narrow upload-admission registration point. The
@@ -167,6 +169,9 @@ func (s *Server) registerInferenceRoutes(register func(method, path string, h ht
 	}
 	if s.inference.ConfirmationEmbeddings != nil {
 		register(http.MethodPost, "/api/v1/inference/confirmation/embeddings", s.inference.ConfirmationEmbeddings)
+	}
+	if s.inference.SourceReviewProviderEvent != nil {
+		register(http.MethodPost, "/api/v1/inference/source-review/provider-event", s.inference.SourceReviewProviderEvent)
 	}
 }
 

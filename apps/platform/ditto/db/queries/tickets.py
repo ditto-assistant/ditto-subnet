@@ -22,13 +22,14 @@ from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Literal
 from uuid import UUID
 
-from sqlalchemy import func, select, text, tuple_
+from sqlalchemy import and_, func, select, text, tuple_
 
 from ditto.api_models.agent_status import AgentStatus
 from ditto.api_models.benchmark_contract import benchmark_contract
 from ditto.api_models.ticket_status import TicketPurpose, TicketStatus
 from ditto.db.models import (
     Agent,
+    InferenceGrant,
     ValidatorTicket,
 )
 from ditto.db.queries.audit import (
@@ -124,6 +125,14 @@ def ticket_attempt_cap(ticket: ValidatorTicket) -> int:
     )
 
 
+def ticket_retry_budget_spent(ticket: ValidatorTicket) -> bool:
+    """Whether an expired lease has no ordinary or parked reissue left."""
+    return (
+        ticket.provider_outage_epoch is None
+        and ticket.attempt_count >= ticket_attempt_cap(ticket)
+    )
+
+
 def retry_budget_spent() -> ColumnElement[bool]:
     """SQL twin of :func:`ticket_attempt_cap`, as a ``ValidatorTicket`` predicate.
 
@@ -133,10 +142,14 @@ def retry_budget_spent() -> ColumnElement[bool]:
     surface -- issuance, the completion-first head check, the desired-era
     backlog gate, owner reachability -- spells the sum exactly once.
     """
-    return ValidatorTicket.attempt_count >= (
-        MAX_ATTEMPTS_PER_VERSION
-        + ValidatorTicket.manual_retry_grants
-        + ValidatorTicket.infra_retry_grants
+    return and_(
+        ValidatorTicket.provider_outage_epoch.is_(None),
+        ValidatorTicket.attempt_count
+        >= (
+            MAX_ATTEMPTS_PER_VERSION
+            + ValidatorTicket.manual_retry_grants
+            + ValidatorTicket.infra_retry_grants
+        ),
     )
 
 
@@ -923,8 +936,39 @@ async def issue_ticket(
         ticket.legacy_completion_allowed = False
         ticket.slot_id = slot_id
         ticket.issued_at = now
-        ticket.deadline = now + ttl
-        ticket.attempt_count += 1
+        next_deadline = now + ttl
+        ticket.deadline = next_deadline
+        parked_epoch = ticket.provider_outage_epoch
+        if parked_epoch is None:
+            ticket.attempt_count += 1
+        else:
+            # Preserve the exact grant row and all cumulative request, token,
+            # embedding, and dollar counters across the no-fault resume.  A
+            # fresh deadline is a credential/liveness rotation, not a fresh
+            # spend lineage.
+            grant = await session.scalar(
+                select(InferenceGrant)
+                .where(
+                    InferenceGrant.agent_id == ticket.agent_id,
+                    InferenceGrant.bench_version == ticket.bench_version,
+                    InferenceGrant.validator_hotkey == ticket.validator_hotkey,
+                )
+                .order_by(InferenceGrant.created_at.desc())
+                .with_for_update()
+                .limit(1)
+            )
+            if grant is not None:
+                grant.ticket_deadline = next_deadline
+                grant.expires_at = next_deadline
+                if grant.status != "exhausted":
+                    grant.status = "pending"
+                grant.bearer_digest = None
+                grant.broker_public_key = None
+                grant.active_requests = 0
+                grant.embedding_active_requests = 0
+                grant.updated_at = now
+            ticket.provider_outage_attempted_epoch = parked_epoch
+        ticket.provider_outage_epoch = None
         ticket.retry_after = None
         # A fresh lease has its own silence to account for. Carrying the old
         # stamp over would let the liveness gate weigh the *previous* lease's
@@ -1098,7 +1142,13 @@ async def issue_confirmation_ticket(
         ticket.dataset_sha256 = dataset_sha256
         ticket.seed_block = None
         ticket.seed_block_hash = None
-        ticket.attempt_count = ticket.attempt_count + 1 if same_version else 1
+        if not same_version:
+            ticket.attempt_count = 1
+        elif ticket.provider_outage_epoch is None:
+            ticket.attempt_count += 1
+        else:
+            ticket.provider_outage_attempted_epoch = ticket.provider_outage_epoch
+        ticket.provider_outage_epoch = None
         ticket.manual_retry_grants = ticket.manual_retry_grants if same_version else 0
         ticket.retry_after = None
     await session.flush()

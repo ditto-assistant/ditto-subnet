@@ -820,6 +820,16 @@ func (d *Deps) handleConfirmationChatCompletions(w http.ResponseWriter, r *http.
 		outcome.status = "completed"
 		return nil
 	}()
+	if receiptFreeResultOverload(upstreamRes, expectedModel, expectedProvider) {
+		_ = d.openProviderCircuit(
+			ctx,
+			now,
+			upstreamRes.status,
+			"confirmation_provider_backpressure_"+strconv.Itoa(upstreamRes.status),
+		)
+	} else if upstreamRes != nil && upstreamRes.status < 400 {
+		_ = d.closeProviderCircuit(ctx, now)
+	}
 	settle()
 	d.traceConfirmationSettled(confirmationTrace{
 		r: r, headers: headers, kind: traces.KindChat, body: body, receivedAt: now, grant: &result.grant,

@@ -274,6 +274,12 @@ from ditto.db.queries.lease_liveness import (
     expire_issued_tickets,
 )
 from ditto.db.queries.payments import get_miner_coldkey_for_agent
+from ditto.db.queries.provider_outages import (
+    lock_provider_work_gate,
+    park_scoring_leases,
+    register_provider_probe,
+    scoring_probe_key,
+)
 from ditto.db.queries.queue_order import miner_has_newer_canonical_work
 from ditto.db.queries.retry_budget import (
     INFRA_RETRY_BACKOFF_CAP,
@@ -3224,6 +3230,24 @@ async def request_job(
                     slot_id=slot_id,
                 )
                 return Response(status_code=204)
+        provider_probe_key = scoring_probe_key(
+            validator_hotkey=payload.validator_hotkey, slot_id=slot_id
+        )
+        provider_gate = await lock_provider_work_gate(
+            session,
+            now=now,
+            kind="scoring",
+            key=provider_probe_key,
+        )
+        if provider_gate.circuit is not None and provider_gate.circuit.state == "open":
+            await park_scoring_leases(session, circuit=provider_gate.circuit, now=now)
+        if not provider_gate.admitted:
+            _record_dispatch_decline(
+                "provider_outage",
+                validator_hotkey=payload.validator_hotkey,
+                slot_id=slot_id,
+            )
+            return Response(status_code=204, headers={"Cache-Control": "no-store"})
         if rollout is not None:
             # A shadow/mismatched v9 score cannot satisfy rollout activation,
             # so its operator-authorized replacement is rollout work rather
@@ -3577,6 +3601,12 @@ async def request_job(
                 )
                 return Response(status_code=204)
         if ticket is not None:
+            register_provider_probe(
+                provider_gate,
+                now=now,
+                kind="scoring",
+                key=provider_probe_key,
+            )
             agent = await get_agent_by_id(session, agent_id=ticket.agent_id)
             # issue_ticket selected this agent from ``agents``, so it exists.
             assert agent is not None
@@ -5404,6 +5434,14 @@ async def fail_job(
             raise HTTPException(
                 status_code=409, detail="job-fail nonce has already been used"
             ) from exc
+        failure_gate = await lock_provider_work_gate(
+            session,
+            now=now,
+            kind="scoring",
+            key=f"failure:{payload.validator_hotkey}",
+        )
+        if failure_gate.circuit is not None and failure_gate.circuit.state == "open":
+            await park_scoring_leases(session, circuit=failure_gate.circuit, now=now)
         # Authorize off the live ticket the caller holds (cross-version lookup on
         # the exact lease, same as the heartbeat progress path), never a
         # standalone nonce grant. A missing/expired/spent lease is a safe no-op.
