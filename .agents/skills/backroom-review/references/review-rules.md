@@ -117,6 +117,26 @@ Before you reject:
 - **Local practice-harness stubs.** A tool stub that only fires when no
   `tool_endpoint` is supplied is dev-only; the scored run supplies the endpoint,
   so the stub is unreachable on the graded path.
+- **Grammar/intent routing or a precursor pass flagged as I7 by itself.** A
+  deterministic grammar router, lightweight per-intent classifiers, advisory
+  relevance signals shown to the model, or a pre-pass LLM that only informs is
+  legitimate when the deciding model still sees the catalog and makes the
+  calls. I7 fails only when an enforced plan predetermines the executed tool
+  count/set/order against a deciding turn that cannot deviate, skip, add, or
+  reorder (see the owner rulings in review-bar.md; live precedent
+  `lets_v609` reject `c8bf0641` vs `whoamI` clear).
+- **`bench_version` branching flagged as benchmark fingerprinting.** Behavior
+  that switches on `bench_version` is a warning sign warranting a second
+  look, never an independent reject; require a companion violation on the
+  served path.
+- **Single-success duplicate suppression flagged as fabricated trajectory
+  (I6).** Suppressing a repeat of a side-effecting tool after a genuine first
+  successful execution (read-only tools exempt) is production idempotency,
+  not telemetry fabrication.
+- **Plain answer normalization flagged as scorer manipulation.** Unicode
+  folding, slot-length caps, and whitespace normalization of the model's own
+  output are scorer-fidelity gaps, not violations, unless normalization is so
+  aggressive the served text no longer represents the model's answer.
 
 When evidence is genuinely mixed (a lone borderline invariant, source ambiguous,
 ownership unresolved), leave it held rather than forcing a reject or release, and
