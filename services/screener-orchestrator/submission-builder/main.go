@@ -148,6 +148,11 @@ func run() error {
 		"--context=tar:///workspace/source.tar.gz",
 		"--dockerfile=Dockerfile",
 		"--destination="+source.ImageRef,
+		// Cloud Run egress shares Google IPs, so unauthenticated Docker Hub
+		// base-image pulls exhaust the anonymous rate limit and fail the
+		// KANIKO stage. mirror.gcr.io serves the cached copy and Kaniko
+		// falls back to the original registry on a miss.
+		"--registry-mirror=mirror.gcr.io",
 		"--no-push",
 		"--no-push-cache",
 		"--cache=false",
