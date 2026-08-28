@@ -144,6 +144,11 @@ class ScreenerConfig:
     source_review_max_completion_tokens: int
     """Per-turn L1 completion budget; must fit a whole policy-v10 sweep."""
     source_review_reasoning_effort: str
+    adjudicator_mode: str
+    """``off``/``shadow``/``enforce`` for the automated clear/reject court."""
+    adjudicator_model: str
+    adjudicator_max_steps: int
+    adjudicator_timeout_seconds: float
     review_concern_hold_count: int
     """Substantiated concerns that hold a budget-terminated review."""
     review_clear_min_notes: int
@@ -344,6 +349,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         source_review_reasoning_effort=os.environ.get(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
         ),
+        adjudicator_mode=os.environ.get("SCREENER_ADJUDICATOR_MODE", "off"),
+        adjudicator_model=os.environ.get(
+            "SCREENER_ADJUDICATOR_MODEL", "z-ai/glm-5.3-flash"
+        ),
+        adjudicator_max_steps=_parse_int("SCREENER_ADJUDICATOR_MAX_STEPS", "24"),
+        adjudicator_timeout_seconds=_parse_float(
+            "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS", "600"
+        ),
         review_concern_hold_count=_parse_int("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "3"),
         review_clear_min_notes=_parse_int("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3"),
         static_preflight_v2_mode=os.environ.get(
@@ -440,6 +453,22 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not 60 <= config.source_review_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS must be between 60 and 3600"
+        )
+    if config.adjudicator_mode not in {"off", "shadow", "enforce"}:
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_MODE must be off, shadow, or enforce"
+        )
+    if config.adjudicator_model != "z-ai/glm-5.3-flash":
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_MODEL must be z-ai/glm-5.3-flash"
+        )
+    if not 1 <= config.adjudicator_max_steps <= 64:
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_MAX_STEPS must be between 1 and 64"
+        )
+    if not 60 <= config.adjudicator_timeout_seconds <= 3_600:
+        raise ScreenerConfigError(
+            "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS must be between 60 and 3600"
         )
     if not 1 <= config.review_concern_hold_count <= 16:
         raise ScreenerConfigError(

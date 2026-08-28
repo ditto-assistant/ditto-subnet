@@ -125,6 +125,16 @@ def _source_review_layer_env(
             str(int(settings.concern_hold_count)),
         ),
         ("SCREENER_REVIEW_CLEAR_MIN_NOTES", str(int(settings.clear_min_notes))),
+        ("SCREENER_ADJUDICATOR_MODE", settings.adjudicator_mode),
+        ("SCREENER_ADJUDICATOR_MODEL", settings.adjudicator_model),
+        (
+            "SCREENER_ADJUDICATOR_MAX_STEPS",
+            str(int(settings.adjudicator_max_steps)),
+        ),
+        (
+            "SCREENER_ADJUDICATOR_TIMEOUT_SECONDS",
+            str(int(settings.adjudicator_timeout_seconds)),
+        ),
     )
 
 

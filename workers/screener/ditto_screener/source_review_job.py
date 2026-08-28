@@ -30,6 +30,7 @@ from ditto_screener.l2_review import (
 )
 from ditto_screener.source_review import OpenRouterSourceReviewAgent
 from ditto_screening_protocol import (
+    SourceReviewAdjudication,
     SourceReviewNote,
     SourceReviewObservationPayload,
 )
@@ -226,6 +227,11 @@ async def _amain() -> int:
                     SourceReviewNote.model_validate(note)
                     for note in observation.notes[:48]
                 ],
+                adjudication=(
+                    SourceReviewAdjudication.model_validate(observation.adjudication)
+                    if observation.adjudication is not None
+                    else None
+                ),
             )
             complete = await client.post(
                 f"{base}/complete",

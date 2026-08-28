@@ -64,6 +64,7 @@ from uuid import UUID
 
 import httpx
 
+from ditto_screener.adjudicator import build_adjudicator
 from ditto_screener.fake_gateway import LOCKED_HARNESS_MODEL
 from ditto_screener.heartbeat import (
     ScreenerProgressStage,
@@ -578,6 +579,7 @@ class BuildGate:
             mode=config.l2_review_mode,
             concern_hold_count=config.review_concern_hold_count,
             clear_min_notes=config.review_clear_min_notes,
+            adjudicator=build_adjudicator(config),
         )
 
     def apply_review_settings(self, effective: EffectiveReviewSettings) -> bool:

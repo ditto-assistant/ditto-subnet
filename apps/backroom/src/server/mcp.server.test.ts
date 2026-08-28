@@ -188,9 +188,9 @@ describe('Backroom MCP tools', () => {
     // 97_000 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, the validator fleet/assignment
     // read schemas, the three inference-trace archive tools, the operator
-    // screening-reject tool, and the gradient-hold controls. Keep modest
-    // headroom for schema evolution; tighten the description budgets, not
-    // this whole-payload backstop, to push back on tutorials.
+    // screening-reject tool, and the gradient-hold and adjudicator controls.
+    // Keep modest headroom for schema evolution; tighten the description
+    // budgets, not this whole-payload backstop, to push back on tutorials.
     expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(97_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
