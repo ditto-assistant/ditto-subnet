@@ -6,6 +6,6 @@
   },
   "devDependencies": {
     "@faircopy/astro": "1.15.0",
-    "faircopy": "1.15.0"
+    "faircopy": "1.18.1"
   }
 }
