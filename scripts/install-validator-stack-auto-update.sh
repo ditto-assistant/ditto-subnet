@@ -27,6 +27,8 @@ require_systemd_path() {
 service_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 PATH="$service_path" command -v cosign >/dev/null 2>&1 || \
   die "install the pinned cosign verifier in the system PATH before enabling stack updates"
+PATH="$service_path" command -v runuser >/dev/null 2>&1 || \
+  die "runuser is required to verify the non-root updater operator"
 [ -f "$ROOT_DIR/.env" ] || die "create $ROOT_DIR/.env first"
 grep -Eq '^VALIDATOR_STACK_AUTO_UPDATE=(true|1|yes)$' "$ROOT_DIR/.env" || die "set VALIDATOR_STACK_AUTO_UPDATE=true only after supervised stack adoption"
 if grep -Eq '^VALIDATOR_AUTO_UPDATE=(true|1|yes)$' "$ROOT_DIR/.env"; then
@@ -39,6 +41,25 @@ service_group="$(id -gn "$service_user")"; service_home="$(getent passwd "$servi
 [ -n "$service_home" ] || die "could not determine operator home"
 docker_config="${DITTO_VALIDATOR_DOCKER_CONFIG:-$service_home/.docker}"
 sigstore_dir="$service_home/.sigstore"
+git_dir="$(git -C "$ROOT_DIR" rev-parse --absolute-git-dir 2>/dev/null || true)"
+git_common_dir="$(git -C "$ROOT_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+[ -d "$git_dir" ] && [ -d "$git_common_dir" ] || die "updater root is not a Git checkout: $ROOT_DIR"
+run_as_service_user() { runuser -u "$service_user" -- "$@"; }
+for writable_path in \
+  "$ROOT_DIR" \
+  "$ROOT_DIR/scripts" \
+  "$ROOT_DIR/scripts/validator-stack-auto-update.sh" \
+  "$git_dir" \
+  "$git_common_dir"; do
+  run_as_service_user test -w "$writable_path" || \
+    die "checkout path must be writable by non-root Docker operator $service_user: $writable_path; move or re-own the checkout outside /root before installing"
+done
+run_as_service_user env \
+  "HOME=$service_home" \
+  "DOCKER_CONFIG=$docker_config" \
+  "PATH=$service_path" \
+  docker info >/dev/null 2>&1 || \
+  die "non-root updater operator $service_user cannot access Docker without sudo"
 wallets_dir="${DITTO_BITTENSOR_WALLETS_DIR:-}"
 if [ -z "$wallets_dir" ]; then
   wallets_dir="$(awk -F= '$1 == "DITTO_BITTENSOR_WALLETS_DIR" { print substr($0, index($0, "=") + 1) }' "$ROOT_DIR/.env" | tail -1)"

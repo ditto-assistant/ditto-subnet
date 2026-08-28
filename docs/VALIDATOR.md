@@ -394,16 +394,22 @@ them without replacement. Both commands fail closed if the descriptor's
 signature is not from this repository's release workflow.
 
 `VALIDATOR_STACK_AUTO_UPDATE` defaults on. Confirm it, then enable the timer
-only after migration or adoption succeeds:
+only after migration or adoption succeeds. Run these commands from the
+non-root account that owns the checkout and can run `docker info` without
+`sudo`. Do not install the checkout below `/root` or run this section from a
+root login shell. `sudo` is used only to install the systemd units; the updater
+itself deliberately runs as the non-root Docker operator and must be able to
+write both the checkout and its Git metadata:
 
 ```sh
+test "$(id -u)" -ne 0
+docker info >/dev/null
 if grep -q '^VALIDATOR_STACK_AUTO_UPDATE=' .env; then
   sed -i 's/^VALIDATOR_STACK_AUTO_UPDATE=.*/VALIDATOR_STACK_AUTO_UPDATE=true/' .env
 else
   printf '\nVALIDATOR_STACK_AUTO_UPDATE=true\n' >>.env
 fi
-sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
-  ./scripts/install-validator-stack-auto-update.sh
+sudo ./scripts/install-validator-stack-auto-update.sh
 systemctl list-timers \
   ditto-validator-stack-prefetch.timer \
   ditto-validator-stack-auto-update.timer \
@@ -434,16 +440,20 @@ authority to rewrite those units.
 
 Existing managed validators need one manual bootstrap when this refresh timer
 is first introduced. Do this only from the canonical checkout with no tracked
-changes; it does not restart the running stack:
+changes, while logged in as the non-root checkout owner and Docker operator;
+it does not restart the running stack. A checkout owned by `root`, especially
+one below `/root`, must be moved outside `/root` and deliberately transferred
+to that operator before installing the refresh service:
 
 ```sh
+test "$(id -u)" -ne 0
+docker info >/dev/null
 git status --short
 git diff --quiet
 git diff --cached --quiet
 git checkout main
 git pull --ff-only origin main
-sudo DITTO_VALIDATOR_UPDATE_USER="$USER" \
-  ./scripts/install-validator-stack-auto-update.sh
+sudo ./scripts/install-validator-stack-auto-update.sh
 sudo systemctl start ditto-validator-stack-updater-refresh.service
 sudo systemctl start ditto-validator-stack-auto-update.service
 systemctl list-timers \
