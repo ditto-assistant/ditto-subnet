@@ -93,12 +93,19 @@ the observed-tool path. Runtime/concurrency diagnosis is
    `get_screening_quarantine_context` item by item. Record prior attempts,
    miner/owner lineage, duplicate evidence, and L2/L3 observations.
    Automated findings are leads, not the verdict.
-4. Decide under [references/review-rules.md](references/review-rules.md):
+4. Decide under [references/review-rules.md](references/review-rules.md) — its
+   **Adjudicating a finding-backed hold** section is the reject-vs-release
+   standard: the tripwire finding is a lead, read every decisive cited line in
+   source before rejecting, and a listed known-false-positive class releases
+   with a cited refutation.
    - **Release** when the real model/tool path remains intact.
    - **Reject** only with concrete reachable current-policy evidence.
    - **Leave unchanged and escalate** when source is missing, evidence is
      mixed, ownership is unresolved, or the failure is infrastructure.
-   - `rescreen` only when the prompt explicitly authorizes it.
+   - `rescreen` only when the prompt explicitly authorizes it (a no-finding
+     `repeatedly-inconclusive` / `source-review-inconclusive` hold from a
+     screening-infra outage is the canonical rescreen — it resets the attempt
+     budget; confirm the artifact's bench era is still supported first).
 5. Re-fetch each context immediately before writing and drop any item whose
    identity, digest, policy, or active state changed.
 6. Write a specific miner-visible reason. Cite the policy category and
