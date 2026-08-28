@@ -15,6 +15,10 @@ Required protected-environment configuration:
 - variable `CLOUDFLARE_DITTOBENCH_ZONE_ID`
 - secret `CLOUDFLARE_API_TOKEN`
 
+The Terraform token needs Workers Scripts Write, Workers KV Storage Write, and
+Pages Write for this account. The separate `preview` GitHub environment should
+use a narrower Pages-only token for dashboard upload and deletion.
+
 The Cloudflare token is supplied only at plan/apply time and is never stored in
 the repository.
 
@@ -23,3 +27,8 @@ This stack also owns the Backroom MCP OAuth KV namespace. Its
 `prod` environment variable `BACKROOM_OAUTH_KV_ID`, never by committing the id:
 the namespace holds live operator grants and tokens, and this repository is
 public. Recreating the namespace revokes every operator's MCP connection.
+
+The stack also creates the `ditto-subnet-dashboard-preview` Direct Upload Pages
+project. The same-run `Publish dashboard preview` reusable workflow uploads
+exact-SHA dashboard bundles there after checking out the default branch; the
+project has no production secrets or Backroom bindings.
