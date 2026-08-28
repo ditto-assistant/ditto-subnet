@@ -2,6 +2,31 @@
 
 <!-- version list -->
 
+## v0.118.0 (2026-08-28)
+
+### Bug Fixes
+
+- **validator**: Recover pylon and refresh the updater
+  ([#1196](https://github.com/ditto-assistant/ditto-subnet/pull/1196),
+  [`b314a92`](https://github.com/ditto-assistant/ditto-subnet/commit/b314a9257d1bbce7c5085110477892b0b189316f))
+
+### Documentation
+
+- **backroom-review**: Add finding-backed hold adjudication doctrine
+  ([#1222](https://github.com/ditto-assistant/ditto-subnet/pull/1222),
+  [`0932de9`](https://github.com/ditto-assistant/ditto-subnet/commit/0932de9022b4af3b8b6fdb2f3bad5dd193808827))
+
+- **skills**: Resolve relay logs from the live release tree in read_platform_logs.sh
+  ([#1220](https://github.com/ditto-assistant/ditto-subnet/pull/1220),
+  [`2386051`](https://github.com/ditto-assistant/ditto-subnet/commit/2386051fea24f6cb9e98a749ac5dea91ae8f703f))
+
+### Features
+
+- **platform**: Expose honest admission-retry state on the public pipeline
+  ([#1221](https://github.com/ditto-assistant/ditto-subnet/pull/1221),
+  [`c45d182`](https://github.com/ditto-assistant/ditto-subnet/commit/c45d182417b2f46c7f116e6d87358aa927e41e6b))
+
+
 ## v0.117.5 (2026-08-28)
 
 ### Bug Fixes
