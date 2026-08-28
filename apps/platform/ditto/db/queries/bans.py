@@ -8,13 +8,14 @@ PK lookup; the writes back the owner-only ``scripts/ban_hotkey.py``.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.exc import IntegrityError as SAIntegrityError
 
 from ditto.db.errors import IntegrityError as DbIntegrityError
-from ditto.db.models import BannedHotkey
+from ditto.db.models import BannedHotkey, HotkeyBanAudit
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,51 @@ async def is_hotkey_banned(session: AsyncSession, *, hotkey: str) -> bool:
     stmt = select(BannedHotkey.hotkey).where(BannedHotkey.hotkey == hotkey)
     result = await session.execute(stmt)
     return result.scalar_one_or_none() is not None
+
+
+async def get_hotkey_ban(
+    session: AsyncSession, *, hotkey: str, for_update: bool = False
+) -> BannedHotkey | None:
+    """Return the exact active ban row, optionally locking it for mutation."""
+    stmt = select(BannedHotkey).where(BannedHotkey.hotkey == hotkey)
+    if for_update:
+        stmt = stmt.with_for_update()
+    return await session.scalar(stmt)
+
+
+async def count_hotkey_bans(session: AsyncSession) -> int:
+    """Count every active hotkey-level upload ban."""
+    return int(
+        await session.scalar(select(func.count()).select_from(BannedHotkey)) or 0
+    )
+
+
+async def list_hotkey_bans(
+    session: AsyncSession, *, limit: int, offset: int
+) -> list[BannedHotkey]:
+    """List active bans newest first with a stable hotkey tiebreaker."""
+    return list(
+        await session.scalars(
+            select(BannedHotkey)
+            .order_by(BannedHotkey.banned_at.desc(), BannedHotkey.hotkey.asc())
+            .limit(limit)
+            .offset(offset)
+        )
+    )
+
+
+async def list_hotkey_ban_audit(
+    session: AsyncSession, *, hotkey: str, limit: int
+) -> list[HotkeyBanAudit]:
+    """List newest-first operator actions for one hotkey."""
+    return list(
+        await session.scalars(
+            select(HotkeyBanAudit)
+            .where(HotkeyBanAudit.hotkey == hotkey)
+            .order_by(HotkeyBanAudit.recorded_at.desc(), HotkeyBanAudit.seq.desc())
+            .limit(limit)
+        )
+    )
 
 
 async def ban_hotkey(
@@ -57,3 +103,34 @@ async def unban_hotkey(session: AsyncSession, *, hotkey: str) -> bool:
     if existed:
         await session.execute(delete(BannedHotkey).where(BannedHotkey.hotkey == hotkey))
     return existed
+
+
+async def unban_hotkey_with_audit(
+    session: AsyncSession,
+    *,
+    hotkey: str,
+    expected_banned_at: datetime,
+    actor: str,
+    reason: str,
+) -> HotkeyBanAudit | None:
+    """Remove one exact active ban and append its operator audit atomically.
+
+    ``None`` means the hotkey was not banned when the row lock was acquired.
+    A mismatched timestamp is left for the endpoint to report as a stale
+    concurrency guard without deleting anything.
+    """
+    row = await get_hotkey_ban(session, hotkey=hotkey, for_update=True)
+    if row is None or row.banned_at != expected_banned_at:
+        return None
+    audit = HotkeyBanAudit(
+        hotkey=hotkey,
+        action="unban",
+        actor=actor,
+        reason=reason,
+        previous_reason=row.reason,
+        previous_banned_at=row.banned_at,
+    )
+    session.add(audit)
+    await session.delete(row)
+    await session.flush()
+    return audit

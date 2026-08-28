@@ -22,6 +22,13 @@ type GeneratedSourceReviewInvariantDecision =
   PlatformComponents['schemas']['SourceReviewInvariantDecision']
 type GeneratedSourceReviewFinding = PlatformComponents['schemas']['SourceReviewFinding']
 type GeneratedValidatorUpdaterStatus = PlatformComponents['schemas']['ValidatorUpdaterStatus']
+type GeneratedAdminActiveHotkeyBan = PlatformComponents['schemas']['AdminActiveHotkeyBan']
+type GeneratedAdminHotkeyBanAuditEntry =
+  PlatformComponents['schemas']['AdminHotkeyBanAuditEntry']
+type GeneratedAdminHotkeyBanControl = PlatformComponents['schemas']['AdminHotkeyBanControl']
+type GeneratedAdminHotkeyBanList = PlatformComponents['schemas']['AdminHotkeyBanList']
+type GeneratedAdminHotkeyUnbanResponse =
+  PlatformComponents['schemas']['AdminHotkeyUnbanResponse']
 
 // Every bench epoch that carries the signed confirmation evidence stack. One
 // definition, derived from the generated contract -- restating it per schema is
@@ -699,6 +706,70 @@ export function submissionSettingsConfirmation(seconds: number, feeAmountRao: nu
 }
 
 export type SubmissionSettingsControl = z.infer<typeof submissionSettingsControlSchema>
+
+export const activeHotkeyBanSchema = z.object({
+  hotkey: z.string().min(1),
+  reason: z.string().nullable(),
+  banned_at: z.string().datetime({ offset: true }),
+} satisfies PlatformResponseShape<GeneratedAdminActiveHotkeyBan>)
+
+export const hotkeyBanAuditEntrySchema = z.object({
+  seq: z.number().int().positive(),
+  hotkey: z.string().min(1),
+  action: z.literal('unban'),
+  actor: z.string().min(1),
+  reason: z.string().min(1),
+  previous_reason: z.string().nullable(),
+  previous_banned_at: z.string().datetime({ offset: true }),
+  recorded_at: z.string().datetime({ offset: true }),
+} satisfies PlatformResponseShape<GeneratedAdminHotkeyBanAuditEntry>)
+
+export const hotkeyBanControlSchema = z.object({
+  hotkey: z.string().min(1),
+  banned: z.boolean(),
+  active_ban: activeHotkeyBanSchema.nullable(),
+  history: z.array(hotkeyBanAuditEntrySchema).max(100),
+} satisfies PlatformResponseShape<GeneratedAdminHotkeyBanControl>)
+
+export const hotkeyBanListSchema = z.object({
+  total: z.number().int().nonnegative(),
+  bans: z.array(activeHotkeyBanSchema).max(200),
+} satisfies PlatformResponseShape<GeneratedAdminHotkeyBanList>)
+
+export const hotkeyBanLookupInputSchema = z.object({
+  hotkey: z.string().trim().min(3).max(96),
+  historyLimit: z.number().int().min(0).max(100).default(20),
+})
+
+export const unbanHotkeyInputSchema = z
+  .object({
+    hotkey: z.string().trim().min(3).max(96),
+    expectedBannedAt: z.string().datetime({ offset: true }),
+    reason: z.string().trim().min(8),
+    confirmation: z.string(),
+  })
+  .superRefine((input, context) => {
+    const expected = `UNBAN HOTKEY ${input.hotkey}`
+    if (input.confirmation !== expected) {
+      context.addIssue({
+        code: 'custom',
+        path: ['confirmation'],
+        message: `confirmation must be exactly ${expected}`,
+      })
+    }
+  })
+
+export const hotkeyUnbanResponseSchema = z.object({
+  hotkey: z.string().min(1),
+  banned: z.literal(false),
+  action: hotkeyBanAuditEntrySchema,
+} satisfies PlatformResponseShape<GeneratedAdminHotkeyUnbanResponse>)
+
+export function unbanHotkeyConfirmation(hotkey: string) {
+  return `UNBAN HOTKEY ${hotkey}`
+}
+
+export type HotkeyBanControl = z.infer<typeof hotkeyBanControlSchema>
 
 // SN118 relative token-efficiency bonus (bench_version >= 7).
 //

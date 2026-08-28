@@ -36,6 +36,25 @@ describe('MCP scope challenges', () => {
     expect(await callsWriteTool(request)).toBe(false)
   })
 
+  it('requires write scope for a hotkey-level unban', async () => {
+    const request = new Request('https://backroom.dittobench.ai/mcp', {
+      method: 'POST',
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: {
+          name: 'unban_hotkey',
+          arguments: {
+            hotkey: '5FKbkmKbJHTgsELVPigLJqbmovaviDN7dHZzX7UJ6xoqG4fx',
+          },
+        },
+      }),
+    })
+    expect(await callsWriteTool(request)).toBe(true)
+    expect(await requiredScopesForRequest(request)).toEqual([BACKROOM_WRITE_SCOPE])
+  })
+
   it('leaves the owner footprint on the ordinary read scope', async () => {
     // Coldkeys are identity metadata from the payment ledger, not miner source.
     // The artifact scope exists for source (tarballs, file listings, diffs), so

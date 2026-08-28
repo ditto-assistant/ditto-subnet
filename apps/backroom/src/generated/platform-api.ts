@@ -578,6 +578,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/admin/hotkey-bans": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Active Hotkey Bans
+         * @description List every active miner-wide upload ban, newest first.
+         */
+        get: operations["active_hotkey_bans_api_v1_admin_hotkey_bans_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/hotkey-bans/{hotkey}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Hotkey Ban Control
+         * @description Read one exact active ban plus its durable operator action history.
+         */
+        get: operations["hotkey_ban_control_api_v1_admin_hotkey_bans__hotkey__get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/admin/hotkey-bans/{hotkey}/unban": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Remove Hotkey Ban
+         * @description Remove one hotkey upload gate without changing any agent status.
+         */
+        post: operations["remove_hotkey_ban_api_v1_admin_hotkey_bans__hotkey__unban_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/admin/inference-concurrency-settings": {
         parameters: {
             query?: never;
@@ -4849,6 +4909,18 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** AdminActiveHotkeyBan */
+        AdminActiveHotkeyBan: {
+            /**
+             * Banned At
+             * Format: date-time
+             */
+            banned_at: string;
+            /** Hotkey */
+            hotkey: string;
+            /** Reason */
+            reason: string | null;
+        };
         /**
          * AdminArtifactDuplicate
          * @description Another submission whose artifact matches this one.
@@ -5921,6 +5993,74 @@ export interface components {
              * @default false
              */
             idempotent: boolean;
+        };
+        /** AdminHotkeyBanAuditEntry */
+        AdminHotkeyBanAuditEntry: {
+            /**
+             * Action
+             * @constant
+             */
+            action: "unban";
+            /** Actor */
+            actor: string;
+            /** Hotkey */
+            hotkey: string;
+            /**
+             * Previous Banned At
+             * Format: date-time
+             */
+            previous_banned_at: string;
+            /** Previous Reason */
+            previous_reason: string | null;
+            /** Reason */
+            reason: string;
+            /**
+             * Recorded At
+             * Format: date-time
+             */
+            recorded_at: string;
+            /** Seq */
+            seq: number;
+        };
+        /** AdminHotkeyBanControl */
+        AdminHotkeyBanControl: {
+            active_ban: components["schemas"]["AdminActiveHotkeyBan"] | null;
+            /** Banned */
+            banned: boolean;
+            /** History */
+            history: components["schemas"]["AdminHotkeyBanAuditEntry"][];
+            /** Hotkey */
+            hotkey: string;
+        };
+        /** AdminHotkeyBanList */
+        AdminHotkeyBanList: {
+            /** Bans */
+            bans: components["schemas"]["AdminActiveHotkeyBan"][];
+            /** Total */
+            total: number;
+        };
+        /** AdminHotkeyUnbanRequest */
+        AdminHotkeyUnbanRequest: {
+            /** Confirmation */
+            confirmation: string;
+            /**
+             * Expected Banned At
+             * Format: date-time
+             */
+            expected_banned_at: string;
+            /** Reason */
+            reason: string;
+        };
+        /** AdminHotkeyUnbanResponse */
+        AdminHotkeyUnbanResponse: {
+            action: components["schemas"]["AdminHotkeyBanAuditEntry"];
+            /**
+             * Banned
+             * @constant
+             */
+            banned: false;
+            /** Hotkey */
+            hotkey: string;
         };
         /** AdminInferenceConcurrencySettingsRequest */
         AdminInferenceConcurrencySettingsRequest: {
@@ -21399,6 +21539,113 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["EfficiencyBonusSettingsRevision"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    active_hotkey_bans_api_v1_admin_hotkey_bans_get: {
+        parameters: {
+            query?: {
+                limit?: number;
+                offset?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHotkeyBanList"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    hotkey_ban_control_api_v1_admin_hotkey_bans__hotkey__get: {
+        parameters: {
+            query?: {
+                history_limit?: number;
+            };
+            header?: {
+                authorization?: string | null;
+            };
+            path: {
+                hotkey: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHotkeyBanControl"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    remove_hotkey_ban_api_v1_admin_hotkey_bans__hotkey__unban_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-admin-actor"?: string | null;
+                authorization?: string | null;
+            };
+            path: {
+                hotkey: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AdminHotkeyUnbanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AdminHotkeyUnbanResponse"];
                 };
             };
             /** @description Validation Error */

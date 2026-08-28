@@ -1201,6 +1201,42 @@ CREATE TABLE public.evaluation_payments (
 
 
 --
+-- Name: hotkey_ban_audit; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.hotkey_ban_audit (
+    seq bigint NOT NULL,
+    hotkey text NOT NULL,
+    action text NOT NULL,
+    actor text NOT NULL,
+    reason text NOT NULL,
+    previous_reason text,
+    previous_banned_at timestamp with time zone NOT NULL,
+    recorded_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT hotkey_ban_audit_action_check CHECK ((action = 'unban'::text))
+);
+
+
+--
+-- Name: hotkey_ban_audit_seq_seq; Type: SEQUENCE; Schema: public; Owner: -
+--
+
+CREATE SEQUENCE public.hotkey_ban_audit_seq_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;
+
+
+--
+-- Name: hotkey_ban_audit_seq_seq; Type: SEQUENCE OWNED BY; Schema: public; Owner: -
+--
+
+ALTER SEQUENCE public.hotkey_ban_audit_seq_seq OWNED BY public.hotkey_ban_audit.seq;
+
+
+--
 -- Name: inference_concurrency_settings_revisions; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -2660,6 +2696,13 @@ ALTER TABLE ONLY public.efficiency_bonus_settings_revisions ALTER COLUMN revisio
 
 
 --
+-- Name: hotkey_ban_audit seq; Type: DEFAULT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.hotkey_ban_audit ALTER COLUMN seq SET DEFAULT nextval('public.hotkey_ban_audit_seq_seq'::regclass);
+
+
+--
 -- Name: inference_concurrency_settings_revisions revision; Type: DEFAULT; Schema: public; Owner: -
 --
 
@@ -2985,6 +3028,14 @@ ALTER TABLE ONLY public.evaluation_payments
 
 ALTER TABLE ONLY public.evaluation_payments
     ADD CONSTRAINT evaluation_payments_pkey PRIMARY KEY (block_hash, extrinsic_index);
+
+
+--
+-- Name: hotkey_ban_audit hotkey_ban_audit_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.hotkey_ban_audit
+    ADD CONSTRAINT hotkey_ban_audit_pkey PRIMARY KEY (seq);
 
 
 --
@@ -4055,6 +4106,13 @@ CREATE INDEX evaluation_payments_available_credit_idx ON public.evaluation_payme
 --
 
 CREATE INDEX evaluation_payments_miner_hotkey_idx ON public.evaluation_payments USING btree (miner_hotkey);
+
+
+--
+-- Name: hotkey_ban_audit_hotkey_recorded_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX hotkey_ban_audit_hotkey_recorded_idx ON public.hotkey_ban_audit USING btree (hotkey, recorded_at);
 
 
 --

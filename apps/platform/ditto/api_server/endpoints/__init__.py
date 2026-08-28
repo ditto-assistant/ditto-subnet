@@ -26,6 +26,9 @@ from ditto.api_server.endpoints.admin_copy_review import (
 from ditto.api_server.endpoints.admin_efficiency_bonus_settings import (
     router as admin_efficiency_bonus_settings_router,
 )
+from ditto.api_server.endpoints.admin_hotkey_bans import (
+    router as admin_hotkey_bans_router,
+)
 from ditto.api_server.endpoints.admin_inference_concurrency_settings import (
     router as admin_inference_concurrency_settings_router,
 )
@@ -112,6 +115,7 @@ __all__ = [
     "admin_queue_policy_settings_router",
     "admin_efficiency_bonus_settings_router",
     "admin_inference_routes_router",
+    "admin_hotkey_bans_router",
     "admin_leaderboard_router",
     "admin_lease_revocations_router",
     "admin_copy_review_router",
