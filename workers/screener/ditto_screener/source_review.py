@@ -797,19 +797,32 @@ I6. Pass clauses: model_selected_executed_tool or no_reported_tool_calls.
 
 I7 MODEL TOOL PLANNING. The host may remove unavailable, unauthorized, unsafe,
 or policy-forbidden capabilities and may naturally retain a class containing
-one tool. It may validate schemas after a genuine model decision. It may not use
-request-keyed rules or a trained head to preselect the exact tool count, set, or
-order inside a multi-tool class, replace the request catalog with that plan,
-clear alternatives because a value exists, or expose only the host-selected
-next tool so the model merely copies arguments. Pass clauses: no_tool_planning,
-policy_capability_filter_only, or natural_singleton_class.
+one tool. It may validate schemas after a genuine model decision. It may not
+use request-keyed rules, a trained head, or an enforced plan authored by any
+separate planner turn to preselect the exact tool count, set, or order inside a
+multi-tool class, replace the request catalog with that plan, clear
+alternatives because a value exists, or expose only the host-selected next
+tool so the model merely copies arguments. Planner authorship does not save a
+forced executor: when the plan is enforced against the deciding model — the
+catalog is replaced per step, only the next planned capability is exposed, the
+step is pinned with an exact tool_choice, or unadvertised model guesses are
+refused — the deciding turn no longer plans, and I7 breaches regardless of
+whether the plan came from a rule, a trained head, or a second model call. The
+deciding turn must remain free to deviate, skip, add, or reorder calls.
+Advisory intent/relevance signals are legitimate only when they are shown to a
+deciding model that still sees the live catalog and keeps that freedom; the
+model must author both the tool choice and the arguments. Pass clauses:
+no_tool_planning, policy_capability_filter_only, or natural_singleton_class.
 
 The classic two-limb test remains part of I2/I3, but passing both limbs does not
 clear I4, I5, or I7. StoryArc remainder compilers, LedgerEventKind validators,
 required_money formatters, world_shape_rule injection, LINKED family audit
 prompts, BalanceFinal/BalanceMid/BudgetDelta/OutcomeSummary sheets, and trained
-exact-deck planners are review leads. Trace trigger, authority transition,
-served effect, and reachability; names alone never decide policy.
+exact-deck planners are review leads. Planner-forced executors are the same
+lead class: a separate planning module plus per-step exposure of one tool, a
+pinned tool_choice, or a refusal to execute unadvertised calls. Trace trigger,
+authority transition, served effect, and reachability; names alone never
+decide policy.
 
 C13 fingerprints are location-only search leads, never automatic bans. Search
 the served /run path for: prompt_tokens: 0, VERIFIED RESULT, glossary_block,
@@ -818,7 +831,9 @@ EXACT_VALUE_PROMPT, system_prompt = compact, try_solve, fn family_of,
 family-router, family::classify, v10_open_program, Role::PHRASES,
 for attempt in, REPLY WITH EXACTLY, WJFAST, Do not recompute, LedgerEventKind,
 required_money, world_shape_rule, StoryArc,
-reply_restates_story_ingredient_money. A hit is a lead:
+reply_restates_story_ingredient_money, exact ordered capability plan, Expose
+only the next capability, planner-forced, model_plan_names, tool_choice pin. A
+hit is a lead:
 read the served path and apply the two-limb and production-engine tests. Do
 not reject from a fingerprint, a score, or a lexical near-duplicate alone.
 
@@ -841,6 +856,24 @@ Calibration contrasts. Do not over-reject:
   compiler only after tracing an actual reachable writer or route selector on
   served /run — the mistake to avoid in both directions is arguing from the
   presence or absence of module names instead of the served data flow.
+- Deterministic grammar or intent routing that only decides whether an action
+  turn exists — or trims the offered catalog for token efficiency — is a
+  legitimate product-surface strategy under policy_capability_filter_only when
+  the deciding model still chooses which tools to call and with what
+  arguments. Do not reject grammar routing, an intent-signal model, or a
+  precursor LLM pass on its own; it becomes an I7 finding only when the
+  enforced plan or narrowing predetermines the executed tool count, set, or
+  order against a deciding turn that has lost that freedom.
+- Behavior branching on bench_version or an equivalent benchmark-detection
+  signal is a warning sign that warrants a second look, never an independent
+  reject. Require a companion violation on the same served path.
+- Request-scoped duplicate suppression after a genuine first successful
+  execution of a side-effecting tool is production behavior, not trajectory
+  manipulation.
+- Plain answer normalization (Unicode folding, slot-length caps, whitespace)
+  of the model's own output is a scorer-fidelity gap, not a violation; reject
+  only when normalization is so aggressive that the served text no longer
+  represents the model's answer.
 
 Apply the same causal standard to source-safety categories:
 - An ordinary locked build is allowed to use checksum-pinned public dependencies,

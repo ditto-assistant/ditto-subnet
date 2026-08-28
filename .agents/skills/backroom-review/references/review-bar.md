@@ -75,16 +75,65 @@ path for I4/I5/I7.
   and runtime-described generic engines pass. Zero hits on `WORKED OUT` or
   remainder-sheet names is a search lead, not an I5 keep.
 - **I7 — model tool planning.** Policy/safety/authorization filtering and a
-  natural singleton capability class pass. Request-keyed rules or trained
-  heads that preselect the exact tool count/set/order inside a multi-tool class,
-  replace the request catalog with that plan, or expose only the host-selected
-  next tool (`next_required`, `required_tool_names`, `the one right call`)
-  fail. An I7 pass on product-surface routing does not park an I5 family
-  compiler.
+  natural singleton capability class pass. Request-keyed rules, trained
+  heads, or an **enforced plan authored by a separate planner turn** that
+  preselect the exact tool count/set/order inside a multi-tool class, replace
+  the request catalog with that plan, or expose only the host-selected next
+  tool (`next_required`, `required_tool_names`, `the one right call`) fail.
+  Planner authorship does not save a forced executor: when the plan is
+  enforced against the deciding model — catalog replaced per step, only the
+  next planned capability exposed, the step pinned with an exact
+  `tool_choice`, or unadvertised guesses refused — the deciding turn no
+  longer plans and I7 breaches even though a real model call authored the
+  plan. The decisive question is always: **can the deciding turn deviate,
+  skip, add, or reorder a call?** If not, I7 fails; if yes, advisory intent
+  signals and precursor passes are legitimate. An I7 pass on product-surface
+  routing does not park an I5 family compiler.
 
 For each invariant, record the matching published pass clause and why it does
 or does not causally displace the breach. A model call alone never displaces
 I3, I4, I5, or I7.
+
+## Owner rulings (2026-08-28, bench-era policy)
+
+These codify behaviors observed at v12. They are bench-era rulings, not
+permanent law: each generation's policies are interim enforcement while the
+next bench version makes the unwanted strategy uncompetitive. Keep them
+narrow so genuinely generalizable paths stay open.
+
+- **Planner-forced tool execution — I7 breach.** A separate planner call
+  (host rule, trained head, or second model turn) whose plan is *enforced*
+  against the deciding model fails I7. Live precedent: `lets_v609`
+  (`de936681`, review `c8bf0641`, reject) — `planning.py` planner model, then
+  `loop.py:425` exposes only the next planned capability, `:480-482` makes the
+  plan the exact ordered capability plan, `:521-526` refuses unadvertised
+  guesses, `models.py:1030-1035` pins `tool_choice` with
+  `parallel_tool_calls=false`. Contrast `grandmaster-agent` v55 (`b590c74b`,
+  reject): same catalog-replacement shape, plan authorship ruled equivalent.
+  Contrast `whoamI` (`89ef6167`, clear): complete catalog stays available and
+  the model chooses arguments, order, and calls — that is the line.
+- **Intent routing alone — legitimate.** Grammar routers, per-intent
+  lightweight classifiers, advisory relevance signals shown to the model, and
+  precursor LLM passes all pass when the deciding model still sees the
+  catalog (possibly trimmed for token efficiency) and makes the calls. The
+  miner community has raised the same point: these are generalizable
+  strategies; make the bench resistant to their abuse rather than banning the
+  pattern. Grammar routing alone is not a reject basis — it needs a
+  companion violation (a forced plan, a family compiler, a two-limb failure)
+  on the same served path.
+- **`bench_version` switching — warning sign only.** Branching behavior on
+  `bench_version` (e.g. enabling bench-only retrieval modes or classifier
+  paths when `bench_version >= 9`, `lets_v609` `baseline.py:2471-2475,
+  2890-2895`) warrants a second look but is never an independent reject.
+  Require a companion violation.
+- **Single-success duplicate suppression — production behavior.** Suppressing
+  a repeat call after a genuine first successful side effect (read-only tools
+  exempt) is not trajectory manipulation.
+- **Answer normalization — scorer gap, not a cheat.** Unicode folding,
+  slot-length caps, and whitespace normalization of the model's own output
+  are symptoms that the grader should be fuzzier; reject only when
+  normalization is so aggressive the served text no longer represents the
+  model's answer.
 
 ## Class labels (search aids, not independent tests)
 
