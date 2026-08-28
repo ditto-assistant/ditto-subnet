@@ -137,6 +137,7 @@ async def test_job_binds_source_and_posts_only_bounded_observation(
                 "failure_disposition": "retryable_infra",
                 "clearance_certified": True,
                 "review_audit": None,
+                "notes": [],
             }
         }
     ]
