@@ -18,6 +18,7 @@ DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile"
 SCORER_DOCKERFILE_PATH = (
     Path(__file__).parents[2] / "services/dittobench-api/Dockerfile"
 )
+PYLON_DOCKERFILE_PATH = Path(__file__).parents[2] / "Dockerfile.pylon"
 RELEASE_WORKFLOW_PATH = Path(__file__).parents[2] / ".github/workflows/release.yml"
 SANDBOX_ENTRYPOINT_PATH = (
     Path(__file__).parents[2] / "scripts/sandbox-docker-entrypoint.sh"
@@ -602,6 +603,7 @@ def test_run_cap_stop_grace_and_updater_drains_are_coherent() -> None:
 def test_source_stack_builds_pylon_with_the_reviewed_turbobt_fix() -> None:
     compose = yaml.safe_load(COMPOSE_PATH.read_text())
     pylon = compose["services"]["pylon"]
+    dockerfile = PYLON_DOCKERFILE_PATH.read_text()
 
     assert pylon["image"] == "${PYLON_IMAGE:-ditto-subnet-pylon:local}"
     assert pylon["pull_policy"] == "build"
@@ -616,6 +618,12 @@ def test_source_stack_builds_pylon_with_the_reviewed_turbobt_fix() -> None:
     assert pylon["build"]["args"]["PYLON_BASE_IMAGE"].startswith(
         "docker.io/backenddevelopersltd/bittensor-pylon@sha256:"
     )
+    assert "bittensor_wallet-4.1.1-cp313-cp313-manylinux_2_28_x86_64.whl" in dockerfile
+    assert (
+        "--checksum=sha256:"
+        "443b1fd0f497331719f23d854362ad7573314aae9fc955f1371bdafc66286875" in dockerfile
+    )
+    assert "/app/pylon_service/.venv/bin/python" in dockerfile
     assert (
         compose["services"]["ditto-subnet"]["environment"][
             "VALIDATOR_STACK_COMPONENT_PYLON"
