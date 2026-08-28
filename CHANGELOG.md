@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.120.0 (2026-08-28)
+
+### Features
+
+- **screener**: Fail enforced planner-model tool plans under I7
+  ([#1231](https://github.com/ditto-assistant/ditto-subnet/pull/1231),
+  [`85aea76`](https://github.com/ditto-assistant/ditto-subnet/commit/85aea76c63372e47f2d076ea71719884c48cf926))
+
+
 ## v0.119.0 (2026-08-28)
 
 ### Features
