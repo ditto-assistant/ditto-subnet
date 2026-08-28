@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v0.121.1 (2026-08-28)
+
+### Performance Improvements
+
+- **platform**: Launch source review alongside build and smoke
+  ([#1237](https://github.com/ditto-assistant/ditto-subnet/pull/1237),
+  [`84d7b81`](https://github.com/ditto-assistant/ditto-subnet/commit/84d7b81a3fc18f17c43032d2bd358c97ffe73e3c))
+
+- **platform**: Reuse verified screening results across attempts
+  ([#1238](https://github.com/ditto-assistant/ditto-subnet/pull/1238),
+  [`ee1dd3c`](https://github.com/ditto-assistant/ditto-subnet/commit/ee1dd3ca90b88233772552c23f6d7553497240ec))
+
+- **screener**: Bound and accelerate L1 source review
+  ([#1239](https://github.com/ditto-assistant/ditto-subnet/pull/1239),
+  [`5b4294b`](https://github.com/ditto-assistant/ditto-subnet/commit/5b4294ba125a0131e096a3aff541f0c513348197))
+
+
 ## v0.121.0 (2026-08-28)
 
 ### Features
