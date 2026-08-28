@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v0.117.5 (2026-08-28)
+
+### Bug Fixes
+
+- **platform**: Back off failed screening attempts from failure time, not lease end
+  ([#1218](https://github.com/ditto-assistant/ditto-subnet/pull/1218),
+  [`e9c5db1`](https://github.com/ditto-assistant/ditto-subnet/commit/e9c5db102a3ee1be3abc9de5467f3d8c8abbdc35))
+
+- **screener**: Ride the long unbilled ladder for HTTP faults and non-JSON bodies
+  ([#1219](https://github.com/ditto-assistant/ditto-subnet/pull/1219),
+  [`57cdf96`](https://github.com/ditto-assistant/ditto-subnet/commit/57cdf967c16efd698539cb2d45a5df112b1f74fb))
+
+
 ## v0.117.4 (2026-08-28)
 
 ### Bug Fixes
