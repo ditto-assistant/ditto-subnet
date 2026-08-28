@@ -28,6 +28,7 @@ from ditto.db.models import (
 )
 from ditto.db.queries.screening import (
     _EXHAUSTED_REASON_CODE,
+    FAILED_ATTEMPT_RETRY_BACKOFF,
     MAX_SCREENING_EXPIRIES,
     claim_screening_attempts,
 )
@@ -806,9 +807,16 @@ async def test_retryable_deep_infrastructure_failure_is_reclaimable(
     assert retry.build_only is False
 
 
-async def test_failed_infrastructure_attempt_waits_until_original_deadline(
+async def test_failed_infrastructure_attempt_backs_off_from_failure_time(
     session: AsyncSession,
 ) -> None:
+    """A provider-backoff failure holds briefly from its failure, not until
+    the end of the 70-minute lease it no longer occupies.
+
+    Backing off to the original deadline stranded a review that died 20
+    minutes in for the remaining ~50 idle minutes; miners read that as a
+    stuck queue (2026-08-28 incident).
+    """
     agent = await _seed_failed_agent(session)
     now = datetime.now(UTC)
     async with session.begin():
@@ -830,13 +838,14 @@ async def test_failed_infrastructure_attempt_waits_until_original_deadline(
 
     assert agent.agent_id not in {
         claimed_agent.agent_id for claimed_agent, _, _ in await _claim(session, now=now)
-    }
+    }, "a just-failed attempt still holds its short backoff"
     assert agent.agent_id in {
         claimed_agent.agent_id
         for claimed_agent, _, _ in await _claim(
-            session, now=now + timedelta(minutes=51)
+            session,
+            now=now + FAILED_ATTEMPT_RETRY_BACKOFF + timedelta(minutes=1),
         )
-    }
+    }, "the agent is claimable once the failure-anchored backoff passes"
 
 
 async def test_agent_parked_for_review_after_expiry_cap(session: AsyncSession):

@@ -50,9 +50,11 @@ if TYPE_CHECKING:
 # outage must not mass-park every in-flight agent: a provider-backoff failure
 # counts only with peer evidence -- another agent passed screening inside that
 # attempt's lease window, so the lane demonstrably worked while refusing this
-# artifact (see _inconclusive_attempt_count). Provider-routing failures stay in
-# backoff until that original deadline so a Targon/Cloud Run blip cannot
-# re-lease every few minutes. Heartbeat-proven orphans stay immediate.
+# artifact (see _inconclusive_attempt_count). Provider-routing failures back
+# off FAILED_ATTEMPT_RETRY_BACKOFF from their failure time (capped by the
+# lease deadline) so a Targon/Cloud Run blip cannot re-lease every few
+# minutes without stranding the agent for the rest of a 70-minute lease.
+# Heartbeat-proven orphans stay immediate.
 MAX_SCREENING_EXPIRIES = 5
 
 # Duplicate-owner statuses. A later cross-miner submission of the SAME bytes is
@@ -100,9 +102,16 @@ PROVIDER_BACKOFF_REASON_CODES = (
     "cloudrun-runtime-unavailable",
     # The agentic reviewer reported a pre-verdict failure it marked
     # retryable_infra; immediate reclaim would hot-loop against the same
-    # broken court, so hold the retry behind the attempt deadline.
+    # broken court, so hold the retry briefly before re-queueing.
     "source-review-retryable-infra",
 )
+# How long a provider-backoff failure waits after its FAILURE before the agent
+# is claimable again, capped by the attempt deadline. Backing off to the full
+# 70-minute lease deadline stranded a review that died 20 minutes in for the
+# remaining 50 idle minutes (2026-08-28 incident, raised by miners as a stuck
+# queue); ten minutes still prevents hot-looping a broken provider while the
+# peer-evidence rule keeps outage failures from burning the attempt cap.
+FAILED_ATTEMPT_RETRY_BACKOFF = timedelta(minutes=10)
 # Active workers report at least every two minutes. Wait through two complete
 # heartbeat intervals before inferring an orphan, and only act on heartbeat
 # observations fresh enough to classify that worker as online publicly.
@@ -673,6 +682,20 @@ async def claim_screening_attempts(
         limit = min(limit, claim_budget)
         if limit <= 0:
             return []
+    # A failed attempt backs off from its FAILURE time, not to the end of the
+    # 70-minute lease it no longer occupies: holding a review that died 20
+    # minutes in until minute 70 stranded agents for most of an hour and read
+    # as a stuck queue from the public pipeline. The short hold still prevents
+    # hot-looping against a broken provider, the lease deadline stays the
+    # upper bound, and an attempt with no recorded finish keeps the historical
+    # deadline behavior.
+    backoff_until = func.least(
+        ScreeningAttempt.deadline,
+        func.coalesce(
+            ScreeningAttempt.finished_at + FAILED_ATTEMPT_RETRY_BACKOFF,
+            ScreeningAttempt.deadline,
+        ),
+    )
     has_running_or_backoff = exists(
         select(ScreeningAttempt.attempt_id).where(
             ScreeningAttempt.agent_id == Agent.agent_id,
@@ -688,7 +711,7 @@ async def claim_screening_attempts(
                             ),
                         ),
                     ),
-                    ScreeningAttempt.deadline > now,
+                    backoff_until > now,
                     ~exists(
                         select(ScreeningRetryOverride.override_id).where(
                             ScreeningRetryOverride.attempt_id
