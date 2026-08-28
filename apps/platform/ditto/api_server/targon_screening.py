@@ -556,15 +556,28 @@ async def _quarantine(
     agent = await session.get(Agent, attempt.agent_id, with_for_update=True)
     if agent is None:
         return
-    reason_code = "agentic-source-review-tripwire"
     finding_digest = observation.finding_digest if observation is not None else None
+    inconclusive_budget = bool(
+        observation is not None
+        and not observation.ok
+        and observation.finding is None
+        and finding_digest is None
+        and observation.failure_disposition in ("inconclusive", "pass_inconclusive")
+    )
+    if inconclusive_budget:
+        reason_code = "source-review-inconclusive"
+        public_reason = "Bounded source review was inconclusive; held for review"
+    else:
+        reason_code = "agentic-source-review-tripwire"
+        public_reason = "Submission held for anti-cheat review"
+    review_audit = observation.review_audit if observation is not None else None
     agent.status = AgentStatus.QUARANTINED
-    agent.screening_reason = "Submission held for anti-cheat review"
+    agent.screening_reason = public_reason
     agent.screening_reason_code = reason_code
     agent.screening_policy_version = SCREENING_POLICY_VERSION
     attempt.status = "quarantined"
     attempt.finished_at = now
-    attempt.public_reason = agent.screening_reason
+    attempt.public_reason = public_reason
     attempt.reason_code = reason_code
     session.add(
         ScreeningQuarantine(
@@ -574,15 +587,17 @@ async def _quarantine(
             screener_hotkey=screener_hotkey,
             policy_version=SCREENING_POLICY_VERSION,
             manifest_digest=(
-                observation.review_audit.canonical_digest()
-                if observation is not None and observation.review_audit is not None
+                review_audit.canonical_digest()
+                if review_audit is not None
                 else hashlib.sha256(b"ditto:platform-targon-l1:v1").hexdigest()
             ),
             finding_digest=finding_digest,
-            review_audit_digest=None,
+            review_audit_digest=(
+                review_audit.canonical_digest() if review_audit is not None else None
+            ),
             review_audit=(
-                observation.review_audit.model_dump(mode="json")
-                if observation is not None and observation.review_audit is not None
+                review_audit.model_dump(mode="json")
+                if review_audit is not None
                 else None
             ),
             reason_code=reason_code,
