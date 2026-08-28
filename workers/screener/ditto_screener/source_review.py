@@ -150,6 +150,48 @@ _MULTI_LOCATION_CATEGORIES = frozenset(
     {"benchmark_emulation", "scorer_contract_manipulation"}
 )
 _RETRY_DELAYS_SECONDS = (0.5, 1.0)
+# The router can relay a provider fault inside an HTTP 200 body (an ``error``
+# object, or ``status: "failed"`` with an error type such as
+# ``rate_limit_exceeded``). Those are transport-class faults, not verdicts;
+# failing the stage on the first one burned whole reviews during sustained
+# rate limiting. Rate limits persist for tens of seconds, so this ladder
+# waits far longer than the sub-second transport retries (always bounded by
+# the stage deadline where one is enforced).
+_MODEL_ERROR_RETRY_DELAYS_SECONDS = (5.0, 15.0, 30.0)
+_RETRYABLE_MODEL_ERROR_TYPES = frozenset(
+    {
+        "rate_limit_exceeded",
+        "server_error",
+        "internal_server_error",
+        "overloaded",
+        "provider_error",
+    }
+)
+
+
+def _retryable_model_error_type(payload: object) -> str | None:
+    """Name a transport-class model fault relayed inside an HTTP 200 body."""
+    if not isinstance(payload, dict):
+        return None
+    codes: list[str] = []
+    error = payload.get("error")
+    if isinstance(error, Mapping):
+        codes.append(
+            str(error.get("code") or error.get("type") or error.get("error_type") or "")
+        )
+    if payload.get("status") == "failed":
+        codes.append(str(payload.get("error_type") or ""))
+    for code in codes:
+        normalized = code.strip().lower()
+        if normalized in _RETRYABLE_MODEL_ERROR_TYPES:
+            return normalized
+        # Chat-completions error bodies carry the HTTP status as a numeric
+        # ``code``; 429 and 5xx are the same transport-class faults.
+        if normalized.isdigit() and (normalized == "429" or int(normalized) >= 500):
+            return normalized
+    return None
+
+
 # A reasoning model occasionally answers in prose instead of the tool
 # contract; one corrective turn recovers most of them. The budget keeps a
 # model that will not follow the contract a hard failure instead of a
@@ -2508,21 +2550,40 @@ class OpenRouterSourceReviewAgent:
         same bounded retry budget as a 5xx before the review is failed.
         """
         last_error: ValueError | None = None
-        for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
+        malformed_attempts = 0
+        model_error_attempts = 0
+        while True:
             response = await self._post_completion(
                 client, api_key, messages, timeout=timeout
             )
+            payload: object | None = None
             try:
-                return _assistant_message(response.json())
+                payload = response.json()
+                return _assistant_message(payload)
             except ValueError as error:
                 last_error = error
-                if attempt >= len(_RETRY_DELAYS_SECONDS):
+                model_error = _retryable_model_error_type(payload)
+                if model_error is not None and model_error_attempts < len(
+                    _MODEL_ERROR_RETRY_DELAYS_SECONDS
+                ):
+                    delay = _MODEL_ERROR_RETRY_DELAYS_SECONDS[model_error_attempts]
+                    model_error_attempts += 1
+                    logger.warning(
+                        "source review model relayed a retryable fault %s; "
+                        "retrying attempt=%d",
+                        model_error,
+                        model_error_attempts + 1,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                if malformed_attempts >= len(_RETRY_DELAYS_SECONDS):
                     break
                 logger.warning(
                     "source review model response was malformed; retrying attempt=%d",
-                    attempt + 2,
+                    malformed_attempts + 2,
                 )
-                await asyncio.sleep(_RETRY_DELAYS_SECONDS[attempt])
+                await asyncio.sleep(_RETRY_DELAYS_SECONDS[malformed_attempts])
+                malformed_attempts += 1
         assert last_error is not None
         raise last_error
 

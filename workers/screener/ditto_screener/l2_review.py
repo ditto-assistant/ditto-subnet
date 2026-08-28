@@ -31,10 +31,12 @@ from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.source_review import (
     _ADVISORY_CATEGORIES,
     _ALLOWED_CATEGORIES,
+    _MODEL_ERROR_RETRY_DELAYS_SECONDS,
     _MULTI_LOCATION_CATEGORIES,
     _OPENROUTER_ATTRIBUTION_HEADERS,
     OpenRouterSourceReviewAgent,
     TarSourceRepository,
+    _retryable_model_error_type,
     policy_v10_static_assessment,
 )
 from ditto_screening_protocol import (
@@ -3294,7 +3296,9 @@ class KimiSolSourceReviewAgent:
             request["provider"]["only"] = [provider]  # type: ignore[index]
         if reasoning_effort != "model_default":
             request["reasoning"] = {"effort": reasoning_effort}
-        for attempt in range(len(_RETRY_DELAYS_SECONDS) + 1):
+        transport_attempts = 0
+        model_error_attempts = 0
+        while True:
             try:
                 timeout = self._turn_timeout(deadline)
                 response = await client.post(
@@ -3316,27 +3320,45 @@ class KimiSolSourceReviewAgent:
                         isinstance(payload, dict)
                         and payload.get("status") == "incomplete"
                     )
-                    if incomplete and attempt < len(_RETRY_DELAYS_SECONDS):
-                        delay = _RETRY_DELAYS_SECONDS[attempt]
+                    if incomplete and transport_attempts < len(_RETRY_DELAYS_SECONDS):
+                        delay = _RETRY_DELAYS_SECONDS[transport_attempts]
+                        transport_attempts += 1
                         remaining = self._turn_timeout(deadline)
                         if remaining > delay:
                             await asyncio.sleep(delay)
                             continue
+                    model_error = _retryable_model_error_type(payload)
+                    if model_error is not None and model_error_attempts < len(
+                        _MODEL_ERROR_RETRY_DELAYS_SECONDS
+                    ):
+                        delay = _MODEL_ERROR_RETRY_DELAYS_SECONDS[model_error_attempts]
+                        model_error_attempts += 1
+                        remaining = self._turn_timeout(deadline)
+                        if remaining > delay:
+                            logger.warning(
+                                "L2/L3 model relayed a retryable fault %s; "
+                                "retrying attempt=%d",
+                                model_error,
+                                model_error_attempts + 1,
+                            )
+                            await asyncio.sleep(delay)
+                            continue
                     return response
                 response.raise_for_status()
+                raise RuntimeError("unreachable")
             except (httpx.TransportError, httpx.HTTPStatusError) as error:
                 retryable = not isinstance(error, httpx.HTTPStatusError) or (
                     error.response.status_code == 429
                     or error.response.status_code >= 500
                 )
-                if not retryable or attempt >= len(_RETRY_DELAYS_SECONDS):
+                if not retryable or transport_attempts >= len(_RETRY_DELAYS_SECONDS):
                     raise
-                delay = _RETRY_DELAYS_SECONDS[attempt]
+                delay = _RETRY_DELAYS_SECONDS[transport_attempts]
+                transport_attempts += 1
                 remaining = self._turn_timeout(deadline)
                 if remaining <= delay:
                     raise ValueError("L2 review exceeded lease budget") from None
                 await asyncio.sleep(delay)
-        raise RuntimeError("unreachable")
 
     def _turn_timeout(self, deadline: float | None) -> float:
         if deadline is None:
