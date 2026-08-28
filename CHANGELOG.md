@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.117.2 (2026-08-28)
+
+### Bug Fixes
+
+- **screener-orchestrator**: Pull Kaniko base images through mirror.gcr.io
+  ([#1211](https://github.com/ditto-assistant/ditto-subnet/pull/1211),
+  [`9fd45ea`](https://github.com/ditto-assistant/ditto-subnet/commit/9fd45eaa69f623147aae944ecc7e60801e3dd4fe))
+
+
 ## v0.117.1 (2026-08-28)
 
 ### Bug Fixes
