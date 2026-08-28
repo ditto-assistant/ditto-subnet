@@ -155,6 +155,15 @@ def _with_policy_v10_invariants(
     return {**review, "invariants": decisions}
 
 
+_BENIGN_REVIEW: dict[str, object] = {
+    "risk_level": "low",
+    "confidence": 0.9,
+    "categories": ["none"],
+    "evidence": [],
+    "summary": "General model-backed request path.",
+}
+
+
 def _archive(tmp_path: Path, source: str) -> Path:
     path = tmp_path / "agent.tar.gz"
     with tarfile.open(path, "w:gz") as archive:
@@ -4845,3 +4854,78 @@ async def test_budget_exhaustion_with_thin_ledger_still_holds(
     assert not observation.ok
     assert observation.failure_disposition == "inconclusive"
     assert observation.notes == ()
+
+
+async def test_completion_budget_fits_a_whole_policy_v10_sweep(
+    tmp_path: Path,
+) -> None:
+    """The verdict turn is not truncated at the historical 2200-token cap.
+
+    A cut-off ``submit_review`` argument string used to die on
+    ``JSONDecodeError`` and burn the whole attempt as infrastructure, so the
+    budget the request carries is a correctness property, not a tuning knob.
+    """
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    transport = _transport(_BENIGN_REVIEW, seen)
+
+    observation = await _agent(key, transport).review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok
+    assert seen
+    assert all(request["max_completion_tokens"] == 8_000 for request in seen)
+
+
+async def test_completion_budget_is_operator_settable(tmp_path: Path) -> None:
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=4,
+        max_completion_tokens=12_000,
+        transport=_transport(_BENIGN_REVIEW, seen),
+    )
+
+    observation = await agent.review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+    )
+
+    assert observation.ok
+    assert all(request["max_completion_tokens"] == 12_000 for request in seen)
+
+
+async def test_completion_budget_cannot_be_set_below_one_sweep(
+    tmp_path: Path,
+) -> None:
+    """A floor keeps a misconfiguration from re-creating the truncation bug."""
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    seen: list[dict[str, object]] = []
+    agent = OpenRouterSourceReviewAgent(
+        api_key_file=str(key),
+        model="openai/gpt-5.6-luna",
+        base_url="https://openrouter.test/api/v1",
+        timeout_seconds=10,
+        max_steps=4,
+        max_completion_tokens=64,
+        transport=_transport(_BENIGN_REVIEW, seen),
+    )
+
+    await agent.review(
+        str(_archive(tmp_path, "fn main() {}")),
+        artifact_sha256=_SHA,
+    )
+
+    assert all(request["max_completion_tokens"] == 2_000 for request in seen)

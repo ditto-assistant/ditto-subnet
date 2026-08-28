@@ -102,6 +102,10 @@ def _source_review_layer_env(
             str(int(settings.source_review_max_read_bytes)),
         ),
         (
+            "SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS",
+            str(int(settings.source_review_max_completion_tokens)),
+        ),
+        (
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT",
             settings.source_review_reasoning_effort,
         ),

@@ -18069,6 +18069,11 @@ export interface components {
              */
             policy_manifest_rotation_id: string;
             /**
+             * Source Review Max Completion Tokens
+             * @default 8000
+             */
+            source_review_max_completion_tokens: number;
+            /**
              * Source Review Max Read Bytes
              * @default 8000000
              */

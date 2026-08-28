@@ -68,6 +68,14 @@ class ScreenerReviewSettings(BaseModel):
     source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=16_000_000)] = (
         8_000_000
     )
+    # Per-turn L1 completion budget, shared with reasoning tokens. Unlike the
+    # step and byte budgets this is not an inspection-depth knob: it only has
+    # to fit the complete policy-v10 sweep the reviewer already decided. Too
+    # small and the verdict is truncated mid-JSON, which fails the review as
+    # infrastructure and rescreens the artifact from scratch.
+    source_review_max_completion_tokens: Annotated[int, Field(ge=2_000, le=32_000)] = (
+        8_000
+    )
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 3_600

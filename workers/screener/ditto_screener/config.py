@@ -141,6 +141,8 @@ class ScreenerConfig:
     source_review_timeout_seconds: float
     source_review_max_steps: int
     source_review_max_read_bytes: int
+    source_review_max_completion_tokens: int
+    """Per-turn L1 completion budget; must fit a whole policy-v10 sweep."""
     source_review_reasoning_effort: str
     static_preflight_v2_mode: str
     """V2 detector rollout: legacy authority in off/shadow, v2 in enforce."""
@@ -332,6 +334,9 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         source_review_max_read_bytes=_parse_int(
             "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES", "8000000"
         ),
+        source_review_max_completion_tokens=_parse_int(
+            "SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS", "8000"
+        ),
         source_review_reasoning_effort=os.environ.get(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
         ),
@@ -412,6 +417,11 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not 32_000 <= config.source_review_max_read_bytes <= 16_000_000:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_MAX_READ_BYTES must be between 32000 and 16000000"
+        )
+    if not 2_000 <= config.source_review_max_completion_tokens <= 32_000:
+        raise ScreenerConfigError(
+            "SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS must be between "
+            "2000 and 32000"
         )
     if config.source_review_reasoning_effort not in {"low", "medium", "high"}:
         raise ScreenerConfigError(

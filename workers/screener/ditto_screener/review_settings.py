@@ -93,6 +93,9 @@ class ReviewSettings(BaseModel):
     source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=16_000_000)] = (
         8_000_000
     )
+    source_review_max_completion_tokens: Annotated[int, Field(ge=2_000, le=32_000)] = (
+        8_000
+    )
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 1_800
@@ -151,6 +154,7 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "source_review_reasoning_effort",
     "source_review_model",
     "source_review_timeout_seconds",
+    "source_review_max_completion_tokens",
 )
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
@@ -217,6 +221,9 @@ class EffectiveReviewSettings(BaseModel):
             l2_max_steps=value.max_steps,
             source_review_max_steps=value.source_review_max_steps,
             source_review_max_read_bytes=value.source_review_max_read_bytes,
+            source_review_max_completion_tokens=(
+                value.source_review_max_completion_tokens
+            ),
             source_review_reasoning_effort=value.source_review_reasoning_effort,
             source_review_model=value.source_review_model,
             source_review_timeout_seconds=float(value.source_review_timeout_seconds),
@@ -282,6 +289,9 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "max_steps": config.l2_max_steps,
             "source_review_max_steps": config.source_review_max_steps,
             "source_review_max_read_bytes": config.source_review_max_read_bytes,
+            "source_review_max_completion_tokens": (
+                config.source_review_max_completion_tokens
+            ),
             "source_review_reasoning_effort": config.source_review_reasoning_effort,
             "source_review_model": config.source_review_model,
             "source_review_timeout_seconds": int(config.source_review_timeout_seconds),

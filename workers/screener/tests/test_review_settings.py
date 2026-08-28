@@ -133,6 +133,7 @@ def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
             "source_review_reasoning_effort",
             "source_review_model",
             "source_review_timeout_seconds",
+            "source_review_max_completion_tokens",
         ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
@@ -149,6 +150,7 @@ def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
             "source_review_reasoning_effort",
             "source_review_model",
             "source_review_timeout_seconds",
+            "source_review_max_completion_tokens",
         ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
@@ -160,7 +162,12 @@ def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
 def test_pre_l1_model_checksum_remains_valid(make_config) -> None:
     config = make_config(source_review_timeout_seconds=1_800)
     payload = _legacy_payload(
-        config, ("source_review_model", "source_review_timeout_seconds")
+        config,
+        (
+            "source_review_model",
+            "source_review_timeout_seconds",
+            "source_review_max_completion_tokens",
+        ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
     assert compatible.settings.source_review_model == "openai/gpt-5.6-luna"
@@ -189,6 +196,7 @@ def test_explicit_budget_is_never_dropped_from_the_checksum(make_config) -> None
             "source_review_reasoning_effort",
             "source_review_model",
             "source_review_timeout_seconds",
+            "source_review_max_completion_tokens",
         ),
     )
     payload["settings"]["source_review_max_read_bytes"] = 2_000_000

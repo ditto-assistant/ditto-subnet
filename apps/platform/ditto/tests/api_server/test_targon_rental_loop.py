@@ -49,6 +49,22 @@ def test_source_review_layer_env_pins_l2_and_l3() -> None:
     assert env["SCREENER_L2_REVIEW_MODEL"] == "moonshotai/kimi-k3"
 
 
+def test_source_review_layer_env_carries_the_l1_verdict_budget() -> None:
+    """The rental must inherit the operator's L1 completion budget.
+
+    Without it the job falls back to its own default and an operator raising
+    the budget to stop truncated verdicts would change nothing in production.
+    """
+    env = dict(
+        _source_review_layer_env(
+            ScreenerReviewSettings(
+                mode="enforce", source_review_max_completion_tokens=12_000
+            )
+        )
+    )
+    assert env["SCREENER_SOURCE_REVIEW_MAX_COMPLETION_TOKENS"] == "12000"
+
+
 class _FakeTargon:
     def __init__(self, *, status: str = "running", message: str = "") -> None:
         self.status = status

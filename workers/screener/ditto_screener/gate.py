@@ -539,6 +539,7 @@ class BuildGate:
             timeout_seconds=config.source_review_timeout_seconds,
             max_steps=config.source_review_max_steps,
             max_read_bytes=config.source_review_max_read_bytes,
+            max_completion_tokens=config.source_review_max_completion_tokens,
             reasoning_effort=config.source_review_reasoning_effort,
             static_preflight_v2_mode=config.static_preflight_v2_mode,
         )
