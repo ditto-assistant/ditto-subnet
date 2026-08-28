@@ -160,6 +160,7 @@ import {
   captureRuntimeProfile,
   downloadRuntimeProfile,
   fetchQueuePolicySettings,
+  fetchScreenerCapacity,
   fetchScreenerReviewControl,
   applyScreenerReviewSettings,
   fetchScreenerPolicyManifestControl,
@@ -431,8 +432,10 @@ function toolAnnotations(kind: 'read' | 'write', destructive = false) {
 // Keep the catalog decision-grade; the original, detailed operation notes stay
 // available on demand through `get_backroom_tool_help`.
 const MCP_CATALOG_DESCRIPTIONS: Record<string, string> = {
+  get_screener_capacity:
+    'Read screener capacity and provider priorities.',
   get_screener_review_settings:
-    'Read L1/L2/L3 source-review settings, last-applied worker instances, and shadow observations. bypass lives on get_queue_policy_settings.',
+    'Read L1/L2/L3 review settings and worker adoption; bypass is in queue policy.',
   apply_screener_review_settings:
     'Write one L1/L2/L3 source-review revision. Confirmation: APPLY SCREENER REVIEW {scope} {MODE}.',
   set_queue_policy_settings:
@@ -1448,6 +1451,17 @@ export function createBackroomMcpServer(props: McpGrantProps) {
     },
     async (input) =>
       write(() => setContinualRetestSettings(input, props.session.email)),
+  )
+
+  registerTool(
+    'get_screener_capacity',
+    {
+      title: 'Get screener capacity',
+      description:
+        'Read the live screener capacity snapshot, node and provider-job inventory, recent controller events, and the revisioned provider control for build, runtime smoke, and source review. The provider-control lists are authoritative for which lane is Targon-first versus GCP-only; dashboard presentation and local defaults are not. Requires backroom:read and changes nothing.',
+      annotations: toolAnnotations('read'),
+    },
+    async () => result(await fetchScreenerCapacity()),
   )
 
   registerTool(
