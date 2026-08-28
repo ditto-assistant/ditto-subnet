@@ -27,6 +27,8 @@ plan. It must create, not replace:
 - its dedicated `10.31.0.0/24` subnet and an egress deny to the Platform subnet;
 - `ditto-validator-prod@ditto-app-dev.iam.gserviceaccount.com`;
 - the empty `validator-prod-hotkey-mnemonic` secret;
+- secret-scoped read access for the validator runtime identity on the existing
+  `validator-wandb-key` secret, without managing its value or versions;
 - the inert firewall/custom-role definition for a disposable hotkey generator,
   with no generator VM, disk, service account, or IAM binding while its phase
   remains `absent`;
@@ -149,7 +151,10 @@ ansible-playbook -i infra/ansible/inventory/gcp.yml \
 The play installs Docker and checksum-pinned Cosign, checks out exactly that
 SHA, materializes an unencrypted hotkey wallet, verifies that its public address
 equals `NEW_HOTKEY`, generates host-local Pylon/control tokens, and validates
-Compose. It does not start a validator.
+Compose. It also reads the latest enabled `validator-wandb-key` version under
+`no_log` and writes only `WANDB_MODE=online` plus `WANDB_API_KEY` to the
+mode-0600 validator environment; project, entity, and run naming retain their
+documented defaults. It does not start a validator.
 
 Disable the Secret Manager version, then run the same play again. The second
 converge must succeed from the existing wallet without accessing the disabled
