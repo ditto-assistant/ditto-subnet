@@ -18008,13 +18008,13 @@ export interface components {
              *       "openai/gpt-5.6-sol"
              *     ]
              */
-            l2_fallback_models: ("moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
+            l2_fallback_models: ("moonshotai/kimi-k3" | "z-ai/glm-5.2" | "z-ai/glm-5.3-flash" | "openai/gpt-5.6-sol")[];
             /**
              * L2 Model
              * @default moonshotai/kimi-k3
              * @enum {string}
              */
-            l2_model: "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol";
+            l2_model: "moonshotai/kimi-k3" | "z-ai/glm-5.2" | "z-ai/glm-5.3-flash" | "openai/gpt-5.6-sol";
             /**
              * L3 Enabled
              * @default true
@@ -18071,11 +18071,12 @@ export interface components {
             /**
              * Source Review Fallback Models
              * @default [
-             *       "z-ai/glm-5.2",
+             *       "z-ai/glm-5.3-flash",
+             *       "moonshotai/kimi-k3",
              *       "openai/gpt-5.6-sol"
              *     ]
              */
-            source_review_fallback_models: ("moonshotai/kimi-k3" | "z-ai/glm-5.2" | "openai/gpt-5.6-sol")[];
+            source_review_fallback_models: ("moonshotai/kimi-k3" | "z-ai/glm-5.2" | "z-ai/glm-5.3-flash" | "openai/gpt-5.6-sol")[];
             /**
              * Source Review Max Read Bytes
              * @default 8000000

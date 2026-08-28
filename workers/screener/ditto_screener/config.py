@@ -325,7 +325,7 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         ),
         source_review_fallback_models=_parse_csv(
             "SCREENER_SOURCE_REVIEW_FALLBACK_MODELS",
-            "z-ai/glm-5.2,openai/gpt-5.6-sol",
+            "z-ai/glm-5.3-flash,moonshotai/kimi-k3,openai/gpt-5.6-sol",
         ),
         source_review_base_url=os.environ.get(
             "SCREENER_SOURCE_REVIEW_BASE_URL", "https://openrouter.ai/api/v1"
@@ -427,12 +427,13 @@ def parse_screener_config_from_env() -> ScreenerConfig:
             "SCREENER_SOURCE_REVIEW_MODEL must be openai/gpt-5.6-luna"
         )
     if config.source_review_fallback_models != (
-        "z-ai/glm-5.2",
+        "z-ai/glm-5.3-flash",
+        "moonshotai/kimi-k3",
         "openai/gpt-5.6-sol",
     ):
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_FALLBACK_MODELS must be "
-            "z-ai/glm-5.2,openai/gpt-5.6-sol"
+            "z-ai/glm-5.3-flash,moonshotai/kimi-k3,openai/gpt-5.6-sol"
         )
     if not 60 <= config.source_review_timeout_seconds <= 3_600:
         raise ScreenerConfigError(

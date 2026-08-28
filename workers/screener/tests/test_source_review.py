@@ -236,7 +236,11 @@ def _agent(
     return OpenRouterSourceReviewAgent(
         api_key_file=str(key_file),
         model="openai/gpt-5.6-luna",
-        fallback_models=("z-ai/glm-5.2", "openai/gpt-5.6-sol"),
+        fallback_models=(
+            "z-ai/glm-5.3-flash",
+            "moonshotai/kimi-k3",
+            "openai/gpt-5.6-sol",
+        ),
         base_url="https://openrouter.test/api/v1",
         timeout_seconds=10,
         max_steps=4,
@@ -4693,7 +4697,8 @@ async def test_l1_uses_cached_prefix_adaptive_reasoning_and_coverage_exit(
     assert seen[0]["prompt_cache_key"] == seen[1]["prompt_cache_key"]
     assert seen[0]["models"] == [
         "openai/gpt-5.6-luna",
-        "z-ai/glm-5.2",
+        "z-ai/glm-5.3-flash",
+        "moonshotai/kimi-k3",
         "openai/gpt-5.6-sol",
     ]
     assert seen[0]["provider"]["allow_fallbacks"] is True

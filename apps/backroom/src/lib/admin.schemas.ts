@@ -249,6 +249,7 @@ export const screenerReviewModeSchema = z.enum(['off', 'shadow', 'enforce', 'inh
 export const screenerReviewModelSchema = z.enum([
   'moonshotai/kimi-k3',
   'z-ai/glm-5.2',
+  'z-ai/glm-5.3-flash',
   'openai/gpt-5.6-sol',
 ])
 export const sourceReviewModelSchema = z.enum(['openai/gpt-5.6-luna'])

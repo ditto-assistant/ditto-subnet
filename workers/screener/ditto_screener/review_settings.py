@@ -19,6 +19,7 @@ from ditto_screener.config import ScreenerConfig
 ReviewModel = Literal[
     "moonshotai/kimi-k3",
     "z-ai/glm-5.2",
+    "z-ai/glm-5.3-flash",
     "openai/gpt-5.6-sol",
 ]
 SourceReviewModel = Literal["openai/gpt-5.6-luna"]
@@ -96,7 +97,8 @@ class ReviewSettings(BaseModel):
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
     source_review_fallback_models: tuple[ReviewModel, ...] = (
-        "z-ai/glm-5.2",
+        "z-ai/glm-5.3-flash",
+        "moonshotai/kimi-k3",
         "openai/gpt-5.6-sol",
     )
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 1_800

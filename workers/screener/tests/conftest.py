@@ -45,7 +45,8 @@ def _default_config(**overrides: Any) -> ScreenerConfig:
         "source_review_api_key_file": None,
         "source_review_model": "openai/gpt-5.6-luna",
         "source_review_fallback_models": (
-            "z-ai/glm-5.2",
+            "z-ai/glm-5.3-flash",
+            "moonshotai/kimi-k3",
             "openai/gpt-5.6-sol",
         ),
         "source_review_base_url": "https://openrouter.ai/api/v1",
