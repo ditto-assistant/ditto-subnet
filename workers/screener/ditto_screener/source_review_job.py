@@ -95,6 +95,10 @@ def _build_reviewer(
     l1 = OpenRouterSourceReviewAgent(
         api_key_file=key_file,
         model=os.environ.get("SCREENER_SOURCE_REVIEW_MODEL", "openai/gpt-5.6-luna"),
+        fallback_models=_parse_csv(
+            "SCREENER_SOURCE_REVIEW_FALLBACK_MODELS",
+            "z-ai/glm-5.3-flash,moonshotai/kimi-k3,openai/gpt-5.6-sol",
+        ),
         base_url=os.environ.get(
             "SCREENER_SOURCE_REVIEW_BASE_URL",
             "https://openrouter.ai/api/v1",

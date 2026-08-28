@@ -56,6 +56,11 @@ def test_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert cfg.static_preflight_v2_mode == "off"
     assert cfg.static_preflight_audit_file is None
     assert cfg.l2_review_mode == "off"
+    assert cfg.source_review_fallback_models == (
+        "z-ai/glm-5.3-flash",
+        "moonshotai/kimi-k3",
+        "openai/gpt-5.6-sol",
+    )
     assert cfg.l2_review_model == "moonshotai/kimi-k3"
     assert cfg.l2_review_provider == "openrouter"
     assert cfg.l2_fallback_models == ("z-ai/glm-5.2", "openai/gpt-5.6-sol")
