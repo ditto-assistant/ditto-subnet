@@ -176,6 +176,8 @@ allowed-optimization and benchmark-emulation boundary,
 [docs/binary-analysis.md](docs/binary-analysis.md) for the bounded opaque-file
 inspection contract, and
 [docs/l2-source-review.md](docs/l2-source-review.md) for the Kimi/GLM/SOL models,
-isolated coding harness, evidence, budgets, and canary/rollback contract, and
+isolated coding harness, evidence, budgets, and canary/rollback contract,
+[docs/l4-adjudication.md](docs/l4-adjudication.md) for the automated
+clear/reject court that resolves a hold instead of queuing it, and
 [docs/deployment.md](docs/deployment.md) for deployment secrets, health checks,
 cache maintenance, and the compatible rollout sequence.

@@ -20,6 +20,7 @@ ReviewModel = Literal[
 ]
 ReasoningEffort = Literal["low", "medium", "high"]
 SourceReviewModel = Literal["openai/gpt-5.6-luna"]
+AdjudicatorModel = Literal["z-ai/glm-5.3-flash"]
 PolicyManifestProfile = Literal["core", "l1", "l1_l2"]
 
 _POLICY_MANIFEST_MODULES: dict[PolicyManifestProfile, list[dict[str, str]]] = {
@@ -97,6 +98,14 @@ class ScreenerReviewSettings(BaseModel):
     # budget-terminated ones carried 6 to 19.
     concern_hold_count: Annotated[int, Field(ge=1, le=16)] = 3
     clear_min_notes: Annotated[int, Field(ge=1, le=32)] = 3
+    # Automated clear/reject court for reviews that would otherwise wait on an
+    # operator. ``off`` by default: it resolves holds terminally, so turning it
+    # on is an explicit audited operator act, exactly as enabling L2/L3 was.
+    # ``shadow`` records the decision and keeps holding.
+    adjudicator_mode: Literal["off", "shadow", "enforce"] = "off"
+    adjudicator_model: AdjudicatorModel = "z-ai/glm-5.3-flash"
+    adjudicator_max_steps: Annotated[int, Field(ge=1, le=64)] = 24
+    adjudicator_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 600
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     audit_retention_days: Annotated[int, Field(ge=1, le=365)] = 30
     policy_manifest_profile: PolicyManifestProfile = "l1"

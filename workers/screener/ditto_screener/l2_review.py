@@ -22,6 +22,7 @@ from uuid import UUID
 
 import httpx
 
+from ditto_screener.adjudicator import SourceReviewAdjudicator
 from ditto_screener.causal_evidence import (
     causal_audit_fields,
     causal_summary,
@@ -3724,6 +3725,7 @@ class LayeredSourceReviewAgent:
         mode: str,
         concern_hold_count: int = 3,
         clear_min_notes: int = 3,
+        adjudicator: SourceReviewAdjudicator | None = None,
     ) -> None:
         if mode not in {"off", "shadow", "enforce"}:
             raise ValueError("invalid L2 mode")
@@ -3732,11 +3734,37 @@ class LayeredSourceReviewAgent:
         self._mode = mode
         self._concern_hold_count = max(1, int(concern_hold_count))
         self._clear_min_notes = max(1, int(clear_min_notes))
+        self._adjudicator = adjudicator
         self._shadow_results: dict[UUID, L2RunResult] = {}
 
     def pop_shadow_result(self, attempt_id: UUID) -> L2RunResult | None:
         """Consume non-authoritative shadow telemetry for one attempt."""
         return self._shadow_results.pop(attempt_id, None)
+
+    async def _adjudicate(
+        self,
+        observation: SourceReviewObservation,
+        *,
+        archive_path: str,
+    ) -> SourceReviewObservation:
+        """Decide a hold-bound outcome instead of parking it on an operator.
+
+        Only outcomes that would otherwise WAIT are adjudicated, and there are
+        two of them: a medium- or high-risk finding, which quarantines, and a
+        review that ended without admitting itself. A low-risk result already
+        passed, and a retryable infrastructure failure has no evidence to
+        weigh -- adjudicating either spends a model call to re-derive an
+        answer the pipeline already has.
+        """
+        if self._adjudicator is None or not _would_hold(observation):
+            return observation
+        adjudication = await self._adjudicator.adjudicate(
+            archive_path,
+            notes=observation.notes,
+            finding=observation.finding,
+            error_code=observation.error_code,
+        )
+        return replace(observation, adjudication=adjudication.model_dump(mode="json"))
 
     def _settle_gradient(
         self, observation: SourceReviewObservation
@@ -3815,7 +3843,7 @@ class LayeredSourceReviewAgent:
         if self._mode == "off" or not l1.ok or not should_escalate:
             if progress is not None:
                 progress(2, 2)
-            return l1
+            return await self._adjudicate(l1, archive_path=archive_path)
         if progress is not None:
             progress(1, 2)
         result = await self._l2.review(
@@ -3840,8 +3868,22 @@ class LayeredSourceReviewAgent:
                 finding=l1.finding,
                 notes=l1.notes,
             )
-            return self._settle_gradient(carried)
-        return _carry_l1_notes(_enforce_causal_authority(result.observation), l1)
+            return await self._adjudicate(
+                self._settle_gradient(carried), archive_path=archive_path
+            )
+        return await self._adjudicate(
+            _carry_l1_notes(_enforce_causal_authority(result.observation), l1),
+            archive_path=archive_path,
+        )
+
+
+def _would_hold(observation: SourceReviewObservation) -> bool:
+    """Whether this outcome ends up in front of an operator."""
+    if observation.ok:
+        # Low risk clears (advisory categories included); anything elevated is
+        # a selector tripwire and quarantines.
+        return observation.risk_level in {"medium", "high"}
+    return observation.failure_disposition != "retryable_infra"
 
 
 def _carry_l1_notes(

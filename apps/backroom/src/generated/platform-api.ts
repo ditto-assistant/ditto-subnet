@@ -4895,6 +4895,18 @@ export interface components {
             /** Slot Id */
             slot_id: string;
         };
+        /**
+         * AdjudicationClearClause
+         * @description Published court false positives an automated clear may cite.
+         *
+         *     These are the release-with-a-refutation classes the operator review rules
+         *     already recognise. Making the vocabulary closed is the point: an
+         *     adjudicator that has to name one of these cannot free-associate its way to
+         *     a clear, and an operator reading the audit trail can check the claim
+         *     against the same published list.
+         * @enum {string}
+         */
+        AdjudicationClearClause: "retrieval_ranking_not_family_engine" | "content_complete_memoization_cache" | "standard_broker_inference_client" | "unreported_tool_calls_executed" | "local_practice_harness_stub" | "intent_routing_or_precursor_pass" | "bench_version_branching_alone" | "single_success_duplicate_suppression" | "plain_answer_normalization" | "prior_pattern_removed" | "model_authors_graded_slot";
         /** AdminActiveContractRequest */
         AdminActiveContractRequest: {
             /**
@@ -17976,6 +17988,28 @@ export interface components {
          */
         ScreenerReviewSettings: {
             /**
+             * Adjudicator Max Steps
+             * @default 24
+             */
+            adjudicator_max_steps: number;
+            /**
+             * Adjudicator Mode
+             * @default off
+             * @enum {string}
+             */
+            adjudicator_mode: "off" | "shadow" | "enforce";
+            /**
+             * Adjudicator Model
+             * @default z-ai/glm-5.3-flash
+             * @constant
+             */
+            adjudicator_model: "z-ai/glm-5.3-flash";
+            /**
+             * Adjudicator Timeout Seconds
+             * @default 600
+             */
+            adjudicator_timeout_seconds: number;
+            /**
              * Audit Retention Days
              * @default 30
              */
@@ -18287,6 +18321,46 @@ export interface components {
          */
         SourceDisclosure: "public" | "never";
         /**
+         * SourceReviewAdjudication
+         * @description Terminal clear/reject decision on a review that would otherwise hold.
+         *
+         *     ``escalate`` is never a model choice. The adjudicator is asked for clear
+         *     or reject; the host substitutes ``escalate`` when the returned decision
+         *     fails its contract (an uncited verdict, a citation the adjudicator never
+         *     read, a hallucinated path, a missing published basis). The hold then
+         *     stands and an operator sees it, so a malformed adjudication can only cost
+         *     latency -- never a wrong release or a wrong ban.
+         */
+        SourceReviewAdjudication: {
+            /** Citations */
+            citations?: components["schemas"]["SourceReviewCitation"][];
+            clear_clause?: components["schemas"]["AdjudicationClearClause"] | null;
+            /**
+             * Decision
+             * @enum {string}
+             */
+            decision: "clear" | "reject" | "escalate";
+            /** Escalation Code */
+            escalation_code?: string | null;
+            /** Model */
+            model: string;
+            /**
+             * Notes Considered
+             * @default 0
+             */
+            notes_considered: number;
+            /**
+             * Policy Version
+             * @default 10
+             */
+            policy_version: number;
+            /** Prompt Revision */
+            prompt_revision: string;
+            /** Reason */
+            reason: string;
+            reject_invariant?: components["schemas"]["SourceReviewInvariant"] | null;
+        };
+        /**
          * SourceReviewAuthorityTransition
          * @description Bounded ways served code can make genuine model/tool output non-authoritative.
          * @enum {string}
@@ -18320,6 +18394,16 @@ export interface components {
             /** Path */
             path: string;
             role: components["schemas"]["SourceReviewEvidenceRole"];
+        };
+        /**
+         * SourceReviewCitation
+         * @description One ``path:line`` the adjudicator read and is relying on.
+         */
+        SourceReviewCitation: {
+            /** Line */
+            line: number;
+            /** Path */
+            path: string;
         };
         /**
          * SourceReviewEvidenceItem
@@ -18452,6 +18536,7 @@ export interface components {
          * @description Bounded source-review observation safe to cross provider boundaries.
          */
         SourceReviewObservationPayload: {
+            adjudication?: components["schemas"]["SourceReviewAdjudication"] | null;
             /** Categories */
             categories?: string[];
             /**

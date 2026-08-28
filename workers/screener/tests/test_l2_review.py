@@ -65,6 +65,10 @@ from ditto_screener.l2_review import (
 )
 from ditto_screener.policy import SourceReviewObservation
 from ditto_screener.source_review import TarSourceRepository
+from ditto_screening_protocol import (
+    SourceReviewAdjudication,
+    SourceReviewCitation,
+)
 from scripts.generate_starter_provenance import _tracked_files
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -4035,3 +4039,148 @@ async def test_exhausted_l2_holds_when_an_l1_lead_survives() -> None:
     )
 
     assert result.failure_disposition == "inconclusive"
+
+
+class _FakeAdjudicator:
+    def __init__(self, decision: str = "clear") -> None:
+        self.calls = 0
+        self.seen_notes: tuple[Any, ...] = ()
+        self._decision = decision
+
+    async def adjudicate(self, _archive: str, **kwargs: Any) -> Any:
+        self.calls += 1
+        self.seen_notes = tuple(kwargs.get("notes") or ())
+        return SourceReviewAdjudication(
+            decision=self._decision,
+            reason="the model authors the served reply at src/main.rs:6",
+            clear_clause="model_authors_graded_slot",
+            citations=[SourceReviewCitation(path="src/main.rs", line=6)],
+            model="z-ai/glm-5.3-flash",
+            prompt_revision="adjudicator-v1-policy-v10",
+        )
+
+
+async def test_a_held_review_reaches_the_adjudicator_with_its_ledger() -> None:
+    notes = (
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+            "summary": "looked like a family table",
+        },
+    )
+    l1 = replace(
+        _l1("low", clearance_certified=False),
+        finding=None,
+        finding_digest=None,
+        categories=(),
+        notes=notes,
+    )
+    exhausted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-step-budget",
+        failure_disposition="pass_inconclusive",
+    )
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1),
+        l2=_FakeL2(_model_result(exhausted)),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 1
+    assert court.seen_notes == notes
+    assert result.adjudication is not None
+    assert result.adjudication["decision"] == "clear"
+
+
+async def test_a_clean_review_is_never_adjudicated() -> None:
+    """Adjudication is for outcomes that would WAIT, not for answers we have."""
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("low", clearance_certified=True)),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 0
+    assert result.adjudication is None
+
+
+async def test_an_infrastructure_failure_is_never_adjudicated() -> None:
+    """A retryable fault has no evidence to weigh; it gets retried instead."""
+    infra = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="source-review-model-response-invalid",
+        failure_disposition="retryable_infra",
+    )
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(infra),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="enforce",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 0
+    assert result.adjudication is None
+
+
+async def test_an_elevated_finding_is_adjudicated_not_queued() -> None:
+    """A medium/high L1 finding quarantines, so it is a hold the court owns.
+
+    Gating adjudication on `not observation.ok` missed exactly this case: the
+    review succeeded, and its success IS the operator hold.
+    """
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("medium")),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="off",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 1
+    assert result.adjudication is not None
+
+
+async def test_a_low_risk_pass_is_not_adjudicated() -> None:
+    court = _FakeAdjudicator()
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(_l1("low", clearance_certified=True)),
+        l2=_FakeL2(_model_result(_safe())),
+        mode="off",
+        adjudicator=court,  # type: ignore[arg-type]
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert court.calls == 0
+    assert result.adjudication is None
