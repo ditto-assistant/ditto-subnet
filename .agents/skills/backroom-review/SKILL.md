@@ -174,6 +174,21 @@ call `unban_hotkey` with a specific reason plus `UNBAN HOTKEY <hotkey>`. Re-read
 the returned control state and require `banned=false` with the new audit entry.
 This never clears the rejected agent UUID.
 
+## Scheduled review loop
+
+`scripts/review-loop.sh [interval-seconds] [fire-prompt.md]` runs one bounded
+review fire every interval (default 900) by invoking `opencode run` from the
+repository root with `scripts/review-loop-prompt.md`, which supplies the
+standing authority for that single fire. The daemon keeps logs in
+`$BACKROOM_REVIEW_LOOP_DIR` (default
+`~/.local/share/opencode/backroom-review-loop/`): `loop.log` plus one
+`fire-<ts>.log` per fire, skips a cycle while the previous fire is still
+running, and exits cleanly when a `stop` file is touched in that directory.
+A loop fire may resolve rows (release/reject/clear) with the same bar as an
+interactive fire, but it never rescreens, and miner-requested holds,
+family-dedupe holds, and stranded holds (409 "agent is no longer held") are
+always left for a human.
+
 ## Report
 
 Table: agent, UUID/version, hotkey, SHA, court, policy/finding or
