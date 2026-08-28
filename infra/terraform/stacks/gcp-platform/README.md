@@ -113,8 +113,8 @@ the internet (the firewall allows it only from Google's IAP range).
 
 ```hcl
 ssh_users = [
-  "user:dan@omniaura.ai",
-  "user:nick@omniaura.ai",
+  "user:peyton@omniaura.ai",
+  "user:nickanderson@omniaura.ai",
 ]
 ```
 
