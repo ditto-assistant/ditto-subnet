@@ -179,17 +179,58 @@ def _retryable_model_error_type(payload: object) -> str | None:
         codes.append(
             str(error.get("code") or error.get("type") or error.get("error_type") or "")
         )
+        codes.append(str(error.get("message") or ""))
+    elif error:
+        # Some router faults arrive as a bare string ``error`` value.
+        codes.append(str(error))
     if payload.get("status") == "failed":
         codes.append(str(payload.get("error_type") or ""))
     for code in codes:
         normalized = code.strip().lower()
+        if not normalized:
+            continue
         if normalized in _RETRYABLE_MODEL_ERROR_TYPES:
             return normalized
         # Chat-completions error bodies carry the HTTP status as a numeric
         # ``code``; 429 and 5xx are the same transport-class faults.
         if normalized.isdigit() and (normalized == "429" or int(normalized) >= 500):
             return normalized
+        # Free-text provider faults ("Rate limit exceeded: free-models-per-day",
+        # "Provider is overloaded") carry the class only inside the message.
+        if any(
+            marker in normalized
+            for marker in ("rate limit", "rate_limit", "overloaded", "try again")
+        ):
+            return "rate_limit_exceeded" if "rate" in normalized else "overloaded"
     return None
+
+
+def _body_signature(payload: object) -> str:
+    """Describe a rejected model body's SHAPE without reproducing content.
+
+    Court prompts and model output can describe miner source, so the raw body
+    must never reach logs. The structure alone (top-level keys, error class,
+    payload type) is what distinguishes a relayed provider fault from a
+    contract change, which is exactly what the next diagnosis needs.
+    """
+    if payload is None:
+        return "non-json"
+    if not isinstance(payload, dict):
+        return f"type={type(payload).__name__}"
+    keys = ",".join(sorted(str(key) for key in payload)[:10])
+    error = payload.get("error")
+    error_class = ""
+    if isinstance(error, Mapping):
+        error_class = str(
+            error.get("code") or error.get("type") or error.get("error_type") or ""
+        )[:60]
+    elif error:
+        error_class = str(error)[:60]
+    choices = payload.get("choices")
+    return (
+        f"keys=[{keys}] error_class={error_class!r} "
+        f"choices={type(choices).__name__ if choices is not None else 'absent'}"
+    )
 
 
 # A reasoning model occasionally answers in prose instead of the tool
@@ -2550,8 +2591,7 @@ class OpenRouterSourceReviewAgent:
         same bounded retry budget as a 5xx before the review is failed.
         """
         last_error: ValueError | None = None
-        malformed_attempts = 0
-        model_error_attempts = 0
+        body_attempts = 0
         while True:
             response = await self._post_completion(
                 client, api_key, messages, timeout=timeout
@@ -2562,28 +2602,32 @@ class OpenRouterSourceReviewAgent:
                 return _assistant_message(payload)
             except ValueError as error:
                 last_error = error
+                # Every body-level failure here means the model authored no
+                # verdict: a relayed provider fault or a shape we cannot
+                # parse. Both are transport-class, and the sub-second ladder
+                # could not outlive a real rate limit — 1.5s of retry burned
+                # 30-minute reviews. Wait like a transport fault instead,
+                # named or not.
                 model_error = _retryable_model_error_type(payload)
-                if model_error is not None and model_error_attempts < len(
-                    _MODEL_ERROR_RETRY_DELAYS_SECONDS
-                ):
-                    delay = _MODEL_ERROR_RETRY_DELAYS_SECONDS[model_error_attempts]
-                    model_error_attempts += 1
+                if body_attempts >= len(_MODEL_ERROR_RETRY_DELAYS_SECONDS):
                     logger.warning(
-                        "source review model relayed a retryable fault %s; "
-                        "retrying attempt=%d",
-                        model_error,
-                        model_error_attempts + 1,
+                        "source review model body failed after %d retries: "
+                        "fault=%s signature=%s",
+                        body_attempts,
+                        model_error or "unclassified",
+                        _body_signature(payload),
                     )
-                    await asyncio.sleep(delay)
-                    continue
-                if malformed_attempts >= len(_RETRY_DELAYS_SECONDS):
                     break
+                delay = _MODEL_ERROR_RETRY_DELAYS_SECONDS[body_attempts]
+                body_attempts += 1
                 logger.warning(
-                    "source review model response was malformed; retrying attempt=%d",
-                    malformed_attempts + 2,
+                    "source review model body was unusable (fault=%s "
+                    "signature=%s); retrying attempt=%d",
+                    model_error or "unclassified",
+                    _body_signature(payload),
+                    body_attempts + 1,
                 )
-                await asyncio.sleep(_RETRY_DELAYS_SECONDS[malformed_attempts])
-                malformed_attempts += 1
+                await asyncio.sleep(delay)
         assert last_error is not None
         raise last_error
 
