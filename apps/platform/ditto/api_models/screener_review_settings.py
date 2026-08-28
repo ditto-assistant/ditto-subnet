@@ -60,8 +60,8 @@ class ScreenerReviewSettings(BaseModel):
     )
     l3_enabled: bool = True
     l3_model: Literal["openai/gpt-5.6-sol"] = "openai/gpt-5.6-sol"
-    timeout_seconds: Annotated[int, Field(ge=30, le=900)] = 900
-    max_steps: Annotated[int, Field(ge=1, le=20)] = 18
+    timeout_seconds: Annotated[int, Field(ge=30, le=1_800)] = 1_200
+    max_steps: Annotated[int, Field(ge=1, le=48)] = 32
     # L1 Luna budget. Distinct from ``max_steps``, which bounds L2. Exhausting
     # either L1 bound yields ``pass_inconclusive`` and admits the artifact.
     source_review_max_steps: Annotated[int, Field(ge=1, le=240)] = 200
@@ -70,12 +70,18 @@ class ScreenerReviewSettings(BaseModel):
     )
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
-    source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 1_800
+    source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 3_600
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)] = 425_000
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)] = 20_000
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)] = 2_400
-    max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 2.0
+    max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 6.0
     critic_reasoning_effort: ReasoningEffort = "medium"
+    # Gradient thresholds for a budget-terminated review's notes ledger: this
+    # many recorded concerns hold the artifact for operator review with the
+    # notes attached; zero concerns plus this many cleared notes admit it on
+    # positive coverage. Step/time budgets tune inspection depth, not fate.
+    concern_hold_count: Annotated[int, Field(ge=1, le=16)] = 1
+    clear_min_notes: Annotated[int, Field(ge=1, le=32)] = 3
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     audit_retention_days: Annotated[int, Field(ge=1, le=365)] = 30
     policy_manifest_profile: PolicyManifestProfile = "l1"

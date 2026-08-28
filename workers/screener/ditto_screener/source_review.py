@@ -49,7 +49,71 @@ from ditto_screening_protocol import (
     SourceReviewPassClause,
 )
 
-_PROMPT_REVISION = "source-review-v21-policy-v10"
+_PROMPT_REVISION = "source-review-v22-policy-v10"
+
+# ── Structured review notes (the in-progress determination ledger) ─────────
+#
+# The reviewer is REQUIRED to record typed notes as it inspects, so a review
+# that dies at any budget still yields the evidence it accumulated instead of
+# a bare inconclusive. At exhaustion the ledger decides a gradient verdict:
+# concerns hold the artifact for operator review WITH the notes as evidence,
+# and a clean ledger with sufficient positive coverage admits it. The step
+# and byte budgets therefore tune inspection DEPTH, not pass/fail fate.
+_MAX_REVIEW_NOTES = 48
+_NOTE_KINDS = frozenset({"concern", "cleared", "observation"})
+# Ask for a note again when this many inspection calls pass without one.
+_NOTELESS_NUDGE_EVERY = 8
+_NOTE_NUDGE = (
+    "Reminder: record_note after each area you inspect — a concern the moment "
+    "you see one, cleared when an area checks out. Only recorded notes "
+    "survive if your budget runs out."
+)
+
+
+def _note_from_arguments(arguments: Mapping[str, object]) -> dict[str, object] | None:
+    """Validate one reviewer note host-side; None when unusable."""
+    kind = arguments.get("kind")
+    summary = arguments.get("summary")
+    if kind not in _NOTE_KINDS or not isinstance(summary, str) or not summary.strip():
+        return None
+    category = arguments.get("category")
+    note: dict[str, object] = {
+        "kind": kind,
+        "category": (
+            category
+            if isinstance(category, str)
+            and (category in _ALLOWED_CATEGORIES or category == "none")
+            else "none"
+        ),
+        "summary": " ".join(summary.split())[:300],
+        "stage": "l1",
+    }
+    path = arguments.get("path")
+    if isinstance(path, str) and path:
+        note["path"] = path[:240]
+    line = arguments.get("line")
+    if isinstance(line, int) and 1 <= line <= 10_000_000:
+        note["line"] = line
+    confidence = arguments.get("confidence")
+    if isinstance(confidence, (int, float)) and 0 <= float(confidence) <= 1:
+        note["confidence"] = float(confidence)
+    return note
+
+
+def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> None:
+    """Bounded append; a concern evicts the oldest non-concern when full."""
+    if len(notes) < _MAX_REVIEW_NOTES:
+        notes.append(note)
+        return
+    if note.get("kind") != "concern":
+        return
+    for index, existing in enumerate(notes):
+        if existing.get("kind") != "concern":
+            del notes[index]
+            notes.append(note)
+            return
+
+
 _MAX_INVENTORY_FILES = 512
 _MAX_OPAQUE_BLOBS = 128
 _MAX_OPAQUE_SCAN_FILES = 2048
@@ -1042,6 +1106,19 @@ reference one or more zero-based evidence_indices from the finding's top-level
 evidence array.
 Use inconclusive only when the bounded static review cannot decide; it routes
 deeper review and cannot silently clear.
+
+KEEP A NOTES LEDGER AS YOU WORK. Call record_note the moment you form a
+determination, without waiting for the final verdict: kind=concern immediately
+when a reachable path looks like a policy violation (name the category, path,
+and line); kind=cleared when an inspected area genuinely checks out (the served
+entrypoint, the model call path, tool dispatch, retrieval, answer construction
+each deserve one when inspected); kind=observation for neutral structure worth
+remembering. Note summaries follow the same public-safety rules as the final
+summary: generic prose, never source text, prompts, fixtures, or benchmark
+cases. If your step, byte, or time budget runs out before submit_review, ONLY
+the recorded notes survive — they decide whether the submission is held for a
+human with your concerns attached, or admitted on your cleared coverage. An
+unrecorded determination is wasted work.
 """
 
 
@@ -2378,7 +2455,14 @@ class OpenRouterSourceReviewAgent:
         static_preflight_v2_mode: str = "off",
         provenance_manifest_file: str | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
+        concern_hold_count: int = 1,
+        clear_min_notes: int = 3,
     ) -> None:
+        # Gradient thresholds for a budget-terminated review: this many
+        # recorded concerns hold the artifact for operator review; zero
+        # concerns plus this many cleared notes admit it on positive coverage.
+        self._concern_hold_count = max(1, int(concern_hold_count))
+        self._clear_min_notes = max(1, int(clear_min_notes))
         self._api_key_file = api_key_file
         self._model = model
         self._base_url = base_url.rstrip("/")
@@ -2409,6 +2493,7 @@ class OpenRouterSourceReviewAgent:
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
     ) -> SourceReviewObservation:
+        notes: list[dict[str, object]] = []
         try:
             api_key = self._read_api_key()
             repository = TarSourceRepository(
@@ -2416,13 +2501,18 @@ class OpenRouterSourceReviewAgent:
                 static_preflight_v2_mode=self._static_preflight_v2_mode,
             )
             result, clearance_certified = await self._run(
-                repository, api_key, progress=progress, deadline=deadline
+                repository,
+                api_key,
+                progress=progress,
+                deadline=deadline,
+                notes=notes,
             )
             observation = _parse_review(
                 result, artifact_sha256=artifact_sha256, repository=repository
             )
             return replace(
                 observation,
+                notes=tuple(notes),
                 clearance_certified=(
                     observation.risk_level != "low" or clearance_certified
                 ),
@@ -2446,32 +2536,40 @@ class OpenRouterSourceReviewAgent:
                 error,
             )
             budget = error if isinstance(error, SourceReviewBudgetExhausted) else None
-            legacy_inconclusive = code in {
+            budget_exhausted = budget is not None or code in {
                 "source-review-read-budget-exhausted",
                 "source-review-step-budget-exhausted",
+                "source-review-lease-budget-exhausted",
             }
+            # Gradient verdict from the ledger: an exhausted budget is no
+            # longer bare pass/fail. Recorded concerns hold the artifact for
+            # operator review WITH that evidence; a clean ledger with enough
+            # positive coverage admits it; a clean-but-thin ledger holds and
+            # shows exactly how far inspection got. The budgets therefore
+            # tune inspection depth, not fate.
+            concern_count = sum(1 for note in notes if note.get("kind") == "concern")
+            cleared_count = sum(1 for note in notes if note.get("kind") == "cleared")
+            if not budget_exhausted:
+                disposition = "retryable_infra"
+            elif concern_count >= self._concern_hold_count:
+                disposition = "inconclusive"
+            elif concern_count == 0 and cleared_count >= self._clear_min_notes:
+                disposition = "pass_inconclusive"
+            else:
+                disposition = "inconclusive"
             return SourceReviewObservation(
                 ok=False,
                 risk_level=None,
                 finding_digest=None,
                 categories=(),
                 error_code=code,
-                # A submission that needs more bounded inspection than this
-                # reviewer allows is an operator-review outcome, not an outage.
-                # Marking it retryable re-runs the same deterministic budget
-                # forever and never advances the platform's inconclusive cap.
-                failure_disposition=(
-                    "pass_inconclusive"
-                    if budget is not None
-                    else "inconclusive"
-                    if legacy_inconclusive
-                    else "retryable_infra"
-                ),
+                failure_disposition=disposition,
                 review_audit=(
                     budget.audit().model_dump(mode="json")
                     if budget is not None
                     else None
                 ),
+                notes=tuple(notes),
             )
 
     def _read_api_key(self) -> str:
@@ -2492,7 +2590,10 @@ class OpenRouterSourceReviewAgent:
         *,
         progress: Callable[[int, int], None] | None = None,
         deadline: float | None = None,
+        notes: list[dict[str, object]] | None = None,
     ) -> tuple[object, bool]:
+        if notes is None:
+            notes = []
         messages: list[dict[str, object]] = [
             {"role": "system", "content": _SYSTEM_PROMPT},
             {
@@ -2508,6 +2609,7 @@ class OpenRouterSourceReviewAgent:
         delivered = 0
         inspection_calls = 0
         toolless_turns = 0
+        noteless_calls = 0
         read_files: set[str] = set()
         runtime_source_read = False
         if progress is not None:
@@ -2545,8 +2647,27 @@ class OpenRouterSourceReviewAgent:
                         return arguments, (
                             inspection_calls >= 2 and runtime_source_read
                         )
+                    if name == "record_note":
+                        note = _note_from_arguments(arguments)
+                        if note is not None:
+                            _append_note(notes, note)
+                            noteless_calls = 0
+                        messages.append(
+                            {
+                                "role": "tool",
+                                "tool_call_id": call_id,
+                                "content": json.dumps(
+                                    {
+                                        "recorded": note is not None,
+                                        "notes": len(notes),
+                                    }
+                                ),
+                            }
+                        )
+                        continue
                     output = _execute_tool(repository, name, arguments)
                     inspection_calls += 1
+                    noteless_calls += 1
                     if name == "read_file":
                         path = arguments.get("path")
                         if isinstance(path, str):
@@ -2567,6 +2688,9 @@ class OpenRouterSourceReviewAgent:
                     messages.append(
                         {"role": "tool", "tool_call_id": call_id, "content": output}
                     )
+                if noteless_calls >= _NOTELESS_NUDGE_EVERY:
+                    noteless_calls = 0
+                    messages.append({"role": "user", "content": _NOTE_NUDGE})
                 if progress is not None:
                     progress(_step + 1, self._max_steps)
         raise SourceReviewBudgetExhausted(
@@ -3189,6 +3313,41 @@ _TOOLS: list[dict[str, object]] = [
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
                 "required": ["path"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "record_note",
+            "description": (
+                "Record one typed working determination NOW, while inspecting. "
+                "kind=concern the moment something looks like a policy "
+                "violation (host answer authority, family compiler, fabricated "
+                "trajectory, ...); kind=cleared when an inspected area checks "
+                "out; kind=observation for neutral context. Notes survive "
+                "budget exhaustion and decide the verdict when the review "
+                "cannot finish, so record them as you go — a summary is "
+                "public-safe prose, never source text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "kind": {
+                        "type": "string",
+                        "enum": ["concern", "cleared", "observation"],
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": sorted(_ALLOWED_CATEGORIES | {"none"}),
+                    },
+                    "path": {"type": "string"},
+                    "line": {"type": "integer", "minimum": 1},
+                    "summary": {"type": "string", "maxLength": 300},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": ["kind", "summary"],
                 "additionalProperties": False,
             },
         },

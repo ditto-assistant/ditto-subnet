@@ -974,6 +974,29 @@ class SubmissionSourceReviewRequest(BaseModel):
     attempt_id: UUID
 
 
+class SourceReviewNote(BaseModel):
+    """One bounded, typed determination recorded DURING a source review.
+
+    The review agent is required to log its working determinations as it
+    inspects, so a budget- or fault-terminated review still yields the
+    evidence it accumulated instead of a bare ``inconclusive``. ``concern``
+    notes accumulate toward an operator hold; ``cleared`` notes accumulate
+    toward positive coverage; ``observation`` is neutral context. Summaries
+    are reviewer-authored and public-safe: never source text, prompts, or
+    challenge values.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    kind: Literal["concern", "cleared", "observation"]
+    category: Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_-]{0,63}$")] = "none"
+    path: Annotated[str, Field(min_length=1, max_length=240)] | None = None
+    line: Annotated[int, Field(ge=1, le=10_000_000)] | None = None
+    summary: Annotated[str, Field(min_length=1, max_length=300)]
+    confidence: Annotated[float, Field(ge=0, le=1)] | None = None
+    stage: Literal["l1", "l2", "l3"] = "l1"
+
+
 class SourceReviewObservationPayload(BaseModel):
     """Bounded source-review observation safe to cross provider boundaries."""
 
@@ -995,6 +1018,9 @@ class SourceReviewObservationPayload(BaseModel):
     ] = "retryable_infra"
     clearance_certified: bool = False
     review_audit: ScreenReviewAudit | None = None
+    notes: Annotated[
+        list[SourceReviewNote], Field(default_factory=list, max_length=48)
+    ]
 
     @model_validator(mode="after")
     def validate_finding_binding(self) -> SourceReviewObservationPayload:
