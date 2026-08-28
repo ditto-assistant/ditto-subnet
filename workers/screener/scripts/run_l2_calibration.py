@@ -13,6 +13,7 @@ import time
 from pathlib import Path
 from uuid import UUID
 
+from ditto_screener.calibration import classification_metrics
 from ditto_screener.causal_evidence import causal_audit_fields
 from ditto_screener.l2_review import (
     L2_CAUSE_PROMPT_REVISION,
@@ -261,6 +262,7 @@ async def _main() -> None:
                         "review": metadata,
                         "completed": len(results),
                         "total": len(items),
+                        "classification": classification_metrics(results),
                         "items": sorted(results, key=lambda row: str(row["agent_id"])),
                     },
                 )
@@ -291,6 +293,7 @@ async def _main() -> None:
                 "completed": len(results),
                 "disposition_matches": disposition_matches,
                 "basis_matches": basis_matches,
+                "classification": classification_metrics(results),
                 "uncached_runs": len(uncached),
                 "reported_cost_usd": round(cost, 6),
                 "review": metadata,
