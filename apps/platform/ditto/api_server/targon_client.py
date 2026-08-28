@@ -10,6 +10,33 @@ from urllib.parse import quote
 
 import httpx
 
+_ERROR_REASON_LIMIT = 200
+
+
+def _error_reason(response: httpx.Response) -> str:
+    """Name the provider's refusal without dumping the full body.
+
+    A bare "HTTP error" made every 409 look identical: no-capacity, billing
+    hold, and duplicate-name conflicts all diagnosed as guesses. Targon error
+    bodies are provider-authored JSON; keep them bounded and single-line.
+    """
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("error", "message", "detail"):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                value = value.get("message")
+            message = str(value or "").strip()
+            if message:
+                return " ".join(message.split())[:_ERROR_REASON_LIMIT]
+    text = (response.text or "").strip()
+    if text:
+        return " ".join(text.split())[:_ERROR_REASON_LIMIT]
+    return "HTTP error"
+
 
 class TargonAPIError(RuntimeError):
     def __init__(self, *, operation: str, status: int | None, reason: str) -> None:
@@ -65,7 +92,11 @@ class AsyncTargonClient:
         if response.status_code == 204 or not response.content:
             return None
         if response.status_code >= 400:
-            reason = "rate limited" if response.status_code == 429 else "HTTP error"
+            reason = (
+                "rate limited"
+                if response.status_code == 429
+                else _error_reason(response)
+            )
             raise TargonAPIError(
                 operation=f"{method} {url.split('?', 1)[0]}",
                 status=response.status_code,
