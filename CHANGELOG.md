@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v0.117.4 (2026-08-28)
+
+### Bug Fixes
+
+- **screener**: Retry unclassified model-body faults on the transport ladder
+  ([#1214](https://github.com/ditto-assistant/ditto-subnet/pull/1214),
+  [`25ef293`](https://github.com/ditto-assistant/ditto-subnet/commit/25ef293225fe8b75fd5f92a78579a73c28352787))
+
+
 ## v0.117.3 (2026-08-28)
 
 ### Bug Fixes
