@@ -482,6 +482,22 @@ def test_disposable_admin_arms_only_after_egress_is_restricted() -> None:
     assert "--result-file" in startup
 
 
+def test_disposable_admin_verifies_checkout_as_its_temporary_owner() -> None:
+    startup = ADMIN_STARTUP.read_text()
+
+    checkout = startup.split(
+        'git -C "$${SOURCE}" checkout --detach "$${GIT_REVISION}"', 1
+    )[1].split('chown -R root:root "$${ROOT}"', 1)[0]
+    assert checkout.count('runuser -u "$${BOOTSTRAP_USER}" --') >= 5
+    assert (
+        'runuser -u "$${BOOTSTRAP_USER}" -- \\\n'
+        '  git -C "$${SOURCE}" remote get-url origin'
+    ) in checkout
+    assert (
+        'runuser -u "$${BOOTSTRAP_USER}" -- \\\n  git -C "$${SOURCE}" rev-parse HEAD'
+    ) in checkout
+
+
 def test_protected_workflow_requires_bootstrap_revision_for_arming() -> None:
     workflow = INFRA_WORKFLOW.read_text()
 
