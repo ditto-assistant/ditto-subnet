@@ -2877,6 +2877,24 @@ class PublicScreeningAttempt(BaseModel):
     review_finding: PublicScreeningReviewFinding | None = None
 
 
+class PublicAdmissionRetry(BaseModel):
+    """Live admission state for a submission still in build & admission.
+
+    ``waiting_retry`` is an infrastructure retry the platform scheduled, not
+    a verdict against the artifact. ``next_retry_at`` is when the submission
+    becomes claimable again; an already-eligible submission reports the
+    payload's generation time (it is waiting for a screener slot, not for a
+    timer). Without this block the public pipeline showed only the stage
+    name, so a between-attempts submission was indistinguishable from a
+    stuck queue.
+    """
+
+    state: Literal["queued", "running", "waiting_retry"]
+    attempt_count: Annotated[int, Field(ge=0)]
+    next_retry_at: datetime | None = None
+    last_failure_infrastructure: bool = False
+
+
 class PublicScreeningDispute(BaseModel):
     """Public-safe appeal state; the miner's private message is never exposed."""
 
@@ -3227,6 +3245,13 @@ class PublicSubmissionPipeline(BaseModel):
     agent_id: UUID
     status: str
     artifact_release: PublicArtifactRelease
+    admission_retry: PublicAdmissionRetry | None = Field(
+        default=None,
+        description=(
+            "Live admission-retry state while the submission is still in "
+            "build & admission; null once admission is terminal."
+        ),
+    )
     submission_family: PublicSubmissionFamily | None = Field(
         default=None,
         description=(

@@ -60,6 +60,7 @@ from ditto.api_models import (
     NameClaimListResponse,
     PublicActivityEntry,
     PublicActivityResponse,
+    PublicAdmissionRetry,
     PublicAgentSummary,
     PublicArtifactDownload,
     PublicArtifactRelease,
@@ -244,6 +245,7 @@ from ditto.db.models import (
     ScreenerNode,
     ScreeningDispute,
     ScreeningQuarantine,
+    ScreeningRetryOverride,
     SubmissionImageBuild,
     ValidatorHeartbeat,
     ValidatorTicket,
@@ -344,6 +346,8 @@ from ditto.db.queries.scores import (
     v9_confirmation_public_projections,
 )
 from ditto.db.queries.screening import (
+    FAILED_ATTEMPT_RETRY_BACKOFF,
+    PROVIDER_BACKOFF_REASON_CODES,
     get_running_screening_attempts,
     list_screening_attempts,
 )
@@ -6069,6 +6073,47 @@ async def agent_pipeline(
         raise HTTPException(status_code=404, detail="submission not found")
 
     attempts = await list_screening_attempts(session, agent_id=agent_id)
+    admission_retry: PublicAdmissionRetry | None = None
+    if agent.status in (
+        AgentStatus.UPLOADED,
+        AgentStatus.SCREENING,
+        AgentStatus.SCREENING_FAILED,
+    ):
+        latest_attempt = attempts[0] if attempts else None
+        last_failure_infrastructure = bool(
+            latest_attempt is not None
+            and latest_attempt.status in ("failed", "expired")
+            and (latest_attempt.reason_code or "") in PROVIDER_BACKOFF_REASON_CODES
+        )
+        next_retry_at: datetime | None = None
+        if agent.status == AgentStatus.SCREENING:
+            retry_state: Literal["queued", "running", "waiting_retry"] = "running"
+        elif agent.status == AgentStatus.UPLOADED or latest_attempt is None:
+            retry_state = "queued"
+        else:
+            retry_state = "waiting_retry"
+            deadline = cast(datetime, _aware(latest_attempt.deadline))
+            finished_at = _aware(latest_attempt.finished_at)
+            backoff_until = (
+                min(deadline, finished_at + FAILED_ATTEMPT_RETRY_BACKOFF)
+                if finished_at is not None
+                else deadline
+            )
+            overridden = await session.scalar(
+                select(ScreeningRetryOverride.override_id)
+                .where(ScreeningRetryOverride.attempt_id == latest_attempt.attempt_id)
+                .limit(1)
+            )
+            # An already-eligible submission is waiting for a screener slot,
+            # not for a timer; report the generation time so the dashboard
+            # never renders a countdown into the past.
+            next_retry_at = now if overridden is not None else max(backoff_until, now)
+        admission_retry = PublicAdmissionRetry(
+            state=retry_state,
+            attempt_count=len(attempts),
+            next_retry_at=next_retry_at,
+            last_failure_infrastructure=last_failure_infrastructure,
+        )
     quarantines = list(
         await session.scalars(
             select(ScreeningQuarantine).where(ScreeningQuarantine.agent_id == agent_id)
@@ -6319,6 +6364,7 @@ async def agent_pipeline(
     return PublicSubmissionPipeline(
         generated_at=now,
         agent_id=agent_id,
+        admission_retry=admission_retry,
         artifact_release=(
             await _artifact_release_snapshot(
                 session,

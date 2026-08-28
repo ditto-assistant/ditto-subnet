@@ -236,9 +236,18 @@ export interface Dispute {
   submitted_at?: string | null;
 }
 
+/** Live admission-retry state while a submission is still in admission. */
+export interface AdmissionRetry {
+  state?: string | null;
+  attempt_count?: number | null;
+  next_retry_at?: string | null;
+  last_failure_infrastructure?: boolean | null;
+}
+
 /** /public/agent/{id}/pipeline — the drawer's full history. */
 export interface PipelinePayload {
   status?: string;
+  admission_retry?: AdmissionRetry | null;
   quorum?: number | null;
   score_count?: number | null;
   active_bench_version?: number | null;
