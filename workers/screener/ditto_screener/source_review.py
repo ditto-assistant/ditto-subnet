@@ -2602,14 +2602,19 @@ class OpenRouterSourceReviewAgent:
                 return _assistant_message(payload)
             except ValueError as error:
                 last_error = error
-                # Every body-level failure here means the model authored no
-                # verdict: a relayed provider fault or a shape we cannot
-                # parse. Both are transport-class, and the sub-second ladder
-                # could not outlive a real rate limit — 1.5s of retry burned
-                # 30-minute reviews. Wait like a transport fault instead,
-                # named or not.
+                # A body-level failure means the model authored no verdict.
+                # Classified provider faults (rate limits, overload, 5xx
+                # relays) are unbilled error bodies: waiting out the fault is
+                # strictly cheaper than burning the review and re-running the
+                # whole court next cycle, so they get the full ladder. An
+                # UNCLASSIFIED shape may be a billed completion under contract
+                # drift, where repetition buys little — it gets exactly one
+                # long retry before failing as before.
                 model_error = _retryable_model_error_type(payload)
-                if body_attempts >= len(_MODEL_ERROR_RETRY_DELAYS_SECONDS):
+                retry_budget = (
+                    len(_MODEL_ERROR_RETRY_DELAYS_SECONDS) if model_error else 1
+                )
+                if body_attempts >= retry_budget:
                     logger.warning(
                         "source review model body failed after %d retries: "
                         "fault=%s signature=%s",

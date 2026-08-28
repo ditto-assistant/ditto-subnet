@@ -4350,14 +4350,15 @@ async def test_string_error_body_and_free_text_rate_limit_are_classified() -> No
     assert source_review_module._retryable_model_error_type({"choices": []}) is None
 
 
-async def test_unclassified_malformed_body_retries_on_the_long_ladder(
+async def test_unclassified_malformed_body_gets_exactly_one_long_retry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A garbage 200 body means no verdict was authored: wait, do not burn.
+    """A garbage 200 body means no verdict was authored: wait once, not thrice.
 
     The sub-second malformed ladder could not outlive a real provider fault,
-    so unclassified bodies now share the transport-class ladder and log a
-    content-free structural signature for the next diagnosis.
+    but an unclassified shape may be a BILLED completion under contract
+    drift, so it gets exactly one transport-ladder retry — classified
+    (unbilled) provider faults keep the full ladder.
     """
     monkeypatch.setattr(
         source_review_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
@@ -4377,7 +4378,7 @@ async def test_unclassified_malformed_body_retries_on_the_long_ladder(
     def handler(_request: httpx.Request) -> httpx.Response:
         nonlocal calls
         calls += 1
-        if calls <= 3:
+        if calls == 1:
             return httpx.Response(200, json={"unexpected": "shape"})
         return httpx.Response(
             200,
@@ -4400,7 +4401,34 @@ async def test_unclassified_malformed_body_retries_on_the_long_ladder(
     )
 
     assert observation.ok and observation.risk_level == "low"
-    assert calls == 4
+    assert calls == 2
+
+
+async def test_persistent_unclassified_body_fails_after_two_posts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Contract drift must not become a paid retry loop: 2 posts, then fail."""
+    monkeypatch.setattr(
+        source_review_module, "_MODEL_ERROR_RETRY_DELAYS_SECONDS", (0.0, 0.0, 0.0)
+    )
+    key = tmp_path / "key"
+    key.write_text("sk-test-private-review")
+    os.chmod(key, 0o600)
+    calls = 0
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(200, json={"unexpected": "shape"})
+
+    observation = await _agent(key, httpx.MockTransport(handler)).review(
+        str(_archive(tmp_path, "fn main() { call_model(); }")),
+        artifact_sha256=_SHA,
+    )
+
+    assert not observation.ok
+    assert observation.failure_disposition == "retryable_infra"
+    assert calls == 2
 
 
 def test_body_signature_never_reproduces_content() -> None:
