@@ -11,7 +11,7 @@ import posixpath
 import re
 import tarfile
 import tomllib
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
@@ -129,6 +129,68 @@ def _append_note(notes: list[dict[str, object]], note: dict[str, object]) -> Non
             del notes[index]
             notes.append(note)
             return
+
+
+def substantiated_concern_count(
+    notes: Sequence[Mapping[str, object]],
+) -> int:
+    """Count concerns that could actually survive as a finding.
+
+    A ``concern`` note is a lead the reviewer recorded mid-inspection, not a
+    verdict. The reviewer records them liberally by design -- the prompt asks
+    for one "the moment you see one" -- so counting them raw makes any
+    budget-cut review look guilty. Production, 2026-08-28: every one of 273
+    concern notes cited a path, so "did it cite" separates nothing; distinct
+    locations do. Reviews that RAN TO COMPLETION and then concluded low risk
+    carried at most 2 substantiated concerns (mean 0.8), while budget- or
+    fault-terminated reviews carried 6 to 19.
+
+    The multi-location rule is the finding contract itself: a
+    ``benchmark_emulation`` or ``scorer_contract_manipulation`` claim needs two
+    distinct source locations to be admissible as a finding, so a single-site
+    note in those categories could never have become one either.
+    """
+    locations: dict[str, set[tuple[str, object]]] = {}
+    for note in notes:
+        if note.get("kind") != "concern":
+            continue
+        path = note.get("path")
+        if not isinstance(path, str) or not path:
+            continue
+        category = str(note.get("category") or "none")
+        locations.setdefault(category, set()).add((path, note.get("line")))
+    total = 0
+    for category, sites in locations.items():
+        if category in _MULTI_LOCATION_CATEGORIES and len(sites) < 2:
+            continue
+        total += len(sites)
+    return total
+
+
+def ledger_disposition(
+    notes: Sequence[Mapping[str, object]],
+    *,
+    concern_hold_count: int,
+    clear_min_notes: int,
+) -> str:
+    """Decide a budget-terminated review from the evidence it did record.
+
+    ``concern_hold_count`` used to be inert above 1. The old form held on
+    ``concerns >= hold_count``, admitted only on ``concerns == 0``, and held
+    everything else -- so with a hold count of 3 a review with one or two
+    concerns matched neither branch and held anyway, exactly as it would have
+    at 1. Raising the operator's threshold changed nothing. A threshold has to
+    mean "fewer than this many does not hold", so that is what this does.
+    """
+    concerns = substantiated_concern_count(notes)
+    if concerns >= max(1, concern_hold_count):
+        return "inconclusive"
+    cleared = sum(1 for note in notes if note.get("kind") == "cleared")
+    if cleared >= max(1, clear_min_notes):
+        return "pass_inconclusive"
+    # Too little positive coverage to admit on: hold, with the ledger showing
+    # the operator exactly how far inspection got.
+    return "inconclusive"
 
 
 # Per-turn completion budget for the L1 reviewer.
@@ -2706,16 +2768,15 @@ class OpenRouterSourceReviewAgent:
             # positive coverage admits it; a clean-but-thin ledger holds and
             # shows exactly how far inspection got. The budgets therefore
             # tune inspection depth, not fate.
-            concern_count = sum(1 for note in notes if note.get("kind") == "concern")
-            cleared_count = sum(1 for note in notes if note.get("kind") == "cleared")
-            if not budget_exhausted:
-                disposition = "retryable_infra"
-            elif concern_count >= self._concern_hold_count:
-                disposition = "inconclusive"
-            elif concern_count == 0 and cleared_count >= self._clear_min_notes:
-                disposition = "pass_inconclusive"
-            else:
-                disposition = "inconclusive"
+            disposition = (
+                ledger_disposition(
+                    notes,
+                    concern_hold_count=self._concern_hold_count,
+                    clear_min_notes=self._clear_min_notes,
+                )
+                if budget_exhausted
+                else "retryable_infra"
+            )
             return SourceReviewObservation(
                 ok=False,
                 risk_level=None,

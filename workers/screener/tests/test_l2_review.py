@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tarfile
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -3913,3 +3914,124 @@ async def test_relayed_rate_limit_retries_are_bounded(
     assert result.observation.failure_disposition == "retryable_infra"
     assert result.observation.error_code == "l2-model-response-contract"
     assert len(requests) == 4
+
+
+async def test_exhausted_l2_does_not_claim_coverage_it_lacks() -> None:
+    """L2 stamps pass_inconclusive on ANY budget exhaustion.
+
+    Until the layered agent re-derived it, that stamp reached Platform even
+    when the ledger it shipped recorded substantiated concerns -- four of the
+    five budget-terminated reviews on 2026-08-28 claimed positive coverage
+    they did not have. L2 records no notes itself, so this is the first point
+    where the ledger is complete enough to decide.
+    """
+    notes = (
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/main.rs",
+            "line": 10,
+            "summary": "family table",
+        },
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/table.rs",
+            "line": 44,
+            "summary": "family table",
+        },
+        {
+            "kind": "concern",
+            "category": "benchmark_emulation",
+            "path": "src/table.rs",
+            "line": 51,
+            "summary": "family table",
+        },
+        {"kind": "cleared", "category": "none", "path": "b.rs", "summary": "clean"},
+    )
+    l1 = replace(
+        _l1("low", clearance_certified=False),
+        finding=None,
+        finding_digest=None,
+        categories=(),
+        notes=notes,
+    )
+    exhausted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-step-budget",
+        failure_disposition="pass_inconclusive",
+    )
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1), l2=_FakeL2(_model_result(exhausted)), mode="enforce"
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.failure_disposition == "inconclusive"
+    assert result.notes == notes
+
+
+async def test_exhausted_l2_admits_on_a_clean_carried_ledger() -> None:
+    notes = (
+        {"kind": "cleared", "category": "none", "path": "a.rs", "summary": "clean"},
+        {"kind": "cleared", "category": "none", "path": "b.rs", "summary": "clean"},
+        {"kind": "cleared", "category": "none", "path": "c.rs", "summary": "clean"},
+    )
+    l1 = replace(
+        _l1("low", clearance_certified=False),
+        finding=None,
+        finding_digest=None,
+        categories=(),
+        notes=notes,
+    )
+    exhausted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-step-budget",
+        failure_disposition="pass_inconclusive",
+    )
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1), l2=_FakeL2(_model_result(exhausted)), mode="enforce"
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.failure_disposition == "pass_inconclusive"
+
+
+async def test_exhausted_l2_holds_when_an_l1_lead_survives() -> None:
+    """A surviving finding is not positive coverage, whatever the ledger says."""
+    l1 = replace(
+        _l1("medium"),
+        notes=(
+            {"kind": "cleared", "category": "none", "path": "a.rs", "summary": "ok"},
+            {"kind": "cleared", "category": "none", "path": "b.rs", "summary": "ok"},
+            {"kind": "cleared", "category": "none", "path": "c.rs", "summary": "ok"},
+        ),
+    )
+    exhausted = SourceReviewObservation(
+        ok=False,
+        risk_level=None,
+        finding_digest=None,
+        categories=(),
+        error_code="l2-model-tool-budget",
+        failure_disposition="pass_inconclusive",
+    )
+    layered = LayeredSourceReviewAgent(  # type: ignore[arg-type]
+        l1=_FakeL1(l1), l2=_FakeL2(_model_result(exhausted)), mode="enforce"
+    )
+
+    result = await layered.review(
+        "unused", artifact_sha256="c" * 64, attempt_id=ATTEMPT
+    )
+
+    assert result.failure_disposition == "inconclusive"

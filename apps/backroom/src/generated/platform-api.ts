@@ -17992,7 +17992,7 @@ export interface components {
             clear_min_notes: number;
             /**
              * Concern Hold Count
-             * @default 1
+             * @default 3
              */
             concern_hold_count: number;
             /**

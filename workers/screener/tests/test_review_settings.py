@@ -134,6 +134,8 @@ def test_pre_l3_toggle_checksum_remains_valid(make_config, tmp_path) -> None:
             "source_review_model",
             "source_review_timeout_seconds",
             "source_review_max_completion_tokens",
+            "concern_hold_count",
+            "clear_min_notes",
         ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
@@ -151,6 +153,8 @@ def test_pre_source_review_budget_checksum_remains_valid(make_config) -> None:
             "source_review_model",
             "source_review_timeout_seconds",
             "source_review_max_completion_tokens",
+            "concern_hold_count",
+            "clear_min_notes",
         ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
@@ -167,6 +171,8 @@ def test_pre_l1_model_checksum_remains_valid(make_config) -> None:
             "source_review_model",
             "source_review_timeout_seconds",
             "source_review_max_completion_tokens",
+            "concern_hold_count",
+            "clear_min_notes",
         ),
     )
     compatible = EffectiveReviewSettings.model_validate(payload)
@@ -197,6 +203,8 @@ def test_explicit_budget_is_never_dropped_from_the_checksum(make_config) -> None
             "source_review_model",
             "source_review_timeout_seconds",
             "source_review_max_completion_tokens",
+            "concern_hold_count",
+            "clear_min_notes",
         ),
     )
     payload["settings"]["source_review_max_read_bytes"] = 2_000_000

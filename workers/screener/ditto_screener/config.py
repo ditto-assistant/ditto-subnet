@@ -144,6 +144,10 @@ class ScreenerConfig:
     source_review_max_completion_tokens: int
     """Per-turn L1 completion budget; must fit a whole policy-v10 sweep."""
     source_review_reasoning_effort: str
+    review_concern_hold_count: int
+    """Substantiated concerns that hold a budget-terminated review."""
+    review_clear_min_notes: int
+    """Cleared notes required to admit one on positive coverage."""
     static_preflight_v2_mode: str
     """V2 detector rollout: legacy authority in off/shadow, v2 in enforce."""
     static_preflight_audit_file: str | None
@@ -340,6 +344,8 @@ def parse_screener_config_from_env() -> ScreenerConfig:
         source_review_reasoning_effort=os.environ.get(
             "SCREENER_SOURCE_REVIEW_REASONING_EFFORT", "high"
         ),
+        review_concern_hold_count=_parse_int("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "3"),
+        review_clear_min_notes=_parse_int("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3"),
         static_preflight_v2_mode=os.environ.get(
             "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
         ),
@@ -434,6 +440,14 @@ def parse_screener_config_from_env() -> ScreenerConfig:
     if not 60 <= config.source_review_timeout_seconds <= 3_600:
         raise ScreenerConfigError(
             "SCREENER_SOURCE_REVIEW_TIMEOUT_SECONDS must be between 60 and 3600"
+        )
+    if not 1 <= config.review_concern_hold_count <= 16:
+        raise ScreenerConfigError(
+            "SCREENER_REVIEW_CONCERN_HOLD_COUNT must be between 1 and 16"
+        )
+    if not 1 <= config.review_clear_min_notes <= 32:
+        raise ScreenerConfigError(
+            "SCREENER_REVIEW_CLEAR_MIN_NOTES must be between 1 and 32"
         )
     if config.static_preflight_v2_mode not in {"off", "shadow", "enforce"}:
         raise ScreenerConfigError(

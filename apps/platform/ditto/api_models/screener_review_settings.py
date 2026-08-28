@@ -62,8 +62,10 @@ class ScreenerReviewSettings(BaseModel):
     l3_model: Literal["openai/gpt-5.6-sol"] = "openai/gpt-5.6-sol"
     timeout_seconds: Annotated[int, Field(ge=30, le=1_800)] = 1_200
     max_steps: Annotated[int, Field(ge=1, le=48)] = 32
-    # L1 Luna budget. Distinct from ``max_steps``, which bounds L2. Exhausting
-    # either L1 bound yields ``pass_inconclusive`` and admits the artifact.
+    # L1 Luna inspection depth. Distinct from ``max_steps``, which bounds L2.
+    # Exhausting either bound no longer decides the artifact's fate on its
+    # own: the recorded notes ledger does, through the gradient thresholds
+    # below. Neither of these has ever actually been exhausted in production.
     source_review_max_steps: Annotated[int, Field(ge=1, le=240)] = 200
     source_review_max_read_bytes: Annotated[int, Field(ge=32_000, le=16_000_000)] = (
         8_000_000
@@ -84,11 +86,16 @@ class ScreenerReviewSettings(BaseModel):
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)] = 2_400
     max_cost_usd: Annotated[float, Field(gt=0, le=10)] = 6.0
     critic_reasoning_effort: ReasoningEffort = "medium"
-    # Gradient thresholds for a budget-terminated review's notes ledger: this
-    # many recorded concerns hold the artifact for operator review with the
-    # notes attached; zero concerns plus this many cleared notes admit it on
-    # positive coverage. Step/time budgets tune inspection depth, not fate.
-    concern_hold_count: Annotated[int, Field(ge=1, le=16)] = 1
+    # Gradient thresholds for a budget-terminated review's notes ledger.
+    # ``concern_hold_count`` counts SUBSTANTIATED concerns -- distinct cited
+    # locations, and two of them for the categories whose findings require
+    # two -- because the reviewer records raw concerns liberally by design.
+    # Fewer than that many, plus ``clear_min_notes`` cleared notes, admits the
+    # artifact on positive coverage; otherwise it holds WITH the ledger
+    # attached. Calibration (2026-08-28): reviews that ran to completion and
+    # concluded low risk carried at most 2 substantiated concerns, while
+    # budget-terminated ones carried 6 to 19.
+    concern_hold_count: Annotated[int, Field(ge=1, le=16)] = 3
     clear_min_notes: Annotated[int, Field(ge=1, le=32)] = 3
     cache_ttl_seconds: Annotated[int, Field(ge=60, le=2_592_000)] = 604_800
     audit_retention_days: Annotated[int, Field(ge=1, le=365)] = 30

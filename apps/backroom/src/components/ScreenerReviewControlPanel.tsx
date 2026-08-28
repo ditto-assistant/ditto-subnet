@@ -25,6 +25,8 @@ const defaults: ScreenerReviewSettings = {
   source_review_max_steps: 200,
   source_review_max_read_bytes: 8_000_000,
   source_review_max_completion_tokens: 8_000,
+  concern_hold_count: 3,
+  clear_min_notes: 3,
   source_review_reasoning_effort: 'high',
   source_review_model: 'openai/gpt-5.6-luna',
   source_review_timeout_seconds: 1_800,
@@ -595,6 +597,8 @@ export function ScreenerReviewControlPanel({
               <NumericField label="L1 Luna max steps" value={settings.source_review_max_steps} onChange={(value) => setSettings((current) => ({ ...current, source_review_max_steps: value }))} />
               <NumericField label="L1 Luna read bytes" value={settings.source_review_max_read_bytes} onChange={(value) => setSettings((current) => ({ ...current, source_review_max_read_bytes: value }))} />
               <NumericField label="L1 verdict completion tokens" value={settings.source_review_max_completion_tokens} onChange={(value) => setSettings((current) => ({ ...current, source_review_max_completion_tokens: value }))} />
+              <NumericField label="Substantiated concerns that hold" value={settings.concern_hold_count} onChange={(value) => setSettings((current) => ({ ...current, concern_hold_count: value }))} />
+              <NumericField label="Cleared notes that admit" value={settings.clear_min_notes} onChange={(value) => setSettings((current) => ({ ...current, clear_min_notes: value }))} />
               <label className="block text-xs text-[var(--muted)]">
                 L1 Luna reasoning
                 <select

@@ -185,13 +185,13 @@ describe('Backroom MCP tools', () => {
     // number is the coarse whole-payload backstop, and input schemas dominate
     // it. Curve v3 and the runtime metrics/capture contracts added legitimate,
     // bounded input schemas without relaxing either prose budget below. The
-    // 96_000 whole-payload includes the L1 model/timeout fields on the
+    // 97_000 whole-payload includes the L1 model/timeout fields on the
     // screener-review settings write schema, the validator fleet/assignment
-    // read schemas, the three inference-trace archive tools, and the operator
-    // screening-reject tool. Keep modest headroom for schema evolution;
-    // tighten the description budgets, not this whole-payload backstop, to
-    // push back on tutorials.
-    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(96_000)
+    // read schemas, the three inference-trace archive tools, the operator
+    // screening-reject tool, and the gradient-hold controls. Keep modest
+    // headroom for schema evolution; tighten the description budgets, not
+    // this whole-payload backstop, to push back on tutorials.
+    expect(JSON.stringify(response.tools).length).toBeLessThanOrEqual(97_000)
     const descriptions = response.tools.map((tool) => tool.description ?? '')
     // Includes concise rollout and protected-policy controls; tutorials live
     // in get_backroom_tool_help, not here.

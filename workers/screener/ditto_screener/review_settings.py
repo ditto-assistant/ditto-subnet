@@ -99,6 +99,8 @@ class ReviewSettings(BaseModel):
     source_review_reasoning_effort: Literal["low", "medium", "high"] = "high"
     source_review_model: SourceReviewModel = "openai/gpt-5.6-luna"
     source_review_timeout_seconds: Annotated[int, Field(ge=60, le=3_600)] = 1_800
+    concern_hold_count: Annotated[int, Field(ge=1, le=16)] = 3
+    clear_min_notes: Annotated[int, Field(ge=1, le=32)] = 3
     max_input_tokens: Annotated[int, Field(ge=1, le=1_000_000)]
     max_output_tokens: Annotated[int, Field(ge=1, le=128_000)]
     max_completion_tokens: Annotated[int, Field(ge=1, le=128_000)]
@@ -155,6 +157,8 @@ _POST_CHECKSUM_FIELDS: tuple[str, ...] = (
     "source_review_model",
     "source_review_timeout_seconds",
     "source_review_max_completion_tokens",
+    "concern_hold_count",
+    "clear_min_notes",
 )
 _DEFAULTS = {
     name: ReviewSettings.model_fields[name].default for name in _POST_CHECKSUM_FIELDS
@@ -227,6 +231,8 @@ class EffectiveReviewSettings(BaseModel):
             source_review_reasoning_effort=value.source_review_reasoning_effort,
             source_review_model=value.source_review_model,
             source_review_timeout_seconds=float(value.source_review_timeout_seconds),
+            review_concern_hold_count=value.concern_hold_count,
+            review_clear_min_notes=value.clear_min_notes,
             l2_max_input_tokens=value.max_input_tokens,
             l2_max_output_tokens=value.max_output_tokens,
             l2_max_completion_tokens=value.max_completion_tokens,
@@ -295,6 +301,8 @@ def bootstrap_review_settings(config: ScreenerConfig) -> EffectiveReviewSettings
             "source_review_reasoning_effort": config.source_review_reasoning_effort,
             "source_review_model": config.source_review_model,
             "source_review_timeout_seconds": int(config.source_review_timeout_seconds),
+            "concern_hold_count": config.review_concern_hold_count,
+            "clear_min_notes": config.review_clear_min_notes,
             "max_input_tokens": config.l2_max_input_tokens,
             "max_output_tokens": config.l2_max_output_tokens,
             "max_completion_tokens": config.l2_max_completion_tokens,

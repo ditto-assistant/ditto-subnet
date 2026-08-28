@@ -114,7 +114,7 @@ def _build_reviewer(
             "SCREENER_STATIC_PREFLIGHT_V2_MODE", "off"
         ),
         concern_hold_count=int(
-            os.environ.get("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "1")
+            os.environ.get("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "3")
         ),
         clear_min_notes=int(os.environ.get("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3")),
     )
@@ -161,6 +161,10 @@ def _build_reviewer(
         l1=l1,
         l2=l2,
         mode=os.environ.get("SCREENER_L2_REVIEW_MODE", "off"),
+        concern_hold_count=int(
+            os.environ.get("SCREENER_REVIEW_CONCERN_HOLD_COUNT", "3")
+        ),
+        clear_min_notes=int(os.environ.get("SCREENER_REVIEW_CLEAR_MIN_NOTES", "3")),
     )
 
 
